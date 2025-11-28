@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Password Manager</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      margin: 0;
+      background-color: #f5f5f7;
+      color: #333;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #ddd;
+    }
+    .logo {
+      width: 32px;
+      height: 32px;
+      margin-right: 12px;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0;
+      font-weight: 500;
+    }
+    .status {
+      background-color: #fff;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 8px;
+      background-color: #cc0000;
+    }
+    .status-text {
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    button {
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+    .primary-btn {
+      background-color: #0066cc;
+      color: white;
+    }
+    .primary-btn:hover {
+      background-color: #0055aa;
+    }
+    .secondary-btn {
+      background-color: #e2e2e2;
+      color: #333;
+    }
+    .secondary-btn:hover {
+      background-color: #d1d1d1;
+    }
+    .footer {
+      margin-top: 16px;
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+    }
+    #login-section {
+      display: none;
+      background-color: #fff;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    #login-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    input {
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    #login-error {
+      color: #d32f2f;
+      font-size: 13px;
+      margin-top: 4px;
+      display: none;
+    }
+    #vault-section {
+      display: none;
+      background-color: #fff;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    #form-section {
+      display: none;
+      background-color: #fff;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .credentials-list {
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .credential-item {
+      padding: 10px;
+      border-bottom: 1px solid #eee;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+    }
+    .credential-item:hover {
+      background-color: #f5f5f7;
+    }
+    .section-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    #settings-section {
+      background-color: #fff;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .setting-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .setting-label {
+      font-size: 14px;
+      color: #333;
+    }
+    .setting-control {
+      padding: 6px 10px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <img src="icons/icon-32.png" alt="Logo" class="logo">
+    <h1>Password Manager</h1>
+  </div>
+
+  <div class="status">
+    <div class="status-indicator"></div>
+    <span class="status-text">Vault is locked</span>
+  </div>
+
+  <!-- Login Form Section -->
+  <div id="login-section">
+    <div class="section-title">Enter your master password</div>
+    <form id="login-form">
+      <input type="password" id="master-password" placeholder="Master password" required>
+      <div id="login-error"></div>
+      <button type="submit" class="primary-btn">Unlock</button>
+    </form>
+  </div>
+
+  <!-- Detected Forms Section -->
+  <div id="form-section">
+    <div class="section-title">Login form detected</div>
+    <p>Would you like to autofill your credentials for this site?</p>
+    <button id="fill-password-btn" class="primary-btn">Fill Password</button>
+  </div>
+
+  <!-- Vault Content Section -->
+  <div id="vault-section">
+    <div class="section-title">Available credentials</div>
+    <div class="credentials-list" id="credentials-container">
+      <!-- Credentials will be populated dynamically -->
+    </div>
+  </div>
+
+  <!-- Settings Section -->
+  <div id="settings-section" class="section">
+    <div class="section-title">Security Settings</div>
+    <div class="setting-item">
+      <div class="setting-label">Auto-lock timeout:</div>
+      <select id="auto-lock-timeout" class="setting-control">
+        <option value="1">1 minute</option>
+        <option value="5">5 minutes</option>
+        <option value="10">10 minutes</option>
+        <option value="15">15 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">1 hour</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Action Buttons -->
+  <div class="actions">
+    <button id="unlock-btn" class="primary-btn">Unlock Vault</button>
+    <button id="logout-btn" class="secondary-btn" style="display: none;">Lock Vault</button>
+    <button id="open-app-btn" class="secondary-btn">Open Password Manager</button>
+  </div>
+
+  <div class="footer">
+    <p>Securely manage your passwords</p>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
