@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:3000 http://127.0.0.1:8000;">
+  <title>Password Manager</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f5f5f5;
+      color: #333;
+    }
+    
+    .loading-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    
+    .loading-spinner {
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: white;
+      animation: spin 1s ease-in-out infinite;
+      margin-bottom: 20px;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .app-info {
+      margin-top: 40px;
+      text-align: center;
+      opacity: 0.8;
+      font-size: 14px;
+    }
+    
+    .version-info {
+      margin-top: 10px;
+      font-size: 12px;
+      opacity: 0.6;
+    }
+    
+    #app {
+      display: none;
+    }
+    
+    .error-container {
+      text-align: center;
+      padding: 40px;
+      background-color: #fee;
+      border: 1px solid #fcc;
+      border-radius: 8px;
+      margin: 20px;
+      color: #c33;
+    }
+    
+    .error-title {
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    
+    .error-message {
+      font-size: 14px;
+      margin-bottom: 20px;
+    }
+    
+    .retry-button {
+      background-color: #667eea;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    
+    .retry-button:hover {
+      background-color: #5a67d8;
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-container" id="loading">
+    <div class="loading-spinner"></div>
+    <h2>Password Manager</h2>
+    <p>Initializing secure desktop application...</p>
+    
+    <div class="app-info">
+      <div>Desktop Application</div>
+      <div class="version-info">
+        Electron: <span id="electron-version"></span> | 
+        Node: <span id="node-version"></span> | 
+        Chrome: <span id="chrome-version"></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- React app will be loaded here -->
+  </div>
+
+  <div class="error-container" id="error" style="display: none;">
+    <div class="error-title">Connection Error</div>
+    <div class="error-message" id="error-message">
+      Unable to connect to the Password Manager backend. Please ensure the backend server is running.
+    </div>
+    <button class="retry-button" onclick="retryConnection()">Retry Connection</button>
+  </div>
+
+  <script>
+    // Initialize the desktop app
+    async function initializeApp() {
+      try {
+        // Check if we're in Electron environment
+        if (window.electronAPI) {
+          console.log('Running in Electron environment');
+          
+          // Check secure storage availability
+          const storageResult = await window.electronAPI.secureStorage.isAvailable();
+          console.log('Secure storage available:', storageResult.available);
+          
+          // Get app version
+          const version = await window.electronAPI.app.getVersion();
+          console.log('App version:', version);
+          
+          // Setup vault lock listener
+          const unsubscribeLock = window.electronAPI.onVaultLock(() => {
+            console.log('Vault lock requested from menu');
+            // Trigger vault lock in React app
+            window.postMessage({ type: 'VAULT_LOCK' }, '*');
+          });
+          
+          // Setup settings listener
+          const unsubscribeSettings = window.electronAPI.onOpenSettings(() => {
+            console.log('Settings requested from menu');
+            // Open settings in React app
+            window.postMessage({ type: 'OPEN_SETTINGS' }, '*');
+          });
+          
+          // Cleanup listeners on window unload
+          window.addEventListener('beforeunload', () => {
+            unsubscribeLock();
+            unsubscribeSettings();
+          });
+        }
+        
+        // Try to load the React app
+        await loadReactApp();
+        
+      } catch (error) {
+        console.error('Failed to initialize app:', error);
+        showError('Initialization failed: ' + error.message);
+      }
+    }
+    
+    async function loadReactApp() {
+      try {
+        // Check if backend is running
+        const response = await fetch('http://127.0.0.1:8000/api/', {
+          method: 'GET',
+          timeout: 5000
+        });
+        
+        if (response.ok) {
+          // Backend is running, load React app
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('app').style.display = 'block';
+          
+          // Load React app (this would typically be done by webpack or similar)
+          // For now, we'll show a placeholder
+          document.getElementById('app').innerHTML = `
+            <div style="padding: 40px; text-align: center;">
+              <h1>Password Manager Desktop</h1>
+              <p>Backend connection successful!</p>
+              <p>Integrate your React frontend here.</p>
+              <div style="margin-top: 20px; font-size: 14px; color: #666;">
+                To complete the setup:
+                <ol style="text-align: left; display: inline-block; margin-top: 10px;">
+                  <li>Build your React frontend</li>
+                  <li>Configure the main.js to load the built React app</li>
+                  <li>Set up proper routing and state management</li>
+                </ol>
+              </div>
+            </div>
+          `;
+        } else {
+          throw new Error('Backend returned error: ' + response.status);
+        }
+      } catch (error) {
+        console.error('Failed to connect to backend:', error);
+        showError('Cannot connect to backend server. Please ensure the Django server is running on http://127.0.0.1:8000');
+      }
+    }
+    
+    function showError(message) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('error-message').textContent = message;
+      document.getElementById('error').style.display = 'block';
+    }
+    
+    function retryConnection() {
+      document.getElementById('error').style.display = 'none';
+      document.getElementById('loading').style.display = 'flex';
+      setTimeout(loadReactApp, 1000);
+    }
+    
+    // Initialize when DOM is loaded
+    document.addEventListener('DOMContentLoaded', initializeApp);
+  </script>
+</body>
+</html>
