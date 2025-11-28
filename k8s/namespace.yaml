@@ -1,0 +1,11 @@
+# =============================================================================
+# Kubernetes Namespace
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: password-manager
+  labels:
+    app: password-manager
+    environment: production
+
