@@ -1,0 +1,214 @@
+{
+  "tech_stack": [
+    "JavaScript",
+    "React 18.2.0",
+    "Vite 5.x",
+    "TensorFlow.js",
+    "WebCrypto API",
+    "Argon2-browser",
+    "CryptoJS",
+    "Firebase",
+    "Styled Components",
+    "Framer Motion",
+    "React Router DOM",
+    "IndexedDB"
+  ],
+  "features": [
+    {
+      "name": "Authentication - Login",
+      "description": "User login with email/password authentication, supporting zero-knowledge verification",
+      "files": ["frontend/src/Components/auth/Login.jsx", "frontend/src/Components/auth/Login.css", "frontend/src/hooks/useAuth.jsx", "frontend/src/contexts/AuthContext.jsx"]
+    },
+    {
+      "name": "Authentication - Passkey/WebAuthn",
+      "description": "Passwordless authentication using FIDO2/WebAuthn passkeys with biometric support",
+      "files": ["frontend/src/Components/auth/PasskeyAuth.jsx", "frontend/src/Components/auth/PasskeyRegistration.jsx", "frontend/src/Components/auth/PasskeyManagement.jsx"]
+    },
+    {
+      "name": "Authentication - OAuth/Social Login",
+      "description": "Social login with Google, GitHub, and Apple OAuth 2.0 providers",
+      "files": ["frontend/src/Components/auth/OAuthCallback.jsx", "frontend/src/Components/auth/SocialLoginButtons.jsx", "frontend/src/Components/auth/SocialMediaLogin.jsx", "frontend/src/services/oauthService.js"]
+    },
+    {
+      "name": "Authentication - Two-Factor Authentication",
+      "description": "TOTP-based two-factor authentication setup and verification",
+      "files": ["frontend/src/Components/auth/TwoFactorSetup.jsx", "frontend/src/services/mfaService.js"]
+    },
+    {
+      "name": "Authentication - Biometric",
+      "description": "Biometric authentication using face/voice recognition and fingerprint",
+      "files": ["frontend/src/Components/auth/BiometricAuth.jsx", "frontend/src/Components/auth/BiometricSetup.jsx", "frontend/src/Components/security/BiometricReauth.jsx"]
+    },
+    {
+      "name": "Vault Dashboard",
+      "description": "Main dashboard for viewing and managing password vault items",
+      "files": ["frontend/src/Components/dashboard/VaultDashboard.jsx", "frontend/src/Components/vault/VaultList.jsx", "frontend/src/Components/vault/VaultItem.jsx", "frontend/src/Components/vault/VaultItemCard.jsx"]
+    },
+    {
+      "name": "Vault Item Management",
+      "description": "CRUD operations for vault items including passwords, cards, notes, and identities",
+      "files": ["frontend/src/Components/vault/VaultItemDetail.jsx", "frontend/src/Components/vault/PasswordItem.jsx", "frontend/src/Components/forms/PasswordForm.jsx", "frontend/src/Components/forms/CardForm.jsx", "frontend/src/Components/forms/IdentityForm.jsx", "frontend/src/Components/forms/NoteForm.jsx"]
+    },
+    {
+      "name": "Password Generator",
+      "description": "Secure password generator with customizable options for length, characters, and complexity",
+      "files": ["frontend/src/Components/security/PasswordGenerator.jsx"]
+    },
+    {
+      "name": "Password Strength Meter",
+      "description": "Real-time password strength analysis with ML-powered predictions",
+      "files": ["frontend/src/Components/security/PasswordStrengthMeter.jsx", "frontend/src/Components/security/PasswordStrengthMeterML.jsx", "frontend/src/Components/security/PasswordStrengthMeterML.css"]
+    },
+    {
+      "name": "Cryptographic Services",
+      "description": "Client-side encryption using AES-256-GCM with Argon2id key derivation",
+      "files": ["frontend/src/services/cryptoService.js", "frontend/src/services/secureVaultCrypto.js", "frontend/src/services/secureVaultService.js", "frontend/src/services/xchachaEncryption.js", "frontend/src/services/eccService.js"]
+    },
+    {
+      "name": "Post-Quantum Cryptography (Kyber)",
+      "description": "CRYSTALS-Kyber-768 hybrid encryption with X25519 for quantum-resistant security",
+      "files": ["frontend/src/services/quantum/kyberService.js", "frontend/src/services/quantum/index.js", "frontend/src/hooks/useKyber.js", "frontend/src/utils/kyber-wasm-loader.js", "frontend/src/utils/kyber-cache.js", "frontend/src/workers/kyber-worker.js"]
+    },
+    {
+      "name": "Fully Homomorphic Encryption (FHE)",
+      "description": "Client-side FHE operations for server-side computation on encrypted data",
+      "files": ["frontend/src/services/fhe/fheService.js", "frontend/src/services/fhe/fheKeys.js", "frontend/src/services/fhe/index.js"]
+    },
+    {
+      "name": "Security Dashboard",
+      "description": "Comprehensive security overview with breach alerts and device management",
+      "files": ["frontend/src/Components/security/components/SecurityDashboard.jsx", "frontend/src/Components/security/components/DeviceManager.jsx", "frontend/src/Components/security/components/LoginHistory.jsx", "frontend/src/Components/security/AccountProtection.jsx"]
+    },
+    {
+      "name": "Dark Web Monitoring",
+      "description": "Real-time breach detection and alerts using WebSocket connections",
+      "files": ["frontend/src/services/darkWebService.js", "frontend/src/Components/security/components/BreachAlertsDashboard.jsx", "frontend/src/Components/security/components/BreachAlert.jsx", "frontend/src/Components/security/components/BreachAlertCard.jsx", "frontend/src/hooks/useBreachWebSocket.js"]
+    },
+    {
+      "name": "Behavioral Recovery",
+      "description": "247-dimensional behavioral DNA capture for account recovery verification",
+      "files": ["frontend/src/Components/recovery/behavioral/BehavioralRecoveryFlow.jsx", "frontend/src/Components/recovery/behavioral/TypingChallenge.jsx", "frontend/src/Components/recovery/behavioral/MouseChallenge.jsx", "frontend/src/Components/recovery/behavioral/CognitiveChallenge.jsx", "frontend/src/hooks/useBehavioralRecovery.js"]
+    },
+    {
+      "name": "Behavioral Capture Engine",
+      "description": "Captures keystroke dynamics, mouse biometrics, and cognitive patterns",
+      "files": ["frontend/src/services/behavioralCapture/BehavioralCaptureEngine.js", "frontend/src/services/behavioralCapture/KeystrokeDynamics.js", "frontend/src/services/behavioralCapture/MouseBiometrics.js", "frontend/src/services/behavioralCapture/CognitivePatterns.js", "frontend/src/services/behavioralCapture/DeviceInteraction.js"]
+    },
+    {
+      "name": "Recovery Key Setup",
+      "description": "Primary and quantum recovery key setup for account recovery",
+      "files": ["frontend/src/Components/auth/RecoveryKeySetup.jsx", "frontend/src/Components/auth/PasswordRecovery.jsx", "frontend/src/Components/auth/PasskeyPrimaryRecoverySetup.jsx", "frontend/src/Components/auth/PasskeyPrimaryRecoveryInitiate.jsx", "frontend/src/Components/auth/QuantumRecoverySetup.jsx"]
+    },
+    {
+      "name": "Social Mesh Recovery",
+      "description": "Guardian-based social recovery with temporal challenges",
+      "files": ["frontend/src/Components/recovery/social/RecoveryInitiation.jsx", "frontend/src/Components/recovery/social/RecoveryProgress.jsx", "frontend/src/Components/recovery/social/TemporalChallengeResponse.jsx"]
+    },
+    {
+      "name": "Blockchain Verification",
+      "description": "On-chain verification of behavioral commitments using Arbitrum",
+      "files": ["frontend/src/Components/recovery/blockchain/BlockchainVerification.jsx", "frontend/src/services/blockchain/arbitrumService.js"]
+    },
+    {
+      "name": "Shared Folders",
+      "description": "Team collaboration with folder sharing and role-based access control",
+      "files": ["frontend/src/Components/sharedfolders/SharedFoldersDashboard.jsx", "frontend/src/Components/sharedfolders/CreateFolderModal.jsx", "frontend/src/Components/sharedfolders/FolderDetailsModal.jsx", "frontend/src/Components/sharedfolders/InvitationsModal.jsx"]
+    },
+    {
+      "name": "Email Masking",
+      "description": "Email alias management with SimpleLogin and AnonAddy integration",
+      "files": ["frontend/src/Components/emailmasking/EmailMaskingDashboard.jsx", "frontend/src/Components/emailmasking/CreateAliasModal.jsx", "frontend/src/Components/emailmasking/AliasCard.jsx", "frontend/src/Components/emailmasking/AliasDetailsModal.jsx", "frontend/src/Components/emailmasking/ProviderSetup.jsx"]
+    },
+    {
+      "name": "Session Management",
+      "description": "Secure session monitoring with auto-lock and timeout features",
+      "files": ["frontend/src/Components/security/SessionMonitor.jsx", "frontend/src/Components/security/SessionMonitor.css", "frontend/src/hooks/useSecureSession.js"]
+    },
+    {
+      "name": "Settings Page",
+      "description": "User preferences and security settings configuration",
+      "files": ["frontend/src/Components/settings/SettingsPage.jsx", "frontend/src/Components/settings/SecuritySettings.jsx", "frontend/src/Components/settings/PrivacySettings.jsx", "frontend/src/Components/settings/NotificationSettings.jsx", "frontend/src/Components/settings/ThemeSettings.jsx", "frontend/src/Components/settings/VaultSettings.jsx"]
+    },
+    {
+      "name": "Emergency Access",
+      "description": "Trusted contact emergency vault access with waiting period",
+      "files": ["frontend/src/Components/security/components/EmergencyAccess.jsx", "frontend/src/Components/vault/EmergencyVaultAccess.jsx"]
+    },
+    {
+      "name": "Vault Export",
+      "description": "Encrypted vault backup and export functionality",
+      "files": ["frontend/src/Components/vault/ExportVault.jsx", "frontend/src/Components/security/components/BackupManager.jsx"]
+    },
+    {
+      "name": "Performance Dashboard",
+      "description": "Application performance monitoring and metrics visualization",
+      "files": ["frontend/src/Components/vault/PerformanceDashboard.jsx", "frontend/src/Components/admin/PerformanceMonitoring.jsx", "frontend/src/services/performanceMonitor.js"]
+    },
+    {
+      "name": "Recovery Metrics Dashboard",
+      "description": "Admin dashboard for monitoring recovery system performance",
+      "files": ["frontend/src/Components/admin/RecoveryDashboard.jsx", "frontend/src/Components/admin/metrics/RecoveryMetricsDashboard.jsx", "frontend/src/Components/dashboard/BehavioralRecoveryStatus.jsx"]
+    },
+    {
+      "name": "A/B Testing",
+      "description": "Feature experimentation and A/B test results visualization",
+      "files": ["frontend/src/services/abTestingService.js", "frontend/src/Components/admin/metrics/ABTestResults.jsx"]
+    },
+    {
+      "name": "Analytics",
+      "description": "User behavior tracking and analytics event collection",
+      "files": ["frontend/src/services/analyticsService.js"]
+    },
+    {
+      "name": "ML Security Service",
+      "description": "Client-side ML models for password strength and threat analysis",
+      "files": ["frontend/src/services/mlSecurityService.js", "frontend/src/ml/behavioralDNA/HybridModel.js", "frontend/src/ml/behavioralDNA/TransformerModel.js", "frontend/src/ml/behavioralDNA/BackendAPI.js"]
+    },
+    {
+      "name": "Autofill",
+      "description": "Password autofill suggestion component for forms",
+      "files": ["frontend/src/Components/autofill/AutofillSuggestion.jsx"]
+    },
+    {
+      "name": "Common UI Components",
+      "description": "Reusable UI components including buttons, modals, inputs, and loading indicators",
+      "files": ["frontend/src/Components/common/Button.jsx", "frontend/src/Components/common/Modal.jsx", "frontend/src/Components/common/Input.jsx", "frontend/src/Components/common/LoadingIndicator.jsx", "frontend/src/Components/common/ErrorBoundary.jsx", "frontend/src/Components/common/ErrorDisplay.jsx", "frontend/src/Components/common/Tooltip.jsx", "frontend/src/Components/common/Icon.jsx"]
+    },
+    {
+      "name": "Layout Components",
+      "description": "Application layout structure including header, sidebar, and page layout",
+      "files": ["frontend/src/Components/layout/Header.jsx", "frontend/src/Components/layout/Sidebar.jsx", "frontend/src/Components/layout/PageLayout.jsx"]
+    },
+    {
+      "name": "Particle Background",
+      "description": "Animated particle background for visual effects",
+      "files": ["frontend/src/Components/animations/ParticleBackground.jsx"]
+    },
+    {
+      "name": "API Service",
+      "description": "Centralized API client with JWT authentication and request handling",
+      "files": ["frontend/src/services/api.js"]
+    },
+    {
+      "name": "Secure Vault Hook",
+      "description": "React hook for vault operations with encryption and decryption",
+      "files": ["frontend/src/hooks/useSecureVault.js", "frontend/src/contexts/VaultContext.jsx"]
+    },
+    {
+      "name": "Error Handling",
+      "description": "Error tracking, handling, and display components",
+      "files": ["frontend/src/services/errorTracker.js", "frontend/src/utils/errorHandler.js"]
+    },
+    {
+      "name": "Offline Support",
+      "description": "Offline queue management and network quality estimation",
+      "files": ["frontend/src/utils/OfflineQueueManager.js", "frontend/src/utils/NetworkQualityEstimator.js"]
+    },
+    {
+      "name": "Secure Storage",
+      "description": "Browser-based secure storage services for sensitive data",
+      "files": ["frontend/src/services/secureStorageService.js", "frontend/src/services/webSecureStorage.js", "frontend/src/services/SecureBehavioralStorage.js"]
+    }
+  ]
+}
+
