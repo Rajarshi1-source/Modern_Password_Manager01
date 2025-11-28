@@ -1,0 +1,104 @@
+# =============================================================================
+# Docker Compose - Development Override
+# =============================================================================
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # PostgreSQL - Expose port for local development
+  # ===========================================================================
+  postgres:
+    ports:
+      - "5432:5432"
+
+  # ===========================================================================
+  # Redis - Expose port for local development
+  # ===========================================================================
+  redis:
+    ports:
+      - "6379:6379"
+
+  # ===========================================================================
+  # Backend - Development mode with hot reload
+  # ===========================================================================
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/backend/Dockerfile
+      target: production
+    command: >
+      python manage.py runserver 0.0.0.0:8000
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=dev-secret-key-not-for-production
+    volumes:
+      - ../password_manager:/app
+    ports:
+      - "8000:8000"
+
+  # ===========================================================================
+  # WebSocket - Development mode
+  # ===========================================================================
+  websocket:
+    command: >
+      daphne password_manager.asgi:application
+      --bind 0.0.0.0
+      --port 8001
+      --verbosity 2
+    environment:
+      - DEBUG=True
+    volumes:
+      - ../password_manager:/app
+    ports:
+      - "8001:8001"
+
+  # ===========================================================================
+  # Celery Worker - Development with auto-reload
+  # ===========================================================================
+  celery_worker:
+    command: >
+      watchmedo auto-restart --directory=/app --pattern=*.py --recursive --
+      celery -A password_manager worker --loglevel=debug --concurrency=2
+    environment:
+      - DEBUG=True
+    volumes:
+      - ../password_manager:/app
+
+  # ===========================================================================
+  # Celery Beat - Development mode
+  # ===========================================================================
+  celery_beat:
+    command: >
+      celery -A password_manager beat --loglevel=debug
+    environment:
+      - DEBUG=True
+    volumes:
+      - ../password_manager:/app
+
+  # ===========================================================================
+  # Frontend - Development with Vite hot reload
+  # ===========================================================================
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend/Dockerfile.dev
+    command: npm run dev -- --host 0.0.0.0
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8001
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+
+  # ===========================================================================
+  # Remove Nginx in development (use Vite dev server directly)
+  # ===========================================================================
+  nginx:
+    profiles:
+      - production
+
