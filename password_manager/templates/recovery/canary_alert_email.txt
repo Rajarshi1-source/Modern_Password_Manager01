@@ -1,0 +1,33 @@
+⚠️ URGENT SECURITY ALERT - Account Recovery Initiated
+
+Hello {{ user.email }},
+
+⚠️ IMMEDIATE ACTION REQUIRED
+
+Someone has initiated account recovery for your SecureVault account.
+
+If this was NOT you, cancel this recovery immediately to protect your account.
+
+RECOVERY DETAILS:
+- Initiated at: {{ initiated_at }}
+- IP Address: {{ ip_address }}
+- Location: {{ location.city|default:"Unknown" }}, {{ location.country|default:"Unknown" }}
+- Expires at: {{ expires_at }}
+
+🚫 TO CANCEL RECOVERY IMMEDIATELY:
+Visit: {{ cancel_url }}
+
+IF THIS WAS YOU:
+No action needed. Continue following the recovery process. You will receive temporal challenges via email over the next few days.
+
+WHAT HAPPENS NEXT (if you don't cancel):
+1. You'll receive 5 identity verification challenges over 3 days
+2. Your guardians will be asked to approve the recovery
+3. If verified, account access will be restored
+
+⚠️ You have 48 hours to cancel this recovery if it's unauthorized.
+
+---
+This is an automated security alert from SecureVault Password Manager.
+© 2025 SecureVault. All rights reserved.
+

@@ -1,0 +1,23 @@
+SecureVault - Recovery Challenge
+
+Challenge {{ challenge_number }} of {{ total_challenges }}
+
+Hello {{ user.email }},
+
+You're receiving this as part of your account recovery process. Please answer the following challenge to verify your identity:
+
+YOUR CHALLENGE:
+{{ challenge_question }}
+
+To submit your answer, visit:
+{{ challenge_url }}
+
+⏰ This challenge expires at: {{ expires_at }}
+
+SECURITY NOTE:
+If you did not initiate this recovery, please cancel it immediately using the link provided in your canary alert email.
+
+---
+This is an automated message from SecureVault Password Manager.
+© 2025 SecureVault. All rights reserved.
+

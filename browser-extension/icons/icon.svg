@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="58" fill="#2563eb" stroke="#1d4ed8" stroke-width="4"/>
+  
+  <!-- Lock body -->
+  <rect x="40" y="56" width="48" height="36" rx="4" fill="white"/>
+  
+  <!-- Lock shackle -->
+  <path d="M52 56V44C52 37.3726 57.3726 32 64 32C70.6274 32 76 37.3726 76 44V56" 
+        stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
+  
+  <!-- Keyhole -->
+  <circle cx="64" cy="68" r="4" fill="#2563eb"/>
+  <rect x="62" y="68" width="4" height="12" fill="#2563eb"/>
+  
+  <!-- Security accent -->
+  <path d="M64 16L72 24L64 32L56 24Z" fill="#fbbf24" opacity="0.8"/>
+</svg>

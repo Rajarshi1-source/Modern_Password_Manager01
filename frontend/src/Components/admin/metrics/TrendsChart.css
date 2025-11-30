@@ -1,0 +1,134 @@
+/**
+ * Trends Chart Styles (Phase 2B.2)
+ */
+
+.trends-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.trends-chart.empty {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Chart Container */
+.chart-container {
+  padding: 20px;
+  background: white;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.chart-header h4 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.chart-current-value {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+/* Chart Bars */
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 200px;
+  padding: 10px 0;
+  border-bottom: 2px solid #e0e0e0;
+  gap: 8px;
+}
+
+.chart-bar-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-bar {
+  width: 100%;
+  min-height: 30px;
+  border-radius: 6px 6px 0 0;
+  position: relative;
+  transition: all 0.3s;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 4px;
+}
+
+.chart-bar:hover {
+  opacity: 0.8;
+  transform: scaleY(1.05);
+}
+
+.chart-bar.empty {
+  background: #e0e0e0;
+  opacity: 0.3;
+}
+
+.bar-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.chart-label {
+  font-size: 10px;
+  color: #666;
+  text-align: center;
+  word-break: break-word;
+}
+
+/* Trends Legend */
+.trends-legend {
+  padding: 16px;
+  background: #f0f7ff;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.trends-legend p {
+  margin: 0;
+  font-size: 13px;
+  color: #2c3e50;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .chart-bars {
+    height: 150px;
+  }
+
+  .chart-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .chart-label {
+    font-size: 9px;
+  }
+
+  .bar-value {
+    font-size: 10px;
+  }
+}
+

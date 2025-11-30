@@ -1,0 +1,139 @@
+/**
+ * Feedback Summary Styles (Phase 2B.2)
+ */
+
+.feedback-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.feedback-summary.empty {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-style: italic;
+}
+
+/* NPS Breakdown */
+.nps-breakdown {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.nps-score-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 30px;
+  background: white;
+  border: 4px solid;
+  border-radius: 16px;
+  min-width: 200px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+.nps-emoji {
+  font-size: 64px;
+  margin-bottom: 12px;
+}
+
+.nps-score {
+  font-size: 48px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.nps-category {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Feedback Metrics Grid */
+.feedback-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.feedback-metric {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: white;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  transition: all 0.2s;
+}
+
+.feedback-metric:hover {
+  border-color: #667eea;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+}
+
+.feedback-metric .metric-icon {
+  font-size: 32px;
+}
+
+.feedback-metric .metric-info {
+  flex: 1;
+}
+
+.feedback-metric .metric-label {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.feedback-metric .metric-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+/* Feedback Actions */
+.feedback-actions {
+  padding: 16px;
+  background: #f0f7ff;
+  border-radius: 8px;
+  border-left: 4px solid #2196F3;
+}
+
+.feedback-note {
+  margin: 0;
+  font-size: 13px;
+  color: #2c3e50;
+  line-height: 1.6;
+}
+
+.improvement-note {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 8px;
+  background: #FFF3E0;
+  border-radius: 4px;
+  color: #E65100;
+  font-weight: 600;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .feedback-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .nps-emoji {
+    font-size: 48px;
+  }
+
+  .nps-score {
+    font-size: 36px;
+  }
+}
+

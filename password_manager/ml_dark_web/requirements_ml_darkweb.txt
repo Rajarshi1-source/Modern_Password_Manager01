@@ -1,0 +1,66 @@
+# ML Dark Web Monitoring Requirements
+# Core ML Dependencies
+
+# PyTorch (CPU version - use GPU version if available)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Transformers for BERT models
+transformers>=4.30.0
+tokenizers>=0.13.0
+sentencepiece>=0.1.99
+
+# NLP and Text Processing
+spacy>=3.5.0
+# Run: python -m spacy download en_core_web_sm
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Web Scraping
+scrapy>=2.9.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+selenium>=4.10.0  # For JavaScript-heavy sites
+PySocks>=1.7.1  # For SOCKS proxy (Tor)
+
+# Celery for Async Processing
+celery>=5.3.0
+redis>=4.5.0
+flower>=2.0.0  # For monitoring Celery tasks
+
+# Django Channels for WebSockets
+channels>=4.0.0
+channels-redis>=4.1.0
+daphne>=4.0.0
+
+# Database
+psycopg2-binary>=2.9.0  # PostgreSQL adapter
+# pgvector - install separately: pip install pgvector
+
+# API and HTTP
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Data Validation
+pydantic>=2.0.0
+
+# Progress Bars
+tqdm>=4.65.0
+
+# Logging and Monitoring
+python-json-logger>=2.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-django>=4.5.0
+pytest-asyncio>=0.21.0
+factory-boy>=3.2.0
+
+# Optional: For better performance
+# accelerate>=0.20.0  # For faster model loading
+# datasets>=2.13.0  # For dataset management
+# huggingface-hub>=0.15.0  # For model management
+

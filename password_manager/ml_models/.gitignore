@@ -1,0 +1,27 @@
+# Ignore all model files by default
+*.bin
+*.pth
+*.pt
+*.h5
+*.onnx
+*.pb
+*.pkl
+*.joblib
+
+# Model directories
+*/breach_classifier/
+*/credential_matcher/
+*/autoencoder/
+*/lstm_model/
+
+# But keep directory structure
+!**/README.md
+!**/.gitignore
+
+# Training artifacts
+*.log
+checkpoints/
+runs/
+tensorboard/
+__pycache__/
+

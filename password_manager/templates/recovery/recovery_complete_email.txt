@@ -1,0 +1,25 @@
+SecureVault - Recovery Completed!
+
+Hello {{ user.email }},
+
+✅ SUCCESS!
+
+Your account recovery has been completed successfully.
+
+RECOVERY DETAILS:
+- Completed at: {{ completed_at }}
+- Trust Score: {{ trust_score|floatformat:1 }}%
+
+WHAT'S NEXT:
+1. Log in to your account with your recovered passkey
+2. Review your security settings
+3. Consider updating your guardian network if needed
+4. Thank your guardians for helping you recover access
+
+SECURITY REMINDER:
+If you notice any suspicious activity, please contact support immediately.
+
+---
+This is an automated message from SecureVault Password Manager.
+© 2025 SecureVault. All rights reserved.
+

@@ -1,0 +1,21 @@
+# Ignore large model files
+*.bin
+*.pth
+*.pt
+*.h5
+*.onnx
+*.pb
+
+# Model directories
+breach_classifier/
+credential_matcher/
+
+# Keep README
+!README.md
+!.gitignore
+
+# Training artifacts
+*.log
+checkpoints/
+runs/
+

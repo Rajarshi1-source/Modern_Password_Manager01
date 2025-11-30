@@ -1,0 +1,438 @@
+{
+  "meta": {
+    "project": "SecureVault Password Manager",
+    "date": "2025-11-19",
+    "prepared_by": "Software Development Manager"
+  },
+  "product_overview": "SecureVault is a next-generation password manager offering advanced security through zero-knowledge client-side encryption, machine learning enhanced threat and password analysis, and support for post-quantum cryptography. It provides secure vault management for passwords and sensitive data with multi-platform accessibility including web, desktop, mobile, and browser extensions.",
+  "core_goals": [
+    "Provide unparalleled security using client-side encryption with zero-knowledge architecture ensuring server never sees plaintext data.",
+    "Support modern authentication methods including password + MFA, passwordless WebAuthn/Passkeys, and OAuth social logins.",
+    "Leverage post-quantum cryptography (CRYSTALS-Kyber-768 hybrid) for encrypted vault items and communications.",
+    "Enable fully homomorphic encryption (FHE) to allow server-side computation on encrypted user data without exposure.",
+    "Implement a comprehensive multi-factor and biometric authentication system to enhance user protection.",
+    "Offer advanced recovery mechanisms including behavioral DNA verification and social mesh recovery to securely regain account access.",
+    "Ensure high performance and scalability with multi-level caching, query optimization, and compression middleware.",
+    "Provide cross-platform support with consistent user experience on web, desktop, mobile, and browser extension clients."
+  ],
+  "key_features": [
+    "Zero-Knowledge Architecture: All encryption and decryption happen client-side with master password never sent to server; server stores only encrypted blobs.",
+    "Comprehensive Authentication: Supports password + TOTP/SMS/Push MFA, WebAuthn/FIDO2 passkeys including biometric factors, OAuth 2.0 social logins (Google, GitHub, Apple).",
+    "Post-Quantum Security: Hybrid CRYSTALS-Kyber-768 + X25519 key management and encryption with optimized Number Theoretic Transform for high performance.",
+    "Fully Homomorphic Encryption (FHE): Multi-tier FHE integration allowing encrypted operations on server with caching and intelligent routing for performance.",
+    "Secure Vault Management: CRUD operations on encrypted vault items, folder organization, shared folders with role-based access control, import/export and encrypted backups.",
+    "Behavioral Biometrics and Recovery: Capture 247-dimensional behavioral DNA including keystroke, mouse, cognitive patterns for continuous auth and recovery.",
+    "Dark Web and Threat Monitoring: Real-time breach alerts using machine learning models including BERT and Siamese networks.",
+    "Multi-Level Caching and Compression: L1 memory, L2 Redis, and database caching combined with Gzip/Brotli response compression for efficient data transfer and fast operations.",
+    "Session and Device Management: Secure session monitoring with auto-lock, device trust scoring, and emergency access with trusted contacts and waiting periods.",
+    "Cross-Platform Deliverables: Web app in React, Electron desktop, React Native mobile, and browser extension with seamless synchronization and consistent security."
+  ],
+  "user_flow_summary": [
+    "User registration via email with password creation, optionally setting up MFA or passkey authentication.",
+    "Master password processed client-side using Argon2id KDF generating the encryption key; zero-knowledge auth hash sent to server for validation.",
+    "Vault data encrypted on client with AES-256-GCM using derived keys before being sent to server for storage.",
+    "Login flows supporting password + MFA, passwordless WebAuthn/passkeys with biometric authentication, or social logins via OAuth providers.",
+    "Vault item management including creating, editing, organizing passwords, cards, notes, identities with real-time strength meter and secure encryption.",
+    "Password generation using crypto-random secure options with ML-based strength feedback.",
+    "Advanced recovery sequences where user can either recover using primary recovery keys or initiate behavioral DNA and guardian-based social mesh recovery requiring multi-day verification.",
+    "FHE-enabled password strength checks and encrypted searches performed via intelligent routing between client, hybrid, and full FHE server computations with caching to reduce latency.",
+    "Security dashboard displays breach alerts, device management, login history, and emergency access controls.",
+    "Shared folders allow team collaboration with fine-grained role access and invitation management.",
+    "Session auto-lock triggers key wipes on timeout; users can manage trusted devices and enable/disable device trust."
+  ],
+  "validation_criteria": [
+    "All sensitive user data is encrypted client-side before any transmission; server never receives plaintext credentials or encryption keys.",
+    "Authentication flows correctly handle password-based, passkey-based, and OAuth login with enforced multi-factor authentication when required.",
+    "Post-quantum cryptography operations demonstrate expected performance improvements via optimized NTT and caching layers.",
+    "Fully homomorphic encryption operations complete successfully across tiers with correct encrypted results and efficient caching behavior.",
+    "Vault API endpoints return encrypted data blobs with metadata-only queries providing faster metadata listings without exposing sensitive ciphertext.",
+    "Behavioral recovery accurately captures and evaluates 247-dimension biometric data and challenges per defined thresholds for recovery approval.",
+    "Security dashboards update and notify users immediately upon breach detection via WebSocket real-time alerts.",
+    "Session management enforces automatic key clearance after inactivity and supports device trust evaluations with audit logging.",
+    "Cross-platform clients synchronize encrypted vault data seamlessly with consistent behavior across platforms.",
+    "Performance benchmarks validate at least 6x speedup in Kyber operations and 10x improvements in cache hit rates and API response times compared to baseline."
+  ],
+  "code_summary": {
+    "tech_stack": [
+      "JavaScript",
+      "React 18.2.0",
+      "Vite 5.x",
+      "TensorFlow.js",
+      "WebCrypto API",
+      "Argon2-browser",
+      "CryptoJS",
+      "Firebase",
+      "Styled Components",
+      "Framer Motion",
+      "React Router DOM",
+      "IndexedDB"
+    ],
+    "features": [
+      {
+        "name": "Authentication - Login",
+        "description": "User login with email/password authentication, supporting zero-knowledge verification",
+        "files": [
+          "frontend/src/Components/auth/Login.jsx",
+          "frontend/src/Components/auth/Login.css",
+          "frontend/src/hooks/useAuth.jsx",
+          "frontend/src/contexts/AuthContext.jsx"
+        ]
+      },
+      {
+        "name": "Authentication - Passkey/WebAuthn",
+        "description": "Passwordless authentication using FIDO2/WebAuthn passkeys with biometric support",
+        "files": [
+          "frontend/src/Components/auth/PasskeyAuth.jsx",
+          "frontend/src/Components/auth/PasskeyRegistration.jsx",
+          "frontend/src/Components/auth/PasskeyManagement.jsx"
+        ]
+      },
+      {
+        "name": "Authentication - OAuth/Social Login",
+        "description": "Social login with Google, GitHub, and Apple OAuth 2.0 providers",
+        "files": [
+          "frontend/src/Components/auth/OAuthCallback.jsx",
+          "frontend/src/Components/auth/SocialLoginButtons.jsx",
+          "frontend/src/Components/auth/SocialMediaLogin.jsx",
+          "frontend/src/services/oauthService.js"
+        ]
+      },
+      {
+        "name": "Authentication - Two-Factor Authentication",
+        "description": "TOTP-based two-factor authentication setup and verification",
+        "files": [
+          "frontend/src/Components/auth/TwoFactorSetup.jsx",
+          "frontend/src/services/mfaService.js"
+        ]
+      },
+      {
+        "name": "Authentication - Biometric",
+        "description": "Biometric authentication using face/voice recognition and fingerprint",
+        "files": [
+          "frontend/src/Components/auth/BiometricAuth.jsx",
+          "frontend/src/Components/auth/BiometricSetup.jsx",
+          "frontend/src/Components/security/BiometricReauth.jsx"
+        ]
+      },
+      {
+        "name": "Vault Dashboard",
+        "description": "Main dashboard for viewing and managing password vault items",
+        "files": [
+          "frontend/src/Components/dashboard/VaultDashboard.jsx",
+          "frontend/src/Components/vault/VaultList.jsx",
+          "frontend/src/Components/vault/VaultItem.jsx",
+          "frontend/src/Components/vault/VaultItemCard.jsx"
+        ]
+      },
+      {
+        "name": "Vault Item Management",
+        "description": "CRUD operations for vault items including passwords, cards, notes, and identities",
+        "files": [
+          "frontend/src/Components/vault/VaultItemDetail.jsx",
+          "frontend/src/Components/vault/PasswordItem.jsx",
+          "frontend/src/Components/forms/PasswordForm.jsx",
+          "frontend/src/Components/forms/CardForm.jsx",
+          "frontend/src/Components/forms/IdentityForm.jsx",
+          "frontend/src/Components/forms/NoteForm.jsx"
+        ]
+      },
+      {
+        "name": "Password Generator",
+        "description": "Secure password generator with customizable options for length, characters, and complexity",
+        "files": [
+          "frontend/src/Components/security/PasswordGenerator.jsx"
+        ]
+      },
+      {
+        "name": "Password Strength Meter",
+        "description": "Real-time password strength analysis with ML-powered predictions",
+        "files": [
+          "frontend/src/Components/security/PasswordStrengthMeter.jsx",
+          "frontend/src/Components/security/PasswordStrengthMeterML.jsx",
+          "frontend/src/Components/security/PasswordStrengthMeterML.css"
+        ]
+      },
+      {
+        "name": "Cryptographic Services",
+        "description": "Client-side encryption using AES-256-GCM with Argon2id key derivation",
+        "files": [
+          "frontend/src/services/cryptoService.js",
+          "frontend/src/services/secureVaultCrypto.js",
+          "frontend/src/services/secureVaultService.js",
+          "frontend/src/services/xchachaEncryption.js",
+          "frontend/src/services/eccService.js"
+        ]
+      },
+      {
+        "name": "Post-Quantum Cryptography (Kyber)",
+        "description": "CRYSTALS-Kyber-768 hybrid encryption with X25519 for quantum-resistant security",
+        "files": [
+          "frontend/src/services/quantum/kyberService.js",
+          "frontend/src/services/quantum/index.js",
+          "frontend/src/hooks/useKyber.js",
+          "frontend/src/utils/kyber-wasm-loader.js",
+          "frontend/src/utils/kyber-cache.js",
+          "frontend/src/workers/kyber-worker.js"
+        ]
+      },
+      {
+        "name": "Fully Homomorphic Encryption (FHE)",
+        "description": "Client-side FHE operations for server-side computation on encrypted data",
+        "files": [
+          "frontend/src/services/fhe/fheService.js",
+          "frontend/src/services/fhe/fheKeys.js",
+          "frontend/src/services/fhe/index.js"
+        ]
+      },
+      {
+        "name": "Security Dashboard",
+        "description": "Comprehensive security overview with breach alerts and device management",
+        "files": [
+          "frontend/src/Components/security/components/SecurityDashboard.jsx",
+          "frontend/src/Components/security/components/DeviceManager.jsx",
+          "frontend/src/Components/security/components/LoginHistory.jsx",
+          "frontend/src/Components/security/AccountProtection.jsx"
+        ]
+      },
+      {
+        "name": "Dark Web Monitoring",
+        "description": "Real-time breach detection and alerts using WebSocket connections",
+        "files": [
+          "frontend/src/services/darkWebService.js",
+          "frontend/src/Components/security/components/BreachAlertsDashboard.jsx",
+          "frontend/src/Components/security/components/BreachAlert.jsx",
+          "frontend/src/Components/security/components/BreachAlertCard.jsx",
+          "frontend/src/hooks/useBreachWebSocket.js"
+        ]
+      },
+      {
+        "name": "Behavioral Recovery",
+        "description": "247-dimensional behavioral DNA capture for account recovery verification",
+        "files": [
+          "frontend/src/Components/recovery/behavioral/BehavioralRecoveryFlow.jsx",
+          "frontend/src/Components/recovery/behavioral/TypingChallenge.jsx",
+          "frontend/src/Components/recovery/behavioral/MouseChallenge.jsx",
+          "frontend/src/Components/recovery/behavioral/CognitiveChallenge.jsx",
+          "frontend/src/hooks/useBehavioralRecovery.js"
+        ]
+      },
+      {
+        "name": "Behavioral Capture Engine",
+        "description": "Captures keystroke dynamics, mouse biometrics, and cognitive patterns",
+        "files": [
+          "frontend/src/services/behavioralCapture/BehavioralCaptureEngine.js",
+          "frontend/src/services/behavioralCapture/KeystrokeDynamics.js",
+          "frontend/src/services/behavioralCapture/MouseBiometrics.js",
+          "frontend/src/services/behavioralCapture/CognitivePatterns.js",
+          "frontend/src/services/behavioralCapture/DeviceInteraction.js"
+        ]
+      },
+      {
+        "name": "Recovery Key Setup",
+        "description": "Primary and quantum recovery key setup for account recovery",
+        "files": [
+          "frontend/src/Components/auth/RecoveryKeySetup.jsx",
+          "frontend/src/Components/auth/PasswordRecovery.jsx",
+          "frontend/src/Components/auth/PasskeyPrimaryRecoverySetup.jsx",
+          "frontend/src/Components/auth/PasskeyPrimaryRecoveryInitiate.jsx",
+          "frontend/src/Components/auth/QuantumRecoverySetup.jsx"
+        ]
+      },
+      {
+        "name": "Social Mesh Recovery",
+        "description": "Guardian-based social recovery with temporal challenges",
+        "files": [
+          "frontend/src/Components/recovery/social/RecoveryInitiation.jsx",
+          "frontend/src/Components/recovery/social/RecoveryProgress.jsx",
+          "frontend/src/Components/recovery/social/TemporalChallengeResponse.jsx"
+        ]
+      },
+      {
+        "name": "Blockchain Verification",
+        "description": "On-chain verification of behavioral commitments using Arbitrum",
+        "files": [
+          "frontend/src/Components/recovery/blockchain/BlockchainVerification.jsx",
+          "frontend/src/services/blockchain/arbitrumService.js"
+        ]
+      },
+      {
+        "name": "Shared Folders",
+        "description": "Team collaboration with folder sharing and role-based access control",
+        "files": [
+          "frontend/src/Components/sharedfolders/SharedFoldersDashboard.jsx",
+          "frontend/src/Components/sharedfolders/CreateFolderModal.jsx",
+          "frontend/src/Components/sharedfolders/FolderDetailsModal.jsx",
+          "frontend/src/Components/sharedfolders/InvitationsModal.jsx"
+        ]
+      },
+      {
+        "name": "Email Masking",
+        "description": "Email alias management with SimpleLogin and AnonAddy integration",
+        "files": [
+          "frontend/src/Components/emailmasking/EmailMaskingDashboard.jsx",
+          "frontend/src/Components/emailmasking/CreateAliasModal.jsx",
+          "frontend/src/Components/emailmasking/AliasCard.jsx",
+          "frontend/src/Components/emailmasking/AliasDetailsModal.jsx",
+          "frontend/src/Components/emailmasking/ProviderSetup.jsx"
+        ]
+      },
+      {
+        "name": "Session Management",
+        "description": "Secure session monitoring with auto-lock and timeout features",
+        "files": [
+          "frontend/src/Components/security/SessionMonitor.jsx",
+          "frontend/src/Components/security/SessionMonitor.css",
+          "frontend/src/hooks/useSecureSession.js"
+        ]
+      },
+      {
+        "name": "Settings Page",
+        "description": "User preferences and security settings configuration",
+        "files": [
+          "frontend/src/Components/settings/SettingsPage.jsx",
+          "frontend/src/Components/settings/SecuritySettings.jsx",
+          "frontend/src/Components/settings/PrivacySettings.jsx",
+          "frontend/src/Components/settings/NotificationSettings.jsx",
+          "frontend/src/Components/settings/ThemeSettings.jsx",
+          "frontend/src/Components/settings/VaultSettings.jsx"
+        ]
+      },
+      {
+        "name": "Emergency Access",
+        "description": "Trusted contact emergency vault access with waiting period",
+        "files": [
+          "frontend/src/Components/security/components/EmergencyAccess.jsx",
+          "frontend/src/Components/vault/EmergencyVaultAccess.jsx"
+        ]
+      },
+      {
+        "name": "Vault Export",
+        "description": "Encrypted vault backup and export functionality",
+        "files": [
+          "frontend/src/Components/vault/ExportVault.jsx",
+          "frontend/src/Components/security/components/BackupManager.jsx"
+        ]
+      },
+      {
+        "name": "Performance Dashboard",
+        "description": "Application performance monitoring and metrics visualization",
+        "files": [
+          "frontend/src/Components/vault/PerformanceDashboard.jsx",
+          "frontend/src/Components/admin/PerformanceMonitoring.jsx",
+          "frontend/src/services/performanceMonitor.js"
+        ]
+      },
+      {
+        "name": "Recovery Metrics Dashboard",
+        "description": "Admin dashboard for monitoring recovery system performance",
+        "files": [
+          "frontend/src/Components/admin/RecoveryDashboard.jsx",
+          "frontend/src/Components/admin/metrics/RecoveryMetricsDashboard.jsx",
+          "frontend/src/Components/dashboard/BehavioralRecoveryStatus.jsx"
+        ]
+      },
+      {
+        "name": "A/B Testing",
+        "description": "Feature experimentation and A/B test results visualization",
+        "files": [
+          "frontend/src/services/abTestingService.js",
+          "frontend/src/Components/admin/metrics/ABTestResults.jsx"
+        ]
+      },
+      {
+        "name": "Analytics",
+        "description": "User behavior tracking and analytics event collection",
+        "files": [
+          "frontend/src/services/analyticsService.js"
+        ]
+      },
+      {
+        "name": "ML Security Service",
+        "description": "Client-side ML models for password strength and threat analysis",
+        "files": [
+          "frontend/src/services/mlSecurityService.js",
+          "frontend/src/ml/behavioralDNA/HybridModel.js",
+          "frontend/src/ml/behavioralDNA/TransformerModel.js",
+          "frontend/src/ml/behavioralDNA/BackendAPI.js"
+        ]
+      },
+      {
+        "name": "Autofill",
+        "description": "Password autofill suggestion component for forms",
+        "files": [
+          "frontend/src/Components/autofill/AutofillSuggestion.jsx"
+        ]
+      },
+      {
+        "name": "Common UI Components",
+        "description": "Reusable UI components including buttons, modals, inputs, and loading indicators",
+        "files": [
+          "frontend/src/Components/common/Button.jsx",
+          "frontend/src/Components/common/Modal.jsx",
+          "frontend/src/Components/common/Input.jsx",
+          "frontend/src/Components/common/LoadingIndicator.jsx",
+          "frontend/src/Components/common/ErrorBoundary.jsx",
+          "frontend/src/Components/common/ErrorDisplay.jsx",
+          "frontend/src/Components/common/Tooltip.jsx",
+          "frontend/src/Components/common/Icon.jsx"
+        ]
+      },
+      {
+        "name": "Layout Components",
+        "description": "Application layout structure including header, sidebar, and page layout",
+        "files": [
+          "frontend/src/Components/layout/Header.jsx",
+          "frontend/src/Components/layout/Sidebar.jsx",
+          "frontend/src/Components/layout/PageLayout.jsx"
+        ]
+      },
+      {
+        "name": "Particle Background",
+        "description": "Animated particle background for visual effects",
+        "files": [
+          "frontend/src/Components/animations/ParticleBackground.jsx"
+        ]
+      },
+      {
+        "name": "API Service",
+        "description": "Centralized API client with JWT authentication and request handling",
+        "files": [
+          "frontend/src/services/api.js"
+        ]
+      },
+      {
+        "name": "Secure Vault Hook",
+        "description": "React hook for vault operations with encryption and decryption",
+        "files": [
+          "frontend/src/hooks/useSecureVault.js",
+          "frontend/src/contexts/VaultContext.jsx"
+        ]
+      },
+      {
+        "name": "Error Handling",
+        "description": "Error tracking, handling, and display components",
+        "files": [
+          "frontend/src/services/errorTracker.js",
+          "frontend/src/utils/errorHandler.js"
+        ]
+      },
+      {
+        "name": "Offline Support",
+        "description": "Offline queue management and network quality estimation",
+        "files": [
+          "frontend/src/utils/OfflineQueueManager.js",
+          "frontend/src/utils/NetworkQualityEstimator.js"
+        ]
+      },
+      {
+        "name": "Secure Storage",
+        "description": "Browser-based secure storage services for sensitive data",
+        "files": [
+          "frontend/src/services/secureStorageService.js",
+          "frontend/src/services/webSecureStorage.js",
+          "frontend/src/services/SecureBehavioralStorage.js"
+        ]
+      }
+    ]
+  }
+}

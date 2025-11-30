@@ -1,0 +1,232 @@
+# =============================================================================
+# Docker Compose - Password Manager (Development)
+# =============================================================================
+# IMPORTANT: For development, ensure DEBUG=True in environment variables
+# This enables:
+#   - Lenient rate limiting (30/min vs 3/min for auth)
+#   - Disabled HTTPS redirect (prevents SSL errors)
+#   - Detailed error messages
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: password_manager_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-password_manager}
+      POSTGRES_USER: ${DB_USER:-pm_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password123}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pm_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: password_manager_redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # Django Backend (HTTP Server)
+  backend:
+    build:
+      context: ./password_manager
+      dockerfile: Dockerfile
+    container_name: password_manager_backend
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn password_manager.wsgi:application --bind 0.0.0.0:8000 --workers 4"
+    volumes:
+      - ./password_manager:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      # Set DEBUG=True for development (disables HTTPS redirect, enables lenient rate limiting)
+      - DEBUG=${DEBUG:-True}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # OpenID Connect (OIDC) Configuration
+      - OIDC_RP_CLIENT_ID=${OIDC_RP_CLIENT_ID:-}
+      - OIDC_RP_CLIENT_SECRET=${OIDC_RP_CLIENT_SECRET:-}
+      - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
+      - OIDC_VERIFY_SSL=${OIDC_VERIFY_SSL:-True}
+      - OIDC_USE_NONCE=${OIDC_USE_NONCE:-True}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # Daphne WebSocket Server (ASGI)
+  # NOTE: WebSocket service is OPTIONAL for basic functionality
+  # It's only needed for real-time breach alerts and live sync features
+  # For development without WebSockets, you can comment out this service
+  websocket:
+    build:
+      context: ./password_manager
+      dockerfile: Dockerfile
+    container_name: password_manager_websocket
+    command: daphne -b 0.0.0.0 -p 8001 password_manager.asgi:application
+    volumes:
+      - ./password_manager:/app
+    ports:
+      - "${WEBSOCKET_PORT:-8001}:8001"
+    environment:
+      - DEBUG=${DEBUG:-True}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      # OpenID Connect (OIDC) Configuration
+      - OIDC_RP_CLIENT_ID=${OIDC_RP_CLIENT_ID:-}
+      - OIDC_RP_CLIENT_SECRET=${OIDC_RP_CLIENT_SECRET:-}
+      - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # Celery Worker (Background Tasks)
+  celery_worker:
+    build:
+      context: ./password_manager
+      dockerfile: Dockerfile
+    container_name: password_manager_celery_worker
+    command: celery -A password_manager worker -l info --concurrency=4
+    volumes:
+      - ./password_manager:/app
+      - media_volume:/app/media
+    environment:
+      - DEBUG=${DEBUG:-True}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # Celery Beat (Periodic Task Scheduler)
+  celery_beat:
+    build:
+      context: ./password_manager
+      dockerfile: Dockerfile
+    container_name: password_manager_celery_beat
+    command: celery -A password_manager beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - ./password_manager:/app
+    environment:
+      - DEBUG=${DEBUG:-True}
+      - SECRET_KEY=${SECRET_KEY:-your-secret-key-here}
+      - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: password_manager_frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+      - VITE_WS_URL=${VITE_WS_URL:-ws://localhost:8001}
+      - VITE_OIDC_ENABLED=${VITE_OIDC_ENABLED:-true}
+    depends_on:
+      - backend
+      - websocket
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+    command: npm run dev -- --host 0.0.0.0
+
+  # Nginx Reverse Proxy & Load Balancer
+  nginx:
+    image: nginx:alpine
+    container_name: password_manager_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - static_volume:/var/www/static:ro
+      - media_volume:/var/www/media:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - websocket
+      - frontend
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  static_volume:
+    driver: local
+  media_volume:
+    driver: local
+
+networks:
+  password_manager_network:
+    driver: bridge
+

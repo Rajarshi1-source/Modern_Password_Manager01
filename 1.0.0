@@ -1,0 +1,5 @@
+Collecting legacy-cgi
+  Downloading legacy_cgi-2.6.3-py3-none-any.whl.metadata (2.3 kB)
+Downloading legacy_cgi-2.6.3-py3-none-any.whl (19 kB)
+Installing collected packages: legacy-cgi
+Successfully installed legacy-cgi-2.6.3

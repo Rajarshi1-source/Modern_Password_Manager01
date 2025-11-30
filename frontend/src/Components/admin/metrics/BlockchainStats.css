@@ -1,0 +1,150 @@
+/**
+ * Blockchain Statistics Styles (Phase 2B.2)
+ */
+
+.blockchain-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.blockchain-stats.empty {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Stats Grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.stat-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 10px;
+  color: white;
+  transition: transform 0.2s;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+}
+
+.stat-icon {
+  font-size: 36px;
+  opacity: 0.9;
+}
+
+.stat-content {
+  flex: 1;
+}
+
+.stat-label {
+  font-size: 13px;
+  opacity: 0.9;
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.stat-sub {
+  font-size: 11px;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+/* Cost Breakdown */
+.cost-breakdown {
+  padding: 20px;
+  background: #f8f9fa;
+  border-radius: 10px;
+  border: 2px solid #e0e0e0;
+}
+
+.cost-breakdown h4 {
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.cost-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.cost-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: white;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.cost-label {
+  color: #666;
+}
+
+.cost-value {
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.cost-comparison {
+  margin-top: 16px;
+  padding: 12px;
+  background: #e7f3ff;
+  border-left: 4px solid #2196F3;
+  border-radius: 4px;
+}
+
+.cost-note {
+  margin: 0;
+  font-size: 13px;
+  color: #2c3e50;
+  line-height: 1.5;
+}
+
+/* Blockchain Info */
+.blockchain-info {
+  padding: 16px;
+  background: #fff9e6;
+  border-radius: 8px;
+  border-left: 4px solid #FFA000;
+}
+
+.blockchain-info p {
+  margin: 6px 0;
+  font-size: 13px;
+  color: #2c3e50;
+}
+
+.blockchain-info strong {
+  color: #F57C00;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cost-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

@@ -1,0 +1,630 @@
+[
+  {
+    "id": "TC001",
+    "title": "User Registration with Email and Password Setup",
+    "description": "Verify that a user can successfully register an account using email and password, with optional MFA or passkey setup.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to the registration page."
+      },
+      {
+        "type": "action",
+        "description": "Enter a valid email address."
+      },
+      {
+        "type": "action",
+        "description": "Create and enter a strong master password."
+      },
+      {
+        "type": "action",
+        "description": "Optionally set up MFA with TOTP or SMS."
+      },
+      {
+        "type": "action",
+        "description": "Optionally register a passkey for passwordless authentication."
+      },
+      {
+        "type": "action",
+        "description": "Submit the registration form."
+      },
+      {
+        "type": "assertion",
+        "description": "Check that registration is successful and user is redirected to the onboarding or dashboard page."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify that no plaintext password is sent to the server by inspecting the network requests."
+      }
+    ]
+  },
+  {
+    "id": "TC002",
+    "title": "Login with Password and TOTP Multi-Factor Authentication",
+    "description": "Verify that user login using email and password with TOTP-based MFA is successful and enforces zero-knowledge authentication.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to the login page."
+      },
+      {
+        "type": "action",
+        "description": "Input valid registered email and password."
+      },
+      {
+        "type": "action",
+        "description": "Submit login credentials."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify that server challenges for TOTP MFA."
+      },
+      {
+        "type": "action",
+        "description": "Input valid TOTP code."
+      },
+      {
+        "type": "action",
+        "description": "Submit TOTP code."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify successful login and access to encrypted vault data."
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure no master password or encryption keys are transmitted in plaintext."
+      }
+    ]
+  },
+  {
+    "id": "TC003",
+    "title": "Passwordless Login using WebAuthn Passkey with Biometric Authentication",
+    "description": "Test successful passwordless login using registered WebAuthn passkey including biometric factor validation.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to login page."
+      },
+      {
+        "type": "action",
+        "description": "Choose passwordless WebAuthn login option."
+      },
+      {
+        "type": "action",
+        "description": "Trigger passkey authentication prompt."
+      },
+      {
+        "type": "action",
+        "description": "Complete biometric verification (e.g., fingerprint or face recognition)."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify login is successful and vault data is decrypted client-side."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm no passwords are requested or transmitted during this flow."
+      }
+    ]
+  },
+  {
+    "id": "TC004",
+    "title": "OAuth Social Login Flow with Google Provider",
+    "description": "Verify that logging in using OAuth via Google is successful and enforces any required MFA policies.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to login page."
+      },
+      {
+        "type": "action",
+        "description": "Click on Google social login button."
+      },
+      {
+        "type": "action",
+        "description": "Complete OAuth consent and authentication via Google."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify user is logged in and redirected appropriately."
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure subsequent MFA is enforced as per application policy."
+      },
+      {
+        "type": "assertion",
+        "description": "Check that the server only receives authentication tokens and no plaintext passwords."
+      }
+    ]
+  },
+  {
+    "id": "TC005",
+    "title": "Master Password Key Derivation and Encryption Key Generation",
+    "description": "Confirm that master password is processed on the client using Argon2id KDF to generate encryption keys and a zero-knowledge hash is sent to server.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Enter master password on client."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify Argon2id KDF runs locally generating encryption keys."
+      },
+      {
+        "type": "assertion",
+        "description": "Check that only zero-knowledge hashed credentials are sent to server."
+      },
+      {
+        "type": "assertion",
+        "description": "Ensure no plaintext master password or encryption keys leave client."
+      }
+    ]
+  },
+  {
+    "id": "TC006",
+    "title": "Vault Item CRUD Operations with Client-Side Encryption",
+    "description": "Test creating, reading, updating, and deleting vault items ensuring AES-256-GCM encryption is performed client-side before server transmission.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Create a new vault item (e.g., password entry) with all required fields."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify item data is encrypted using AES-256-GCM client-side before sending to server."
+      },
+      {
+        "type": "action",
+        "description": "View the created vault item."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify encrypted data is decrypted client-side and shown correctly."
+      },
+      {
+        "type": "action",
+        "description": "Update the vault item with new data."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify updated data is re-encrypted client-side and sent."
+      },
+      {
+        "type": "action",
+        "description": "Delete the vault item."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm the item is removed and no plaintext data remains on server."
+      }
+    ]
+  },
+  {
+    "id": "TC007",
+    "title": "Password Generator Produces Secure and Strong Passwords with ML Feedback",
+    "description": "Verify the password generator creates cryptographically secure passwords with user-selected options and ML strength feedback is properly displayed.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Open the password generator."
+      },
+      {
+        "type": "action",
+        "description": "Select password criteria: length, character sets, complexity."
+      },
+      {
+        "type": "action",
+        "description": "Generate a password."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm password meets selected criteria."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify ML-powered strength meter displays password strength in real-time."
+      },
+      {
+        "type": "assertion",
+        "description": "Check generated passwords use secure randomness."
+      }
+    ]
+  },
+  {
+    "id": "TC008",
+    "title": "Post-Quantum Cryptography Operations Using CRYSTALS-Kyber-768 Hybrid",
+    "description": "Test correct encryption and decryption using post-quantum hybrid cryptographic algorithms with performance benchmarking.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Trigger client-side encryption of sensitive data using Kyber-768 hybrid scheme."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify encryption completes successfully within expected performance benchmarks."
+      },
+      {
+        "type": "action",
+        "description": "Perform decryption of the encrypted data on client."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm decrypted data matches original plaintext."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm performance speedup meets or exceeds 6x baseline for Kyber operations."
+      }
+    ]
+  },
+  {
+    "id": "TC009",
+    "title": "Fully Homomorphic Encryption for Encrypted Password Strength Checks",
+    "description": "Verify that encrypted password strength checks using multi-tier FHE complete successfully and results are accurate with caching optimization.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Submit encrypted password data for server-side FHE computation."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify server performs encrypted operations correctly without data exposure."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm that FHE results are accurately returned and interpreted client-side."
+      },
+      {
+        "type": "assertion",
+        "description": "Test caching layers improve response times according to expected performance."
+      }
+    ]
+  },
+  {
+    "id": "TC010",
+    "title": "Real-Time Breach Alert via Dark Web Monitoring",
+    "description": "Confirm that the system receives and displays real-time breach alerts leveraging WebSocket connections and ML models.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Establish WebSocket connection to breach monitoring service."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify breach alerts are received in real-time when detected."
+      },
+      {
+        "type": "assertion",
+        "description": "Check that breach alerts trigger immediate notification updates in security dashboard."
+      },
+      {
+        "type": "assertion",
+        "description": "Validate that ML models (BERT & Siamese networks) correctly classify threat severity."
+      }
+    ]
+  },
+  {
+    "id": "TC011",
+    "title": "Behavioral DNA Capture and Recovery Verification",
+    "description": "Test capturing 247-dimensional behavioral biometrics for continuous authentication and recovery approval process.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Perform typing challenge capturing keystroke dynamics."
+      },
+      {
+        "type": "action",
+        "description": "Complete mouse interaction challenge capturing mouse biometrics."
+      },
+      {
+        "type": "action",
+        "description": "Engage cognitive pattern challenge."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify data captured matches expected format and dimensionality."
+      },
+      {
+        "type": "action",
+        "description": "Submit behavioral data for recovery verification."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm that recovery approval triggers only if behavioral thresholds are met."
+      }
+    ]
+  },
+  {
+    "id": "TC012",
+    "title": "Session Auto-Lock and Device Trust Management",
+    "description": "Verify session auto-lock triggers key clearance after inactivity and device trust scoring is properly enforced with audit logging.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log into account and remain inactive until auto-lock timeout."
+      },
+      {
+        "type": "assertion",
+        "description": "Check that encryption keys are wiped from client memory upon auto-lock."
+      },
+      {
+        "type": "action",
+        "description": "Access session and device management page."
+      },
+      {
+        "type": "action",
+        "description": "Review device trust scores and toggle trust settings."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify audit logs record changes and access events accurately."
+      }
+    ]
+  },
+  {
+    "id": "TC013",
+    "title": "Shared Folder Management with Role-Based Access Control",
+    "description": "Test creating, sharing, and managing folders with role-based access and invitations for team collaboration.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Create a new shared folder."
+      },
+      {
+        "type": "action",
+        "description": "Add vault items to the shared folder."
+      },
+      {
+        "type": "action",
+        "description": "Invite team members with assigned roles (viewer, editor, admin)."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify invited users receive invitation and can access shared folder according to assigned permissions."
+      },
+      {
+        "type": "action",
+        "description": "Change roles and revoke access."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm permissions update immediately and revoked users lose access."
+      }
+    ]
+  },
+  {
+    "id": "TC014",
+    "title": "Vault Data Synchronization Across Web, Mobile, Desktop, and Browser Extensions",
+    "description": "Verify seamless synchronization of encrypted vault data across all supported platforms with consistent UI and behavior.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Log in on web client and create/update vault items."
+      },
+      {
+        "type": "action",
+        "description": "Log in on desktop and mobile clients."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify vault updates are synchronized and decrypted correctly on all clients."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm consistent UX and encryption handling across platforms."
+      }
+    ]
+  },
+  {
+    "id": "TC015",
+    "title": "Encrypted Vault Export and Import Functionality",
+    "description": "Test exporting vault backup as encrypted blob and importing it back securely restores vault data.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Trigger vault export generating encrypted backup file."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify exported file is encrypted and cannot be read without master keys."
+      },
+      {
+        "type": "action",
+        "description": "Import vault backup file back into vault."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm vault data is restored completely and correctly."
+      }
+    ]
+  },
+  {
+    "id": "TC016",
+    "title": "Error Handling for Invalid Credentials and Network Failures",
+    "description": "Verify that the system appropriately handles invalid login attempts and recovers gracefully from network issues.",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Attempt login with incorrect email format."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify validation error message is shown and submission blocked."
+      },
+      {
+        "type": "action",
+        "description": "Attempt login with invalid password."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify login failure message without revealing sensitive info."
+      },
+      {
+        "type": "action",
+        "description": "Simulate network disconnection during login."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify appropriate network error message is displayed."
+      },
+      {
+        "type": "action",
+        "description": "Retry login after network restoration."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm login proceeds successfully after recovery."
+      }
+    ]
+  },
+  {
+    "id": "TC017",
+    "title": "Guardians-Based Social Mesh Recovery Workflow",
+    "description": "Test initiating and completing social mesh recovery with guardian invitations and temporal challenge responses.",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Initiate social mesh recovery after losing access."
+      },
+      {
+        "type": "action",
+        "description": "Send invitations to trusted guardians."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify guardians receive and acknowledge recovery requests."
+      },
+      {
+        "type": "action",
+        "description": "Respond to temporal multi-day recovery challenges."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm recovery proceeds only after required approvals and waiting periods."
+      }
+    ]
+  },
+  {
+    "id": "TC018",
+    "title": "Security Dashboard Breach Alerts and Device Management",
+    "description": "Validate that the security dashboard updates with breach alerts and allows management of device sessions and emergency access.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Trigger a breach alert event."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify real-time alert appears on security dashboard."
+      },
+      {
+        "type": "action",
+        "description": "Navigate to device management, review active sessions."
+      },
+      {
+        "type": "action",
+        "description": "Deactivate a device session."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm session termination and audit log update."
+      },
+      {
+        "type": "action",
+        "description": "Initiate emergency access request with trusted contacts."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify emergency access waits appropriate time and notifications."
+      }
+    ]
+  },
+  {
+    "id": "TC019",
+    "title": "API Endpoint Verifies Encrypted Blob Handling and Metadata Only Queries",
+    "description": "Test that API endpoints return encrypted vault blobs and properly support faster metadata-only queries without exposing ciphertext.",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Request full vault item from API."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm encrypted blob data is returned with no plaintext."
+      },
+      {
+        "type": "action",
+        "description": "Request metadata-only list of vault items."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify response contains only metadata without ciphertext for performance."
+      }
+    ]
+  },
+  {
+    "id": "TC020",
+    "title": "Performance Benchmark: Cache Hit Rate and API Latency Improvements",
+    "description": "Validate multi-level caching (L1 memory, L2 Redis, DB caching) combined with response compression achieves expected performance gains.",
+    "category": "performance",
+    "priority": "Medium",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Execute a series of common vault API requests repeatedly."
+      },
+      {
+        "type": "assertion",
+        "description": "Verify cache hit rate is at least 10x better than baseline without cache."
+      },
+      {
+        "type": "assertion",
+        "description": "Confirm API response times improve by at least 10x due to caching and compression."
+      },
+      {
+        "type": "assertion",
+        "description": "Validate integrity and correctness of compressed responses."
+      }
+    ]
+  }
+]

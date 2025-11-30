@@ -1,0 +1,210 @@
+# ============================================================================
+# Password Manager - Backend Dependencies
+# ============================================================================
+# Django 4.2.x LTS Branch
+# ============================================================================
+
+# Core Django Framework
+Django==4.2.26
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.2.2
+asgiref==3.8.1
+
+# Django Extensions & Tools
+django-extensions==4.1
+django-cors-headers==4.0.0
+django-storages==1.13.2
+django-timezone-field==7.1
+drf-yasg==1.21.10
+
+# Authentication & OAuth 2.0 / OpenID Connect
+django-allauth==65.12.0
+dj-rest-auth==7.0.1
+python3-openid==3.2.0
+oauthlib==3.2.2
+requests-oauthlib==2.0.0
+
+# OpenID Connect (OIDC) Support
+mozilla-django-oidc>=4.0.0
+
+# Cryptography & Security
+cryptography==44.0.2
+argon2-cffi==21.3.0
+argon2-cffi-bindings==21.2.0
+pyOpenSSL==25.0.0
+pycryptodome>=3.20.0
+ecdsa==0.19.1
+pyotp==2.9.0
+
+# JWT & Tokens
+PyJWT==2.10.1
+python-jose==3.3.0
+
+# Celery & Task Queue
+celery==5.5.1
+django-celery-beat==2.8.0
+django_celery_results==2.6.0
+amqp==5.3.1
+billiard==4.2.1
+kombu==5.5.3
+vine==5.1.0
+redis==5.2.1
+
+# Database
+psycopg2-binary==2.9.10
+sqlparse==0.5.3
+
+# HTTP & Networking
+requests==2.32.3
+certifi==2025.1.31
+charset-normalizer==3.4.1
+idna==3.10
+urllib3==1.26.20
+dnspython==2.7.0
+
+# AWS & Cloud Storage
+boto3==1.26.76
+botocore==1.29.165
+s3transfer==0.6.2
+jmespath==1.0.1
+google-cloud-storage==2.5.0
+
+# Firebase & Push Notifications
+firebase-admin==5.3.0
+django-push-notifications==3.0.0
+pyfcm==1.5.4
+
+# Django Channels & WebSockets
+channels>=4.0.0
+channels-redis>=4.1.0
+daphne>=4.0.0
+
+# GeoIP & Device Detection
+geoip2==4.7.0
+django-ipware==4.0.2
+user-agents==2.2.0
+
+# CLI & Utilities
+click==8.1.8
+click-didyoumean==0.3.1
+click-plugins==1.1.1
+click-repl==0.3.0
+colorama==0.4.6
+prompt_toolkit==3.0.51
+wcwidth==0.2.13
+
+# Data Processing
+python-dateutil==2.9.0.post0
+python-crontab==3.2.0
+cron-descriptor==1.4.5
+pytz==2025.2
+tzdata==2025.2
+
+# XML & Serialization
+defusedxml==0.7.1
+MarkupSafe==3.0.2
+PyYAML==6.0.2
+inflection==0.5.1
+uritemplate==4.1.1
+packaging==25.0
+
+# Encoding
+cffi==1.17.1
+pycparser==2.22
+pyasn1==0.6.1
+rsa==4.9.1
+six==1.17.0
+
+# Environment & Config
+python-dotenv==1.0.0
+
+# WSGI/ASGI Server
+Werkzeug==3.1.3
+
+# Python 3.13+ Compatibility
+legacy-cgi>=2.0.0
+
+# ============================================================================
+# Machine Learning & Data Science
+# ============================================================================
+
+# Core ML Libraries
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+joblib>=1.3.0
+
+# Deep Learning - TensorFlow
+tensorflow>=2.13.0
+
+# Deep Learning - PyTorch & Transformers (Behavioral Recovery)
+torch>=2.1.0
+transformers>=4.35.0
+
+# ============================================================================
+# Advanced Security Features
+# ============================================================================
+
+# Post-Quantum Cryptography - Optional, requires native liboqs library
+# On Linux: pip install liboqs-python
+# On Windows: Requires manual liboqs installation (complex)
+# liboqs-python>=0.10.0
+
+# Blockchain Anchoring
+web3>=7.0.0
+eth-account>=0.13.0
+
+# Social Mesh Recovery (Shamir's Secret Sharing)
+secretsharing>=0.2.6
+
+# Fully Homomorphic Encryption (FHE) - Optional, platform-specific
+# Uncomment if needed and available on your platform (Linux recommended)
+# concrete-python>=2.5.0
+# tenseal>=0.3.14
+
+# ============================================================================
+# Notifications & Communication
+# ============================================================================
+
+# SMS & Email
+twilio>=8.0.0
+sendgrid>=6.11.0
+authy==2.2.6
+
+# ============================================================================
+# Production & Deployment
+# ============================================================================
+
+# ASGI/WSGI Servers
+gunicorn>=21.2.0
+uvicorn[standard]>=0.24.0
+
+# Static Files & Caching
+whitenoise>=6.6.0
+django-redis>=5.4.0
+hiredis>=2.3.2
+
+# Monitoring & Error Tracking
+sentry-sdk>=1.40.0
+psutil>=5.9.0
+
+# Security & Rate Limiting
+django-ratelimit>=4.1.0
+django-defender>=0.9.7
+
+# Health Checks
+django-health-check>=3.18.0
+
+# Profiling (Development)
+django-silk>=5.0.4
+
+# ============================================================================
+# Security Auditing (Development/CI)
+# ============================================================================
+safety>=2.3.0
+pip-audit>=2.6.0
+
+# ============================================================================
+# Optional: MongoDB Support
+# ============================================================================
+pymongo==4.3.3

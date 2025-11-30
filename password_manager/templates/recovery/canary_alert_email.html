@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URGENT: Recovery Initiated</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: #e74c3c;
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 8px 8px 0 0;
+        }
+        .content {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 0 0 8px 8px;
+        }
+        .alert-box {
+            background: #fff3cd;
+            border: 3px solid #ffc107;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .details-box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #e74c3c;
+        }
+        .button-danger {
+            display: inline-block;
+            padding: 15px 40px;
+            background: #e74c3c;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            margin: 20px 0;
+            font-weight: bold;
+            font-size: 16px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>⚠️ URGENT SECURITY ALERT</h1>
+        <p>Account Recovery Has Been Initiated</p>
+    </div>
+    
+    <div class="content">
+        <p>Hello {{ user.email }},</p>
+        
+        <div class="alert-box">
+            <h2 style="margin-top: 0; color: #856404;">⚠️ IMMEDIATE ACTION REQUIRED</h2>
+            <p><strong>Someone has initiated account recovery for your SecureVault account.</strong></p>
+            <p>If this was NOT you, cancel this recovery immediately to protect your account.</p>
+        </div>
+        
+        <div class="details-box">
+            <h3>Recovery Details:</h3>
+            <ul>
+                <li><strong>Initiated at:</strong> {{ initiated_at|date:"F j, Y, g:i a" }}</li>
+                <li><strong>IP Address:</strong> {{ ip_address }}</li>
+                <li><strong>Location:</strong> {{ location.city|default:"Unknown" }}, {{ location.country|default:"Unknown" }}</li>
+                <li><strong>Expires at:</strong> {{ expires_at|date:"F j, Y, g:i a" }}</li>
+            </ul>
+        </div>
+        
+        <div style="text-align: center;">
+            <a href="{{ cancel_url }}" class="button-danger">🚫 CANCEL RECOVERY NOW</a>
+        </div>
+        
+        <div style="margin-top: 30px; padding: 20px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 6px;">
+            <h3 style="margin-top: 0; color: #155724;">If this was you:</h3>
+            <p>No action needed. Continue following the recovery process. You will receive temporal challenges via email over the next few days.</p>
+        </div>
+        
+        <hr style="margin: 30px 0;">
+        
+        <p><strong>What happens next if you don't cancel:</strong></p>
+        <ol>
+            <li>You'll receive 5 identity verification challenges over 3 days</li>
+            <li>Your guardians will be asked to approve the recovery</li>
+            <li>If verified, account access will be restored</li>
+        </ol>
+        
+        <p style="color: #e74c3c; font-weight: bold;">⚠️ You have 48 hours to cancel this recovery if it's unauthorized.</p>
+    </div>
+    
+    <div class="footer">
+        <p>This is an automated security alert from SecureVault Password Manager.</p>
+        <p>© 2025 SecureVault. All rights reserved.</p>
+    </div>
+</body>
+</html>
+

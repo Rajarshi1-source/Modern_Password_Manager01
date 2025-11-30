@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recovery Completed</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 8px 8px 0 0;
+        }
+        .content {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 0 0 8px 8px;
+        }
+        .success-box {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>✅ Recovery Completed!</h1>
+        <p>Your account has been successfully recovered</p>
+    </div>
+    
+    <div class="content">
+        <p>Hello {{ user.email }},</p>
+        
+        <div class="success-box">
+            <h3 style="margin-top: 0; color: #155724;">🎉 Success!</h3>
+            <p>Your account recovery has been completed successfully.</p>
+            <ul>
+                <li><strong>Completed at:</strong> {{ completed_at|date:"F j, Y, g:i a" }}</li>
+                <li><strong>Trust Score:</strong> {{ trust_score|floatformat:1 }}%</li>
+            </ul>
+        </div>
+        
+        <p><strong>What's next?</strong></p>
+        <ol>
+            <li>Log in to your account with your recovered passkey</li>
+            <li>Review your security settings</li>
+            <li>Consider updating your guardian network if needed</li>
+            <li>Thank your guardians for helping you recover access</li>
+        </ol>
+        
+        <hr>
+        
+        <p><strong>Security Reminder:</strong> If you notice any suspicious activity, please contact support immediately.</p>
+    </div>
+    
+    <div class="footer">
+        <p>This is an automated message from SecureVault Password Manager.</p>
+        <p>© 2025 SecureVault. All rights reserved.</p>
+    </div>
+</body>
+</html>
+

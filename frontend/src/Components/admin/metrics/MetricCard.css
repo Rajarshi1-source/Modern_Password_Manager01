@@ -1,0 +1,162 @@
+/**
+ * Metric Card Styles (Phase 2B.2)
+ */
+
+.metric-card {
+  padding: 20px;
+  border-radius: 10px;
+  background: white;
+  border: 2px solid #e0e0e0;
+  transition: all 0.3s;
+  position: relative;
+  overflow: hidden;
+}
+
+.metric-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* Status Colors */
+.metric-card.status-success {
+  border-color: #4CAF50;
+}
+
+.metric-card.status-warning {
+  border-color: #FF9800;
+}
+
+.metric-card.status-danger {
+  border-color: #F44336;
+}
+
+.metric-card.status-info {
+  border-color: #2196F3;
+}
+
+.metric-card.status-neutral {
+  border-color: #9E9E9E;
+}
+
+/* Critical Alert Banner */
+.critical-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #F44336;
+  color: white;
+  text-align: center;
+  padding: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  animation: pulse 2s infinite;
+}
+
+.metric-card.critical-alert {
+  border-color: #F44336;
+  border-width: 3px;
+  background: #fff5f5;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* Card Header */
+.metric-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 15px;
+  margin-top: 8px; /* Space for critical banner */
+}
+
+.metric-icon {
+  font-size: 28px;
+}
+
+.metric-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+/* Value Container */
+.metric-value-container {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.metric-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #2c3e50;
+}
+
+.metric-trend {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.metric-trend.trend-up {
+  color: #4CAF50;
+}
+
+.metric-trend.trend-down {
+  color: #F44336;
+}
+
+/* Footer */
+.metric-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px solid #e0e0e0;
+  font-size: 13px;
+}
+
+.metric-target {
+  color: #666;
+}
+
+.metric-target strong {
+  color: #2c3e50;
+}
+
+.metric-status {
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: #f5f5f5;
+}
+
+/* Description */
+.metric-description {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #e0e0e0;
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+  .metric-value {
+    font-size: 24px;
+  }
+
+  .metric-footer {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+}
+

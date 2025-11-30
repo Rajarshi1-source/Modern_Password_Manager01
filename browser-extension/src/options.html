@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Password Manager - Settings</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            color: #2563eb;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .settings-section {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .settings-section h2 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 18px;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 5px;
+        }
+
+        .setting-item {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .setting-info {
+            flex: 1;
+        }
+
+        .setting-info label {
+            font-weight: 500;
+            color: #333;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .setting-info .description {
+            font-size: 13px;
+            color: #666;
+        }
+
+        .setting-control {
+            flex-shrink: 0;
+            margin-left: 15px;
+        }
+
+        /* Toggle Switch */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #2563eb;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+
+        /* Input Fields */
+        .input-field {
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 200px;
+        }
+
+        .input-field:focus {
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+        }
+
+        .input-field.error {
+            border-color: #ef4444;
+            box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.1);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .btn-primary {
+            background: #2563eb;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #1d4ed8;
+        }
+
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        /* Notifications */
+        #notifications {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+
+        .notification {
+            padding: 12px 16px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            color: white;
+            font-weight: 500;
+            min-width: 250px;
+            animation: slideIn 0.3s ease;
+        }
+
+        .notification.success {
+            background: #10b981;
+        }
+
+        .notification.error {
+            background: #ef4444;
+        }
+
+        .notification.info {
+            background: #3b82f6;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Dark Mode */
+        body.dark-mode {
+            background: #1f2937;
+            color: #f9fafb;
+        }
+
+        body.dark-mode .settings-section,
+        body.dark-mode .header {
+            background: #374151;
+            color: #f9fafb;
+        }
+
+        body.dark-mode .setting-info label {
+            color: #f9fafb;
+        }
+
+        body.dark-mode .setting-info .description {
+            color: #d1d5db;
+        }
+
+        body.dark-mode .input-field {
+            background: #4b5563;
+            border-color: #6b7280;
+            color: #f9fafb;
+        }
+
+        body.dark-mode .input-field:focus {
+            border-color: #3b82f6;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .setting-item {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .setting-control {
+                margin-left: 0;
+                margin-top: 10px;
+            }
+            
+            .input-field {
+                width: 100%;
+            }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Password Manager Settings</h1>
+            <p>Configure your browser extension preferences</p>
+        </div>
+
+        <!-- General Settings -->
+        <div class="settings-section">
+            <h2>General</h2>
+            
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="autoFill">Auto-fill passwords</label>
+                    <div class="description">Automatically fill login forms when credentials are detected</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="autoFill">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="autoSave">Auto-save passwords</label>
+                    <div class="description">Automatically prompt to save new passwords</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="autoSave">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="showNotifications">Show notifications</label>
+                    <div class="description">Display browser notifications for important events</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="showNotifications">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Server Settings -->
+        <div class="settings-section">
+            <h2>Server & Sync</h2>
+            
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="apiEndpoint">API Endpoint</label>
+                    <div class="description">Password Manager server URL</div>
+                </div>
+                <div class="setting-control">
+                    <input type="url" id="apiEndpoint" class="input-field" placeholder="https://api.example.com">
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="syncEnabled">Enable sync</label>
+                    <div class="description">Synchronize data with Password Manager server</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="syncEnabled">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security Settings -->
+        <div class="settings-section">
+            <h2>Security</h2>
+            
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="sessionTimeout">Session timeout (minutes)</label>
+                    <div class="description">Auto-lock extension after this many minutes of inactivity</div>
+                </div>
+                <div class="setting-control">
+                    <input type="number" id="sessionTimeout" class="input-field" min="1" max="60" value="15">
+                </div>
+            </div>
+        </div>
+
+        <!-- Interface Settings -->
+        <div class="settings-section">
+            <h2>Interface</h2>
+            
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="darkMode">Dark mode</label>
+                    <div class="description">Use dark theme for the extension interface</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="darkMode">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="keyboardShortcuts">Keyboard shortcuts</label>
+                    <div class="description">Enable keyboard shortcuts for quick actions</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="keyboardShortcuts">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="contextMenu">Context menu</label>
+                    <div class="description">Show Password Manager options in right-click menu</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="contextMenu">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="iconBadge">Icon badge</label>
+                    <div class="description">Show number of saved passwords on extension icon</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="iconBadge">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Debug Settings (Development only) -->
+        <div class="settings-section" id="debugSection">
+            <h2>Debug (Development)</h2>
+            
+            <div class="setting-item">
+                <div class="setting-info">
+                    <label for="debugMode">Debug mode</label>
+                    <div class="description">Enable verbose logging for development</div>
+                </div>
+                <div class="setting-control">
+                    <label class="switch">
+                        <input type="checkbox" id="debugMode">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="settings-section">
+            <h2>Actions</h2>
+            
+            <div class="button-group">
+                <button id="exportSettings" class="btn btn-primary">Export Settings</button>
+                <button id="importSettings" class="btn btn-secondary">Import Settings</button>
+                <button id="resetDefaults" class="btn btn-danger">Reset to Defaults</button>
+            </div>
+            
+            <input type="file" id="importFile" class="file-input" accept=".json">
+        </div>
+    </div>
+
+    <!-- Notifications Container -->
+    <div id="notifications"></div>
+
+    <script src="options.js"></script>
+</body>
+</html>

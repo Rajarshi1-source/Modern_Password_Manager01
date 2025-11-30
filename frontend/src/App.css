@@ -1,0 +1,637 @@
+/* Modern Gen Z Password Manager Theme */
+:root {
+  --primary: #7B68EE;
+  --primary-dark: #5A4AD1;
+  --primary-gradient: linear-gradient(45deg, #7B68EE, #9370DB);
+  --primary-light: #E8E4FF;
+  --accent: #FF6B6B;
+  --accent-dark: #FF5252;
+  --accent-light: #FFD6D6;
+  --success: #00C897;
+  --warning: #FFD166;
+  --danger: #FF6B6B;
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-light: #888888;
+  --text-on-primary: #FFFFFF;
+  --bg-primary: #F8F9FF;
+  --bg-secondary: #FFFFFF;
+  --border-color: #E0E0E0;
+  --card-shadow: 0 8px 20px rgba(123, 104, 238, 0.1);
+  --card-border-radius: 16px;
+  --input-border-radius: 12px;
+  --button-border-radius: 12px;
+}
+
+.dark-mode {
+  --primary: #9370DB;
+  --primary-dark: #7B68EE;
+  --primary-light: #282445;
+  --accent: #FF6B6B;
+  --accent-dark: #FF5252;
+  --accent-light: #482936;
+  --text-primary: #FFFFFF;
+  --text-secondary: #BBBBBB;
+  --text-light: #888888;
+  --text-on-primary: #FFFFFF;
+  --bg-primary: #121212;
+  --bg-secondary: #1E1E1E;
+  --border-color: #333333;
+  --card-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+  transition: background-color 0.3s ease;
+}
+
+.App {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Add a specific style for the auth page */
+.App.auth-page {
+  /* Remove background to allow particles to show */
+  background: transparent !important;
+}
+
+/* Light gradient background for auth page to show particles */
+html:has(.App.auth-page),
+body:has(.App.auth-page) {
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%) !important;
+  background-attachment: fixed !important;
+}
+
+/* Fallback for browsers that don't support :has() */
+html.auth-page-body,
+body.auth-page-body {
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e8f0 100%) !important;
+  background-attachment: fixed !important;
+}
+
+.App-header {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: transparent;
+  padding: 2rem;
+  overflow: visible;
+  z-index: 1;
+}
+
+/* Particles background - renders behind everything */
+#tsparticles {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 0 !important;
+}
+
+/* Canvas element inside tsparticles needs pointer events for hover effects */
+#tsparticles canvas {
+  pointer-events: auto !important;
+}
+
+.auth-container {
+  background: rgba(255, 255, 255, 0.95);
+  width: 100%;
+  max-width: 450px;
+  border-radius: var(--card-border-radius);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1), 0 10px 30px rgba(123, 104, 238, 0.15);
+  overflow: hidden;
+  position: relative;
+  z-index: 10;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  animation: fadeInUp 0.5s ease-out;
+  border: 1px solid rgba(123, 104, 238, 0.15);
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-header {
+  padding: 2rem 2rem 1.5rem;
+  text-align: center;
+}
+
+.auth-logo {
+  width: 70px;
+  height: 70px;
+  margin-bottom: 1.5rem;
+}
+
+.auth-header h1 {
+  font-size: 2.2rem;
+  font-weight: 800;
+  margin-bottom: 0.5rem;
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.auth-header p {
+  color: var(--text-secondary);
+  font-size: 1rem;
+  margin-bottom: 0;
+}
+
+.auth-toggle {
+  display: flex;
+  margin-bottom: 1.5rem;
+  background: var(--primary-light);
+  border-radius: 999px;
+  padding: 0.25rem;
+  position: relative;
+  width: 100%;
+  max-width: 280px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.toggle-btn {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+  position: relative;
+  z-index: 2;
+  border-radius: 999px;
+}
+
+.toggle-btn.active {
+  color: var(--text-on-primary);
+}
+
+.toggle-slider {
+  position: absolute;
+  top: 0.25rem;
+  left: 0.25rem;
+  width: calc(50% - 0.25rem);
+  height: calc(100% - 0.5rem);
+  background: var(--primary-gradient);
+  border-radius: 999px;
+  transition: transform 0.3s ease;
+  transform: translateX(0);
+}
+
+.toggle-btn.active:nth-child(2) ~ .toggle-slider {
+  transform: translateX(calc(100% + 0.25rem));
+}
+
+.login-form, .signup-form {
+  padding: 0 2rem 2rem;
+  text-align: left;
+}
+
+.form-group {
+  margin-bottom: 1.25rem;
+  position: relative;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.form-group input {
+  width: 100%;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--input-border-radius);
+  font-size: 1rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  transition: all 0.3s ease;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(123, 104, 238, 0.2);
+}
+
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  margin-top: 0.5rem;
+  cursor: pointer;
+}
+
+.checkbox-group input {
+  width: auto;
+  margin-right: 10px;
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+.checkbox-group label {
+  margin-bottom: 0;
+  font-weight: normal;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.submit-btn {
+  width: 100%;
+  padding: 1rem 1.5rem;
+  background: var(--primary-gradient);
+  color: white;
+  border: none;
+  border-radius: var(--button-border-radius);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(123, 104, 238, 0.3);
+  margin-top: 1.5rem;
+}
+
+.submit-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(123, 104, 238, 0.4);
+}
+
+.submit-btn:active {
+  transform: translateY(0);
+}
+
+.forgot-password-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0.5rem;
+  font-size: 0.9rem;
+  transition: color 0.2s ease;
+  display: block;
+  width: 100%;
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.forgot-password-btn:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  margin: 1.5rem 0;
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.auth-divider::before {
+  margin-right: 1rem;
+}
+
+.auth-divider::after {
+  margin-left: 1rem;
+}
+
+.social-buttons {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.social-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--button-border-radius);
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.social-btn:hover {
+  background: var(--primary-light);
+  border-color: var(--primary-light);
+}
+
+.auth-switch {
+  margin-top: 1.5rem;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.text-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.text-btn:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+.error-message {
+  background-color: var(--accent-light);
+  color: var(--accent-dark);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.success-message {
+  background-color: rgba(0, 200, 151, 0.1);
+  color: var(--success);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Background shapes - subtle gradient effects on white background */
+.bg-shape {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0.15;
+  filter: blur(100px);
+  z-index: 0;
+}
+
+.bg-shape-1 {
+  width: 400px;
+  height: 400px;
+  background-color: rgba(123, 104, 238, 0.2);
+  top: -150px;
+  right: -150px;
+}
+
+.bg-shape-2 {
+  width: 500px;
+  height: 500px;
+  background-color: rgba(147, 112, 219, 0.15);
+  bottom: -200px;
+  left: -200px;
+}
+
+/* Help center modal */
+.help-center {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.help-center-content {
+  background-color: var(--bg-secondary);
+  padding: 2rem;
+  border-radius: var(--card-border-radius);
+  box-shadow: var(--card-shadow);
+  max-width: 500px;
+  width: 90%;
+  position: relative;
+  animation: zoomIn 0.3s ease-out;
+}
+
+@keyframes zoomIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.close-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: color 0.2s ease;
+}
+
+.close-btn:hover {
+  color: var(--accent);
+}
+
+.recovery-link {
+  color: var(--primary);
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+}
+
+.recovery-link:hover {
+  color: var(--primary-dark);
+  text-decoration: underline;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+  .auth-container {
+    max-width: 100%;
+  }
+  
+  .auth-header h1 {
+    font-size: 1.8rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-header {
+    padding: 1.5rem 1.5rem 1rem;
+  }
+  
+  .login-form, .signup-form {
+    padding: 0 1.5rem 1.5rem;
+  }
+  
+  .auth-logo {
+    width: 60px;
+    height: 60px;
+  }
+}
+
+/* Floating label animation for inputs */
+.form-floating {
+  position: relative;
+}
+
+.form-floating label {
+  position: absolute;
+  top: 50%;
+  left: 1rem;
+  transform: translateY(-50%);
+  background-color: transparent;
+  padding: 0 0.5rem;
+  pointer-events: none;
+  transition: all 0.2s ease;
+  color: var(--text-light);
+}
+
+.form-floating input:focus ~ label,
+.form-floating input:not(:placeholder-shown) ~ label {
+  top: 0;
+  transform: translateY(-50%) scale(0.85);
+  background-color: var(--bg-secondary);
+  color: var(--primary);
+}
+
+/* App-specific styles */
+.app-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.app-nav h1 {
+  margin: 0;
+  font-size: 1.8rem;
+  font-weight: 700;
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.nav-link {
+  color: white;
+  text-decoration: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  transition: all 0.3s ease;
+  font-weight: 500;
+}
+
+.nav-link:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  text-decoration: none;
+}
+
+.logout-btn {
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-weight: 500;
+}
+
+.logout-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.app-content {
+  max-width: 1200px;
+  margin: 2rem auto;
+  padding: 0 2rem;
+}
+
+/* Recovery key setup */
+.recovery-key-setup {
+  max-width: 600px;
+  margin: 40px auto;
+  background: var(--bg-secondary);
+  padding: 2rem;
+  border-radius: var(--card-border-radius);
+  box-shadow: var(--card-shadow);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}

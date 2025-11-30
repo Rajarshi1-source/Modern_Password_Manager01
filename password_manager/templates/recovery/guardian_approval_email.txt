@@ -1,0 +1,31 @@
+SecureVault - Guardian Approval Needed
+
+Hello {{ guardian_email }},
+
+You are receiving this because you're a trusted guardian for {{ user_email }}'s account.
+
+ACTION REQUIRED:
+{{ user_email }} has initiated account recovery and needs your approval to proceed.
+
+{% if requires_video %}
+⚠️ VIDEO VERIFICATION REQUIRED:
+This recovery request requires a video call verification before you can approve.
+{% endif %}
+
+IMPORTANT:
+Only approve if you've verified this request is legitimate and you've personally confirmed with {{ user_email }} that they initiated this recovery.
+
+To review and approve, visit:
+{{ approval_url }}
+
+SECURITY WARNING:
+- Never share the approval link with anyone
+- Verify this request directly with {{ user_email }}
+- If you're unsure, contact {{ user_email }} through a known communication channel
+
+This approval request expires at: {{ expires_at }}
+
+---
+This is an automated message from SecureVault Password Manager.
+© 2025 SecureVault. All rights reserved.
+

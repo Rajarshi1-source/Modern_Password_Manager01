@@ -1,0 +1,696 @@
+# =============================================================================
+# Kubernetes Deployments - Password Manager
+# =============================================================================
+# Backend API, WebSocket, Celery Worker, Celery Beat, Frontend
+# =============================================================================
+
+# =============================================================================
+# PostgreSQL Database
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: database
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # PostgreSQL should not run multiple instances
+  selector:
+    matchLabels:
+      app: password-manager
+      component: database
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: database
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secrets
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - pm_user
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - pm_user
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: database
+spec:
+  selector:
+    app: password-manager
+    component: database
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: database
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard  # Change to your storage class
+
+# =============================================================================
+# Redis Cache & Message Broker
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: password-manager
+      component: cache
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: cache
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          command:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --maxmemory
+            - "512mb"
+            - --maxmemory-policy
+            - allkeys-lru
+          ports:
+            - containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: REDIS_PASSWORD
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: cache
+spec:
+  selector:
+    app: password-manager
+    component: cache
+  ports:
+    - port: 6379
+      targetPort: 6379
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+# =============================================================================
+# Backend API (Django + Gunicorn)
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: password-manager
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: password-manager-sa
+      containers:
+        - name: backend
+          image: ghcr.io/yourusername/password-manager/backend:latest
+          imagePullPolicy: Always
+          command:
+            - gunicorn
+            - password_manager.wsgi:application
+            - --bind
+            - 0.0.0.0:8000
+            - --workers
+            - "4"
+            - --threads
+            - "2"
+            - --timeout
+            - "120"
+            - --keep-alive
+            - "5"
+            - --access-logfile
+            - "-"
+            - --error-logfile
+            - "-"
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          env:
+            - name: RUN_MIGRATIONS
+              value: "true"
+            - name: COLLECT_STATIC
+              value: "true"
+          volumeMounts:
+            - name: static-files
+              mountPath: /app/staticfiles
+            - name: media-files
+              mountPath: /app/media
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /api/health/
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health/
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: static-files
+          persistentVolumeClaim:
+            claimName: static-pvc
+        - name: media-files
+          persistentVolumeClaim:
+            claimName: media-pvc
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: password-manager
+              component: backend
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend
+spec:
+  selector:
+    app: password-manager
+    component: backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+  type: ClusterIP
+
+# =============================================================================
+# WebSocket Server (Daphne)
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: websocket
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: websocket
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: password-manager
+      component: websocket
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: websocket
+    spec:
+      serviceAccountName: password-manager-sa
+      containers:
+        - name: websocket
+          image: ghcr.io/yourusername/password-manager/backend:latest
+          imagePullPolicy: Always
+          command:
+            - daphne
+            - password_manager.asgi:application
+            - --bind
+            - 0.0.0.0
+            - --port
+            - "8001"
+            - --verbosity
+            - "1"
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          env:
+            - name: RUN_MIGRATIONS
+              value: "false"
+            - name: COLLECT_STATIC
+              value: "false"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          livenessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            tcpSocket:
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: websocket-service
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: websocket
+spec:
+  selector:
+    app: password-manager
+    component: websocket
+  ports:
+    - port: 8001
+      targetPort: 8001
+  type: ClusterIP
+
+# =============================================================================
+# Celery Worker
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: celery-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: password-manager
+      component: celery-worker
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: celery-worker
+    spec:
+      serviceAccountName: password-manager-sa
+      containers:
+        - name: celery-worker
+          image: ghcr.io/yourusername/password-manager/backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - password_manager
+            - worker
+            - --loglevel=info
+            - --concurrency=4
+            - --queues=default,blockchain,ml
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          env:
+            - name: RUN_MIGRATIONS
+              value: "false"
+            - name: COLLECT_STATIC
+              value: "false"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - password_manager
+                - inspect
+                - ping
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            timeoutSeconds: 30
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+
+# =============================================================================
+# Celery Beat (Scheduler)
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-beat
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: celery-beat
+spec:
+  replicas: 1  # Only one beat instance should run
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: password-manager
+      component: celery-beat
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: celery-beat
+    spec:
+      serviceAccountName: password-manager-sa
+      containers:
+        - name: celery-beat
+          image: ghcr.io/yourusername/password-manager/backend:latest
+          imagePullPolicy: Always
+          command:
+            - celery
+            - -A
+            - password_manager
+            - beat
+            - --loglevel=info
+            - --scheduler
+            - django_celery_beat.schedulers:DatabaseScheduler
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+          env:
+            - name: RUN_MIGRATIONS
+              value: "false"
+            - name: COLLECT_STATIC
+              value: "false"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+
+# =============================================================================
+# Frontend (React)
+# =============================================================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: password-manager
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: ghcr.io/yourusername/password-manager/frontend:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          env:
+            - name: VITE_API_BASE_URL
+              value: "https://api.yourapp.com"
+            - name: VITE_WS_URL
+              value: "wss://api.yourapp.com"
+            - name: VITE_BLOCKCHAIN_ENABLED
+              value: "false"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "250m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: frontend
+spec:
+  selector:
+    app: password-manager
+    component: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+  type: ClusterIP
+
+# =============================================================================
+# Service Account
+# =============================================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: password-manager-sa
+  namespace: password-manager
+  labels:
+    app: password-manager
+
+# =============================================================================
+# PVC for Static and Media Files
+# =============================================================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: static-pvc
+  namespace: password-manager
+  labels:
+    app: password-manager
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-pvc
+  namespace: password-manager
+  labels:
+    app: password-manager
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
