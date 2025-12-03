@@ -11,9 +11,9 @@ Version: 2.0.0 (ASGI-compatible)
 import time
 import logging
 import traceback
-from datetime import datetime
 from django.db import connection
 from django.conf import settings
+from django.utils import timezone
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
 
 logger = logging.getLogger('performance')
@@ -108,7 +108,7 @@ class PerformanceMonitoringMiddleware:
                 'query_count': query_count,
                 'query_time_ms': round(query_time * 1000, 2),
                 'memory_mb': round(memory_used, 2),
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': timezone.now().isoformat(),
                 'user': str(request.user) if hasattr(request, 'user') and request.user.is_authenticated else 'anonymous'
             }
             
@@ -263,7 +263,7 @@ class APIPerformanceMiddleware:
                 'method': request.method,
                 'duration_ms': round(duration * 1000, 2),
                 'status': response.status_code,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': timezone.now().isoformat()
             }
             
             logger.info(f"API Performance: {api_log}")
@@ -339,7 +339,7 @@ class SystemResourceMonitor:
         if not PSUTIL_AVAILABLE:
             return {
                 'error': 'psutil not available',
-                'timestamp': datetime.now().isoformat()
+                'timestamp': timezone.now().isoformat()
             }
         
         try:
@@ -353,7 +353,7 @@ class SystemResourceMonitor:
                 'memory_available_mb': memory.available / 1024 / 1024,
                 'disk_percent': disk.percent,
                 'disk_free_gb': disk.free / 1024 / 1024 / 1024,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': timezone.now().isoformat()
             }
         except Exception as e:
             logger.error(f"Failed to get system metrics: {e}")
@@ -420,7 +420,7 @@ class PerformanceMetricsCollector:
                 'request_metrics': request_metrics,
                 'api_metrics': api_metrics,
                 'system_metrics': system_metrics,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': timezone.now().isoformat()
             }
         except Exception as e:
             logger.error(f"Failed to get performance summary: {e}")

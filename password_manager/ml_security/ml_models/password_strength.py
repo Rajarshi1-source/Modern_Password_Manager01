@@ -3,6 +3,11 @@ Password Strength Predictor using LSTM/RNN
 
 This module implements an LSTM-based neural network for predicting password strength.
 It analyzes character sequences and patterns to evaluate password security.
+
+Performance Optimizations:
+- TensorFlow configured for inference mode (reduced memory, faster predictions)
+- Model predictions use verbose=0 to avoid logging overhead
+- Thread count optimized for CPU inference
 """
 
 import numpy as np
@@ -18,11 +23,30 @@ logger = logging.getLogger(__name__)
 # Try to import TensorFlow/Keras, fall back to rule-based if not available
 try:
     import tensorflow as tf
+    
+    # Optimize TensorFlow for inference (reduces startup time and memory)
+    # Set before importing keras components
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TF info/warning logs
+    
+    # Configure TensorFlow for inference optimization
+    tf.get_logger().setLevel('ERROR')  # Reduce TF logging verbosity
+    
+    # Limit GPU memory growth if GPU is available
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    
+    # Optimize CPU threading for inference
+    tf.config.threading.set_intra_op_parallelism_threads(2)
+    tf.config.threading.set_inter_op_parallelism_threads(2)
+    
     from tensorflow import keras
     from tensorflow.keras.models import Sequential, load_model
     from tensorflow.keras.layers import LSTM, Dense, Embedding, Dropout, Bidirectional
     from tensorflow.keras.preprocessing.sequence import pad_sequences
     TENSORFLOW_AVAILABLE = True
+    logger.info("TensorFlow configured for optimized inference")
 except ImportError:
     logger.warning("TensorFlow not available. Using rule-based password strength prediction.")
     TENSORFLOW_AVAILABLE = False

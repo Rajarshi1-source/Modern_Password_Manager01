@@ -18,8 +18,8 @@ Date: October 2025
 import logging
 import traceback
 import sys
-from datetime import datetime
 from django.http import JsonResponse
+from django.utils import timezone
 from django.core.exceptions import (
     ValidationError,
     PermissionDenied,
@@ -296,7 +296,7 @@ def log_error(exception, request=None):
     
     # Prepare error context
     error_context = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': timezone.now().isoformat(),
         'exception_type': type(exception).__name__,
         'exception_message': str(exception),
         'traceback': traceback.format_exc(),

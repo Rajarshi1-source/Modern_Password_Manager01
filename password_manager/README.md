@@ -449,7 +449,7 @@ Common utilities, constants, and helpers.
 | `validators.py` | Custom validation functions |
 | `decorators.py` | Custom decorators |
 | `error_handlers.py` | Global error handling |
-| `performance_middleware.py` | Performance monitoring |
+| `performance_middleware.py` | Performance monitoring (timezone-aware metrics, slow-request warnings) |
 | `performance_views.py` | Performance metrics API |
 | `crypto/` | Shared cryptographic utilities |
 | `views/` | Shared view utilities |

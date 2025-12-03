@@ -5828,6 +5828,12 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) includes:
 
 ---
 
+## ⚙️ Backend Runtime Notes (Django & ML Security)
+
+- **Timezone-aware metrics**: All performance and analytics timestamps now use Django's `timezone.now()`, eliminating naive-datetime warnings when `USE_TZ = True`.
+- **Performance monitoring**: `shared/performance_middleware.py` records request and API metrics and may emit `SLOW REQUEST` warnings for genuinely slow endpoints.
+- **ML warm-up**: The ML security module (`ml_security`) pre-loads and warms up core models at startup, so the very first call may log a slow request, but subsequent `/api/ml-security/...` requests should be much faster.
+
 ## 🤝 Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.

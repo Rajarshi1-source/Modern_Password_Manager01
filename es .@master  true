@@ -1,0 +1,130 @@
+[35m.github/workflows/ci.yml[m[36m:[m[32m292[m[36m:[m        uses: aquasecurity/trivy-action@[1;31mmaster[m
+[35m.github/workflows/ci.yml[m[36m:[m[32m307[m[36m:[m        uses: aquasecurity/trivy-action@[1;31mmaster[m
+[35m.github/workflows/frontend-ci.yml[m[36m:[m[32m78[m[36m:[m        uses: snyk/actions/node@[1;31mmaster[m
+[35mREADME.md[m[36m:[m[32m42[m[36m:[m- [Master Password Recovery](#-[1;31mmaster[m-password-recovery)
+[35mREADME.md[m[36m:[m[32m995[m[36m:[m│    │ • URL   │      │  │ XSS Prevention │     │ • [1;31mmaster[mPass   │    │ Derive     │ │   │
+[35mREADME.md[m[36m:[m[32m1215[m[36m:[m    U->>C: Enter [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m1568[m[36m:[m| **argon2-browser** | ^1.18.0 | 🔐 KDF | Memory-hard key derivation function (Argon2id) compiled to WebAssembly. Winner of the Password Hashing Competition (PHC). Used for deriving encryption keys from [1;31mmaster[m passwords with adaptive parameters (32-128MB memory based on device capability). |
+[35mREADME.md[m[36m:[m[32m2295[m[36m:[m│   │   ├── initialize()                    # Init with [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m2634[m[36m:[m│   │  • 256-bit key derived from [1;31mmaster[m password                                      │  │
+[35mREADME.md[m[36m:[m[32m2844[m[36m:[m  const [1;31mmaster[mNonce = this.generateNonce(12);
+[35mREADME.md[m[36m:[m[32m2855[m[36m:[m    const chunkNonce = new Uint8Array([...[1;31mmaster[mNonce, ...chunkNonceExtra]);
+[35mREADME.md[m[36m:[m[32m2871[m[36m:[m    [1;31mmaster[mNonce: this.arrayBufferToBase64([1;31mmaster[mNonce),
+[35mREADME.md[m[36m:[m[32m3402[m[36m:[m│   │   new CryptoService([1;31mmaster[mPassword)                                 │   │
+[35mREADME.md[m[36m:[m[32m3404[m[36m:[m│   │   ├─► Store [1;31mmaster[m password in memory                               │   │
+[35mREADME.md[m[36m:[m[32m3485[m[36m:[m * 3. The [1;31mmaster[m password never leaves the client
+[35mREADME.md[m[36m:[m[32m3490[m[36m:[m  constructor([1;31mmaster[mPassword) {
+[35mREADME.md[m[36m:[m[32m3491[m[36m:[m    this.[1;31mmaster[mPassword = [1;31mmaster[mPassword;
+[35mREADME.md[m[36m:[m[32m3579[m[36m:[m      pass: this.[1;31mmaster[mPassword,
+[35mREADME.md[m[36m:[m[32m3595[m[36m:[m    const key = CryptoJS.PBKDF2(this.[1;31mmaster[mPassword, salt, {
+[35mREADME.md[m[36m:[m[32m3827[m[36m:[m  this.[1;31mmaster[mPassword = null;
+[35mREADME.md[m[36m:[m[32m3892[m[36m:[m// Derive key from [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m3893[m[36m:[masync deriveKeyFromPassword([1;31mmaster[mPassword, salt) {
+[35mREADME.md[m[36m:[m[32m3908[m[36m:[m    pass: [1;31mmaster[mPassword,
+[35mREADME.md[m[36m:[m[32m3959[m[36m:[m        password: User's [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m3998[m[36m:[m  const key = CryptoJS.PBKDF2(this.[1;31mmaster[mPassword, salt, {
+[35mREADME.md[m[36m:[m[32m4022[m[36m:[m    U->>C: Enter [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m4063[m[36m:[m  async deriveKeyFromPassword([1;31mmaster[mPassword, salt) {
+[35mREADME.md[m[36m:[m[32m4065[m[36m:[m      pass: [1;31mmaster[mPassword,
+[35mREADME.md[m[36m:[m[32m4937[m[36m:[m    C->>C: Derive vault key from [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m4947[m[36m:[m    U->>C: Forgot [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m4961[m[36m:[m    U->>C: Enter new [1;31mmaster[m password
+[35mREADME.md[m[36m:[m[32m5070[m[36m:[m│   ├── POST   setup-recovery-key/     # Setup [1;31mmaster[m password recovery
+[35mbrowser-extension/src/background.js[m[36m:[m[32m197[m[36m:[m          const authResult = await this.authenticate(message.[1;31mmaster[mPassword);
+[35mbrowser-extension/src/background.js[m[36m:[m[32m349[m[36m:[m  async authenticate([1;31mmaster[mPassword) {
+[35mbrowser-extension/src/background.js[m[36m:[m[32m351[m[36m:[m      const authResult = await this.api.login([1;31mmaster[mPassword);
+[35mbrowser-extension/src/background.js[m[36m:[m[32m369[m[36m:[m      return { success: false, error: 'Invalid [1;31mmaster[m password' };
+[35mbrowser-extension/src/background.js[m[36m:[m[32m531[m[36m:[m  async login([1;31mmaster[mPassword) {
+[35mbrowser-extension/src/background.js[m[36m:[m[32m534[m[36m:[m      this.cryptoService = new CryptoService([1;31mmaster[mPassword);
+[35mbrowser-extension/src/background.js[m[36m:[m[32m552[m[36m:[m      // Verify [1;31mmaster[m password
+[35mbrowser-extension/src/background.js[m[36m:[m[32m553[m[36m:[m      const verifyResponse = await fetch(`${this.apiUrl}/vault/verify_[1;31mmaster[m_password/`, {
+[35mbrowser-extension/src/background.js[m[36m:[m[32m556[m[36m:[m        body: JSON.stringify({ [1;31mmaster[m_password: [1;31mmaster[mPassword })
+[35mbrowser-extension/src/background.js[m[36m:[m[32m569[m[36m:[m          '[1;31mmaster[mPasswordHash': await this.cryptoService.hash([1;31mmaster[mPassword)
+[35mbrowser-extension/src/background.js[m[36m:[m[32m575[m[36m:[m      return { success: false, error: 'Invalid [1;31mmaster[m password' };
+[35mbrowser-extension/src/background.js[m[36m:[m[32m717[m[36m:[m  constructor([1;31mmaster[mPassword) {
+[35mbrowser-extension/src/background.js[m[36m:[m[32m718[m[36m:[m    this.[1;31mmaster[mPassword = [1;31mmaster[mPassword;
+[35mbrowser-extension/src/background.js[m[36m:[m[32m723[m[36m:[m   * Derive encryption key from [1;31mmaster[m password and salt using PBKDF2
+[35mbrowser-extension/src/background.js[m[36m:[m[32m729[m[36m:[m    const cacheKey = `${this.[1;31mmaster[mPassword}:${salt}`;
+[35mbrowser-extension/src/background.js[m[36m:[m[32m737[m[36m:[m      const passwordBuffer = encoder.encode(this.[1;31mmaster[mPassword);
+[35mbrowser-extension/src/background.js[m[36m:[m[32m906[m[36m:[m    const purposePassword = `${this.[1;31mmaster[mPassword}:${purpose}`;
+[35mbrowser-extension/src/popup.html[m[36m:[m[32m184[m[36m:[m    <div class="section-title">Enter your [1;31mmaster[m password</div>
+[35mbrowser-extension/src/popup.html[m[36m:[m[32m186[m[36m:[m      <input type="password" id="[1;31mmaster[m-password" placeholder="Master password" required>
+[35mbrowser-extension/src/popup.js[m[36m:[m[32m8[m[36m:[m  const passwordInput = document.getElementById('[1;31mmaster[m-password');
+[35mbrowser-extension/src/popup.js[m[36m:[m[32m98[m[36m:[m    const [1;31mmaster[mPassword = passwordInput.value;
+[35mbrowser-extension/src/popup.js[m[36m:[m[32m100[m[36m:[m    if (![1;31mmaster[mPassword) {
+[35mbrowser-extension/src/popup.js[m[36m:[m[32m112[m[36m:[m      { action: 'authenticate', [1;31mmaster[mPassword },
+[35mdocumentation/ADVANCED_FEATURES_IMPLEMENTATION_COMPLETE.md[m[36m:[m[32m74[m[36m:[m- HKDF sub-key derivation from [1;31mmaster[m keys
+[35mdocumentation/AUTHENTICATION_ENHANCEMENTS_QUICK_REFERENCE.md[m[36m:[m[32m180[m[36m:[m      await axios.post('/api/auth/change-[1;31mmaster[m-password/', {
+[35mdocumentation/AUTHENTICATION_ENHANCEMENTS_QUICK_REFERENCE.md[m[36m:[m[32m191[m[36m:[m    requireReauth('change your [1;31mmaster[m password', performPasswordChange);
+[35mdocumentation/AUTHENTICATION_ENHANCEMENTS_QUICK_REFERENCE.md[m[36m:[m[32m342[m[36m:[m- ✅ Change [1;31mmaster[m password
+[35mdocumentation/BEHAVIORAL_RECOVERY_SECURITY.md[m[36m:[m[32m71[m[36m:[m- Key derived from user's [1;31mmaster[m password
+[35mdocumentation/BEHAVIORAL_SERVICES_RESTORED.md[m[36m:[m[32m579[m[36m:[m- ✅ Encryption key derived from [1;31mmaster[m password
+[35mdocumentation/BUG_FIXES_AND_IMPROVEMENTS.md[m[36m:[m[32m89[m[36m:[m  - User enters new [1;31mmaster[m password
+[35mdocumentation/BUG_FIXES_AND_IMPROVEMENTS.md[m[36m:[m[32m221[m[36m:[m6. Enter new [1;31mmaster[m password (12+ chars, strong)
+[35mdocumentation/BUG_FIXES_AND_IMPROVEMENTS.md[m[36m:[m[32m252[m[36m:[m📝 Use different storage than [1;31mmaster[m password  
+[35mdocumentation/BUG_FIXES_AND_IMPROVEMENTS.md[m[36m:[m[32m258[m[36m:[m⚠️ If both [1;31mmaster[m password AND recovery key lost, data cannot be recovered  
+[35mdocumentation/BUG_FIXES_AND_IMPROVEMENTS.md[m[36m:[m[32m337[m[36m:[mThe password recovery system has been completely overhauled from a non-functional placeholder to a fully working, secure, and user-friendly feature. Users can now confidently reset their [1;31mmaster[m passwords using either email or recovery keys, with strong security measures in place to protect their data.
+[35mdocumentation/DEPLOYMENT_GUIDE_MISSING_FEATURES.md[m[36m:[m[32m609[m[36m:[m- [SimpleLogin API Docs](https://github.com/simple-login/app/blob/[1;31mmaster[m/docs/api.md)
+[35mdocumentation/DEPLOYMENT_QUICK_REFERENCE.md[m[36m:[m[32m290[m[36m:[m        uses: appleboy/ssh-action@[1;31mmaster[m
+[35mdocumentation/HYBRID_CRYPTO_IMPLEMENTATION_SUMMARY.md[m[36m:[m[32m223[m[36m:[m1. User logs in with [1;31mmaster[m password
+[35mdocumentation/HYBRID_CRYPTO_IMPLEMENTATION_SUMMARY.md[m[36m:[m[32m239[m[36m:[mdef upgrade_user_crypto_on_login(user, [1;31mmaster[m_password):
+[35mdocumentation/HYBRID_CRYPTO_IMPLEMENTATION_SUMMARY.md[m[36m:[m[32m253[m[36m:[m            plaintext = decrypt_v1(item.encrypted_data, [1;31mmaster[m_password)
+[35mdocumentation/HYBRID_CRYPTO_IMPLEMENTATION_SUMMARY.md[m[36m:[m[32m256[m[36m:[m            new_encrypted = encrypt_v2(plaintext, [1;31mmaster[m_password)
+[35mdocumentation/HYBRID_CRYPTO_README.md[m[36m:[m[32m294[m[36m:[m// User enters [1;31mmaster[m password
+[35mdocumentation/HYBRID_CRYPTO_README.md[m[36m:[m[32m295[m[36m:[mconst [1;31mmaster[mPassword = "user_secure_password";
+[35mdocumentation/HYBRID_CRYPTO_README.md[m[36m:[m[32m302[m[36m:[m  pass: [1;31mmaster[mPassword,
+[35mdocumentation/HYBRID_CRYPTO_UPGRADE_PLAN.md[m[36m:[m[32m304[m[36m:[mdef upgrade_encryption_on_login(user, [1;31mmaster[m_password):
+[35mdocumentation/HYBRID_CRYPTO_UPGRADE_PLAN.md[m[36m:[m[32m316[m[36m:[m        plaintext = decrypt_old(item.encrypted_data, [1;31mmaster[m_password)
+[35mdocumentation/HYBRID_CRYPTO_UPGRADE_PLAN.md[m[36m:[m[32m319[m[36m:[m        new_encrypted = encrypt_new(plaintext, [1;31mmaster[m_password)
+[35mdocumentation/IMPLEMENTATION_STATUS_FINAL.md[m[36m:[m[32m600[m[36m:[m- 🔗 [SimpleLogin API](https://github.com/simple-login/app/blob/[1;31mmaster[m/docs/api.md)
+[35mdocumentation/LAZY_DECRYPTION_IMPLEMENTATION.md[m[36m:[m[32m287[m[36m:[m  const unlockVault = async ([1;31mmaster[mPassword) => {
+[35mdocumentation/LAZY_DECRYPTION_IMPLEMENTATION.md[m[36m:[m[32m293[m[36m:[m      const result = await vaultService.initialize([1;31mmaster[mPassword);
+[35mdocumentation/LAZY_DECRYPTION_IMPLEMENTATION.md[m[36m:[m[32m305[m[36m:[m        setError('Invalid [1;31mmaster[m password');
+[35mdocumentation/LAZY_DECRYPTION_IMPLEMENTED.md[m[36m:[m[32m156[m[36m:[mconst unlockVault = async ([1;31mmaster[mPassword) => {
+[35mdocumentation/LAZY_DECRYPTION_IMPLEMENTED.md[m[36m:[m[32m161[m[36m:[m    const result = await vaultService.initialize([1;31mmaster[mPassword);
+[35mdocumentation/LAZY_DECRYPTION_IMPLEMENTED.md[m[36m:[m[32m243[m[36m:[mUser enters [1;31mmaster[m password
+[35mdocumentation/MISSING_FEATURES_COMPLETE_SUMMARY.md[m[36m:[m[32m627[m[36m:[m- [SimpleLogin API](https://github.com/simple-login/app/blob/[1;31mmaster[m/docs/api.md)
+[35mdocumentation/MISSING_FEATURES_IMPLEMENTATION.md[m[36m:[m[32m447[m[36m:[m- [SimpleLogin API Docs](https://github.com/simple-login/app/blob/[1;31mmaster[m/docs/api.md)
+[35mdocumentation/NEXT_STEPS.md[m[36m:[m[32m251[m[36m:[m1. User enters [1;31mmaster[m password
+[35mdocumentation/PASSKEY_RECOVERY_COMPLETE_GUIDE.md[m[36m:[m[32m127[m[36m:[m[1;31mmaster[m_key (32 bytes)
+[35mdocumentation/PASSKEY_RECOVERY_COMPLETE_GUIDE.md[m[36m:[m[32m137[m[36m:[mcombined_key = [1;31mmaster[m_key + kyber_shared_secret
+[35mdocumentation/PASSKEY_RECOVERY_COMPLETE_GUIDE.md[m[36m:[m[32m234[m[36m:[m| **AAD Binding** | [1;31mmaster[m_key_hash + kyber_pk | Integrity protection |
+[35mdocumentation/PASSWORD_RECOVERY_QUICK_GUIDE.md[m[36m:[m[32m43[m[36m:[m4. Enter new [1;31mmaster[m password
+[35mdocumentation/PASSWORD_RECOVERY_QUICK_GUIDE.md[m[36m:[m[32m70[m[36m:[m**⚠️ IMPORTANT**: Store recovery key separately from [1;31mmaster[m password!
+[35mdocumentation/PASSWORD_RECOVERY_QUICK_GUIDE.md[m[36m:[m[32m155[m[36m:[m- Use different storage than [1;31mmaster[m password
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m100[m[36m:[m│     └─> Argon2id(password, salt) = [1;31mmaster[m_key              │
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m124[m[36m:[m│     vault_key = HKDF([1;31mmaster[m_key || shared_secret)          │
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m624[m[36m:[m * Combines [1;31mmaster[m password derivation with X3DH shared secret
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m636[m[36m:[m   * Combines [1;31mmaster[m password key with X3DH shared secret
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m638[m[36m:[m   * @param {Uint8Array} [1;31mmaster[mPasswordKey - Derived from Argon2id
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m643[m[36m:[m  async deriveVaultKey([1;31mmaster[mPasswordKey, x3dhSharedSecret, salt) {
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m646[m[36m:[m      ...[1;31mmaster[mPasswordKey,
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m705[m[36m:[m  constructor([1;31mmaster[mPassword) {
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m706[m[36m:[m    this.[1;31mmaster[mPassword = [1;31mmaster[mPassword;
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m738[m[36m:[m   * Uses hybrid approach: [1;31mmaster[m password + X3DH
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m741[m[36m:[m    // 1. Derive key from [1;31mmaster[m password (unchanged)
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m742[m[36m:[m    const [1;31mmaster[mKey = await this.deriveMasterKey();
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m755[m[36m:[m          [1;31mmaster[mKey,
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m781[m[36m:[m    // 1. Derive [1;31mmaster[m key
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m782[m[36m:[m    const [1;31mmaster[mKey = await this.deriveMasterKey();
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m793[m[36m:[m      [1;31mmaster[mKey,
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1457[m[36m:[m  - [ ] Combine [1;31mmaster[m password + X3DH
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1580[m[36m:[m- ✅ Server NEVER receives [1;31mmaster[m password
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1644[m[36m:[m- **Authentication Hash:** Argon2id([1;31mmaster[m_password, salt)
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1649[m[36m:[m- **Encryption Key:** HKDF([1;31mmaster[m_password_key || x3dh_secret)
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1824[m[36m:[m  it('should never send [1;31mmaster[m password to server', async () => {
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1853[m[36m:[m    const [1;31mmaster[mPassword = 'test-password';
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1856[m[36m:[m    const cryptoV1 = new CryptoService([1;31mmaster[mPassword);
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1860[m[36m:[m    const cryptoV2 = new CryptoServiceV2([1;31mmaster[mPassword);
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1942[m[36m:[m4. User enters [1;31mmaster[m password (confirmation)
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1959[m[36m:[m  async migrateV1ToV2(v1EncryptedVault, [1;31mmaster[mPassword) {
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1961[m[36m:[m    const cryptoV1 = new CryptoService([1;31mmaster[mPassword);
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1965[m[36m:[m    const cryptoV2 = new CryptoServiceV2([1;31mmaster[mPassword);
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m1998[m[36m:[masync function getVaultData(encryptedVault, [1;31mmaster[mPassword) {
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m2002[m[36m:[m    const cryptoV1 = new CryptoService([1;31mmaster[mPassword);
+[35mdocumentation/POST_QUANTUM_UPGRADE_PLAN.md[m[36m:[m[32m2005[m[36m:[m    const cryptoV2 = new CryptoServiceV2([1;31mmaster[mPassword);
+[35mdocumentation/QUANTUM_RECOVERY_IMPLEMENTATION_GUIDE.md[m[36m:[m[32m42[m[36m:[m- User forgets their [1;31mmaster[m password AND loses recovery key
+[35mdocumentation/QUANTUM_RECOVERY_IMPLEMENTATION_GUIDE.md[m[36m:[m[32m542[m[36m:[m- User prompted to update [1;31mmaster[m password
+[35mdocumentation/README_MISSING_FEATURES.md[m[36m:[m[32m374[m[36m:[m- [SimpleLogin API](https://github.com/simple-login/app/blob/[1;31mmaster[m/docs/api.md)
+[35mdocumentation/SOCIAL_MESH_RECOVERY_ASSESSMENT.md[m[36m:[m[32m908[m[36m:[m4. **Hardware Security Module (HSM):** Store [1;31mmaster[m encryption keys in HSM
+[35mdocumentation/SOCIAL_MESH_RECOVERY_STATUS_REPORT.md[m[36m:[m[32m171[m[36m:[m4. Reconstruct [1;31mmaster[m secret using Shamir's SSS

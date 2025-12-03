@@ -393,6 +393,18 @@ Reduce:
 - Temporal sequence length
 - Number of estimators in Random Forest
 
+## ⚙️ Runtime Performance & Warm-Up
+
+- **Model loading**: All core ML models (`password_strength`, `anomaly_detector`, `threat_analyzer`) are loaded once at Django startup via `ml_security.ml_models.load_models()`.
+- **Warm-up predictions**: On startup, the backend runs small dummy predictions to trigger TensorFlow's lazy initialization, so **the first real API call is not penalized** by JIT/graph setup.
+- **Expected behavior**:
+  - Django logs may show a **single** slow request warning on the very first warm-up phase after deploy/restart.
+  - Subsequent calls to `POST /api/ml-security/password-strength/predict/` should typically complete in a few hundred milliseconds on a normal CPU.
+- **If you see repeated slow-request warnings** for ML endpoints:
+  - Verify that TensorFlow is installed with CPU/GPU support appropriate for your machine.
+  - Make sure pre-trained model files exist under `password_manager/ml_security/trained_models/` (otherwise a fresh model is built in memory and may be slower).
+  - Consider increasing infrastructure resources or offloading heavy inference to a dedicated service if you run very high traffic.
+
 ## 📚 References
 
 ### LSTM for Password Strength
