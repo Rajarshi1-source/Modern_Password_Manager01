@@ -5,7 +5,7 @@
 # ============================================================================
 
 # Core Django Framework
-Django==4.2.26
+Django==4.2.27
 djangorestframework==3.16.1
 djangorestframework-simplejwt==5.2.2
 asgiref==3.8.1
