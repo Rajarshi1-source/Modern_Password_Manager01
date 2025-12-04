@@ -7,7 +7,7 @@
 # Core Django Framework
 Django==4.2.27
 djangorestframework==3.16.1
-djangorestframework-simplejwt==5.2.2
+djangorestframework-simplejwt==5.5.1
 asgiref==3.8.1
 
 # Django Extensions & Tools
@@ -59,7 +59,7 @@ requests==2.32.4
 certifi==2025.1.31
 charset-normalizer==3.4.1
 idna==3.10
-urllib3==1.26.20
+urllib3==2.5.0
 dnspython==2.7.0
 
 # AWS & Cloud Storage
@@ -119,7 +119,7 @@ six==1.17.0
 python-dotenv==1.0.0
 
 # WSGI/ASGI Server
-Werkzeug==3.1.3
+Werkzeug==3.1.4
 
 # Python 3.13+ Compatibility
 legacy-cgi>=2.0.0
@@ -207,4 +207,4 @@ pip-audit>=2.6.0
 # ============================================================================
 # Optional: MongoDB Support
 # ============================================================================
-pymongo==4.3.3
+pymongo==4.6.3
