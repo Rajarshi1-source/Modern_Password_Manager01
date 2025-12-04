@@ -22,6 +22,7 @@
   "author": "Password Manager Team",
   "license": "MIT",
   "dependencies": {
+    "electron": "^35.7.5",
     "electron-store": "^8.1.0",
     "axios": "^1.5.0",
     "electron-updater": "^6.1.4"
@@ -30,7 +31,7 @@
     "node-dpapi": "^1.0.0"
   },
   "devDependencies": {
-    "electron": "^27.0.0",
+    "electron": "^35.7.5",
     "electron-builder": "^24.6.4",
     "electron-rebuild": "^3.2.9"
   },

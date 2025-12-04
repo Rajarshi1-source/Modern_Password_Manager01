@@ -5,7 +5,7 @@
 # ============================================================================
 
 # Core Django Framework
-Django==4.2.26
+Django==4.2.27
 djangorestframework==3.16.1
 djangorestframework-simplejwt==5.2.2
 asgiref==3.8.1
@@ -55,7 +55,7 @@ psycopg2-binary==2.9.10
 sqlparse==0.5.3
 
 # HTTP & Networking
-requests==2.32.3
+requests==2.32.4
 certifi==2025.1.31
 charset-normalizer==3.4.1
 idna==3.10
