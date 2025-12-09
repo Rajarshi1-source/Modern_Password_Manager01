@@ -25,8 +25,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from django.conf import settings
 from django.core.cache import cache
-from jose import jwt, JWTError
-from jose.constants import ALGORITHMS
+import jwt
+from jwt.exceptions import InvalidTokenError as JWTError, ExpiredSignatureError, InvalidSignatureError
 
 logger = logging.getLogger(__name__)
 
@@ -455,42 +455,40 @@ class OIDCService:
             kid = unverified_header.get('kid')
             
             # Find the matching key
-            rsa_key = None
+            signing_key = None
             for key in jwks.get('keys', []):
                 if key.get('kid') == kid:
-                    rsa_key = {
-                        'kty': key['kty'],
-                        'kid': key['kid'],
-                        'use': key.get('use', 'sig'),
-                        'n': key['n'],
-                        'e': key['e'],
-                    }
+                    # PyJWT can work with JWK directly using PyJWKClient
+                    # But for compatibility, we'll use the RSA algorithm helper
+                    from jwt.algorithms import RSAAlgorithm
+                    signing_key = RSAAlgorithm.from_jwk(json.dumps(key))
                     break
             
-            if not rsa_key:
+            if not signing_key:
                 # Try refreshing JWKS
                 jwks = provider.get_jwks(force_refresh=True)
                 for key in jwks.get('keys', []):
                     if key.get('kid') == kid:
-                        rsa_key = {
-                            'kty': key['kty'],
-                            'kid': key['kid'],
-                            'use': key.get('use', 'sig'),
-                            'n': key['n'],
-                            'e': key['e'],
-                        }
+                        from jwt.algorithms import RSAAlgorithm
+                        signing_key = RSAAlgorithm.from_jwk(json.dumps(key))
                         break
             
-            if not rsa_key:
+            if not signing_key:
                 raise OIDCValidationError(f"Unable to find matching key for kid: {kid}")
             
             # Verify and decode token
             claims = jwt.decode(
                 id_token,
-                rsa_key,
+                signing_key,
                 algorithms=['RS256', 'RS384', 'RS512'],
                 audience=provider.client_id,
                 issuer=provider.issuer,
+                options={
+                    'verify_signature': True,
+                    'verify_exp': True,
+                    'verify_aud': True,
+                    'verify_iss': True,
+                }
             )
             
             # Validate nonce if required
@@ -510,6 +508,9 @@ class OIDCService:
         except JWTError as e:
             logger.error(f"ID token validation failed: {e}")
             raise OIDCValidationError(f"ID token validation failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error during token validation: {e}")
+            raise OIDCValidationError(f"Token validation error: {e}")
     
     def get_userinfo(
         self,
@@ -572,4 +573,3 @@ oidc_service = OIDCService()
 def get_oidc_service() -> OIDCService:
     """Get the OIDC service singleton"""
     return oidc_service
-
