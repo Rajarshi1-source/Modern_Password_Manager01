@@ -5,6 +5,9 @@ This module provides real post-quantum cryptography using CRYSTALS-Kyber.
 Falls back to simulated implementation if liboqs is not available.
 
 Security Level: NIST Level 3 (Kyber-768)
+
+Note: In local development without Docker, the code uses simulated Kyber.
+      In production (Docker), liboqs is compiled and installed for real PQC.
 """
 
 import os
@@ -19,6 +22,14 @@ from cryptography.hazmat.backends import default_backend
 
 logger = logging.getLogger(__name__)
 
+# Track if warnings have been shown (to avoid spam during startup)
+_warnings_shown = {'liboqs': False, 'pqcrypto': False, 'simulation': False}
+
+# Check if we're in development mode
+_DEBUG_MODE = os.environ.get('DEBUG', 'True').lower() == 'true'
+_IN_DOCKER = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+_SUPPRESS_CRYPTO_WARNINGS = _DEBUG_MODE and not _IN_DOCKER
+
 # Try to import liboqs for real Kyber implementation
 LIBOQS_AVAILABLE = False
 oqs = None
@@ -27,9 +38,12 @@ try:
     import oqs as oqs_lib
     oqs = oqs_lib
     LIBOQS_AVAILABLE = True
-    logger.info("[OK] liboqs-python loaded successfully - using real CRYSTALS-Kyber")
+    logger.info("liboqs-python loaded - using real CRYSTALS-Kyber-768")
 except ImportError:
-    logger.warning("[WARNING] liboqs-python not available - using simulated Kyber (NOT for production)")
+    if not _warnings_shown['liboqs'] and not _SUPPRESS_CRYPTO_WARNINGS:
+        _warnings_shown['liboqs'] = True
+        if not _DEBUG_MODE:
+            logger.warning("[WARNING] liboqs-python not available - using simulated Kyber (NOT for production)")
 
 # Try pqcrypto as alternative
 PQCRYPTO_AVAILABLE = False
@@ -40,9 +54,12 @@ if not LIBOQS_AVAILABLE:
         from pqcrypto.kem import kyber768
         pqcrypto_kyber = kyber768
         PQCRYPTO_AVAILABLE = True
-        logger.info("[OK] pqcrypto loaded successfully - using real CRYSTALS-Kyber")
+        logger.info("pqcrypto loaded - using real CRYSTALS-Kyber-768")
     except ImportError:
-        logger.warning("[WARNING] pqcrypto not available - using simulated Kyber (NOT for production)")
+        if not _warnings_shown['pqcrypto'] and not _SUPPRESS_CRYPTO_WARNINGS:
+            _warnings_shown['pqcrypto'] = True
+            if not _DEBUG_MODE:
+                logger.warning("[WARNING] pqcrypto not available - using simulated Kyber (NOT for production)")
 
 
 class ProductionKyber:
@@ -72,13 +89,16 @@ class ProductionKyber:
         # Determine which implementation to use
         if LIBOQS_AVAILABLE:
             self.implementation = 'liboqs'
-            logger.info("Using liboqs implementation of Kyber-768")
+            logger.debug("Using liboqs implementation of Kyber-768")
         elif PQCRYPTO_AVAILABLE:
             self.implementation = 'pqcrypto'
-            logger.info("Using pqcrypto implementation of Kyber-768")
+            logger.debug("Using pqcrypto implementation of Kyber-768")
         elif allow_simulation:
             self.implementation = 'simulation'
-            logger.warning("Using SIMULATED Kyber - NOT SECURE FOR PRODUCTION")
+            if not _warnings_shown['simulation'] and not _SUPPRESS_CRYPTO_WARNINGS:
+                _warnings_shown['simulation'] = True
+                if not _DEBUG_MODE:
+                    logger.warning("Using SIMULATED Kyber - NOT SECURE FOR PRODUCTION")
         else:
             raise RuntimeError(
                 "No post-quantum cryptography library available. "

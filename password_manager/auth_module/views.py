@@ -34,9 +34,14 @@ from password_manager.throttling import AuthRateThrottle, StrictSecurityThrottle
 from shared.validators import validate_strong_password
 from shared.utils import get_client_ip, generate_secure_id
 from shared.decorators import log_api_call, security_headers
+# FIX: Import CSRF exemption for JWT-based API endpoints
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
 
 # Create your views here.
 
+# FIX: Exempt AuthViewSet from CSRF - we use JWT authentication, not session cookies
+@method_decorator(csrf_exempt, name='dispatch')
 class AuthViewSet(viewsets.ViewSet):
     """Authentication endpoints for the password manager"""
     permission_classes = [permissions.AllowAny]
@@ -70,8 +75,12 @@ class AuthViewSet(viewsets.ViewSet):
                 auth_hash=auth_hash
             )
             
-            # Generate authentication token
+            # Generate authentication token (legacy)
             token, created = Token.objects.get_or_create(user=user)
+            
+            # FIX: Also generate JWT tokens for frontend compatibility
+            from rest_framework_simplejwt.tokens import RefreshToken
+            refresh = RefreshToken.for_user(user)
             
             # Enhanced security analysis for new user registration - Option B: Parallel services
             try:
@@ -99,6 +108,8 @@ class AuthViewSet(viewsets.ViewSet):
             
             return success_response({
                 'token': token.key,
+                'access': str(refresh.access_token),  # FIX: JWT access token
+                'refresh': str(refresh),              # FIX: JWT refresh token
                 'salt': base64.b64encode(salt).decode('utf-8'),
                 'user_id': user.id
             }, status_code=status.HTTP_201_CREATED)

@@ -30,7 +30,7 @@ const InputWrapper = styled.div`
   width: 100%;
 `;
 
-const StyledInput = styled.input`
+const inputStyles = css`
   width: 100%;
   padding: 10px 12px;
   font-size: 14px;
@@ -64,6 +64,17 @@ const StyledInput = styled.input`
   ${props => props.rightIcon && css`
     padding-right: 36px;
   `}
+`;
+
+const StyledInput = styled.input`
+  ${inputStyles}
+`;
+
+const StyledTextarea = styled.textarea`
+  ${inputStyles}
+  resize: vertical;
+  min-height: ${props => props.rows ? `${props.rows * 24}px` : '80px'};
+  font-family: inherit;
 `;
 
 const LeftIconWrapper = styled.div`
@@ -176,6 +187,10 @@ const Input = ({
       {showPassword ? <FaEyeSlash /> : <FaEye />}
     </RightIconWrapper>
   ) : null;
+
+  // Determine if we should render a textarea
+  const isTextarea = type === 'textarea';
+  const InputComponent = isTextarea ? StyledTextarea : StyledInput;
   
   return (
     <InputContainer marginBottom={marginBottom} {...rest}>
@@ -186,16 +201,16 @@ const Input = ({
       )}
       
       <InputWrapper>
-        {leftIcon && (
+        {leftIcon && !isTextarea && (
           <LeftIconWrapper>
             {leftIcon}
           </LeftIconWrapper>
         )}
         
-        <StyledInput
+        <InputComponent
           id={id}
           name={name}
-          type={actualType}
+          type={isTextarea ? undefined : actualType}
           placeholder={placeholder}
           value={value}
           onChange={onChange}
@@ -205,13 +220,14 @@ const Input = ({
           disabled={disabled}
           error={error}
           focused={focused}
-          leftIcon={leftIcon}
-          rightIcon={rightIcon || type === 'password'}
+          leftIcon={!isTextarea ? leftIcon : undefined}
+          rightIcon={!isTextarea ? (rightIcon || type === 'password') : undefined}
           aria-invalid={error ? 'true' : 'false'}
+          rows={inputProps.rows}
           {...inputProps}
         />
         
-        {rightIcon && (
+        {rightIcon && !isTextarea && (
           <RightIconWrapper clickable={!!inputProps.onRightIconClick}>
             {rightIcon}
           </RightIconWrapper>

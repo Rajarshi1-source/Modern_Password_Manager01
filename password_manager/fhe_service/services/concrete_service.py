@@ -6,25 +6,40 @@ Optimized for simple operations like:
 - Password length comparisons (encrypted)
 - Character type counting (encrypted)
 - Simple boolean operations on encrypted data
+
+Note: concrete-python only works on Linux x86_64.
+      In local development, the code uses fallback mode.
+      In production (Docker/Linux), FHE operations are fully functional.
 """
 
 import logging
 import hashlib
 import time
+import os
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# Check if we're in development mode
+_DEBUG_MODE = os.environ.get('DEBUG', 'True').lower() == 'true'
+_IN_DOCKER = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+_SUPPRESS_CRYPTO_WARNINGS = _DEBUG_MODE and not _IN_DOCKER
+_concrete_warning_shown = False
+
 # Attempt to import concrete-python
 try:
     import concrete.fhe as fhe
     from concrete.fhe import Configuration
     CONCRETE_AVAILABLE = True
+    logger.info("concrete-python available - FHE operations enabled")
 except ImportError:
     CONCRETE_AVAILABLE = False
-    logger.warning("concrete-python not available. FHE operations will use fallback mode.")
+    if not _concrete_warning_shown and not _SUPPRESS_CRYPTO_WARNINGS:
+        _concrete_warning_shown = True
+        if not _DEBUG_MODE:
+            logger.warning("concrete-python not available. FHE operations will use fallback mode.")
 
 
 class ConcreteOperationType(Enum):
@@ -86,7 +101,8 @@ class ConcreteService:
         if CONCRETE_AVAILABLE:
             self._initialize_concrete()
         else:
-            logger.warning("Running ConcreteService in fallback mode (no FHE)")
+            if not _SUPPRESS_CRYPTO_WARNINGS:
+                logger.debug("Running ConcreteService in fallback mode")
     
     def _initialize_concrete(self):
         """Initialize Concrete-Python configuration."""

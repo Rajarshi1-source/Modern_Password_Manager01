@@ -248,7 +248,8 @@ class AnalyticsService {
       this.flush();
     }
     
-    return event;
+    // Return a resolved Promise for chaining compatibility
+    return Promise.resolve(event);
   }
   
   /**

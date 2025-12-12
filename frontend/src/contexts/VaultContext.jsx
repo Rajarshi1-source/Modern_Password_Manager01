@@ -45,91 +45,6 @@ export const VaultProvider = ({ children }) => {
     lastActivityRef.current = Date.now(); 
   };
   
-  // Initialize broadcast channel for cross-tab communication
-  useEffect(() => {
-    if (typeof BroadcastChannel !== 'undefined') {
-      broadcastChannelRef.current = new BroadcastChannel('vault_state_channel');
-      
-      broadcastChannelRef.current.onmessage = (event) => {
-        if (event.data.type === 'LOCK_VAULT') {
-          // Another tab locked the vault, lock this one too
-          handleLockVault(false); // Don't broadcast again to avoid loops
-        } else if (event.data.type === 'VAULT_UPDATED') {
-          // Another tab updated the vault items, refresh if unlocked
-          if (isUnlocked) {
-            refreshItems();
-          }
-        }
-      };
-      
-      return () => {
-        broadcastChannelRef.current.close();
-      };
-    } else {
-      // Fallback for browsers that don't support BroadcastChannel
-      window.addEventListener('storage', handleStorageEvent);
-      return () => {
-        window.removeEventListener('storage', handleStorageEvent);
-      };
-    }
-  }, [isUnlocked, handleLockVault, handleStorageEvent, refreshItems]);
-  
-  // Handle storage events for cross-tab communication fallback
-  const handleStorageEvent = useCallback((event) => {
-    if (event.key === 'vaultLockState' && event.newValue === 'locked') {
-      handleLockVault(false);
-    } else if (event.key === 'vaultUpdated') {
-      if (isUnlocked) {
-        refreshItems();
-      }
-    }
-  }, [handleLockVault, isUnlocked, refreshItems]);
-  
-  // Setup activity monitoring for auto-lock
-  useEffect(() => {
-    // Only set up the timer if the vault is unlocked
-    if (!isUnlocked) return;
-    
-    // Convert minutes to milliseconds
-    const timeoutMs = autoLockTimeout * 60 * 1000;
-    
-    // Create the auto-lock timer that checks elapsed time since last activity
-    const checkInactivity = () => {
-      const now = Date.now();
-      const timeElapsed = now - lastActivityRef.current;
-      
-      if (timeElapsed >= timeoutMs) {
-        // Lock vault if inactive for too long
-        handleLockVault(true);
-      } else {
-        // Schedule next check at the remaining time
-        const remainingTime = Math.max(0, timeoutMs - timeElapsed);
-        autoLockTimerRef.current = setTimeout(checkInactivity, Math.min(remainingTime, 10000));
-      }
-    };
-    
-    // Start monitoring inactivity
-    autoLockTimerRef.current = setTimeout(checkInactivity, timeoutMs);
-    
-    // Track user activity events
-    const activityEvents = [
-      'mousedown', 'mousemove', 'keydown', 
-      'scroll', 'touchstart', 'click', 'focus'
-    ];
-    
-    // Add event listeners for all activity types
-    activityEvents.forEach(event => {
-      window.addEventListener(event, updateActivity, { passive: true });
-    });
-    
-    // Clean up
-    return () => {
-      clearTimeout(autoLockTimerRef.current);
-      activityEvents.forEach(event => {
-        window.removeEventListener(event, updateActivity);
-      });
-    };
-  }, [isUnlocked, autoLockTimeout, handleLockVault]);
   
   // Fix #6: Check if component is mounted before updating state
   const checkIfInitialized = useCallback(async () => {
@@ -266,38 +181,93 @@ export const VaultProvider = ({ children }) => {
   // For backward compatibility
   const lockVault = () => handleLockVault(true);
   
-  // Fix #9: Add firebaseInitialized to dependency array
+  // Handle storage events for cross-tab communication fallback
+  const handleStorageEvent = useCallback((event) => {
+    if (event.key === 'vaultLockState' && event.newValue === 'locked') {
+      handleLockVault(false);
+    } else if (event.key === 'vaultUpdated') {
+      if (isUnlocked) {
+        refreshItems();
+      }
+    }
+  }, [handleLockVault, isUnlocked, refreshItems]);
+  
+  // Initialize broadcast channel for cross-tab communication
   useEffect(() => {
-    if (isUnlocked && !firebaseInitialized) {
-      const initializeFirebase = async () => {
-        try {
-          // Get Firebase token from backend
-          const response = await api.get('/auth/firebase_token/');
-          if (response.data.token && isMountedRef.current) {
-            const success = await firebaseService.initialize(response.data.token);
-            if (success && isMountedRef.current) {
-              setFirebaseInitialized(true);
-              // Start listening for changes
-              const userId = response.data.user_id;
-              firebaseService.listenForChanges(userId, handleFirebaseUpdate);
-            }
+    if (typeof BroadcastChannel !== 'undefined') {
+      broadcastChannelRef.current = new BroadcastChannel('vault_state_channel');
+      
+      broadcastChannelRef.current.onmessage = (event) => {
+        if (event.data.type === 'LOCK_VAULT') {
+          // Another tab locked the vault, lock this one too
+          handleLockVault(false); // Don't broadcast again to avoid loops
+        } else if (event.data.type === 'VAULT_UPDATED') {
+          // Another tab updated the vault items, refresh if unlocked
+          if (isUnlocked) {
+            refreshItems();
           }
-        } catch (error) {
-          console.error('Failed to initialize Firebase:', error);
         }
       };
       
-      initializeFirebase();
+      return () => {
+        broadcastChannelRef.current.close();
+      };
+    } else {
+      // Fallback for browsers that don't support BroadcastChannel
+      window.addEventListener('storage', handleStorageEvent);
+      return () => {
+        window.removeEventListener('storage', handleStorageEvent);
+      };
     }
+  }, [isUnlocked, handleLockVault, handleStorageEvent, refreshItems]);
+  
+  // Setup activity monitoring for auto-lock
+  useEffect(() => {
+    // Only set up the timer if the vault is unlocked
+    if (!isUnlocked) return;
     
-    return () => {
-      if (firebaseInitialized) {
-        firebaseService.detachListeners();
+    // Convert minutes to milliseconds
+    const timeoutMs = autoLockTimeout * 60 * 1000;
+    
+    // Create the auto-lock timer that checks elapsed time since last activity
+    const checkInactivity = () => {
+      const now = Date.now();
+      const timeElapsed = now - lastActivityRef.current;
+      
+      if (timeElapsed >= timeoutMs) {
+        // Lock vault if inactive for too long
+        handleLockVault(true);
+      } else {
+        // Schedule next check at the remaining time
+        const remainingTime = Math.max(0, timeoutMs - timeElapsed);
+        autoLockTimerRef.current = setTimeout(checkInactivity, Math.min(remainingTime, 10000));
       }
     };
-  }, [isUnlocked, firebaseInitialized, handleFirebaseUpdate]); // Fixed dependency array
+    
+    // Start monitoring inactivity
+    autoLockTimerRef.current = setTimeout(checkInactivity, timeoutMs);
+    
+    // Track user activity events
+    const activityEvents = [
+      'mousedown', 'mousemove', 'keydown', 
+      'scroll', 'touchstart', 'click', 'focus'
+    ];
+    
+    // Add event listeners for all activity types
+    activityEvents.forEach(event => {
+      window.addEventListener(event, updateActivity, { passive: true });
+    });
+    
+    // Clean up
+    return () => {
+      clearTimeout(autoLockTimerRef.current);
+      activityEvents.forEach(event => {
+        window.removeEventListener(event, updateActivity);
+      });
+    };
+  }, [isUnlocked, autoLockTimeout, handleLockVault]);
   
-  // Fix #7: Add firebaseService to dependency array and handle decryption errors
+  // Handle Firebase real-time updates
   const handleFirebaseUpdate = useCallback(async (firebaseItems) => {
     if (!isUnlocked) return;
     
@@ -362,7 +332,38 @@ export const VaultProvider = ({ children }) => {
     } catch (error) {
       console.error("Error processing Firebase updates:", error);
     }
-  }, [isUnlocked, vaultService, items, firebaseService]);
+  }, [isUnlocked, vaultService, items]);
+  
+  // Fix #9: Add firebaseInitialized to dependency array
+  useEffect(() => {
+    if (isUnlocked && !firebaseInitialized) {
+      const initializeFirebase = async () => {
+        try {
+          // Get Firebase token from backend
+          const response = await api.get('/auth/firebase_token/');
+          if (response.data.token && isMountedRef.current) {
+            const success = await firebaseService.initialize(response.data.token);
+            if (success && isMountedRef.current) {
+              setFirebaseInitialized(true);
+              // Start listening for changes
+              const userId = response.data.user_id;
+              firebaseService.listenForChanges(userId, handleFirebaseUpdate);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to initialize Firebase:', error);
+        }
+      };
+      
+      initializeFirebase();
+    }
+    
+    return () => {
+      if (firebaseInitialized) {
+        firebaseService.detachListeners();
+      }
+    };
+  }, [isUnlocked, firebaseInitialized, handleFirebaseUpdate]);
   
   // Update addItem to sync with Firebase and limit pending changes
   const addItem = async (item) => {

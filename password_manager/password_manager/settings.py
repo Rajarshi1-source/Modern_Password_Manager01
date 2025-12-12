@@ -135,6 +135,8 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    # FIX: CSRF exemption for auth endpoints - MUST be before CsrfViewMiddleware
+    'middleware.CSRFExemptAuthMiddleware',
     # Disable HTTPS redirect in development - causes ASGI issues
     # 'middleware.HttpsRedirectMiddleware',
     'middleware.SecurityHeadersMiddleware',

@@ -144,10 +144,14 @@ transformers>=4.35.0
 # Advanced Security Features
 # ============================================================================
 
-# Post-Quantum Cryptography - Optional, requires native liboqs library
-# On Linux: pip install liboqs-python
-# On Windows: Requires manual liboqs installation (complex)
-# liboqs-python>=0.10.0
+# Post-Quantum Cryptography
+# Note: liboqs-python requires liboqs C library to be compiled and installed.
+# In Docker, this is handled by the multi-stage Dockerfile.
+# For local development on Windows without Docker, the code will use simulated Kyber.
+# liboqs-python>=0.10.0  # Installed from source in Docker
+
+# Pure Python Post-Quantum Crypto (fallback when liboqs unavailable)
+# pqcrypto  # Installed separately in Docker
 
 # Blockchain Anchoring
 web3>=7.0.0
@@ -156,10 +160,10 @@ eth-account>=0.13.0
 # Social Mesh Recovery (Shamir's Secret Sharing)
 secretsharing>=0.2.6
 
-# Fully Homomorphic Encryption (FHE) - Optional, platform-specific
-# Uncomment if needed and available on your platform (Linux recommended)
-# concrete-python>=2.5.0
-# tenseal>=0.3.14
+# Fully Homomorphic Encryption (FHE) - Platform-specific (Linux x86_64 only)
+# Note: concrete-python only works on Linux x86_64.
+# For other platforms, the code uses fallback encryption mode.
+# concrete-python>=2.5.0  # Installed separately in Docker
 
 # ============================================================================
 # Notifications & Communication

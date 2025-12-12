@@ -1,6 +1,315 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
+import { FaBell, FaEnvelope, FaMobileAlt, FaDesktop, FaShieldAlt, FaClock, FaExclamationTriangle, FaSave, FaToggleOn, FaToggleOff } from 'react-icons/fa';
+
+const spin = keyframes`
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+`;
+
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const pulse = keyframes`
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+`;
+
+const Container = styled.div`
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
+const Header = styled.div`
+  margin-bottom: 24px;
+`;
+
+const Title = styled.h3`
+  margin: 0 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  svg { color: ${props => props.theme.primary || '#7B68EE'}; }
+`;
+
+const Subtitle = styled.p`
+  margin: 0;
+  color: ${props => props.theme.textSecondary || '#666'};
+  font-size: 14px;
+`;
+
+const InfoBanner = styled.div`
+  background: linear-gradient(135deg, ${props => props.theme.primaryLight || '#f0edff'} 0%, #e8f4fd 100%);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  border: 1px solid ${props => props.theme.primary || '#7B68EE'}20;
+`;
+
+const InfoIcon = styled.div`
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: ${props => props.theme.primary || '#7B68EE'};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  svg { color: white; font-size: 18px; }
+`;
+
+const InfoContent = styled.div`
+  flex: 1;
+`;
+
+const InfoTitle = styled.h4`
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+`;
+
+const InfoText = styled.p`
+  margin: 0;
+  font-size: 13px;
+  color: ${props => props.theme.textSecondary || '#666'};
+  line-height: 1.5;
+`;
+
+const LoadingContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: ${props => props.theme.textSecondary || '#666'};
+`;
+
+const Spinner = styled.div`
+  width: 40px;
+  height: 40px;
+  border: 3px solid ${props => props.theme.backgroundSecondary || '#f0f0f0'};
+  border-top-color: ${props => props.theme.primary || '#7B68EE'};
+  border-radius: 50%;
+  animation: ${spin} 0.8s linear infinite;
+  margin-bottom: 16px;
+`;
+
+const Form = styled.form`
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+`;
+
+const Section = styled.div`
+  background: ${props => props.theme.cardBg || '#fff'};
+  border-radius: 16px;
+  padding: 24px;
+  border: 1px solid ${props => props.theme.borderColor || '#e0e0e0'};
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
+const SectionHeader = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid ${props => props.theme.borderColor || '#e0e0e0'};
+`;
+
+const SectionIcon = styled.div`
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: ${props => props.$color || props.theme.primary || '#7B68EE'}15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  svg { color: ${props => props.$color || props.theme.primary || '#7B68EE'}; font-size: 18px; }
+`;
+
+const SectionTitle = styled.h4`
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+`;
+
+const ToggleGroup = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+`;
+
+const ToggleItem = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background: ${props => props.$active 
+    ? `linear-gradient(135deg, ${props.theme.primaryLight || '#f0edff'} 0%, ${props.theme.cardBg || '#fff'} 100%)`
+    : props.theme.backgroundSecondary || '#f8f9fa'};
+  border-radius: 12px;
+  border: 1px solid ${props => props.$active ? props.theme.primary || '#7B68EE' : 'transparent'};
+  transition: all 0.2s ease;
+  &:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+`;
+
+const ToggleInfo = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+`;
+
+const ToggleIcon = styled.div`
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: ${props => props.$active ? props.theme.primary || '#7B68EE' : props.theme.borderColor || '#e0e0e0'};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  svg { color: ${props => props.$active ? 'white' : props.theme.textSecondary || '#666'}; font-size: 18px; }
+`;
+
+const ToggleContent = styled.div`
+  flex: 1;
+`;
+
+const ToggleLabel = styled.label`
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  margin-bottom: 4px;
+  cursor: pointer;
+`;
+
+const ToggleDescription = styled.p`
+  margin: 0;
+  font-size: 12px;
+  color: ${props => props.theme.textSecondary || '#666'};
+  line-height: 1.4;
+`;
+
+const ToggleSwitch = styled.button`
+  width: 52px;
+  height: 28px;
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.3s ease;
+  background: ${props => props.$active 
+    ? `linear-gradient(135deg, ${props.theme.primary || '#7B68EE'} 0%, ${props.theme.accent || '#9B8BFF'} 100%)`
+    : props.theme.borderColor || '#d1d5db'};
+  &::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: ${props => props.$active ? '26px' : '3px'};
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    transition: all 0.3s ease;
+  }
+  &:hover { transform: scale(1.05); }
+`;
+
+const PhoneInput = styled.div`
+  margin-top: 16px;
+  padding: 16px;
+  background: ${props => props.theme.backgroundSecondary || '#f8f9fa'};
+  border-radius: 12px;
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
+const InputLabel = styled.label`
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  margin-bottom: 8px;
+`;
+
+const Input = styled.input`
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid ${props => props.theme.borderColor || '#e0e0e0'};
+  border-radius: 10px;
+  font-size: 14px;
+  background: ${props => props.theme.cardBg || '#fff'};
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  &:focus { outline: none; border-color: ${props => props.theme.primary || '#7B68EE'}; }
+`;
+
+const InputHint = styled.p`
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: ${props => props.theme.textSecondary || '#666'};
+`;
+
+const SelectGroup = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 16px;
+`;
+
+const SelectContainer = styled.div`
+  background: ${props => props.theme.backgroundSecondary || '#f8f9fa'};
+  border-radius: 12px;
+  padding: 16px;
+`;
+
+const Select = styled.select`
+  width: 100%;
+  padding: 12px 16px;
+  border: 2px solid ${props => props.theme.borderColor || '#e0e0e0'};
+  border-radius: 10px;
+  font-size: 14px;
+  background: ${props => props.theme.cardBg || '#fff'};
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  &:focus { outline: none; border-color: ${props => props.theme.primary || '#7B68EE'}; }
+`;
+
+const SubmitButton = styled.button`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  padding: 16px 24px;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  background: linear-gradient(135deg, ${props => props.theme.primary || '#7B68EE'} 0%, ${props => props.theme.accent || '#9B8BFF'} 100%);
+  color: white;
+  box-shadow: 0 4px 14px ${props => props.theme.primary || '#7B68EE'}40;
+  &:hover:not(:disabled) { transform: translateY(-2px); }
+  &:disabled { opacity: 0.7; cursor: not-allowed; animation: ${pulse} 1.5s ease-in-out infinite; }
+`;
 
 const NotificationSettings = () => {
   const [settings, setSettings] = useState({
@@ -15,29 +324,27 @@ const NotificationSettings = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
-  // Fetch current notification settings
-  useEffect(() => {
-    const fetchSettings = async () => {
-      setLoading(true);
-      try {
-        const response = await axios.get('/api/security/account-protection/notification-settings/', {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
-          }
-        });
-        setSettings(response.data);
-      } catch (error) {
-        toast.error('Failed to fetch notification settings');
-        console.error('Error fetching settings:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    fetchSettings();
+  const fetchSettings = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await axios.get('/api/security/account-protection/notification-settings/', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        }
+      });
+      setSettings(response.data);
+    } catch (error) {
+      toast.error('Failed to fetch notification settings');
+      console.error('Error fetching settings:', error);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
   
-  // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -49,7 +356,7 @@ const NotificationSettings = () => {
         }
       });
       
-      toast.success('Notification settings updated successfully');
+      toast.success('Settings saved successfully! 🎉');
     } catch (error) {
       toast.error('Failed to update notification settings');
       console.error('Error saving settings:', error);
@@ -58,210 +365,222 @@ const NotificationSettings = () => {
     }
   };
   
-  // Handle input changes
+  const handleToggle = (name) => {
+    setSettings(prev => ({
+      ...prev,
+      [name]: !prev[name]
+    }));
+  };
+  
   const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    setSettings({
-      ...settings,
-      [name]: type === 'checkbox' ? checked : value
-    });
+    const { name, value } = e.target;
+    setSettings(prev => ({
+      ...prev,
+      [name]: value
+    }));
   };
   
   if (loading) {
     return (
-      <div className="flex justify-center items-center py-8">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-      </div>
+      <LoadingContainer>
+        <Spinner />
+        <span>Loading settings...</span>
+      </LoadingContainer>
     );
   }
   
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-medium text-gray-900">Security Notification Settings</h3>
-        <p className="mt-1 text-sm text-gray-600">
+    <Container>
+      <Header>
+        <Title>
+          <FaBell /> Notification Settings
+        </Title>
+        <Subtitle>
           Configure how you want to be notified when suspicious login attempts are detected.
-        </p>
-      </div>
+        </Subtitle>
+      </Header>
 
-      <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
-        <div className="flex">
-          <div className="flex-shrink-0">
-            <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-            </svg>
-          </div>
-          <div className="ml-3">
-            <p className="text-sm text-blue-700">
-              Configure how you want to be notified when suspicious activity is detected on your accounts.
-            </p>
-          </div>
-        </div>
-      </div>
+      <InfoBanner>
+        <InfoIcon>
+          <FaShieldAlt />
+        </InfoIcon>
+        <InfoContent>
+          <InfoTitle>Stay Protected</InfoTitle>
+          <InfoText>
+            Enable notifications to receive instant alerts when suspicious activity is detected. 
+            We recommend keeping at least one notification method active for maximum security.
+          </InfoText>
+        </InfoContent>
+      </InfoBanner>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Alert Methods */}
-        <div className="space-y-4">
-          <h4 className="text-base font-medium text-gray-900">Alert Methods</h4>
+      <Form onSubmit={handleSubmit}>
+        <Section>
+          <SectionHeader>
+            <SectionIcon $color="#7B68EE">
+              <FaBell />
+            </SectionIcon>
+            <SectionTitle>Alert Methods</SectionTitle>
+          </SectionHeader>
           
-          <div className="space-y-3">
-            <div className="flex items-center">
-              <input
-                id="email_alerts"
-                name="email_alerts"
-                type="checkbox"
-                checked={settings.email_alerts}
-                onChange={handleChange}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+          <ToggleGroup>
+            <ToggleItem $active={settings.email_alerts}>
+              <ToggleInfo>
+                <ToggleIcon $active={settings.email_alerts}>
+                  <FaEnvelope />
+                </ToggleIcon>
+                <ToggleContent>
+                  <ToggleLabel htmlFor="email_alerts">Email Alerts</ToggleLabel>
+                  <ToggleDescription>
+                    Receive security alerts via email when suspicious activity is detected
+                  </ToggleDescription>
+                </ToggleContent>
+              </ToggleInfo>
+              <ToggleSwitch
+                type="button"
+                $active={settings.email_alerts}
+                onClick={() => handleToggle('email_alerts')}
               />
-              <label htmlFor="email_alerts" className="ml-3 block text-sm font-medium text-gray-700">
-                Email Alerts
-              </label>
-            </div>
-            <p className="ml-7 text-sm text-gray-500">
-              Receive security alerts via email when suspicious activity is detected
-            </p>
+            </ToggleItem>
 
-            <div className="flex items-center">
-              <input
-                id="sms_alerts"
-                name="sms_alerts"
-                type="checkbox"
-                checked={settings.sms_alerts}
-                onChange={handleChange}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            <ToggleItem $active={settings.sms_alerts}>
+              <ToggleInfo>
+                <ToggleIcon $active={settings.sms_alerts}>
+                  <FaMobileAlt />
+                </ToggleIcon>
+                <ToggleContent>
+                  <ToggleLabel htmlFor="sms_alerts">SMS Alerts</ToggleLabel>
+                  <ToggleDescription>
+                    Receive instant text messages for critical security alerts
+                  </ToggleDescription>
+                </ToggleContent>
+              </ToggleInfo>
+              <ToggleSwitch
+                type="button"
+                $active={settings.sms_alerts}
+                onClick={() => handleToggle('sms_alerts')}
               />
-              <label htmlFor="sms_alerts" className="ml-3 block text-sm font-medium text-gray-700">
-                SMS Alerts
-              </label>
-            </div>
-            <p className="ml-7 text-sm text-gray-500">
-              Receive security alerts via SMS when suspicious activity is detected
-            </p>
+            </ToggleItem>
 
-            <div className="flex items-center">
-              <input
-                id="push_alerts"
-                name="push_alerts"
-                type="checkbox"
-                checked={settings.push_alerts}
-                onChange={handleChange}
-                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+            {settings.sms_alerts && (
+              <PhoneInput>
+                <InputLabel htmlFor="phone_number">Phone Number</InputLabel>
+                <Input
+                  type="tel"
+                  id="phone_number"
+                  name="phone_number"
+                  value={settings.phone_number}
+                  onChange={handleChange}
+                  placeholder="+1 (555) 000-0000"
+                  required={settings.sms_alerts}
+                />
+                <InputHint>Enter your phone number in international format</InputHint>
+              </PhoneInput>
+            )}
+
+            <ToggleItem $active={settings.push_alerts}>
+              <ToggleInfo>
+                <ToggleIcon $active={settings.push_alerts}>
+                  <FaDesktop />
+                </ToggleIcon>
+                <ToggleContent>
+                  <ToggleLabel htmlFor="push_alerts">Push Notifications</ToggleLabel>
+                  <ToggleDescription>
+                    Receive push notifications directly in your browser
+                  </ToggleDescription>
+                </ToggleContent>
+              </ToggleInfo>
+              <ToggleSwitch
+                type="button"
+                $active={settings.push_alerts}
+                onClick={() => handleToggle('push_alerts')}
               />
-              <label htmlFor="push_alerts" className="ml-3 block text-sm font-medium text-gray-700">
-                Push Notifications
-              </label>
-            </div>
-            <p className="ml-7 text-sm text-gray-500">
-              Receive push notifications in your browser
-            </p>
-          </div>
-        </div>
+            </ToggleItem>
+          </ToggleGroup>
+        </Section>
 
-        {/* Phone Number */}
-        {settings.sms_alerts && (
-          <div>
-            <label htmlFor="phone_number" className="block text-sm font-medium text-gray-700">
-              Phone Number
-            </label>
-            <div className="mt-1">
-              <input
-                type="tel"
-                id="phone_number"
-                name="phone_number"
-                value={settings.phone_number}
-                onChange={handleChange}
-                placeholder="+1234567890"
-                required={settings.sms_alerts}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              />
-            </div>
-            <p className="mt-1 text-sm text-gray-500">
-              Enter your phone number in international format (e.g., +1234567890)
-            </p>
-          </div>
-        )}
-
-        {/* Auto-Lock Settings */}
-        <div className="space-y-4">
-          <h4 className="text-base font-medium text-gray-900">Automatic Protection</h4>
+        <Section>
+          <SectionHeader>
+            <SectionIcon $color="#10B981">
+              <FaShieldAlt />
+            </SectionIcon>
+            <SectionTitle>Automatic Protection</SectionTitle>
+          </SectionHeader>
           
-          <div className="flex items-center">
-            <input
-              id="auto_lock_accounts"
-              name="auto_lock_accounts"
-              type="checkbox"
-              checked={settings.auto_lock_accounts}
-              onChange={handleChange}
-              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+          <ToggleItem $active={settings.auto_lock_accounts}>
+            <ToggleInfo>
+              <ToggleIcon $active={settings.auto_lock_accounts}>
+                {settings.auto_lock_accounts ? <FaToggleOn /> : <FaToggleOff />}
+              </ToggleIcon>
+              <ToggleContent>
+                <ToggleLabel>Auto-Lock Accounts</ToggleLabel>
+                <ToggleDescription>
+                  Automatically lock your social media accounts when suspicious activity is detected
+                </ToggleDescription>
+              </ToggleContent>
+            </ToggleInfo>
+            <ToggleSwitch
+              type="button"
+              $active={settings.auto_lock_accounts}
+              onClick={() => handleToggle('auto_lock_accounts')}
             />
-            <label htmlFor="auto_lock_accounts" className="ml-3 block text-sm font-medium text-gray-700">
-              Automatically lock social media accounts when suspicious activity is detected
-            </label>
-          </div>
-        </div>
+          </ToggleItem>
+        </Section>
 
-        {/* Threshold Settings */}
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-          <div>
-            <label htmlFor="suspicious_activity_threshold" className="block text-sm font-medium text-gray-700">
-              Suspicious Activity Threshold
-            </label>
-            <div className="mt-1">
-              <select
+        <Section>
+          <SectionHeader>
+            <SectionIcon $color="#F59E0B">
+              <FaClock />
+            </SectionIcon>
+            <SectionTitle>Alert Thresholds</SectionTitle>
+          </SectionHeader>
+          
+          <SelectGroup>
+            <SelectContainer>
+              <InputLabel htmlFor="suspicious_activity_threshold">
+                <FaExclamationTriangle style={{ marginRight: '8px', color: '#F59E0B' }} />
+                Suspicious Activity Threshold
+              </InputLabel>
+              <Select
                 id="suspicious_activity_threshold"
                 name="suspicious_activity_threshold"
                 value={settings.suspicious_activity_threshold}
                 onChange={handleChange}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
               >
                 <option value={1}>1 failed attempt</option>
                 <option value={3}>3 failed attempts</option>
                 <option value={5}>5 failed attempts</option>
                 <option value={10}>10 failed attempts</option>
-              </select>
-            </div>
-            <p className="mt-1 text-sm text-gray-500">
-              Number of failed attempts before triggering an alert
-            </p>
-          </div>
+              </Select>
+              <InputHint>Number of failed attempts before triggering an alert</InputHint>
+            </SelectContainer>
 
-          <div>
-            <label htmlFor="alert_cooldown_minutes" className="block text-sm font-medium text-gray-700">
-              Alert Cooldown Period
-            </label>
-            <div className="mt-1">
-              <select
+            <SelectContainer>
+              <InputLabel htmlFor="alert_cooldown_minutes">
+                <FaClock style={{ marginRight: '8px', color: '#7B68EE' }} />
+                Alert Cooldown Period
+              </InputLabel>
+              <Select
                 id="alert_cooldown_minutes"
                 name="alert_cooldown_minutes"
                 value={settings.alert_cooldown_minutes}
                 onChange={handleChange}
-                className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
               >
                 <option value={5}>5 minutes</option>
                 <option value={15}>15 minutes</option>
                 <option value={30}>30 minutes</option>
                 <option value={60}>1 hour</option>
-              </select>
-            </div>
-            <p className="mt-1 text-sm text-gray-500">
-              Minimum time between consecutive alerts
-            </p>
-          </div>
-        </div>
+              </Select>
+              <InputHint>Minimum time between consecutive alerts</InputHint>
+            </SelectContainer>
+          </SelectGroup>
+        </Section>
 
-        {/* Submit Button */}
-        <div className="pt-4">
-          <button 
-            type="submit" 
-            disabled={saving}
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {saving ? 'Saving...' : 'Save Settings'}
-          </button>
-        </div>
-      </form>
-    </div>
+        <SubmitButton type="submit" disabled={saving}>
+          <FaSave />
+          {saving ? 'Saving Changes...' : 'Save Settings'}
+        </SubmitButton>
+      </Form>
+    </Container>
   );
 };
 

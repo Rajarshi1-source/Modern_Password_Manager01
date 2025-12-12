@@ -37,6 +37,19 @@ const LoadingText = styled.div`
   animation: ${pulse} 1.5s ease-in-out infinite;
 `;
 
+// Screen reader only text
+const SROnly = styled.span`
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+`;
+
 const LoadingIndicator = ({ 
   size = 40,
   text,
@@ -54,22 +67,9 @@ const LoadingIndicator = ({
     >
       <Spinner size={size} />
       {text && <LoadingText>{text}</LoadingText>}
-      <span className="sr-only">Loading...</span>
+      <SROnly>Loading...</SROnly>
     </Container>
   );
 };
-
-// Add global style for screen reader only class
-const SROnly = styled.span`
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border-width: 0;
-`;
 
 export default LoadingIndicator;

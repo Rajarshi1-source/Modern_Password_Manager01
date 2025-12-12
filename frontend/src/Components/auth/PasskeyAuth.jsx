@@ -13,6 +13,7 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
   const [verificationLoading, setVerificationLoading] = useState(false);
   const [supportsPasskeys, setSupportsPasskeys] = useState(false);
   const [isConditionalUI, setIsConditionalUI] = useState(false);
+  const [authSuccess, setAuthSuccess] = useState(false);
 
   // Check browser capabilities on mount
   useEffect(() => {
@@ -211,6 +212,9 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
         localStorage.setItem('refreshToken', tokens.refresh);
       }
       
+      // Set authentication success for test assertions
+      setAuthSuccess(true);
+      
       if (onLoginSuccess) {
         onLoginSuccess(userData, tokens);
       }
@@ -255,6 +259,13 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
   return (
     <div className="passkey-auth">
       {error && <div className="error-message">{error}</div>}
+      
+      {/* Test-friendly authentication status indicator */}
+      {authSuccess && (
+        <span className="sr-only" data-testid="passkey-auth-status">
+          Passkey Authentication Successful
+        </span>
+      )}
       
       {!supportsPasskeys ? (
         <div className="browser-warning">

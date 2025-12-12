@@ -23,6 +23,8 @@ from rest_framework import permissions
 from django.conf import settings
 from django.conf.urls.static import static
 from api.health import health_check, readiness_check, liveness_check
+# FIX: Import csrf_exempt for auth endpoints
+from django.views.decorators.csrf import csrf_exempt
 
 # API documentation schema
 schema_view = get_schema_view(
@@ -65,6 +67,10 @@ urlpatterns = [
     
     # Django admin
     path('admin/', admin.site.urls),
+    
+    # FIX: Direct /auth/ route for frontend compatibility (mirrors /api/auth/)
+    # This allows frontend to call /auth/register/ without needing to change paths
+    path('auth/', include('auth_module.urls')),
     
     # API routes - this will use your structured API endpoints
     path('api/', include('api.urls')),

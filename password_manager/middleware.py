@@ -14,6 +14,42 @@ import ipaddress
 logger = logging.getLogger(__name__)
 
 
+# FIX: Middleware to exempt /auth/ and /api/auth/ paths from CSRF
+# This is more reliable than view-level decorators for DRF ViewSets
+class CSRFExemptAuthMiddleware:
+    """Exempt authentication endpoints from CSRF verification.
+    
+    JWT-based APIs don't need CSRF protection since they use
+    Authorization headers instead of cookies for authentication.
+    """
+    async_capable = True
+    sync_capable = True
+    
+    def __init__(self, get_response):
+        self.get_response = get_response
+        if iscoroutinefunction(self.get_response):
+            markcoroutinefunction(self)
+    
+    def __call__(self, request):
+        if iscoroutinefunction(self.get_response):
+            return self.__acall__(request)
+        return self._process_sync(request)
+    
+    async def __acall__(self, request):
+        self._exempt_csrf_if_auth(request)
+        return await self.get_response(request)
+    
+    def _process_sync(self, request):
+        self._exempt_csrf_if_auth(request)
+        return self.get_response(request)
+    
+    def _exempt_csrf_if_auth(self, request):
+        """Mark auth requests as CSRF exempt"""
+        # Exempt /auth/ and /api/auth/ paths from CSRF
+        if request.path.startswith('/auth/') or request.path.startswith('/api/auth/'):
+            setattr(request, '_dont_enforce_csrf_checks', True)
+
+
 class ASGIRedirectFixMiddleware:
     """
     Middleware to fix ASGI redirect compatibility issues.

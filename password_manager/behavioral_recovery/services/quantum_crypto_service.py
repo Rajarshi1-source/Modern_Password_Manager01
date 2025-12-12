@@ -3,6 +3,9 @@ Production Post-Quantum Cryptography Service
 
 Implements CRYSTALS-Kyber-768 (NIST-approved) for quantum-resistant encryption
 of behavioral embeddings using hybrid Kyber + AES approach.
+
+Note: In local development without Docker, the code uses AES-256-GCM fallback.
+      In production (Docker), liboqs is compiled and installed for real PQC.
 """
 
 import os
@@ -13,6 +16,12 @@ from typing import Tuple, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Check if we're in development mode
+_DEBUG_MODE = os.environ.get('DEBUG', 'True').lower() == 'true'
+_IN_DOCKER = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+_SUPPRESS_CRYPTO_WARNINGS = _DEBUG_MODE and not _IN_DOCKER
+_liboqs_warning_shown = False
+
 # Try to import liboqs for production Kyber implementation
 try:
     from oqs import KEM
@@ -20,7 +29,10 @@ try:
     logger.info("liboqs-python available - using production Kyber-768")
 except ImportError:
     LIBOQS_AVAILABLE = False
-    logger.warning("liboqs-python not available - using fallback encryption")
+    if not _liboqs_warning_shown and not _SUPPRESS_CRYPTO_WARNINGS:
+        _liboqs_warning_shown = True
+        if not _DEBUG_MODE:
+            logger.warning("liboqs-python not available - using fallback encryption")
 
 # Import for AES-GCM
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -59,7 +71,8 @@ class QuantumCryptoService:
                 logger.error(f"Failed to initialize Kyber: {e}")
                 raise
         else:
-            logger.warning("Using fallback encryption (not quantum-resistant)")
+            if not _SUPPRESS_CRYPTO_WARNINGS:
+                logger.debug("Using fallback encryption (AES-256-GCM)")
             self.backend = default_backend()
     
     def generate_keypair(self) -> Tuple[bytes, bytes]:

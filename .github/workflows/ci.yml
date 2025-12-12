@@ -38,6 +38,9 @@ jobs:
     name: Backend Tests
     runs-on: ubuntu-latest
     
+    permissions:
+      contents: read
+    
     services:
       postgres:
         image: postgres:15-alpine
@@ -135,6 +138,9 @@ jobs:
   frontend-test:
     name: Frontend Tests
     runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout code
@@ -330,6 +336,9 @@ jobs:
       name: staging
       url: https://staging.yourapp.com
     
+    permissions:
+      contents: read
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -384,6 +393,9 @@ jobs:
     environment:
       name: production
       url: https://yourapp.com
+    
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout code
@@ -506,6 +518,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'
     environment:
       name: production
+    
+    permissions:
+      contents: read
     
     steps:
       - name: Configure kubectl

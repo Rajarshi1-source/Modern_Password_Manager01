@@ -618,11 +618,10 @@ const EmergencyAccess = () => {
           <Input
             label="Waiting Period (hours)"
             type="number"
-            min="1"
-            max="720"
             value={waitingPeriod}
             onChange={(e) => setWaitingPeriod(e.target.value)}
-            helpText="Time before emergency access is automatically granted"
+            helperText="Time before emergency access is automatically granted"
+            inputProps={{ min: 1, max: 720 }}
           />
         </FormGroup>
         
@@ -672,11 +671,10 @@ const EmergencyAccess = () => {
               <Input
                 label="Waiting Period (hours)"
                 type="number"
-                min="1"
-                max="720"
                 value={waitingPeriod}
                 onChange={(e) => setWaitingPeriod(e.target.value)}
-                helpText="Time before emergency access is automatically granted"
+                helperText="Time before emergency access is automatically granted"
+                inputProps={{ min: 1, max: 720 }}
               />
             </FormGroup>
             
@@ -716,10 +714,10 @@ const EmergencyAccess = () => {
               <Input
                 label="Reason for Access"
                 type="textarea"
-                rows={4}
                 value={requestReason}
                 onChange={(e) => setRequestReason(e.target.value)}
                 placeholder="Explain why you need emergency access"
+                inputProps={{ rows: 4 }}
               />
             </FormGroup>
             

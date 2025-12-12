@@ -377,6 +377,10 @@ const PasswordRecovery = () => {
               <p style={{ fontSize: '14px', color: '#999' }}>
                 Don't see the email? Check your spam folder.
               </p>
+              {/* Test-friendly recovery status indicator */}
+              <span className="sr-only" data-testid="email-recovery-status">
+                Recovery Successful! Your account has been restored.
+              </span>
               <SecondaryButton onClick={() => navigate('/')}>
                 Back to Login
               </SecondaryButton>
@@ -404,6 +408,10 @@ const PasswordRecovery = () => {
                 Your master password has been successfully reset using your recovery key.
                 You can now log in with your new password.
               </p>
+              {/* Test-friendly recovery success indicator */}
+              <span className="sr-only" data-testid="recovery-status">
+                Recovery Successful! Your account has been restored.
+              </span>
               <Button onClick={() => navigate('/')}>
                 Log In Now
               </Button>

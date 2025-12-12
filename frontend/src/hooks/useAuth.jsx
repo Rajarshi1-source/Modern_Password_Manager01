@@ -220,17 +220,14 @@ export const AuthProvider = ({ children }) => {
    * @returns {Promise<Object>} User data
    */
   const login = useCallback(async (credentials) => {
-    console.log('[DEBUG useAuth] login() called with:', credentials);
     try {
       setIsLoading(true);
       
       // Call Django SimpleJWT token endpoint (uses username field by default)
-      console.log('[DEBUG useAuth] Calling POST /api/auth/token/...');
       const response = await axios.post('/api/auth/token/', {
         username: credentials.email || credentials.username,
         password: credentials.password
       });
-      console.log('[DEBUG useAuth] Response:', response.data);
       
       const { access, refresh, user: userData } = response.data;
       

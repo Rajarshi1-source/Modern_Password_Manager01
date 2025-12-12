@@ -7,9 +7,11 @@
  * - Offline queue for missed alerts
  * - Ping/pong health monitoring
  * - Connection quality indicators
+ * - HTTP polling fallback when WebSocket is unavailable (WSGI mode)
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import axios from 'axios';
 import NetworkQualityEstimator from '../utils/NetworkQualityEstimator';
 import OfflineQueueManager from '../utils/OfflineQueueManager';
 
@@ -48,12 +50,17 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
   const networkEstimatorRef = useRef(new NetworkQualityEstimator());
   const offlineQueueRef = useRef(new OfflineQueueManager());
   
+  // HTTP polling fallback state
+  const [usingPolling, setUsingPolling] = useState(false);
+  const pollingIntervalRef = useRef(null);
+  
   // Constants
   const MAX_RECONNECT_ATTEMPTS = 10;
   const INITIAL_RECONNECT_DELAY = 1000; // 1 second
   const MAX_RECONNECT_DELAY = 30000; // 30 seconds
   const PING_INTERVAL = 30000; // 30 seconds
   const PONG_TIMEOUT = 10000; // 10 seconds
+  const POLLING_INTERVAL = 30000; // 30 seconds for HTTP fallback
 
   /**
    * Calculate reconnection delay with exponential backoff
@@ -123,6 +130,63 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
       clearInterval(pingIntervalRef.current);
       pingIntervalRef.current = null;
     }
+  }, []);
+
+  /**
+   * Start HTTP polling as fallback when WebSocket is unavailable
+   */
+  const startPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
+    
+    console.log('[Polling] 📡 Starting HTTP polling fallback');
+    setUsingPolling(true);
+    
+    // Initial fetch
+    const fetchAlerts = async () => {
+      try {
+        const response = await axios.get('/api/security/breach-alerts/');
+        const alerts = response.data?.results || response.data || [];
+        
+        // Process new alerts
+        if (alerts.length > 0) {
+          alerts.forEach(alert => {
+            if (onAlert && !alert.read) {
+              onAlert(alert);
+            }
+          });
+        }
+        
+        setIsConnected(true);
+        setConnectionQuality('polling');
+        setConnectionError(null);
+        
+        if (onConnectionChange) {
+          onConnectionChange(true);
+        }
+      } catch (error) {
+        console.error('[Polling] Error fetching alerts:', error);
+        setConnectionError(error.message);
+      }
+    };
+    
+    // Initial fetch
+    fetchAlerts();
+    
+    // Set up polling interval
+    pollingIntervalRef.current = setInterval(fetchAlerts, POLLING_INTERVAL);
+  }, [onAlert, onConnectionChange]);
+
+  /**
+   * Stop HTTP polling
+   */
+  const stopPolling = useCallback(() => {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    setUsingPolling(false);
   }, []);
 
   /**
@@ -258,15 +322,22 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
             connect();
           }, delay);
         } else if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
-          setConnectionError('Failed to reconnect after maximum attempts');
-          console.error('[WebSocket] ⚠️ Max reconnection attempts reached');
+          console.warn('[WebSocket] ⚠️ Max reconnection attempts reached, falling back to HTTP polling');
+          // Fall back to HTTP polling when WebSocket is not available
+          startPolling();
         }
       };
     } catch (error) {
       console.error('[WebSocket] ❌ Connection error:', error);
       setConnectionError(error.message);
+      
+      // If WebSocket fails to create, use polling fallback
+      if (error.message?.includes('WebSocket') || error.message?.includes('ECONNREFUSED')) {
+        console.log('[WebSocket] Falling back to HTTP polling');
+        startPolling();
+      }
     }
-  }, [userId, onAlert, onUpdate, onConnectionChange, startHealthMonitoring, getReconnectDelay, processOfflineQueue]);
+  }, [userId, onAlert, onUpdate, onConnectionChange, startHealthMonitoring, getReconnectDelay, processOfflineQueue, startPolling]);
 
   /**
    * Handle alerts when offline (add to queue)
@@ -284,6 +355,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
   const disconnect = useCallback(() => {
     console.log('[WebSocket] 🔌 Manual disconnect');
     stopHealthMonitoring();
+    stopPolling();
     
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -292,7 +364,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
     if (wsRef.current) {
       wsRef.current.close(1000, 'User disconnect');
     }
-  }, [stopHealthMonitoring]);
+  }, [stopHealthMonitoring, stopPolling]);
 
   /**
    * Manually reconnect
@@ -357,6 +429,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
     connectionError, 
     connectionQuality,
     reconnectAttempts,
+    usingPolling,
     
     // Network metrics
     networkQuality,

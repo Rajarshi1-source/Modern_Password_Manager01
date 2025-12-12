@@ -14,8 +14,39 @@
 | TensorFlow oneDNN info | Info | None | ✅ Yes (suppress) |
 | Keras `input_length` deprecated | Warning | Low | ✅ Yes |
 | Threat analyzer model error | Error | Medium | ✅ Yes |
-| liboqs-python not available | Warning | Low | ✅ Yes (optional) |
+| liboqs-python not available | Info (Dev) | Low | ✅ Auto-suppressed in dev |
+| pqcrypto not available | Info (Dev) | Low | ✅ Auto-suppressed in dev |
+| concrete-python not available | Info (Dev) | Low | ✅ Auto-suppressed in dev |
 | ab_testing app not found | Warning | Low | ✅ Yes |
+
+---
+
+## 🔇 Automatic Warning Suppression (Development Mode)
+
+In **local development** (DEBUG=True, not in Docker), crypto library warnings are **automatically suppressed**.
+
+### Why These Warnings Exist
+
+1. **liboqs-python**: Requires compiling the liboqs C library (Linux-specific)
+2. **pqcrypto**: Requires native compilation (Linux-specific)  
+3. **concrete-python**: Only works on Linux x86_64 (FHE library)
+
+### When Warnings Appear
+
+| Environment | Crypto Warnings |
+|-------------|-----------------|
+| Local dev (Windows/Mac) | **Suppressed** ✅ |
+| Docker (Linux) | Libraries installed, no warnings |
+| Production (Linux) | Libraries installed, no warnings |
+
+### Manual Override
+
+To see suppressed warnings in development:
+```bash
+# Set environment variable
+set DEBUG=False  # Windows
+export DEBUG=False  # Linux/Mac
+```
 
 ---
 
@@ -137,17 +168,67 @@ x = Dense(64, activation='relu')(input_layer)  # ✅ CORRECT
 
 ---
 
-### Fix 6: Install liboqs-python (Optional - Quantum Cryptography)
+### Fix 6: Post-Quantum Cryptography Libraries (liboqs, pqcrypto, concrete-python)
 
-**Option A**: Install the library
+These warnings are **expected during local development** on Windows. The system gracefully falls back to secure classical cryptography.
 
-```bash
-pip install liboqs-python
+**Messages you may see in development:**
+```
+[DEV] liboqs-python not available - this is expected in local development
+[DEV] pqcrypto not available - using secure fallback for development
+[DEV] concrete-python not available - FHE operations will use fallback mode (OK for development)
 ```
 
-**Option B**: Suppress the warning
+These are **INFO messages** in development mode, not errors. The application works correctly without these libraries.
 
-**File**: `password_manager/auth_module/services/quantum_crypto_service.py` (or similar)
+---
+
+#### For Production Deployment (Docker)
+
+The Docker image automatically compiles and installs all crypto libraries:
+
+```bash
+# Build and run with Docker (includes liboqs, pqcrypto, concrete-python)
+docker compose -f docker/docker-compose.yml up --build
+```
+
+The production Dockerfile:
+- Compiles **liboqs** C library from source
+- Installs **liboqs-python** wrapper
+- Installs **pqcrypto** pure-Python crypto
+- Installs **concrete-python** FHE library (Linux x86_64 only)
+
+---
+
+#### For Local Development (Windows/macOS - Optional)
+
+If you want to eliminate these messages locally (not required):
+
+**Option A**: Use Docker (recommended)
+```bash
+docker compose -f docker/docker-compose.dev.yml up
+```
+
+**Option B**: Install on Linux/WSL2
+```bash
+# Install liboqs system library first
+git clone https://github.com/open-quantum-safe/liboqs.git
+cd liboqs && mkdir build && cd build
+cmake -GNinja .. -DBUILD_SHARED_LIBS=ON -DOQS_ENABLE_KEM_KYBER=ON
+ninja && sudo ninja install
+
+# Then install Python packages
+pip install liboqs-python
+pip install pqcrypto
+pip install concrete-python  # Linux x86_64 only
+```
+
+**Option C**: Accept the fallbacks (recommended for Windows dev)
+The fallback encryption is still secure (AES-256-GCM) and works correctly for development/testing.
+
+---
+
+#### Legacy Reference (if you have old code)
 
 ```python
 try:
