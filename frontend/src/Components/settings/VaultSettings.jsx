@@ -1,261 +1,377 @@
 import React from 'react';
-import styled from 'styled-components';
-import { FaBolt, FaDatabase, FaClock, FaInfoCircle } from 'react-icons/fa';
+import styled, { keyframes } from 'styled-components';
+import { FaBolt, FaDatabase, FaClock, FaInfoCircle, FaRocket, FaMemory, FaLock, FaCheckCircle } from 'react-icons/fa';
 import { useVault } from '../../contexts/VaultContext';
+import {
+  Section,
+  SectionHeader,
+  SectionHeaderContent,
+  SectionIcon,
+  SettingItem,
+  SettingInfo,
+  SettingControl,
+  ToggleSwitch,
+  Badge,
+  InfoBox,
+  InfoText
+} from './SettingsComponents';
 
+// Animations
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const pulse = keyframes`
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+`;
+
+// Color Constants - matching vault page
+const colors = {
+  primary: '#7B68EE',
+  primaryDark: '#6B58DE',
+  primaryLight: '#9B8BFF',
+  success: '#10b981',
+  warning: '#f59e0b',
+  background: '#0f0f1a',
+  backgroundSecondary: '#1a1a2e',
+  cardBg: '#1e1e35',
+  text: '#ffffff',
+  textSecondary: '#a0a0b8',
+  border: '#2d2d4a'
+};
+
+// Styled Components
 const Container = styled.div`
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 24px;
+  animation: ${fadeIn} 0.4s ease-out;
 `;
 
-const Card = styled.div`
-  background: ${props => props.theme.cardBg || '#fff'};
+const BenefitsGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+`;
+
+const BenefitCard = styled.div`
+  background: linear-gradient(135deg, ${colors.backgroundSecondary} 0%, ${colors.cardBg} 100%);
+  border-radius: 14px;
+  padding: 20px;
+  border: 1px solid ${colors.border};
+  transition: all 0.3s ease;
+  animation: ${fadeIn} 0.4s ease-out;
+  animation-delay: ${props => props.$delay || '0s'};
+  animation-fill-mode: backwards;
+  
+  &:hover {
+    border-color: ${colors.success}50;
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.15);
+  }
+`;
+
+const BenefitIcon = styled.div`
+  width: 44px;
+  height: 44px;
   border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  margin-bottom: 24px;
-`;
-
-const CardTitle = styled.h2`
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 8px 0;
+  background: linear-gradient(135deg, ${props => props.$color}30 0%, ${props => props.$color}15 100%);
   display: flex;
   align-items: center;
-  gap: 12px;
-  color: ${props => props.theme.textPrimary || '#333'};
+  justify-content: center;
+  margin-bottom: 14px;
+  
+  svg {
+    font-size: 20px;
+    color: ${props => props.$color};
+  }
 `;
 
-const CardDescription = styled.p`
-  color: ${props => props.theme.textSecondary || '#666'};
-  margin: 0 0 24px 0;
-  font-size: 14px;
+const BenefitTitle = styled.h4`
+  font-size: 15px;
+  font-weight: 600;
+  color: ${colors.text};
+  margin: 0 0 8px 0;
+`;
+
+const BenefitValue = styled.div`
+  font-size: 24px;
+  font-weight: 800;
+  background: linear-gradient(135deg, ${props => props.$color} 0%, ${props => props.$colorEnd || props.$color} 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 6px;
+`;
+
+const BenefitDescription = styled.p`
+  font-size: 13px;
+  color: ${colors.textSecondary};
+  margin: 0;
   line-height: 1.5;
 `;
 
-const SettingRow = styled.div`
+const RecommendationCard = styled.div`
+  background: linear-gradient(135deg, ${colors.primary}15 0%, ${colors.primaryDark}10 100%);
+  border: 1px solid ${colors.primary}40;
+  border-radius: 16px;
+  padding: 24px;
+  margin-top: 24px;
   display: flex;
-  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  animation: ${fadeIn} 0.5s ease-out;
+`;
+
+const RecommendationIcon = styled.div`
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%);
+  display: flex;
   align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid ${props => props.theme.borderColor || '#e0e0e0'};
+  justify-content: center;
+  flex-shrink: 0;
+  animation: ${pulse} 2s ease-in-out infinite;
+  
+  svg {
+    font-size: 24px;
+    color: #fff;
+  }
+`;
+
+const RecommendationContent = styled.div`
+  flex: 1;
+`;
+
+const RecommendationTitle = styled.h3`
+  font-size: 18px;
+  font-weight: 700;
+  color: ${colors.text};
+  margin: 0 0 8px 0;
+`;
+
+const RecommendationText = styled.p`
+  font-size: 14px;
+  color: ${colors.textSecondary};
+  margin: 0;
+  line-height: 1.6;
+`;
+
+const FeatureList = styled.ul`
+  list-style: none;
+  padding: 0;
+  margin: 20px 0 0 0;
+`;
+
+const FeatureItem = styled.li`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid ${colors.border};
+  color: ${colors.textSecondary};
+  font-size: 14px;
   
   &:last-child {
     border-bottom: none;
   }
-`;
-
-const SettingInfo = styled.div`
-  flex: 1;
-`;
-
-const SettingLabel = styled.div`
-  font-weight: 500;
-  margin-bottom: 4px;
-  color: ${props => props.theme.textPrimary || '#333'};
-`;
-
-const SettingDescription = styled.div`
-  font-size: 13px;
-  color: ${props => props.theme.textSecondary || '#666'};
-  line-height: 1.4;
-`;
-
-const Toggle = styled.button`
-  position: relative;
-  width: 56px;
-  height: 28px;
-  border-radius: 14px;
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.3s ease;
-  background-color: ${props => props.active ? '#4CAF50' : '#ccc'};
   
-  &::after {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: ${props => props.active ? '30px' : '2px'};
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background-color: white;
-    transition: left 0.3s ease;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  svg {
+    color: ${colors.success};
+    font-size: 16px;
+    flex-shrink: 0;
   }
-  
-  &:hover {
-    opacity: 0.9;
-  }
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-`;
-
-const InfoBox = styled.div`
-  background: ${props => props.theme.primary ? `${props.theme.primary}15` : '#e8e4ff'};
-  border-left: 4px solid ${props => props.theme.primary || '#7B68EE'};
-  padding: 16px;
-  border-radius: 4px;
-  margin-top: 16px;
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-`;
-
-const InfoText = styled.div`
-  font-size: 13px;
-  color: ${props => props.theme.textPrimary || '#333'};
-  line-height: 1.5;
   
   strong {
-    font-weight: 600;
+    color: ${colors.text};
   }
 `;
 
-const BenefitsList = styled.ul`
-  margin: 16px 0 0 0;
-  padding-left: 20px;
-  
-  li {
-    margin-bottom: 8px;
-    color: ${props => props.theme.textSecondary || '#666'};
-    font-size: 14px;
-    line-height: 1.5;
-  }
-`;
-
-const StatusBadge = styled.span`
-  display: inline-flex;
+const StatusIndicator = styled.div`
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 600;
-  background: ${props => props.active ? '#E8F5E9' : '#FFF3E0'};
-  color: ${props => props.active ? '#4CAF50' : '#FF9800'};
+  gap: 8px;
+  margin-left: auto;
 `;
 
 const VaultSettings = () => {
-  const { lazyLoadEnabled, setLazyLoadEnabled } = useVault();
+  const vaultContext = useVault();
+  
+  // Safely access vault context with fallbacks
+  const lazyLoadEnabled = vaultContext?.lazyLoadEnabled ?? false;
+  const setLazyLoadEnabled = vaultContext?.setLazyLoadEnabled;
 
   const handleToggleLazyLoad = () => {
-    setLazyLoadEnabled(!lazyLoadEnabled);
-    
-    // Optionally reload the vault items to apply changes
-    // This could be done automatically in VaultContext when lazyLoadEnabled changes
+    if (setLazyLoadEnabled) {
+      setLazyLoadEnabled(!lazyLoadEnabled);
+    }
   };
 
   return (
     <Container>
-      <Card>
-        <CardTitle>
-          <FaBolt />
-          Performance Settings
-        </CardTitle>
-        <CardDescription>
-          Optimize your vault's performance and loading speed
-        </CardDescription>
+      {/* Performance Settings Section */}
+      <Section>
+        <SectionHeader>
+          <SectionIcon $color={colors.primary}>
+            <FaBolt />
+          </SectionIcon>
+          <SectionHeaderContent>
+            <h2>Performance Settings</h2>
+            <p>Optimize your vault's loading speed and memory usage</p>
+          </SectionHeaderContent>
+        </SectionHeader>
 
-        <SettingRow>
+        <SettingItem>
           <SettingInfo>
-            <SettingLabel>
+            <h3>
+              <FaLock style={{ color: colors.primary }} />
               Lazy Decryption
-              {' '}
-              <StatusBadge active={lazyLoadEnabled}>
-                {lazyLoadEnabled ? 'Enabled' : 'Disabled'}
-              </StatusBadge>
-            </SettingLabel>
-            <SettingDescription>
-              Load vault items faster by decrypting them only when needed. 
-              Significantly improves performance for large vaults.
-            </SettingDescription>
+              <StatusIndicator>
+                <Badge $variant={lazyLoadEnabled ? 'success' : 'warning'}>
+                  {lazyLoadEnabled ? 'Enabled' : 'Disabled'}
+                </Badge>
+              </StatusIndicator>
+            </h3>
+            <p>
+              Load vault items faster by decrypting them only when accessed. 
+              Dramatically improves performance for vaults with many items.
+            </p>
           </SettingInfo>
-          <Toggle 
-            active={lazyLoadEnabled} 
-            onClick={handleToggleLazyLoad}
-            aria-label={`Lazy decryption is ${lazyLoadEnabled ? 'enabled' : 'disabled'}`}
-          />
-        </SettingRow>
+          <SettingControl>
+            <ToggleSwitch
+              checked={lazyLoadEnabled}
+              onChange={handleToggleLazyLoad}
+              disabled={!setLazyLoadEnabled}
+            />
+          </SettingControl>
+        </SettingItem>
 
         <InfoBox>
-          <FaInfoCircle size={20} style={{ flexShrink: 0, marginTop: 2 }} />
+          <FaInfoCircle />
           <InfoText>
-            <strong>How Lazy Decryption Works:</strong>
-            <br />
-            When enabled, vault items are encrypted until you click on them. 
-            This dramatically reduces initial load time and memory usage.
+            <strong>How it works:</strong> When enabled, vault items remain encrypted 
+            until you click on them. This reduces initial load time from seconds to 
+            milliseconds for large vaults.
           </InfoText>
         </InfoBox>
 
+        {/* Performance Benefits */}
         {lazyLoadEnabled && (
-          <>
-            <BenefitsList>
-              <li>
-                <FaClock style={{ color: '#4CAF50' }} /> 
-                {' '}Vault unlocks up to <strong>80% faster</strong> (< 500ms for 100 items)
-              </li>
-              <li>
-                <FaDatabase style={{ color: '#4CAF50' }} /> 
-                {' '}Uses <strong>70% less memory</strong> (~15MB vs ~50MB for 100 items)
-              </li>
-              <li>
-                <FaBolt style={{ color: '#4CAF50' }} /> 
-                {' '}Items decrypt instantly when clicked (< 20ms each)
-              </li>
-            </BenefitsList>
+          <BenefitsGrid>
+            <BenefitCard $delay="0.1s">
+              <BenefitIcon $color={colors.success}>
+                <FaClock />
+              </BenefitIcon>
+              <BenefitTitle>Faster Unlock</BenefitTitle>
+              <BenefitValue $color={colors.success} $colorEnd="#34d399">
+                80%
+              </BenefitValue>
+              <BenefitDescription>
+                Vault unlocks in under 500ms for 100+ items
+              </BenefitDescription>
+            </BenefitCard>
 
-            <InfoBox style={{ marginTop: 16 }}>
-              <FaInfoCircle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
-              <InfoText>
-                <strong>Note:</strong> Search results may be limited to item titles for encrypted items. 
-                Full-text search requires decrypting the item first.
-              </InfoText>
-            </InfoBox>
-          </>
+            <BenefitCard $delay="0.2s">
+              <BenefitIcon $color={colors.primary}>
+                <FaMemory />
+              </BenefitIcon>
+              <BenefitTitle>Less Memory</BenefitTitle>
+              <BenefitValue $color={colors.primary} $colorEnd={colors.primaryLight}>
+                70%
+              </BenefitValue>
+              <BenefitDescription>
+                Uses ~15MB instead of ~50MB for large vaults
+              </BenefitDescription>
+            </BenefitCard>
+
+            <BenefitCard $delay="0.3s">
+              <BenefitIcon $color={colors.warning}>
+                <FaBolt />
+              </BenefitIcon>
+              <BenefitTitle>Instant Access</BenefitTitle>
+              <BenefitValue $color={colors.warning} $colorEnd="#fbbf24">
+                &lt;20ms
+              </BenefitValue>
+              <BenefitDescription>
+                Items decrypt instantly when clicked
+              </BenefitDescription>
+            </BenefitCard>
+          </BenefitsGrid>
         )}
-      </Card>
 
-      {!lazyLoadEnabled && (
-        <Card>
-          <CardTitle>
-            Why Enable Lazy Decryption?
-          </CardTitle>
-          <CardDescription>
-            Lazy decryption provides significant performance improvements, especially for users with large vaults.
-          </CardDescription>
-
-          <BenefitsList>
-            <li>
-              <strong>Faster Login:</strong> Unlock your vault in milliseconds instead of seconds
-            </li>
-            <li>
-              <strong>Better Performance:</strong> Smoother scrolling and navigation with reduced memory usage
-            </li>
-            <li>
-              <strong>Longer Battery Life:</strong> Less CPU usage means better battery performance on laptops and mobile devices
-            </li>
-            <li>
-              <strong>No Compromises:</strong> Items decrypt instantly when you need them - you won't notice any difference in usability
-            </li>
-          </BenefitsList>
-
-          <InfoBox>
-            <FaInfoCircle size={20} style={{ flexShrink: 0, marginTop: 2 }} />
+        {/* Show limitation note when enabled */}
+        {lazyLoadEnabled && (
+          <InfoBox style={{ marginTop: '20px' }}>
+            <FaInfoCircle />
             <InfoText>
-              We recommend enabling lazy decryption for the best experience. 
-              You can always turn it off if you prefer traditional full decryption.
+              <strong>Note:</strong> Search is limited to item titles for encrypted items. 
+              Click an item to decrypt it for full-text search capabilities.
             </InfoText>
           </InfoBox>
-        </Card>
+        )}
+      </Section>
+
+      {/* Recommendation Section (when disabled) */}
+      {!lazyLoadEnabled && (
+        <Section>
+          <SectionHeader>
+            <SectionIcon $color={colors.success}>
+              <FaRocket />
+            </SectionIcon>
+            <SectionHeaderContent>
+              <h2>Why Enable Lazy Decryption?</h2>
+              <p>Recommended for the best vault experience</p>
+            </SectionHeaderContent>
+          </SectionHeader>
+
+          <RecommendationCard>
+            <RecommendationIcon>
+              <FaRocket />
+            </RecommendationIcon>
+            <RecommendationContent>
+              <RecommendationTitle>Boost Your Vault Performance</RecommendationTitle>
+              <RecommendationText>
+                Enable lazy decryption for significant performance improvements, 
+                especially if you have a large number of stored credentials.
+              </RecommendationText>
+            </RecommendationContent>
+          </RecommendationCard>
+
+          <FeatureList>
+            <FeatureItem>
+              <FaCheckCircle />
+              <span><strong>Faster Login:</strong> Unlock your vault in milliseconds instead of seconds</span>
+            </FeatureItem>
+            <FeatureItem>
+              <FaCheckCircle />
+              <span><strong>Better Performance:</strong> Smoother scrolling and navigation</span>
+            </FeatureItem>
+            <FeatureItem>
+              <FaCheckCircle />
+              <span><strong>Lower Memory:</strong> Reduced RAM usage for better device performance</span>
+            </FeatureItem>
+            <FeatureItem>
+              <FaCheckCircle />
+              <span><strong>Longer Battery:</strong> Less CPU usage extends battery life on mobile</span>
+            </FeatureItem>
+            <FeatureItem>
+              <FaCheckCircle />
+              <span><strong>No Compromises:</strong> Items decrypt instantly when you need them</span>
+            </FeatureItem>
+          </FeatureList>
+
+          <InfoBox>
+            <FaInfoCircle />
+            <InfoText>
+              <strong>Recommended:</strong> We suggest enabling lazy decryption for the best experience. 
+              You can always disable it if you prefer traditional full decryption on unlock.
+            </InfoText>
+          </InfoBox>
+        </Section>
       )}
     </Container>
   );
 };
 
 export default VaultSettings;
-

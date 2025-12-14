@@ -1,16 +1,14 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import styled from 'styled-components';
-import { FaSearch, FaPlus, FaFilter, FaStar } from 'react-icons/fa';
+import { FaSearch, FaPlus, FaStar } from 'react-icons/fa';
 import VaultItemCard from './VaultItemCard';
-import { motion, AnimatePresence } from 'framer-motion';
 import { useAccessibility } from '../../contexts/AccessibilityContext';
-import { useVault } from '../../contexts/VaultContext';
 import LoadingIndicator from '../common/LoadingIndicator';
 import ErrorDisplay from '../common/ErrorDisplay';
 
 const Container = styled.div`
-  padding: 20px;
-  max-width: 800px;
+  padding: 24px;
+  max-width: 900px;
   margin: 0 auto;
 `;
 
@@ -18,109 +16,146 @@ const Header = styled.div`
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid ${props => props.theme.borderColor || '#e8e4ff'};
 `;
 
 const Title = styled.h1`
   margin: 0;
-  font-size: 24px;
-  font-weight: 600;
+  font-size: 28px;
+  font-weight: 700;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  
+  &::before {
+    content: '🔐';
+    font-size: 1.5rem;
+  }
 `;
 
 const AddButton = styled.button`
-  background: ${props => props.theme.accent};
+  background: linear-gradient(135deg, #7B68EE 0%, #9B8BFF 100%);
   color: white;
   border: none;
-  border-radius: 4px;
-  padding: 8px 16px;
+  border-radius: 12px;
+  padding: 12px 24px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 15px;
+  box-shadow: 0 4px 14px rgba(123, 104, 238, 0.35);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   
   &:hover {
-    background: ${props => props.theme.accentHover};
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(123, 104, 238, 0.45);
+  }
+  
+  &:active {
+    transform: translateY(0);
   }
 `;
 
 const SearchContainer = styled.div`
   position: relative;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 `;
 
 const SearchInput = styled.input`
   width: 100%;
-  padding: 12px 16px 12px 40px;
-  border-radius: 8px;
-  border: 1px solid ${props => props.theme.borderColor};
-  background: ${props => props.theme.backgroundSecondary};
-  color: ${props => props.theme.textPrimary};
+  padding: 16px 20px 16px 52px;
+  border-radius: 14px;
+  border: 2px solid ${props => props.theme.borderColor || '#e8e4ff'};
+  background: ${props => props.theme.backgroundSecondary || '#fafaff'};
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
   font-size: 16px;
+  transition: all 0.25s ease;
+  
+  &:hover {
+    border-color: #d4ccff;
+    background: #ffffff;
+  }
   
   &:focus {
     outline: none;
-    border-color: ${props => props.theme.accent};
-    box-shadow: 0 0 0 2px ${props => props.theme.accentLight};
+    border-color: #7B68EE;
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(123, 104, 238, 0.15);
   }
   
   &::placeholder {
-    color: ${props => props.theme.textSecondary};
+    color: ${props => props.theme.textSecondary || '#a0a0b8'};
   }
 `;
 
 const SearchIcon = styled.div`
   position: absolute;
-  left: 12px;
+  left: 18px;
   top: 50%;
   transform: translateY(-50%);
-  color: ${props => props.theme.textSecondary};
+  color: #7B68EE;
+  font-size: 18px;
 `;
 
 const FiltersContainer = styled.div`
   display: flex;
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: 10px;
+  margin-bottom: 24px;
   overflow-x: auto;
-  padding-bottom: 4px;
+  padding: 4px;
+  background: ${props => props.theme.backgroundSecondary || '#f8f9ff'};
+  border-radius: 14px;
   
   &::-webkit-scrollbar {
-    height: 4px;
+    height: 6px;
   }
   
   &::-webkit-scrollbar-track {
-    background: ${props => props.theme.backgroundSecondary};
+    background: transparent;
   }
   
   &::-webkit-scrollbar-thumb {
-    background: ${props => props.theme.borderColor};
-    border-radius: 2px;
+    background: #d4ccff;
+    border-radius: 3px;
   }
 `;
 
 const FilterButton = styled.button`
-  background: ${props => props.active ? props.theme.accentLight : props.theme.backgroundSecondary};
-  color: ${props => props.active ? props.theme.accent : props.theme.textSecondary};
-  border: 1px solid ${props => props.active ? props.theme.accent : props.theme.borderColor};
-  border-radius: 4px;
-  padding: 6px 12px;
+  background: ${props => props.active 
+    ? 'linear-gradient(135deg, #7B68EE 0%, #9B8BFF 100%)' 
+    : 'transparent'};
+  color: ${props => props.active ? '#ffffff' : props.theme.textSecondary || '#6b7280'};
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
   font-size: 14px;
+  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
   cursor: pointer;
+  transition: all 0.25s ease;
+  box-shadow: ${props => props.active ? '0 4px 12px rgba(123, 104, 238, 0.3)' : 'none'};
   
   &:hover {
-    border-color: ${props => props.theme.accent};
+    background: ${props => props.active 
+      ? 'linear-gradient(135deg, #6B58DE 0%, #8B7BEF 100%)'
+      : 'rgba(123, 104, 238, 0.1)'};
+    color: ${props => props.active ? '#ffffff' : '#7B68EE'};
   }
 `;
 
 const VaultGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-  gap: 16px;
-  margin-top: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
   
   @media (max-width: 600px) {
     grid-template-columns: 1fr;
@@ -129,20 +164,30 @@ const VaultGrid = styled.div`
 
 const EmptyState = styled.div`
   text-align: center;
-  padding: 40px;
-  background: ${props => props.theme.cardBg};
-  border-radius: 8px;
-  margin-top: 16px;
+  padding: 60px 40px;
+  background: linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%);
+  border-radius: 20px;
+  margin-top: 20px;
+  border: 2px dashed #d4ccff;
+`;
+
+const EmptyIcon = styled.div`
+  font-size: 4rem;
+  margin-bottom: 16px;
 `;
 
 const EmptyTitle = styled.h3`
-  margin-bottom: 8px;
-  color: ${props => props.theme.textPrimary};
+  margin-bottom: 12px;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  font-size: 1.5rem;
+  font-weight: 700;
 `;
 
 const EmptyMessage = styled.p`
-  color: ${props => props.theme.textSecondary};
-  margin-bottom: 16px;
+  color: ${props => props.theme.textSecondary || '#6b7280'};
+  margin-bottom: 20px;
+  font-size: 1rem;
+  line-height: 1.6;
 `;
 
 const VaultList = ({ 
@@ -160,10 +205,8 @@ const VaultList = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-  const [decryptingSearch, setDecryptingSearch] = useState(false);
   const itemRefs = useRef([]);
   const { handleKeyNavigation } = useAccessibility();
-  const { decryptItem } = useVault();
   
   const filters = [
     { id: 'all', label: 'All Items', icon: null },
@@ -235,12 +278,11 @@ const VaultList = ({
       const currentIndex = itemRefs.current.findIndex(ref => ref.current === document.activeElement);
       if (currentIndex === -1) return;
       
-      const columns = Math.floor(window.innerWidth / 300);
       const nextIndex = e.key === 'ArrowRight' 
         ? Math.min(currentIndex + 1, items.length - 1)
         : Math.max(currentIndex - 1, 0);
       
-      itemRefs.current[nextIndex].current?.focus();
+      itemRefs.current[nextIndex]?.current?.focus();
     }
   };
   
@@ -261,11 +303,12 @@ const VaultList = ({
   if (items.length === 0) {
     return (
       <EmptyState>
+        <EmptyIcon>{emergencyMode ? '🔒' : '📭'}</EmptyIcon>
         <EmptyTitle>No items found</EmptyTitle>
         <EmptyMessage>
           {emergencyMode 
             ? "This vault has no items or you don't have permission to view them."
-            : "You haven't added any items to your vault yet."}
+            : "You haven't added any items to your vault yet. Click 'Add Item' to get started!"}
         </EmptyMessage>
       </EmptyState>
     );

@@ -1,154 +1,384 @@
 import React, { useState } from 'react';
-import styled from 'styled-components';
-import { FaEye, FaEyeSlash, FaArrowLeft, FaSave, FaTrash, FaRandom } from 'react-icons/fa';
+import styled, { keyframes } from 'styled-components';
+import { FaEye, FaEyeSlash, FaArrowLeft, FaSave, FaTrash, FaRandom, FaKey, FaGlobe, FaUser, FaStickyNote, FaTimes, FaLock } from 'react-icons/fa';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
 import PasswordGenerator from '../security/PasswordGenerator';
-import Modal from '../common/Modal';
+
+// Animations
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+// Colors matching vault page
+const colors = {
+  primary: '#7B68EE',
+  primaryDark: '#6B58DE',
+  primaryLight: '#9B8BFF',
+  success: '#10b981',
+  warning: '#f59e0b',
+  danger: '#ef4444',
+  background: '#f8f9ff',
+  backgroundSecondary: '#ffffff',
+  cardBg: '#ffffff',
+  text: '#1a1a2e',
+  textSecondary: '#6b7280',
+  border: '#e8e4ff',
+  borderLight: '#d4ccff'
+};
 
 const FormContainer = styled.div`
-  padding: 20px;
+  max-width: 580px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px;
+  animation: ${fadeIn} 0.4s ease-out;
 `;
 
 const FormHeader = styled.div`
   display: flex;
   align-items: center;
-  margin-bottom: 24px;
+  gap: 16px;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid ${colors.border};
 `;
 
 const BackButton = styled.button`
-  background: none;
-  border: none;
-  color: ${props => props.theme.textSecondary};
+  background: ${colors.background};
+  border: 2px solid ${colors.border};
+  color: ${colors.textSecondary};
   cursor: pointer;
-  padding: 8px;
-  margin-right: 8px;
-  border-radius: 4px;
+  padding: 12px;
+  border-radius: 12px;
+  transition: all 0.25s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   
   &:hover {
-    background: ${props => props.theme.backgroundHover};
+    background: ${colors.border};
+    color: ${colors.primary};
+    border-color: ${colors.primary};
+    transform: translateX(-4px);
   }
 `;
 
-const Title = styled.h2`
-  margin: 0;
+const HeaderContent = styled.div`
   flex: 1;
+`;
+
+const Title = styled.h2`
+  margin: 0 0 4px 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: ${colors.text};
+  display: flex;
+  align-items: center;
+  gap: 12px;
+`;
+
+const TitleIcon = styled.div`
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, ${colors.primary}20 0%, ${colors.primaryLight}15 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  svg {
+    font-size: 20px;
+    color: ${colors.primary};
+  }
+`;
+
+const Subtitle = styled.p`
+  margin: 0;
+  font-size: 14px;
+  color: ${colors.textSecondary};
 `;
 
 const Form = styled.form`
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 `;
 
-const FormGroup = styled.div`
+const FormSection = styled.div`
+  background: linear-gradient(135deg, ${colors.background} 0%, ${colors.border}30 100%);
+  border-radius: 16px;
+  padding: 20px;
+`;
+
+const SectionTitle = styled.h3`
+  font-size: 13px;
+  font-weight: 700;
+  color: ${colors.textSecondary};
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 16px 0;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+`;
+
+const FieldGroup = styled.div`
+  margin-bottom: 16px;
+  
+  &:last-child {
+    margin-bottom: 0;
+  }
+`;
+
+const LabelWrapper = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+`;
+
+const LabelIcon = styled.div`
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, ${colors.primary}15 0%, ${colors.primaryLight}10 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  svg {
+    font-size: 14px;
+    color: ${colors.primary};
+  }
 `;
 
 const Label = styled.label`
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
+  color: ${colors.text};
 `;
 
-const Input = styled.input`
-  padding: 10px 12px;
-  border: 1px solid ${props => props.error ? props.theme.danger : props.theme.borderColor};
-  border-radius: 4px;
-  font-size: 14px;
-  background: ${props => props.theme.inputBg};
-  color: ${props => props.theme.textPrimary};
-  
-  &:focus {
-    outline: none;
-    border-color: ${props => props.theme.accent};
-    box-shadow: 0 0 0 2px ${props => props.theme.accentLight};
-  }
+const RequiredStar = styled.span`
+  color: ${colors.danger};
+  margin-left: 4px;
 `;
 
-const Textarea = styled.textarea`
-  padding: 10px 12px;
-  border: 1px solid ${props => props.error ? props.theme.danger : props.theme.borderColor};
-  border-radius: 4px;
-  font-size: 14px;
-  background: ${props => props.theme.inputBg};
-  color: ${props => props.theme.textPrimary};
-  min-height: 80px;
-  resize: vertical;
-  
-  &:focus {
-    outline: none;
-    border-color: ${props => props.theme.accent};
-    box-shadow: 0 0 0 2px ${props => props.theme.accentLight};
-  }
-`;
-
-const ErrorMessage = styled.div`
-  color: ${props => props.theme.danger};
-  font-size: 12px;
-  margin-top: 4px;
-`;
-
-const PasswordContainer = styled.div`
+const InputWrapper = styled.div`
   position: relative;
 `;
 
-const PasswordVisibilityToggle = styled.button`
+const Input = styled.input`
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 2px solid ${props => props.error ? colors.danger : colors.border};
+  background: ${colors.backgroundSecondary};
+  color: ${colors.text};
+  font-size: 15px;
+  font-weight: 500;
+  transition: all 0.25s ease;
+  box-sizing: border-box;
+  
+  &:focus {
+    outline: none;
+    border-color: ${props => props.error ? colors.danger : colors.primary};
+    background: ${colors.background};
+    box-shadow: 0 0 0 4px ${props => props.error ? `${colors.danger}15` : `${colors.primary}15`};
+  }
+  
+  &::placeholder {
+    color: ${colors.textSecondary};
+    font-weight: 400;
+  }
+`;
+
+const PasswordActions = styled.div`
   position: absolute;
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
-  background: none;
-  border: none;
-  color: ${props => props.theme.textSecondary};
-  cursor: pointer;
+  display: flex;
+  gap: 4px;
 `;
 
-const GenerateButton = styled(PasswordVisibilityToggle)`
-  right: 40px;
+const ActionIconButton = styled.button`
+  background: ${colors.background};
+  border: 1px solid ${colors.border};
+  color: ${colors.textSecondary};
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  &:hover {
+    color: ${colors.primary};
+    background: ${colors.border};
+    border-color: ${colors.borderLight};
+  }
+`;
+
+const GeneratePasswordButton = styled.button`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  background: linear-gradient(135deg, ${colors.primary}10 0%, ${colors.primaryLight}08 100%);
+  border: 2px dashed ${colors.border};
+  color: ${colors.primary};
+  padding: 14px 20px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-top: 12px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  
+  &:hover {
+    background: linear-gradient(135deg, ${colors.primary}15 0%, ${colors.primaryLight}12 100%);
+    border-color: ${colors.primary};
+    transform: translateY(-2px);
+  }
+`;
+
+const TextArea = styled.textarea`
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 2px solid ${props => props.error ? colors.danger : colors.border};
+  background: ${colors.backgroundSecondary};
+  color: ${colors.text};
+  font-size: 15px;
+  font-weight: 500;
+  font-family: inherit;
+  min-height: 100px;
+  resize: vertical;
+  transition: all 0.25s ease;
+  box-sizing: border-box;
+  line-height: 1.6;
+  
+  &:focus {
+    outline: none;
+    border-color: ${colors.primary};
+    background: ${colors.background};
+    box-shadow: 0 0 0 4px ${colors.primary}15;
+  }
+  
+  &::placeholder {
+    color: ${colors.textSecondary};
+    font-weight: 400;
+  }
+`;
+
+const ErrorMessage = styled.div`
+  color: ${colors.danger};
+  font-size: 13px;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
 `;
 
 const ButtonsContainer = styled.div`
   display: flex;
   justify-content: space-between;
-  margin-top: 20px;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid ${colors.border};
 `;
 
 const Button = styled.button`
-  padding: 10px 20px;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: 500;
+  padding: 14px 28px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
   
   &:disabled {
-    opacity: 0.7;
+    opacity: 0.6;
     cursor: not-allowed;
   }
 `;
 
 const SaveButton = styled(Button)`
-  background: ${props => props.theme.accent};
+  background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%);
   color: white;
   border: none;
+  box-shadow: 0 4px 14px ${colors.primary}40;
+  flex: 1;
+  justify-content: center;
   
   &:hover:not(:disabled) {
-    background: ${props => props.theme.accentHover};
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px ${colors.primary}50;
   }
 `;
 
 const DeleteButton = styled(Button)`
-  background: transparent;
-  color: ${props => props.theme.danger};
-  border: 1px solid ${props => props.theme.danger};
+  background: ${colors.danger}10;
+  color: ${colors.danger};
+  border: 2px solid ${colors.danger}30;
   
   &:hover:not(:disabled) {
-    background: ${props => props.theme.dangerLight};
+    background: ${colors.danger}20;
+    border-color: ${colors.danger};
+  }
+`;
+
+const ModalOverlay = styled.div`
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: ${fadeIn} 0.2s ease-out;
+`;
+
+const ModalContent = styled.div`
+  background: ${colors.cardBg};
+  border-radius: 20px;
+  padding: 28px;
+  max-width: 480px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  position: relative;
+`;
+
+const ModalClose = styled.button`
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: ${colors.background};
+  border: 1px solid ${colors.border};
+  color: ${colors.textSecondary};
+  cursor: pointer;
+  padding: 10px;
+  border-radius: 10px;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    color: ${colors.danger};
+    background: ${colors.danger}15;
+    border-color: ${colors.danger}40;
   }
 `;
 
@@ -189,128 +419,165 @@ const PasswordForm = ({ initialData = {}, onSubmit, onDelete, onCancel }) => {
   return (
     <FormContainer>
       <FormHeader>
-        <BackButton onClick={onCancel}>
+        <BackButton onClick={onCancel} type="button">
           <FaArrowLeft />
         </BackButton>
-        <Title>{initialData.id ? 'Edit Password' : 'Add Password'}</Title>
+        <TitleIcon>
+          <FaKey />
+        </TitleIcon>
+        <HeaderContent>
+          <Title>{initialData.id ? 'Edit Password' : 'Add Password'}</Title>
+          <Subtitle>Securely store your login credentials</Subtitle>
+        </HeaderContent>
       </FormHeader>
       
       <Form onSubmit={formik.handleSubmit}>
-        <FormGroup>
-          <Label htmlFor="name">Name</Label>
-          <Input
-            id="name"
-            name="name"
-            type="text"
-            onChange={formik.handleChange}
-            onBlur={formik.handleBlur}
-            value={formik.values.name}
-            error={formik.touched.name && formik.errors.name}
-            placeholder="e.g., Gmail Account"
-          />
-          {formik.touched.name && formik.errors.name && (
-            <ErrorMessage>{formik.errors.name}</ErrorMessage>
-          )}
-        </FormGroup>
-        
-        <FormGroup>
-          <Label htmlFor="username">Username / Email</Label>
-          <Input
-            id="username"
-            name="username"
-            type="text"
-            onChange={formik.handleChange}
-            onBlur={formik.handleBlur}
-            value={formik.values.username}
-            error={formik.touched.username && formik.errors.username}
-            placeholder="e.g., user@example.com"
-          />
-        </FormGroup>
-        
-        <FormGroup>
-          <Label htmlFor="password">Password</Label>
-          <PasswordContainer>
+        <FormSection>
+          <SectionTitle>📝 Basic Info</SectionTitle>
+          
+          <FieldGroup>
+            <LabelWrapper>
+              <LabelIcon><FaLock /></LabelIcon>
+              <Label htmlFor="name">Name<RequiredStar>*</RequiredStar></Label>
+            </LabelWrapper>
             <Input
-              id="password"
-              name="password"
-              type={passwordVisible ? 'text' : 'password'}
+              id="name"
+              name="name"
+              type="text"
               onChange={formik.handleChange}
               onBlur={formik.handleBlur}
-              value={formik.values.password}
-              error={formik.touched.password && formik.errors.password}
+              value={formik.values.name}
+              error={formik.touched.name && formik.errors.name}
+              placeholder="e.g., Gmail Account"
             />
-            <GenerateButton 
-              type="button" 
-              onClick={() => setShowGenerator(true)} 
-              title="Generate Password"
-            >
-              <FaRandom />
-            </GenerateButton>
-            <PasswordVisibilityToggle 
-              type="button" 
-              onClick={togglePasswordVisibility} 
-              title={passwordVisible ? 'Hide Password' : 'Show Password'}
-            >
-              {passwordVisible ? <FaEyeSlash /> : <FaEye />}
-            </PasswordVisibilityToggle>
-          </PasswordContainer>
-          {formik.touched.password && formik.errors.password && (
-            <ErrorMessage>{formik.errors.password}</ErrorMessage>
-          )}
-        </FormGroup>
+            {formik.touched.name && formik.errors.name && (
+              <ErrorMessage>{formik.errors.name}</ErrorMessage>
+            )}
+          </FieldGroup>
+          
+          <FieldGroup>
+            <LabelWrapper>
+              <LabelIcon><FaGlobe /></LabelIcon>
+              <Label htmlFor="url">Website URL</Label>
+            </LabelWrapper>
+            <Input
+              id="url"
+              name="url"
+              type="text"
+              onChange={formik.handleChange}
+              onBlur={formik.handleBlur}
+              value={formik.values.url}
+              placeholder="e.g., https://example.com"
+            />
+          </FieldGroup>
+        </FormSection>
         
-        <FormGroup>
-          <Label htmlFor="url">Website URL</Label>
-          <Input
-            id="url"
-            name="url"
-            type="text"
-            onChange={formik.handleChange}
-            onBlur={formik.handleBlur}
-            value={formik.values.url}
-            error={formik.touched.url && formik.errors.url}
-            placeholder="e.g., https://example.com"
-          />
-        </FormGroup>
+        <FormSection>
+          <SectionTitle>🔐 Credentials</SectionTitle>
+          
+          <FieldGroup>
+            <LabelWrapper>
+              <LabelIcon><FaUser /></LabelIcon>
+              <Label htmlFor="username">Username / Email</Label>
+            </LabelWrapper>
+            <Input
+              id="username"
+              name="username"
+              type="text"
+              onChange={formik.handleChange}
+              onBlur={formik.handleBlur}
+              value={formik.values.username}
+              placeholder="e.g., user@example.com"
+            />
+          </FieldGroup>
+          
+          <FieldGroup>
+            <LabelWrapper>
+              <LabelIcon><FaLock /></LabelIcon>
+              <Label htmlFor="password">Password<RequiredStar>*</RequiredStar></Label>
+            </LabelWrapper>
+            <InputWrapper>
+              <Input
+                id="password"
+                name="password"
+                type={passwordVisible ? 'text' : 'password'}
+                onChange={formik.handleChange}
+                onBlur={formik.handleBlur}
+                value={formik.values.password}
+                error={formik.touched.password && formik.errors.password}
+                style={{ paddingRight: '90px' }}
+              />
+              <PasswordActions>
+                <ActionIconButton 
+                  type="button" 
+                  onClick={() => setShowGenerator(true)} 
+                  title="Generate Password"
+                >
+                  <FaRandom />
+                </ActionIconButton>
+                <ActionIconButton 
+                  type="button" 
+                  onClick={togglePasswordVisibility} 
+                  title={passwordVisible ? 'Hide Password' : 'Show Password'}
+                >
+                  {passwordVisible ? <FaEyeSlash /> : <FaEye />}
+                </ActionIconButton>
+              </PasswordActions>
+            </InputWrapper>
+            {formik.touched.password && formik.errors.password && (
+              <ErrorMessage>{formik.errors.password}</ErrorMessage>
+            )}
+            
+            <GeneratePasswordButton 
+              type="button"
+              onClick={() => setShowGenerator(true)}
+            >
+              <FaRandom /> Generate Strong Password
+            </GeneratePasswordButton>
+          </FieldGroup>
+        </FormSection>
         
-        <FormGroup>
-          <Label htmlFor="notes">Notes</Label>
-          <Textarea
-            id="notes"
-            name="notes"
-            onChange={formik.handleChange}
-            onBlur={formik.handleBlur}
-            value={formik.values.notes}
-            error={formik.touched.notes && formik.errors.notes}
-            placeholder="Additional information..."
-          />
-        </FormGroup>
+        <FormSection>
+          <SectionTitle>📋 Additional Info</SectionTitle>
+          
+          <FieldGroup>
+            <LabelWrapper>
+              <LabelIcon><FaStickyNote /></LabelIcon>
+              <Label htmlFor="notes">Notes (Optional)</Label>
+            </LabelWrapper>
+            <TextArea
+              id="notes"
+              name="notes"
+              onChange={formik.handleChange}
+              onBlur={formik.handleBlur}
+              value={formik.values.notes}
+              placeholder="Additional information..."
+            />
+          </FieldGroup>
+        </FormSection>
         
         <ButtonsContainer>
           {initialData.id && (
-            <DeleteButton 
-              type="button" 
-              onClick={() => onDelete(initialData.id)}
-            >
+            <DeleteButton type="button" onClick={() => onDelete(initialData.id)}>
               <FaTrash /> Delete
             </DeleteButton>
           )}
-          <SaveButton 
-            type="submit" 
-            disabled={formik.isSubmitting || !formik.isValid}
-          >
-            <FaSave /> Save
+          <SaveButton type="submit" disabled={formik.isSubmitting || !formik.isValid}>
+            <FaSave /> {initialData.id ? 'Update Password' : 'Save Password'}
           </SaveButton>
         </ButtonsContainer>
       </Form>
       
-      <Modal 
-        isOpen={showGenerator} 
-        onClose={() => setShowGenerator(false)}
-        title="Password Generator"
-      >
-        <PasswordGenerator onSelect={handleSelectPassword} />
-      </Modal>
+      {showGenerator && (
+        <ModalOverlay onClick={() => setShowGenerator(false)}>
+          <ModalContent onClick={e => e.stopPropagation()}>
+            <ModalClose onClick={() => setShowGenerator(false)}>
+              <FaTimes />
+            </ModalClose>
+            <PasswordGenerator onSelect={handleSelectPassword} />
+          </ModalContent>
+        </ModalOverlay>
+      )}
     </FormContainer>
   );
 };

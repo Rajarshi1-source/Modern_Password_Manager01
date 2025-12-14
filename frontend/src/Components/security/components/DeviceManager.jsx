@@ -1,132 +1,375 @@
-import React, { useState, useEffect } from 'react';
-import styled from 'styled-components';
+import React, { useState, useEffect, useCallback } from 'react';
+import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
-import { FaMobile, FaDesktop, FaTabletAlt } from 'react-icons/fa';
+import { FaMobile, FaDesktop, FaTabletAlt, FaShieldAlt, FaTrash, FaEdit, FaSync, FaCheckCircle, FaTimesCircle, FaLaptop, FaClock, FaInfoCircle } from 'react-icons/fa';
 
-const Container = styled.div`
-  padding: 20px;
+const spin = keyframes`
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 `;
 
-const Title = styled.h2`
-  margin-bottom: 16px;
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const Container = styled.div`
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
+const Header = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+`;
+
+const Title = styled.h3`
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
   display: flex;
   align-items: center;
   gap: 10px;
-`;
-
-const Description = styled.p`
-  color: ${props => props.theme.textSecondary};
-  margin-bottom: 24px;
-`;
-
-const LoadingMessage = styled.p`
-  text-align: center;
-  color: ${props => props.theme.textSecondary};
-`;
-
-const EmptyState = styled.div`
-  text-align: center;
-  padding: 40px 20px;
-  background: ${props => props.theme.cardBg};
-  border-radius: 8px;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
   
-  h3 {
-    margin-bottom: 8px;
-    color: ${props => props.theme.textPrimary};
-  }
-  
-  p {
-    color: ${props => props.theme.textSecondary};
+  svg {
+    color: ${props => props.theme.primary || '#7B68EE'};
   }
 `;
 
-const DeviceTable = styled.div`
-  background: ${props => props.theme.cardBg};
-  border-radius: 8px;
-  overflow: hidden;
-`;
-
-const TableHeader = styled.div`
-  display: grid;
-  grid-template-columns: 2fr 1fr 2fr 1fr 1fr 1fr;
-  gap: 16px;
-  padding: 16px;
-  background: ${props => props.theme.backgroundSecondary};
-  font-weight: 600;
+const Subtitle = styled.p`
+  margin: 0;
+  color: ${props => props.theme.textSecondary || '#666'};
   font-size: 14px;
-  color: ${props => props.theme.textSecondary};
 `;
 
-const DeviceRow = styled.div`
-  display: grid;
-  grid-template-columns: 2fr 1fr 2fr 1fr 1fr 1fr;
-  gap: 16px;
-  padding: 16px;
-  border-bottom: 1px solid ${props => props.theme.borderColor};
-  align-items: center;
-  
-  &:last-child {
-    border-bottom: none;
-  }
-`;
-
-const DeviceName = styled.div`
+const HeaderLeft = styled.div`
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  font-weight: 500;
 `;
 
-const DeviceType = styled.div`
+const RefreshButton = styled.button`
+  padding: 8px 12px;
+  border: 1px solid ${props => props.theme.borderColor || '#e0e0e0'};
+  border-radius: 8px;
+  background: ${props => props.theme.cardBg || '#fff'};
+  color: ${props => props.theme.textSecondary || '#666'};
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 6px;
-`;
-
-const TrustButton = styled.button`
-  padding: 6px 12px;
-  border: none;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  
-  ${props => props.trusted ? `
-    background: ${props.theme.success};
-    color: white;
-  ` : `
-    background: ${props.theme.backgroundSecondary};
-    color: ${props.theme.textSecondary};
-    border: 1px solid ${props.theme.borderColor};
-  `}
+  font-size: 13px;
+  transition: all 0.2s ease;
   
   &:hover {
-    opacity: 0.8;
+    border-color: ${props => props.theme.primary || '#7B68EE'};
+    color: ${props => props.theme.primary || '#7B68EE'};
   }
+  
+  svg {
+    animation: ${props => props.$loading ? spin : 'none'} 1s linear infinite;
+  }
+`;
+
+const InfoBanner = styled.div`
+  background: linear-gradient(135deg, ${props => props.theme.primaryLight || '#f0edff'} 0%, #e8f4fd 100%);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  border: 1px solid ${props => props.theme.primary || '#7B68EE'}20;
+`;
+
+const InfoIcon = styled.div`
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: ${props => props.theme.primary || '#7B68EE'};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  svg { color: white; font-size: 18px; }
+`;
+
+const InfoContent = styled.div`
+  flex: 1;
+`;
+
+const InfoTitle = styled.h4`
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+`;
+
+const InfoText = styled.p`
+  margin: 0;
+  font-size: 13px;
+  color: ${props => props.theme.textSecondary || '#666'};
+  line-height: 1.5;
+`;
+
+const LoadingContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: ${props => props.theme.textSecondary || '#666'};
+`;
+
+const Spinner = styled.div`
+  width: 40px;
+  height: 40px;
+  border: 3px solid ${props => props.theme.backgroundSecondary || '#f0f0f0'};
+  border-top-color: ${props => props.theme.primary || '#7B68EE'};
+  border-radius: 50%;
+  animation: ${spin} 0.8s linear infinite;
+  margin-bottom: 16px;
+`;
+
+const EmptyState = styled.div`
+  background: linear-gradient(135deg, ${props => props.theme.primaryLight || '#f0edff'} 0%, ${props => props.theme.cardBg || '#fff'} 100%);
+  border-radius: 16px;
+  padding: 48px 24px;
+  text-align: center;
+  border: 1px dashed ${props => props.theme.borderColor || '#e0e0e0'};
+`;
+
+const EmptyIcon = styled.div`
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: ${props => props.theme.primary || '#7B68EE'}20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+  
+  svg {
+    font-size: 28px;
+    color: ${props => props.theme.primary || '#7B68EE'};
+  }
+`;
+
+const EmptyTitle = styled.h4`
+  margin: 0 0 8px;
+  font-size: 18px;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+`;
+
+const EmptyText = styled.p`
+  margin: 0;
+  color: ${props => props.theme.textSecondary || '#666'};
+  font-size: 14px;
+`;
+
+const DeviceList = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`;
+
+const DeviceCard = styled.div`
+  background: ${props => props.$current 
+    ? `linear-gradient(135deg, ${props.theme.primaryLight || '#f0edff'} 0%, ${props.theme.cardBg || '#fff'} 100%)`
+    : props.theme.cardBg || '#fff'};
+  border-radius: 12px;
+  padding: 16px 20px;
+  border: 1px solid ${props => props.$current 
+    ? props.theme.primary || '#7B68EE' 
+    : props.theme.borderColor || '#e0e0e0'};
+  transition: all 0.2s ease;
+  animation: ${fadeIn} 0.3s ease-out;
+  animation-delay: ${props => props.$index * 0.05}s;
+  animation-fill-mode: backwards;
+  
+  &:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    transform: translateY(-2px);
+  }
+`;
+
+const CardHeader = styled.div`
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 16px;
+`;
+
+const DeviceInfo = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 14px;
+`;
+
+const DeviceIconWrapper = styled.div`
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: ${props => props.$trusted 
+    ? `linear-gradient(135deg, #10b981 0%, #059669 100%)`
+    : `linear-gradient(135deg, ${props.theme.primary || '#7B68EE'} 0%, ${props.theme.accent || '#9B8BFF'} 100%)`};
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  svg {
+    color: white;
+    font-size: 20px;
+  }
+`;
+
+const DeviceDetails = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+`;
+
+const DeviceName = styled.span`
+  font-size: 15px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+`;
+
+const DeviceMeta = styled.span`
+  font-size: 12px;
+  color: ${props => props.theme.textSecondary || '#666'};
+`;
+
+const StatusBadge = styled.span`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  
+  ${props => {
+    if (props.$variant === 'trusted') {
+      return `
+        background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+        color: #059669;
+      `;
+    }
+    if (props.$variant === 'current') {
+      return `
+        background: linear-gradient(135deg, #ddd6fe 0%, #c4b5fd 100%);
+        color: #7c3aed;
+      `;
+    }
+    return `
+      background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+      color: #64748b;
+    `;
+  }}
+`;
+
+const CardDetails = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+`;
+
+const DetailItem = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: ${props => props.theme.backgroundSecondary || '#f8f9fa'};
+  border-radius: 8px;
+  
+  svg {
+    color: ${props => props.theme.primary || '#7B68EE'};
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+`;
+
+const DetailContent = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+`;
+
+const DetailLabel = styled.span`
+  font-size: 11px;
+  color: ${props => props.theme.textSecondary || '#666'};
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+`;
+
+const DetailValue = styled.span`
+  font-size: 13px;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  font-weight: 500;
+  word-break: break-all;
+`;
+
+const CardActions = styled.div`
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 `;
 
 const ActionButton = styled.button`
-  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  margin-right: 4px;
+  transition: all 0.2s ease;
   
-  ${props => props.variant === 'edit' ? `
-    background: ${props.theme.primary};
-    color: white;
-  ` : `
-    background: ${props.theme.danger};
-    color: white;
-  `}
-  
-  &:hover {
-    opacity: 0.8;
-  }
+  ${props => {
+    if (props.$variant === 'trust') {
+      return `
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        color: white;
+        &:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); }
+      `;
+    }
+    if (props.$variant === 'untrust') {
+      return `
+        background: ${props.theme.backgroundSecondary || '#f8f9fa'};
+        color: ${props.theme.textSecondary || '#666'};
+        border: 1px solid ${props.theme.borderColor || '#e0e0e0'};
+        &:hover { border-color: ${props.theme.primary || '#7B68EE'}; color: ${props.theme.primary || '#7B68EE'}; }
+      `;
+    }
+    if (props.$variant === 'edit') {
+      return `
+        background: ${props.theme.primary || '#7B68EE'}15;
+        color: ${props.theme.primary || '#7B68EE'};
+        &:hover { background: ${props.theme.primary || '#7B68EE'}25; }
+      `;
+    }
+    if (props.$variant === 'delete') {
+      return `
+        background: #fee2e2;
+        color: #dc2626;
+        &:hover { background: #fecaca; }
+      `;
+    }
+    return `
+      background: ${props.theme.backgroundSecondary || '#f8f9fa'};
+      color: ${props.theme.textPrimary || '#1a1a2e'};
+    `;
+  }}
 `;
 
 const Modal = styled.div`
@@ -140,70 +383,101 @@ const Modal = styled.div`
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  animation: ${fadeIn} 0.2s ease-out;
 `;
 
 const ModalContent = styled.div`
-  background: ${props => props.theme.cardBg};
-  padding: 24px;
-  border-radius: 8px;
+  background: ${props => props.theme.cardBg || '#fff'};
+  padding: 28px;
+  border-radius: 16px;
   width: 90%;
-  max-width: 500px;
+  max-width: 480px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  animation: ${fadeIn} 0.3s ease-out;
 `;
 
-const ModalHeader = styled.h3`
-  margin-top: 0;
-  margin-bottom: 16px;
+const ModalHeader = styled.div`
+  margin-bottom: 20px;
+`;
+
+const ModalTitle = styled.h3`
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+`;
+
+const ModalSubtitle = styled.p`
+  margin: 0;
+  font-size: 14px;
+  color: ${props => props.theme.textSecondary || '#666'};
 `;
 
 const FormGroup = styled.div`
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 `;
 
 const Label = styled.label`
   display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
   margin-bottom: 8px;
-  font-weight: 500;
 `;
 
 const Input = styled.input`
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid ${props => props.theme.borderColor};
-  border-radius: 4px;
-  background: ${props => props.theme.backgroundPrimary};
-  color: ${props => props.theme.textPrimary};
+  padding: 12px 16px;
+  border: 2px solid ${props => props.theme.borderColor || '#e0e0e0'};
+  border-radius: 10px;
+  font-size: 14px;
+  background: ${props => props.theme.cardBg || '#fff'};
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  
+  &:focus {
+    outline: none;
+    border-color: ${props => props.theme.primary || '#7B68EE'};
+  }
 `;
 
-const DeviceInfo = styled.p`
+const DeviceInfoBox = styled.div`
+  background: ${props => props.theme.backgroundSecondary || '#f8f9fa'};
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 16px;
   font-size: 12px;
-  color: ${props => props.theme.textSecondary};
-  margin: 8px 0 0 0;
+  color: ${props => props.theme.textSecondary || '#666'};
+  line-height: 1.6;
 `;
 
 const ModalActions = styled.div`
   display: flex;
-  gap: 8px;
+  gap: 12px;
   justify-content: flex-end;
+  margin-top: 24px;
 `;
 
-const Button = styled.button`
-  padding: 8px 16px;
+const ModalButton = styled.button`
+  padding: 12px 20px;
   border: none;
-  border-radius: 4px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
   cursor: pointer;
-  font-weight: 500;
+  transition: all 0.2s ease;
   
-  ${props => props.variant === 'primary' ? `
-    background: ${props.theme.primary};
+  ${props => props.$variant === 'primary' ? `
+    background: linear-gradient(135deg, ${props.theme.primary || '#7B68EE'} 0%, ${props.theme.accent || '#9B8BFF'} 100%);
     color: white;
+    box-shadow: 0 4px 14px ${props.theme.primary || '#7B68EE'}40;
+    &:hover { transform: translateY(-2px); }
   ` : `
-    background: ${props.theme.backgroundSecondary};
-    color: ${props.theme.textPrimary};
+    background: ${props.theme.backgroundSecondary || '#f8f9fa'};
+    color: ${props.theme.textPrimary || '#1a1a2e'};
+    &:hover { background: ${props.theme.borderColor || '#e0e0e0'}; }
   `}
-  
-  &:hover {
-    opacity: 0.8;
-  }
 `;
 
 const DeviceManager = () => {
@@ -213,11 +487,7 @@ const DeviceManager = () => {
   const [currentDevice, setCurrentDevice] = useState(null);
   const [deviceName, setDeviceName] = useState('');
 
-  useEffect(() => {
-    fetchDevices();
-  }, []);
-
-  const fetchDevices = async () => {
+  const fetchDevices = useCallback(async () => {
     try {
       setLoading(true);
       const { data } = await axios.get('/api/security/devices/');
@@ -228,7 +498,11 @@ const DeviceManager = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchDevices();
+  }, [fetchDevices]);
 
   const handleEditDevice = (device) => {
     setCurrentDevice(device);
@@ -291,6 +565,8 @@ const DeviceManager = () => {
         return <FaMobile />;
       case 'tablet':
         return <FaTabletAlt />;
+      case 'laptop':
+        return <FaLaptop />;
       default:
         return <FaDesktop />;
     }
@@ -302,8 +578,10 @@ const DeviceManager = () => {
     const now = new Date();
     const diffInMinutes = Math.floor((now - date) / (1000 * 60));
     
-    if (diffInMinutes < 60) {
-      return `${diffInMinutes} minutes ago`;
+    if (diffInMinutes < 1) {
+      return 'Just now';
+    } else if (diffInMinutes < 60) {
+      return `${diffInMinutes} min ago`;
     } else if (diffInMinutes < 1440) {
       return `${Math.floor(diffInMinutes / 60)} hours ago`;
     } else {
@@ -313,81 +591,158 @@ const DeviceManager = () => {
 
   return (
     <Container>
-      <Title>
-        <FaMobile /> Manage Your Devices
-      </Title>
-      <Description>
-        Devices that have accessed your account are listed here. You can mark devices as trusted for enhanced security or remove old/unrecognized devices.
-      </Description>
-      
+      <Header>
+        <HeaderLeft>
+          <Title>
+            <FaMobile /> Manage Devices
+          </Title>
+          <Subtitle>
+            View and manage devices that have accessed your account
+          </Subtitle>
+        </HeaderLeft>
+        <RefreshButton onClick={fetchDevices} $loading={loading}>
+          <FaSync /> Refresh
+        </RefreshButton>
+      </Header>
+
+      <InfoBanner>
+        <InfoIcon>
+          <FaShieldAlt />
+        </InfoIcon>
+        <InfoContent>
+          <InfoTitle>Device Security</InfoTitle>
+          <InfoText>
+            Mark frequently used devices as trusted for a smoother login experience. 
+            Remove any devices you don't recognize to protect your account.
+          </InfoText>
+        </InfoContent>
+      </InfoBanner>
+
       {loading ? (
-        <LoadingMessage>Loading devices...</LoadingMessage>
+        <LoadingContainer>
+          <Spinner />
+          <span>Loading devices...</span>
+        </LoadingContainer>
       ) : devices.length === 0 ? (
         <EmptyState>
-          <h3>No devices found</h3>
-          <p>No devices have been registered with your account yet. Devices will appear here after you log in from them.</p>
+          <EmptyIcon>
+            <FaMobile />
+          </EmptyIcon>
+          <EmptyTitle>No Devices Found</EmptyTitle>
+          <EmptyText>
+            Devices will appear here after you log in from them.
+          </EmptyText>
         </EmptyState>
       ) : (
-        <DeviceTable>
-          <TableHeader>
-            <div>Device Name</div>
-            <div>Type</div>
-            <div>Browser / OS</div>
-            <div>Last Used</div>
-            <div>Trusted</div>
-            <div>Actions</div>
-          </TableHeader>
-          {devices.map(device => (
-            <DeviceRow key={device.device_id}>
-              <DeviceName>
-                {getDeviceIcon(device.device_type)}
-                {device.device_name || `Unknown Device (${device.fingerprint ? device.fingerprint.substring(0, 8) : 'N/A'})`}
-              </DeviceName>
-              <DeviceType>
-                {device.device_type || 'Unknown'}
-              </DeviceType>
-              <div>
-                {device.browser || 'Unknown'} / {device.os || 'Unknown'}
-              </div>
-              <div>{formatLastSeen(device.last_seen)}</div>
-              <div>
-                <TrustButton 
-                  trusted={device.is_trusted}
-                  onClick={() => handleToggleTrusted(device.device_id, device.is_trusted)}
-                >
-                  {device.is_trusted ? (
-                    <>✓ Trusted</>
-                  ) : (
-                    <>✗ Not Trusted</>
+        <DeviceList>
+          {devices.map((device, index) => (
+            <DeviceCard 
+              key={device.device_id} 
+              $current={device.is_current}
+              $index={index}
+            >
+              <CardHeader>
+                <DeviceInfo>
+                  <DeviceIconWrapper $trusted={device.is_trusted}>
+                    {getDeviceIcon(device.device_type)}
+                  </DeviceIconWrapper>
+                  <DeviceDetails>
+                    <DeviceName>
+                      {device.device_name || `Unknown Device`}
+                    </DeviceName>
+                    <DeviceMeta>
+                      {device.browser || 'Unknown Browser'} • {device.os || 'Unknown OS'}
+                    </DeviceMeta>
+                  </DeviceDetails>
+                </DeviceInfo>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {device.is_current && (
+                    <StatusBadge $variant="current">
+                      <FaCheckCircle /> Current Device
+                    </StatusBadge>
                   )}
-                </TrustButton>
-              </div>
-              <div>
+                  {device.is_trusted && (
+                    <StatusBadge $variant="trusted">
+                      <FaCheckCircle /> Trusted
+                    </StatusBadge>
+                  )}
+                </div>
+              </CardHeader>
+
+              <CardDetails>
+                <DetailItem>
+                  <FaClock />
+                  <DetailContent>
+                    <DetailLabel>Last Active</DetailLabel>
+                    <DetailValue>{formatLastSeen(device.last_seen)}</DetailValue>
+                  </DetailContent>
+                </DetailItem>
+                
+                <DetailItem>
+                  <FaDesktop />
+                  <DetailContent>
+                    <DetailLabel>Device Type</DetailLabel>
+                    <DetailValue style={{ textTransform: 'capitalize' }}>
+                      {device.device_type || 'Unknown'}
+                    </DetailValue>
+                  </DetailContent>
+                </DetailItem>
+                
+                {device.location && (
+                  <DetailItem>
+                    <FaInfoCircle />
+                    <DetailContent>
+                      <DetailLabel>Location</DetailLabel>
+                      <DetailValue>{device.location}</DetailValue>
+                    </DetailContent>
+                  </DetailItem>
+                )}
+              </CardDetails>
+
+              <CardActions>
+                {device.is_trusted ? (
+                  <ActionButton 
+                    $variant="untrust"
+                    onClick={() => handleToggleTrusted(device.device_id, true)}
+                  >
+                    <FaTimesCircle /> Remove Trust
+                  </ActionButton>
+                ) : (
+                  <ActionButton 
+                    $variant="trust"
+                    onClick={() => handleToggleTrusted(device.device_id, false)}
+                  >
+                    <FaCheckCircle /> Mark as Trusted
+                  </ActionButton>
+                )}
                 <ActionButton 
-                  variant="edit"
+                  $variant="edit"
                   onClick={() => handleEditDevice(device)}
-                  title="Edit device name"
                 >
-                  ✏️
+                  <FaEdit /> Rename
                 </ActionButton>
-                <ActionButton 
-                  variant="delete"
-                  onClick={() => handleDeleteDevice(device.device_id)}
-                  title="Remove device"
-                >
-                  🗑️
-                </ActionButton>
-              </div>
-            </DeviceRow>
+                {!device.is_current && (
+                  <ActionButton 
+                    $variant="delete"
+                    onClick={() => handleDeleteDevice(device.device_id)}
+                  >
+                    <FaTrash /> Remove
+                  </ActionButton>
+                )}
+              </CardActions>
+            </DeviceCard>
           ))}
-        </DeviceTable>
+        </DeviceList>
       )}
       
       {/* Edit Device Modal */}
       {showEditModal && (
         <Modal onClick={() => { setShowEditModal(false); setCurrentDevice(null); }}>
           <ModalContent onClick={(e) => e.stopPropagation()}>
-            <ModalHeader>Edit Device Name</ModalHeader>
+            <ModalHeader>
+              <ModalTitle>Rename Device</ModalTitle>
+              <ModalSubtitle>Give this device a friendly name to recognize it easily</ModalSubtitle>
+            </ModalHeader>
             <form onSubmit={(e) => { e.preventDefault(); handleUpdateDevice(); }}>
               <FormGroup>
                 <Label>Device Name</Label>
@@ -400,23 +755,23 @@ const DeviceManager = () => {
                 />
               </FormGroup>
               {currentDevice && (
-                <DeviceInfo>
-                  Device ID: {currentDevice.fingerprint ? currentDevice.fingerprint.substring(0, 12) : 'N/A'}...<br />
-                  Last seen: {formatLastSeen(currentDevice.last_seen)}<br />
-                  Type: {currentDevice.device_type || 'Unknown'}
-                </DeviceInfo>
+                <DeviceInfoBox>
+                  <strong>Device ID:</strong> {currentDevice.fingerprint ? currentDevice.fingerprint.substring(0, 12) + '...' : 'N/A'}<br />
+                  <strong>Last seen:</strong> {formatLastSeen(currentDevice.last_seen)}<br />
+                  <strong>Type:</strong> {currentDevice.device_type || 'Unknown'}
+                </DeviceInfoBox>
               )}
             </form>
             <ModalActions>
-              <Button 
-                variant="secondary" 
+              <ModalButton 
+                type="button"
                 onClick={() => { setShowEditModal(false); setCurrentDevice(null); }}
               >
                 Cancel
-              </Button>
-              <Button variant="primary" onClick={handleUpdateDevice}>
+              </ModalButton>
+              <ModalButton $variant="primary" onClick={handleUpdateDevice}>
                 Save Changes
-              </Button>
+              </ModalButton>
             </ModalActions>
           </ModalContent>
         </Modal>
@@ -425,4 +780,4 @@ const DeviceManager = () => {
   );
 };
 
-export default DeviceManager; 
+export default DeviceManager;

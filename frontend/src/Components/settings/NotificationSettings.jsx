@@ -1,16 +1,114 @@
 import React, { useState, useEffect } from 'react';
+import styled from 'styled-components';
 import preferencesService from '../../services/preferencesService';
+import { FaBell, FaEnvelope, FaMobileAlt, FaDesktop, FaClock, FaShieldAlt, FaCheckCircle, FaInfoCircle, FaVolumeUp, FaExclamationTriangle } from 'react-icons/fa';
 import {
   Section,
   SectionHeader,
+  SectionHeaderContent,
+  SectionIcon,
   SettingItem,
   SettingInfo,
   SettingControl,
+  Select,
   ToggleSwitch,
   TimePicker,
-  Slider,
-  Alert
+  Alert,
+  Badge,
+  InfoBox,
+  InfoText
 } from './SettingsComponents';
+
+const NotificationPreview = styled.div`
+  background: #252542;
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-top: 16px;
+  border: 1px solid #2d2d4a;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+`;
+
+const NotificationIcon = styled.div`
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #7B68EE 0%, #6B58DE 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  svg {
+    color: white;
+    font-size: 20px;
+  }
+`;
+
+const NotificationContent = styled.div`
+  flex: 1;
+  
+  h4 {
+    margin: 0 0 4px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+  
+  p {
+    margin: 0;
+    font-size: 12px;
+    color: #a0a0b8;
+  }
+`;
+
+const NotificationTime = styled.span`
+  font-size: 11px;
+  color: #6b6b8a;
+`;
+
+const QuietHoursCard = styled.div`
+  background: linear-gradient(135deg, #1a1a2e 0%, #252542 100%);
+  border-radius: 14px;
+  padding: 20px;
+  margin-top: 16px;
+  border: 1px solid #2d2d4a;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+`;
+
+const QuietHoursInfo = styled.div`
+  flex: 1;
+  
+  h4 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  
+  p {
+    margin: 0;
+    font-size: 13px;
+    color: #a0a0b8;
+  }
+`;
+
+const TimeRange = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  
+  span {
+    color: #6b6b8a;
+    font-size: 14px;
+  }
+`;
 
 const NotificationSettings = () => {
   const [notifications, setNotifications] = useState({});
@@ -40,81 +138,116 @@ const NotificationSettings = () => {
 
   return (
     <>
-      {saved && <Alert type="success">Notification settings saved successfully!</Alert>}
+      {saved && (
+        <Alert type="success">
+          <FaCheckCircle /> Notification settings saved successfully!
+        </Alert>
+      )}
       
       <Section>
         <SectionHeader>
-          <h2>General Notifications</h2>
-          <p>Manage how you receive notifications</p>
+          <SectionIcon $color="#7B68EE">
+            <FaBell />
+          </SectionIcon>
+          <SectionHeaderContent>
+            <h2>Notification Channels</h2>
+            <p>Choose how you want to receive alerts and updates</p>
+          </SectionHeaderContent>
         </SectionHeader>
 
         <SettingItem>
           <SettingInfo>
-            <h3>Enable Notifications</h3>
-            <p>Turn all notifications on or off</p>
+            <h3>
+              <FaEnvelope style={{ color: '#3B82F6', marginRight: 8 }} />
+              Email Notifications
+            </h3>
+            <p>Receive important security alerts and updates via email</p>
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch
-              checked={notifications.enabled !== false}
-              onChange={(value) => updateNotifications('enabled', value)}
+              checked={notifications.emailNotifications !== false}
+              onChange={(value) => updateNotifications('emailNotifications', value)}
             />
           </SettingControl>
         </SettingItem>
 
-        {notifications.enabled !== false && (
-          <>
-            <SettingItem>
-              <SettingInfo>
-                <h3>Browser Notifications</h3>
-                <p>Show desktop notifications</p>
-              </SettingInfo>
-              <SettingControl>
-                <ToggleSwitch
-                  checked={notifications.browser !== false}
-                  onChange={(value) => updateNotifications('browser', value)}
-                />
-              </SettingControl>
-            </SettingItem>
+        <SettingItem>
+          <SettingInfo>
+            <h3>
+              <FaDesktop style={{ color: '#10B981', marginRight: 8 }} />
+              Push Notifications
+              <Badge $variant="success">Recommended</Badge>
+            </h3>
+            <p>Get instant browser notifications for security events</p>
+          </SettingInfo>
+          <SettingControl>
+            <ToggleSwitch
+              checked={notifications.pushNotifications !== false}
+              onChange={(value) => updateNotifications('pushNotifications', value)}
+            />
+          </SettingControl>
+        </SettingItem>
 
-            <SettingItem>
-              <SettingInfo>
-                <h3>Email Notifications</h3>
-                <p>Receive notifications via email</p>
-              </SettingInfo>
-              <SettingControl>
-                <ToggleSwitch
-                  checked={notifications.email !== false}
-                  onChange={(value) => updateNotifications('email', value)}
-                />
-              </SettingControl>
-            </SettingItem>
+        <SettingItem>
+          <SettingInfo>
+            <h3>
+              <FaMobileAlt style={{ color: '#EC4899', marginRight: 8 }} />
+              SMS Alerts
+              <Badge>Critical Only</Badge>
+            </h3>
+            <p>Receive text messages for critical security breaches</p>
+          </SettingInfo>
+          <SettingControl>
+            <ToggleSwitch
+              checked={notifications.smsAlerts || false}
+              onChange={(value) => updateNotifications('smsAlerts', value)}
+            />
+          </SettingControl>
+        </SettingItem>
 
-            <SettingItem>
-              <SettingInfo>
-                <h3>Push Notifications</h3>
-                <p>Mobile push notifications (requires mobile app)</p>
-              </SettingInfo>
-              <SettingControl>
-                <ToggleSwitch
-                  checked={notifications.push || false}
-                  onChange={(value) => updateNotifications('push', value)}
-                />
-              </SettingControl>
-            </SettingItem>
-          </>
-        )}
+        <SettingItem>
+          <SettingInfo>
+            <h3>
+              <FaVolumeUp style={{ color: '#F59E0B', marginRight: 8 }} />
+              Sound Alerts
+            </h3>
+            <p>Play a sound when notifications arrive</p>
+          </SettingInfo>
+          <SettingControl>
+            <ToggleSwitch
+              checked={notifications.soundAlerts !== false}
+              onChange={(value) => updateNotifications('soundAlerts', value)}
+            />
+          </SettingControl>
+        </SettingItem>
+
+        <NotificationPreview>
+          <NotificationIcon>
+            <FaShieldAlt />
+          </NotificationIcon>
+          <NotificationContent>
+            <h4>Security Alert</h4>
+            <p>New login detected from Chrome on Windows</p>
+          </NotificationContent>
+          <NotificationTime>Just now</NotificationTime>
+        </NotificationPreview>
       </Section>
 
       <Section>
         <SectionHeader>
-          <h2>Notification Types</h2>
-          <p>Choose which types of notifications to receive</p>
+          <SectionIcon $color="#F59E0B">
+            <FaExclamationTriangle />
+          </SectionIcon>
+          <SectionHeaderContent>
+            <h2>Alert Types</h2>
+            <p>Configure which events trigger notifications</p>
+          </SectionHeaderContent>
         </SectionHeader>
 
         <SettingItem>
           <SettingInfo>
-            <h3>Breach Alerts</h3>
-            <p>Notify when your credentials are found in a data breach</p>
+            <h3>Security Breaches</h3>
+            <p>Alert when your credentials appear in a data breach</p>
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch
@@ -126,52 +259,52 @@ const NotificationSettings = () => {
 
         <SettingItem>
           <SettingInfo>
-            <h3>Security Alerts</h3>
-            <p>Notify about suspicious activity and security events</p>
+            <h3>New Device Login</h3>
+            <p>Alert when your account is accessed from a new device</p>
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch
-              checked={notifications.securityAlerts !== false}
-              onChange={(value) => updateNotifications('securityAlerts', value)}
+              checked={notifications.newDeviceAlerts !== false}
+              onChange={(value) => updateNotifications('newDeviceAlerts', value)}
             />
           </SettingControl>
         </SettingItem>
 
         <SettingItem>
           <SettingInfo>
-            <h3>Account Activity</h3>
-            <p>Notify about logins and account changes</p>
+            <h3>Password Expiry Reminders</h3>
+            <p>Remind me when passwords need to be updated</p>
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch
-              checked={notifications.accountActivity || false}
-              onChange={(value) => updateNotifications('accountActivity', value)}
+              checked={notifications.passwordExpiryAlerts !== false}
+              onChange={(value) => updateNotifications('passwordExpiryAlerts', value)}
             />
           </SettingControl>
         </SettingItem>
 
         <SettingItem>
           <SettingInfo>
-            <h3>Marketing</h3>
-            <p>Receive tips, offers, and promotional content</p>
+            <h3>Weak Password Warnings</h3>
+            <p>Alert when weak or reused passwords are detected</p>
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch
-              checked={notifications.marketing || false}
-              onChange={(value) => updateNotifications('marketing', value)}
+              checked={notifications.weakPasswordAlerts !== false}
+              onChange={(value) => updateNotifications('weakPasswordAlerts', value)}
             />
           </SettingControl>
         </SettingItem>
 
         <SettingItem>
           <SettingInfo>
-            <h3>Product Updates</h3>
-            <p>Notify about new features and improvements</p>
+            <h3>Sharing Activity</h3>
+            <p>Notify when passwords are shared or unshared</p>
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch
-              checked={notifications.productUpdates !== false}
-              onChange={(value) => updateNotifications('productUpdates', value)}
+              checked={notifications.sharingAlerts !== false}
+              onChange={(value) => updateNotifications('sharingAlerts', value)}
             />
           </SettingControl>
         </SettingItem>
@@ -179,14 +312,19 @@ const NotificationSettings = () => {
 
       <Section>
         <SectionHeader>
-          <h2>Quiet Hours</h2>
-          <p>Disable notifications during specific hours</p>
+          <SectionIcon $color="#10B981">
+            <FaClock />
+          </SectionIcon>
+          <SectionHeaderContent>
+            <h2>Quiet Hours</h2>
+            <p>Silence non-critical notifications during specific times</p>
+          </SectionHeaderContent>
         </SectionHeader>
 
         <SettingItem>
           <SettingInfo>
             <h3>Enable Quiet Hours</h3>
-            <p>Mute notifications during set hours</p>
+            <p>Pause non-urgent notifications during set hours</p>
           </SettingInfo>
           <SettingControl>
             <ToggleSwitch
@@ -197,76 +335,81 @@ const NotificationSettings = () => {
         </SettingItem>
 
         {notifications.quietHoursEnabled && (
-          <>
-            <SettingItem>
-              <SettingInfo>
-                <h3>Start Time</h3>
-                <p>When quiet hours begin</p>
-              </SettingInfo>
-              <SettingControl>
-                <TimePicker
-                  value={notifications.quietHoursStart || '22:00'}
-                  onChange={(e) => updateNotifications('quietHoursStart', e.target.value)}
-                />
-              </SettingControl>
-            </SettingItem>
-
-            <SettingItem>
-              <SettingInfo>
-                <h3>End Time</h3>
-                <p>When quiet hours end</p>
-              </SettingInfo>
-              <SettingControl>
-                <TimePicker
-                  value={notifications.quietHoursEnd || '08:00'}
-                  onChange={(e) => updateNotifications('quietHoursEnd', e.target.value)}
-                />
-              </SettingControl>
-            </SettingItem>
-          </>
+          <QuietHoursCard>
+            <QuietHoursInfo>
+              <h4>
+                <FaClock style={{ color: '#10B981' }} />
+                Quiet Period
+              </h4>
+              <p>Only critical security alerts will be sent during this time</p>
+            </QuietHoursInfo>
+            <TimeRange>
+              <TimePicker
+                value={notifications.quietHoursStart || '22:00'}
+                onChange={(e) => updateNotifications('quietHoursStart', e.target.value)}
+              />
+              <span>to</span>
+              <TimePicker
+                value={notifications.quietHoursEnd || '07:00'}
+                onChange={(e) => updateNotifications('quietHoursEnd', e.target.value)}
+              />
+            </TimeRange>
+          </QuietHoursCard>
         )}
+
+        <InfoBox>
+          <FaInfoCircle />
+          <InfoText>
+            <strong>Note:</strong> Critical security alerts (data breaches, unauthorized access) 
+            will always be sent regardless of quiet hours settings.
+          </InfoText>
+        </InfoBox>
       </Section>
 
       <Section>
         <SectionHeader>
-          <h2>Sound & Alerts</h2>
-          <p>Configure notification sounds</p>
+          <SectionIcon $color="#3B82F6">
+            <FaEnvelope />
+          </SectionIcon>
+          <SectionHeaderContent>
+            <h2>Email Preferences</h2>
+            <p>Control frequency of email communications</p>
+          </SectionHeaderContent>
         </SectionHeader>
 
         <SettingItem>
           <SettingInfo>
-            <h3>Notification Sound</h3>
-            <p>Play sound with notifications</p>
+            <h3>Email Digest Frequency</h3>
+            <p>How often to receive summary emails</p>
           </SettingInfo>
           <SettingControl>
-            <ToggleSwitch
-              checked={notifications.sound !== false}
-              onChange={(value) => updateNotifications('sound', value)}
-            />
+            <Select
+              value={notifications.emailDigestFrequency || 'weekly'}
+              onChange={(e) => updateNotifications('emailDigestFrequency', e.target.value)}
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="never">Never</option>
+            </Select>
           </SettingControl>
         </SettingItem>
 
-        {notifications.sound !== false && (
-          <SettingItem>
-            <SettingInfo>
-              <h3>Sound Volume</h3>
-              <p>Adjust notification volume ({Math.round((notifications.soundVolume || 0.7) * 100)}%)</p>
-            </SettingInfo>
-            <SettingControl>
-              <Slider
-                min="0"
-                max="1"
-                step="0.1"
-                value={notifications.soundVolume || 0.7}
-                onChange={(e) => updateNotifications('soundVolume', parseFloat(e.target.value))}
-              />
-            </SettingControl>
-          </SettingItem>
-        )}
+        <SettingItem>
+          <SettingInfo>
+            <h3>Marketing Emails</h3>
+            <p>Receive news, tips, and product updates</p>
+          </SettingInfo>
+          <SettingControl>
+            <ToggleSwitch
+              checked={notifications.marketingEmails || false}
+              onChange={(value) => updateNotifications('marketingEmails', value)}
+            />
+          </SettingControl>
+        </SettingItem>
       </Section>
     </>
   );
 };
 
 export default NotificationSettings;
-

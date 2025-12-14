@@ -42,6 +42,29 @@ export class VaultService {
   }
   
   /**
+   * Check if vault is initialized for the current user
+   * @returns {Promise<Object>} Initialization status
+   */
+  async checkInitialization() {
+    try {
+      const response = await this.api.get('/vault/check_initialization/');
+      return {
+        initialized: response.data.initialized || false,
+        has_salt: response.data.has_salt || false,
+        has_items: response.data.has_items || false
+      };
+    } catch (error) {
+      // If endpoint doesn't exist or user not authenticated, assume not initialized
+      console.warn('Vault initialization check failed:', error.message);
+      return {
+        initialized: false,
+        has_salt: false,
+        has_items: false
+      };
+    }
+  }
+  
+  /**
    * Initialize encryption with master password
    * @param {string} masterPassword - User's master password
    * @returns {Promise<Object>} Verification result

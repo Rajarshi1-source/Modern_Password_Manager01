@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import styled, { keyframes } from 'styled-components';
 import preferencesService from '../../services/preferencesService';
 import analyticsService from '../../services/analyticsService';
 import ThemeSettings from './ThemeSettings';
 import SecuritySettings from './SecuritySettings';
 import NotificationSettings from './NotificationSettings';
 import PrivacySettings from './PrivacySettings';
+import { FaPalette, FaShieldAlt, FaBell, FaUserShield, FaArrowLeft, FaSync, FaDownload, FaUpload, FaUndo, FaCheckCircle, FaExclamationTriangle } from 'react-icons/fa';
 import {
+  SettingsPageWrapper,
   SettingsContainer,
   SettingsHeader,
   TabContainer,
@@ -15,6 +18,64 @@ import {
   Button,
   Alert
 } from './SettingsComponents';
+
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const BackButtonWrapper = styled.div`
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 24px;
+`;
+
+const BackButton = styled.button`
+  background: rgba(123, 104, 238, 0.1);
+  color: #a0a0b8;
+  border: 1px solid rgba(123, 104, 238, 0.3);
+  border-radius: 12px;
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.3s ease;
+  
+  &:hover {
+    background: rgba(123, 104, 238, 0.2);
+    color: #7B68EE;
+    border-color: #7B68EE;
+    transform: translateX(-4px);
+  }
+  
+  svg {
+    transition: transform 0.3s ease;
+  }
+  
+  &:hover svg {
+    transform: translateX(-4px);
+  }
+`;
+
+const ContentWrapper = styled.div`
+  animation: ${fadeIn} 0.4s ease-out;
+`;
+
+const AlertWrapper = styled.div`
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 1000;
+  max-width: 400px;
+  animation: ${fadeIn} 0.3s ease-out;
+  
+  svg {
+    font-size: 18px;
+  }
+`;
 
 const SettingsPage = () => {
   const [activeTab, setActiveTab] = useState('theme');
@@ -44,6 +105,12 @@ const SettingsPage = () => {
     });
   };
 
+  const showMessage = (msg, type) => {
+    setMessage(msg);
+    setMessageType(type);
+    setTimeout(() => setMessage(''), 4000);
+  };
+
   const handleExport = async () => {
     try {
       const preferences = await preferencesService.export();
@@ -59,8 +126,7 @@ const SettingsPage = () => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       
-      setMessage('Preferences exported successfully!');
-      setMessageType('success');
+      showMessage('✨ Preferences exported successfully!', 'success');
       
       // Track export
       analyticsService.trackEvent('export', 'preferences', {
@@ -68,8 +134,7 @@ const SettingsPage = () => {
       });
     } catch (error) {
       console.error('Export failed:', error);
-      setMessage('Failed to export preferences');
-      setMessageType('error');
+      showMessage('Failed to export preferences', 'error');
     }
   };
 
@@ -85,8 +150,7 @@ const SettingsPage = () => {
         
         try {
           await preferencesService.import(file);
-          setMessage('Preferences imported successfully! Reloading...');
-          setMessageType('success');
+          showMessage('✨ Preferences imported successfully! Reloading...', 'success');
           
           // Track import
           analyticsService.trackEvent('import', 'preferences', {
@@ -97,16 +161,14 @@ const SettingsPage = () => {
           setTimeout(() => window.location.reload(), 2000);
         } catch (error) {
           console.error('Import failed:', error);
-          setMessage('Failed to import preferences. Please check the file format.');
-          setMessageType('error');
+          showMessage('Failed to import preferences. Please check the file format.', 'error');
         }
       };
       
       input.click();
     } catch (error) {
       console.error('Import error:', error);
-      setMessage('Failed to import preferences');
-      setMessageType('error');
+      showMessage('Failed to import preferences', 'error');
     }
   };
 
@@ -117,8 +179,7 @@ const SettingsPage = () => {
     
     try {
       await preferencesService.reset();
-      setMessage('All settings have been reset to defaults. Reloading...');
-      setMessageType('success');
+      showMessage('🔄 All settings have been reset to defaults. Reloading...', 'success');
       
       // Track reset
       analyticsService.trackEvent('reset', 'preferences', {
@@ -129,25 +190,20 @@ const SettingsPage = () => {
       setTimeout(() => window.location.reload(), 2000);
     } catch (error) {
       console.error('Reset failed:', error);
-      setMessage('Failed to reset preferences');
-      setMessageType('error');
+      showMessage('Failed to reset preferences', 'error');
     }
   };
 
   const handleSync = async () => {
     try {
       await preferencesService.sync();
-      setMessage('Preferences synced successfully!');
-      setMessageType('success');
+      showMessage('✅ Preferences synced successfully!', 'success');
       
       // Track sync
       analyticsService.trackEvent('sync', 'preferences');
-      
-      setTimeout(() => setMessage(''), 3000);
     } catch (error) {
       console.error('Sync failed:', error);
-      setMessage('Failed to sync preferences');
-      setMessageType('error');
+      showMessage('Failed to sync preferences', 'error');
     }
   };
 
@@ -167,63 +223,77 @@ const SettingsPage = () => {
   };
 
   return (
-    <SettingsContainer>
-      <SettingsHeader>
-        <h1>Settings</h1>
-        <p>Customize your password manager experience</p>
-      </SettingsHeader>
+    <SettingsPageWrapper>
+      <SettingsContainer>
+        <BackButtonWrapper>
+          <BackButton onClick={() => navigate(-1)}>
+            <FaArrowLeft /> Back to Vault
+          </BackButton>
+        </BackButtonWrapper>
 
-      {message && <Alert type={messageType}>{message}</Alert>}
+        <SettingsHeader>
+          <h1>⚙️ Settings</h1>
+          <p>Customize your password manager experience</p>
+        </SettingsHeader>
 
-      <TabContainer>
-        <Tab
-          active={activeTab === 'theme'}
-          onClick={() => handleTabChange('theme')}
-        >
-          🎨 Theme
-        </Tab>
-        <Tab
-          active={activeTab === 'security'}
-          onClick={() => handleTabChange('security')}
-        >
-          🔒 Security
-        </Tab>
-        <Tab
-          active={activeTab === 'notifications'}
-          onClick={() => handleTabChange('notifications')}
-        >
-          🔔 Notifications
-        </Tab>
-        <Tab
-          active={activeTab === 'privacy'}
-          onClick={() => handleTabChange('privacy')}
-        >
-          🔐 Privacy
-        </Tab>
-      </TabContainer>
+        {message && (
+          <AlertWrapper>
+            <Alert type={messageType}>
+              {messageType === 'success' && <FaCheckCircle />}
+              {messageType === 'error' && <FaExclamationTriangle />}
+              {message}
+            </Alert>
+          </AlertWrapper>
+        )}
 
-      {renderTabContent()}
+        <TabContainer>
+          <Tab
+            active={activeTab === 'theme'}
+            onClick={() => handleTabChange('theme')}
+          >
+            <FaPalette /> Theme
+          </Tab>
+          <Tab
+            active={activeTab === 'security'}
+            onClick={() => handleTabChange('security')}
+          >
+            <FaShieldAlt /> Security
+          </Tab>
+          <Tab
+            active={activeTab === 'notifications'}
+            onClick={() => handleTabChange('notifications')}
+          >
+            <FaBell /> Notifications
+          </Tab>
+          <Tab
+            active={activeTab === 'privacy'}
+            onClick={() => handleTabChange('privacy')}
+          >
+            <FaUserShield /> Privacy
+          </Tab>
+        </TabContainer>
 
-      <ActionButtons>
-        <Button onClick={() => navigate(-1)}>
-          Back
-        </Button>
-        <Button onClick={handleSync}>
-          Sync Now
-        </Button>
-        <Button onClick={handleExport}>
-          Export Settings
-        </Button>
-        <Button onClick={handleImport}>
-          Import Settings
-        </Button>
-        <Button onClick={handleReset}>
-          Reset to Defaults
-        </Button>
-      </ActionButtons>
-    </SettingsContainer>
+        <ContentWrapper key={activeTab}>
+          {renderTabContent()}
+        </ContentWrapper>
+
+        <ActionButtons>
+          <Button onClick={handleSync}>
+            <FaSync /> Sync Now
+          </Button>
+          <Button onClick={handleExport}>
+            <FaDownload /> Export
+          </Button>
+          <Button onClick={handleImport}>
+            <FaUpload /> Import
+          </Button>
+          <Button variant="danger" onClick={handleReset}>
+            <FaUndo /> Reset All
+          </Button>
+        </ActionButtons>
+      </SettingsContainer>
+    </SettingsPageWrapper>
   );
 };
 
 export default SettingsPage;
-

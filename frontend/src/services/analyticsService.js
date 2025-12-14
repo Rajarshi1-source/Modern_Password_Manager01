@@ -92,6 +92,41 @@ class AnalyticsService {
   /* ===== INITIALIZATION ===== */
   
   /**
+   * Initialize analytics service with user context
+   * @param {Object} options - Initialization options
+   * @param {string} options.userId - User ID
+   * @param {string} options.email - User email
+   * @param {Object} options.properties - Additional user properties
+   * @returns {Promise<void>}
+   */
+  async initialize(options = {}) {
+    try {
+      // Set user context
+      if (options.userId) {
+        this.userContext.userId = options.userId;
+      }
+      if (options.email) {
+        this.userContext.email = options.email;
+      }
+      if (options.properties) {
+        this.userContext.properties = { ...this.userContext.properties, ...options.properties };
+      }
+      
+      // Track initialization
+      this.trackEvent('analytics_initialized', {
+        userId: this.userContext.userId,
+        sessionId: this.sessionId
+      });
+      
+      console.log('[Analytics] Initialized with user context');
+      return Promise.resolve();
+    } catch (error) {
+      console.warn('[Analytics] Initialization failed:', error);
+      return Promise.reject(error);
+    }
+  }
+  
+  /**
    * Generate unique session ID
    */
   generateSessionId() {

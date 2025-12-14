@@ -6,25 +6,50 @@ import { useAccessibility } from '../../contexts/AccessibilityContext';
 import { useVault } from '../../contexts/VaultContext';
 
 const Card = styled(motion.div)`
-  background: ${props => props.theme.cardBg};
-  border-radius: 8px;
-  padding: 16px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  background: linear-gradient(135deg, #ffffff 0%, #fafaff 100%);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(123, 104, 238, 0.08);
   position: relative;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid #e8e4ff;
+  overflow: hidden;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: linear-gradient(90deg, #7B68EE 0%, #9B8BFF 100%);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
   
   &:hover {
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    transform: translateY(-4px);
+    box-shadow: 0 12px 32px rgba(123, 104, 238, 0.18);
+    border-color: #d4ccff;
+  }
+  
+  &:hover::before {
+    opacity: 1;
   }
   
   &:focus-within {
-    outline: 2px solid ${props => props.theme.primary};
-    outline-offset: 2px;
+    outline: none;
+    border-color: #7B68EE;
+    box-shadow: 0 0 0 4px rgba(123, 104, 238, 0.15);
   }
   
   ${props => props.emergencyMode && `
-    border-left: 4px solid ${props.theme.warning};
+    border-left: 4px solid #f59e0b;
+    
+    &::before {
+      background: linear-gradient(90deg, #f59e0b 0%, #fbbf24 100%);
+    }
   `}
 `;
 
@@ -32,142 +57,182 @@ const CardHeader = styled.div`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 `;
 
 const CardTitle = styled.h3`
   margin: 0;
-  font-size: 16px;
-  color: ${props => props.theme.textPrimary};
+  font-size: 17px;
+  font-weight: 600;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
-  max-width: 80%;
+  max-width: 75%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 `;
 
 const IconWrapper = styled.div`
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 `;
 
 const TypeIcon = styled.div`
-  color: ${props => props.theme.primary};
-  font-size: 18px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #e8e4ff 0%, #d4ccff 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #7B68EE;
+  font-size: 16px;
 `;
 
 const FavoriteIcon = styled.button`
-  color: ${props => props.isFavorite ? '#FFD700' : props.theme.textSecondary};
-  background: none;
+  color: ${props => props.isFavorite ? '#FFD700' : '#a0a0b8'};
+  background: ${props => props.isFavorite ? '#fffbeb' : 'transparent'};
   border: none;
   cursor: pointer;
   font-size: 16px;
   display: flex;
   align-items: center;
-  padding: 4px;
-  border-radius: 4px;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 8px;
+  transition: all 0.25s ease;
   
   &:hover {
-    background: ${props => props.theme.bgHover};
+    background: #fffbeb;
+    color: #FFD700;
+    transform: scale(1.1);
   }
   
   &:focus-visible {
-    outline: 2px solid ${props => props.theme.primary};
+    outline: 2px solid #7B68EE;
     outline-offset: 2px;
   }
 `;
 
 const CardContent = styled.div`
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+  padding: 12px;
+  background: #f8f9ff;
+  border-radius: 10px;
 `;
 
 const ItemDetail = styled.div`
   font-size: 14px;
-  color: ${props => props.theme.textSecondary};
-  margin-bottom: 4px;
+  color: ${props => props.theme.textSecondary || '#6b7280'};
+  margin-bottom: 6px;
   display: flex;
   align-items: center;
+  
+  &:last-child {
+    margin-bottom: 0;
+  }
 `;
 
 const ActionMenu = styled.div`
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 12px;
+  right: 12px;
 `;
 
 const MenuButton = styled.button`
-  background: none;
+  background: #f8f9ff;
   border: none;
-  color: ${props => props.theme.textSecondary};
+  color: ${props => props.theme.textSecondary || '#6b7280'};
   cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
+  padding: 8px;
+  border-radius: 8px;
+  transition: all 0.25s ease;
   
   &:hover {
-    background: ${props => props.theme.bgHover};
-    color: ${props => props.theme.textPrimary};
+    background: #e8e4ff;
+    color: #7B68EE;
   }
   
   &:focus-visible {
-    outline: 2px solid ${props => props.theme.primary};
+    outline: 2px solid #7B68EE;
     outline-offset: 2px;
   }
 `;
 
 const MenuDropdown = styled.div`
   position: absolute;
-  top: 100%;
+  top: calc(100% + 4px);
   right: 0;
-  background: ${props => props.theme.cardBg};
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
   z-index: 10;
-  min-width: 150px;
+  min-width: 160px;
   display: ${props => props.isOpen ? 'block' : 'none'};
+  border: 1px solid #e8e4ff;
+  overflow: hidden;
 `;
 
 const MenuItem = styled.button`
   display: block;
   width: 100%;
   text-align: left;
-  padding: 8px 12px;
+  padding: 12px 16px;
   background: none;
   border: none;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 500;
+  color: ${props => props.theme.textPrimary || '#1a1a2e'};
+  transition: all 0.2s ease;
   
   &:hover {
-    background: ${props => props.theme.bgHover};
+    background: #f8f9ff;
+    color: #7B68EE;
   }
   
   &:focus-visible {
-    outline: 2px solid ${props => props.theme.primary};
-    outline-offset: 2px;
+    outline: 2px solid #7B68EE;
+    outline-offset: -2px;
+  }
+  
+  &:last-child {
+    color: #e53e3e;
+    
+    &:hover {
+      background: #fff5f5;
+      color: #c53030;
+    }
   }
 `;
 
 const EmergencyBadge = styled.div`
   position: absolute;
-  top: 8px;
-  left: 8px;
-  background: ${props => props.theme.warningLight};
-  color: ${props => props.theme.warning};
+  top: 12px;
+  left: 12px;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  color: #d97706;
   font-size: 10px;
-  font-weight: 500;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 `;
 
 const EncryptedBadge = styled.div`
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: ${props => props.theme.accentLight || '#e3f2fd'};
-  color: ${props => props.theme.accent || '#1976d2'};
+  background: linear-gradient(135deg, #e8e4ff 0%, #d4ccff 100%);
+  color: #7B68EE;
   font-size: 10px;
-  font-weight: 500;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
   margin-left: 8px;
 `;
 
@@ -177,12 +242,18 @@ const LoadingOverlay = styled.div`
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.9);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: 16px;
   z-index: 5;
+  backdrop-filter: blur(4px);
+  
+  div {
+    font-weight: 600;
+    color: #7B68EE;
+  }
 `;
 
 const VaultItemCard = ({ 

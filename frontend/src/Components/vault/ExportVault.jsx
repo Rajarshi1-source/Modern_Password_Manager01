@@ -1,127 +1,241 @@
 import React, { useState } from 'react';
-import styled from 'styled-components';
-import { FaDownload, FaLock, FaCheckCircle, FaExclamationTriangle } from 'react-icons/fa';
+import styled, { keyframes } from 'styled-components';
+import { FaDownload, FaLock, FaCheckCircle, FaExclamationTriangle, FaFileExport, FaFileCode, FaFileAlt, FaFileCsv } from 'react-icons/fa';
 import { useVault } from '../../contexts/VaultContext';
 import { VaultService } from '../../services/vaultService';
+
+// Animations
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const pulse = keyframes`
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+`;
+
+const spin = keyframes`
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+`;
+
+// Colors matching vault page
+const colors = {
+  primary: '#7B68EE',
+  primaryDark: '#6B58DE',
+  primaryLight: '#9B8BFF',
+  success: '#10b981',
+  warning: '#f59e0b',
+  danger: '#ef4444',
+  background: '#f8f9ff',
+  backgroundSecondary: '#ffffff',
+  cardBg: '#ffffff',
+  text: '#1a1a2e',
+  textSecondary: '#6b7280',
+  border: '#e8e4ff',
+  borderLight: '#d4ccff'
+};
 
 const Container = styled.div`
   max-width: 600px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 32px 24px;
+  animation: ${fadeIn} 0.4s ease-out;
 `;
 
 const Card = styled.div`
-  background: ${props => props.theme.cardBg || '#fff'};
-  border-radius: 12px;
-  padding: 32px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(135deg, ${colors.cardBg} 0%, ${colors.background} 100%);
+  border-radius: 24px;
+  padding: 36px;
+  box-shadow: 0 8px 32px rgba(123, 104, 238, 0.12);
+  border: 1px solid ${colors.border};
+`;
+
+const Header = styled.div`
+  text-align: center;
+  margin-bottom: 28px;
+`;
+
+const IconBadge = styled.div`
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, ${colors.primary}20 0%, ${colors.primaryLight}15 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+  
+  svg {
+    font-size: 32px;
+    color: ${colors.primary};
+  }
 `;
 
 const Title = styled.h2`
-  font-size: 24px;
-  font-weight: 700;
-  margin: 0 0 8px 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: ${props => props.theme.textPrimary || '#333'};
+  font-size: 26px;
+  font-weight: 800;
+  margin: 0 0 10px 0;
+  background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryLight} 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 `;
 
 const Description = styled.p`
-  color: ${props => props.theme.textSecondary || '#666'};
-  margin: 0 0 24px 0;
-  font-size: 14px;
-  line-height: 1.5;
+  color: ${colors.textSecondary};
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
 `;
 
 const WarningBox = styled.div`
-  background: #FFF3E0;
-  border-left: 4px solid #FF9800;
-  padding: 16px;
-  border-radius: 4px;
-  margin-bottom: 24px;
+  background: linear-gradient(135deg, ${colors.warning}15 0%, ${colors.warning}08 100%);
+  border-left: 4px solid ${colors.warning};
+  padding: 18px 20px;
+  border-radius: 0 14px 14px 0;
+  margin-bottom: 28px;
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: flex-start;
 `;
 
+const WarningIcon = styled.div`
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: ${colors.warning}20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  
+  svg {
+    font-size: 18px;
+    color: ${colors.warning};
+  }
+`;
+
 const WarningText = styled.div`
-  font-size: 13px;
-  color: #333;
-  line-height: 1.5;
+  font-size: 14px;
+  color: ${colors.text};
+  line-height: 1.6;
   
   strong {
-    font-weight: 600;
+    font-weight: 700;
     display: block;
     margin-bottom: 4px;
+    color: ${colors.warning};
   }
 `;
 
 const ProgressContainer = styled.div`
-  margin: 24px 0;
+  margin: 28px 0;
+  animation: ${fadeIn} 0.3s ease-out;
 `;
 
 const ProgressBar = styled.div`
-  height: 8px;
-  background: ${props => props.theme.backgroundSecondary || '#f5f5f5'};
-  border-radius: 4px;
+  height: 10px;
+  background: ${colors.border};
+  border-radius: 5px;
   overflow: hidden;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 `;
 
 const ProgressFill = styled.div`
   height: 100%;
-  background: linear-gradient(90deg, #4CAF50, #66BB6A);
-  width: ${props => props.progress}%;
+  background: linear-gradient(90deg, ${colors.primary} 0%, ${colors.primaryLight} 100%);
+  width: ${props => props.$progress}%;
   transition: width 0.3s ease;
+  border-radius: 5px;
 `;
 
 const ProgressText = styled.div`
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 13px;
-  color: ${props => props.theme.textSecondary || '#666'};
+  font-size: 14px;
+  color: ${colors.textSecondary};
 `;
 
 const ProgressLabel = styled.span`
-  font-weight: 500;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  
+  &::before {
+    content: '';
+    width: 16px;
+    height: 16px;
+    border: 2px solid ${colors.border};
+    border-top-color: ${colors.primary};
+    border-radius: 50%;
+    animation: ${spin} 0.8s linear infinite;
+  }
 `;
 
 const ProgressPercentage = styled.span`
-  font-weight: 600;
-  color: ${props => props.theme.primary || '#7B68EE'};
+  font-weight: 700;
+  color: ${colors.primary};
+  font-size: 16px;
 `;
 
 const FormatSelector = styled.div`
-  margin-bottom: 24px;
+  margin-bottom: 28px;
 `;
 
 const FormatLabel = styled.div`
-  font-weight: 600;
-  margin-bottom: 12px;
-  color: ${props => props.theme.textPrimary || '#333'};
-  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 14px;
+  color: ${colors.text};
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 `;
 
 const FormatOptions = styled.div`
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
 `;
 
 const FormatOption = styled.button`
-  padding: 12px;
-  border-radius: 8px;
-  border: 2px solid ${props => props.selected ? props.theme.primary || '#7B68EE' : props.theme.borderColor || '#e0e0e0'};
-  background: ${props => props.selected ? (props.theme.primary || '#7B68EE') + '15' : 'transparent'};
+  padding: 18px 16px;
+  border-radius: 14px;
+  border: 2px solid ${props => props.$selected ? colors.primary : colors.border};
+  background: ${props => props.$selected 
+    ? `linear-gradient(135deg, ${colors.primary}15 0%, ${colors.primaryLight}10 100%)`
+    : colors.background};
   cursor: pointer;
-  transition: all 0.2s ease;
-  font-weight: 500;
-  color: ${props => props.selected ? props.theme.primary || '#7B68EE' : props.theme.textPrimary || '#333'};
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
   
-  &:hover {
-    border-color: ${props => props.theme.primary || '#7B68EE'};
+  svg {
+    font-size: 24px;
+    color: ${props => props.$selected ? colors.primary : colors.textSecondary};
+    transition: color 0.3s ease;
+  }
+  
+  span {
+    font-weight: 600;
+    font-size: 14px;
+    color: ${props => props.$selected ? colors.primary : colors.text};
+  }
+  
+  &:hover:not(:disabled) {
+    border-color: ${colors.primary};
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(123, 104, 238, 0.15);
+    
+    svg {
+      color: ${colors.primary};
+    }
   }
   
   &:disabled {
@@ -132,72 +246,137 @@ const FormatOption = styled.button`
 
 const ButtonGroup = styled.div`
   display: flex;
-  gap: 12px;
-  margin-top: 24px;
+  gap: 14px;
+  margin-top: 28px;
 `;
 
 const Button = styled.button`
   flex: 1;
-  padding: 14px 24px;
-  border-radius: 8px;
+  padding: 16px 28px;
+  border-radius: 14px;
   border: none;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 15px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   
   &.primary {
-    background: ${props => props.theme.primary || '#7B68EE'};
+    background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%);
     color: white;
+    box-shadow: 0 4px 14px ${colors.primary}40;
     
     &:hover:not(:disabled) {
-      opacity: 0.9;
-      transform: translateY(-1px);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px ${colors.primary}50;
     }
   }
   
   &.secondary {
-    background: transparent;
-    color: ${props => props.theme.textPrimary || '#333'};
-    border: 1px solid ${props => props.theme.borderColor || '#e0e0e0'};
+    background: ${colors.background};
+    color: ${colors.text};
+    border: 2px solid ${colors.border};
     
     &:hover:not(:disabled) {
-      background: ${props => props.theme.backgroundSecondary || '#f5f5f5'};
+      background: ${colors.border};
+      border-color: ${colors.borderLight};
     }
   }
   
   &:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+    transform: none;
   }
 `;
 
 const SuccessMessage = styled.div`
-  background: #E8F5E9;
-  border-left: 4px solid #4CAF50;
-  padding: 16px;
-  border-radius: 4px;
-  margin-top: 24px;
+  background: linear-gradient(135deg, ${colors.success}15 0%, ${colors.success}08 100%);
+  border-left: 4px solid ${colors.success};
+  padding: 20px;
+  border-radius: 0 14px 14px 0;
+  margin-top: 28px;
   display: flex;
-  gap: 12px;
+  gap: 16px;
   align-items: center;
-  color: #2E7D32;
+  animation: ${fadeIn} 0.4s ease-out;
+`;
+
+const SuccessIcon = styled.div`
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: ${colors.success}20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  
+  svg {
+    font-size: 22px;
+    color: ${colors.success};
+  }
+`;
+
+const SuccessText = styled.div`
+  strong {
+    font-weight: 700;
+    display: block;
+    margin-bottom: 4px;
+    color: ${colors.success};
+    font-size: 16px;
+  }
+  
+  div {
+    font-size: 14px;
+    color: ${colors.textSecondary};
+  }
 `;
 
 const ErrorMessage = styled.div`
-  background: #FFEBEE;
-  border-left: 4px solid #F44336;
-  padding: 16px;
-  border-radius: 4px;
-  margin-top: 24px;
+  background: linear-gradient(135deg, ${colors.danger}15 0%, ${colors.danger}08 100%);
+  border-left: 4px solid ${colors.danger};
+  padding: 20px;
+  border-radius: 0 14px 14px 0;
+  margin-top: 28px;
   display: flex;
-  gap: 12px;
+  gap: 16px;
   align-items: flex-start;
-  color: #C62828;
+  animation: ${fadeIn} 0.4s ease-out;
+`;
+
+const ErrorIcon = styled.div`
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: ${colors.danger}20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  
+  svg {
+    font-size: 22px;
+    color: ${colors.danger};
+  }
+`;
+
+const ErrorText = styled.div`
+  strong {
+    font-weight: 700;
+    display: block;
+    margin-bottom: 4px;
+    color: ${colors.danger};
+    font-size: 16px;
+  }
+  
+  div {
+    font-size: 14px;
+    color: ${colors.textSecondary};
+  }
 `;
 
 const ExportVault = ({ onClose }) => {
@@ -205,7 +384,7 @@ const ExportVault = ({ onClose }) => {
   const [format, setFormat] = useState('json');
   const [isExporting, setIsExporting] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState('idle'); // idle, exporting, success, error
+  const [status, setStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [exportedCount, setExportedCount] = useState(0);
   const [vaultService] = useState(() => new VaultService());
@@ -218,23 +397,18 @@ const ExportVault = ({ onClose }) => {
     setErrorMessage('');
 
     try {
-      // Get master password (in real implementation, you'd get this from context or prompt user)
-      const masterPassword = localStorage.getItem('masterPasswordHash'); // Placeholder
+      const masterPassword = localStorage.getItem('masterPasswordHash');
       
-      // Initialize vault service if needed
       if (!vaultService.cryptoService) {
-        // This would need proper initialization - skipping for now
-        // await vaultService.initialize(masterPassword);
+        // Initialization would happen here
       }
 
-      // Filter items that need decryption
       const itemsToDecrypt = items.filter(item => item._lazyLoaded && !item._decrypted);
       const alreadyDecrypted = items.filter(item => item._decrypted);
 
       let allDecryptedItems = [...alreadyDecrypted];
 
       if (itemsToDecrypt.length > 0) {
-        // Use bulk decryption with progress callback
         const decryptedItems = await vaultService.bulkDecryptItems(
           itemsToDecrypt,
           (progressPercent, decryptedItem) => {
@@ -248,7 +422,6 @@ const ExportVault = ({ onClose }) => {
         setProgress(100);
       }
 
-      // Format the data based on selected format
       let exportData;
       let filename;
       let mimeType;
@@ -267,7 +440,6 @@ const ExportVault = ({ onClose }) => {
         mimeType = 'text/plain';
       }
 
-      // Create and download file
       const blob = new Blob([exportData], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -326,46 +498,53 @@ const ExportVault = ({ onClose }) => {
   return (
     <Container>
       <Card>
-        <Title>
-          <FaDownload />
-          Export Vault
-        </Title>
-        <Description>
-          Export all your vault items to a file. Items will be decrypted during export.
-        </Description>
+        <Header>
+          <IconBadge>
+            <FaFileExport />
+          </IconBadge>
+          <Title>Export Vault</Title>
+          <Description>
+            Export all your vault items to a file. Items will be decrypted during export.
+          </Description>
+        </Header>
 
         <WarningBox>
-          <FaExclamationTriangle size={20} style={{ flexShrink: 0, marginTop: 2 }} />
+          <WarningIcon>
+            <FaExclamationTriangle />
+          </WarningIcon>
           <WarningText>
-            <strong>Security Warning</strong>
+            <strong>⚠️ Security Warning</strong>
             The exported file will contain your data in plain text. 
             Make sure to store it securely and delete it when no longer needed.
           </WarningText>
         </WarningBox>
 
         <FormatSelector>
-          <FormatLabel>Export Format</FormatLabel>
+          <FormatLabel>📁 Export Format</FormatLabel>
           <FormatOptions>
             <FormatOption
-              selected={format === 'json'}
+              $selected={format === 'json'}
               onClick={() => setFormat('json')}
               disabled={isExporting}
             >
-              JSON
+              <FaFileCode />
+              <span>JSON</span>
             </FormatOption>
             <FormatOption
-              selected={format === 'csv'}
+              $selected={format === 'csv'}
               onClick={() => setFormat('csv')}
               disabled={isExporting}
             >
-              CSV
+              <FaFileCsv />
+              <span>CSV</span>
             </FormatOption>
             <FormatOption
-              selected={format === 'txt'}
+              $selected={format === 'txt'}
               onClick={() => setFormat('txt')}
               disabled={isExporting}
             >
-              Text
+              <FaFileAlt />
+              <span>Text</span>
             </FormatOption>
           </FormatOptions>
         </FormatSelector>
@@ -373,7 +552,7 @@ const ExportVault = ({ onClose }) => {
         {isExporting && (
           <ProgressContainer>
             <ProgressBar>
-              <ProgressFill progress={progress} />
+              <ProgressFill $progress={progress} />
             </ProgressBar>
             <ProgressText>
               <ProgressLabel>
@@ -386,14 +565,13 @@ const ExportVault = ({ onClose }) => {
 
         {status === 'success' && (
           <SuccessMessage>
-            <FaCheckCircle size={20} />
-            <div>
+            <SuccessIcon>
+              <FaCheckCircle />
+            </SuccessIcon>
+            <SuccessText>
               <strong>Export Complete!</strong>
-              <div style={{ fontSize: 13, marginTop: 4 }}>
-                Your vault has been exported successfully. Check your downloads folder.
-              </div>
-            </div>
-            {/* Test-friendly export status indicator */}
+              <div>Your vault has been exported successfully. Check your downloads folder.</div>
+            </SuccessText>
             <span className="sr-only" data-testid="export-status">
               Vault export successful and data integrity verified
             </span>
@@ -402,13 +580,13 @@ const ExportVault = ({ onClose }) => {
 
         {status === 'error' && (
           <ErrorMessage>
-            <FaExclamationTriangle size={20} style={{ flexShrink: 0, marginTop: 2 }} />
-            <div>
+            <ErrorIcon>
+              <FaExclamationTriangle />
+            </ErrorIcon>
+            <ErrorText>
               <strong>Export Failed</strong>
-              <div style={{ fontSize: 13, marginTop: 4 }}>
-                {errorMessage}
-              </div>
-            </div>
+              <div>{errorMessage}</div>
+            </ErrorText>
           </ErrorMessage>
         )}
 
@@ -444,4 +622,3 @@ const ExportVault = ({ onClose }) => {
 };
 
 export default ExportVault;
-

@@ -22,7 +22,7 @@ export class KeystrokeDynamics {
     // Statistics accumulators
     this.stats = {
       totalKeys: 0,
-      pressdurations: [],
+      pressDurations: [],
       flightTimes: [],
       errorCorrections: 0,
       shiftUsage: 0,

@@ -136,7 +136,7 @@ export const BehavioralProvider = ({ children }) => {
         setProfileStats(stats);
         
         // Auto-create commitments when profile is ready
-        if (stats.isReady && !commitmentStatus.has_commitments) {
+        if (stats.isReady && !commitmentStatus?.has_commitments) {
           createBehavioralCommitments();
         }
       }, 60000); // Update every minute
@@ -147,7 +147,7 @@ export const BehavioralProvider = ({ children }) => {
     } catch (error) {
       console.error('Error starting behavioral capture:', error);
     }
-  }, [isCapturing, commitmentStatus.has_commitments, createBehavioralCommitments]);
+  }, [isCapturing, commitmentStatus?.has_commitments, createBehavioralCommitments]);
   
   /**
    * Stop behavioral capture
@@ -174,11 +174,20 @@ export const BehavioralProvider = ({ children }) => {
     try {
       const response = await axios.get('/api/behavioral-recovery/commitments/status/');
       
-      if (response.data.success) {
-        setCommitmentStatus(response.data.data);
+      if (response.data.success && response.data.data) {
+        // Ensure required fields exist with defaults
+        setCommitmentStatus({
+          has_commitments: response.data.data.has_commitments || false,
+          ready_for_recovery: response.data.data.ready_for_recovery || false,
+          ...response.data.data
+        });
       }
     } catch (error) {
-      console.error('Error checking commitment status:', error);
+      // Don't log 401 errors - these are expected when not authenticated
+      if (error.response?.status !== 401) {
+        console.error('Error checking commitment status:', error);
+      }
+      // Keep default state on error
     }
   }, []);
   
