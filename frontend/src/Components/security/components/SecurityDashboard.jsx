@@ -710,6 +710,11 @@ const Spinner = styled.div`
   margin-bottom: 20px;
 `;
 
+//FIX: Add AnimatedDiv styled component for the renderOverviewTab
+const AnimatedDiv = styled.div`
+  animation: ${fadeIn} 0.3s ease-out;
+`;
+
 const SecurityDashboard = () => {
   const { items } = useVault();
   const navigate = useNavigate();
@@ -848,7 +853,7 @@ const SecurityDashboard = () => {
   const activeAlerts = alerts.filter(alert => !alert.resolved);
   
   const renderOverviewTab = () => (
-    <div style={{ animation: `${fadeIn} 0.3s ease-out` }}>
+    <AnimatedDiv>
       {scanProgress && (
         <ScanningBanner>
           <ScanningText>
@@ -957,7 +962,7 @@ const SecurityDashboard = () => {
           </SafeBanner>
         )}
       </Section>
-    </div>
+    </AnimatedDiv>
   );
   
   const renderAccountsTab = () => (
