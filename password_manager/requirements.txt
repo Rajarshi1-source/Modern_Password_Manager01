@@ -18,7 +18,7 @@ django-timezone-field==7.1
 drf-yasg==1.21.10
 
 # Authentication & OAuth 2.0 / OpenID Connect
-django-allauth==65.12.0
+django-allauth==65.13.0
 dj-rest-auth==7.0.1
 python3-openid==3.2.0
 oauthlib==3.2.2
