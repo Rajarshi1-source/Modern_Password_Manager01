@@ -307,3 +307,27 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 code="stats_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
+    @action(detail=False, methods=['get'])
+    def check_initialization(self, request):
+        """Check if vault is initialized for the current user"""
+        try:
+            from vault.models import UserSalt
+            
+            # Check if user has a salt (vault initialized)
+            has_salt = UserSalt.objects.filter(user=request.user).exists()
+            
+            # Check if user has any vault items
+            has_items = self.get_queryset().exists()
+            
+            return success_response({
+                'initialized': has_salt,
+                'has_salt': has_salt,
+                'has_items': has_items
+            })
+        except Exception as e:
+            return error_response(
+                message=f"Failed to check initialization: {str(e)}",
+                code="initialization_check_error",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

@@ -5,14 +5,18 @@ import wasm from 'vite-plugin-wasm'
 
 export default defineConfig({
   plugins: [
-    react(),
+    react({
+      jsxRuntime: 'automatic',  // Automatic JSX runtime
+      fastRefresh: true,        // Disable Fast Refresh for faster builds in development
+    }),
     wasm()
   ],
   
-  // Development server configuration
+  // Development server configuration (CRITICAL - keeps your API working)
   server: {
     port: 5173,  // Vite default (change to 3000 if you prefer)
     host: true,
+    strictPort: false,
     proxy: {
       // Proxy API calls to Django dev server
       '/api': {
@@ -42,101 +46,85 @@ export default defineConfig({
     }
   },
   
+    // OPTIMIZED: Pre-bundle commonly used dependencies
+    optimizeDeps: {
+      //Only include packages imported at entry point
+      include: [
+        'react',
+        'react-dom/client',
+        'react-router-dom',
+        'axios',
+        'styled-components',
+        'react-hot-toast',
+        'react-icons/fa',
+        'lucide-react',
+        'lodash',
+        'framer-motion',
+        // ADD: explicitly pre-bundle the problematic packages
+        'long',
+        '@tensorflow/tfjs-core',
+        '@tensorflow/tfjs'         // if you import tfjs-core or tfjs directlyi n your code
+      ],
+      // Exclude large optional/lazy-loaded packages
+      exclude: [
+        '@tensorflow/tfjs',
+        '@tensorflow/tfjs-backend-webgl',
+        '@tensorflow-models/universal-sentence-encoder',
+        '@grpc/grpc-js',
+        'firebase',
+        'argon2-browser',
+        'tfhe',
+        // Keep Kyber libs excluded (loaded dynamically)
+        'mlkem',
+        'pqc-kyber', 
+        'crystals-kyber-js'
+      ],
+      // Target ES2020 for compatibility with Kyber WASM
+      esbuildOptions: {
+        target: 'es2020',
+        // make sure esbuild bundles for the browser platform (helps cjs -> esm transform)
+        platform: 'browser',
+      },
+    },
+
   // Build configuration
+  // SIMPLIFIED: let Vite handle chunking automatically
   build: {
+    target: 'es2020',
     outDir: 'dist',
-    sourcemap: true,
-    chunkSizeWarningLimit: 1000, // Increase limit to 1MB
+    sourcemap: false, //Disable sourcemaps for faster builds
+    chunkSizeWarningLimit: 1500, // Increase limit to 1MB
     rollupOptions: {
       output: {
-        manualChunks: (id) => {
-          // Separate vendor libraries
+        // Simpler chunking strategy
+        manualChunks(id) {
+          // Core vendors
           if (id.includes('node_modules')) {
             // Core React libraries
             if (id.includes('react') || id.includes('react-dom')) {
               return 'react-vendor';
             }
-            
-            // Routing
-            if (id.includes('react-router')) {
-              return 'router';
-            }
-            
-            // UI Libraries
-            if (id.includes('styled-components') || id.includes('framer-motion')) {
-              return 'ui-vendor';
-            }
-            
             // Firebase (large dependency)
             if (id.includes('firebase')) {
               return 'firebase';
             }
-            
-            // Crypto libraries (large)
-            if (id.includes('crypto-js') || id.includes('argon2')) {
-              return 'crypto';
-            }
-            
-            // Post-Quantum Crypto / Kyber libraries
-            if (id.includes('pqc-kyber') || id.includes('crystals-kyber') || 
-                id.includes('mlkem') || id.includes('@stablelib')) {
-              return 'kyber-crypto';
-            }
-            
-            // Form libraries
-            if (id.includes('formik') || id.includes('yup')) {
-              return 'forms';
-            }
-            
-            // Icons and particles (can be large)
-            if (id.includes('react-icons') || id.includes('@tsparticles')) {
-              return 'ui-effects';
-            }
-            
-            // Other vendor libraries
+            // Everything else goes to vendor
             return 'vendor';
-          }
-          
-          // Separate by feature/route
-          if (id.includes('/Components/security/')) {
-            return 'security';
-          }
-          
-          if (id.includes('/Components/auth/')) {
-            return 'auth';
-          }
-          
-          if (id.includes('/Components/vault/')) {
-            return 'vault';
-          }
-          
-          if (id.includes('/services/')) {
-            return 'services';
-          }
-          
-          // Kyber-specific modules
-          if (id.includes('/utils/kyber-wasm-loader') || 
-              id.includes('/utils/kyber-cache')) {
-            return 'kyber-core';
-          }
-          
-          if (id.includes('/workers/kyber-worker')) {
-            return 'kyber-worker';
-          }
-          
-          if (id.includes('/hooks/useKyber')) {
-            return 'kyber-hooks';
-          }
-          
-          // Quantum services
-          if (id.includes('/services/quantum/')) {
-            return 'quantum-services';
-          }
         }
-      },
-      external: ['argon2-browser', 'tfhe']
+      }
     }
   },
+
+  // ADD: make sure mixed ESM/CJS packages are properly transformed
+  commonjsOptions: {
+    transformMixedEsModules: true,
+    include: [/node_modules/, /node_modules\/@tensorflow\/.*/],
+  },
+  // Reduce minification time (optional - use it builds are slow)
+  minify: 'esbuild', // Faster than terser
+  //Disable CSS code splitting for faster builds
+  cssCodeSplit: false,
+},
   
   // Path resolution
   resolve: {
@@ -148,7 +136,8 @@ export default defineConfig({
       '@utils': resolve(__dirname, 'src/utils'),
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@workers': resolve(__dirname, 'src/workers'),
-    }
+    },
+    extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
   },
   
   // Environment variables
@@ -156,17 +145,18 @@ export default defineConfig({
     global: 'globalThis',
   },
   
-  // Handle Node.js polyfills and optimize Kyber dependencies
-  optimizeDeps: {
-    include: ['path-browserify', '@stablelib/random', '@stablelib/x25519', '@stablelib/sha256'],
-    exclude: ['argon2-browser', 'mlkem', 'pqc-kyber', 'crystals-kyber-js', 'tfhe']
-  },
-  
   // Assets configuration for WASM
+  // WASM support (CRITICAL for Kyber crypto)
   assetsInclude: ['**/*.wasm'],
   
-  // Worker configuration for WASM
+  // Worker configuration for WASM (CRITICAL for Kyber worker)
   worker: {
     format: 'es'
-  }
+  },
+
+  // Cache configuration for faster rebuilds
+  cacheDir: 'node_modules/.vite',
+
+  // Clear screen for cleaner output
+  clearScreen: true,
 })

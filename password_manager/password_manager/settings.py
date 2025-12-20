@@ -351,6 +351,7 @@ REST_FRAMEWORK = {
         'security': '20/hour',  # Security operations
         'passkey': '10/minute',  # WebAuthn operations
         'vault': '100/hour',  # Reasonable vault operations
+        'dj_rest_auth': '10/minute',  # dj-rest-auth operations
     }
 }
 

@@ -15,7 +15,7 @@ import ErrorBoundary from './Components/common/ErrorBoundary';
 import ApiService from './services/api';
 import toast, { Toaster } from 'react-hot-toast';
 import oauthService from './services/oauthService';
-import PasswordStrengthMeterML from './Components/security/PasswordStrengthMeterML';
+//import PasswordStrengthMeterML from './Components/security/PasswordStrengthMeterML';
 import SessionMonitor from './Components/security/SessionMonitor';
 import { errorTracker } from './services/errorTracker';
 import analyticsService from './services/analyticsService';
@@ -24,6 +24,7 @@ import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
 
 // Lazy load heavy components
+const PasswordStrengthMeterML = lazy(() => import('./Components/security/PasswordStrengthMeterML'));
 const RecoveryKeySetupPage = lazy(() => import('./Components/auth/RecoveryKeySetup'));
 const PasskeyManagement = lazy(() => import('./Components/auth/PasskeyManagement'));
 const AccountProtection = lazy(() => import('./Components/security/AccountProtection'));
@@ -225,7 +226,13 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
       }
     } catch (error) {
       console.error(`${provider} login error:`, error);
-      toast.error(error.message || `Failed to login with ${provider}`, { id: 'oauth-loading' });
+
+      // 🎯 Better error handling for closed popup
+      if (error.message?.includes('Popup was closed') || error.message?.includes('closed')) {
+        toast.error('Sign-in cancelled. Please try again.', { id: 'oauth-loading' });
+      } else {
+        toast.error(error.message || `Failed to login with ${provider}`, { id: 'oauth-loading' });
+      }
     }
   };
 
@@ -265,6 +272,7 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
             onCut={preventCopyPaste}
             required
             placeholder="name@gmail.com"
+            autoComplete="email"
           />
           {emailError && (
             <small style={{ color: 'var(--danger)', marginTop: '4px', display: 'block' }}>
@@ -484,7 +492,7 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
       const result = await oauthService.initiateLogin(provider);
       
       if (result && result.tokens) {
-        toast.success('Signup successful!', { id: 'oauth-loading' });
+        toast.success('Sign-up successful!', { id: 'oauth-loading' });
         
         // Store tokens
         localStorage.setItem('token', result.tokens.access);
@@ -496,7 +504,13 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
       }
     } catch (error) {
       console.error(`${provider} signup error:`, error);
-      toast.error(error.message || `Failed to sign up with ${provider}`, { id: 'oauth-loading' });
+
+      // 🎯 Better error handling for closed popup
+      if (error.message?.includes('Popup was closed') || error.message?.includes('closed')) {
+        toast.error('Sign-in cancelled. Please try again.', { id: 'oauth-loading' });
+      } else {
+        toast.error(error.message || `Failed to sign up with ${provider}`, { id: 'oauth-loading' });
+      }
     }
   };
 
@@ -521,6 +535,7 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
             onCut={preventCopyPaste}
             required
             placeholder="name@gmail.com"
+            autoComplete="email"
           />
           {emailError && (
             <small style={{ color: 'var(--danger)', marginTop: '4px', display: 'block' }}>
@@ -532,7 +547,9 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
           <label htmlFor="signup-password">Master Password</label>
 
           {/* ML-Powered Password Strength Indicator */}
+        <Suspense fallback={<div style={{ height: '40px' }} />}>
           <PasswordStrengthMeterML password={signupData.password} />
+        </Suspense>
 
           <div style={{ position: 'relative' }}>
             <input
@@ -602,6 +619,7 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
             onCut={preventCopyPaste}
             required
             placeholder="••••••••••••••••"
+            autoComplete="new-password"
           />
           {signupData.confirmPassword && signupData.password !== signupData.confirmPassword && (
             <small style={{ color: 'var(--danger)', marginTop: '4px', display: 'block' }}>
