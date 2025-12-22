@@ -1529,7 +1529,7 @@ erDiagram
 | Technology | Version | Purpose |
 |------------|---------|---------|
 | Python | 3.13 | Primary language |
-| Django | 4.2.26 | Web framework (LTS) |
+| Django | 4.2.27 | Web framework (LTS) |
 | Django REST Framework | 3.16+ | REST API |
 | Django Channels | 4.0+ | WebSocket support |
 | Celery | 5.5+ | Background tasks |
@@ -1784,7 +1784,7 @@ SecureVault's frontend uses a carefully curated set of libraries for security, p
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| Django | 4.2.26 | High-level Python web framework (LTS) |
+| Django | 4.2.27 | High-level Python web framework (LTS) |
 | djangorestframework | 3.16.1 | Powerful toolkit for building Web APIs |
 | djangorestframework-simplejwt | 5.2.2 | JWT authentication for Django REST Framework |
 | asgiref | 3.8.1 | ASGI specs, helper code, and adapters |
@@ -1827,7 +1827,7 @@ SecureVault's frontend uses a carefully curated set of libraries for security, p
 | Package | Version | Description |
 |---------|---------|-------------|
 | PyJWT | 2.10.1 | JSON Web Token implementation |
-| python-jose | 3.3.0 | JavaScript Object Signing and Encryption (JOSE) |
+| python-jose | 3.4.0 | JavaScript Object Signing and Encryption (JOSE) |
 
 #### Celery & Task Queue
 

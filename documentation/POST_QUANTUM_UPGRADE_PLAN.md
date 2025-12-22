@@ -279,7 +279,7 @@ ntru==0.3                        # Pure Python NTRU (may be slower)
 hkdf==0.0.3                      # HMAC-based KDF
 
 # NEW: Protocol Buffers (for X3DH message serialization)
-protobuf==4.25.0
+protobuf==6.31.1
 
 # NEW: Additional utilities
 pycryptodome==3.20.0             # Additional crypto primitives

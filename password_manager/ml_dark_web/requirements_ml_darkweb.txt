@@ -6,8 +6,8 @@ torch>=2.0.0
 torchvision>=0.15.0
 
 # Transformers for BERT models
-transformers>=4.30.0
-tokenizers>=0.13.0
+transformers>=4.38.0
+tokenizers>=0.22.0
 sentencepiece>=0.1.99
 
 # NLP and Text Processing
@@ -20,10 +20,10 @@ pandas>=2.0.0
 scikit-learn>=1.3.0
 
 # Web Scraping
-scrapy>=2.9.0
-beautifulsoup4>=4.12.0
+scrapy>=2.11.2
+beautifulsoup4>=4.13.3
 lxml>=4.9.0
-selenium>=4.10.0  # For JavaScript-heavy sites
+selenium>=4.17.0  # For JavaScript-heavy sites
 PySocks>=1.7.1  # For SOCKS proxy (Tor)
 
 # Celery for Async Processing
@@ -41,14 +41,14 @@ psycopg2-binary>=2.9.0  # PostgreSQL adapter
 # pgvector - install separately: pip install pgvector
 
 # API and HTTP
-requests>=2.31.0
-urllib3>=2.0.0
+requests>=2.32.4
+urllib3>=2.6.0
 
 # Data Validation
-pydantic>=2.0.0
+pydantic>=2.10.6
 
 # Progress Bars
-tqdm>=4.65.0
+tqdm>=4.67.1
 
 # Logging and Monitoring
 python-json-logger>=2.0.0
