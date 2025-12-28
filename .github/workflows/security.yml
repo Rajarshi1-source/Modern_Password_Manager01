@@ -1,0 +1,56 @@
+name: Security & Supply Chain Audit
+
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: "0 3 * * 1"  # weekly
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install tools
+        run: |
+          pip install --upgrade pip
+          pip install pip-audit safety cyclonedx-bom
+
+      - name: Dependency install (prod)
+        run: |
+          pip install \
+            -r requirements-prod.txt \
+            -c requirements-constraints.txt
+
+      - name: pip-audit
+        run: |
+          pip-audit || true
+
+      - name: safety scan
+        run: |
+          safety check --full-report || true
+
+      - name: SBOM generation
+        run: |
+          cyclonedx-py \
+            --format json \
+            --output sbom.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json

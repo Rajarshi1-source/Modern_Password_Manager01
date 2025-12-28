@@ -1,0 +1,40 @@
+stages:
+  - build
+  - sbom
+  - sign
+
+variables:
+  IMAGE: registry.gitlab.com/$CI_PROJECT_PATH/app:$CI_COMMIT_SHA
+
+build:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  script:
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN registry.gitlab.com
+    - docker build -t $IMAGE .
+    - docker push $IMAGE
+  artifacts:
+    expire_in: 1h
+    when: always
+
+sbom:
+  stage: sbom
+  image: alpine:3.18
+  before_script:
+    - apk add --no-cache curl bash openjdk11-jre
+  script:
+    - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v0.82.0
+    - syft $IMAGE -o cyclonedx-json=sbom.image.cyclonedx.json
+    - curl -sL -o cyclonedx-cli.jar https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.29.0/cyclonedx-cli-assembly-0.29.0.jar
+    - java -jar cyclonedx-cli.jar convert --input-file sbom.image.cyclonedx.json --output-file sbom.image.spdx.json --output-format spdx-json
+
+sign:
+  stage: sign
+  image: gcr.io/projectsigstore/cosign/cosign:latest
+  script:
+    - cosign sign-blob --keyless sbom.image.cyclonedx.json
+  dependencies:
+    - sbom
+

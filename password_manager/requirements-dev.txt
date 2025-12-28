@@ -1,0 +1,26 @@
+# Local development, testing, CI
+-r requirements-prod.txt
+
+# Testing
+pytest>=9.0.0
+pytest-django>=4.11.0
+pytest-asyncio>=1.3.0
+factory-boy>=3.3.0
+
+# Security Audits
+pip-audit>=2.10.0
+safety>=3.7.0
+
+# Profiling & Debugging
+django-silk>=5.4.3
+django-extensions>=4.1
+
+# CLI & Utilities
+click>=8.1.8
+rich>=14.0.0
+
+# Web Scraping (Dev / ML)
+scrapy>=2.11.0,<3.0
+beautifulsoup4>=4.13.0
+selenium>=4.39.0
+PySocks>=1.7.1

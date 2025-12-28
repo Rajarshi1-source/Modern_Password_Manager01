@@ -1,0 +1,36 @@
+# Small constraints to avoid the hyper/h2/pyasn1 conflicts and pin security-relevant transitive deps
+# Top-level primary pins (from your installed environment)
+Django==4.2.27
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+celery==5.5.1
+redis==5.2.1
+scrapy==2.13.4
+selenium>=4.39.0
+PyJWT==2.10.1
+requests==2.32.4
+
+# Fixes for pyasn1 / pyasn1-modules compatibility (match service-identity / google-auth needs)
+pyasn1==0.6.1
+pyasn1-modules==0.4.2
+
+# hyper / h2 / hyperframe family — keep versions compatible with apns2 & hyper
+hyper==0.7.0
+h2==2.6.2
+hyperframe==3.2.0
+hpack==3.0.0
+
+# Other transitive/security pins recommended by pip-audit / pip-check steps
+filelock==3.20.1
+marshmallow==4.1.2
+certifi>=2025.10.5
+sentencepiece==0.2.1
+tokenizers==0.22.1
+PySocks==1.7.1
+webdriver-manager==4.0.2
+
+# Explicitly pin python-jose removal (do not install)
+# python-jose==3.4.0    # <- intentionally omitted as you migrated to PyJWT
+
+# Small note: CPU builds of torch may include +cpu in the pip name; do not constrain it here
+# Leave heavy ML packages to your ML-specific requirements file (requirements_ml_darkweb.txt).

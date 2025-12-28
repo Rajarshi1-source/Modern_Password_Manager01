@@ -1,0 +1,52 @@
+# Core Django
+Django==4.2.27
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+
+# Auth & Security
+django-allauth==65.13.0
+dj-rest-auth==7.0.1
+cryptography==44.0.2
+argon2-cffi==21.3.0
+pycryptodome>=3.20.0
+PyJWT==2.10.1
+pyotp==2.9.0
+
+# Async & Messaging
+celery==5.5.1
+redis==5.2.1
+django-celery-beat==2.8.0
+django_celery_results==2.6.0
+
+# Database
+psycopg2-binary==2.9.10
+
+# Channels / WebSockets
+channels==4.2.2
+channels-redis==4.2.1
+daphne==4.2.1
+
+# Cloud & Notifications
+firebase-admin==5.3.0
+sendgrid>=6.11.0
+twilio>=8.0.0
+
+# Web & API
+requests==2.32.4
+urllib3==2.6.0
+
+# Servers
+gunicorn>=21.2.0
+uvicorn[standard]>=0.24.0
+whitenoise>=6.6.0
+
+# Monitoring
+sentry-sdk>=1.40.0
+psutil>=5.9.0
+
+# ML Runtime (if enabled)
+torch>=2.9.1
+transformers>=4.57.2
+numpy>=2.2.0
+pandas>=2.2.0
+scikit-learn>=1.4.0

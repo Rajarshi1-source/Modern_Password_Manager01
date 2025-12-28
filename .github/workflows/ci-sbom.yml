@@ -1,0 +1,87 @@
+name: CI — build, SBOM, sign, attest
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build-and-sbom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for cosign keyless OIDC
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}/app:${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to registry (GHCR)
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          # for GHCR use GITHUB_TOKEN or a PAT as needed
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ${{ env.IMAGE }}
+          platforms: linux/amd64
+
+      - name: Install Syft (Anchore) (deb)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v0.82.0
+          syft version
+
+      - name: Generate SBOM (CycloneDX) from image
+        run: |
+          syft ${{ env.IMAGE }} -o cyclonedx-json=sbom.image.cyclonedx.json
+          ls -lh sbom.image.cyclonedx.json
+
+      - name: (Optional) Generate SBOM for python env (cyclonedx-py)
+        run: |
+          python -m pip install cyclonedx-bom
+          cyclonedx-py environment > sbom.python.cyclonedx.json || true
+        continue-on-error: true
+
+      - name: Convert CycloneDX -> SPDX (optional)
+        # Download cyclonedx-cli jar into workspace (only if you want SPDX)
+        run: |
+          curl -sL -o cyclonedx-cli.jar https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.29.0/cyclonedx-cli-assembly-0.29.0.jar
+          java -jar cyclonedx-cli.jar convert --input-file sbom.image.cyclonedx.json --output-file sbom.image.spdx.json --output-format spdx-json
+
+      - name: Push SBOM as OCI artifact (ORAS)
+        run: |
+          # install oras
+          curl -sSfL https://github.com/oras-project/oras/releases/download/v0.14.0/oras_0.14.0_linux_amd64.tar.gz | tar -xz
+          sudo mv oras /usr/local/bin/oras
+          oras version
+          # push sbom as OCI artifact referencing the image
+          oras push ${{ env.IMAGE }}:sbom --artifact-type application/vnd.cyclonedx+json sbom.image.cyclonedx.json
+
+      - name: Sign SBOM with cosign (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          # Keyless signing (OIDC) — requires that GitHub OIDC trust and cosign root certs are valid
+          pip install cosign==1.18.0 || true
+          # using cosign from GitHub Actions runner or install binary
+          # Sign local file keyless:
+          cosign sign-blob --keyless sbom.image.cyclonedx.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom.image.cyclonedx.json
+            sbom.image.spdx.json
+            sbom.python.cyclonedx.json || true

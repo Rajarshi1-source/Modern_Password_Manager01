@@ -1,0 +1,54 @@
+# =========================
+# Stage 1: Builder
+# =========================
+FROM python:3.13-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# System deps (build only)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    libpq-dev \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Copy dependency files
+COPY requirements-prod.txt .
+COPY requirements-constraints.txt .
+
+# Install dependencies into virtualenv
+RUN python -m venv /venv \
+ && /venv/bin/pip install --upgrade pip \
+ && /venv/bin/pip install \
+      --no-cache-dir \
+      --require-hashes \
+      -r requirements-prod.txt \
+      -c requirements-constraints.txt
+
+# Copy application
+COPY . .
+
+# =========================
+# Stage 2: Runtime (Distroless)
+# =========================
+FROM gcr.io/distroless/python3-debian12
+
+WORKDIR /app
+
+# Copy virtualenv and app
+COPY --from=builder /venv /venv
+COPY --from=builder /app /app
+
+# Non-root execution
+USER nonroot:nonroot
+
+ENV PATH="/venv/bin:$PATH" \
+    DJANGO_SETTINGS_MODULE=password_manager.settings.production
+
+EXPOSE 8000
+
+CMD ["gunicorn", "password_manager.wsgi:application", "-b", "0.0.0.0:8000"]

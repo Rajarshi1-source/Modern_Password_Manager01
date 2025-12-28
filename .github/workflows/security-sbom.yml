@@ -1,0 +1,47 @@
+name: Security SBOM & Supply Chain Audit
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  id-token: write   # required for cosign keyless signing
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SBOM tools
+        run: |
+          pip install --upgrade pip
+          pip install cyclonedx-bom cyclonedx-cli pip-audit
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cyclonedx-py environment > sbom.json
+
+      - name: Validate SBOM
+        run: |
+          cyclonedx-cli validate --input-file sbom.json
+
+      - name: Vulnerability Scan (pip-audit)
+        run: |
+          pip-audit || true
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json

@@ -56,7 +56,7 @@ RUN npm run build
 # -----------------------------------------------------------------------------
 # Stage 3: Production - Nginx serving static files
 # -----------------------------------------------------------------------------
-FROM nginx:1.25-alpine AS production
+FROM nginx:1.29.3-alpine AS production
 
 # Install curl for health checks
 RUN apk add --no-cache curl

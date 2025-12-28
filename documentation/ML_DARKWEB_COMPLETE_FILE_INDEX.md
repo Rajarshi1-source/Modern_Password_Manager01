@@ -346,7 +346,7 @@ daphne>=4.0.0
 redis>=4.5.0
 
 # ML Models
-torch>=2.0.0
+torch>=2.2.2
 transformers>=4.30.0
 scikit-learn>=1.3.0
 spacy>=3.6.0
