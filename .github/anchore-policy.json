@@ -1,0 +1,149 @@
+{
+    "id": "password-manager-security-policy",
+    "version": "1.0.0",
+    "name": "Password Manager Security Policy",
+    "policies": [
+      {
+        "id": "critical-vulnerabilities",
+        "name": "Block CRITICAL vulnerabilities",
+        "rules": [
+          {
+            "gate": "vulnerabilities",
+            "trigger": "package",
+            "action": "stop",
+            "params": [
+              {
+                "name": "severity_comparison",
+                "value": ">="
+              },
+              {
+                "name": "severity",
+                "value": "critical"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "high-vulnerabilities",
+        "name": "Warn on HIGH vulnerabilities",
+        "rules": [
+          {
+            "gate": "vulnerabilities",
+            "trigger": "package",
+            "action": "warn",
+            "params": [
+              {
+                "name": "severity_comparison",
+                "value": "="
+              },
+              {
+                "name": "severity",
+                "value": "high"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "dockerfile-checks",
+        "name": "Dockerfile best practices",
+        "rules": [
+          {
+            "gate": "dockerfile",
+            "trigger": "instruction",
+            "action": "warn",
+            "params": [
+              {
+                "name": "instruction",
+                "value": "HEALTHCHECK"
+              },
+              {
+                "name": "check",
+                "value": "not_exists"
+              }
+            ]
+          },
+          {
+            "gate": "dockerfile",
+            "trigger": "instruction",
+            "action": "stop",
+            "params": [
+              {
+                "name": "instruction",
+                "value": "USER"
+              },
+              {
+                "name": "check",
+                "value": "not_exists"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "secrets-check",
+        "name": "Block secrets in images",
+        "rules": [
+          {
+            "gate": "secret_scans",
+            "trigger": "content_regex_checks",
+            "action": "stop",
+            "params": [
+              {
+                "name": "content_regex_name",
+                "value": ".*"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "package-blocklist",
+        "name": "Block vulnerable packages",
+        "rules": [
+          {
+            "gate": "vulnerabilities",
+            "trigger": "package",
+            "action": "stop",
+            "params": [
+              {
+                "name": "package_type",
+                "value": "all"
+              },
+              {
+                "name": "fix_available",
+                "value": "true"
+              },
+              {
+                "name": "severity_comparison",
+                "value": ">="
+              },
+              {
+                "name": "severity",
+                "value": "high"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "mappings": [
+      {
+        "name": "default",
+        "registry": "*",
+        "repository": "*",
+        "image": {
+          "type": "tag",
+          "value": "*"
+        },
+        "policy_ids": [
+          "critical-vulnerabilities",
+          "high-vulnerabilities",
+          "dockerfile-checks",
+          "secrets-check",
+          "package-blocklist"
+        ]
+      }
+    ]
+  }

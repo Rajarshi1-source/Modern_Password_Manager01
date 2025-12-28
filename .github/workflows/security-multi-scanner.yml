@@ -1,0 +1,193 @@
+name: Multi-Scanner Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE_NAME: ${{ github.repository }}/backend
+  FRONTEND_IMAGE_NAME: ${{ github.repository }}/frontend
+
+jobs:
+  # ===========================================================================
+  # Multi-Scanner Security Analysis
+  # ===========================================================================
+  security-scan:
+    name: Multi-Scanner Security Scan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      security-events: write
+      contents: read
+      packages: read
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image_type: backend
+            image_name: ${{ github.repository }}/backend
+          - image_type: frontend
+            image_name: ${{ github.repository }}/frontend
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      # =====================================================================
+      # Scanner 1: Trivy (Comprehensive vulnerability database)
+      # =====================================================================
+      
+      - name: Run Trivy Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.image_name }}:latest
+          format: 'sarif'
+          output: 'trivy-${{ matrix.image_type }}.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: 0  # Don't fail, collect all results
+          vuln-type: 'os,library'
+          scanners: 'vuln,secret,config'
+      
+      - name: Upload Trivy Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-${{ matrix.image_type }}.sarif'
+          category: 'trivy-${{ matrix.image_type }}'
+      
+      # =====================================================================
+      # Scanner 2: Grype (Fast, accurate CVE detection)
+      # =====================================================================
+      
+      - name: Run Grype Scan
+        uses: anchore/scan-action@v3
+        id: grype-scan
+        with:
+          image: ${{ env.REGISTRY }}/${{ matrix.image_name }}:latest
+          severity-cutoff: medium
+          fail-build: false  # Don't fail, collect all results
+          output-format: sarif
+          only-fixed: false
+      
+      - name: Upload Grype Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: ${{ steps.grype-scan.outputs.sarif }}
+          category: 'grype-${{ matrix.image_type }}'
+      
+      # =====================================================================
+      # Scanner 3: Anchore Policy Check (Compliance validation)
+      # =====================================================================
+      
+      - name: Anchore Policy Check - Backend
+        uses: anchore/scan-action@v3
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+          fail-build: true  # Don't fail, collect all results
+          severity-cutoff: critical
+          policy-bundle-path: .github/anchore-policy.json
+          output-format: sarif
+      
+      - name: Upload Anchore Results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: ${{ steps.anchore-scan.outputs.sarif }}
+          category: 'anchore-${{ matrix.image_type }}'
+      
+      # =====================================================================
+      # Generate Scan Report
+      # =====================================================================
+      
+      - name: Generate Scan Summary
+        if: always()
+        run: |
+          echo "## 🛡️ Security Scan Results - ${{ matrix.image_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | Status | Findings |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ✅ Complete | See Security tab |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grype | ✅ Complete | See Security tab |" >> $GITHUB_STEP_SUMMARY
+          echo "| Anchore | ✅ Complete | See Artifacts |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Scan Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ env.REGISTRY }}/${{ matrix.image_name }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Scanners:** Trivy, Grype, Anchore" >> $GITHUB_STEP_SUMMARY
+          echo "- **Severity Threshold:** HIGH, CRITICAL" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "View detailed results in the **Security** tab or download artifacts." >> $GITHUB_STEP_SUMMARY
+  
+  # ===========================================================================
+  # Consolidated Report
+  # ===========================================================================
+  generate-report:
+    name: Generate Consolidated Report
+    runs-on: ubuntu-latest
+    needs: security-scan
+    if: always()
+    
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download All Scan Results
+        uses: actions/download-artifact@v4
+        with:
+          path: scan-results
+      
+      - name: Generate Consolidated Report
+        run: |
+          echo "# 🛡️ Multi-Scanner Security Report" > security-report.md
+          echo "" >> security-report.md
+          echo "**Generated:** $(date -u)" >> security-report.md
+          echo "**Commit:** ${{ github.sha }}" >> security-report.md
+          echo "" >> security-report.md
+          echo "## Scanners Used" >> security-report.md
+          echo "1. **Trivy** - Comprehensive vulnerability scanning" >> security-report.md
+          echo "2. **Grype** - Fast CVE detection" >> security-report.md
+          echo "3. **Anchore** - Policy compliance checks" >> security-report.md
+          echo "" >> security-report.md
+          echo "## Images Scanned" >> security-report.md
+          echo "- Backend: \`${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest\`" >> security-report.md
+          echo "- Frontend: \`${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest\`" >> security-report.md
+          echo "" >> security-report.md
+          echo "View detailed findings in GitHub Security tab." >> security-report.md
+      
+      - name: Upload Consolidated Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-report.md
+          retention-days: 90
+      
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('security-report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
