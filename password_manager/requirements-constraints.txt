@@ -16,9 +16,9 @@ pyasn1-modules==0.4.2
 
 # hyper / h2 / hyperframe family — keep versions compatible with apns2 & hyper
 hyper==0.7.0
-h2==2.6.2
+h2==4.3.0
 hyperframe==3.2.0
-hpack==3.0.0
+hpack==4.1.0
 
 # Other transitive/security pins recommended by pip-audit / pip-check steps
 filelock==3.20.1
