@@ -58,7 +58,7 @@ requests==2.32.4
 certifi>=2025.11.12
 charset-normalizer==3.4.1
 idna==3.10
-urllib3==2.6.0
+urllib3==2.6.3
 dnspython==2.7.0
 
 # AWS & Cloud Storage
@@ -211,3 +211,4 @@ pip-audit>=2.6.0
 # Optional: MongoDB Support
 # ============================================================================
 pymongo==4.6.3
+aiohttp>=3.13.3 # not directly required, pinned by Snyk to avoid a vulnerability
