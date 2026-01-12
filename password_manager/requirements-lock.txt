@@ -287,7 +287,7 @@ ua-parser==1.0.1
 ua-parser-builtins==0.18.0.post1
 ujson==5.11.0
 uritemplate==4.1.1
-urllib3==2.6.0
+urllib3==2.6.3
 user-agents==2.2.0
 uvicorn==0.38.0
 vine==5.1.0
