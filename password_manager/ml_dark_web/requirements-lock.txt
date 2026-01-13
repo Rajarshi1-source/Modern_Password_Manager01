@@ -87,7 +87,7 @@ eth_abi==5.2.0
 factory_boy==3.3.3
 Faker==39.0.0
 fido2==2.0.0
-filelock==3.20.1
+filelock==3.20.3
 firebase-admin==5.3.0
 flatbuffers==25.9.23
 flower==2.0.1
