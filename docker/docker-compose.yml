@@ -19,11 +19,11 @@ services:
     image: postgres:15-alpine
     container_name: password_manager_postgres
     restart: unless-stopped
-    
+
     # ✅ FIX #1: Database ports NOT exposed - only accessible via internal Docker network
     # REMOVED: ports: - "5432:5432"
     # Other containers connect via hostname "postgres" on internal network
-    
+
     # ✅ FIX #2: Resource limits prevent DoS attacks
     deploy:
       resources:
@@ -33,35 +33,35 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
-    
+
     # ✅ FIX #3: Mandatory secrets - NO defaults, startup fails if missing
     environment:
-      POSTGRES_DB: ${DB_NAME:?Error: DB_NAME not set in .env}
-      POSTGRES_USER: ${DB_USER:?Error: DB_USER not set in .env}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?Error: DB_PASSWORD not set in .env}
+      POSTGRES_DB: "${DB_NAME:?Error: DB_NAME not set in .env}"
+      POSTGRES_USER: "${DB_USER:?Error: DB_USER not set in .env}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?Error: DB_PASSWORD not set in .env}"
       PGDATA: /var/lib/postgresql/data/pgdata
-    
+
     # ✅ FIX #4: Run as non-root user
-    user: "999:999"  # postgres user in alpine image
-    
+    user: "999:999" # postgres user in alpine image
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pm_user}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-pm_user}" ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
-    
+
     networks:
-      - backend_network  # Isolated backend network
-    
+      - backend_network # Isolated backend network
+
     # Additional security hardening
     security_opt:
       - no-new-privileges:true
-    
+
     # Read-only root filesystem (except data volumes)
     read_only: true
     tmpfs:
@@ -75,10 +75,10 @@ services:
     image: redis:7-alpine
     container_name: password_manager_redis
     restart: unless-stopped
-    
+
     # ✅ FIX #1: Redis port NOT exposed to host
     # REMOVED: ports: - "6379:6379"
-    
+
     # ✅ FIX #2: Resource limits
     deploy:
       resources:
@@ -88,33 +88,29 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-    
+
     # ✅ FIX #3: Mandatory password
     command: >
-      redis-server
-      --appendonly yes
-      --requirepass ${REDIS_PASSWORD:?Error: REDIS_PASSWORD not set in .env}
-      --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
-    
+      redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?Error: REDIS_PASSWORD not set in .env} --maxmemory 256mb --maxmemory-policy allkeys-lru
+
     # ✅ FIX #4: Run as non-root
-    user: "999:999"  # redis user
-    
+    user: "999:999" # redis user
+
     volumes:
       - redis_data:/data
-    
+
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
-    
+
     networks:
       - backend_network
-    
+
     security_opt:
       - no-new-privileges:true
-    
+
     read_only: true
     tmpfs:
       - /tmp
@@ -128,7 +124,7 @@ services:
       dockerfile: Dockerfile
     container_name: password_manager_backend
     restart: unless-stopped
-    
+
     # ✅ FIX #2: Resource limits
     deploy:
       resources:
@@ -138,26 +134,26 @@ services:
         reservations:
           cpus: '1.0'
           memory: 1G
-    
+
     command: >
       sh -c "python manage.py migrate &&
              python manage.py collectstatic --noinput &&
              gunicorn password_manager.wsgi:application --bind 0.0.0.0:8000 --workers 4"
-    
+
     volumes:
-      - ./password_manager:/app:ro  # Read-only app code
+      - ./password_manager:/app:ro # Read-only app code
       - static_volume:/app/staticfiles
       - media_volume:/app/media
-    
+
     ports:
       - "${BACKEND_PORT:-8000}:8000"
-    
+
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
-      - SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set in .env}
-      - DATABASE_URL=postgresql://${DB_USER:?Error: DB_USER not set}:${DB_PASSWORD:?Error: DB_PASSWORD not set}@postgres:5432/${DB_NAME:?Error: DB_NAME not set}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?Error: REDIS_PASSWORD not set}@redis:6379/0
+      - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set in .env}"
+      - "DATABASE_URL=postgresql://${DB_USER:?Error: DB_USER not set}:${DB_PASSWORD:?Error: DB_PASSWORD not set}@postgres:5432/${DB_NAME:?Error: DB_NAME not set}"
+      - "REDIS_URL=redis://:${REDIS_PASSWORD:?Error: REDIS_PASSWORD not set}@redis:6379/0"
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
@@ -168,25 +164,25 @@ services:
       - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
       - OIDC_VERIFY_SSL=${OIDC_VERIFY_SSL:-True}
       - OIDC_USE_NONCE=${OIDC_USE_NONCE:-True}
-    
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    
+
     networks:
       - backend_network
       - frontend_network
-    
+
     # ✅ FIX #4: Run as non-root
     user: "1000:1000"
-    
+
     security_opt:
       - no-new-privileges:true
-    
+
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health/" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -201,7 +197,7 @@ services:
       dockerfile: Dockerfile
     container_name: password_manager_websocket
     restart: unless-stopped
-    
+
     # ✅ FIX #2: Resource limits
     deploy:
       resources:
@@ -211,19 +207,19 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
-    
+
     command: daphne -b 0.0.0.0 -p 8001 password_manager.asgi:application
-    
+
     volumes:
       - ./password_manager:/app:ro
-    
+
     ports:
       - "${WEBSOCKET_PORT:-8001}:8001"
-    
+
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
-      - SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}
+      - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -232,18 +228,18 @@ services:
       - OIDC_RP_CLIENT_ID=${OIDC_RP_CLIENT_ID:-}
       - OIDC_RP_CLIENT_SECRET=${OIDC_RP_CLIENT_SECRET:-}
       - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
-    
+
     depends_on:
       - postgres
       - redis
-    
+
     networks:
       - backend_network
       - frontend_network
-    
+
     # ✅ FIX #4: Run as non-root
     user: "1000:1000"
-    
+
     security_opt:
       - no-new-privileges:true
 
@@ -256,7 +252,7 @@ services:
       dockerfile: Dockerfile
     container_name: password_manager_celery_worker
     restart: unless-stopped
-    
+
     # ✅ FIX #2: Resource limits
     deploy:
       resources:
@@ -266,13 +262,13 @@ services:
         reservations:
           cpus: '1.0'
           memory: 1G
-    
+
     command: celery -A password_manager worker -l info --concurrency=4
-    
+
     volumes:
       - ./password_manager:/app:ro
       - media_volume:/app/media
-    
+
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
@@ -281,17 +277,17 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
-    
+
     depends_on:
       - postgres
       - redis
-    
+
     networks:
       - backend_network
-    
+
     # ✅ FIX #4: Run as non-root
     user: "1000:1000"
-    
+
     security_opt:
       - no-new-privileges:true
 
@@ -304,7 +300,7 @@ services:
       dockerfile: Dockerfile
     container_name: password_manager_celery_beat
     restart: unless-stopped
-    
+
     # ✅ FIX #2: Resource limits
     deploy:
       resources:
@@ -314,12 +310,12 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-    
+
     command: celery -A password_manager beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
-    
+
     volumes:
       - ./password_manager:/app:ro
-    
+
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
@@ -328,17 +324,17 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
-    
+
     depends_on:
       - postgres
       - redis
-    
+
     networks:
       - backend_network
-    
+
     # ✅ FIX #4: Run as non-root
     user: "1000:1000"
-    
+
     security_opt:
       - no-new-privileges:true
 
@@ -351,7 +347,7 @@ services:
       dockerfile: Dockerfile
     container_name: password_manager_frontend
     restart: unless-stopped
-    
+
     # ✅ FIX #2: Resource limits
     deploy:
       resources:
@@ -361,32 +357,32 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-    
+
     volumes:
       - ./frontend:/app:ro
       - /app/node_modules
-    
+
     ports:
       - "${FRONTEND_PORT:-5173}:5173"
-    
+
     environment:
       - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
       - VITE_WS_URL=${VITE_WS_URL:-ws://localhost:8001}
       - VITE_OIDC_ENABLED=${VITE_OIDC_ENABLED:-true}
-    
+
     depends_on:
       - backend
       - websocket
-    
+
     networks:
       - frontend_network
-    
+
     # ✅ FIX #4: Run as non-root
     user: "1000:1000"
-    
+
     security_opt:
       - no-new-privileges:true
-    
+
     command: npm run dev -- --host 0.0.0.0
 
   # ===========================================================================
@@ -396,7 +392,7 @@ services:
     image: nginx:alpine
     container_name: password_manager_nginx
     restart: unless-stopped
-    
+
     # ✅ FIX #2: Resource limits
     deploy:
       resources:
@@ -406,29 +402,29 @@ services:
         reservations:
           cpus: '0.25'
           memory: 128M
-    
+
     ports:
       - "80:80"
       - "443:443"
-    
+
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - static_volume:/var/www/static:ro
       - media_volume:/var/www/media:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
-    
+
     depends_on:
       - backend
       - websocket
       - frontend
-    
+
     networks:
       - frontend_network
       - backend_network
-    
+
     # ✅ FIX #4: Nginx already runs as non-root in alpine image
-    
+
     security_opt:
       - no-new-privileges:true
 
@@ -452,8 +448,8 @@ networks:
   # Backend network - only backend services (database, redis, api, workers)
   backend_network:
     driver: bridge
-    internal: false  # Set to true for complete isolation in production
-  
+    internal: false # Set to true for complete isolation in production
+
   # Frontend network - frontend and nginx
   frontend_network:
     driver: bridge
