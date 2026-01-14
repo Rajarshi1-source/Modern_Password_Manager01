@@ -449,6 +449,153 @@ class MLSecurityService {
         }
     }
     
+    /**
+     * ============================================================================
+     * ADVERSARIAL AI INTEGRATION
+     * ============================================================================
+     */
+    
+    /**
+     * Analyze password using adversarial AI
+     * @param {string} password - Password to analyze
+     * @param {boolean} runFullBattle - Whether to run full battle simulation
+     * @returns {Promise} Adversarial analysis results
+     */
+    async analyzePasswordAdversarial(password, runFullBattle = false) {
+        try {
+            const adversarialService = (await import('./adversarialService')).default;
+            
+            if (runFullBattle) {
+                return await adversarialService.analyzePassword(
+                    adversarialService.extractFeatures(password),
+                    true
+                );
+            } else {
+                return await adversarialService.getQuickAssessment(
+                    adversarialService.extractFeatures(password)
+                );
+            }
+        } catch (error) {
+            console.error('Adversarial analysis error:', error);
+            throw this._handleError(error);
+        }
+    }
+    
+    /**
+     * Get combined password analysis (ML + Adversarial)
+     * @param {string} password - Password to analyze
+     * @returns {Promise} Combined analysis results
+     */
+    async getComprehensivePasswordAnalysis(password) {
+        try {
+            // Run both analyses in parallel
+            const [mlResult, adversarialResult] = await Promise.all([
+                this.predictPasswordStrength(password, false),
+                this.analyzePasswordAdversarial(password, false)
+            ]);
+            
+            return {
+                success: true,
+                ml_analysis: mlResult,
+                adversarial_analysis: adversarialResult,
+                combined_score: this._calculateCombinedScore(mlResult, adversarialResult),
+                recommendations: this._mergeRecommendations(mlResult, adversarialResult)
+            };
+        } catch (error) {
+            console.error('Comprehensive analysis error:', error);
+            throw this._handleError(error);
+        }
+    }
+    
+    /**
+     * Get adversarial defense recommendations
+     * @param {Object} options - Query options
+     * @returns {Promise} Defense recommendations
+     */
+    async getAdversarialRecommendations(options = {}) {
+        try {
+            const adversarialService = (await import('./adversarialService')).default;
+            return await adversarialService.getRecommendations(options);
+        } catch (error) {
+            console.error('Error fetching adversarial recommendations:', error);
+            throw this._handleError(error);
+        }
+    }
+    
+    /**
+     * Get user's adversarial defense profile
+     * @returns {Promise} Defense profile
+     */
+    async getAdversarialDefenseProfile() {
+        try {
+            const adversarialService = (await import('./adversarialService')).default;
+            return await adversarialService.getDefenseProfile();
+        } catch (error) {
+            console.error('Error fetching defense profile:', error);
+            throw this._handleError(error);
+        }
+    }
+    
+    /**
+     * Get trending attack patterns
+     * @param {number} limit - Number of trends to fetch
+     * @returns {Promise} Trending attacks
+     */
+    async getTrendingAttacks(limit = 5) {
+        try {
+            const adversarialService = (await import('./adversarialService')).default;
+            return await adversarialService.getTrendingAttacks(limit);
+        } catch (error) {
+            console.error('Error fetching trending attacks:', error);
+            throw this._handleError(error);
+        }
+    }
+    
+    /**
+     * Calculate combined score from ML and adversarial analysis
+     * @private
+     */
+    _calculateCombinedScore(mlResult, adversarialResult) {
+        const mlScore = this._strengthToScore(mlResult?.prediction?.strength);
+        const advScore = adversarialResult?.analysis?.defense_score || 0.5;
+        
+        // Weighted average: 40% ML, 60% Adversarial (adversarial is more attack-aware)
+        return (mlScore * 0.4) + (advScore * 0.6);
+    }
+    
+    /**
+     * Convert strength label to numeric score
+     * @private
+     */
+    _strengthToScore(strength) {
+        const scores = {
+            'very_weak': 0.1,
+            'weak': 0.3,
+            'moderate': 0.5,
+            'strong': 0.75,
+            'very_strong': 0.95
+        };
+        return scores[strength] || 0.5;
+    }
+    
+    /**
+     * Merge recommendations from both analysis types
+     * @private
+     */
+    _mergeRecommendations(mlResult, adversarialResult) {
+        const mlRecs = mlResult?.prediction?.recommendations || [];
+        const advRecs = adversarialResult?.analysis?.recommendations || [];
+        
+        // Combine and deduplicate
+        const allRecs = [...advRecs, ...mlRecs.map(r => ({ 
+            title: r, 
+            priority: 'medium',
+            source: 'ml' 
+        }))];
+        
+        return allRecs.slice(0, 5); // Return top 5
+    }
+    
     _handleError(error) {
         if (error.response) {
             // Server responded with error

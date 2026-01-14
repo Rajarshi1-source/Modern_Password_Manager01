@@ -510,4 +510,144 @@ class PasswordStrengthPredictor:
         logger.info(f"Model saved to {self.model_path}")
         
         return history
+    
+    def get_adversarial_features(self, password: str) -> Dict:
+        """
+        Extract features for adversarial AI analysis.
+        
+        This method provides a comprehensive feature set compatible with
+        the adversarial_ai module's AttackerAI and DefenderAI engines.
+        
+        Args:
+            password: Password string to analyze
+        
+        Returns:
+            Dictionary of features for adversarial analysis:
+            {
+                'length': int,
+                'entropy': float,
+                'has_upper': bool,
+                'has_lower': bool,
+                'has_digit': bool,
+                'has_special': bool,
+                'has_common_patterns': bool,
+                'character_diversity': float,
+                'guessability_score': float,
+                'pattern_info': dict,
+                'strength_prediction': str,
+                'confidence': float
+            }
+        """
+        if not password:
+            return {
+                'length': 0,
+                'entropy': 0.0,
+                'has_upper': False,
+                'has_lower': False,
+                'has_digit': False,
+                'has_special': False,
+                'has_common_patterns': False,
+                'character_diversity': 0.0,
+                'guessability_score': 100.0,
+                'pattern_info': {},
+                'strength_prediction': 'very_weak',
+                'confidence': 1.0
+            }
+        
+        # Get base features
+        base_features = self.extract_features(password)
+        
+        # Get prediction
+        prediction = self.predict(password)
+        
+        # Build pattern info
+        pattern_info = self._extract_pattern_info(password)
+        
+        # Return adversarial-compatible feature dict
+        return {
+            'length': base_features['length'],
+            'entropy': base_features['entropy'],
+            'has_upper': base_features['has_uppercase'],
+            'has_lower': base_features['has_lowercase'],
+            'has_digit': base_features['has_numbers'],
+            'has_special': base_features['has_special'],
+            'has_common_patterns': base_features['contains_common_patterns'],
+            'character_diversity': base_features['character_diversity'],
+            'guessability_score': base_features['guessability_score'],
+            'pattern_info': pattern_info,
+            'strength_prediction': prediction['strength'],
+            'confidence': prediction['confidence']
+        }
+    
+    def _extract_pattern_info(self, password: str) -> Dict:
+        """
+        Extract detailed pattern information for adversarial analysis.
+        
+        Args:
+            password: Password string
+        
+        Returns:
+            Dictionary of pattern information
+        """
+        password_lower = password.lower()
+        
+        # Keyboard walk patterns
+        keyboard_walks = ['qwerty', 'qwertyuiop', 'asdf', 'asdfghjkl', 'zxcv', 
+                          'zxcvbnm', 'qazwsx', 'wsxedc', '1234', '12345', 
+                          '123456', '1234567890', 'poiuy', 'lkjhg', 'mnbvc']
+        has_keyboard_walk = any(kw in password_lower for kw in keyboard_walks)
+        
+        # Date patterns
+        date_patterns = [
+            r'\d{4}$',  # Year at end (1990, 2023)
+            r'\d{2}/\d{2}',  # Date format
+            r'\d{2}-\d{2}',  # Date format with dash
+            r'(19|20)\d{2}',  # 4-digit year
+            r'\d{6}',  # MMDDYY or DDMMYY
+            r'\d{8}',  # Full date
+        ]
+        has_date_pattern = any(re.search(p, password) for p in date_patterns)
+        
+        # Repeated characters
+        has_repeated = bool(re.search(r'(.)\1{2,}', password))
+        
+        # Sequential patterns
+        sequential_patterns = [
+            r'abc', r'bcd', r'cde', r'def', r'efg', r'fgh', r'ghi', r'hij',
+            r'ijk', r'jkl', r'klm', r'lmn', r'mno', r'nop', r'opq', r'pqr',
+            r'qrs', r'rst', r'stu', r'tuv', r'uvw', r'vwx', r'wxy', r'xyz',
+            r'012', r'123', r'234', r'345', r'456', r'567', r'678', r'789',
+        ]
+        has_sequential = any(re.search(p, password_lower) for p in sequential_patterns)
+        
+        # Leet speak detection
+        leet_chars = {'@': 'a', '4': 'a', '3': 'e', '1': 'i', '!': 'i', 
+                      '0': 'o', '5': 's', '$': 's', '7': 't'}
+        leet_count = sum(1 for c in password if c in leet_chars)
+        has_leet_speak = leet_count >= 2
+        
+        # Common word bases
+        common_bases = ['password', 'admin', 'user', 'login', 'welcome', 
+                        'hello', 'dragon', 'master', 'monkey', 'shadow',
+                        'sunshine', 'princess', 'football', 'baseball',
+                        'iloveyou', 'trustno1', 'letmein']
+        has_dictionary_base = any(base in password_lower for base in common_bases)
+        
+        # Prefix/suffix analysis
+        common_prefixes = ['the', 'my', 'abc', '123', 'aaa', 'zzz']
+        common_suffixes = ['123', '1234', '12345', '!', '!!', '!!!', '1', '01', '69', '007']
+        has_common_prefix = any(password_lower.startswith(p) for p in common_prefixes)
+        has_common_suffix = any(password.endswith(s) for s in common_suffixes)
+        
+        return {
+            'keyboard_walk': has_keyboard_walk,
+            'date_pattern': has_date_pattern,
+            'repeated_chars': has_repeated,
+            'sequential': has_sequential,
+            'leet_speak': has_leet_speak,
+            'dictionary_base': has_dictionary_base,
+            'common_prefix': has_common_prefix,
+            'common_suffix': has_common_suffix,
+            'leet_count': leet_count,
+        }
 

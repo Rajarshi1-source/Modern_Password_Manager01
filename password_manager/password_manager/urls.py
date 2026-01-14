@@ -113,6 +113,9 @@ urlpatterns = [
     
     # FHE (Fully Homomorphic Encryption) API routes
     path('api/fhe/', include('fhe_service.urls')),
+    
+    # Adversarial AI Password Defense API routes
+    path('api/adversarial/', include('adversarial_ai.urls')),
 ]
 
 # Add static file serving for development

@@ -124,6 +124,7 @@ INSTALLED_APPS = [
     'behavioral_recovery',  # Behavioral Biometric Recovery
     'blockchain',  # Blockchain Anchoring (Phase 2B)
     'fhe_service',  # Fully Homomorphic Encryption Service
+    'adversarial_ai',  # Adversarial AI Password Defense
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
