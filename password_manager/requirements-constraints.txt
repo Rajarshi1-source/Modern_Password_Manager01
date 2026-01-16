@@ -11,7 +11,7 @@ PyJWT==2.10.1
 requests==2.32.4
 
 # Fixes for pyasn1 / pyasn1-modules compatibility (match service-identity / google-auth needs)
-pyasn1==0.6.1
+pyasn1==0.6.2
 pyasn1-modules==0.4.2
 
 # hyper / h2 / hyperframe family — keep versions compatible with apns2 & hyper

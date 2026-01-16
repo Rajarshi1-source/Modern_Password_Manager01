@@ -186,7 +186,7 @@ psycopg2-binary==2.9.10
 py-serializable==2.1.0
 py-ubjson==0.16.1
 py-vapid==1.9.2
-pyasn1==0.6.1
+pyasn1==0.6.2
 pyasn1_modules==0.4.2
 pycparser==2.22
 pycryptodome==3.23.0
