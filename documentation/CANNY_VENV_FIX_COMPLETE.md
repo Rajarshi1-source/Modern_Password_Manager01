@@ -52,7 +52,7 @@ All required dependencies have been successfully installed in your **`canny` vir
 ### 4. ✅ TensorFlow
 ```
 ✓ tensorflow==2.20.0
-✓ keras==3.12.0
+✓ keras>=3.13.1
 ✓ tensorboard==2.20.0
 ✓ h5py==3.15.1
 ✓ ml-dtypes==0.5.4
