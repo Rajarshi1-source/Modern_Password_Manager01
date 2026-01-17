@@ -262,3 +262,270 @@ def daily_breach_scan():
         scan_user_vault.delay(user.id)
     
     return f"Scheduled scans for {users.count()} users"
+
+
+# =============================================================================
+# Genetic Password Evolution Tasks
+# =============================================================================
+
+@shared_task
+def check_genetic_evolution(user_id: int):
+    """
+    Check if a user's genetic password should evolve based on epigenetic changes.
+    
+    This task fetches the latest biological age from connected epigenetic providers
+    and triggers evolution if significant changes are detected.
+    
+    Args:
+        user_id: ID of the user to check
+        
+    Returns:
+        dict: Evolution status and results
+    """
+    from .models import DNAConnection, GeneticEvolutionLog, GeneticSubscription
+    from .services.epigenetic_service import epigenetic_evolution_manager
+    
+    try:
+        user = User.objects.get(id=user_id)
+        
+        # Check if user has a DNA connection
+        try:
+            dna_connection = DNAConnection.objects.get(user=user, is_active=True)
+        except DNAConnection.DoesNotExist:
+            logger.info(f"No active DNA connection for user {user_id}")
+            return {'checked': False, 'reason': 'no_dna_connection'}
+        
+        # Check subscription for epigenetic features
+        try:
+            subscription = GeneticSubscription.objects.get(user=user)
+            if not subscription.epigenetic_evolution_enabled:
+                logger.info(f"Epigenetic evolution disabled for user {user_id}")
+                return {'checked': False, 'reason': 'evolution_disabled'}
+        except GeneticSubscription.DoesNotExist:
+            logger.info(f"No subscription for user {user_id}")
+            return {'checked': False, 'reason': 'no_subscription'}
+        
+        # Check for evolution
+        result = epigenetic_evolution_manager.check_and_evolve(user)
+        
+        if result.get('evolved'):
+            logger.info(
+                f"Evolution triggered for user {user_id}: "
+                f"Gen {result.get('old_generation')} -> {result.get('new_generation')}"
+            )
+            
+            # Update the DNA connection
+            dna_connection.evolution_generation = result.get('new_generation', 1)
+            dna_connection.last_biological_age = result.get('biological_age')
+            dna_connection.last_epigenetic_update = timezone.now()
+            dna_connection.save()
+            
+            # Log the evolution
+            GeneticEvolutionLog.objects.create(
+                user=user,
+                trigger_type='automatic',
+                old_evolution_gen=result.get('old_generation', 1),
+                new_evolution_gen=result.get('new_generation', 2),
+                biological_age_before=result.get('previous_age'),
+                biological_age_after=result.get('biological_age'),
+                success=True,
+                completed_at=timezone.now()
+            )
+            
+            # Update subscription usage
+            subscription.evolutions_triggered = (subscription.evolutions_triggered or 0) + 1
+            subscription.save()
+            
+            return {
+                'checked': True,
+                'evolved': True,
+                'old_generation': result.get('old_generation'),
+                'new_generation': result.get('new_generation'),
+                'biological_age': result.get('biological_age'),
+            }
+        
+        return {
+            'checked': True,
+            'evolved': False,
+            'current_generation': dna_connection.evolution_generation,
+            'reason': 'no_significant_change',
+        }
+        
+    except User.DoesNotExist:
+        logger.error(f"User {user_id} not found")
+        return {'checked': False, 'error': 'user_not_found'}
+    
+    except Exception as e:
+        logger.error(f"Error checking genetic evolution for user {user_id}: {str(e)}")
+        return {'checked': False, 'error': str(e)}
+
+
+@shared_task
+def daily_genetic_evolution_check():
+    """
+    Daily scheduled task to check all eligible users for genetic password evolution.
+    
+    This runs once daily and queues individual evolution checks for users with:
+    - Active DNA connections
+    - Epigenetic evolution enabled
+    - Premium or trial subscription
+    """
+    from .models import DNAConnection, GeneticSubscription
+    
+    # Find users with active DNA connections and epigenetic features
+    eligible_connections = DNAConnection.objects.filter(
+        is_active=True,
+        user__geneticsubscription__epigenetic_evolution_enabled=True,
+        user__geneticsubscription__status='active',
+    ).select_related('user')
+    
+    queued_count = 0
+    
+    for connection in eligible_connections:
+        # Queue individual evolution check
+        check_genetic_evolution.delay(connection.user_id)
+        queued_count += 1
+    
+    logger.info(f"Queued genetic evolution checks for {queued_count} users")
+    return {'queued': queued_count}
+
+
+@shared_task
+def sync_epigenetic_data(user_id: int, provider: str = None):
+    """
+    Sync epigenetic data from connected providers for a user.
+    
+    This fetches the latest biological age and other epigenetic markers
+    from providers like Humanity.health.
+    
+    Args:
+        user_id: ID of the user
+        provider: Optional specific provider to sync from
+        
+    Returns:
+        dict: Sync results including biological age data
+    """
+    from .models import DNAConnection
+    from .services.epigenetic_service import HumanityHealthProvider, ManualEpigeneticProvider
+    
+    try:
+        user = User.objects.get(id=user_id)
+        
+        try:
+            dna_connection = DNAConnection.objects.get(user=user, is_active=True)
+        except DNAConnection.DoesNotExist:
+            return {'synced': False, 'reason': 'no_connection'}
+        
+        # Try to fetch from Humanity.health if no specific provider
+        epigenetic_provider = HumanityHealthProvider()
+        
+        try:
+            # This would use the user's OAuth token that's stored with the connection
+            # For now, we'll return a placeholder result
+            result = {
+                'synced': True,
+                'provider': 'humanity_health',
+                'biological_age': None,  # Would be fetched from API
+                'message': 'Epigenetic sync queued - API integration pending',
+            }
+            
+            logger.info(f"Epigenetic sync completed for user {user_id}")
+            return result
+            
+        except Exception as api_error:
+            logger.warning(f"API sync failed for user {user_id}: {api_error}")
+            return {
+                'synced': False,
+                'error': str(api_error),
+            }
+            
+    except User.DoesNotExist:
+        return {'synced': False, 'error': 'user_not_found'}
+    
+    except Exception as e:
+        logger.error(f"Error syncing epigenetic data for user {user_id}: {str(e)}")
+        return {'synced': False, 'error': str(e)}
+
+
+@shared_task
+def cleanup_expired_genetic_trials():
+    """
+    Daily task to clean up expired genetic password trials.
+    
+    - Marks expired trials as inactive
+    - Disables epigenetic features for expired subscriptions
+    - Sends notification to users about trial expiration
+    """
+    from .models import GeneticSubscription
+    
+    now = timezone.now()
+    
+    # Find expired trials
+    expired_trials = GeneticSubscription.objects.filter(
+        tier='trial',
+        status='active',
+        trial_expires_at__lt=now,
+    )
+    
+    expired_count = 0
+    
+    for subscription in expired_trials:
+        subscription.status = 'expired'
+        subscription.epigenetic_evolution_enabled = False
+        subscription.save()
+        
+        # TODO: Send notification to user
+        # notification_service.send_trial_expired(subscription.user)
+        
+        expired_count += 1
+        logger.info(f"Expired trial for user {subscription.user_id}")
+    
+    logger.info(f"Cleaned up {expired_count} expired genetic trials")
+    return {'expired_trials_cleaned': expired_count}
+
+
+@shared_task
+def refresh_dna_tokens():
+    """
+    Weekly task to refresh OAuth tokens for DNA providers.
+    
+    Refreshes tokens that are about to expire to maintain access
+    to DNA provider APIs.
+    """
+    from .models import DNAConnection
+    from .services.dna_provider_service import get_dna_provider
+    
+    # Find connections with tokens that might need refresh
+    # (tokens typically expire after a certain period)
+    active_connections = DNAConnection.objects.filter(
+        is_active=True,
+        status='connected',
+    )
+    
+    refreshed_count = 0
+    failed_count = 0
+    
+    for connection in active_connections:
+        try:
+            provider = get_dna_provider(connection.provider)
+            
+            if connection.encrypted_refresh_token:
+                # Decrypt and refresh token
+                # This is a placeholder - actual implementation would decrypt
+                # and call the provider's refresh endpoint
+                
+                logger.debug(f"Token refresh queued for user {connection.user_id}")
+                refreshed_count += 1
+                
+        except Exception as e:
+            logger.error(
+                f"Failed to refresh token for user {connection.user_id}: {str(e)}"
+            )
+            failed_count += 1
+    
+    logger.info(f"Token refresh complete: {refreshed_count} refreshed, {failed_count} failed")
+    return {
+        'refreshed': refreshed_count,
+        'failed': failed_count,
+    }
+

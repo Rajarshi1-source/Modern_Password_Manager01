@@ -99,6 +99,28 @@ app.conf.update(
             'task': 'ml_security.tasks.update_threat_intelligence',
             'schedule': crontab(hour=1, minute=30),  # 1:30 AM daily
         },
+        
+        # =================================================================
+        # Genetic Password Evolution Tasks
+        # =================================================================
+        
+        # Daily genetic evolution check (for premium users)
+        'check-genetic-evolution-daily': {
+            'task': 'security.tasks.daily_genetic_evolution_check',
+            'schedule': crontab(hour=5, minute=0),  # 5:00 AM daily
+        },
+        
+        # Cleanup expired genetic trials (daily)
+        'cleanup-genetic-trials': {
+            'task': 'security.tasks.cleanup_expired_genetic_trials',
+            'schedule': crontab(hour=4, minute=30),  # 4:30 AM daily
+        },
+        
+        # Refresh DNA provider OAuth tokens (weekly)
+        'refresh-dna-tokens-weekly': {
+            'task': 'security.tasks.refresh_dna_tokens',
+            'schedule': crontab(day_of_week=6, hour=3, minute=0),  # Saturday 3:00 AM
+        },
     },
 )
 

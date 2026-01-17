@@ -140,6 +140,11 @@ tensorflow>=2.13.0
 torch>=2.2.2
 transformers>=4.35.0
 
+# Quantum Random Number Generation
+httpx>=0.27.0
+qiskit>=1.0.0
+qiskit-ibm-runtime>=0.20.0
+
 # ============================================================================
 # Advanced Security Features
 # ============================================================================
@@ -215,3 +220,12 @@ aiohttp>=3.13.3 # not directly required, pinned by Snyk to avoid a vulnerability
 authlib>=1.6.6 # not directly required, pinned by Snyk to avoid a vulnerability
 filelock>=3.20.3 # not directly required, pinned by Snyk to avoid a vulnerability
 zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
+
+# ============================================================================
+# Genetic Password Evolution
+# ============================================================================
+# DNA file parsing (23andMe, AncestryDNA, VCF formats)
+biopython>=1.82
+
+# Async HTTP client for DNA provider APIs
+httpx>=0.27.0

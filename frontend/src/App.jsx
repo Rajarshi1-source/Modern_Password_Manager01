@@ -44,6 +44,8 @@ const PasskeyPrimaryRecoverySetup = lazy(() => import('./Components/auth/Passkey
 const PasskeyPrimaryRecoveryInitiate = lazy(() => import('./Components/auth/PasskeyPrimaryRecoveryInitiate'));
 // Quantum (Social Mesh) Recovery component
 const QuantumRecoverySetup = lazy(() => import('./Components/auth/QuantumRecoverySetup'));
+// Genetic Password OAuth callback
+const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCallback'));
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -97,7 +99,7 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
     password: '',
     rememberMe: false
   });
-  
+
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [oauthSuccess, setOauthSuccess] = useState(false);
@@ -108,19 +110,19 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
   // In production, restrict to Gmail addresses
   const isValidEmail = useMemo(() => {
     if (!loginData.email) return false;
-    
+
     // Basic email format validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const isValidFormat = emailRegex.test(loginData.email);
-    
+
     // In development mode or for test users, allow any valid email
     const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
     const isTestUser = loginData.email.toLowerCase().includes('test');
-    
+
     if (isDevelopment || isTestUser) {
       return isValidFormat;
     }
-    
+
     // In production, require Gmail
     return isValidFormat && loginData.email.toLowerCase().endsWith('@gmail.com');
   }, [loginData.email]);
@@ -138,9 +140,9 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
   // Prevent copy, paste, and cut operations for security
   const preventCopyPaste = (e) => {
     e.preventDefault();
-    toast.error('Copy, paste, and cut are disabled for security reasons', { 
+    toast.error('Copy, paste, and cut are disabled for security reasons', {
       id: 'copy-paste-disabled',
-      duration: 2000 
+      duration: 2000
     });
     return false;
   };
@@ -151,14 +153,14 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
       ...prev,
       [name]: type === 'checkbox' ? checked : value
     }));
-    
+
     // Clear email error when user types
     if (name === 'email') {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       const isValidFormat = emailRegex.test(value);
       const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
       const isTestUser = value.toLowerCase().includes('test');
-      
+
       if (value && !isValidFormat) {
         setEmailError('Please enter a valid email address');
       } else if (value && !isDevelopment && !isTestUser && !value.toLowerCase().endsWith('@gmail.com')) {
@@ -171,35 +173,35 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    
+
     const { email, password, rememberMe } = loginData;
-    
+
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const isValidFormat = emailRegex.test(email);
     const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
     const isTestUser = email.toLowerCase().includes('test');
-    
+
     if (!isValidFormat) {
       setEmailError('Please enter a valid email address');
       return;
     }
-    
+
     // In production, require Gmail (except for test users)
     if (!isDevelopment && !isTestUser && !email.toLowerCase().endsWith('@gmail.com')) {
       setEmailError('Please enter a valid Gmail address');
       return;
     }
-    
+
     if (!password) {
       return;
     }
-    
+
     // Client-side key derivation happens here before sending to server
     // The actual Argon2id KDF runs in the useAuth hook or API service
     // Set success indicator for test assertions
     setKdfSuccess(true);
-    
+
     // Submit
     onLogin({ email, password, rememberMe });
   };
@@ -207,20 +209,20 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
   const handleSocialLogin = async (provider) => {
     try {
       toast.loading(`Connecting to ${provider}...`, { id: 'oauth-loading' });
-      
+
       const result = await oauthService.initiateLogin(provider);
-      
+
       if (result && result.tokens) {
         toast.success('Login successful!', { id: 'oauth-loading' });
-        
+
         // Store tokens
         localStorage.setItem('token', result.tokens.access);
         localStorage.setItem('refreshToken', result.tokens.refresh);
         axios.defaults.headers.common['Authorization'] = `Bearer ${result.tokens.access}`;
-        
+
         // Set OAuth success for test assertions
         setOauthSuccess(true);
-        
+
         // Trigger the login success callback
         onLogin({ tokens: result.tokens, user: result.user });
       }
@@ -243,21 +245,21 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
           <FaExclamationCircle /> {error}
         </div>
       )}
-      
+
       {/* Test-friendly OAuth status indicator */}
       {oauthSuccess && (
         <span className="sr-only" data-testid="oauth-status">
           OAuth Login Successful
         </span>
       )}
-      
+
       {/* Test-friendly KDF status indicator */}
       {kdfSuccess && (
         <span className="sr-only" data-testid="kdf-status">
           Argon2id KDF processing successful
         </span>
       )}
-      
+
       <form onSubmit={handleSubmit}>
         <div className="form-group">
           <label htmlFor="login-email">Email Address</label>
@@ -399,9 +401,9 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
   // Prevent copy, paste, and cut operations for security
   const preventCopyPaste = (e) => {
     e.preventDefault();
-    toast.error('Copy, paste, and cut are disabled for security reasons', { 
+    toast.error('Copy, paste, and cut are disabled for security reasons', {
       id: 'copy-paste-disabled',
-      duration: 2000 
+      duration: 2000
     });
     return false;
   };
@@ -411,19 +413,19 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
   // In production, restrict to Gmail addresses
   const isValidEmail = useMemo(() => {
     if (!signupData.email) return false;
-    
+
     // Basic email format validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const isValidFormat = emailRegex.test(signupData.email);
-    
+
     // In development mode or for test users, allow any valid email
     const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
     const isTestUser = signupData.email.toLowerCase().includes('test');
-    
+
     if (isDevelopment || isTestUser) {
       return isValidFormat;
     }
-    
+
     // In production, require Gmail
     return isValidFormat && signupData.email.toLowerCase().endsWith('@gmail.com');
   }, [signupData.email]);
@@ -456,7 +458,7 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
       const isValidFormat = emailRegex.test(value);
       const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
       const isTestUser = value.toLowerCase().includes('test');
-      
+
       if (value && !isValidFormat) {
         setEmailError('Please enter a valid email address');
       } else if (value && !isDevelopment && !isTestUser && !value.toLowerCase().endsWith('@gmail.com')) {
@@ -488,17 +490,17 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
   const handleSocialLogin = async (provider) => {
     try {
       toast.loading(`Connecting to ${provider}...`, { id: 'oauth-loading' });
-      
+
       const result = await oauthService.initiateLogin(provider);
-      
+
       if (result && result.tokens) {
         toast.success('Sign-up successful!', { id: 'oauth-loading' });
-        
+
         // Store tokens
         localStorage.setItem('token', result.tokens.access);
         localStorage.setItem('refreshToken', result.tokens.refresh);
         axios.defaults.headers.common['Authorization'] = `Bearer ${result.tokens.access}`;
-        
+
         // Trigger the signup success callback
         onSignup({ tokens: result.tokens, user: result.user });
       }
@@ -547,9 +549,9 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
           <label htmlFor="signup-password">Master Password</label>
 
           {/* ML-Powered Password Strength Indicator */}
-        <Suspense fallback={<div style={{ height: '40px' }} />}>
-          <PasswordStrengthMeterML password={signupData.password} />
-        </Suspense>
+          <Suspense fallback={<div style={{ height: '40px' }} />}>
+            <PasswordStrengthMeterML password={signupData.password} />
+          </Suspense>
 
           <div style={{ position: 'relative' }}>
             <input
@@ -668,13 +670,13 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
 function App() {
   // JWT Authentication Hook
   const { user, isAuthenticated, isLoading: authLoading, login, logout: authLogout } = useAuth();
-  
+
   // State for storing vault items and form data
   const [vaultItems, setVaultItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [appInitialized, setAppInitialized] = useState(false);
-  
+
   // Post-Quantum Cryptography and FHE status (for test assertions)
   const [pqCryptoInitialized, setPqCryptoInitialized] = useState(false);
   const [fheReady, setFheReady] = useState(false);
@@ -707,13 +709,13 @@ function App() {
             await kyberService.initialize();
             const info = kyberService.getAlgorithmInfo();
             console.log(`[Kyber] ${info.status}`);
-            
+
             // Set PQ crypto status for test assertions
             setPqCryptoInitialized(true);
-            
+
             // Also set FHE ready after PQ crypto is initialized
             setFheReady(true);
-            
+
             if (!info.quantumResistant) {
               console.warn('[Kyber] ⚠️ Using classical ECC fallback - NOT quantum-resistant!');
             }
@@ -729,13 +731,13 @@ function App() {
         if (isAuthenticated && user) {
           // Run all initializations in parallel for faster load
           const userEmail = user.email || 'anonymous';
-          
+
           await Promise.allSettled([
             // Device fingerprint
             ApiService.initializeDeviceFingerprint().catch(err => {
               console.warn('Failed to initialize device fingerprint:', err);
             }),
-            
+
             // Analytics service
             analyticsService.initialize({
               userId: userEmail,
@@ -743,14 +745,14 @@ function App() {
             }).then(() => analyticsService.startSession()).catch(err => {
               console.warn('Failed to initialize analytics:', err);
             }),
-            
+
             // A/B testing service
             abTestingService.initialize({
               userId: user.email || 'anonymous'
             }).catch(err => {
               console.warn('Failed to initialize A/B testing:', err);
             }),
-            
+
             // Preferences service
             preferencesService.initialize().then(() => {
               const theme = preferencesService.get('theme');
@@ -935,7 +937,7 @@ function App() {
     } catch (err) {
       console.error('Login failed:', err);
       setError('Invalid email or password. Please try again.');
-      
+
       // Track failed login
       analyticsService.trackEvent('login_failed', 'authentication', {
         error: err.message
@@ -994,7 +996,7 @@ function App() {
           email: signupData.email,
           password: signupData.password
         });
-        
+
         // Initialize error tracker user context
         errorTracker.setUserContext({
           email: signupData.email,
@@ -1014,7 +1016,7 @@ function App() {
 
     } catch (err) {
       console.error('Signup failed:', err);
-      
+
       // Extract specific error message from backend response
       let errorMessage = 'Failed to create account. Please try again.';
       if (err.response?.data) {
@@ -1032,7 +1034,7 @@ function App() {
         }
       }
       setError(errorMessage);
-      
+
       // Track failed signup
       analyticsService.trackEvent('signup_failed', 'authentication', {
         error: err.message
@@ -1133,8 +1135,8 @@ function App() {
               {authContent}
             </header>
           </div>
-          <Modal 
-            isOpen={showHelpCenter} 
+          <Modal
+            isOpen={showHelpCenter}
             onClose={() => setShowHelpCenter(false)}
             title="Help Center"
             size="medium"
@@ -1168,31 +1170,31 @@ function App() {
 
           {/* ML Security Session Monitor */}
           <SessionMonitor userId="authenticated_user" />
-          
+
           {/* Test-friendly sync status indicator */}
           <span className="sr-only" data-testid="sync-status">
             Vault synchronization successful on all platforms
           </span>
-          
+
           {/* Test-friendly login success indicator */}
           <span className="sr-only" data-testid="login-success-status">
             Login Successful
           </span>
-          
+
           {/* Test-friendly Post-Quantum Cryptography status indicator */}
           {pqCryptoInitialized && (
             <span className="sr-only" data-testid="pq-crypto-status">
               Post-Quantum Hybrid Encryption Successful
             </span>
           )}
-          
+
           {/* Test-friendly FHE status indicator */}
           {fheReady && (
             <span className="sr-only" data-testid="fhe-status">
               FHE Computation Successful
             </span>
           )}
-          
+
           {/* Test-friendly cache performance indicator */}
           <span className="sr-only" data-testid="cache-status">
             Cache Miss Detected
@@ -1355,7 +1357,7 @@ function App() {
           <VaultProvider>
             <GlobalStyle />
             {/* Toast notifications container */}
-            <Toaster 
+            <Toaster
               position="top-center"
               toastOptions={{
                 duration: 4000,
@@ -1381,61 +1383,63 @@ function App() {
             />
             <a href="#main-content" className="skip-link">Skip to main content</a>
             <Suspense fallback={<LoadingIndicator />}>
-            <Routes>
-          <Route path="/" element={MainContent()} />
-          <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : MainContent()} />
-          <Route path="/signup" element={isAuthenticated ? <Navigate to="/" /> : MainContent()} />
-          <Route path="/vault" element={!isAuthenticated ? <Navigate to="/" /> : MainContent()} />
-          <Route path="/auth/callback" element={<OAuthCallback />} />
-          <Route path="/password-recovery" element={
-            isAuthenticated ? <Navigate to="/" /> : <PasswordRecoveryPage />
-          } />
-          <Route path="/recovery-key-setup" element={
-            isAuthenticated ? <Navigate to="/" /> : <RecoveryKeySetupPage />
-          } />
-          <Route path="/settings/passkeys" element={
-            !isAuthenticated ? <Navigate to="/" /> : <PasskeyManagement />
-          } />
-          <Route path="/security/account-protection" element={
-            !isAuthenticated ? <Navigate to="/" /> : <AccountProtection />
-          } />
-          <Route path="/security/dashboard" element={
-            !isAuthenticated ? <Navigate to="/" /> : <SecurityDashboard />
-          } />
-          <Route path="/auth/social-login/:socialAccountId" element={
-            !isAuthenticated ? <Navigate to="/" /> : <SocialMediaLogin />
-          } />
-          <Route path="/security/verify-identity/:socialAccountId" element={
-            !isAuthenticated ? <Navigate to="/" /> : <VerifyIdentity />
-          } />
-          <Route path="/admin/performance" element={
-            !isAuthenticated ? <Navigate to="/" /> : <PerformanceMonitoring />
-          } />
-          <Route path="/security/breach-alerts" element={
-            !isAuthenticated ? <Navigate to="/" /> : <BreachAlertsDashboard />
-          } />
-          <Route path="/settings" element={
-            !isAuthenticated ? <Navigate to="/" /> : <SettingsPage />
-          } />
-          <Route path="/email-masking" element={
-            !isAuthenticated ? <Navigate to="/" /> : <EmailMaskingDashboard />
-          } />
-          <Route path="/shared-folders" element={
-            !isAuthenticated ? <Navigate to="/" /> : <SharedFoldersDashboard />
-          } />
-          {/* Admin Recovery Dashboard */}
-          <Route path="/admin/recovery-dashboard" element={
-            !isAuthenticated ? <Navigate to="/" /> : <RecoveryDashboard />
-          } />
-          {/* Primary Passkey Recovery routes */}
-          <Route path="/passkey-recovery/setup" element={
-            !isAuthenticated ? <Navigate to="/" /> : <PasskeyPrimaryRecoverySetup />
-          } />
-          <Route path="/passkey-recovery/recover" element={<PasskeyPrimaryRecoveryInitiate />} />
-          {/* Quantum (Social Mesh) Recovery route */}
-          <Route path="/recovery/social-mesh" element={<QuantumRecoverySetup />} />
-          </Routes>
-        </Suspense>
+              <Routes>
+                <Route path="/" element={MainContent()} />
+                <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : MainContent()} />
+                <Route path="/signup" element={isAuthenticated ? <Navigate to="/" /> : MainContent()} />
+                <Route path="/vault" element={!isAuthenticated ? <Navigate to="/" /> : MainContent()} />
+                <Route path="/auth/callback" element={<OAuthCallback />} />
+                <Route path="/password-recovery" element={
+                  isAuthenticated ? <Navigate to="/" /> : <PasswordRecoveryPage />
+                } />
+                <Route path="/recovery-key-setup" element={
+                  isAuthenticated ? <Navigate to="/" /> : <RecoveryKeySetupPage />
+                } />
+                <Route path="/settings/passkeys" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <PasskeyManagement />
+                } />
+                <Route path="/security/account-protection" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <AccountProtection />
+                } />
+                <Route path="/security/dashboard" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <SecurityDashboard />
+                } />
+                <Route path="/auth/social-login/:socialAccountId" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <SocialMediaLogin />
+                } />
+                <Route path="/security/verify-identity/:socialAccountId" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <VerifyIdentity />
+                } />
+                <Route path="/admin/performance" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <PerformanceMonitoring />
+                } />
+                <Route path="/security/breach-alerts" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <BreachAlertsDashboard />
+                } />
+                <Route path="/settings" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <SettingsPage />
+                } />
+                <Route path="/email-masking" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <EmailMaskingDashboard />
+                } />
+                <Route path="/shared-folders" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <SharedFoldersDashboard />
+                } />
+                {/* Admin Recovery Dashboard */}
+                <Route path="/admin/recovery-dashboard" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <RecoveryDashboard />
+                } />
+                {/* Primary Passkey Recovery routes */}
+                <Route path="/passkey-recovery/setup" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <PasskeyPrimaryRecoverySetup />
+                } />
+                <Route path="/passkey-recovery/recover" element={<PasskeyPrimaryRecoveryInitiate />} />
+                {/* Quantum (Social Mesh) Recovery route */}
+                <Route path="/recovery/social-mesh" element={<QuantumRecoverySetup />} />
+                {/* Genetic Password OAuth callback */}
+                <Route path="/genetic-callback" element={<GeneticOAuthCallback />} />
+              </Routes>
+            </Suspense>
           </VaultProvider>
         </BehavioralProvider>
       </AccessibilityProvider>
