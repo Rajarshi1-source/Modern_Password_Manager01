@@ -34,6 +34,7 @@
     "pqc-kyber": "^0.7.0",
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
+    "react-countdown": "^2.3.5",
     "react-dom": "^18.2.0",
     "react-dropzone": "^14.2.3",
     "react-firebase-hooks": "^5.1.1",

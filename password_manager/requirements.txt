@@ -229,3 +229,30 @@ biopython>=1.82
 
 # Async HTTP client for DNA provider APIs
 httpx>=0.27.0
+
+# ============================================================================
+# Chemical Password Storage
+# ============================================================================
+# Time-lock puzzle math (VDF, modular exponentiation)
+sympy>=1.12
+
+# ============================================================================
+# Epigenetic Password Adaptation (RL-based)
+# ============================================================================
+# Reinforcement Learning
+gymnasium>=0.29.0
+stable-baselines3>=2.0.0
+
+# Contextual Bandits
+vowpalwabbit>=9.0.0
+
+# ML utilities
+scikit-learn>=1.3.0
+python-Levenshtein>=0.21.0
+
+# Differential Privacy (Google's library for formal DP guarantees)
+pydp>=1.1.5
+
+# Neural Networks for Memorability Prediction
+torch>=2.0.0
+

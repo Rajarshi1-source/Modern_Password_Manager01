@@ -8,6 +8,9 @@ from .api.darkWebEndpoints import DarkWebViewSet
 from .api.account_protection import AccountProtectionViewSet, SocialMediaAccountViewSet
 from .api import quantum_rng_views
 from .api import genetic_password_views
+from .api import chemical_storage_views
+from .api import adaptive_password_views
+
 
 @api_view(['GET'])
 def security_root(request, format=None):
@@ -22,7 +25,10 @@ def security_root(request, format=None):
         'audit-log': reverse('security-audit-log', request=request, format=format),
         'quantum': reverse('quantum-generate-password', request=request, format=format),
         'genetic': reverse('genetic-generate-password', request=request, format=format),
+        'chemical': reverse('chemical-encode', request=request, format=format),
+        'adaptive': reverse('adaptive-config', request=request, format=format),
     })
+
 
 # Create a router for viewsets
 router = routers.DefaultRouter()
@@ -79,8 +85,70 @@ urlpatterns = [
     # Preferences
     path('genetic/preferences/', genetic_password_views.update_preferences, name='genetic-preferences'),
     
+    # ==========================================================================
+    # Chemical Password Storage endpoints
+    # ==========================================================================
+    
+    # DNA Encoding
+    path('chemical/encode/', chemical_storage_views.encode_password_to_dna, name='chemical-encode'),
+    path('chemical/decode/', chemical_storage_views.decode_dna_to_password, name='chemical-decode'),
+    
+    # Time-Lock Capsules
+    path('chemical/time-lock/', chemical_storage_views.create_time_lock, name='chemical-time-lock'),
+    path('chemical/capsule-status/<uuid:capsule_id>/', chemical_storage_views.get_capsule_status, name='chemical-capsule-status'),
+    path('chemical/unlock-capsule/<uuid:capsule_id>/', chemical_storage_views.unlock_capsule, name='chemical-unlock-capsule'),
+    
+    # Lab Synthesis
+    path('chemical/synthesis-order/', chemical_storage_views.order_synthesis, name='chemical-synthesis-order'),
+    path('chemical/synthesis-status/<str:order_id>/', chemical_storage_views.check_synthesis_status, name='chemical-synthesis-status'),
+    path('chemical/sequencing-request/', chemical_storage_views.request_sequencing, name='chemical-sequencing-request'),
+    
+    # Certificates
+    path('chemical/certificates/', chemical_storage_views.list_certificates, name='chemical-certificates'),
+    path('chemical/certificate/<uuid:certificate_id>/', chemical_storage_views.get_certificate, name='chemical-certificate'),
+    
+    # Subscription
+    path('chemical/subscription/', chemical_storage_views.get_subscription, name='chemical-subscription'),
+    
+    # Full Workflow
+    path('chemical/store/', chemical_storage_views.store_password_chemically, name='chemical-store'),
+    
+    # Provider Info
+    path('chemical/providers/', chemical_storage_views.list_lab_providers, name='chemical-providers'),
+    
+    # ==========================================================================
+    # Adaptive Password Evolution endpoints
+    # ==========================================================================
+    
+    # Configuration
+    path('adaptive/config/', adaptive_password_views.get_adaptive_config, name='adaptive-config'),
+    path('adaptive/enable/', adaptive_password_views.enable_adaptive_passwords, name='adaptive-enable'),
+    path('adaptive/disable/', adaptive_password_views.disable_adaptive_passwords, name='adaptive-disable'),
+    
+    # Typing Session Recording
+    path('adaptive/record-session/', adaptive_password_views.record_typing_session, name='adaptive-record-session'),
+    
+    # Adaptation Suggestions
+    path('adaptive/suggest/', adaptive_password_views.suggest_adaptation, name='adaptive-suggest'),
+    path('adaptive/apply/', adaptive_password_views.apply_adaptation, name='adaptive-apply'),
+    path('adaptive/rollback/', adaptive_password_views.rollback_adaptation, name='adaptive-rollback'),
+    
+    # Profile and History
+    path('adaptive/profile/', adaptive_password_views.get_typing_profile, name='adaptive-profile'),
+    path('adaptive/history/', adaptive_password_views.get_adaptation_history, name='adaptive-history'),
+    path('adaptive/stats/', adaptive_password_views.get_evolution_stats, name='adaptive-stats'),
+    
+    # Data Management (GDPR)
+    path('adaptive/data/', adaptive_password_views.delete_adaptive_data, name='adaptive-delete-data'),
+    path('adaptive/export/', adaptive_password_views.export_adaptive_data, name='adaptive-export-data'),
+    
+    # Feedback
+    path('adaptive/feedback/', adaptive_password_views.submit_feedback, name='adaptive-submit-feedback'),
+    path('adaptive/feedback/<uuid:adaptation_id>/', adaptive_password_views.get_feedback_for_adaptation, name='adaptive-get-feedback'),
+    
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),
     path('audit-log/', views.audit_log, name='security-audit-log'),
 ]
+
 

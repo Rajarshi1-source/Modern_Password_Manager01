@@ -1,128 +1,428 @@
-// @ts-check
-import { test, expect } from '@playwright/test';
+/**
+ * Genetic Password Evolution - E2E Tests
+ * ========================================
+ * 
+ * End-to-end tests using Playwright for:
+ * - DNA provider connection flow
+ * - Password generation with genetic seeding
+ * - Evolution status and triggering
+ * - Certificate management
+ * 
+ * @author Password Manager Team
+ * @created 2026-01-17
+ */
 
-test.describe('Genetic Password Evolution Feature', () => {
-  test.beforeEach(async (/** @type {{ page: import('@playwright/test').Page }} */ { page }) => {
-    // Mock authentication via localStorage injection before page load
-    await page.addInitScript(() => {
-      window.localStorage.setItem('access_token', 'mock-valid-token');
-      window.localStorage.setItem('user', JSON.stringify({ username: 'testuser' }));
-    });
+const { test, expect } = require('@playwright/test');
+
+// Test configuration
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
+const API_URL = process.env.API_URL || 'http://localhost:8000';
+
+// Test user credentials
+const TEST_USER = {
+  email: 'e2e-genetic@test.com',
+  password: 'TestPassword123!',
+};
+
+
+// =============================================================================
+// Setup & Teardown
+// =============================================================================
+
+test.describe('Genetic Password Evolution E2E', () => {
+  test.beforeEach(async ({ page }) => {
+    // Login before each test
+    await page.goto(`${BASE_URL}/login`);
+    
+    await page.fill('[data-testid="email-input"]', TEST_USER.email);
+    await page.fill('[data-testid="password-input"]', TEST_USER.password);
+    await page.click('[data-testid="login-button"]');
+    
+    // Wait for dashboard
+    await page.waitForURL('**/dashboard**', { timeout: 10000 });
   });
 
-  test('should display genetic connection options', async (/** @type {{ page: import('@playwright/test').Page }} */ { page }) => {
-    // Navigate after setup
-    await page.goto('/');
 
-    // Click on Genetic tab or button to switch mode
-    // Using strict match to avoid partial matches
-    await page.getByText('Genetic', { exact: true }).click();
+  // ===========================================================================
+  // DNA Connection Tests
+  // ===========================================================================
 
-    // Should see DNA provider options
-    await expect(page.getByText('Sequencing.com')).toBeVisible();
-    await expect(page.getByText('23andMe')).toBeVisible();
-    await expect(page.getByText('Upload File')).toBeVisible();
+  test('should display connection status', async ({ page }) => {
+    // Navigate to genetic password section
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Wait for modal to appear
+    await expect(page.locator('[data-testid="genetic-modal"]')).toBeVisible();
+    
+    // Should show connection status
+    await expect(page.locator('[data-testid="connection-status"]')).toBeVisible();
   });
 
-  test('should handle manual file upload flow', async (/** @type {{ page: import('@playwright/test').Page }} */ { page }) => {
-    await page.goto('/');
+  test('should list available DNA providers', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
     
-    // Switch to Genetic mode
-    await page.getByText('Genetic', { exact: true }).click();
+    // Click connect button
+    await page.click('[data-testid="connect-dna-button"]');
     
-    // Click upload (opens modal)
-    await page.getByText('Upload File').click();
+    // Should show provider options
+    await expect(page.locator('[data-testid="provider-list"]')).toBeVisible();
     
-    // Should see upload modal
-    await expect(page.getByText('Upload DNA Data')).toBeVisible();
+    // Should have at least Sequencing.com and 23andMe
+    await expect(page.locator('text=Sequencing')).toBeVisible();
+    await expect(page.locator('text=23andMe')).toBeVisible();
+    await expect(page.locator('text=Manual Upload')).toBeVisible();
+  });
+
+  test('should handle manual DNA file upload', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
     
-    // Create a dummy file for upload
-    const buffer = Buffer.from('rsid\tchromosome\tposition\tgenotype\nrs123\t1\t123\tAA');
+    // If not connected, click connect
+    const connectButton = page.locator('[data-testid="connect-dna-button"]');
+    if (await connectButton.isVisible()) {
+      await connectButton.click();
+    }
     
-    // Use setInputFiles for robust upload testing (works with hidden inputs too)
-    // Assuming the modal has an input[type="file"]
-    await page.locator('input[type="file"]').first().setInputFiles({
+    // Select manual upload
+    await page.click('[data-testid="provider-manual"]');
+    
+    // Upload file input should appear
+    await expect(page.locator('[data-testid="dna-file-input"]')).toBeVisible();
+    
+    // Upload test file
+    const fileInput = page.locator('[data-testid="dna-file-input"]');
+    await fileInput.setInputFiles({
       name: 'genome.txt',
       mimeType: 'text/plain',
-      buffer: buffer,
+      buffer: Buffer.from('# This data file generated by 23andMe\nrs1426654\t15\t28365618\tAA'),
     });
     
-    // Wait for upload button to be enabled or just click it
-    // Using a more specific selector if possible, falling back to name
-    await page.getByRole('button', { name: 'Upload' }).click();
-    
-    // Verify success message or UI update
-    // Assuming alert or toast appears
-    // await expect(page.getByText('Upload Complete')).toBeVisible();
+    // Should show upload progress or success
+    await expect(page.locator('[data-testid="upload-status"]')).toBeVisible({ timeout: 10000 });
   });
 
-  test('should generate password when connected', async (/** @type {{ page: import('@playwright/test').Page }} */ { page }) => {
-    // Mock the connection status API BEFORE navigation
-    await page.route('**/api/security/genetic/connection-status/', async (/** @type {import('@playwright/test').Route} */ route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          connected: true,
-          connection: {
-            provider: 'manual',
-            snp_count: 10000,
-            evolution_generation: 1
-          },
-          // Add default subscription data to prevent undefined errors
-          subscription: { tier: 'trial', status: 'active', epigenetic_evolution_enabled: true }
-        })
-      });
-    });
+  test('should disconnect DNA connection', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
     
-    // Mock generation API
-    await page.route('**/api/security/genetic/generate-password/', async (/** @type {import('@playwright/test').Route} */ route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          password: 'GeneticPassword123!',
-          certificate: { 
-            id: 'cert-123',
-            password_hash_prefix: 'abc',
-            genetic_hash_prefix: 'def'
-          },
-          evolution_generation: 1
-        })
+    // If connected, should show disconnect button
+    const disconnectButton = page.locator('[data-testid="disconnect-button"]');
+    if (await disconnectButton.isVisible()) {
+      await disconnectButton.click();
+      
+      // Confirm disconnection
+      await page.click('[data-testid="confirm-disconnect"]');
+      
+      // Should show disconnected status
+      await expect(page.locator('text=Not Connected')).toBeVisible({ timeout: 5000 });
+    }
+  });
+
+
+  // ===========================================================================
+  // Password Generation Tests
+  // ===========================================================================
+
+  test('should generate genetic password', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Wait for modal
+    await expect(page.locator('[data-testid="genetic-modal"]')).toBeVisible();
+    
+    // Configure password options
+    await page.fill('[data-testid="password-length"]', '20');
+    await page.check('[data-testid="include-uppercase"]');
+    await page.check('[data-testid="include-lowercase"]');
+    await page.check('[data-testid="include-numbers"]');
+    await page.check('[data-testid="include-symbols"]');
+    
+    // Generate password
+    await page.click('[data-testid="generate-button"]');
+    
+    // Wait for password
+    await expect(page.locator('[data-testid="generated-password"]')).toBeVisible({ timeout: 5000 });
+    
+    // Verify password is displayed
+    const password = await page.textContent('[data-testid="generated-password"]');
+    expect(password.length).toBeGreaterThan(0);
+  });
+
+  test('should display certificate after generation', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    await page.click('[data-testid="generate-button"]');
+    
+    // Wait for generation
+    await expect(page.locator('[data-testid="generated-password"]')).toBeVisible({ timeout: 5000 });
+    
+    // Certificate should be shown
+    await expect(page.locator('[data-testid="certificate-card"]')).toBeVisible();
+    
+    // Should show certificate details
+    await expect(page.locator('[data-testid="snp-markers-count"]')).toBeVisible();
+    await expect(page.locator('[data-testid="evolution-generation"]')).toBeVisible();
+  });
+
+  test('should copy password to clipboard', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    await page.click('[data-testid="generate-button"]');
+    
+    await expect(page.locator('[data-testid="generated-password"]')).toBeVisible({ timeout: 5000 });
+    
+    // Click copy button
+    await page.click('[data-testid="copy-password-button"]');
+    
+    // Should show confirmation
+    await expect(page.locator('text=Copied')).toBeVisible();
+  });
+
+  test('should regenerate password with same seed', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    await page.click('[data-testid="generate-button"]');
+    await expect(page.locator('[data-testid="generated-password"]')).toBeVisible({ timeout: 5000 });
+    const password1 = await page.textContent('[data-testid="generated-password"]');
+    
+    // Regenerate
+    await page.click('[data-testid="regenerate-button"]');
+    await page.waitForTimeout(500);
+    const password2 = await page.textContent('[data-testid="generated-password"]');
+    
+    // Same seed should produce same password
+    expect(password1).toBe(password2);
+  });
+
+
+  // ===========================================================================
+  // Evolution Tests
+  // ===========================================================================
+
+  test('should display evolution status', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Switch to evolution tab
+    await page.click('[data-testid="tab-evolution"]');
+    
+    // Should show evolution status
+    await expect(page.locator('[data-testid="evolution-status"]')).toBeVisible();
+    await expect(page.locator('[data-testid="current-generation"]')).toBeVisible();
+    await expect(page.locator('[data-testid="biological-age"]')).toBeVisible();
+  });
+
+  test('should show evolution history', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    await page.click('[data-testid="tab-evolution"]');
+    
+    // Should show evolution history if any
+    await expect(page.locator('[data-testid="evolution-history"]')).toBeVisible();
+  });
+
+  test('should trigger manual evolution (premium)', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    await page.click('[data-testid="tab-evolution"]');
+    
+    // Premium users can trigger evolution
+    const evolveButton = page.locator('[data-testid="trigger-evolution-button"]');
+    if (await evolveButton.isVisible() && !(await evolveButton.isDisabled())) {
+      await evolveButton.click();
+      
+      // Should show confirmation or result
+      await expect(page.locator('[data-testid="evolution-result"]')).toBeVisible({ timeout: 10000 });
+    }
+  });
+
+
+  // ===========================================================================
+  // Certificate Tests
+  // ===========================================================================
+
+  test('should list certificates', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Switch to certificates tab
+    await page.click('[data-testid="tab-certificates"]');
+    
+    // Certificate list should appear
+    await expect(page.locator('[data-testid="certificate-list"]')).toBeVisible();
+  });
+
+  test('should view certificate details', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    await page.click('[data-testid="tab-certificates"]');
+    
+    // Click on first certificate if exists
+    const firstCert = page.locator('[data-testid="certificate-item"]').first();
+    if (await firstCert.isVisible()) {
+      await firstCert.click();
+      
+      // Should show certificate details
+      await expect(page.locator('[data-testid="certificate-details"]')).toBeVisible();
+      await expect(page.locator('[data-testid="cert-provider"]')).toBeVisible();
+      await expect(page.locator('[data-testid="cert-signature"]')).toBeVisible();
+    }
+  });
+
+  test('should download certificate', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    await page.click('[data-testid="tab-certificates"]');
+    
+    const downloadButton = page.locator('[data-testid="download-certificate"]').first();
+    if (await downloadButton.isVisible()) {
+      // Set up download promise
+      const downloadPromise = page.waitForEvent('download');
+      
+      await downloadButton.click();
+      
+      // Verify download started
+      const download = await downloadPromise;
+      expect(download.suggestedFilename()).toContain('genetic_certificate');
+    }
+  });
+
+
+  // ===========================================================================
+  // Integration Tests
+  // ===========================================================================
+
+  test('full workflow: connect, generate, view certificate', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Step 1: Check connection status
+    const connectionStatus = await page.textContent('[data-testid="connection-status"]');
+    
+    // Step 2: Generate password
+    await page.click('[data-testid="generate-button"]');
+    await expect(page.locator('[data-testid="generated-password"]')).toBeVisible({ timeout: 5000 });
+    
+    // Step 3: View certificate
+    const certCard = page.locator('[data-testid="certificate-card"]');
+    await expect(certCard).toBeVisible();
+    
+    // Step 4: Check evolution status
+    await page.click('[data-testid="tab-evolution"]');
+    await expect(page.locator('[data-testid="current-generation"]')).toBeVisible();
+    
+    // Step 5: View certificates list
+    await page.click('[data-testid="tab-certificates"]');
+    await expect(page.locator('[data-testid="certificate-list"]')).toBeVisible();
+  });
+
+  test('password generation with quantum combination', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Enable quantum combination
+    await page.check('[data-testid="combine-with-quantum"]');
+    
+    // Generate
+    await page.click('[data-testid="generate-button"]');
+    
+    await expect(page.locator('[data-testid="generated-password"]')).toBeVisible({ timeout: 5000 });
+    
+    // Certificate should indicate quantum combination
+    await expect(page.locator('[data-testid="quantum-badge"]')).toBeVisible();
+  });
+
+
+  // ===========================================================================
+  // Error Handling Tests
+  // ===========================================================================
+
+  test('handles no DNA connection gracefully', async ({ page }) => {
+    // Assuming no connection for this test
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Should prompt to connect DNA
+    const connectPrompt = page.locator('[data-testid="connect-prompt"]');
+    if (await connectPrompt.isVisible()) {
+      expect(await connectPrompt.textContent()).toContain('Connect');
+    }
+  });
+
+  test('handles API errors gracefully', async ({ page }) => {
+    // Mock API failure
+    await page.route('**/api/security/genetic/**', (route) => {
+      route.fulfill({
+        status: 500,
+        body: JSON.stringify({ error: 'Internal Server Error' }),
       });
     });
 
-    // Mock evolution status API as well since it might be called
-    await page.route('**/api/security/genetic/evolution-status/', async (/** @type {import('@playwright/test').Route} */ route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          success: true,
-          evolution: {
-            can_use_epigenetic: true,
-            current_generation: 1
-          }
-        })
-      });
-    });
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    // Should show error message
+    await expect(page.locator('[data-testid="error-message"]')).toBeVisible({ timeout: 5000 });
+  });
 
-    // Now navigate
-    await page.goto('/');
 
-    await page.getByText('Genetic', { exact: true }).click();
+  // ===========================================================================
+  // Accessibility Tests
+  // ===========================================================================
+
+  test('should be keyboard navigable', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
     
-    // Should see connected state (e.g. Generation info instead of connect buttons)
-    // Using a simpler assertion or waiting for specific text
-    await expect(page.getByText('Gen 1')).toBeVisible();
+    // Tab through elements
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
     
-    // Click generate
-    await page.getByRole('button', { name: 'Generate' }).first().click();
+    const focused = await page.evaluate(() => document.activeElement.tagName);
+    expect(['INPUT', 'BUTTON', 'SELECT', 'A']).toContain(focused);
+  });
+
+  test('should have proper ARIA labels', async ({ page }) => {
+    await page.click('[data-testid="genetic-password-button"]');
     
-    // Check result in the display field
-    // Assuming the password display has a specific test ID or using value
-    await expect(page.locator('input[readonly], textarea[readonly]')).toHaveValue('GeneticPassword123!');
+    // Check for ARIA labels on important elements
+    const generateButton = page.locator('[data-testid="generate-button"]');
+    const ariaLabel = await generateButton.getAttribute('aria-label');
+    
+    // Should have aria-label or accessible text
+    const buttonText = await generateButton.textContent();
+    expect(ariaLabel || buttonText).toBeTruthy();
+  });
+});
+
+
+// =============================================================================
+// Performance Tests
+// =============================================================================
+
+test.describe('Genetic Password Performance', () => {
+  test('password generation completes within 3 seconds', async ({ page }) => {
+    await page.goto(`${BASE_URL}/login`);
+    await page.fill('[data-testid="email-input"]', TEST_USER.email);
+    await page.fill('[data-testid="password-input"]', TEST_USER.password);
+    await page.click('[data-testid="login-button"]');
+    await page.waitForURL('**/dashboard**');
+    
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    const startTime = Date.now();
+    
+    await page.click('[data-testid="generate-button"]');
+    await expect(page.locator('[data-testid="generated-password"]')).toBeVisible({ timeout: 5000 });
+    
+    const endTime = Date.now();
+    
+    expect(endTime - startTime).toBeLessThan(3000);
+  });
+
+  test('certificate list loads within 2 seconds', async ({ page }) => {
+    await page.goto(`${BASE_URL}/login`);
+    await page.fill('[data-testid="email-input"]', TEST_USER.email);
+    await page.fill('[data-testid="password-input"]', TEST_USER.password);
+    await page.click('[data-testid="login-button"]');
+    await page.waitForURL('**/dashboard**');
+    
+    await page.click('[data-testid="genetic-password-button"]');
+    
+    const startTime = Date.now();
+    
+    await page.click('[data-testid="tab-certificates"]');
+    await expect(page.locator('[data-testid="certificate-list"]')).toBeVisible({ timeout: 5000 });
+    
+    const endTime = Date.now();
+    
+    expect(endTime - startTime).toBeLessThan(2000);
   });
 });

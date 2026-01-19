@@ -11,7 +11,13 @@ from .models import (
     GeneticPasswordCertificate,
     GeneticEvolutionLog,
     DNAConsentRecord,
+    # Chemical Storage Models
+    ChemicalStorageSubscription,
+    DNAEncodedPassword,
+    TimeLockCapsule,
+    ChemicalStorageCertificate,
 )
+
 
 
 # =============================================================================
@@ -207,3 +213,48 @@ class DNAConsentRecordAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'consent_type')
     readonly_fields = ('id', 'consented_at', 'withdrawn_at', 'consent_text_hash')
 
+
+# =============================================================================
+# Chemical Password Storage Models Admin
+# =============================================================================
+
+@admin.register(ChemicalStorageSubscription)
+class ChemicalStorageSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'tier', 'status', 'passwords_stored', 'max_passwords', 'lab_provider')
+    list_filter = ('tier', 'status', 'lab_provider')
+    search_fields = ('user__username',)
+    readonly_fields = ('id', 'started_at', 'created_at', 'updated_at')
+
+
+@admin.register(DNAEncodedPassword)
+class DNAEncodedPasswordAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'service_name', 'status', 'sequence_length_bp', 'synthesis_cost_usd', 'synthesis_provider')
+    list_filter = ('status', 'synthesis_provider', 'has_error_correction', 'time_lock_enabled')
+    search_fields = ('user__username', 'service_name', 'synthesis_order_id', 'physical_sample_id')
+    readonly_fields = ('id', 'created_at', 'updated_at', 'sequence_hash', 'password_hash_prefix')
+
+
+
+@admin.register(TimeLockCapsule)
+class TimeLockCapsuleAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'mode', 'status', 'unlock_at', 'beneficiary_email')
+    list_filter = ('mode', 'status', 'requires_verification')
+    search_fields = ('user__username', 'beneficiary_email')
+    readonly_fields = ('id', 'created_at', 'unlocked_at', 'encrypted_data', 'encryption_key_encrypted')
+    
+    def time_remaining(self, obj):
+        remaining = obj.time_remaining()
+        if remaining == 0:
+            return "Unlockable"
+        hours = remaining // 3600
+        minutes = (remaining % 3600) // 60
+        return f"{hours}h {minutes}m"
+    time_remaining.short_description = 'Time Remaining'
+
+
+@admin.register(ChemicalStorageCertificate)
+class ChemicalStorageCertificateAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'encoding_method', 'synthesis_provider', 'time_lock_enabled', 'created_at')
+    list_filter = ('encoding_method', 'synthesis_provider', 'time_lock_enabled')
+    search_fields = ('user__username', 'sequence_hash')
+    readonly_fields = ('id', 'created_at', 'signature', 'sequence_hash')

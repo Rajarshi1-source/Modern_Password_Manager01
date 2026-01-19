@@ -1036,4 +1036,55 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'vault.tasks.cleanup_expired_cache',
         'schedule': crontab(minute='30'),  # Every hour at :30
     },
+    # ==========================================================================
+    # Adaptive Password Tasks
+    # ==========================================================================
+    # Aggregate typing profiles hourly
+    'aggregate-typing-profiles': {
+        'task': 'security.tasks.adaptive_tasks.aggregate_typing_profiles',
+        'schedule': crontab(minute='15'),  # Every hour at :15
+    },
+    # Cleanup expired adaptation suggestions daily
+    'cleanup-expired-adaptations': {
+        'task': 'security.tasks.adaptive_tasks.cleanup_expired_adaptations',
+        'schedule': crontab(hour='3', minute='30'),  # 3:30 AM UTC daily
+    },
+    # Update RL model weekly
+    'update-adaptation-rl-model': {
+        'task': 'security.tasks.adaptive_tasks.update_rl_model_from_feedback',
+        'schedule': crontab(day_of_week='monday', hour='4', minute='0'),  # Monday 4:00 AM
+    },
 }
+
+# ==============================================================================
+# EPIGENETIC PASSWORD ADAPTATION CONFIGURATION
+# ==============================================================================
+
+ADAPTIVE_PASSWORD = {
+    # Feature Flag
+    'ENABLED': os.environ.get('ADAPTIVE_PASSWORD_ENABLED', 'True').lower() == 'true',
+    
+    # Privacy Settings
+    'DEFAULT_OPT_IN': False,  # Opt-in by default (GDPR compliant)
+    'DIFFERENTIAL_PRIVACY_EPSILON': float(os.environ.get('DP_EPSILON', '0.5')),
+    
+    # Suggestion Settings
+    'SUGGESTION_FREQUENCY_DAYS': int(os.environ.get('ADAPTATION_FREQUENCY_DAYS', '30')),
+    'MIN_SESSIONS_FOR_SUGGESTION': 10,
+    'AUTO_APPLY_THRESHOLD': 0.9,  # Confidence threshold for auto-apply
+    
+    # Rollback Settings
+    'MAX_ROLLBACK_DEPTH': 10,  # Maximum number of rollback versions
+    'ADAPTATION_EXPIRY_DAYS': 7,  # Days before pending adaptations expire
+    
+    # ML Training Settings
+    'ALLOW_CENTRALIZED_TRAINING': True,
+    'ALLOW_FEDERATED_LEARNING': False,
+    'RL_MODEL_UPDATE_INTERVAL_DAYS': 7,
+    
+    # Performance Settings
+    'ASYNC_SUGGESTION_GENERATION': True,  # Use Celery for suggestions
+    'MAX_ERROR_POSITIONS_STORED': 10,  # Limit for privacy
+    'TIMING_BUCKET_COUNT': 9,  # Number of timing buckets
+}
+
