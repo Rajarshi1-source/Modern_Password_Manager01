@@ -1088,3 +1088,36 @@ ADAPTIVE_PASSWORD = {
     'TIMING_BUCKET_COUNT': 9,  # Number of timing buckets
 }
 
+# ==============================================================================
+# QUANTUM ENTANGLEMENT-INSPIRED KEY DISTRIBUTION CONFIGURATION
+# ==============================================================================
+
+QUANTUM_ENTANGLEMENT = {
+    # Feature Flag
+    'ENABLED': os.environ.get('ENTANGLEMENT_ENABLED', 'True').lower() == 'true',
+    
+    # Lattice Cryptography
+    'LATTICE_ALGORITHM': os.environ.get('LATTICE_ALGO', 'kyber-1024'),
+    
+    # Randomness Pool
+    'POOL_SIZE_BYTES': int(os.environ.get('ENTANGLE_POOL_SIZE', '4096')),
+    
+    # Entropy Thresholds
+    'ENTROPY_THRESHOLD': float(os.environ.get('ENTROPY_THRESHOLD', '7.5')),
+    'ENTROPY_CRITICAL': float(os.environ.get('ENTROPY_CRITICAL', '7.0')),
+    
+    # Synchronization
+    'SYNC_INTERVAL_SECONDS': int(os.environ.get('ENTANGLE_SYNC_INTERVAL', '300')),
+    
+    # Limits
+    'MAX_PAIRS_PER_USER': int(os.environ.get('MAX_ENTANGLED_PAIRS', '5')),
+    
+    # Security
+    'AUTO_REVOKE_ON_ANOMALY': os.environ.get('AUTO_REVOKE_ANOMALY', 'True').lower() == 'true',
+    'PAIRING_TIMEOUT_MINUTES': int(os.environ.get('PAIRING_TIMEOUT', '10')),
+    
+    # KL Divergence Thresholds
+    'KL_DIVERGENCE_WARNING': float(os.environ.get('KL_WARNING', '0.1')),
+    'KL_DIVERGENCE_CRITICAL': float(os.environ.get('KL_CRITICAL', '0.5')),
+}
+

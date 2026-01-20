@@ -1,0 +1,231 @@
+/**
+ * EntropyHealthCard.css
+ * Styles for the entropy health indicator
+ */
+
+/* Compact Card */
+.entropy-card.compact {
+    padding: 12px;
+    background: var(--hover-bg);
+    border-radius: 8px;
+}
+
+.entropy-bar-container {
+    height: 6px;
+    background: var(--border-color);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.entropy-bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+.entropy-card.compact .entropy-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+}
+
+.entropy-value {
+    font-weight: 600;
+}
+
+.entropy-badge {
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.entropy-badge.green {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+}
+
+.entropy-badge.yellow {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+}
+
+.entropy-badge.red {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+/* Full Card */
+.entropy-card.full {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    padding: 24px;
+}
+
+.entropy-card.full.health-green {
+    border-top: 3px solid #10b981;
+}
+
+.entropy-card.full.health-yellow {
+    border-top: 3px solid #f59e0b;
+}
+
+.entropy-card.full.health-red {
+    border-top: 3px solid #ef4444;
+}
+
+.entropy-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.header-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.header-title h3 {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.health-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.health-badge.green {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+}
+
+.health-badge.yellow {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+}
+
+.health-badge.red {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+/* Gauge */
+.entropy-gauge {
+    position: relative;
+    width: 200px;
+    height: 120px;
+    margin: 0 auto 20px;
+}
+
+.gauge-svg {
+    width: 100%;
+    height: 100%;
+}
+
+.gauge-value {
+    transition: stroke-dasharray 1s ease;
+}
+
+.gauge-center {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+}
+
+.gauge-value-text {
+    display: block;
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.gauge-unit {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.gauge-markers {
+    position: absolute;
+    bottom: 40px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 0 10px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+/* Message */
+.entropy-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    margin-bottom: 20px;
+}
+
+.entropy-message.green {
+    background: rgba(16, 185, 129, 0.1);
+    color: #10b981;
+}
+
+.entropy-message.yellow {
+    background: rgba(245, 158, 11, 0.1);
+    color: #f59e0b;
+}
+
+.entropy-message.red {
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+}
+
+/* Stats */
+.entropy-stats {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    margin-bottom: 20px;
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.stat-item .stat-label {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.stat-item .stat-value {
+    font-weight: 600;
+}
+
+/* Actions */
+.entropy-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.entropy-actions button {
+    padding: 10px 20px;
+}

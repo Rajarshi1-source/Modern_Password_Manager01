@@ -1,0 +1,57 @@
+﻿c:\Users\RAJARSHI\Password_
+manager\canny\Scripts\pytho
+n.exe : INFO TensorFlow 
+configured for optimized 
+inference
+At line:1 char:1
++ c:\Users\RAJARSHI\Passwor
+d_manager\canny\Scripts\pyt
+hon.exe manage.py ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~
+    + CategoryInfo         
+     : NotSpecified: (INF  
+  O TensorFlow...mized i   
+ nference:String) [], R    
+emoteException
+    + FullyQualifiedErrorI 
+   d : NativeCommandError
+ 
+INFO Creating new LSTM 
+model for password strength
+INFO Password strength 
+model loaded
+INFO Anomaly detection 
+model loaded
+INFO Creating new CNN-LSTM 
+model for threat analysis
+INFO Threat analyzer model 
+loaded
+INFO ML models loaded in 
+0.31s
+INFO Password strength 
+model warmed up
+INFO Anomaly detector 
+model warmed up
+INFO Threat analyzer model 
+warmed up
+INFO ML model warm-up 
+completed in 3.11s
+INFO Blockchain anchoring 
+is disabled
+INFO FIDO2 Server 
+initialized with 
+RP_ID=localhost, 
+RP_NAME=Password Manager
+INFO Creating new CNN-LSTM 
+model for threat analysis
+WARNING liboqs not 
+available - using 
+simulated lattice crypto
+Operations to perform:
+  Apply all migrations: ab_testing, account, admin, adversarial_ai, analytics, auth, auth_module, authtoken, behavioral_recovery, blockchain, contenttypes, email_masking, fhe_service, logging_manager, ml_dark_web, ml_security, push_notifications, security, sessions, shared, sites, socialaccount, token_blacklist, user, vault
+Running migrations:
+  No migrations to apply.
+  Your models in app(s): 'security' have changes that are not yet reflected in a migration, and so won't be applied.
+  Run 'manage.py makemigrations' to make new migrations, and then re-run 'manage.py migrate' to apply them.

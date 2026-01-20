@@ -8,13 +8,24 @@ Serializers for REST API endpoints.
 from rest_framework import serializers
 from django.contrib.auth.models import User
 
-from ..models import (
-    AdaptivePasswordConfig,
-    TypingSession,
-    PasswordAdaptation,
-    UserTypingProfile,
-    AdaptationFeedback,
-)
+# Handle potential import issues
+try:
+    from ..models import (
+        AdaptivePasswordConfig,
+        TypingSession,
+        PasswordAdaptation,
+        UserTypingProfile,
+        AdaptationFeedback,
+    )
+    MODELS_AVAILABLE = True
+except ImportError:
+    MODELS_AVAILABLE = False
+    AdaptivePasswordConfig = None
+    TypingSession = None
+    PasswordAdaptation = None
+    UserTypingProfile = None
+    AdaptationFeedback = None
+
 
 
 # =============================================================================

@@ -146,6 +146,50 @@ urlpatterns = [
     path('adaptive/feedback/', adaptive_password_views.submit_feedback, name='adaptive-submit-feedback'),
     path('adaptive/feedback/<uuid:adaptation_id>/', adaptive_password_views.get_feedback_for_adaptation, name='adaptive-get-feedback'),
     
+    # ==========================================================================
+    # Quantum Entanglement-Inspired Key Distribution endpoints
+    # ==========================================================================
+    
+    # Device Pairing
+    path('entanglement/initiate/', 
+         __import__('security.api.entanglement_views', fromlist=['InitiatePairingView']).InitiatePairingView.as_view(), 
+         name='entanglement-initiate'),
+    path('entanglement/verify/', 
+         __import__('security.api.entanglement_views', fromlist=['VerifyPairingView']).VerifyPairingView.as_view(), 
+         name='entanglement-verify'),
+    
+    # Key Synchronization
+    path('entanglement/sync/', 
+         __import__('security.api.entanglement_views', fromlist=['SyncKeysView']).SyncKeysView.as_view(), 
+         name='entanglement-sync'),
+    path('entanglement/rotate/', 
+         __import__('security.api.entanglement_views', fromlist=['RotateKeysView']).RotateKeysView.as_view(), 
+         name='entanglement-rotate'),
+    
+    # Status and Analysis
+    path('entanglement/status/<uuid:pair_id>/', 
+         __import__('security.api.entanglement_views', fromlist=['PairStatusView']).PairStatusView.as_view(), 
+         name='entanglement-status'),
+    path('entanglement/entropy/<uuid:pair_id>/', 
+         __import__('security.api.entanglement_views', fromlist=['EntropyAnalysisView']).EntropyAnalysisView.as_view(), 
+         name='entanglement-entropy'),
+    path('entanglement/detail/<uuid:pair_id>/', 
+         __import__('security.api.entanglement_views', fromlist=['PairDetailView']).PairDetailView.as_view(), 
+         name='entanglement-detail'),
+    
+    # Revocation and Deletion
+    path('entanglement/revoke/', 
+         __import__('security.api.entanglement_views', fromlist=['RevokeView']).RevokeView.as_view(), 
+         name='entanglement-revoke'),
+    path('entanglement/<uuid:pair_id>/', 
+         __import__('security.api.entanglement_views', fromlist=['DeletePairView']).DeletePairView.as_view(), 
+         name='entanglement-delete'),
+    
+    # User's Pairs
+    path('entanglement/pairs/', 
+         __import__('security.api.entanglement_views', fromlist=['UserPairsView']).UserPairsView.as_view(), 
+         name='entanglement-pairs'),
+    
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),
     path('audit-log/', views.audit_log, name='security-audit-log'),

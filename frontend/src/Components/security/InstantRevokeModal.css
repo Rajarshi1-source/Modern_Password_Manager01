@@ -1,0 +1,345 @@
+/**
+ * InstantRevokeModal.css
+ * Styles for the emergency revocation modal
+ */
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 20px;
+    backdrop-filter: blur(4px);
+}
+
+.revoke-modal {
+    background: var(--card-bg);
+    border-radius: 20px;
+    width: 100%;
+    max-width: 480px;
+    position: relative;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.modal-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 32px;
+    height: 32px;
+    background: var(--hover-bg);
+    border: none;
+    border-radius: 50%;
+    font-size: 1.5rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+}
+
+.modal-close:hover {
+    background: var(--border-color);
+    color: var(--text-primary);
+}
+
+.modal-content {
+    padding: 32px;
+}
+
+.modal-icon {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 24px;
+}
+
+.modal-icon.warning {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+.modal-icon.processing {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--primary);
+}
+
+.modal-icon.success {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+}
+
+.modal-icon.error {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+}
+
+.modal-content h2 {
+    text-align: center;
+    margin: 0 0 12px;
+    font-size: 1.5rem;
+}
+
+.modal-description {
+    text-align: center;
+    color: var(--text-secondary);
+    margin: 0 0 24px;
+}
+
+/* Affected Devices */
+.affected-devices {
+    margin-bottom: 20px;
+}
+
+.affected-devices h4 {
+    margin: 0 0 12px;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.affected-devices .device-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.device-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--hover-bg);
+    border: 2px solid transparent;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.device-item:hover {
+    border-color: var(--primary);
+}
+
+.device-item.compromised {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: #ef4444;
+}
+
+.device-item .device-name {
+    font-weight: 600;
+}
+
+.compromised-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: #ef4444;
+    color: white;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin: 8px 0 0;
+    font-style: italic;
+}
+
+/* Reason Input */
+.reason-input {
+    margin-bottom: 20px;
+}
+
+.reason-input label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+.reason-input textarea {
+    width: 100%;
+    padding: 12px;
+    background: var(--hover-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    resize: none;
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.reason-input textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+/* Warning Box */
+.warning-box {
+    display: flex;
+    gap: 12px;
+    padding: 16px;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 10px;
+    color: #f59e0b;
+}
+
+.warning-box strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.warning-box p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--text-primary);
+}
+
+/* Processing State */
+.processing-state {
+    text-align: center;
+    padding: 32px 0;
+}
+
+.processing-state .pulse {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.processing-state .progress-bar {
+    width: 200px;
+    height: 4px;
+    background: var(--border-color);
+    border-radius: 2px;
+    margin: 24px auto 0;
+    overflow: hidden;
+}
+
+.processing-state .progress-fill.animate {
+    width: 100%;
+    height: 100%;
+    background: var(--primary);
+    animation: progress 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.1);
+        opacity: 0.7;
+    }
+}
+
+@keyframes progress {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+/* Success State */
+.success-state {
+    text-align: center;
+}
+
+.success-details {
+    background: var(--hover-bg);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 20px;
+    text-align: left;
+}
+
+.detail-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.detail-row:last-child {
+    border-bottom: none;
+}
+
+.detail-row .label {
+    color: var(--text-secondary);
+}
+
+.detail-row .value {
+    font-weight: 600;
+}
+
+.detail-row .value.warning {
+    color: #f59e0b;
+}
+
+.info-box {
+    margin-top: 16px;
+    padding: 12px;
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 8px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.info-box p {
+    margin: 0;
+}
+
+/* Error State */
+.error-state {
+    text-align: center;
+}
+
+.error-message {
+    color: #ef4444;
+    margin: 12px 0;
+}
+
+.error-actions {
+    margin-top: 20px;
+}
+
+/* Modal Actions */
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 20px 32px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* Spinning animation for loader */
+.spinning {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}

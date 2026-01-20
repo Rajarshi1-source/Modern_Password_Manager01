@@ -1413,3 +1413,217 @@ class AdaptationFeedback(models.Model):
             self.days_since_adaptation = delta.days
         super().save(*args, **kwargs)
 
+
+# =============================================================================
+# Quantum Entanglement-Inspired Key Distribution Models
+# =============================================================================
+
+class EntangledDevicePair(models.Model):
+    """
+    Two devices with quantum-inspired entangled cryptographic keys.
+    
+    Simulates quantum entanglement properties:
+    - Synchronized key material between devices
+    - Changes are instantly detectable
+    - Eavesdropping detection through entropy monitoring
+    - Instant revocation upon compromise
+    """
+    
+    STATUS_CHOICES = [
+        ('pending', 'Pending Pairing'),
+        ('active', 'Active'),
+        ('suspended', 'Suspended'),
+        ('revoked', 'Revoked'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE,
+        related_name='entangled_pairs'
+    )
+    
+    # The two paired devices
+    device_a = models.ForeignKey(
+        UserDevice,
+        on_delete=models.CASCADE,
+        related_name='entangled_as_device_a',
+        help_text="First device in the entangled pair"
+    )
+    device_b = models.ForeignKey(
+        UserDevice,
+        on_delete=models.CASCADE,
+        related_name='entangled_as_device_b',
+        help_text="Second device in the entangled pair"
+    )
+    
+    # Status
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending'
+    )
+    
+    # Timestamps
+    pairing_initiated_at = models.DateTimeField(auto_now_add=True)
+    pairing_completed_at = models.DateTimeField(null=True, blank=True)
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    
+    # Revocation info
+    revocation_reason = models.TextField(blank=True)
+    
+    class Meta:
+        db_table = 'entangled_device_pair'
+        verbose_name = 'Entangled Device Pair'
+        verbose_name_plural = 'Entangled Device Pairs'
+        ordering = ['-pairing_initiated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['device_a', 'device_b'],
+                condition=models.Q(status='active'),
+                name='unique_active_pair'
+            )
+        ]
+    
+    def __str__(self):
+        return f"Entangled: {self.device_a.device_name} <-> {self.device_b.device_name} ({self.status})"
+    
+    def is_healthy(self) -> bool:
+        """Check if pair is healthy based on entropy."""
+        try:
+            return self.sharedrandomnesspool.entropy_measurement >= 7.5
+        except SharedRandomnessPool.DoesNotExist:
+            return False
+    
+    def get_other_device(self, device_id: str):
+        """Get the other device in the pair."""
+        if str(self.device_a.device_id) == device_id:
+            return self.device_b
+        elif str(self.device_b.device_id) == device_id:
+            return self.device_a
+        return None
+
+
+class SharedRandomnessPool(models.Model):
+    """
+    Synchronized random pool for an entangled pair.
+    
+    Contains encrypted randomness that both devices use for
+    deriving symmetric keys. Entropy is monitored to detect tampering.
+    """
+    
+    pair = models.OneToOneField(
+        EntangledDevicePair,
+        on_delete=models.CASCADE,
+        primary_key=True
+    )
+    
+    # Encrypted pools - each device has its own encrypted copy
+    encrypted_pool_a = models.BinaryField(
+        help_text="Pool encrypted with device A's derived key"
+    )
+    encrypted_pool_b = models.BinaryField(
+        help_text="Pool encrypted with device B's derived key"
+    )
+    
+    # Generation tracking - increments on each key rotation
+    pool_generation = models.IntegerField(
+        default=0,
+        help_text="Generation number, incremented on each rotation"
+    )
+    
+    # Entropy measurement (bits per byte, max 8.0 for perfect randomness)
+    entropy_measurement = models.FloatField(
+        default=8.0,
+        help_text="Shannon entropy in bits per byte (8.0 = perfect random)"
+    )
+    
+    # Timestamps
+    last_refreshed_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'shared_randomness_pool'
+        verbose_name = 'Shared Randomness Pool'
+        verbose_name_plural = 'Shared Randomness Pools'
+    
+    def __str__(self):
+        return f"Pool gen {self.pool_generation} (entropy: {self.entropy_measurement:.2f})"
+    
+    def is_entropy_healthy(self) -> bool:
+        """Check if entropy is at healthy level."""
+        return self.entropy_measurement >= 7.5
+    
+    def is_entropy_critical(self) -> bool:
+        """Check if entropy is at critical level."""
+        return self.entropy_measurement < 7.0
+
+
+class EntanglementSyncEvent(models.Model):
+    """
+    Log of synchronization and security events for entangled pairs.
+    
+    Tracks:
+    - Key rotations
+    - Entropy checks
+    - Anomaly detections
+    - Instant revocations
+    """
+    
+    EVENT_TYPE_CHOICES = [
+        ('key_rotation', 'Key Rotation'),
+        ('entropy_check', 'Entropy Check'),
+        ('anomaly_detected', 'Anomaly Detected'),
+        ('instant_revoke', 'Instant Revocation'),
+        ('pool_refresh', 'Pool Refresh'),
+        ('sync_request', 'Sync Request'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    pair = models.ForeignKey(
+        EntangledDevicePair,
+        on_delete=models.CASCADE,
+        related_name='sync_events'
+    )
+    
+    event_type = models.CharField(
+        max_length=30,
+        choices=EVENT_TYPE_CHOICES
+    )
+    
+    # Which device initiated the event (null for system-initiated)
+    initiated_by_device = models.ForeignKey(
+        UserDevice,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='initiated_sync_events'
+    )
+    
+    # Outcome
+    success = models.BooleanField(default=True)
+    
+    # Additional details (JSON)
+    details = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Additional event details"
+    )
+    
+    # Timestamp
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'entanglement_sync_event'
+        verbose_name = 'Entanglement Sync Event'
+        verbose_name_plural = 'Entanglement Sync Events'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['pair', 'event_type']),
+            models.Index(fields=['created_at']),
+        ]
+    
+    def __str__(self):
+        status = "✓" if self.success else "✗"
+        return f"{status} {self.get_event_type_display()} @ {self.created_at}"
