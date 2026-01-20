@@ -85,7 +85,7 @@ def load_models():
     from .anomaly_detector import AnomalyDetector
     from .threat_analyzer import ThreatAnalyzer
     
-    global _models, _models_loaded
+    global _models_loaded
     
     # Prevent loading models multiple times
     if _models_loaded:

@@ -45,6 +45,7 @@ from .services.parallel_kyber import ParallelKyberOperations, get_parallel_kyber
 from .services.kyber_cache import KyberCacheManager, get_kyber_cache
 from .services.kyber_crypto import get_crypto_status, production_kyber
 from .services.optimized_ntt import get_optimized_ntt
+from django.db.models import Max
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def get_user_keypair(user, version: int = None, create_if_missing: bool = False)
             
             # Get next version number
             max_version = KyberKeyPair.objects.filter(user=user).aggregate(
-                max_ver=models.Max('key_version')
+                max_ver=Max('key_version')
             )['max_ver'] or 0
             
             keypair = KyberKeyPair.objects.create(
