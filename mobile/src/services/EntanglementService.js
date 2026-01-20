@@ -269,6 +269,86 @@ class EntanglementService {
     if (score >= 7.0) return 'degraded';
     return 'critical';
   }
+
+  // =========================================================================
+  // Entropy History & Anomalies (NEW)
+  // =========================================================================
+
+  /**
+   * Get historical entropy measurements for a pair
+   * @param {string} pairId - Pair ID
+   * @param {number} days - Number of days to fetch (default 7)
+   * @param {number} limit - Max records (default 50)
+   * @returns {Promise<Object>} Entropy history with statistics
+   */
+  async getEntropyHistory(pairId, days = 7, limit = 50) {
+    const headers = await this.getHeaders();
+    
+    const response = await fetch(
+      `${this.baseUrl}/entropy-history/${pairId}/?days=${days}&limit=${limit}`,
+      {
+        method: 'GET',
+        headers,
+      }
+    );
+
+    return this.handleResponse(response);
+  }
+
+  /**
+   * Get anomaly events for a pair
+   * @param {string} pairId - Pair ID
+   * @param {Object} options - Filter options
+   * @param {boolean} options.resolved - Filter by resolved status
+   * @param {string} options.severity - Filter by severity
+   * @param {number} options.limit - Max records
+   * @returns {Promise<Object>} Anomaly events list
+   */
+  async getAnomalies(pairId, options = {}) {
+    const headers = await this.getHeaders();
+    
+    const params = new URLSearchParams();
+    if (options.resolved !== undefined) {
+      params.append('resolved', options.resolved.toString());
+    }
+    if (options.severity) {
+      params.append('severity', options.severity);
+    }
+    if (options.limit) {
+      params.append('limit', options.limit.toString());
+    }
+    
+    const queryString = params.toString();
+    const url = `${this.baseUrl}/anomalies/${pairId}/${queryString ? `?${queryString}` : ''}`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+    });
+
+    return this.handleResponse(response);
+  }
+
+  /**
+   * Resolve an anomaly event
+   * @param {string} anomalyId - Anomaly event ID
+   * @param {string} notes - Resolution notes
+   * @returns {Promise<Object>} Updated anomaly event
+   */
+  async resolveAnomaly(anomalyId, notes = '') {
+    const headers = await this.getHeaders();
+    
+    const response = await fetch(`${this.baseUrl}/resolve-anomaly/`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        anomaly_id: anomalyId,
+        resolution_notes: notes,
+      }),
+    });
+
+    return this.handleResponse(response);
+  }
 }
 
 export default new EntanglementService();

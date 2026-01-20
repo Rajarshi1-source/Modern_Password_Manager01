@@ -26,11 +26,13 @@ from ml_dark_web.middleware import TokenAuthMiddlewareStack
 # Import WebSocket URL patterns from both apps
 from ml_dark_web import routing as ml_dark_web_routing
 from adversarial_ai import routing as adversarial_ai_routing
+from security import routing as security_routing
 
 # Combine WebSocket URL patterns
 websocket_urlpatterns = (
     ml_dark_web_routing.websocket_urlpatterns +
-    adversarial_ai_routing.websocket_urlpatterns
+    adversarial_ai_routing.websocket_urlpatterns +
+    security_routing.websocket_urlpatterns
 )
 
 # ASGI application with WebSocket support

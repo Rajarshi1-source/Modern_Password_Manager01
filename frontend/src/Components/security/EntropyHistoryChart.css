@@ -1,0 +1,182 @@
+/**
+ * EntropyHistoryChart Component Styles
+ */
+
+.entropy-chart-container {
+    background: linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%);
+    border-radius: 16px;
+    padding: 24px;
+    margin: 16px 0;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.entropy-chart-loading,
+.entropy-chart-error,
+.entropy-chart-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 300px;
+    gap: 16px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.entropy-chart-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(99, 102, 241, 0.3);
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.error-icon,
+.empty-icon {
+    font-size: 48px;
+}
+
+.retry-btn {
+    background: #6366f1;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.retry-btn:hover {
+    background: #4f46e5;
+    transform: translateY(-2px);
+}
+
+.entropy-chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.entropy-chart-title {
+    color: #fff;
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 0;
+}
+
+.entropy-chart-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.days-select {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.875rem;
+}
+
+.days-select option {
+    background: #2d2d44;
+    color: #fff;
+}
+
+.refresh-btn {
+    background: rgba(99, 102, 241, 0.2);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    color: #a5b4fc;
+    padding: 8px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: all 0.2s;
+}
+
+.refresh-btn:hover {
+    background: rgba(99, 102, 241, 0.3);
+    border-color: rgba(99, 102, 241, 0.6);
+}
+
+.entropy-chart-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #fff;
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.stat-warning .stat-value {
+    color: #f59e0b;
+}
+
+.stat-critical .stat-value {
+    color: #ef4444;
+}
+
+.entropy-chart-wrapper {
+    height: 300px;
+    position: relative;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .entropy-chart-container {
+        padding: 16px;
+    }
+
+    .entropy-chart-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .entropy-chart-controls {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .stat-value {
+        font-size: 1.25rem;
+    }
+
+    .entropy-chart-wrapper {
+        height: 250px;
+    }
+}

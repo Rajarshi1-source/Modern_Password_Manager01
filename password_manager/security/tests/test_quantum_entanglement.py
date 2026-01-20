@@ -1406,3 +1406,694 @@ class EntanglementE2ETests(TransactionTestCase):
             reverse('entanglement-status', kwargs={'pair_id': pair.id})
         )
         self.assertEqual(response.data['status'], 'revoked')
+
+
+# =============================================================================
+# MODEL TESTS: EntropyMeasurementRecord and AnomalyEvent (NEW)
+# =============================================================================
+
+class EntropyMeasurementRecordModelTests(TestCase):
+    """Tests for the EntropyMeasurementRecord model."""
+    
+    def setUp(self):
+        """Create test pair."""
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        from security.models import UserDevice, EntangledDevicePair
+        
+        self.device_a = UserDevice.objects.create(
+            user=self.user,
+            device_name='Phone',
+            device_type='mobile',
+            browser='Safari',
+            os_info='iOS',
+            ip_address='192.168.1.1'
+        )
+        self.device_b = UserDevice.objects.create(
+            user=self.user,
+            device_name='Laptop',
+            device_type='desktop',
+            browser='Chrome',
+            os_info='macOS',
+            ip_address='192.168.1.2'
+        )
+        
+        self.pair = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device_a,
+            device_b=self.device_b,
+            status='active'
+        )
+    
+    def test_create_entropy_measurement(self):
+        """Test creating an entropy measurement record."""
+        from security.models import EntropyMeasurementRecord
+        
+        record = EntropyMeasurementRecord.objects.create(
+            pair=self.pair,
+            device=self.device_a,
+            entropy_value=7.92,
+            kl_divergence=0.05,
+            is_healthy=True,
+            sample_size=4096,
+            sample_hash=hashlib.sha256(b'test').hexdigest()
+        )
+        
+        self.assertIsNotNone(record.id)
+        self.assertEqual(record.entropy_value, 7.92)
+        self.assertTrue(record.is_healthy)
+    
+    def test_entropy_measurement_with_warning(self):
+        """Test entropy measurement with warning status."""
+        from security.models import EntropyMeasurementRecord
+        
+        record = EntropyMeasurementRecord.objects.create(
+            pair=self.pair,
+            entropy_value=7.3,
+            is_healthy=False,
+            is_warning=True,
+            sample_size=4096,
+            sample_hash=hashlib.sha256(b'test').hexdigest()
+        )
+        
+        self.assertFalse(record.is_healthy)
+        self.assertTrue(record.is_warning)
+        self.assertFalse(record.is_critical)
+    
+    def test_entropy_measurement_with_critical(self):
+        """Test entropy measurement with critical status."""
+        from security.models import EntropyMeasurementRecord
+        
+        record = EntropyMeasurementRecord.objects.create(
+            pair=self.pair,
+            entropy_value=6.5,
+            is_healthy=False,
+            is_warning=False,
+            is_critical=True,
+            sample_size=4096,
+            sample_hash=hashlib.sha256(b'low_entropy').hexdigest()
+        )
+        
+        self.assertTrue(record.is_critical)
+    
+    def test_entropy_measurement_str_representation(self):
+        """Test entropy measurement string representation."""
+        from security.models import EntropyMeasurementRecord
+        
+        record = EntropyMeasurementRecord.objects.create(
+            pair=self.pair,
+            entropy_value=7.92,
+            is_healthy=True,
+            sample_size=4096,
+            sample_hash='abc123'
+        )
+        
+        str_repr = str(record)
+        self.assertIn('7.92', str_repr)
+    
+    def test_entropy_history_query(self):
+        """Test querying entropy history for a pair."""
+        from security.models import EntropyMeasurementRecord
+        
+        # Create multiple records
+        for i in range(5):
+            EntropyMeasurementRecord.objects.create(
+                pair=self.pair,
+                entropy_value=7.8 + (i * 0.01),
+                sample_size=4096,
+                sample_hash=f'hash_{i}'
+            )
+        
+        history = self.pair.entropy_history.all()
+        self.assertEqual(history.count(), 5)
+
+
+class AnomalyEventModelTests(TestCase):
+    """Tests for the AnomalyEvent model."""
+    
+    def setUp(self):
+        """Create test pair."""
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        from security.models import UserDevice, EntangledDevicePair
+        
+        self.device_a = UserDevice.objects.create(
+            user=self.user,
+            device_name='Phone',
+            device_type='mobile',
+            browser='Safari',
+            os_info='iOS',
+            ip_address='192.168.1.1'
+        )
+        self.device_b = UserDevice.objects.create(
+            user=self.user,
+            device_name='Laptop',
+            device_type='desktop',
+            browser='Chrome',
+            os_info='macOS',
+            ip_address='192.168.1.2'
+        )
+        
+        self.pair = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device_a,
+            device_b=self.device_b,
+            status='active'
+        )
+    
+    def test_create_anomaly_event(self):
+        """Test creating an anomaly event."""
+        from security.models import AnomalyEvent
+        
+        event = AnomalyEvent.objects.create(
+            pair=self.pair,
+            device=self.device_a,
+            anomaly_type='low_entropy',
+            severity='medium',
+            entropy_value=7.1,
+            recommendation='Rotate keys immediately'
+        )
+        
+        self.assertIsNotNone(event.id)
+        self.assertEqual(event.anomaly_type, 'low_entropy')
+        self.assertEqual(event.severity, 'medium')
+        self.assertFalse(event.resolved)
+    
+    def test_anomaly_event_severity_choices(self):
+        """Test anomaly severity choices are valid."""
+        from security.models import AnomalyEvent
+        
+        for severity, _ in AnomalyEvent.SEVERITY_CHOICES:
+            event = AnomalyEvent(
+                pair=self.pair,
+                anomaly_type='low_entropy',
+                severity=severity,
+                recommendation='Test'
+            )
+            event.full_clean()  # Should not raise
+    
+    def test_anomaly_event_type_choices(self):
+        """Test anomaly type choices are valid."""
+        from security.models import AnomalyEvent
+        
+        for anomaly_type, _ in AnomalyEvent.TYPE_CHOICES:
+            event = AnomalyEvent(
+                pair=self.pair,
+                anomaly_type=anomaly_type,
+                severity='low',
+                recommendation='Test'
+            )
+            event.full_clean()
+    
+    def test_resolve_anomaly(self):
+        """Test resolving an anomaly event."""
+        from security.models import AnomalyEvent
+        
+        event = AnomalyEvent.objects.create(
+            pair=self.pair,
+            anomaly_type='high_kl_divergence',
+            severity='high',
+            recommendation='Check devices'
+        )
+        
+        self.assertFalse(event.resolved)
+        self.assertIsNone(event.resolved_at)
+        
+        event.resolve(notes='Verified false positive')
+        
+        self.assertTrue(event.resolved)
+        self.assertIsNotNone(event.resolved_at)
+        self.assertEqual(event.resolution_notes, 'Verified false positive')
+    
+    def test_anomaly_event_str_representation(self):
+        """Test anomaly event string representation."""
+        from security.models import AnomalyEvent
+        
+        event = AnomalyEvent.objects.create(
+            pair=self.pair,
+            anomaly_type='tampering_suspected',
+            severity='critical',
+            recommendation='Revoke immediately'
+        )
+        
+        str_repr = str(event)
+        self.assertIn('CRITICAL', str_repr)
+        self.assertIn('Tampering', str_repr)
+    
+    def test_auto_revoked_flag(self):
+        """Test auto_revoked flag on anomaly."""
+        from security.models import AnomalyEvent
+        
+        event = AnomalyEvent.objects.create(
+            pair=self.pair,
+            anomaly_type='tampering_suspected',
+            severity='critical',
+            auto_revoked=True,
+            recommendation='Pair was auto-revoked'
+        )
+        
+        self.assertTrue(event.auto_revoked)
+    
+    def test_anomaly_query_by_severity(self):
+        """Test querying anomalies by severity."""
+        from security.models import AnomalyEvent
+        
+        # Create different severity events
+        AnomalyEvent.objects.create(
+            pair=self.pair, anomaly_type='low_entropy',
+            severity='low', recommendation='Monitor'
+        )
+        AnomalyEvent.objects.create(
+            pair=self.pair, anomaly_type='sync_failure',
+            severity='medium', recommendation='Retry'
+        )
+        AnomalyEvent.objects.create(
+            pair=self.pair, anomaly_type='tampering_suspected',
+            severity='critical', recommendation='Revoke'
+        )
+        
+        critical = AnomalyEvent.objects.filter(severity='critical')
+        self.assertEqual(critical.count(), 1)
+
+
+# =============================================================================
+# INTEGRATION TESTS: New API Endpoints (NEW)
+# =============================================================================
+
+class EntropyHistoryAPITests(APITestCase):
+    """Tests for the entropy history API endpoint."""
+    
+    def setUp(self):
+        """Set up test user and pair."""
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        from security.models import UserDevice, EntangledDevicePair
+        
+        self.device_a = UserDevice.objects.create(
+            user=self.user,
+            device_name='Phone',
+            device_type='mobile',
+            browser='Safari',
+            os_info='iOS',
+            ip_address='192.168.1.1'
+        )
+        self.device_b = UserDevice.objects.create(
+            user=self.user,
+            device_name='Laptop',
+            device_type='desktop',
+            browser='Chrome',
+            os_info='macOS',
+            ip_address='192.168.1.2'
+        )
+        
+        self.pair = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device_a,
+            device_b=self.device_b,
+            status='active'
+        )
+        
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+    
+    def test_get_entropy_history_empty(self):
+        """Test getting entropy history when none exists."""
+        url = reverse('entanglement-entropy-history', kwargs={'pair_id': self.pair.id})
+        
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['measurements']), 0)
+    
+    def test_get_entropy_history_with_data(self):
+        """Test getting entropy history with measurements."""
+        from security.models import EntropyMeasurementRecord
+        
+        # Create some measurements
+        for i in range(5):
+            EntropyMeasurementRecord.objects.create(
+                pair=self.pair,
+                device=self.device_a,
+                entropy_value=7.8 + (i * 0.01),
+                sample_size=4096,
+                sample_hash=f'hash_{i}'
+            )
+        
+        url = reverse('entanglement-entropy-history', kwargs={'pair_id': self.pair.id})
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total_count'], 5)
+        self.assertIn('average_entropy', response.data)
+    
+    def test_get_entropy_history_with_days_filter(self):
+        """Test entropy history with days filter."""
+        url = reverse('entanglement-entropy-history', kwargs={'pair_id': self.pair.id})
+        
+        response = self.client.get(url, {'days': 30})
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+    
+    def test_get_entropy_history_unauthorized(self):
+        """Test entropy history for unauthorized user."""
+        other_user = User.objects.create_user(
+            username='otheruser',
+            email='other@example.com',
+            password='pass123'
+        )
+        
+        self.client.force_authenticate(user=other_user)
+        
+        url = reverse('entanglement-entropy-history', kwargs={'pair_id': self.pair.id})
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class AnomalyAPITests(APITestCase):
+    """Tests for the anomaly API endpoints."""
+    
+    def setUp(self):
+        """Set up test user and pair."""
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        from security.models import UserDevice, EntangledDevicePair
+        
+        self.device_a = UserDevice.objects.create(
+            user=self.user,
+            device_name='Phone',
+            device_type='mobile',
+            browser='Safari',
+            os_info='iOS',
+            ip_address='192.168.1.1'
+        )
+        self.device_b = UserDevice.objects.create(
+            user=self.user,
+            device_name='Laptop',
+            device_type='desktop',
+            browser='Chrome',
+            os_info='macOS',
+            ip_address='192.168.1.2'
+        )
+        
+        self.pair = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device_a,
+            device_b=self.device_b,
+            status='active'
+        )
+        
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+    
+    def test_get_anomalies_empty(self):
+        """Test getting anomalies when none exist."""
+        url = reverse('entanglement-anomalies', kwargs={'pair_id': self.pair.id})
+        
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['anomalies']), 0)
+        self.assertEqual(response.data['unresolved_count'], 0)
+    
+    def test_get_anomalies_with_data(self):
+        """Test getting anomalies with events."""
+        from security.models import AnomalyEvent
+        
+        AnomalyEvent.objects.create(
+            pair=self.pair,
+            anomaly_type='low_entropy',
+            severity='medium',
+            recommendation='Rotate keys'
+        )
+        AnomalyEvent.objects.create(
+            pair=self.pair,
+            anomaly_type='high_kl_divergence',
+            severity='high',
+            recommendation='Check devices'
+        )
+        
+        url = reverse('entanglement-anomalies', kwargs={'pair_id': self.pair.id})
+        response = self.client.get(url)
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total_count'], 2)
+        self.assertEqual(response.data['unresolved_count'], 2)
+    
+    def test_get_anomalies_filter_by_severity(self):
+        """Test filtering anomalies by severity."""
+        from security.models import AnomalyEvent
+        
+        AnomalyEvent.objects.create(
+            pair=self.pair, anomaly_type='low_entropy',
+            severity='low', recommendation='Monitor'
+        )
+        AnomalyEvent.objects.create(
+            pair=self.pair, anomaly_type='tampering_suspected',
+            severity='critical', recommendation='Revoke'
+        )
+        
+        url = reverse('entanglement-anomalies', kwargs={'pair_id': self.pair.id})
+        response = self.client.get(url, {'severity': 'critical'})
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['anomalies']), 1)
+        self.assertEqual(response.data['anomalies'][0]['severity'], 'critical')
+    
+    def test_get_anomalies_filter_by_resolved(self):
+        """Test filtering anomalies by resolved status."""
+        from security.models import AnomalyEvent
+        
+        event1 = AnomalyEvent.objects.create(
+            pair=self.pair, anomaly_type='low_entropy',
+            severity='low', recommendation='Monitor'
+        )
+        event1.resolve()
+        
+        AnomalyEvent.objects.create(
+            pair=self.pair, anomaly_type='sync_failure',
+            severity='medium', recommendation='Retry'
+        )
+        
+        url = reverse('entanglement-anomalies', kwargs={'pair_id': self.pair.id})
+        response = self.client.get(url, {'resolved': 'false'})
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['anomalies']), 1)
+    
+    def test_resolve_anomaly(self):
+        """Test resolving an anomaly via API."""
+        from security.models import AnomalyEvent
+        
+        event = AnomalyEvent.objects.create(
+            pair=self.pair,
+            anomaly_type='low_entropy',
+            severity='medium',
+            recommendation='Rotate keys'
+        )
+        
+        url = reverse('entanglement-resolve-anomaly')
+        response = self.client.post(url, {
+            'anomaly_id': str(event.id),
+            'resolution_notes': 'False positive verified'
+        }, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['resolved'])
+        
+        event.refresh_from_db()
+        self.assertTrue(event.resolved)
+        self.assertEqual(event.resolution_notes, 'False positive verified')
+    
+    def test_resolve_already_resolved_fails(self):
+        """Test resolving an already resolved anomaly fails."""
+        from security.models import AnomalyEvent
+        
+        event = AnomalyEvent.objects.create(
+            pair=self.pair,
+            anomaly_type='low_entropy',
+            severity='medium',
+            recommendation='Rotate keys',
+            resolved=True
+        )
+        
+        url = reverse('entanglement-resolve-anomaly')
+        response = self.client.post(url, {
+            'anomaly_id': str(event.id)
+        }, format='json')
+        
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# =============================================================================
+# WEBSOCKET TESTS
+# =============================================================================
+
+class EntanglementWebSocketTests(TestCase):
+    """Tests for the entanglement WebSocket consumer."""
+    
+    def test_send_sync_notification_helper(self):
+        """Test sync notification helper function."""
+        from security.consumers.entanglement_consumer import send_sync_notification
+        import asyncio
+        
+        # Test that the helper function exists and is callable
+        self.assertTrue(callable(send_sync_notification))
+    
+    def test_send_anomaly_alert_helper(self):
+        """Test anomaly alert helper function."""
+        from security.consumers.entanglement_consumer import send_anomaly_alert
+        
+        self.assertTrue(callable(send_anomaly_alert))
+    
+    def test_send_entropy_update_helper(self):
+        """Test entropy update helper function."""
+        from security.consumers.entanglement_consumer import send_entropy_update
+        
+        self.assertTrue(callable(send_entropy_update))
+    
+    def test_send_revocation_notice_helper(self):
+        """Test revocation notice helper function."""
+        from security.consumers.entanglement_consumer import send_revocation_notice
+        
+        self.assertTrue(callable(send_revocation_notice))
+
+
+# =============================================================================
+# SERIALIZER TESTS
+# =============================================================================
+
+class EntropySerializerTests(TestCase):
+    """Tests for entropy history serializers."""
+    
+    def setUp(self):
+        """Set up test data."""
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        from security.models import UserDevice, EntangledDevicePair, EntropyMeasurementRecord
+        
+        self.device = UserDevice.objects.create(
+            user=self.user,
+            device_name='Phone',
+            device_type='mobile',
+            browser='Safari',
+            os_info='iOS',
+            ip_address='192.168.1.1'
+        )
+        
+        device_b = UserDevice.objects.create(
+            user=self.user,
+            device_name='Laptop',
+            device_type='desktop',
+            browser='Chrome',
+            os_info='macOS',
+            ip_address='192.168.1.2'
+        )
+        
+        self.pair = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device,
+            device_b=device_b,
+            status='active'
+        )
+        
+        self.measurement = EntropyMeasurementRecord.objects.create(
+            pair=self.pair,
+            device=self.device,
+            entropy_value=7.92,
+            kl_divergence=0.05,
+            is_healthy=True,
+            sample_size=4096,
+            sample_hash='test_hash'
+        )
+    
+    def test_entropy_measurement_serializer(self):
+        """Test EntropyMeasurementRecordSerializer."""
+        from security.serializers.entanglement_serializers import EntropyMeasurementRecordSerializer
+        
+        serializer = EntropyMeasurementRecordSerializer(self.measurement)
+        data = serializer.data
+        
+        self.assertEqual(data['entropy_value'], 7.92)
+        self.assertTrue(data['is_healthy'])
+        self.assertEqual(data['sample_size'], 4096)
+
+
+class AnomalySerializerTests(TestCase):
+    """Tests for anomaly event serializers."""
+    
+    def setUp(self):
+        """Set up test data."""
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        
+        from security.models import UserDevice, EntangledDevicePair, AnomalyEvent
+        
+        device_a = UserDevice.objects.create(
+            user=self.user,
+            device_name='Phone',
+            device_type='mobile',
+            browser='Safari',
+            os_info='iOS',
+            ip_address='192.168.1.1'
+        )
+        
+        device_b = UserDevice.objects.create(
+            user=self.user,
+            device_name='Laptop',
+            device_type='desktop',
+            browser='Chrome',
+            os_info='macOS',
+            ip_address='192.168.1.2'
+        )
+        
+        self.pair = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=device_a,
+            device_b=device_b,
+            status='active'
+        )
+        
+        self.anomaly = AnomalyEvent.objects.create(
+            pair=self.pair,
+            device=device_a,
+            anomaly_type='low_entropy',
+            severity='medium',
+            entropy_value=7.2,
+            recommendation='Rotate keys'
+        )
+    
+    def test_anomaly_event_serializer(self):
+        """Test AnomalyEventSerializer."""
+        from security.serializers.entanglement_serializers import AnomalyEventSerializer
+        
+        serializer = AnomalyEventSerializer(self.anomaly)
+        data = serializer.data
+        
+        self.assertEqual(data['anomaly_type'], 'low_entropy')
+        self.assertEqual(data['severity'], 'medium')
+        self.assertFalse(data['resolved'])
+

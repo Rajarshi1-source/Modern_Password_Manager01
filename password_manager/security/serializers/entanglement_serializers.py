@@ -270,3 +270,84 @@ class UserPairsListSerializer(serializers.Serializer):
     pairs = PairStatusSerializer(many=True)
     total_count = serializers.IntegerField()
     max_allowed = serializers.IntegerField()
+
+
+class EntropyMeasurementRecordSerializer(serializers.Serializer):
+    """Serializer for entropy measurement history records."""
+    
+    id = serializers.UUIDField(read_only=True)
+    pair_id = serializers.UUIDField(source='pair.id')
+    device_id = serializers.UUIDField(source='device.device_id', allow_null=True)
+    device_name = serializers.CharField(source='device.device_name', allow_null=True)
+    
+    entropy_value = serializers.FloatField()
+    kl_divergence = serializers.FloatField(allow_null=True)
+    
+    is_healthy = serializers.BooleanField()
+    is_warning = serializers.BooleanField()
+    is_critical = serializers.BooleanField()
+    
+    sample_size = serializers.IntegerField()
+    sample_hash = serializers.CharField()
+    
+    measured_at = serializers.DateTimeField()
+
+
+class EntropyHistoryListSerializer(serializers.Serializer):
+    """Response for entropy history endpoint."""
+    
+    pair_id = serializers.UUIDField()
+    measurements = EntropyMeasurementRecordSerializer(many=True)
+    total_count = serializers.IntegerField()
+    average_entropy = serializers.FloatField()
+    warning_count = serializers.IntegerField()
+    critical_count = serializers.IntegerField()
+
+
+class AnomalyEventSerializer(serializers.Serializer):
+    """Serializer for anomaly events."""
+    
+    id = serializers.UUIDField(read_only=True)
+    pair_id = serializers.UUIDField(source='pair.id')
+    device_id = serializers.UUIDField(source='device.device_id', allow_null=True)
+    device_name = serializers.CharField(source='device.device_name', allow_null=True)
+    
+    anomaly_type = serializers.CharField()
+    anomaly_type_display = serializers.CharField(source='get_anomaly_type_display')
+    severity = serializers.CharField()
+    severity_display = serializers.CharField(source='get_severity_display')
+    
+    entropy_value = serializers.FloatField(allow_null=True)
+    kl_divergence = serializers.FloatField(allow_null=True)
+    
+    auto_revoked = serializers.BooleanField()
+    resolved = serializers.BooleanField()
+    resolved_at = serializers.DateTimeField(allow_null=True)
+    resolution_notes = serializers.CharField()
+    
+    details = serializers.DictField()
+    recommendation = serializers.CharField()
+    
+    detected_at = serializers.DateTimeField()
+
+
+class AnomalyListSerializer(serializers.Serializer):
+    """Response for anomaly list endpoint."""
+    
+    pair_id = serializers.UUIDField()
+    anomalies = AnomalyEventSerializer(many=True)
+    total_count = serializers.IntegerField()
+    unresolved_count = serializers.IntegerField()
+    critical_count = serializers.IntegerField()
+
+
+class ResolveAnomalySerializer(serializers.Serializer):
+    """Request to resolve an anomaly."""
+    
+    anomaly_id = serializers.UUIDField(help_text="Anomaly event ID to resolve")
+    resolution_notes = serializers.CharField(
+        max_length=500,
+        required=False,
+        default="",
+        help_text="Notes about how the anomaly was resolved"
+    )

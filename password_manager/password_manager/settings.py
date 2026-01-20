@@ -188,7 +188,24 @@ TEMPLATES = [
 WSGI_APPLICATION = 'password_manager.wsgi.application'
 ASGI_APPLICATION = 'password_manager.asgi.application'
 
+# Django Channels Layer Configuration
+# For development, use in-memory channel layer
+# For production, use Redis: 'channels_redis.core.RedisChannelLayer'
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
 
+# For production with Redis (uncomment when Redis is available):
+# CHANNEL_LAYERS = {
+#     'default': {
+#         'BACKEND': 'channels_redis.core.RedisChannelLayer',
+#         'CONFIG': {
+#             'hosts': [(os.environ.get('REDIS_HOST', 'localhost'), 6379)],
+#         },
+#     },
+# }
 # Database configuration
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 

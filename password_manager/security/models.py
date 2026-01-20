@@ -1627,3 +1627,179 @@ class EntanglementSyncEvent(models.Model):
     def __str__(self):
         status = "✓" if self.success else "✗"
         return f"{status} {self.get_event_type_display()} @ {self.created_at}"
+
+
+class EntropyMeasurementRecord(models.Model):
+    """
+    Historical entropy measurements for trend analysis.
+    
+    Stores periodic entropy readings from entangled pairs for:
+    - Trend visualization
+    - Anomaly pattern detection
+    - Audit trail
+    """
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    pair = models.ForeignKey(
+        EntangledDevicePair,
+        on_delete=models.CASCADE,
+        related_name='entropy_history'
+    )
+    device = models.ForeignKey(
+        UserDevice,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='entropy_measurements'
+    )
+    
+    # Entropy metrics
+    entropy_value = models.FloatField(
+        help_text="Shannon entropy in bits per byte (0-8)"
+    )
+    kl_divergence = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="KL divergence from paired pool"
+    )
+    
+    # Health status
+    is_healthy = models.BooleanField(default=True)
+    is_warning = models.BooleanField(default=False)
+    is_critical = models.BooleanField(default=False)
+    
+    # Sample info
+    sample_size = models.IntegerField(help_text="Pool size in bytes")
+    sample_hash = models.CharField(
+        max_length=64,
+        help_text="SHA-256 hash of sampled data for verification"
+    )
+    
+    # Timestamp
+    measured_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'entropy_measurement_record'
+        verbose_name = 'Entropy Measurement Record'
+        verbose_name_plural = 'Entropy Measurement Records'
+        ordering = ['-measured_at']
+        indexes = [
+            models.Index(fields=['pair', 'measured_at']),
+            models.Index(fields=['is_critical', 'measured_at']),
+        ]
+    
+    def __str__(self):
+        status = "🟢" if self.is_healthy else ("🟡" if self.is_warning else "🔴")
+        return f"{status} Entropy={self.entropy_value:.2f} @ {self.measured_at}"
+
+
+class AnomalyEvent(models.Model):
+    """
+    Dedicated anomaly tracking with severity levels.
+    
+    Provides structured tracking of detected anomalies for:
+    - Security analytics and reporting
+    - Auto-revocation decisions
+    - Historical pattern analysis
+    """
+    
+    SEVERITY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ]
+    
+    TYPE_CHOICES = [
+        ('low_entropy', 'Low Entropy'),
+        ('high_kl_divergence', 'High KL Divergence'),
+        ('tampering_suspected', 'Tampering Suspected'),
+        ('sync_failure', 'Sync Failure'),
+        ('device_offline', 'Device Offline'),
+        ('chi_squared_anomaly', 'Chi-Squared Anomaly'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    pair = models.ForeignKey(
+        EntangledDevicePair,
+        on_delete=models.CASCADE,
+        related_name='anomaly_events'
+    )
+    device = models.ForeignKey(
+        UserDevice,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='anomaly_events'
+    )
+    
+    # Anomaly classification
+    anomaly_type = models.CharField(
+        max_length=30,
+        choices=TYPE_CHOICES,
+        help_text="Type of anomaly detected"
+    )
+    severity = models.CharField(
+        max_length=20,
+        choices=SEVERITY_CHOICES,
+        help_text="Severity level of the anomaly"
+    )
+    
+    # Metrics at time of detection
+    entropy_value = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Entropy value when anomaly was detected"
+    )
+    kl_divergence = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="KL divergence when anomaly was detected"
+    )
+    
+    # Response tracking
+    auto_revoked = models.BooleanField(
+        default=False,
+        help_text="Whether pair was auto-revoked due to this anomaly"
+    )
+    resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution_notes = models.TextField(blank=True)
+    
+    # Additional details
+    details = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Additional anomaly details"
+    )
+    recommendation = models.TextField(
+        help_text="Recommended action for this anomaly"
+    )
+    
+    # Timestamps
+    detected_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'anomaly_event'
+        verbose_name = 'Anomaly Event'
+        verbose_name_plural = 'Anomaly Events'
+        ordering = ['-detected_at']
+        indexes = [
+            models.Index(fields=['pair', 'severity']),
+            models.Index(fields=['resolved', 'detected_at']),
+            models.Index(fields=['anomaly_type', 'detected_at']),
+        ]
+    
+    def __str__(self):
+        resolved = "✓" if self.resolved else "⚠"
+        return f"{resolved} [{self.severity.upper()}] {self.get_anomaly_type_display()} @ {self.detected_at}"
+    
+    def resolve(self, notes: str = ""):
+        """Mark anomaly as resolved."""
+        from django.utils import timezone
+        self.resolved = True
+        self.resolved_at = timezone.now()
+        self.resolution_notes = notes
+        self.save()

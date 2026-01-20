@@ -190,6 +190,19 @@ urlpatterns = [
          __import__('security.api.entanglement_views', fromlist=['UserPairsView']).UserPairsView.as_view(), 
          name='entanglement-pairs'),
     
+    # Entropy History (NEW)
+    path('entanglement/entropy-history/<uuid:pair_id>/', 
+         __import__('security.api.entanglement_views', fromlist=['EntropyHistoryView']).EntropyHistoryView.as_view(), 
+         name='entanglement-entropy-history'),
+    
+    # Anomaly Events (NEW)
+    path('entanglement/anomalies/<uuid:pair_id>/', 
+         __import__('security.api.entanglement_views', fromlist=['AnomalyListView']).AnomalyListView.as_view(), 
+         name='entanglement-anomalies'),
+    path('entanglement/resolve-anomaly/', 
+         __import__('security.api.entanglement_views', fromlist=['ResolveAnomalyView']).ResolveAnomalyView.as_view(), 
+         name='entanglement-resolve-anomaly'),
+    
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),
     path('audit-log/', views.audit_log, name='security-audit-log'),

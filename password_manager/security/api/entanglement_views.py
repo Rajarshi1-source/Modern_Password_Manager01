@@ -336,3 +336,186 @@ class PairDetailView(APIView):
         
         serializer = EntangledDevicePairSerializer(pair)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class EntropyHistoryView(APIView):
+    """Get historical entropy measurements for a pair."""
+    
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, pair_id):
+        """
+        Get entropy measurement history with statistics.
+        
+        Query params:
+        - limit: Number of records (default 50, max 200)
+        - days: Filter to last N days (default 7)
+        """
+        from security.models import EntropyMeasurementRecord
+        from security.serializers.entanglement_serializers import (
+            EntropyMeasurementRecordSerializer,
+            EntropyHistoryListSerializer
+        )
+        from django.utils import timezone
+        from datetime import timedelta
+        from django.db.models import Avg
+        
+        # Verify ownership
+        pair = get_object_or_404(
+            EntangledDevicePair,
+            id=pair_id,
+            user=request.user
+        )
+        
+        # Get query params
+        limit = min(int(request.query_params.get('limit', 50)), 200)
+        days = int(request.query_params.get('days', 7))
+        
+        # Filter by time
+        since = timezone.now() - timedelta(days=days)
+        
+        measurements = EntropyMeasurementRecord.objects.filter(
+            pair_id=pair_id,
+            measured_at__gte=since
+        ).select_related('device').order_by('-measured_at')[:limit]
+        
+        # Calculate statistics
+        stats = EntropyMeasurementRecord.objects.filter(
+            pair_id=pair_id,
+            measured_at__gte=since
+        ).aggregate(
+            avg_entropy=Avg('entropy_value'),
+        )
+        
+        warning_count = EntropyMeasurementRecord.objects.filter(
+            pair_id=pair_id,
+            measured_at__gte=since,
+            is_warning=True
+        ).count()
+        
+        critical_count = EntropyMeasurementRecord.objects.filter(
+            pair_id=pair_id,
+            measured_at__gte=since,
+            is_critical=True
+        ).count()
+        
+        data = {
+            'pair_id': pair_id,
+            'measurements': list(measurements),
+            'total_count': measurements.count() if hasattr(measurements, 'count') else len(measurements),
+            'average_entropy': stats['avg_entropy'] or 0.0,
+            'warning_count': warning_count,
+            'critical_count': critical_count,
+        }
+        
+        # Serialize measurements manually
+        data['measurements'] = EntropyMeasurementRecordSerializer(
+            measurements, many=True
+        ).data
+        
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class AnomalyListView(APIView):
+    """List anomaly events for a pair."""
+    
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, pair_id):
+        """
+        Get anomaly events with filtering.
+        
+        Query params:
+        - resolved: Filter by resolution status (true/false)
+        - severity: Filter by severity (low/medium/high/critical)
+        - limit: Number of records (default 50)
+        """
+        from security.models import AnomalyEvent
+        from security.serializers.entanglement_serializers import (
+            AnomalyEventSerializer
+        )
+        
+        # Verify ownership
+        pair = get_object_or_404(
+            EntangledDevicePair,
+            id=pair_id,
+            user=request.user
+        )
+        
+        # Base queryset
+        queryset = AnomalyEvent.objects.filter(
+            pair_id=pair_id
+        ).select_related('device').order_by('-detected_at')
+        
+        # Apply filters
+        resolved = request.query_params.get('resolved')
+        if resolved is not None:
+            queryset = queryset.filter(resolved=resolved.lower() == 'true')
+        
+        severity = request.query_params.get('severity')
+        if severity:
+            queryset = queryset.filter(severity=severity)
+        
+        limit = min(int(request.query_params.get('limit', 50)), 200)
+        anomalies = queryset[:limit]
+        
+        # Get counts
+        total_count = queryset.count()
+        unresolved_count = AnomalyEvent.objects.filter(
+            pair_id=pair_id,
+            resolved=False
+        ).count()
+        critical_count = AnomalyEvent.objects.filter(
+            pair_id=pair_id,
+            severity='critical',
+            resolved=False
+        ).count()
+        
+        data = {
+            'pair_id': pair_id,
+            'anomalies': AnomalyEventSerializer(anomalies, many=True).data,
+            'total_count': total_count,
+            'unresolved_count': unresolved_count,
+            'critical_count': critical_count,
+        }
+        
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class ResolveAnomalyView(APIView):
+    """Resolve an anomaly event."""
+    
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """
+        Mark an anomaly as resolved.
+        """
+        from security.models import AnomalyEvent
+        from security.serializers.entanglement_serializers import (
+            ResolveAnomalySerializer,
+            AnomalyEventSerializer
+        )
+        
+        serializer = ResolveAnomalySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        anomaly = get_object_or_404(
+            AnomalyEvent.objects.select_related('pair'),
+            id=serializer.validated_data['anomaly_id'],
+            pair__user=request.user
+        )
+        
+        if anomaly.resolved:
+            return Response(
+                {'error': 'Anomaly is already resolved'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        anomaly.resolve(notes=serializer.validated_data.get('resolution_notes', ''))
+        
+        return Response(
+            AnomalyEventSerializer(anomaly).data,
+            status=status.HTTP_200_OK
+        )
+
