@@ -1803,3 +1803,402 @@ class AnomalyEvent(models.Model):
         self.resolved_at = timezone.now()
         self.resolution_notes = notes
         self.save()
+
+
+# =============================================================================
+# Geofencing & Impossible Travel Detection Models
+# =============================================================================
+
+class LocationHistory(models.Model):
+    """
+    Stores precise GPS coordinates for login events.
+    Used for physics-based impossible travel detection.
+    """
+    SOURCE_CHOICES = [
+        ('gps', 'GPS (High Accuracy)'),
+        ('network', 'Network Location'),
+        ('ip_fallback', 'IP Geolocation'),
+        ('manual', 'Manually Provided'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='location_history'
+    )
+    device = models.ForeignKey(
+        'UserDevice', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='location_records'
+    )
+    
+    # GPS Coordinates (high precision)
+    latitude = models.DecimalField(
+        max_digits=10, decimal_places=7,
+        help_text="Latitude in decimal degrees (-90 to 90)"
+    )
+    longitude = models.DecimalField(
+        max_digits=10, decimal_places=7,
+        help_text="Longitude in decimal degrees (-180 to 180)"
+    )
+    accuracy_meters = models.FloatField(
+        default=0,
+        help_text="GPS accuracy in meters"
+    )
+    altitude = models.FloatField(
+        null=True, blank=True,
+        help_text="Altitude in meters (for satellite verification)"
+    )
+    
+    # IP-based fallback location
+    ip_address = models.GenericIPAddressField()
+    ip_location_city = models.CharField(max_length=255, blank=True)
+    ip_location_country = models.CharField(max_length=255, blank=True)
+    ip_location_country_code = models.CharField(max_length=10, blank=True)
+    
+    # Metadata
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        default='ip_fallback'
+    )
+    timestamp = models.DateTimeField(auto_now_add=True)
+    server_timestamp = models.DateTimeField(
+        auto_now_add=True,
+        help_text="NTP-synchronized server time"
+    )
+    is_ntp_verified = models.BooleanField(
+        default=True,
+        help_text="Whether timestamp is NTP-verified"
+    )
+    
+    # Login association
+    login_attempt = models.ForeignKey(
+        'LoginAttempt', on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='location_records'
+    )
+    
+    class Meta:
+        db_table = 'location_history'
+        ordering = ['-timestamp']
+        indexes = [
+            models.Index(fields=['user', 'timestamp']),
+            models.Index(fields=['latitude', 'longitude']),
+            models.Index(fields=['ip_address']),
+        ]
+    
+    def __str__(self):
+        return f"📍 {self.user.username} @ ({self.latitude}, {self.longitude}) - {self.timestamp}"
+    
+    @property
+    def coordinates(self):
+        """Return tuple of (lat, lon)."""
+        return (float(self.latitude), float(self.longitude))
+
+
+class ImpossibleTravelEvent(models.Model):
+    """
+    Records detected impossible travel anomalies.
+    Uses physics-based calculations to determine travel plausibility.
+    """
+    SEVERITY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ]
+    
+    ACTION_CHOICES = [
+        ('allowed', 'Allowed'),
+        ('challenged', 'MFA Challenge Required'),
+        ('blocked', 'Access Blocked'),
+        ('travel_verified', 'Travel Verified via Airline'),
+        ('user_confirmed', 'User Confirmed Legitimate'),
+    ]
+    
+    TRAVEL_MODE_CHOICES = [
+        ('walking', 'Walking'),
+        ('driving', 'Driving'),
+        ('train', 'Train/Rail'),
+        ('flight', 'Commercial Flight'),
+        ('supersonic', 'Supersonic (Impossible)'),
+        ('unknown', 'Unknown'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='impossible_travel_events'
+    )
+    
+    # Source and destination locations
+    source_location = models.ForeignKey(
+        LocationHistory, on_delete=models.CASCADE,
+        related_name='travel_from_events'
+    )
+    destination_location = models.ForeignKey(
+        LocationHistory, on_delete=models.CASCADE,
+        related_name='travel_to_events'
+    )
+    
+    # Physics calculations
+    distance_km = models.FloatField(help_text="Great-circle distance in kilometers")
+    time_difference_seconds = models.IntegerField(help_text="Time between locations")
+    required_speed_kmh = models.FloatField(help_text="Speed required to travel")
+    max_allowed_speed_kmh = models.FloatField(
+        default=920,
+        help_text="Maximum plausible speed (commercial flight ~920 km/h)"
+    )
+    
+    # Inferred travel mode
+    inferred_travel_mode = models.CharField(
+        max_length=20,
+        choices=TRAVEL_MODE_CHOICES,
+        default='unknown'
+    )
+    
+    # Risk assessment
+    severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES)
+    risk_score = models.IntegerField(
+        default=0,
+        help_text="Risk score 0-100"
+    )
+    
+    # Action taken
+    action_taken = models.CharField(
+        max_length=30,
+        choices=ACTION_CHOICES,
+        default='challenged'
+    )
+    
+    # Resolution
+    is_legitimate = models.BooleanField(default=False)
+    airline_verified = models.BooleanField(default=False)
+    verification_data = models.JSONField(
+        default=dict, blank=True,
+        help_text="Airline booking proof or verification details"
+    )
+    
+    # Cloned session detection
+    is_cloned_session = models.BooleanField(
+        default=False,
+        help_text="Indicates simultaneous sessions from impossible locations"
+    )
+    concurrent_session_id = models.CharField(max_length=255, blank=True)
+    
+    resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='resolved_travel_events'
+    )
+    resolution_notes = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'impossible_travel_event'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'created_at']),
+            models.Index(fields=['severity', 'resolved']),
+            models.Index(fields=['action_taken']),
+        ]
+    
+    def __str__(self):
+        status = "✓" if self.is_legitimate else "⚠"
+        return f"{status} [{self.severity.upper()}] {self.distance_km:.0f}km in {self.time_difference_seconds//60}min = {self.required_speed_kmh:.0f}km/h"
+    
+    def resolve(self, user=None, legitimate=True, notes=""):
+        """Mark event as resolved."""
+        self.resolved = True
+        self.resolved_at = timezone.now()
+        self.resolved_by = user
+        self.is_legitimate = legitimate
+        self.resolution_notes = notes
+        self.save()
+
+
+class GeofenceZone(models.Model):
+    """
+    User-defined trusted location zones.
+    Logins from within these zones are considered trusted.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='geofence_zones'
+    )
+    
+    name = models.CharField(
+        max_length=100,
+        help_text="Friendly name (e.g., 'Home', 'Office')"
+    )
+    
+    # Zone center
+    latitude = models.DecimalField(max_digits=10, decimal_places=7)
+    longitude = models.DecimalField(max_digits=10, decimal_places=7)
+    radius_meters = models.IntegerField(
+        default=500,
+        help_text="Zone radius in meters"
+    )
+    
+    # Trust settings
+    is_always_trusted = models.BooleanField(
+        default=True,
+        help_text="Skip MFA checks from this zone"
+    )
+    require_mfa_outside = models.BooleanField(
+        default=True,
+        help_text="Require MFA when logging in from outside all zones"
+    )
+    
+    # Notifications
+    notify_on_entry = models.BooleanField(default=False)
+    notify_on_exit = models.BooleanField(default=False)
+    
+    # Metadata
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'geofence_zone'
+        ordering = ['name']
+    
+    def __str__(self):
+        status = "🟢" if self.is_active else "⚪"
+        return f"{status} {self.name} ({self.radius_meters}m radius)"
+    
+    def contains_point(self, lat: float, lon: float) -> bool:
+        """Check if a point is within this geofence zone."""
+        from math import radians, sin, cos, sqrt, atan2
+        
+        R = 6371000  # Earth's radius in meters
+        
+        lat1, lon1 = radians(float(self.latitude)), radians(float(self.longitude))
+        lat2, lon2 = radians(lat), radians(lon)
+        
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * atan2(sqrt(a), sqrt(1-a))
+        distance = R * c
+        
+        return distance <= self.radius_meters
+
+
+class TravelItinerary(models.Model):
+    """
+    Pre-registered legitimate travel for verification.
+    Allows users to pre-declare travel plans to avoid false positives.
+    """
+    VERIFICATION_STATUS_CHOICES = [
+        ('pending', 'Pending Verification'),
+        ('verified', 'Verified'),
+        ('failed', 'Verification Failed'),
+        ('expired', 'Expired'),
+    ]
+    
+    PROVIDER_CHOICES = [
+        ('amadeus', 'Amadeus GDS'),
+        ('sabre', 'Sabre'),
+        ('travelport', 'Travelport'),
+        ('manual', 'Manual Entry'),
+        ('email_parse', 'Email Parsed'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='travel_itineraries'
+    )
+    
+    # Trip details
+    departure_city = models.CharField(max_length=255)
+    departure_country = models.CharField(max_length=100, blank=True)
+    departure_airport_code = models.CharField(max_length=10, blank=True)
+    departure_latitude = models.DecimalField(
+        max_digits=10, decimal_places=7,
+        null=True, blank=True
+    )
+    departure_longitude = models.DecimalField(
+        max_digits=10, decimal_places=7,
+        null=True, blank=True
+    )
+    
+    arrival_city = models.CharField(max_length=255)
+    arrival_country = models.CharField(max_length=100, blank=True)
+    arrival_airport_code = models.CharField(max_length=10, blank=True)
+    arrival_latitude = models.DecimalField(
+        max_digits=10, decimal_places=7,
+        null=True, blank=True
+    )
+    arrival_longitude = models.DecimalField(
+        max_digits=10, decimal_places=7,
+        null=True, blank=True
+    )
+    
+    # Timing
+    departure_time = models.DateTimeField()
+    arrival_time = models.DateTimeField()
+    
+    # Flight details (optional)
+    airline_code = models.CharField(max_length=10, blank=True)
+    airline_name = models.CharField(max_length=100, blank=True)
+    flight_number = models.CharField(max_length=20, blank=True)
+    booking_reference = models.CharField(
+        max_length=50, blank=True,
+        help_text="PNR / Confirmation number"
+    )
+    
+    # Verification
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VERIFICATION_STATUS_CHOICES,
+        default='pending'
+    )
+    verification_provider = models.CharField(
+        max_length=20,
+        choices=PROVIDER_CHOICES,
+        default='manual'
+    )
+    verification_data = models.JSONField(
+        default=dict, blank=True,
+        help_text="API response or verification details"
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    
+    # Metadata
+    notes = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'travel_itinerary'
+        ordering = ['-departure_time']
+        indexes = [
+            models.Index(fields=['user', 'departure_time']),
+            models.Index(fields=['verification_status']),
+        ]
+    
+    def __str__(self):
+        status = "✓" if self.verification_status == 'verified' else "⏳"
+        return f"{status} {self.departure_city} → {self.arrival_city} ({self.departure_time.date()})"
+    
+    @property
+    def duration_hours(self):
+        """Calculate trip duration in hours."""
+        delta = self.arrival_time - self.departure_time
+        return delta.total_seconds() / 3600
+    
+    def covers_timeframe(self, timestamp):
+        """Check if this itinerary covers a given timestamp."""
+        # Add buffer time for airport procedures
+        buffer = timezone.timedelta(hours=3)
+        return (self.departure_time - buffer) <= timestamp <= (self.arrival_time + buffer)
+

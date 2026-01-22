@@ -1,0 +1,430 @@
+/* TrustedZonesManager Component Styles */
+
+.trusted-zones-manager {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    padding: 24px;
+    border: 1px solid rgba(79, 172, 254, 0.2);
+}
+
+.trusted-zones-manager.loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    gap: 16px;
+}
+
+.trusted-zones-manager.loading p {
+    color: #a0a0a0;
+}
+
+/* Header */
+.zones-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.header-content h2 {
+    margin: 0;
+    color: #fff;
+    font-size: 1.25rem;
+}
+
+.header-content p {
+    margin: 4px 0 0;
+    color: #808080;
+    font-size: 0.85rem;
+}
+
+.add-zone-btn {
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #1a1a2e;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.add-zone-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
+}
+
+/* Error */
+.error-message {
+    background: rgba(244, 67, 54, 0.1);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    padding: 12px 16px;
+    border-radius: 8px;
+    color: #f44336;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.error-message button {
+    background: rgba(244, 67, 54, 0.2);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    color: #f44336;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+/* Form Overlay */
+.zone-form-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.zone-form {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    padding: 24px;
+    width: 100%;
+    max-width: 420px;
+    border: 1px solid rgba(79, 172, 254, 0.3);
+    animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.zone-form h3 {
+    margin: 0 0 20px;
+    color: #fff;
+    font-size: 1.1rem;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    color: #c0c0c0;
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="number"] {
+    width: 100%;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.9rem;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: #4facfe;
+}
+
+.form-row {
+    display: flex;
+    gap: 12px;
+}
+
+.form-row .form-group {
+    flex: 1;
+}
+
+.location-btn {
+    width: 100%;
+    padding: 10px;
+    background: rgba(79, 172, 254, 0.1);
+    border: 1px solid rgba(79, 172, 254, 0.3);
+    color: #4facfe;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-bottom: 16px;
+    transition: all 0.2s ease;
+}
+
+.location-btn:hover {
+    background: rgba(79, 172, 254, 0.2);
+}
+
+/* Range input */
+.form-group input[type="range"] {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    outline: none;
+    -webkit-appearance: none;
+}
+
+.form-group input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 20px;
+    height: 20px;
+    background: #4facfe;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.range-labels {
+    display: flex;
+    justify-content: space-between;
+    color: #808080;
+    font-size: 0.75rem;
+    margin-top: 4px;
+}
+
+/* Checkbox */
+.form-group.checkbox label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.form-group.checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #4facfe;
+}
+
+/* Form actions */
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.form-actions .btn {
+    flex: 1;
+    padding: 12px;
+    border-radius: 8px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.form-actions .btn.cancel {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #e0e0e0;
+}
+
+.form-actions .btn.save {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    border: none;
+    color: #1a1a2e;
+}
+
+/* Zones List */
+.zones-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 40px 20px;
+}
+
+.empty-icon {
+    font-size: 3rem;
+    display: block;
+    margin-bottom: 16px;
+    opacity: 0.5;
+}
+
+.empty-state p {
+    color: #a0a0a0;
+    margin: 4px 0;
+}
+
+.empty-state .hint {
+    font-size: 0.85rem;
+    color: #606060;
+}
+
+/* Zone Card */
+.zone-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    transition: all 0.2s ease;
+}
+
+.zone-card:hover {
+    border-color: rgba(79, 172, 254, 0.3);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.zone-card.inactive {
+    opacity: 0.5;
+}
+
+.zone-icon {
+    font-size: 2rem;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(79, 172, 254, 0.1);
+    border-radius: 12px;
+}
+
+.zone-info {
+    flex: 1;
+}
+
+.zone-info h4 {
+    margin: 0;
+    color: #fff;
+    font-size: 1rem;
+}
+
+.zone-coords {
+    color: #808080;
+    font-size: 0.75rem;
+    margin: 2px 0;
+    font-family: monospace;
+}
+
+.zone-meta {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.radius-badge {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    color: #a0a0a0;
+}
+
+.trust-badge {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    background: rgba(0, 230, 118, 0.1);
+    border-radius: 10px;
+    color: #00e676;
+}
+
+/* Zone Actions */
+.zone-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.zone-actions button {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+}
+
+.edit-btn {
+    background: rgba(79, 172, 254, 0.1);
+    color: #4facfe;
+}
+
+.edit-btn:hover {
+    background: rgba(79, 172, 254, 0.2);
+}
+
+.delete-btn {
+    background: rgba(244, 67, 54, 0.1);
+    color: #f44336;
+}
+
+.delete-btn:hover {
+    background: rgba(244, 67, 54, 0.2);
+}
+
+/* Spinner */
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(79, 172, 254, 0.2);
+    border-top-color: #4facfe;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    .zones-header {
+        flex-direction: column;
+        gap: 16px;
+        text-align: center;
+    }
+
+    .add-zone-btn {
+        width: 100%;
+    }
+
+    .zone-card {
+        flex-wrap: wrap;
+    }
+
+    .zone-info {
+        width: calc(100% - 64px);
+    }
+
+    .zone-actions {
+        width: 100%;
+        justify-content: flex-end;
+        margin-top: 8px;
+    }
+}

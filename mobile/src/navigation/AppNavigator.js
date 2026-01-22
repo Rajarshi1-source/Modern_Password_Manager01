@@ -14,6 +14,10 @@ import Settings from '../screens/Settings';
 import Vault from '../screens/Vault';
 import AccountRecovery from '../screens/AccountRecovery';
 
+// Import geofencing screens
+import GeofenceScreen from '../screens/GeofenceScreen';
+import TrustedZonesScreen from '../screens/TrustedZonesScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -43,6 +47,8 @@ const MainTabNavigator = () => {
             iconName = focused ? 'ios-lock-closed' : 'ios-lock-closed-outline';
           } else if (route.name === 'SettingsStack') {
             iconName = focused ? 'ios-settings' : 'ios-settings-outline';
+          } else if (route.name === 'Geofence') {
+            iconName = focused ? 'ios-location' : 'ios-location-outline';
           }
 
           return <Ionicons name={iconName} size={size} color={color} />;
@@ -57,6 +63,15 @@ const MainTabNavigator = () => {
         options={{ headerTitle: 'Password Vault' }}
       />
       <Tab.Screen 
+        name="Geofence" 
+        component={GeofenceNavigator} 
+        options={{ 
+          headerShown: false, 
+          tabBarLabel: 'Location',
+          tabBarBadge: undefined // Can show alert count here
+        }}
+      />
+      <Tab.Screen 
         name="SettingsStack" 
         component={SettingsNavigator} 
         options={{ headerShown: false, tabBarLabel: 'Settings' }}
@@ -69,6 +84,22 @@ const MainTabNavigator = () => {
     </Tab.Navigator>
   );
 };
+
+// Geofence navigation stack
+const GeofenceNavigator = () => (
+  <MainStack.Navigator>
+    <MainStack.Screen 
+      name="GeofenceMain" 
+      component={GeofenceScreen}
+      options={{ headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="TrustedZones" 
+      component={TrustedZonesScreen}
+      options={{ headerTitle: 'Trusted Zones' }}
+    />
+  </MainStack.Navigator>
+);
 
 // Settings stack
 const SettingsNavigator = () => (

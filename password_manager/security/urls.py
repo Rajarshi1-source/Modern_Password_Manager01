@@ -203,6 +203,51 @@ urlpatterns = [
          __import__('security.api.entanglement_views', fromlist=['ResolveAnomalyView']).ResolveAnomalyView.as_view(), 
          name='entanglement-resolve-anomaly'),
     
+    # ==========================================================================
+    # Geofencing & Impossible Travel Detection Endpoints
+    # ==========================================================================
+    
+    # Location Recording
+    path('geofence/location/record/', 
+         __import__('security.api.geofence_views', fromlist=['RecordLocationView']).RecordLocationView.as_view(), 
+         name='geofence-location-record'),
+    path('geofence/location/history/', 
+         __import__('security.api.geofence_views', fromlist=['LocationHistoryView']).LocationHistoryView.as_view(), 
+         name='geofence-location-history'),
+    
+    # Geofence Zones
+    path('geofence/zones/', 
+         __import__('security.api.geofence_views', fromlist=['GeofenceZoneListView']).GeofenceZoneListView.as_view(), 
+         name='geofence-zones'),
+    path('geofence/zones/<uuid:zone_id>/', 
+         __import__('security.api.geofence_views', fromlist=['GeofenceZoneDetailView']).GeofenceZoneDetailView.as_view(), 
+         name='geofence-zone-detail'),
+    path('geofence/check/', 
+         __import__('security.api.geofence_views', fromlist=['GeofenceCheckView']).GeofenceCheckView.as_view(), 
+         name='geofence-check'),
+    
+    # Impossible Travel Events
+    path('geofence/travel/events/', 
+         __import__('security.api.geofence_views', fromlist=['ImpossibleTravelEventListView']).ImpossibleTravelEventListView.as_view(), 
+         name='geofence-travel-events'),
+    path('geofence/travel/resolve/', 
+         __import__('security.api.geofence_views', fromlist=['ResolveTravelEventView']).ResolveTravelEventView.as_view(), 
+         name='geofence-travel-resolve'),
+    path('geofence/travel/analyze/', 
+         __import__('security.api.geofence_views', fromlist=['AnalyzeTravelView']).AnalyzeTravelView.as_view(), 
+         name='geofence-travel-analyze'),
+    
+    # Travel Itineraries
+    path('geofence/itinerary/', 
+         __import__('security.api.geofence_views', fromlist=['TravelItineraryListView']).TravelItineraryListView.as_view(), 
+         name='geofence-itinerary-list'),
+    path('geofence/itinerary/<uuid:itinerary_id>/', 
+         __import__('security.api.geofence_views', fromlist=['TravelItineraryDetailView']).TravelItineraryDetailView.as_view(), 
+         name='geofence-itinerary-detail'),
+    path('geofence/travel/verify/', 
+         __import__('security.api.geofence_views', fromlist=['VerifyTravelView']).VerifyTravelView.as_view(), 
+         name='geofence-travel-verify'),
+    
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),
     path('audit-log/', views.audit_log, name='security-audit-log'),

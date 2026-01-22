@@ -1,0 +1,172 @@
+/* GeolocationCapture Component Styles */
+
+.geolocation-capture {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid rgba(79, 172, 254, 0.2);
+    margin-bottom: 16px;
+}
+
+.geolocation-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.geolocation-icon {
+    font-size: 1.2rem;
+}
+
+.geolocation-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #e0e0e0;
+}
+
+/* Permission request */
+.geolocation-permission {
+    text-align: center;
+    padding: 12px;
+}
+
+.geolocation-permission p {
+    color: #a0a0a0;
+    margin-bottom: 12px;
+    font-size: 0.85rem;
+}
+
+/* Loading state */
+.geolocation-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+}
+
+.geolocation-loading p {
+    color: #a0a0a0;
+    font-size: 0.85rem;
+}
+
+.spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(79, 172, 254, 0.2);
+    border-top-color: #4facfe;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Success state */
+.geolocation-success {
+    padding: 8px;
+}
+
+.location-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.success-icon {
+    color: #00e676;
+    font-size: 1rem;
+}
+
+.location-info span:last-child {
+    color: #e0e0e0;
+    font-size: 0.85rem;
+}
+
+.analysis-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.analysis-badge.none,
+.analysis-badge.low {
+    background: rgba(0, 230, 118, 0.1);
+    color: #00e676;
+    border: 1px solid rgba(0, 230, 118, 0.3);
+}
+
+.analysis-badge.medium {
+    background: rgba(255, 193, 7, 0.1);
+    color: #ffc107;
+    border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.analysis-badge.high {
+    background: rgba(255, 152, 0, 0.1);
+    color: #ff9800;
+    border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+.analysis-badge.critical {
+    background: rgba(244, 67, 54, 0.1);
+    color: #f44336;
+    border: 1px solid rgba(244, 67, 54, 0.3);
+}
+
+/* Error state */
+.geolocation-error {
+    text-align: center;
+    padding: 12px;
+}
+
+.error-icon {
+    color: #f44336;
+    font-size: 1.2rem;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.geolocation-error p {
+    color: #f44336;
+    font-size: 0.85rem;
+    margin-bottom: 12px;
+}
+
+/* Buttons */
+.geolocation-btn {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: none;
+}
+
+.geolocation-btn.primary {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #1a1a2e;
+}
+
+.geolocation-btn.primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
+}
+
+.geolocation-btn.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.geolocation-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+}

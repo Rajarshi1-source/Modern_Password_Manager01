@@ -1138,3 +1138,56 @@ QUANTUM_ENTANGLEMENT = {
     'KL_DIVERGENCE_CRITICAL': float(os.environ.get('KL_CRITICAL', '0.5')),
 }
 
+# ==============================================================================
+# GEOFENCING & IMPOSSIBLE TRAVEL DETECTION CONFIGURATION
+# ==============================================================================
+
+GEOFENCE_SETTINGS = {
+    # Feature Flags
+    'ENABLED': os.environ.get('GEOFENCE_ENABLED', 'True').lower() == 'true',
+    'IMPOSSIBLE_TRAVEL_ENABLED': os.environ.get('IMPOSSIBLE_TRAVEL_ENABLED', 'True').lower() == 'true',
+    'AIRLINE_VERIFICATION_ENABLED': os.environ.get('AIRLINE_VERIFICATION_ENABLED', 'True').lower() == 'true',
+    'CLONED_SESSION_DETECTION': os.environ.get('CLONED_SESSION_DETECTION_ENABLED', 'True').lower() == 'true',
+    
+    # Speed Thresholds (km/h) - Used for travel mode inference
+    'SPEED_WALKING': float(os.environ.get('TRAVEL_SPEED_WALKING', '6')),
+    'SPEED_CYCLING': float(os.environ.get('TRAVEL_SPEED_CYCLING', '40')),
+    'SPEED_DRIVING': float(os.environ.get('TRAVEL_SPEED_DRIVING', '200')),
+    'SPEED_HIGH_SPEED_RAIL': float(os.environ.get('TRAVEL_SPEED_RAIL', '400')),
+    'SPEED_COMMERCIAL_FLIGHT': float(os.environ.get('TRAVEL_SPEED_FLIGHT', '920')),
+    'SPEED_SUPERSONIC_THRESHOLD': float(os.environ.get('TRAVEL_SPEED_SUPERSONIC', '1200')),
+    
+    # Action Thresholds
+    'CHALLENGE_SPEED_THRESHOLD': float(os.environ.get('CHALLENGE_SPEED_THRESHOLD', '500')),  # Require MFA
+    'BLOCK_SPEED_THRESHOLD': float(os.environ.get('BLOCK_SPEED_THRESHOLD', '1200')),  # Block access
+    
+    # Time Thresholds
+    'MIN_TIME_BETWEEN_LOCATIONS_SECONDS': int(os.environ.get('MIN_LOCATION_GAP', '60')),  # 1 minute
+    'CLONED_SESSION_MAX_TIME_DIFF_SECONDS': int(os.environ.get('CLONED_SESSION_TIME', '300')),  # 5 minutes
+    
+    # Data Retention (days)
+    'LOCATION_HISTORY_RETENTION_DAYS': int(os.environ.get('LOCATION_HISTORY_RETENTION_DAYS', '90')),
+    'TRAVEL_EVENT_RETENTION_DAYS': int(os.environ.get('TRAVEL_EVENT_RETENTION_DAYS', '365')),
+    
+    # Geofence Zone Limits
+    'MAX_ZONES_PER_USER': int(os.environ.get('MAX_GEOFENCE_ZONES', '10')),
+    'DEFAULT_ZONE_RADIUS_METERS': int(os.environ.get('DEFAULT_ZONE_RADIUS', '500')),
+    'MIN_ZONE_RADIUS_METERS': 50,
+    'MAX_ZONE_RADIUS_METERS': 10000,
+    
+    # NTP Time Synchronization
+    'NTP_SERVER': os.environ.get('NTP_SERVER', 'pool.ntp.org'),
+    'NTP_TIMEOUT_SECONDS': int(os.environ.get('NTP_TIMEOUT', '5')),
+    'USE_NTP_VERIFICATION': os.environ.get('USE_NTP_VERIFICATION', 'True').lower() == 'true',
+}
+
+# Amadeus API Configuration (Primary Airline Verification Provider)
+AMADEUS_API_KEY = os.environ.get('AMADEUS_API_KEY', '')
+AMADEUS_API_SECRET = os.environ.get('AMADEUS_API_SECRET', '')
+AMADEUS_ENVIRONMENT = os.environ.get('AMADEUS_ENVIRONMENT', 'test')  # 'test' or 'production'
+
+# Sabre API Configuration (Fallback Provider)
+SABRE_API_KEY = os.environ.get('SABRE_API_KEY', '')
+SABRE_API_SECRET = os.environ.get('SABRE_API_SECRET', '')
+SABRE_REST_URL = os.environ.get('SABRE_REST_URL', 'https://api.cert.sabre.com')
+
