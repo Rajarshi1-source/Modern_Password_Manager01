@@ -89,7 +89,7 @@ jobs:
       - name: Run Safety check
         run: |
           cd password_manager
-          safety check --file requirements.txt --exit-code 1 --json > safety-report.json || true
+          safety check --file requirements.txt --exit-code --json > safety-report.json || true
           cat safety-report.json
       
       # ✅ FIX #4: Fail on vulnerabilities
