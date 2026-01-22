@@ -190,6 +190,28 @@ except ImportError as e:
     ADAPTIVE_TASKS_AVAILABLE = False
 
 
+# ============================================================================
+# Time-Lock Tasks
+# ============================================================================
+
+try:
+    from .time_lock_tasks import (
+        check_capsule_unlocks,
+        check_dead_mans_switches,
+        check_expired_capsules,
+        check_escrow_deadlines,
+        trigger_password_will,
+        send_will_reminder,
+        notify_beneficiary,
+        process_vdf_computation,
+        CELERY_BEAT_SCHEDULE as TIME_LOCK_BEAT_SCHEDULE,
+    )
+    TIME_LOCK_TASKS_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Could not import time-lock tasks: {e}")
+    TIME_LOCK_TASKS_AVAILABLE = False
+
+
 __all__ = [
     'check_for_breaches',
     'scan_user_vault',
@@ -203,3 +225,16 @@ __all__ = [
 
 if ADAPTIVE_TASKS_AVAILABLE:
     pass  # adaptive_tasks uses wildcard import
+
+if TIME_LOCK_TASKS_AVAILABLE:
+    __all__.extend([
+        'check_capsule_unlocks',
+        'check_dead_mans_switches',
+        'check_expired_capsules',
+        'check_escrow_deadlines',
+        'trigger_password_will',
+        'send_will_reminder',
+        'notify_beneficiary',
+        'process_vdf_computation',
+    ])
+

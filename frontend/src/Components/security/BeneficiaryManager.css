@@ -1,0 +1,356 @@
+/* BeneficiaryManager Component Styles */
+
+.beneficiary-manager {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    padding: 24px;
+    border: 1px solid rgba(79, 172, 254, 0.2);
+}
+
+.beneficiary-manager.loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+    gap: 16px;
+}
+
+.beneficiary-manager.loading p {
+    color: #a0a0a0;
+}
+
+/* Header */
+.manager-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.manager-header h2 {
+    margin: 0;
+    color: #fff;
+    font-size: 1.3rem;
+}
+
+.manager-header p {
+    margin: 4px 0 0;
+    color: #808080;
+    font-size: 0.85rem;
+}
+
+.add-btn {
+    padding: 10px 20px;
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #1a1a2e;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.add-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
+}
+
+/* Error */
+.error-message {
+    background: rgba(244, 67, 54, 0.1);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    padding: 12px 16px;
+    border-radius: 8px;
+    color: #f44336;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 48px 20px;
+}
+
+.empty-state .icon {
+    font-size: 3rem;
+    opacity: 0.5;
+}
+
+.empty-state p {
+    color: #a0a0a0;
+    margin: 16px 0 8px;
+}
+
+.empty-state .hint {
+    color: #606060;
+    font-size: 0.85rem;
+}
+
+/* Beneficiaries List */
+.beneficiaries-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.beneficiary-card {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    transition: all 0.2s ease;
+}
+
+.beneficiary-card:hover {
+    border-color: rgba(79, 172, 254, 0.3);
+}
+
+.ben-avatar {
+    width: 48px;
+    height: 48px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 600;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.ben-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.ben-name {
+    margin: 0;
+    color: #fff;
+    font-size: 1rem;
+}
+
+.ben-email {
+    display: block;
+    color: #a0a0a0;
+    font-size: 0.85rem;
+}
+
+.ben-relationship {
+    display: inline-block;
+    padding: 2px 8px;
+    background: rgba(102, 126, 234, 0.2);
+    border-radius: 10px;
+    font-size: 0.7rem;
+    color: #667eea;
+    margin-top: 4px;
+}
+
+.ben-status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+.verification-badge {
+    padding: 4px 10px;
+    border-radius: 10px;
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
+.verification-badge.verified {
+    background: rgba(0, 230, 118, 0.2);
+    color: #00e676;
+}
+
+.verification-badge.pending {
+    background: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+}
+
+.access-badge {
+    font-size: 0.75rem;
+    color: #808080;
+    text-transform: capitalize;
+}
+
+.ben-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.7rem;
+    color: #606060;
+}
+
+.ben-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.action-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+}
+
+.action-btn.resend {
+    background: rgba(79, 172, 254, 0.1);
+}
+
+.action-btn.remove {
+    background: rgba(244, 67, 54, 0.1);
+}
+
+.action-btn:hover {
+    transform: scale(1.1);
+}
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 450px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+    border: 1px solid rgba(79, 172, 254, 0.3);
+}
+
+.modal-content h3 {
+    margin: 0 0 24px;
+    color: #fff;
+    font-size: 1.2rem;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    color: #c0c0c0;
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+}
+
+.form-group input,
+.form-group select {
+    width: 100%;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.9rem;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: #4facfe;
+}
+
+.form-group.checkbox label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+}
+
+.form-group.checkbox input[type="checkbox"] {
+    width: auto;
+    accent-color: #4facfe;
+}
+
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.form-actions .btn {
+    flex: 1;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.form-actions .btn.cancel {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+}
+
+.form-actions .btn.add {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #1a1a2e;
+}
+
+.form-actions .btn.add:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Spinner */
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(79, 172, 254, 0.2);
+    border-top-color: #4facfe;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    .beneficiary-card {
+        flex-wrap: wrap;
+    }
+
+    .ben-info {
+        flex-basis: calc(100% - 64px);
+    }
+
+    .ben-status,
+    .ben-meta,
+    .ben-actions {
+        flex-basis: 100%;
+        flex-direction: row;
+        justify-content: flex-start;
+        padding-left: 64px;
+    }
+}

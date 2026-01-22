@@ -248,6 +248,56 @@ urlpatterns = [
          __import__('security.api.geofence_views', fromlist=['VerifyTravelView']).VerifyTravelView.as_view(), 
          name='geofence-travel-verify'),
     
+    # ==========================================================================
+    # Time-Lock Encryption Endpoints
+    # ==========================================================================
+    
+    # Capsule CRUD
+    path('timelock/capsules/', 
+         __import__('security.api.time_lock_views', fromlist=['CapsuleListView']).CapsuleListView.as_view(), 
+         name='timelock-capsules'),
+    path('timelock/capsules/<uuid:capsule_id>/', 
+         __import__('security.api.time_lock_views', fromlist=['CapsuleDetailView']).CapsuleDetailView.as_view(), 
+         name='timelock-capsule-detail'),
+    path('timelock/capsules/<uuid:capsule_id>/status/', 
+         __import__('security.api.time_lock_views', fromlist=['CapsuleStatusView']).CapsuleStatusView.as_view(), 
+         name='timelock-capsule-status'),
+    path('timelock/capsules/<uuid:capsule_id>/unlock/', 
+         __import__('security.api.time_lock_views', fromlist=['UnlockCapsuleView']).UnlockCapsuleView.as_view(), 
+         name='timelock-capsule-unlock'),
+    path('timelock/capsules/<uuid:capsule_id>/cancel/', 
+         __import__('security.api.time_lock_views', fromlist=['CancelCapsuleView']).CancelCapsuleView.as_view(), 
+         name='timelock-capsule-cancel'),
+    
+    # Beneficiaries
+    path('timelock/beneficiaries/', 
+         __import__('security.api.time_lock_views', fromlist=['BeneficiaryListView']).BeneficiaryListView.as_view(), 
+         name='timelock-beneficiaries'),
+    path('timelock/beneficiaries/<uuid:beneficiary_id>/', 
+         __import__('security.api.time_lock_views', fromlist=['BeneficiaryDetailView']).BeneficiaryDetailView.as_view(), 
+         name='timelock-beneficiary-detail'),
+    
+    # Password Wills
+    path('timelock/wills/', 
+         __import__('security.api.time_lock_views', fromlist=['PasswordWillListView']).PasswordWillListView.as_view(), 
+         name='timelock-wills'),
+    path('timelock/wills/<uuid:will_id>/checkin/', 
+         __import__('security.api.time_lock_views', fromlist=['PasswordWillCheckInView']).PasswordWillCheckInView.as_view(), 
+         name='timelock-will-checkin'),
+    
+    # Escrow Agreements
+    path('timelock/escrows/', 
+         __import__('security.api.time_lock_views', fromlist=['EscrowListView']).EscrowListView.as_view(), 
+         name='timelock-escrows'),
+    path('timelock/escrows/<uuid:escrow_id>/approve/', 
+         __import__('security.api.time_lock_views', fromlist=['EscrowApproveView']).EscrowApproveView.as_view(), 
+         name='timelock-escrow-approve'),
+    
+    # VDF Verification
+    path('timelock/vdf/verify/', 
+         __import__('security.api.time_lock_views', fromlist=['VDFVerifyView']).VDFVerifyView.as_view(), 
+         name='timelock-vdf-verify'),
+    
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),
     path('audit-log/', views.audit_log, name='security-audit-log'),

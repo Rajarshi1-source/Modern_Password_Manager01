@@ -1,0 +1,407 @@
+/* EscrowDashboard Component Styles */
+
+.escrow-dashboard {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    padding: 24px;
+    border: 1px solid rgba(0, 230, 118, 0.2);
+}
+
+.escrow-dashboard.loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 300px;
+    gap: 16px;
+}
+
+.escrow-dashboard.loading p {
+    color: #a0a0a0;
+}
+
+/* Header */
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.dashboard-header h2 {
+    margin: 0;
+    color: #fff;
+    font-size: 1.5rem;
+}
+
+.dashboard-header p {
+    margin: 4px 0 0;
+    color: #808080;
+    font-size: 0.9rem;
+}
+
+.create-btn {
+    padding: 12px 24px;
+    background: linear-gradient(135deg, #00e676 0%, #00c853 100%);
+    color: #1a1a2e;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.create-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 230, 118, 0.4);
+}
+
+/* Error */
+.error-message {
+    background: rgba(244, 67, 54, 0.1);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    padding: 12px 16px;
+    border-radius: 8px;
+    color: #f44336;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+/* Sections */
+.escrow-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.escrow-section h3 {
+    color: #e0e0e0;
+    font-size: 1rem;
+    margin-bottom: 16px;
+}
+
+.escrows-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+.empty-state {
+    padding: 24px;
+    text-align: center;
+    color: #606060;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 12px;
+    border: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+/* Escrow Card */
+.escrow-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.escrow-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(0, 230, 118, 0.3);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+.escrow-card.released {
+    border-color: rgba(0, 230, 118, 0.4);
+    background: rgba(0, 230, 118, 0.05);
+}
+
+.escrow-card.disputed {
+    border-color: rgba(244, 67, 54, 0.4);
+    background: rgba(244, 67, 54, 0.05);
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.condition-icon {
+    font-size: 1.5rem;
+}
+
+.status-badges {
+    display: flex;
+    gap: 8px;
+}
+
+.badge {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge.released {
+    background: rgba(0, 230, 118, 0.2);
+    color: #00e676;
+}
+
+.badge.disputed {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+}
+
+.badge.pending {
+    background: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+}
+
+.escrow-card .title {
+    margin: 0 0 8px;
+    color: #fff;
+    font-size: 1.1rem;
+}
+
+.escrow-card .description {
+    color: #808080;
+    font-size: 0.85rem;
+    margin: 0 0 16px;
+}
+
+/* Approval Status */
+.approval-status {
+    margin-bottom: 16px;
+}
+
+.approval-bar {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.approval-progress {
+    height: 100%;
+    background: linear-gradient(90deg, #00e676 0%, #00c853 100%);
+    transition: width 0.3s ease;
+}
+
+.approval-text {
+    font-size: 0.8rem;
+    color: #a0a0a0;
+}
+
+/* Parties List */
+.parties-list {
+    margin-bottom: 16px;
+}
+
+.parties-list h4 {
+    color: #c0c0c0;
+    font-size: 0.8rem;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+}
+
+.party-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.party-name {
+    color: #e0e0e0;
+    font-size: 0.85rem;
+}
+
+.approved-badge {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 0.7rem;
+}
+
+.approved-badge.yes {
+    background: rgba(0, 230, 118, 0.2);
+    color: #00e676;
+}
+
+.approved-badge.no {
+    background: rgba(255, 255, 255, 0.1);
+    color: #606060;
+}
+
+.release-ready {
+    padding: 10px;
+    background: rgba(0, 230, 118, 0.1);
+    border-radius: 8px;
+    text-align: center;
+    color: #00e676;
+    font-weight: 500;
+    margin-bottom: 12px;
+}
+
+.approve-btn {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #00e676 0%, #00c853 100%);
+    color: #1a1a2e;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.approve-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);
+}
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 500px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+    border: 1px solid rgba(0, 230, 118, 0.3);
+}
+
+.modal-content h3 {
+    margin: 0 0 24px;
+    color: #fff;
+    font-size: 1.25rem;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    color: #c0c0c0;
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+}
+
+.form-group input,
+.form-group textarea,
+.form-group select {
+    width: 100%;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.9rem;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: #00e676;
+}
+
+.email-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.email-row input {
+    flex: 1;
+}
+
+.email-row .remove-btn {
+    width: 40px;
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+.add-email-btn {
+    width: 100%;
+    padding: 10px;
+    background: rgba(0, 230, 118, 0.1);
+    border: 1px dashed rgba(0, 230, 118, 0.3);
+    border-radius: 8px;
+    color: #00e676;
+    cursor: pointer;
+}
+
+.form-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.form-actions .btn {
+    flex: 1;
+    padding: 14px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.form-actions .btn.cancel {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+}
+
+.form-actions .btn.create {
+    background: linear-gradient(135deg, #00e676 0%, #00c853 100%);
+    color: #1a1a2e;
+}
+
+.form-actions .btn.create:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Spinner */
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(0, 230, 118, 0.2);
+    border-top-color: #00e676;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

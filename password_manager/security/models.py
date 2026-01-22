@@ -2202,3 +2202,502 @@ class TravelItinerary(models.Model):
         buffer = timezone.timedelta(hours=3)
         return (self.departure_time - buffer) <= timestamp <= (self.arrival_time + buffer)
 
+
+# =============================================================================
+# Time-Lock Encryption Models
+# =============================================================================
+
+class TimeLockCapsule(models.Model):
+    """
+    Persisted time-lock capsule for delayed access to secrets.
+    
+    Supports:
+    - Server-enforced delays (recommended)
+    - Client-side RSA puzzles (offline capable)
+    - Hybrid mode (both options)
+    """
+    MODE_CHOICES = [
+        ('server', 'Server-Enforced'),
+        ('client', 'Client-Side Puzzle'),
+        ('hybrid', 'Hybrid Mode'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('locked', 'Locked'),
+        ('solving', 'Solving (Client Mode)'),
+        ('unlocked', 'Unlocked'),
+        ('expired', 'Expired'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    TYPE_CHOICES = [
+        ('general', 'General'),
+        ('will', 'Password Will'),
+        ('escrow', 'Escrow'),
+        ('time_capsule', 'Time Capsule'),
+        ('emergency', 'Emergency Access'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='time_lock_capsules'
+    )
+    
+    # Encrypted content
+    encrypted_data = models.BinaryField(
+        help_text="AES-encrypted secret data"
+    )
+    encryption_key_encrypted = models.BinaryField(
+        help_text="Encryption key encrypted with server master key"
+    )
+    
+    # Timing
+    unlock_at = models.DateTimeField(
+        help_text="When the capsule becomes accessible"
+    )
+    delay_seconds = models.IntegerField(
+        help_text="Original delay duration in seconds"
+    )
+    
+    # Mode and status
+    mode = models.CharField(
+        max_length=20,
+        choices=MODE_CHOICES,
+        default='server'
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='locked'
+    )
+    capsule_type = models.CharField(
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default='general'
+    )
+    
+    # Client-side puzzle parameters (for client/hybrid modes)
+    puzzle_n = models.TextField(
+        blank=True,
+        help_text="RSA modulus (large integer as string)"
+    )
+    puzzle_a = models.TextField(
+        blank=True,
+        help_text="Base value for repeated squaring"
+    )
+    puzzle_t = models.BigIntegerField(
+        null=True, blank=True,
+        help_text="Number of squarings required"
+    )
+    
+    # Metadata
+    title = models.CharField(
+        max_length=255,
+        help_text="User-friendly title for the capsule"
+    )
+    description = models.TextField(
+        blank=True,
+        help_text="Additional details about the capsule"
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    opened_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When the capsule was unlocked"
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    
+    # Access control
+    max_unlock_attempts = models.IntegerField(default=3)
+    unlock_attempts = models.IntegerField(default=0)
+    
+    class Meta:
+        db_table = 'time_lock_capsule'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['owner', 'status']),
+            models.Index(fields=['unlock_at', 'status']),
+            models.Index(fields=['capsule_type']),
+        ]
+    
+    def __str__(self):
+        status_icons = {
+            'locked': '🔒',
+            'solving': '⏳',
+            'unlocked': '🔓',
+            'expired': '⌛',
+            'cancelled': '❌'
+        }
+        icon = status_icons.get(self.status, '❓')
+        return f"{icon} {self.title} (unlocks: {self.unlock_at})"
+    
+    @property
+    def is_ready_to_unlock(self):
+        """Check if capsule can be unlocked (time has passed)."""
+        return self.status == 'locked' and timezone.now() >= self.unlock_at
+    
+    @property
+    def time_remaining_seconds(self):
+        """Get remaining seconds until unlock."""
+        if self.status != 'locked':
+            return 0
+        remaining = (self.unlock_at - timezone.now()).total_seconds()
+        return max(0, int(remaining))
+    
+    def cancel(self):
+        """Cancel the capsule."""
+        self.status = 'cancelled'
+        self.cancelled_at = timezone.now()
+        self.save()
+
+
+class CapsuleBeneficiary(models.Model):
+    """
+    Beneficiary for password wills and shared access.
+    
+    Allows users to designate trusted people who can
+    access the capsule contents after unlock.
+    """
+    ACCESS_LEVEL_CHOICES = [
+        ('view', 'View Only'),
+        ('full', 'Full Access'),
+        ('download', 'Download Only'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    capsule = models.ForeignKey(
+        TimeLockCapsule, on_delete=models.CASCADE,
+        related_name='beneficiaries'
+    )
+    
+    # Beneficiary info
+    email = models.EmailField()
+    name = models.CharField(max_length=255)
+    relationship = models.CharField(
+        max_length=100, blank=True,
+        help_text="e.g., 'Spouse', 'Lawyer', 'Business Partner'"
+    )
+    
+    # Access settings
+    access_level = models.CharField(
+        max_length=20,
+        choices=ACCESS_LEVEL_CHOICES,
+        default='view'
+    )
+    requires_verification = models.BooleanField(
+        default=True,
+        help_text="Require identity verification before access"
+    )
+    
+    # Verification status
+    verification_token = models.CharField(max_length=255, blank=True)
+    verified = models.BooleanField(default=False)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    
+    # Notification status
+    notified_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When unlock notification was sent"
+    )
+    accessed_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When beneficiary accessed the content"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'capsule_beneficiary'
+        unique_together = ['capsule', 'email']
+    
+    def __str__(self):
+        verified = "✓" if self.verified else "○"
+        return f"{verified} {self.name} <{self.email}> - {self.capsule.title}"
+
+
+class VDFProof(models.Model):
+    """
+    Stores VDF (Verifiable Delay Function) proofs.
+    
+    Based on Wesolowski VDF for proving computation time.
+    Allows verification in O(log t) time.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    capsule = models.ForeignKey(
+        TimeLockCapsule, on_delete=models.CASCADE,
+        related_name='vdf_proofs'
+    )
+    
+    # VDF parameters
+    challenge = models.TextField(
+        help_text="Initial challenge value (g)"
+    )
+    output = models.TextField(
+        help_text="VDF output (y = g^(2^t) mod n)"
+    )
+    proof = models.TextField(
+        help_text="Wesolowski proof (π)"
+    )
+    modulus = models.TextField(
+        help_text="RSA modulus (n)"
+    )
+    iterations = models.BigIntegerField(
+        help_text="Number of squarings (t)"
+    )
+    
+    # Verification
+    verified = models.BooleanField(default=False)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    verification_time_ms = models.IntegerField(
+        null=True, blank=True,
+        help_text="Time to verify the proof in milliseconds"
+    )
+    
+    # Computation metadata
+    computation_time_seconds = models.FloatField(
+        help_text="Actual computation time"
+    )
+    hardware_info = models.JSONField(
+        default=dict, blank=True,
+        help_text="Information about the computing hardware"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'vdf_proof'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        verified = "✓" if self.verified else "○"
+        return f"{verified} VDF proof for {self.capsule.title} ({self.iterations:,} iterations)"
+
+
+class PasswordWill(models.Model):
+    """
+    Digital password will for inheritance.
+    
+    Implements a "dead man's switch" pattern:
+    - User must check in periodically
+    - If check-in is missed, beneficiaries are notified
+    - Capsule unlocks and passwords are released
+    """
+    TRIGGER_TYPE_CHOICES = [
+        ('inactivity', 'Inactivity Trigger'),
+        ('date', 'Specific Date'),
+        ('manual', 'Manual Trigger'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        User, on_delete=models.CASCADE,
+        related_name='password_wills'
+    )
+    capsule = models.ForeignKey(
+        TimeLockCapsule, on_delete=models.CASCADE,
+        related_name='password_will'
+    )
+    
+    # Trigger settings
+    trigger_type = models.CharField(
+        max_length=20,
+        choices=TRIGGER_TYPE_CHOICES,
+        default='inactivity'
+    )
+    inactivity_days = models.IntegerField(
+        null=True, blank=True,
+        help_text="Days of inactivity before trigger (for inactivity type)"
+    )
+    target_date = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Specific date to trigger (for date type)"
+    )
+    
+    # Check-in tracking
+    last_check_in = models.DateTimeField(
+        default=timezone.now,
+        help_text="Last time owner confirmed they're alive"
+    )
+    check_in_reminder_days = models.IntegerField(
+        default=7,
+        help_text="Days before deadline to send reminder"
+    )
+    
+    # Status
+    is_active = models.BooleanField(default=True)
+    is_triggered = models.BooleanField(default=False)
+    triggered_at = models.DateTimeField(null=True, blank=True)
+    
+    # Notifications
+    reminder_sent = models.BooleanField(default=False)
+    reminder_sent_at = models.DateTimeField(null=True, blank=True)
+    beneficiaries_notified = models.BooleanField(default=False)
+    beneficiaries_notified_at = models.DateTimeField(null=True, blank=True)
+    
+    # Metadata
+    notes = models.TextField(
+        blank=True,
+        help_text="Personal message to beneficiaries"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'password_will'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        status = "🟢" if self.is_active else "⚪"
+        if self.is_triggered:
+            status = "🔴"
+        return f"{status} Will for {self.owner.username} ({self.trigger_type})"
+    
+    @property
+    def days_until_trigger(self):
+        """Calculate days until the will triggers."""
+        if not self.is_active or self.is_triggered:
+            return None
+        
+        if self.trigger_type == 'inactivity':
+            deadline = self.last_check_in + timezone.timedelta(days=self.inactivity_days)
+        elif self.trigger_type == 'date':
+            deadline = self.target_date
+        else:
+            return None
+        
+        remaining = (deadline - timezone.now()).days
+        return max(0, remaining)
+    
+    def check_in(self):
+        """User confirms they're still active."""
+        self.last_check_in = timezone.now()
+        self.reminder_sent = False
+        self.save()
+    
+    def trigger(self):
+        """Activate the will and notify beneficiaries."""
+        self.is_triggered = True
+        self.triggered_at = timezone.now()
+        self.save()
+
+
+class EscrowAgreement(models.Model):
+    """
+    Escrow-style time-locked release.
+    
+    Allows multiple parties to agree on conditions
+    for releasing time-locked secrets.
+    """
+    RELEASE_CONDITION_CHOICES = [
+        ('date', 'On Specific Date'),
+        ('all_approve', 'All Parties Approve'),
+        ('any_approve', 'Any Party Approves'),
+        ('majority', 'Majority Approves'),
+        ('date_or_approve', 'Date OR Approval'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    capsule = models.ForeignKey(
+        TimeLockCapsule, on_delete=models.CASCADE,
+        related_name='escrow_agreement'
+    )
+    
+    # Agreement details
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    release_condition = models.CharField(
+        max_length=20,
+        choices=RELEASE_CONDITION_CHOICES,
+        default='date'
+    )
+    
+    # Parties
+    parties = models.ManyToManyField(
+        User,
+        related_name='escrow_agreements'
+    )
+    
+    # Approval tracking
+    approved_by = models.JSONField(
+        default=list,
+        help_text="List of user IDs who have approved"
+    )
+    approval_deadline = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Deadline for parties to approve"
+    )
+    
+    # Dispute resolution
+    dispute_resolution_email = models.EmailField(
+        blank=True,
+        help_text="Contact for dispute resolution"
+    )
+    is_disputed = models.BooleanField(default=False)
+    dispute_notes = models.TextField(blank=True)
+    
+    # Status
+    is_released = models.BooleanField(default=False)
+    released_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'escrow_agreement'
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        status = "🔓" if self.is_released else "🔐"
+        return f"{status} Escrow: {self.title}"
+    
+    @property
+    def approval_count(self):
+        """Number of parties who have approved."""
+        return len(self.approved_by)
+    
+    @property
+    def total_parties(self):
+        """Total number of parties."""
+        return self.parties.count()
+    
+    @property
+    def can_release(self):
+        """Check if release conditions are met."""
+        if self.is_released or self.is_disputed:
+            return False
+        
+        now = timezone.now()
+        
+        if self.release_condition == 'date':
+            return now >= self.capsule.unlock_at
+        elif self.release_condition == 'all_approve':
+            return self.approval_count >= self.total_parties
+        elif self.release_condition == 'any_approve':
+            return self.approval_count >= 1
+        elif self.release_condition == 'majority':
+            return self.approval_count > self.total_parties // 2
+        elif self.release_condition == 'date_or_approve':
+            return now >= self.capsule.unlock_at or self.approval_count >= self.total_parties
+        
+        return False
+    
+    def approve(self, user_id):
+        """Record approval from a party."""
+        if user_id not in self.approved_by:
+            self.approved_by.append(user_id)
+            self.save()
+    
+    def release(self):
+        """Release the escrow."""
+        if self.can_release:
+            self.is_released = True
+            self.released_at = timezone.now()
+            self.capsule.status = 'unlocked'
+            self.capsule.opened_at = timezone.now()
+            self.capsule.save()
+            self.save()
+
+
