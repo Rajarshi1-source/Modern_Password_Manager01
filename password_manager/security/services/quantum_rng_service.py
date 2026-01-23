@@ -49,6 +49,7 @@ class QuantumProvider(Enum):
     ANU = "anu_qrng"
     IBM = "ibm_quantum"
     IONQ = "ionq_quantum"
+    OCEAN_WAVE = "noaa_ocean_wave"  # NOAA Ocean Wave entropy
     FALLBACK = "cryptographic_fallback"
 
 
@@ -523,13 +524,23 @@ class QuantumEntropyPool:
         self._total_available: int = 0
         self._lock = asyncio.Lock()
         
-        # Provider priority order
+        # Provider priority order (includes ocean wave for entropy diversity)
         self._providers: List[QuantumRNGProvider] = [
             ANUQuantumProvider(),
             IBMQuantumProvider(),
             IonQQuantumProvider(),
+            self._get_ocean_provider(),  # NOAA Ocean Wave
             FallbackCryptoProvider(),
         ]
+    
+    def _get_ocean_provider(self):
+        """Lazy import of ocean provider to avoid circular imports."""
+        try:
+            from security.services.ocean_wave_entropy_service import OceanWaveEntropyProvider
+            return OceanWaveEntropyProvider()
+        except ImportError:
+            logger.warning("Ocean wave entropy provider not available")
+            return None
     
     async def get_random_bytes(self, count: int) -> Tuple[bytes, QuantumCertificate]:
         """

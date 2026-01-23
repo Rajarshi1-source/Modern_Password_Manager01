@@ -237,10 +237,10 @@ class DNAEncodedPasswordAdmin(admin.ModelAdmin):
 
 @admin.register(TimeLockCapsule)
 class TimeLockCapsuleAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'mode', 'status', 'unlock_at', 'beneficiary_email')
-    list_filter = ('mode', 'status', 'requires_verification')
-    search_fields = ('user__username', 'beneficiary_email')
-    readonly_fields = ('id', 'created_at', 'unlocked_at', 'encrypted_data', 'encryption_key_encrypted')
+    list_display = ('id', 'owner', 'mode', 'status', 'unlock_at', 'capsule_type')
+    list_filter = ('mode', 'status', 'capsule_type')
+    search_fields = ('owner__username',)
+    readonly_fields = ('id', 'created_at', 'encrypted_data', 'encryption_key_encrypted')
     
     def time_remaining(self, obj):
         remaining = obj.time_remaining()
@@ -250,6 +250,7 @@ class TimeLockCapsuleAdmin(admin.ModelAdmin):
         minutes = (remaining % 3600) // 60
         return f"{hours}h {minutes}m"
     time_remaining.short_description = 'Time Remaining'
+
 
 
 @admin.register(ChemicalStorageCertificate)

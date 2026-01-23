@@ -209,6 +209,14 @@ class QuantumService {
         icon: '⚛️',
         color: '#7C3AED',
       },
+      'noaa_ocean_wave': {
+        name: 'NOAA Ocean Wave',
+        description: 'National Data Buoy Center',
+        source: 'Ocean wave patterns & temperature',
+        icon: '🌊',
+        color: '#0077B6',
+        tagline: 'Powered by the ocean\'s chaos',
+      },
       'cryptographic_fallback': {
         name: 'Cryptographic RNG',
         description: 'Secure Fallback',

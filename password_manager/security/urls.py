@@ -10,6 +10,7 @@ from .api import quantum_rng_views
 from .api import genetic_password_views
 from .api import chemical_storage_views
 from .api import adaptive_password_views
+from .api import ocean_entropy_views  # 🌊 Ocean Wave Entropy
 
 
 @api_view(['GET'])
@@ -59,6 +60,19 @@ urlpatterns = [
     path('quantum/certificate/<uuid:certificate_id>/', quantum_rng_views.get_certificate, name='quantum-certificate'),
     path('quantum/certificates/', quantum_rng_views.list_certificates, name='quantum-certificates'),
     path('quantum/pool-status/', quantum_rng_views.get_pool_status, name='quantum-pool-status'),
+    
+    # ==========================================================================
+    # 🌊 Ocean Wave Entropy endpoints
+    # ==========================================================================
+    path('ocean/status/', ocean_entropy_views.OceanEntropyStatusView.as_view(), name='ocean-status'),
+    path('ocean/buoys/', ocean_entropy_views.OceanBuoyListView.as_view(), name='ocean-buoys'),
+    path('ocean/readings/', ocean_entropy_views.OceanReadingsView.as_view(), name='ocean-readings'),
+    path('ocean/generate/', ocean_entropy_views.OceanEntropyGenerateView.as_view(), name='ocean-generate'),
+    path('ocean/pool/', ocean_entropy_views.OceanPoolStatusView.as_view(), name='ocean-pool'),
+    path('ocean/generate-hybrid-password/', ocean_entropy_views.HybridPasswordGenerateView.as_view(), name='ocean-hybrid-password'),
+    path('ocean/buoy/<str:buoy_id>/live-data/', ocean_entropy_views.LiveWaveDataView.as_view(), name='ocean-live-data'),
+    path('ocean/my-stats/', ocean_entropy_views.UserOceanStatsView.as_view(), name='ocean-my-stats'),
+    path('ocean/certificate/<uuid:certificate_id>/', ocean_entropy_views.HybridCertificateView.as_view(), name='ocean-certificate'),
     
     # ==========================================================================
     # Genetic Password Evolution endpoints

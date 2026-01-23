@@ -221,6 +221,7 @@ class QuantumEntropyBatch(models.Model):
         ('anu_qrng', 'ANU QRNG'),
         ('ibm_quantum', 'IBM Quantum'),
         ('ionq_quantum', 'IonQ Quantum'),
+        ('noaa_ocean_wave', 'NOAA Ocean Wave'),  # Ocean wave entropy
         ('cryptographic_fallback', 'Cryptographic Fallback'),
     ]
     
@@ -259,6 +260,7 @@ class QuantumPasswordCertificate(models.Model):
         ('vacuum_fluctuations', 'Vacuum Fluctuations (ANU)'),
         ('superconducting_qubit_superposition', 'Superconducting Qubit Superposition (IBM)'),
         ('trapped_ion_superposition', 'Trapped Ion Superposition (IonQ)'),
+        ('ocean_wave_patterns', 'Ocean Wave Patterns (NOAA)'),  # 🌊 Ocean entropy
         ('cryptographic_prng', 'Cryptographic PRNG (Fallback)'),
     ]
     
@@ -835,80 +837,8 @@ class DNAEncodedPassword(models.Model):
         return f"DNA-{str(self.id)[:8]} ({self.status})"
 
 
-class TimeLockCapsule(models.Model):
-    """
-    Server-enforced time-lock capsule for delayed password access.
-    
-    User cannot skip ahead - server releases password only after delay.
-    Perfect for emergency access, dead man's switch functionality.
-    """
-    
-    MODE_CHOICES = [
-        ('server', 'Server Enforced'),
-        ('client', 'Client Solvable'),
-        ('hybrid', 'Hybrid (Both)'),
-    ]
-    
-    STATUS_CHOICES = [
-        ('locked', 'Locked'),
-        ('solving', 'Solving'),
-        ('unlocked', 'Unlocked'),
-        ('cancelled', 'Cancelled'),
-        ('expired', 'Expired'),
-    ]
-    
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(User, on_delete=models.CASCADE,
-                             related_name='time_lock_capsules')
-    
-    # Capsule data (encrypted)
-    encrypted_data = models.BinaryField(
-        help_text="AES-encrypted password data")
-    encryption_key_encrypted = models.BinaryField(
-        help_text="Encryption key, encrypted with master key")
-    
-    # Time-lock configuration
-    mode = models.CharField(max_length=20, choices=MODE_CHOICES, default='server')
-    delay_seconds = models.IntegerField(
-        help_text="Original delay in seconds")
-    
-    # Status
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='locked')
-    created_at = models.DateTimeField(auto_now_add=True)
-    unlock_at = models.DateTimeField()
-    unlocked_at = models.DateTimeField(null=True, blank=True)
-    
-    # Beneficiary (for emergency access)
-    beneficiary_email = models.EmailField(null=True, blank=True,
-        help_text="Email to notify when capsule unlocks")
-    requires_verification = models.BooleanField(default=True,
-        help_text="Require identity verification to unlock")
-    
-    # Client puzzle data (for client mode)
-    puzzle_data = models.JSONField(null=True, blank=True,
-        help_text="RSA puzzle parameters for client-side solving")
-    
-    class Meta:
-        db_table = 'time_lock_capsule'
-        verbose_name = 'Time-Lock Capsule'
-        verbose_name_plural = 'Time-Lock Capsules'
-        ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"Capsule-{str(self.id)[:8]} ({self.status})"
-    
-    def is_unlockable(self):
-        """Check if capsule can be unlocked."""
-        if self.status != 'locked':
-            return False
-        return timezone.now() >= self.unlock_at
-    
-    def time_remaining(self):
-        """Get remaining time until unlock."""
-        if self.status != 'locked':
-            return 0
-        delta = self.unlock_at - timezone.now()
-        return max(0, int(delta.total_seconds()))
+# Note: TimeLockCapsule is defined later in the file (around line 2212+)
+# with the owner field instead of user. Do not add duplicate here.
 
 
 class ChemicalStorageCertificate(models.Model):
@@ -2701,3 +2631,17 @@ class EscrowAgreement(models.Model):
             self.save()
 
 
+# =============================================================================
+# Ocean Wave Entropy Models Import
+# =============================================================================
+# Import ocean entropy models for Django migrations
+try:
+    from security.models.ocean_entropy_models import (
+        OceanEntropyBatch,
+        HybridPasswordCertificate,
+        BuoyHealthStatus,
+        OceanEntropyUsageStats,
+    )
+except ImportError:
+    # Models not yet available during initial setup
+    pass

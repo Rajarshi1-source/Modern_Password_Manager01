@@ -10,6 +10,9 @@ from .deaddrop_serializers import (
     LocationClaimSerializer,
     CollectFragmentsSerializer,
     DistributionStatusSerializer,
+    NFCBeaconSerializer,
+    NFCChallengeSerializer,
+    NFCVerifySerializer,
 )
 
 __all__ = [
@@ -23,4 +26,7 @@ __all__ = [
     'LocationClaimSerializer',
     'CollectFragmentsSerializer',
     'DistributionStatusSerializer',
+    'NFCBeaconSerializer',
+    'NFCChallengeSerializer',
+    'NFCVerifySerializer',
 ]

@@ -1,0 +1,570 @@
+/**
+ * Ocean Entropy Dashboard Styles
+ * ===============================
+ * 
+ * Beautiful ocean-themed styles for the entropy dashboard.
+ * Uses ocean blues, wave animations, and modern glassmorphism.
+ * 
+ * @author Password Manager Team
+ * @created 2026-01-23
+ */
+
+/* Main Dashboard */
+.ocean-dashboard {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0a1628 0%, #0d2137 50%, #0a1628 100%);
+    color: #e8f4f8;
+    padding: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.ocean-dashboard.loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+}
+
+/* Wave Loader Animation */
+.wave-loader {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.wave-loader .wave {
+    width: 12px;
+    height: 40px;
+    background: linear-gradient(180deg, #00b4d8, #0077b6);
+    border-radius: 6px;
+    animation: waveLoader 1.2s ease-in-out infinite;
+}
+
+.wave-loader .wave:nth-child(1) {
+    animation-delay: 0s;
+}
+
+.wave-loader .wave:nth-child(2) {
+    animation-delay: 0.1s;
+}
+
+.wave-loader .wave:nth-child(3) {
+    animation-delay: 0.2s;
+}
+
+@keyframes waveLoader {
+
+    0%,
+    100% {
+        transform: scaleY(0.5);
+        opacity: 0.5;
+    }
+
+    50% {
+        transform: scaleY(1);
+        opacity: 1;
+    }
+}
+
+/* Header */
+.ocean-header {
+    background: linear-gradient(180deg, #0077b6 0%, #023e8a 100%);
+    padding: 1.5rem 2rem;
+    border-bottom: 2px solid rgba(0, 180, 216, 0.3);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.header-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.title-area {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.ocean-icon {
+    font-size: 3rem;
+    filter: drop-shadow(0 0 12px rgba(0, 180, 216, 0.6));
+    animation: bobbing 3s ease-in-out infinite;
+}
+
+@keyframes bobbing {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
+}
+
+.title-area h1 {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.tagline {
+    margin: 0;
+    font-size: 0.9rem;
+    color: rgba(232, 244, 248, 0.7);
+    font-style: italic;
+}
+
+.status-badge {
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(10px);
+}
+
+.status-badge[data-status="available"] {
+    background: rgba(0, 200, 83, 0.2);
+    color: #00c853;
+    border: 1px solid rgba(0, 200, 83, 0.3);
+}
+
+.status-badge[data-status="degraded"] {
+    background: rgba(255, 193, 7, 0.2);
+    color: #ffc107;
+    border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+/* Error Banner */
+.error-banner {
+    background: rgba(244, 67, 54, 0.15);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    color: #f44336;
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin: 1rem 2rem;
+    border-radius: 10px;
+}
+
+.error-banner button {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0 0.5rem;
+}
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.25rem;
+    padding: 1.5rem 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.stat-card {
+    background: linear-gradient(145deg, rgba(0, 119, 182, 0.15), rgba(0, 180, 216, 0.08));
+    border: 1px solid rgba(0, 180, 216, 0.2);
+    border-radius: 16px;
+    padding: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    backdrop-filter: blur(10px);
+    transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.stat-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(0, 119, 182, 0.2);
+}
+
+.stat-card.generated {
+    background: linear-gradient(145deg, rgba(0, 200, 83, 0.15), rgba(0, 200, 83, 0.05));
+    border-color: rgba(0, 200, 83, 0.3);
+}
+
+.stat-icon {
+    font-size: 2.25rem;
+    line-height: 1;
+}
+
+.stat-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #00b4d8;
+}
+
+.stat-card.generated .stat-value {
+    color: #00c853;
+}
+
+.stat-label {
+    font-size: 0.8rem;
+    color: rgba(232, 244, 248, 0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* Main Grid */
+.main-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    padding: 0 2rem 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+@media (max-width: 992px) {
+    .main-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Cards */
+.card {
+    background: linear-gradient(145deg, rgba(13, 33, 55, 0.9), rgba(10, 22, 40, 0.95));
+    border: 1px solid rgba(0, 180, 216, 0.15);
+    border-radius: 20px;
+    padding: 1.5rem;
+    backdrop-filter: blur(10px);
+}
+
+.card h2 {
+    margin: 0 0 1rem;
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #00b4d8;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.card-header h2 {
+    margin: 0;
+}
+
+/* Wave Visualizer */
+.wave-visualizer {
+    overflow: hidden;
+}
+
+.wave-animation {
+    height: 100px;
+    position: relative;
+    overflow: hidden;
+    border-radius: 10px;
+    margin-bottom: 1rem;
+}
+
+.wave-animation svg {
+    width: 100%;
+    height: 100%;
+}
+
+.wave-path {
+    fill: rgba(0, 119, 182, 0.4);
+    animation: waveMove 8s linear infinite;
+}
+
+.wave-path.primary {
+    fill: rgba(0, 180, 216, 0.5);
+    animation-duration: 6s;
+}
+
+.wave-path.secondary {
+    fill: rgba(0, 119, 182, 0.3);
+    animation-delay: -2s;
+}
+
+@keyframes waveMove {
+    0% {
+        transform: translateX(0);
+    }
+
+    100% {
+        transform: translateX(-50%);
+    }
+}
+
+.current-readings {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.reading-item {
+    background: rgba(0, 119, 182, 0.1);
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.buoy-id {
+    font-weight: 600;
+    color: #00b4d8;
+    white-space: nowrap;
+}
+
+.reading-values {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.85rem;
+    color: rgba(232, 244, 248, 0.7);
+    flex-wrap: wrap;
+}
+
+/* Entropy Generator */
+.entropy-generator .description {
+    color: rgba(232, 244, 248, 0.7);
+    margin-bottom: 1.5rem;
+    font-size: 0.95rem;
+    line-height: 1.6;
+}
+
+.generate-controls {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.generate-btn {
+    background: linear-gradient(135deg, #0077b6, #00b4d8);
+    border: none;
+    color: white;
+    padding: 0.85rem 1.5rem;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.3s;
+}
+
+.generate-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0, 119, 182, 0.4);
+}
+
+.generate-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.generate-btn.secondary {
+    background: linear-gradient(135deg, #023e8a, #0077b6);
+}
+
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Entropy Result */
+.entropy-result {
+    margin-top: 1.5rem;
+    padding: 1.25rem;
+    background: rgba(0, 200, 83, 0.08);
+    border: 1px solid rgba(0, 200, 83, 0.2);
+    border-radius: 12px;
+}
+
+.entropy-result h3 {
+    margin: 0 0 0.75rem;
+    font-size: 0.95rem;
+    color: #00c853;
+}
+
+.entropy-hex {
+    display: block;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 1rem;
+    border-radius: 8px;
+    font-family: 'Fira Code', 'Monaco', monospace;
+    font-size: 0.85rem;
+    color: #00b4d8;
+    word-break: break-all;
+    margin-bottom: 1rem;
+    line-height: 1.5;
+}
+
+.entropy-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    font-size: 0.8rem;
+    color: rgba(232, 244, 248, 0.6);
+}
+
+.ocean-message {
+    margin: 1rem 0 0;
+    font-style: italic;
+    color: #00b4d8;
+    text-align: center;
+}
+
+/* Buoy Map */
+.region-select {
+    background: rgba(0, 119, 182, 0.2);
+    border: 1px solid rgba(0, 180, 216, 0.3);
+    color: #e8f4f8;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    appearance: menulist;
+}
+
+.buoy-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: 350px;
+    overflow-y: auto;
+    padding-right: 0.5rem;
+}
+
+.buoy-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    background: rgba(0, 119, 182, 0.08);
+    border-radius: 10px;
+    transition: background 0.2s;
+}
+
+.buoy-item:hover {
+    background: rgba(0, 119, 182, 0.15);
+}
+
+.buoy-icon {
+    font-size: 1.25rem;
+}
+
+.buoy-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.buoy-name {
+    font-weight: 600;
+    color: #00b4d8;
+    font-size: 0.9rem;
+}
+
+.buoy-details {
+    font-size: 0.8rem;
+    color: rgba(232, 244, 248, 0.6);
+}
+
+.buoy-coords {
+    font-size: 0.75rem;
+    color: rgba(232, 244, 248, 0.4);
+    font-family: 'Fira Code', monospace;
+}
+
+.no-buoys {
+    text-align: center;
+    color: rgba(232, 244, 248, 0.5);
+    font-style: italic;
+    padding: 2rem;
+}
+
+/* Provider Info */
+.provider-info .info-content {
+    line-height: 1.7;
+}
+
+.provider-info p {
+    color: rgba(232, 244, 248, 0.8);
+    margin-bottom: 1rem;
+}
+
+.provider-info h3 {
+    color: #00b4d8;
+    font-size: 1rem;
+    margin: 1.25rem 0 0.75rem;
+}
+
+.provider-info ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.provider-info li {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid rgba(0, 180, 216, 0.1);
+    font-size: 0.9rem;
+    color: rgba(232, 244, 248, 0.75);
+}
+
+.provider-info li:last-child {
+    border-bottom: none;
+}
+
+.tagline-footer {
+    text-align: center;
+    font-size: 1.1rem;
+    margin-top: 1.5rem !important;
+    color: #00b4d8 !important;
+}
+
+/* Scrollbar */
+.buoy-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.buoy-list::-webkit-scrollbar-track {
+    background: rgba(0, 119, 182, 0.1);
+    border-radius: 3px;
+}
+
+.buoy-list::-webkit-scrollbar-thumb {
+    background: rgba(0, 180, 216, 0.3);
+    border-radius: 3px;
+}
+
+.buoy-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 180, 216, 0.5);
+}
