@@ -116,6 +116,9 @@ urlpatterns = [
     
     # Adversarial AI Password Defense API routes
     path('api/adversarial/', include('adversarial_ai.urls')),
+    
+    # Mesh Dead Drop Password Sharing API routes
+    path('api/mesh/', include('mesh_deaddrop.urls')),
 ]
 
 # Add static file serving for development

@@ -1,0 +1,302 @@
+/**
+ * Nearby Nodes Styles
+ */
+
+.nearby-nodes {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 20px;
+}
+
+.nearby-nodes.loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 300px;
+    color: #808080;
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-top-color: #00e676;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 12px;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Header */
+.nodes-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.nodes-header h3 {
+    margin: 0;
+    color: #fff;
+    font-size: 16px;
+}
+
+.refresh-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.refresh-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.refresh-btn:disabled {
+    opacity: 0.5;
+}
+
+/* Stats */
+.nodes-stats {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.stat {
+    flex: 1;
+    text-align: center;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 10px;
+}
+
+.stat-value {
+    display: block;
+    font-size: 22px;
+    font-weight: 700;
+    color: #00e676;
+}
+
+.stat-label {
+    font-size: 10px;
+    color: #808080;
+    text-transform: uppercase;
+}
+
+/* Filter */
+.nodes-filter {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.filter-btn {
+    flex: 1;
+    padding: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #a0a0a0;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.filter-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.filter-btn.active {
+    background: rgba(0, 230, 118, 0.15);
+    border-color: rgba(0, 230, 118, 0.3);
+    color: #00e676;
+}
+
+/* Node List */
+.nodes-list {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 40px;
+    color: #808080;
+}
+
+.empty-icon {
+    font-size: 40px;
+    display: block;
+    margin-bottom: 12px;
+    opacity: 0.5;
+}
+
+/* Node Card */
+.node-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.node-card:hover {
+    border-color: rgba(33, 150, 243, 0.3);
+    background: rgba(33, 150, 243, 0.05);
+}
+
+.node-card.offline {
+    opacity: 0.6;
+}
+
+.node-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.node-status {
+    flex-shrink: 0;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: block;
+}
+
+.status-dot.online {
+    background: #00e676;
+    box-shadow: 0 0 8px rgba(0, 230, 118, 0.5);
+}
+
+.status-dot.offline {
+    background: #808080;
+}
+
+.node-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.node-name {
+    display: block;
+    color: #fff;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.node-type {
+    font-size: 11px;
+    color: #808080;
+}
+
+/* Signal Bars */
+.signal-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.bar {
+    width: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    transition: background 0.2s;
+}
+
+.bar.active {
+    background: #00e676;
+}
+
+/* Node Details */
+.node-details {
+    display: flex;
+    gap: 16px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.detail-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.detail-label {
+    font-size: 10px;
+    color: #606060;
+    text-transform: uppercase;
+}
+
+.detail-value {
+    font-size: 12px;
+    color: #a0a0a0;
+}
+
+.detail-value.trust {
+    font-weight: 600;
+}
+
+/* Available Badge */
+.available-badge {
+    margin-top: 10px;
+    padding: 6px 10px;
+    background: rgba(0, 230, 118, 0.1);
+    border-radius: 6px;
+    font-size: 11px;
+    color: #00e676;
+}
+
+/* My Nodes Section */
+.my-nodes-section {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.my-nodes-section h4 {
+    margin: 0 0 8px;
+    color: #fff;
+    font-size: 14px;
+}
+
+.my-nodes-section p {
+    margin: 0 0 12px;
+    color: #808080;
+    font-size: 13px;
+}
+
+.register-btn {
+    width: 100%;
+    padding: 12px;
+    background: rgba(33, 150, 243, 0.1);
+    border: 1px dashed rgba(33, 150, 243, 0.3);
+    border-radius: 8px;
+    color: #2196f3;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.register-btn:hover {
+    background: rgba(33, 150, 243, 0.15);
+}

@@ -1,0 +1,172 @@
+/**
+ * Mesh Network Map Styles
+ */
+
+.mesh-network-map {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #1a1a2e;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.map-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(26, 26, 46, 0.9);
+    z-index: 10;
+    color: #808080;
+}
+
+.map-loading .spinner {
+    width: 32px;
+    height: 32px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-top-color: #00e676;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 12px;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.map-canvas {
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+}
+
+/* Legend */
+.map-legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    background: rgba(26, 26, 46, 0.9);
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: #a0a0a0;
+}
+
+.legend-item:last-child {
+    margin-bottom: 0;
+}
+
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
+/* Node Popup */
+.node-popup {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(22, 33, 62, 0.95);
+    border: 1px solid rgba(33, 150, 243, 0.3);
+    border-radius: 12px;
+    padding: 16px;
+    min-width: 200px;
+    z-index: 20;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.popup-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.popup-header h4 {
+    margin: 0;
+    color: #fff;
+    font-size: 14px;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.status-dot.online {
+    background: #00e676;
+    box-shadow: 0 0 8px rgba(0, 230, 118, 0.5);
+}
+
+.status-dot.offline {
+    background: #808080;
+}
+
+.popup-info p {
+    margin: 4px 0;
+    color: #a0a0a0;
+    font-size: 12px;
+}
+
+.popup-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.popup-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Stats Overlay */
+.map-stats {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    gap: 12px;
+}
+
+.stat {
+    background: rgba(26, 26, 46, 0.9);
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    text-align: center;
+}
+
+.stat-value {
+    display: block;
+    font-size: 18px;
+    font-weight: 700;
+    color: #00e676;
+}
+
+.stat-label {
+    font-size: 10px;
+    color: #808080;
+    text-transform: uppercase;
+}

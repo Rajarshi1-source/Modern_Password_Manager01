@@ -125,6 +125,7 @@ INSTALLED_APPS = [
     'blockchain',  # Blockchain Anchoring (Phase 2B)
     'fhe_service',  # Fully Homomorphic Encryption Service
     'adversarial_ai',  # Adversarial AI Password Defense
+    'mesh_deaddrop',  # Dead Drop Password Sharing via Mesh Networks
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
