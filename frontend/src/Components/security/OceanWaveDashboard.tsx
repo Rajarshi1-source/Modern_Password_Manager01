@@ -15,7 +15,24 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
+// @ts-ignore - Install with: npm install leaflet react-leaflet @types/leaflet
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
+// @ts-ignore - Install with: npm install leaflet react-leaflet @types/leaflet
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import './OceanWaveDashboard.css';
+
+// Fix Leaflet default marker icon issue
+try {
+    delete (L.Icon.Default.prototype as any)._getIconUrl;
+    L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
+        iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+    });
+} catch (e) {
+    console.warn('Leaflet not initialized:', e);
+}
 
 // Types
 interface BuoyData {
@@ -32,6 +49,8 @@ interface BuoyData {
         water_temp: number | null;
         wind_speed: number | null;
     } | null;
+    wave_height?: number | null;
+    wave_period?: number | null;
     quality_score: number;
     last_reading: string | null;
 }
@@ -80,11 +99,119 @@ interface GeneratedPassword {
     ocean_details?: {
         provider: string;
         source_id: string;
+        buoy_id?: string;
+        wave_height?: number;
     };
 }
 
 const API_URL = (import.meta as any).env?.VITE_API_URL || '';
 const API_BASE = `${API_URL}/api/security/ocean`;
+
+// Custom buoy marker icons
+const createBuoyIcon = (status: string) => {
+    const color = status === 'excellent' ? '#22c55e' :
+        status === 'good' ? '#3b82f6' :
+            status === 'degraded' ? '#f59e0b' : '#ef4444';
+
+    return L.divIcon({
+        className: 'buoy-marker',
+        html: `
+            <div style="
+                width: 32px;
+                height: 32px;
+                background: ${color};
+                border: 3px solid white;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 16px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            ">🌊</div>
+        `,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16],
+    });
+};
+
+// Map center controller component
+const MapController: React.FC<{ center: [number, number]; zoom: number }> = ({ center, zoom }) => {
+    const map = useMap();
+    useEffect(() => {
+        map.setView(center, zoom);
+    }, [center, zoom, map]);
+    return null;
+};
+
+// Buoy Map Component with Leaflet
+const BuoyMap: React.FC<{
+    buoys: BuoyData[];
+    selectedBuoy: BuoyData | null;
+    onSelectBuoy: (buoy: BuoyData) => void;
+}> = ({ buoys, selectedBuoy, onSelectBuoy }) => {
+    const defaultCenter: [number, number] = [35, -60]; // Atlantic Ocean
+    const center: [number, number] = selectedBuoy
+        ? [selectedBuoy.latitude, selectedBuoy.longitude]
+        : defaultCenter;
+    const zoom = selectedBuoy ? 6 : 3;
+
+    return (
+        <div className="buoy-map-container">
+            <MapContainer
+                center={center}
+                zoom={zoom}
+                style={{ height: '300px', width: '100%', borderRadius: '12px' }}
+                scrollWheelZoom={true}
+            >
+                <TileLayer
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <MapController center={center} zoom={zoom} />
+
+                {buoys.map((buoy) => (
+                    <Marker
+                        key={buoy.id}
+                        position={[buoy.latitude, buoy.longitude]}
+                        icon={createBuoyIcon(buoy.status)}
+                        eventHandlers={{
+                            click: () => onSelectBuoy(buoy),
+                        }}
+                    >
+                        <Popup>
+                            <div className="buoy-popup">
+                                <h4>{buoy.name || buoy.id}</h4>
+                                <p>📍 {buoy.region}</p>
+                                <p>Status: <span className={`status-${buoy.status}`}>{buoy.status}</span></p>
+                                {buoy.wave_height && <p>Wave: {buoy.wave_height.toFixed(1)}m</p>}
+                                <p>Quality: {(buoy.quality_score * 100).toFixed(0)}%</p>
+                            </div>
+                        </Popup>
+                    </Marker>
+                ))}
+
+                {selectedBuoy && (
+                    <Circle
+                        center={[selectedBuoy.latitude, selectedBuoy.longitude]}
+                        radius={50000}
+                        pathOptions={{
+                            color: '#06b6d4',
+                            fillColor: '#06b6d4',
+                            fillOpacity: 0.1,
+                        }}
+                    />
+                )}
+            </MapContainer>
+
+            <div className="map-legend">
+                <span className="legend-item"><span className="dot excellent"></span> Excellent</span>
+                <span className="legend-item"><span className="dot good"></span> Good</span>
+                <span className="legend-item"><span className="dot degraded"></span> Degraded</span>
+                <span className="legend-item"><span className="dot offline"></span> Offline</span>
+            </div>
+        </div>
+    );
+};
 
 // Wave Visualization Component
 const WaveVisualization: React.FC<{
@@ -291,6 +418,20 @@ export const OceanWaveDashboard: React.FC = () => {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            {/* Buoy Map Section */}
+            <motion.section
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="card map-card"
+            >
+                <h2>🗺️ Buoy Network Map</h2>
+                <BuoyMap
+                    buoys={buoys}
+                    selectedBuoy={selectedBuoy}
+                    onSelectBuoy={setSelectedBuoy}
+                />
+            </motion.section>
 
             {/* Main Grid */}
             <div className="main-grid">
