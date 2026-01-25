@@ -443,7 +443,9 @@ class HybridPasswordGenerateView(APIView):
                 'password': password,
                 'sources': [s['name'] for s in certificate.get('sources', [])],
                 'entropy_bits': entropy_bits,
+                'quality_score': certificate.get('quality_assessment', {}).get('overall_score', 0.0),
                 'quality_assessment': certificate.get('quality_assessment', {}),
+                'certificate_id': certificate.get('certificate_id'),
                 'service_name': service_name,
                 'mixing_algorithm': certificate.get('mixing_algorithm'),
                 'total_sources': certificate.get('total_sources', 0),
@@ -451,10 +453,25 @@ class HybridPasswordGenerateView(APIView):
                 'generated_at': timezone.now().isoformat(),
             }
             
+            # Build nested ocean_details per spec format
             if ocean_source:
-                response_data['ocean_details'] = ocean_source.get('metadata', {})
+                ocean_metadata = ocean_source.get('metadata', {})
+                response_data['ocean_details'] = {
+                    'buoy_id': ocean_metadata.get('buoy_id'),
+                    'buoy_name': ocean_metadata.get('buoy_name'),
+                    'wave_height': ocean_metadata.get('wave_height'),
+                    'wave_period': ocean_metadata.get('wave_period'),
+                    'location': [
+                        ocean_metadata.get('latitude'),
+                        ocean_metadata.get('longitude')
+                    ] if ocean_metadata.get('latitude') else None,
+                    'timestamp': ocean_metadata.get('timestamp'),
+                    'quality_score': ocean_source.get('quality_score', 0.0),
+                    'provider': 'NOAA',
+                }
             
             return Response(response_data, status=status.HTTP_201_CREATED)
+
             
         except InsufficientEntropySources as e:
             return Response({
