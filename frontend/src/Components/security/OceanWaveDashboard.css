@@ -1,0 +1,585 @@
+/**
+ * Ocean Wave Dashboard Styles (TypeScript Version)
+ * ==================================================
+ * 
+ * Enhanced styles with Leaflet map support.
+ * Uses ocean blues, wave animations, and modern glassmorphism.
+ * 
+ * @author Password Manager Team
+ * @created 2026-01-25
+ */
+
+/* Main Dashboard */
+.ocean-dashboard-ts {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0a1628 0%, #0d2137 50%, #0a1628 100%);
+    color: #e8f4f8;
+    padding: 0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.ocean-dashboard-ts.loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2rem;
+}
+
+.loading-spinner {
+    text-align: center;
+}
+
+.loading-spinner .wave-icon {
+    font-size: 4rem;
+    display: block;
+    animation: bounce 1s ease-in-out infinite;
+}
+
+.loading-spinner p {
+    color: #94a3b8;
+    margin-top: 1rem;
+}
+
+@keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+}
+
+/* Header */
+.dashboard-header {
+    background: linear-gradient(180deg, #0077b6 0%, #023e8a 100%);
+    padding: 1.5rem 2rem;
+    border-bottom: 2px solid rgba(0, 180, 216, 0.3);
+}
+
+.header-content {
+    text-align: center;
+}
+
+.header-content h1 {
+    margin: 0;
+    font-size: 2rem;
+    font-weight: 700;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.wave-emoji {
+    font-size: 2.5rem;
+    animation: bobbing 3s ease-in-out infinite;
+}
+
+@keyframes bobbing {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
+}
+
+.tagline {
+    margin: 0.5rem 0 0;
+    font-size: 1rem;
+    color: rgba(232, 244, 248, 0.7);
+    font-style: italic;
+}
+
+/* Error Banner */
+.error-banner {
+    background: rgba(244, 67, 54, 0.15);
+    border: 1px solid rgba(244, 67, 54, 0.3);
+    color: #f44336;
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    margin: 1rem 2rem;
+    border-radius: 10px;
+}
+
+.error-banner button {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0 0.5rem;
+}
+
+/* Cards */
+.card {
+    background: linear-gradient(145deg, rgba(13, 33, 55, 0.9), rgba(10, 22, 40, 0.95));
+    border: 1px solid rgba(0, 180, 216, 0.15);
+    border-radius: 20px;
+    padding: 1.5rem;
+    backdrop-filter: blur(10px);
+    margin: 1rem 2rem;
+}
+
+.card h2 {
+    margin: 0 0 1rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #00b4d8;
+}
+
+/* Map Card */
+.map-card {
+    margin: 1rem 2rem;
+}
+
+.buoy-map-container {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* Leaflet Map Overrides */
+.buoy-map-container .leaflet-container {
+    background: #0d2137;
+    border-radius: 12px;
+}
+
+.buoy-map-container .leaflet-tile-pane {
+    filter: brightness(0.8) saturate(0.8);
+}
+
+/* Buoy Marker Styles */
+.buoy-marker {
+    background: transparent;
+    border: none;
+}
+
+/* Map Legend */
+.map-legend {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    padding: 1rem 0 0;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: rgba(232, 244, 248, 0.8);
+}
+
+.legend-item .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid white;
+}
+
+.legend-item .dot.excellent {
+    background: #22c55e;
+}
+
+.legend-item .dot.good {
+    background: #3b82f6;
+}
+
+.legend-item .dot.degraded {
+    background: #f59e0b;
+}
+
+.legend-item .dot.offline {
+    background: #ef4444;
+}
+
+/* Buoy Popup */
+.buoy-popup {
+    padding: 0.5rem;
+}
+
+.buoy-popup h4 {
+    margin: 0 0 0.5rem;
+    color: #0077b6;
+}
+
+.buoy-popup p {
+    margin: 0.25rem 0;
+    font-size: 0.9rem;
+}
+
+.buoy-popup .status-excellent { color: #22c55e; }
+.buoy-popup .status-good { color: #3b82f6; }
+.buoy-popup .status-degraded { color: #f59e0b; }
+.buoy-popup .status-offline { color: #ef4444; }
+
+/* Main Grid */
+.main-grid {
+    display: grid;
+    grid-template-columns: 350px 1fr;
+    gap: 1.5rem;
+    padding: 0 2rem 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+@media (max-width: 992px) {
+    .main-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Buoy List */
+.buoy-list-card {
+    max-height: 500px;
+}
+
+.buoy-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 400px;
+    overflow-y: auto;
+    padding-right: 0.5rem;
+}
+
+.buoy-item {
+    width: 100%;
+    background: rgba(0, 119, 182, 0.08);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+    color: inherit;
+}
+
+.buoy-item:hover {
+    background: rgba(0, 119, 182, 0.15);
+}
+
+.buoy-item.selected {
+    background: rgba(0, 180, 216, 0.2);
+    border-color: #00b4d8;
+}
+
+.buoy-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.buoy-name {
+    font-weight: 600;
+    color: #00b4d8;
+    font-size: 0.9rem;
+}
+
+.buoy-region {
+    font-size: 0.8rem;
+    color: rgba(232, 244, 248, 0.6);
+}
+
+.buoy-coords {
+    font-size: 0.75rem;
+    color: rgba(232, 244, 248, 0.4);
+    font-family: 'Fira Code', monospace;
+    margin-top: 0.25rem;
+}
+
+/* Wave Visualization */
+.wave-viz-card {
+    min-height: 400px;
+}
+
+.wave-canvas {
+    width: 100%;
+    height: 200px;
+    border-radius: 12px;
+    background: rgba(0, 119, 182, 0.1);
+    margin-bottom: 1rem;
+}
+
+.wave-data-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+/* Data Cards */
+.data-card {
+    background: rgba(0, 119, 182, 0.1);
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: center;
+}
+
+.data-card-icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.data-card-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.data-card-label {
+    font-size: 0.75rem;
+    color: rgba(232, 244, 248, 0.6);
+    text-transform: uppercase;
+}
+
+.data-card-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #00b4d8;
+}
+
+/* Quality Bar */
+.quality-bar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+}
+
+.quality-track {
+    flex: 1;
+    height: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.quality-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #22c55e, #00b4d8);
+    border-radius: 5px;
+}
+
+.quality-value {
+    font-weight: 700;
+    color: #22c55e;
+    min-width: 50px;
+    text-align: right;
+}
+
+.no-data {
+    text-align: center;
+    padding: 3rem;
+    color: rgba(232, 244, 248, 0.5);
+    font-style: italic;
+}
+
+/* Generator Card */
+.generator-card {
+    grid-column: 1 / -1;
+}
+
+.generator-controls {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 1rem;
+}
+
+.generate-btn {
+    background: linear-gradient(135deg, #0077b6, #00b4d8);
+    border: none;
+    color: white;
+    padding: 1rem 2rem;
+    border-radius: 12px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    transition: all 0.3s;
+}
+
+.generate-btn:hover:not(:disabled) {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 25px rgba(0, 119, 182, 0.4);
+}
+
+.generate-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: inline-block;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Generated Result */
+.generated-result {
+    background: rgba(0, 200, 83, 0.08);
+    border: 1px solid rgba(0, 200, 83, 0.2);
+    border-radius: 16px;
+    padding: 1.5rem;
+    text-align: center;
+}
+
+.password-display {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 1rem 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+}
+
+.password-display code {
+    font-family: 'Fira Code', 'Monaco', monospace;
+    font-size: 1.5rem;
+    color: #22d3ee;
+    letter-spacing: 2px;
+}
+
+.copy-btn {
+    background: transparent;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.copy-btn:hover {
+    transform: scale(1.2);
+}
+
+.password-meta {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.password-meta span {
+    font-size: 0.9rem;
+    color: rgba(232, 244, 248, 0.6);
+}
+
+.algorithm-info {
+    font-size: 0.85rem;
+    color: #00b4d8;
+}
+
+/* Certificates Card */
+.certificates-card {
+    grid-column: 1 / -1;
+}
+
+.certificates-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.certificate-item {
+    background: rgba(0, 119, 182, 0.1);
+    border-radius: 12px;
+    padding: 1rem;
+}
+
+.cert-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.cert-id {
+    font-family: 'Fira Code', monospace;
+    color: #00b4d8;
+}
+
+.cert-time {
+    font-size: 0.8rem;
+    color: rgba(232, 244, 248, 0.5);
+}
+
+.cert-sources {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.source-tag {
+    background: rgba(0, 180, 216, 0.2);
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    color: #00b4d8;
+}
+
+.cert-ocean {
+    font-size: 0.85rem;
+    color: rgba(232, 244, 248, 0.7);
+}
+
+/* Footer */
+.dashboard-footer {
+    text-align: center;
+    padding: 2rem;
+    color: rgba(232, 244, 248, 0.5);
+}
+
+.dashboard-footer p {
+    margin: 0.5rem 0;
+}
+
+.footer-note {
+    font-size: 0.85rem;
+}
+
+/* Scrollbar */
+.buoy-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.buoy-list::-webkit-scrollbar-track {
+    background: rgba(0, 119, 182, 0.1);
+    border-radius: 3px;
+}
+
+.buoy-list::-webkit-scrollbar-thumb {
+    background: rgba(0, 180, 216, 0.3);
+    border-radius: 3px;
+}
+
+.buoy-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 180, 216, 0.5);
+}
+
+/* Leaflet Container Fix */
+.leaflet-container {
+    font-family: inherit;
+}
+
+.leaflet-popup-content-wrapper {
+    border-radius: 12px;
+}
+
+.leaflet-popup-content {
+    margin: 12px;
+}

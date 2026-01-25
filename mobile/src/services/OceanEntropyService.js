@@ -202,6 +202,64 @@ class OceanEntropyService {
   }
 
   /**
+   * Generate a hybrid password using ocean entropy
+   * @param {Object} options - Password generation options
+   * @param {number} [options.length=16] - Password length
+   * @param {boolean} [options.includeUppercase=true] - Include uppercase letters
+   * @param {boolean} [options.includeLowercase=true] - Include lowercase letters
+   * @param {boolean} [options.includeNumbers=true] - Include numbers
+   * @param {boolean} [options.includeSymbols=true] - Include symbols
+   * @returns {Promise<Object>} Generated password with metadata
+   */
+  async generateHybridPassword(options = {}) {
+    try {
+      const {
+        length = 16,
+        includeUppercase = true,
+        includeLowercase = true,
+        includeNumbers = true,
+        includeSymbols = true,
+      } = options;
+
+      const response = await fetch(`${OCEAN_API}/generate-hybrid-password/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+        body: JSON.stringify({
+          length,
+          include_uppercase: includeUppercase,
+          include_lowercase: includeLowercase,
+          include_numbers: includeNumbers,
+          include_symbols: includeSymbols,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        password: data.password,
+        sources: data.sources || ['quantum', 'ocean'],
+        entropyBits: data.entropy_bits || 95,
+        qualityScore: data.quality_score || 0.95,
+        oceanDetails: data.ocean_details || {},
+        certificateId: data.certificate_id,
+      };
+    } catch (error) {
+      console.error('Hybrid password generation failed:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
    * Get auth token from secure storage
    * @private
    */

@@ -1192,3 +1192,43 @@ SABRE_API_KEY = os.environ.get('SABRE_API_KEY', '')
 SABRE_API_SECRET = os.environ.get('SABRE_API_SECRET', '')
 SABRE_REST_URL = os.environ.get('SABRE_REST_URL', 'https://api.cert.sabre.com')
 
+
+# =============================================================================
+# 🌊 Ocean Wave Entropy Configuration
+# =============================================================================
+# Configuration for ocean wave entropy harvesting from NOAA buoys.
+# Ocean data provides chaotic, unpredictable entropy for password generation.
+
+OCEAN_ENTROPY = {
+    # Feature Toggle
+    'ENABLED': os.environ.get('OCEAN_ENTROPY_ENABLED', 'True').lower() == 'true',
+    
+    # NOAA API Settings
+    'TIMEOUT': int(os.environ.get('NOAA_API_TIMEOUT', '10')),  # seconds
+    'MAX_RETRIES': int(os.environ.get('NOAA_MAX_RETRIES', '3')),
+    
+    # Caching Configuration
+    'CACHE_TTL': int(os.environ.get('OCEAN_ENTROPY_CACHE_TTL', '300')),  # 5 minutes
+    'USE_REDIS': os.environ.get('OCEAN_ENTROPY_USE_REDIS', 'False').lower() == 'true',
+    'REDIS_KEY_PREFIX': 'ocean_entropy:',
+    
+    # Buoy Selection
+    'BUOY_ROTATION_HOURS': int(os.environ.get('OCEAN_BUOY_ROTATION_HOURS', '4')),
+    'MAX_BUOYS_PER_REQUEST': int(os.environ.get('OCEAN_MAX_BUOYS', '5')),
+    'PREFERRED_BUOYS': os.environ.get('PREFERRED_BUOYS', '44013,41010,46050,42001').split(','),
+    
+    # Quality Thresholds
+    'MIN_QUALITY_SCORE': float(os.environ.get('OCEAN_MIN_QUALITY_SCORE', '0.3')),
+    'MIN_ENTROPY_BITS_PER_BYTE': float(os.environ.get('OCEAN_MIN_ENTROPY_BITS', '4.0')),
+    'MAX_DATA_AGE_MINUTES': int(os.environ.get('OCEAN_MAX_DATA_AGE_MINUTES', '60')),
+    
+    # Security Requirements
+    'REQUIRE_TWO_SOURCES': os.environ.get('OCEAN_REQUIRE_TWO_SOURCES', 'True').lower() == 'true',
+    
+    # Pool Contribution
+    'POOL_CONTRIBUTION_PERCENT': int(os.environ.get('OCEAN_POOL_CONTRIBUTION_PERCENT', '25')),
+    
+    # Rate Limiting (to respect NOAA servers)
+    'MAX_REQUESTS_PER_HOUR_PER_BUOY': int(os.environ.get('OCEAN_MAX_REQUESTS_PER_HOUR', '60')),
+}
+
