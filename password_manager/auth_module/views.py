@@ -13,6 +13,7 @@ from .utils import (
 from vault.models import AuditLog
 from logging_manager.models import RecoveryAttemptLog
 import os
+import logging
 import base64
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
@@ -37,6 +38,8 @@ from shared.decorators import log_api_call, security_headers
 # FIX: Import CSRF exemption for JWT-based API endpoints
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+
+logger = logging.getLogger(__name__)
 
 # Create your views here.
 
