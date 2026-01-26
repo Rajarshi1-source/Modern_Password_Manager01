@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import ApiService from '../../Services/api';
+import ApiService from '../../services/api';
 import './RecoveryDashboard.css';
 
 export const RecoveryDashboard = () => {
@@ -252,10 +252,9 @@ export const RecoveryDashboard = () => {
                           </span>
                         </td>
                         <td>
-                          <span className={`trust-score ${
-                            attempt.trust_score >= 0.7 ? 'high' :
-                            attempt.trust_score >= 0.5 ? 'medium' : 'low'
-                          }`}>
+                          <span className={`trust-score ${attempt.trust_score >= 0.7 ? 'high' :
+                              attempt.trust_score >= 0.5 ? 'medium' : 'low'
+                            }`}>
                             {(attempt.trust_score * 100).toFixed(1)}%
                           </span>
                         </td>
@@ -266,9 +265,9 @@ export const RecoveryDashboard = () => {
                           {new Date(attempt.initiated_at).toLocaleDateString()}
                         </td>
                         <td>
-                          {attempt.recovery_successful ? '✅' : 
-                           attempt.honeypot_triggered ? '🍯' :
-                           attempt.suspicious_activity ? '⚠️' : '-'}
+                          {attempt.recovery_successful ? '✅' :
+                            attempt.honeypot_triggered ? '🍯' :
+                              attempt.suspicious_activity ? '⚠️' : '-'}
                         </td>
                       </tr>
                     ))}
