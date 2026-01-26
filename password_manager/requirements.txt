@@ -253,7 +253,7 @@ python-Levenshtein>=0.21.0
 # Differential Privacy (Google's library for formal DP guarantees)
 # Note: pydp does not support Python 3.13+. Using last known compatible version.
 # For Python 3.13+, the code will use numpy fallback (see adaptive_password_service.py)
-pydp==0.2.4
+pydp==0.2.4; python_version < "3.13"
 
 # Neural Networks for Memorability Prediction
 torch>=2.0.0
