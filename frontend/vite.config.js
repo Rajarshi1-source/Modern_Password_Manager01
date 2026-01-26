@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 import wasm from 'vite-plugin-wasm'
+import topLevelAwait from 'vite-plugin-top-level-await'
 
 export default defineConfig({
   plugins: [
@@ -9,7 +10,8 @@ export default defineConfig({
       jsxRuntime: 'automatic',  // Automatic JSX runtime
       fastRefresh: true,        // Disable Fast Refresh for faster builds in development
     }),
-    wasm()
+    wasm(),
+    topLevelAwait()
   ],
   
   // Development server configuration (CRITICAL - keeps your API working)
@@ -95,6 +97,7 @@ export default defineConfig({
     sourcemap: false, //Disable sourcemaps for faster builds
     chunkSizeWarningLimit: 1500, // Increase limit to 1MB
     rollupOptions: {
+      external: ['fs', 'path', 'crypto'],
       output: {
         // Simpler chunking strategy
         manualChunks(id) {
