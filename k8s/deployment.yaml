@@ -598,7 +598,7 @@ spec:
           image: ghcr.io/yourusername/password-manager/frontend:latest
           imagePullPolicy: Always
           ports:
-            - containerPort: 80
+            - containerPort: 8080
           env:
             - name: VITE_API_BASE_URL
               value: "https://api.yourapp.com"
@@ -616,13 +616,13 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: 80
+              port: 8080
             initialDelaySeconds: 10
             periodSeconds: 30
           readinessProbe:
             httpGet:
               path: /health
-              port: 80
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 10
           securityContext:
@@ -644,7 +644,7 @@ spec:
     component: frontend
   ports:
     - port: 80
-      targetPort: 80
+      targetPort: 8080
   type: ClusterIP
 
 # =============================================================================
