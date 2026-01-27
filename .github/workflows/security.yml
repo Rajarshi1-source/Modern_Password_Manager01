@@ -31,6 +31,7 @@ jobs:
 
       - name: Dependency install (prod)
         run: |
+          cd password_manager
           pip install \
             -r requirements-prod.txt \
             -c requirements-constraints.txt
