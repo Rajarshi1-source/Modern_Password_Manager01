@@ -43,6 +43,20 @@ Scans are required:
 - **Mitigation:** Installed from official PyTorch distribution
 - **Status:** Accepted
 
+### 3️⃣ `protobuf` – Recursion Depth DoS (CVE-2024-7254)
+- **Source:** Direct dependency (`protobuf` <= 6.33.4)
+- **Severity:** Medium (DoS)
+- **Issue:** Recursion depth bypass in `google.protobuf.json_format.ParseDict()` allows stack exhaustion via deeply nested `Any` messages.
+- **Mitigation:** Input validation on nested structures; monitored for upstream patch.
+- **Status:** Accepted risk (Waiting for upstream patch)
+
+### 4️⃣ `ecdsa` – Minerva Timing Attack (CVE-2024-23342)
+- **Source:** Indirect dependency via `sendgrid`
+- **Severity:** High (Potential Key Leak)
+- **Issue:** `ecdsa.SigningKey.sign_digest()` is vulnerable to timing attacks on P-256 curve, potentially leaking nonces.
+- **Mitigation:** We do not perform P-256 signing operations directly; dependency usage is limited to non-signing contexts or verified safe paths.
+- **Status:** Accepted risk (Upstream considers side-channel out of scope)
+
 ---
 
 ## 🚨 Reporting a Vulnerability
