@@ -29,17 +29,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build and install liboqs (Open Quantum Safe library)
 WORKDIR /tmp
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git \
-    && cd liboqs \
-    && mkdir build && cd build \
-    && cmake -GNinja .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=ON \
-        -DOQS_USE_OPENSSL=ON \
-        -DOQS_ENABLE_KEM_KYBER=ON \
-        -DOQS_ENABLE_KEM_SABER=ON \
-        -DOQS_ENABLE_KEM_NTRU=ON \
-        -DOQS_ENABLE_SIG_DILITHIUM=ON \
+# Build and install liboqs (Open Quantum Safe library)
+WORKDIR /tmp
+RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git
+WORKDIR /tmp/liboqs
+RUN mkdir build
+WORKDIR /tmp/liboqs/build
+RUN cmake -GNinja .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=ON \
+    -DOQS_USE_OPENSSL=ON \
+    -DOQS_ENABLE_KEM_KYBER=ON \
+    -DOQS_ENABLE_KEM_SABER=ON \
+    -DOQS_ENABLE_KEM_NTRU=ON \
+    -DOQS_ENABLE_SIG_DILITHIUM=ON \
     && ninja \
     && ninja install
 
@@ -48,10 +51,13 @@ ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
 ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}"
 
 # Install liboqs-python wrapper
-RUN git clone --depth 1 https://github.com/open-quantum-safe/liboqs-python.git \
-    && cd liboqs-python \
-    && pip install --no-cache-dir . \
-    && cd .. && rm -rf liboqs-python
+# Install liboqs-python wrapper
+WORKDIR /tmp
+RUN git clone --depth 1 https://github.com/open-quantum-safe/liboqs-python.git
+WORKDIR /tmp/liboqs-python
+RUN pip install --no-cache-dir .
+WORKDIR /tmp
+RUN rm -rf liboqs-python
 
 # Install pqcrypto (pure Python post-quantum crypto)
 RUN pip install --no-cache-dir pqcrypto || echo "pqcrypto installation optional"
@@ -179,12 +185,12 @@ ENTRYPOINT ["/entrypoint.sh"]
 
 # Default command (can be overridden)
 CMD ["gunicorn", "password_manager.wsgi:application", \
-     "--bind", "0.0.0.0:8000", \
-     "--workers", "4", \
-     "--threads", "2", \
-     "--timeout", "120", \
-     "--keep-alive", "5", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "--capture-output", \
-     "--enable-stdio-inheritance"]
+    "--bind", "0.0.0.0:8000", \
+    "--workers", "4", \
+    "--threads", "2", \
+    "--timeout", "120", \
+    "--keep-alive", "5", \
+    "--access-logfile", "-", \
+    "--error-logfile", "-", \
+    "--capture-output", \
+    "--enable-stdio-inheritance"]

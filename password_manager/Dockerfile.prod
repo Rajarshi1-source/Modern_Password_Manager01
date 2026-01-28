@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     curl \
- && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
 COPY requirements-prod.txt .
@@ -22,12 +22,12 @@ COPY requirements-constraints.txt .
 
 # Install dependencies into virtualenv
 RUN python -m venv /venv \
- && /venv/bin/pip install --upgrade pip \
- && /venv/bin/pip install \
-      --no-cache-dir \
-      --require-hashes \
-      -r requirements-prod.txt \
-      -c requirements-constraints.txt
+    && /venv/bin/pip install --upgrade pip \
+    && /venv/bin/pip install \
+    --no-cache-dir \
+    --require-hashes \
+    -r requirements-prod.txt \
+    -c requirements-constraints.txt
 
 # Copy application
 COPY . .
@@ -35,7 +35,7 @@ COPY . .
 # =========================
 # Stage 2: Runtime (Distroless)
 # =========================
-FROM gcr.io/distroless/python3-debian12
+FROM gcr.io/distroless/python3-debian12:nonroot
 
 WORKDIR /app
 
