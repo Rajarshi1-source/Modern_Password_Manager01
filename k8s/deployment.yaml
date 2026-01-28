@@ -44,6 +44,10 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            - name: postgres-tmp
+              mountPath: /tmp
+            - name: postgres-run
+              mountPath: /var/run/postgresql
           resources:
             requests:
               memory: "512Mi"
@@ -51,6 +55,8 @@ spec:
             limits:
               memory: "2Gi"
               cpu: "1000m"
+          securityContext:
+            readOnlyRootFilesystem: true
           livenessProbe:
             exec:
               command:
@@ -67,10 +73,14 @@ spec:
                 - pm_user
             initialDelaySeconds: 5
             periodSeconds: 5
-      volumes:
+        volumes:
         - name: postgres-data
           persistentVolumeClaim:
             claimName: postgres-pvc
+        - name: postgres-tmp
+          emptyDir: {}
+        - name: postgres-run
+          emptyDir: {}
 
 ---
 apiVersion: v1
@@ -155,6 +165,8 @@ spec:
           volumeMounts:
             - name: redis-data
               mountPath: /data
+            - name: redis-tmp
+              mountPath: /tmp
           resources:
             requests:
               memory: "256Mi"
@@ -162,6 +174,8 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "500m"
+          securityContext:
+            readOnlyRootFilesystem: true
           livenessProbe:
             exec:
               command:
@@ -180,6 +194,8 @@ spec:
         - name: redis-data
           persistentVolumeClaim:
             claimName: redis-pvc
+        - name: redis-tmp
+          emptyDir: {}
 
 ---
 apiVersion: v1
@@ -607,6 +623,11 @@ spec:
               value: "wss://api.yourapp.com"
             - name: VITE_BLOCKCHAIN_ENABLED
               value: "false"
+            - name: VITE_CACHE_DIR
+              value: "/tmp/.vite"
+          volumeMounts:
+            - name: frontend-tmp
+              mountPath: /tmp
           resources:
             requests:
               memory: "128Mi"
@@ -629,6 +650,10 @@ spec:
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: frontend-tmp
+          emptyDir: {}
 
 ---
 apiVersion: v1

@@ -158,7 +158,7 @@ export default defineConfig({
   },
 
   // Cache configuration for faster rebuilds
-  cacheDir: 'node_modules/.vite',
+  cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
 
   // Clear screen for cleaner output
   clearScreen: true,
