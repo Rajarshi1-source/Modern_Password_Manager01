@@ -10,7 +10,9 @@ export default defineConfig({
       jsxRuntime: 'automatic',  // Automatic JSX runtime
       fastRefresh: true,        // Disable Fast Refresh for faster builds in development
     }),
-    wasm(),
+    wasm({
+      filter: (id) => !id.includes('argon2.wasm')
+    }),
     topLevelAwait()
   ],
   
