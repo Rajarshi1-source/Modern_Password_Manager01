@@ -51,7 +51,7 @@ jobs:
             --report-path=/path/gitleaks-results.sarif \
             --verbose \
             --redact \
-            --fail-exit-code=1
+            --exit-code=1
       
       - name: Upload Gitleaks SARIF
         if: always()
