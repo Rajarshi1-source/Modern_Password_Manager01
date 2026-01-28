@@ -88,6 +88,9 @@ RUN chmod +x /docker-entrypoint.sh
 # Expose port
 EXPOSE 80
 
+# Switch to non-root user
+USER nginx-app
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost/health || exit 1

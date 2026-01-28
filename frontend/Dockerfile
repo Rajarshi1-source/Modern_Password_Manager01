@@ -15,6 +15,12 @@ COPY . .
 # Expose port
 EXPOSE 5173
 
+# Fix permissions for node user
+RUN chown -R node:node /app
+
+# Switch to non-root user
+USER node
+
 # Default command (development)
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 
