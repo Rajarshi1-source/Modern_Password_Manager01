@@ -141,6 +141,7 @@ export default defineConfig({
       '@utils': resolve(__dirname, 'src/utils'),
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@workers': resolve(__dirname, 'src/workers'),
+      'argon2-browser': resolve(__dirname, 'node_modules/argon2-browser/dist/argon2-bundled.min.js'),
     },
     extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
   },
