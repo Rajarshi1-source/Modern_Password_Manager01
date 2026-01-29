@@ -8,7 +8,7 @@ torchvision>=0.20.1
 # Transformers for BERT models
 transformers>=4.46.2
 tokenizers>=0.22.0,<0.24.0
-sentencepiece>=0.2.0
+sentencepiece>=0.2.1
 
 # NLP and Text Processing
 spacy>=3.8.11
