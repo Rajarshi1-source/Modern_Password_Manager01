@@ -11,6 +11,8 @@ from .api import genetic_password_views
 from .api import chemical_storage_views
 from .api import adaptive_password_views
 from .api import ocean_entropy_views  # 🌊 Ocean Wave Entropy
+from .api import storm_chase_views     # 🌀 Storm Chase Mode
+from .api import natural_entropy_views # ⚡ Natural Entropy (Lightning/Seismic/Solar)
 
 
 @api_view(['GET'])
@@ -28,6 +30,7 @@ def security_root(request, format=None):
         'genetic': reverse('genetic-generate-password', request=request, format=format),
         'chemical': reverse('chemical-encode', request=request, format=format),
         'adaptive': reverse('adaptive-config', request=request, format=format),
+        'storm-chase': reverse('storm-list', request=request, format=format),
     })
 
 
@@ -73,6 +76,27 @@ urlpatterns = [
     path('ocean/buoy/<str:buoy_id>/live-data/', ocean_entropy_views.LiveWaveDataView.as_view(), name='ocean-live-data'),
     path('ocean/my-stats/', ocean_entropy_views.UserOceanStatsView.as_view(), name='ocean-my-stats'),
     path('ocean/certificate/<uuid:certificate_id>/', ocean_entropy_views.HybridCertificateView.as_view(), name='ocean-certificate'),
+    
+    # ==========================================================================
+    # 🌀 Storm Chase Mode endpoints
+    # ==========================================================================
+    path('ocean/storms/', storm_chase_views.StormListView.as_view(), name='storm-list'),
+    path('ocean/storms/status/', storm_chase_views.StormStatusView.as_view(), name='storm-status'),
+    path('ocean/storms/buoys/', storm_chase_views.StormBuoysView.as_view(), name='storm-buoys'),
+    path('ocean/storms/scan/', storm_chase_views.ScanStormsView.as_view(), name='storm-scan'),
+    path('ocean/generate-storm-entropy/', storm_chase_views.GenerateStormEntropyView.as_view(), name='storm-generate-entropy'),
+    
+    # ==========================================================================
+    # ⚡ Natural Entropy (Multi-Source) endpoints
+    # ==========================================================================
+    path('natural/generate-password/', natural_entropy_views.generate_natural_password, name='natural-generate-password'),
+    path('natural/status/', natural_entropy_views.get_global_entropy_status, name='natural-status'),
+    path('natural/statistics/', natural_entropy_views.get_entropy_statistics, name='natural-statistics'),
+    path('natural/lightning/', natural_entropy_views.get_lightning_activity, name='natural-lightning'),
+    path('natural/seismic/', natural_entropy_views.get_seismic_activity, name='natural-seismic'),
+    path('natural/solar/', natural_entropy_views.get_solar_wind_status, name='natural-solar'),
+    path('natural/preferences/', natural_entropy_views.user_entropy_preferences, name='natural-preferences'),
+    path('natural/certificates/', natural_entropy_views.get_user_certificates, name='natural-certificates'),
     
     # ==========================================================================
     # Genetic Password Evolution endpoints

@@ -21,6 +21,7 @@ import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-le
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './OceanWaveDashboard.css';
+import StormChaseCard from './StormChaseCard';
 
 // Fix Leaflet default marker icon issue
 try {
@@ -305,6 +306,7 @@ export const OceanWaveDashboard: React.FC = () => {
     const [generatedPassword, setGeneratedPassword] = useState<GeneratedPassword | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    const [stormStatus, setStormStatus] = useState<any>(null);
 
     // Fetch buoy status
     const fetchBuoyStatus = useCallback(async () => {
@@ -418,6 +420,9 @@ export const OceanWaveDashboard: React.FC = () => {
                     </motion.div>
                 )}
             </AnimatePresence>
+
+            {/* Storm Chase Mode Card */}
+            <StormChaseCard onStormStatusChange={setStormStatus} />
 
             {/* Buoy Map Section */}
             <motion.section

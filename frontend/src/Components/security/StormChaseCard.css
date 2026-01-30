@@ -1,0 +1,506 @@
+/**
+ * Storm Chase Card Styles
+ * =======================
+ * 
+ * Hurricane-themed styling for the Storm Chase Mode card.
+ * Features spinning storm icons, pulsing alerts, and severity-based colors.
+ * 
+ * "During hurricanes, buoys have MAXIMUM entropy!" 🌀
+ */
+
+/* ==========================================================================
+   Base Card Styles
+   ========================================================================== */
+
+.storm-chase-card {
+    background: linear-gradient(135deg, #1a0a2e 0%, #16213e 50%, #0f3460 100%);
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 20px;
+    border: 1px solid rgba(6, 182, 212, 0.3);
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.storm-chase-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(ellipse at center,
+            rgba(6, 182, 212, 0.1) 0%,
+            transparent 70%);
+    pointer-events: none;
+}
+
+/* Active storm state */
+.storm-chase-card.storm-active {
+    border-color: rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.3),
+        inset 0 0 60px rgba(239, 68, 68, 0.1);
+    animation: storm-pulse 2s ease-in-out infinite;
+}
+
+.storm-chase-card.storm-severity-extreme {
+    border-color: rgba(220, 38, 38, 0.8);
+    box-shadow: 0 0 40px rgba(220, 38, 38, 0.4),
+        inset 0 0 80px rgba(220, 38, 38, 0.15);
+}
+
+@keyframes storm-pulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 30px rgba(239, 68, 68, 0.3),
+            inset 0 0 60px rgba(239, 68, 68, 0.1);
+    }
+
+    50% {
+        box-shadow: 0 0 50px rgba(239, 68, 68, 0.5),
+            inset 0 0 80px rgba(239, 68, 68, 0.2);
+    }
+}
+
+/* ==========================================================================
+   Loading State
+   ========================================================================== */
+
+.storm-chase-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+}
+
+.storm-loading-spinner {
+    font-size: 32px;
+    margin-bottom: 12px;
+}
+
+.storm-loading-spinner .storm-icon-spinning {
+    display: inline-block;
+    animation: spin 2s linear infinite;
+}
+
+/* ==========================================================================
+   Header
+   ========================================================================== */
+
+.storm-chase-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+}
+
+.storm-title-section {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.storm-icon {
+    font-size: 32px;
+    display: inline-block;
+}
+
+.storm-icon-spinning {
+    animation: spin 3s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.storm-chase-title {
+    color: #ffffff;
+    font-size: 18px;
+    font-weight: 700;
+    margin: 0;
+}
+
+.storm-chase-subtitle {
+    color: #94a3b8;
+    font-size: 12px;
+    margin: 4px 0 0 0;
+}
+
+.storm-active .storm-chase-subtitle {
+    color: #fca5a5;
+    font-weight: 600;
+}
+
+/* Scan Button */
+.storm-scan-btn {
+    background: rgba(6, 182, 212, 0.2);
+    border: 1px solid rgba(6, 182, 212, 0.4);
+    color: #06b6d4;
+    padding: 8px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.storm-scan-btn:hover:not(:disabled) {
+    background: rgba(6, 182, 212, 0.3);
+    transform: translateY(-1px);
+}
+
+.storm-scan-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.storm-scan-btn.scanning {
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.6;
+    }
+}
+
+/* ==========================================================================
+   Status Indicator
+   ========================================================================== */
+
+.storm-status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 10px;
+    margin-bottom: 16px;
+}
+
+.storm-status-indicator.active {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #6b7280;
+}
+
+.storm-status-indicator.active .status-dot {
+    background: #ef4444;
+    animation: dot-pulse 1.5s ease-in-out infinite;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.6);
+}
+
+@keyframes dot-pulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.2);
+        opacity: 0.8;
+    }
+}
+
+.status-text {
+    color: #e2e8f0;
+    font-size: 14px;
+    flex: 1;
+}
+
+.entropy-bonus-badge {
+    background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+    color: #ffffff;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    animation: bonus-glow 2s ease-in-out infinite;
+}
+
+@keyframes bonus-glow {
+
+    0%,
+    100% {
+        box-shadow: 0 0 5px rgba(239, 68, 68, 0.5);
+    }
+
+    50% {
+        box-shadow: 0 0 15px rgba(239, 68, 68, 0.8);
+    }
+}
+
+/* ==========================================================================
+   Message
+   ========================================================================== */
+
+.storm-message {
+    color: #94a3b8;
+    font-size: 14px;
+    text-align: center;
+    margin: 12px 0;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+}
+
+.storm-active .storm-message {
+    color: #fcd34d;
+    font-weight: 600;
+}
+
+/* ==========================================================================
+   Storm Alerts Section
+   ========================================================================== */
+
+.storm-alerts-section {
+    margin-top: 16px;
+    overflow: hidden;
+}
+
+.alerts-title {
+    color: #f59e0b;
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 12px 0;
+}
+
+.storm-alerts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.storm-alert-item {
+    background: rgba(0, 0, 0, 0.4);
+    border-radius: 10px;
+    padding: 12px;
+    border-left: 4px solid #6b7280;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.storm-alert-item.severity-storm {
+    border-left-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.1);
+}
+
+.storm-alert-item.severity-severe {
+    border-left-color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.storm-alert-item.severity-extreme {
+    border-left-color: #dc2626;
+    background: rgba(220, 38, 38, 0.15);
+    animation: extreme-flash 1.5s ease-in-out infinite;
+}
+
+@keyframes extreme-flash {
+
+    0%,
+    100% {
+        background: rgba(220, 38, 38, 0.15);
+    }
+
+    50% {
+        background: rgba(220, 38, 38, 0.25);
+    }
+}
+
+/* Alert Buoy Info */
+.alert-buoy-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 150px;
+}
+
+.alert-severity-icon {
+    font-size: 24px;
+}
+
+.alert-buoy-name {
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 14px;
+    display: block;
+}
+
+.alert-region {
+    color: #94a3b8;
+    font-size: 11px;
+    text-transform: uppercase;
+    display: block;
+}
+
+/* Alert Conditions */
+.alert-conditions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.condition-badge {
+    background: rgba(0, 0, 0, 0.4);
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    color: #cbd5e1;
+}
+
+.condition-badge.wave {
+    background: rgba(6, 182, 212, 0.3);
+    color: #67e8f9;
+}
+
+.condition-badge.wind {
+    background: rgba(168, 85, 247, 0.3);
+    color: #c4b5fd;
+}
+
+.condition-badge.pressure {
+    background: rgba(34, 197, 94, 0.3);
+    color: #86efac;
+}
+
+/* Alert Bonus */
+.alert-bonus {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.severity-badge {
+    color: #ffffff;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.bonus-text {
+    color: #22d3ee;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+/* More Alerts Text */
+.more-alerts-text {
+    color: #94a3b8;
+    font-size: 12px;
+    text-align: center;
+    margin: 12px 0 0 0;
+    font-style: italic;
+}
+
+/* ==========================================================================
+   Regions Affected
+   ========================================================================== */
+
+.regions-affected {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.regions-label {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+.region-tag {
+    background: rgba(6, 182, 212, 0.2);
+    color: #06b6d4;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    text-transform: capitalize;
+}
+
+/* ==========================================================================
+   Last Scan Time
+   ========================================================================== */
+
+.last-scan-time {
+    color: #64748b;
+    font-size: 11px;
+    text-align: right;
+    margin: 12px 0 0 0;
+}
+
+/* ==========================================================================
+   Error State
+   ========================================================================== */
+
+.storm-error {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    text-align: center;
+    margin-top: 12px;
+}
+
+/* ==========================================================================
+   Responsive Design
+   ========================================================================== */
+
+@media (max-width: 600px) {
+    .storm-chase-header {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .storm-scan-btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .storm-alert-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .alert-bonus {
+        width: 100%;
+        justify-content: space-between;
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+}

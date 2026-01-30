@@ -46,6 +46,8 @@ const PasskeyPrimaryRecoveryInitiate = lazy(() => import('./Components/auth/Pass
 const QuantumRecoverySetup = lazy(() => import('./Components/auth/QuantumRecoverySetup'));
 // Genetic Password OAuth callback
 const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCallback'));
+// Natural Entropy Dashboard
+const UltimateEntropyDashboard = lazy(() => import('./Components/security/UltimateEntropyDashboard'));
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1438,6 +1440,10 @@ function App() {
                 <Route path="/recovery/social-mesh" element={<QuantumRecoverySetup />} />
                 {/* Genetic Password OAuth callback */}
                 <Route path="/genetic-callback" element={<GeneticOAuthCallback />} />
+                {/* Natural Entropy Dashboard */}
+                <Route path="/security/natural-entropy" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <UltimateEntropyDashboard />
+                } />
               </Routes>
             </Suspense>
           </VaultProvider>

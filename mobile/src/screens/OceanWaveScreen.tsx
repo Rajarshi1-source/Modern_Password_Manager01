@@ -214,6 +214,7 @@ const OceanWaveScreen: React.FC = () => {
     const [isGenerating, setIsGenerating] = useState(false);
     const [generatedPassword, setGeneratedPassword] = useState<GeneratedPassword | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [stormStatus, setStormStatus] = useState<any>(null);
 
     const mapRef = useRef<MapView>(null);
 
@@ -252,11 +253,28 @@ const OceanWaveScreen: React.FC = () => {
         return () => clearInterval(interval);
     }, [fetchBuoys]);
 
+    // Fetch storm status
+    const fetchStormStatus = useCallback(async () => {
+        try {
+            const status = await oceanEntropyService.getStormStatus();
+            setStormStatus(status);
+        } catch (err) {
+            console.error('Failed to fetch storm status:', err);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchStormStatus();
+        const stormInterval = setInterval(fetchStormStatus, 60000);
+        return () => clearInterval(stormInterval);
+    }, [fetchStormStatus]);
+
     // Handle refresh
     const onRefresh = useCallback(() => {
         setIsRefreshing(true);
         fetchBuoys();
-    }, [fetchBuoys]);
+        fetchStormStatus();
+    }, [fetchBuoys, fetchStormStatus]);
 
     // Select buoy and center map
     const handleSelectBuoy = useCallback((buoy: BuoyData) => {
@@ -341,6 +359,23 @@ const OceanWaveScreen: React.FC = () => {
                 {error && (
                     <View style={styles.errorBanner}>
                         <Text style={styles.errorText}>⚠️ {error}</Text>
+                    </View>
+                )}
+
+                {/* Storm Chase Mode Banner */}
+                {stormStatus?.isActive && (
+                    <View style={styles.stormBanner}>
+                        <Text style={styles.stormBannerIcon}>
+                            {stormStatus.mostSevere === 'extreme' ? '🌀' : '⚠️'}
+                        </Text>
+                        <View style={styles.stormBannerContent}>
+                            <Text style={styles.stormBannerTitle}>
+                                STORM CHASE MODE ACTIVE
+                            </Text>
+                            <Text style={styles.stormBannerSubtitle}>
+                                {stormStatus.activeStormsCount} storm(s) • +{((stormStatus.maxEntropyBonus || 0) * 100).toFixed(0)}% entropy
+                            </Text>
+                        </View>
                     </View>
                 )}
 
@@ -807,6 +842,35 @@ const styles = StyleSheet.create({
         color: '#64748b',
         fontSize: 12,
         fontStyle: 'italic',
+    },
+    // Storm Chase Mode Banner Styles
+    stormBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(239, 68, 68, 0.2)',
+        borderWidth: 1,
+        borderColor: 'rgba(239, 68, 68, 0.5)',
+        marginHorizontal: 16,
+        marginBottom: 16,
+        padding: 12,
+        borderRadius: 12,
+    },
+    stormBannerIcon: {
+        fontSize: 28,
+        marginRight: 12,
+    },
+    stormBannerContent: {
+        flex: 1,
+    },
+    stormBannerTitle: {
+        color: '#fca5a5',
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    stormBannerSubtitle: {
+        color: '#f87171',
+        fontSize: 12,
+        marginTop: 2,
     },
 });
 

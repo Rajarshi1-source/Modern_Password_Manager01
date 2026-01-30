@@ -259,6 +259,356 @@ class OceanEntropyService {
     }
   }
 
+  // =========================================================================
+  // 🌀 Storm Chase Mode Methods
+  // =========================================================================
+
+  /**
+   * Get active storm alerts
+   * @returns {Promise<Object>} List of active storm alerts
+   */
+  async getActiveStorms() {
+    try {
+      const response = await fetch(`${OCEAN_API}/storms/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Storm list fetch failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get storm chase mode status
+   * @returns {Promise<Object>} Storm chase status with alerts and bonus info
+   */
+  async getStormStatus() {
+    try {
+      const response = await fetch(`${OCEAN_API}/storms/status/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        isActive: data.is_active,
+        activeStormsCount: data.active_storms_count,
+        mostSevere: data.most_severe,
+        maxEntropyBonus: data.max_entropy_bonus,
+        regionsAffected: data.regions_affected || [],
+        stormAlerts: data.storm_alerts || [],
+        message: data.message,
+        lastScan: data.last_scan,
+      };
+    } catch (error) {
+      console.error('Storm status fetch failed:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Generate entropy prioritizing storm-affected buoys
+   * @param {number} [count=32] - Number of bytes to generate
+   * @param {string} [format='hex'] - Output format
+   * @returns {Promise<Object>} Generated entropy with storm info
+   */
+  async generateStormEntropy(count = 32, format = 'hex') {
+    try {
+      const response = await fetch(`${OCEAN_API}/generate-storm-entropy/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+        body: JSON.stringify({ count, format }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        entropy: data.entropy,
+        format: data.format,
+        bytesCount: data.bytes_count,
+        sourceBuoys: data.source_buoys,
+        stormMode: data.storm_mode,
+        entropyBonus: data.entropy_bonus,
+        message: data.message,
+      };
+    } catch (error) {
+      console.error('Storm entropy generation failed:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Trigger a manual storm scan
+   * @returns {Promise<Object>} Scan results
+   */
+  async scanForStorms() {
+    try {
+      const response = await fetch(`${OCEAN_API}/storms/scan/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        stormsFound: data.storms_found,
+        alerts: data.alerts || [],
+        scannedAt: data.scanned_at,
+      };
+    } catch (error) {
+      console.error('Storm scan failed:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  // =========================================================================
+  // ⚡ Natural Entropy (Multi-Source) Methods
+  // =========================================================================
+
+  /**
+   * Generate password from multiple natural entropy sources
+   * @param {string[]} sources - Array of sources: 'ocean', 'lightning', 'seismic', 'solar'
+   * @param {number} length - Password length (8-64)
+   * @param {string} charset - Character set: 'standard', 'alphanumeric', 'max_entropy'
+   * @returns {Promise<Object>} Generated password and certificate
+   */
+  async generateNaturalPassword(sources = ['ocean', 'lightning', 'seismic', 'solar'], length = 24, charset = 'standard') {
+    try {
+      const response = await fetch(`${OCEAN_API}/natural/generate-password/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+        body: JSON.stringify({ sources, length, charset }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        password: data.password,
+        sourcesUsed: data.sources_used,
+        qualityScore: data.quality_score,
+        generationTimeMs: data.generation_time_ms,
+        certificate: data.certificate,
+        errors: data.errors,
+      };
+    } catch (error) {
+      console.error('Natural password generation failed:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Get global entropy status for all sources
+   * @returns {Promise<Object>} Status of all entropy sources
+   */
+  async getGlobalEntropyStatus() {
+    try {
+      const response = await fetch(`${OCEAN_API}/natural/status/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        sources: data.sources,
+        availableSources: data.available_sources,
+        totalSources: data.total_sources,
+        timestamp: data.timestamp,
+      };
+    } catch (error) {
+      console.error('Global status fetch failed:', error);
+      return {
+        success: false,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Get lightning activity data
+   * @returns {Promise<Object>} Recent lightning strikes and global activity
+   */
+  async getLightningActivity() {
+    try {
+      const response = await fetch(`${OCEAN_API}/natural/lightning/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Lightning activity fetch failed:', error);
+      return { error: error.message };
+    }
+  }
+
+  /**
+   * Get seismic activity data
+   * @returns {Promise<Object>} Recent earthquakes and global activity
+   */
+  async getSeismicActivity() {
+    try {
+      const response = await fetch(`${OCEAN_API}/natural/seismic/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Seismic activity fetch failed:', error);
+      return { error: error.message };
+    }
+  }
+
+  /**
+   * Get solar wind status
+   * @returns {Promise<Object>} Solar wind readings and space weather
+   */
+  async getSolarWindStatus() {
+    try {
+      const response = await fetch(`${OCEAN_API}/natural/solar/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Solar wind fetch failed:', error);
+      return { error: error.message };
+    }
+  }
+
+  /**
+   * Get user entropy preferences
+   * @returns {Promise<Object>} User's source preferences
+   */
+  async getEntropyPreferences() {
+    try {
+      const response = await fetch(`${OCEAN_API}/natural/preferences/`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Preferences fetch failed:', error);
+      return { error: error.message };
+    }
+  }
+
+  /**
+   * Update user entropy preferences
+   * @param {Object} preferences - Preference updates
+   * @returns {Promise<Object>} Update result
+   */
+  async updateEntropyPreferences(preferences) {
+    try {
+      const response = await fetch(`${OCEAN_API}/natural/preferences/`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await this._getToken()}`,
+        },
+        body: JSON.stringify(preferences),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Preferences update failed:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
   /**
    * Get auth token from secure storage
    * @private

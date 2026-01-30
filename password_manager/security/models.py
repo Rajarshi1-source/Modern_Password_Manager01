@@ -2630,6 +2630,294 @@ class EscrowAgreement(models.Model):
             self.capsule.save()
             self.save()
 
+# =============================================================================
+# Natural Entropy Source Models (Lightning, Seismic, Solar Wind)
+# =============================================================================
+
+class LightningEntropyBatch(models.Model):
+    """Tracks lightning entropy fetches for auditing."""
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Lightning strike information
+    strikes_used = models.IntegerField(help_text="Number of lightning strikes used")
+    peak_intensity_ka = models.FloatField(help_text="Peak current in kiloamperes")
+    average_intensity_ka = models.FloatField(help_text="Average intensity across strikes")
+    
+    # Geographic spread
+    strike_region = models.CharField(max_length=255, blank=True)
+    center_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    center_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    
+    # Entropy metrics
+    bytes_fetched = models.IntegerField()
+    quality_score = models.FloatField(help_text="Entropy quality score (0.0-1.0)")
+    
+    # Timestamps
+    strikes_timestamp_start = models.DateTimeField(null=True, blank=True)
+    strikes_timestamp_end = models.DateTimeField(null=True, blank=True)
+    fetched_at = models.DateTimeField(auto_now_add=True)
+    fetch_duration_ms = models.IntegerField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'lightning_entropy_batch'
+        verbose_name = 'Lightning Entropy Batch'
+        verbose_name_plural = 'Lightning Entropy Batches'
+        ordering = ['-fetched_at']
+        indexes = [models.Index(fields=['-fetched_at']), models.Index(fields=['-quality_score'])]
+    
+    def __str__(self):
+        return f"Lightning: {self.strikes_used} strikes @ {self.fetched_at}"
+
+
+class SeismicEntropyBatch(models.Model):
+    """Tracks seismic entropy fetches for auditing."""
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Earthquake information
+    events_used = models.IntegerField(help_text="Number of earthquakes used")
+    largest_magnitude = models.FloatField(help_text="Largest earthquake magnitude")
+    average_magnitude = models.FloatField(help_text="Average magnitude across events")
+    magnitude_type = models.CharField(max_length=20, default='Mw')
+    
+    # Geographic information
+    primary_region = models.CharField(max_length=255, blank=True)
+    epicenter_latitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    epicenter_longitude = models.DecimalField(max_digits=10, decimal_places=7, null=True, blank=True)
+    depth_km = models.FloatField(null=True, blank=True)
+    
+    # Entropy metrics
+    bytes_fetched = models.IntegerField()
+    quality_score = models.FloatField(help_text="Entropy quality score (0.0-1.0)")
+    
+    # Timestamps
+    events_timestamp_start = models.DateTimeField(null=True, blank=True)
+    events_timestamp_end = models.DateTimeField(null=True, blank=True)
+    fetched_at = models.DateTimeField(auto_now_add=True)
+    fetch_duration_ms = models.IntegerField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'seismic_entropy_batch'
+        verbose_name = 'Seismic Entropy Batch'
+        verbose_name_plural = 'Seismic Entropy Batches'
+        ordering = ['-fetched_at']
+        indexes = [models.Index(fields=['-fetched_at']), models.Index(fields=['-largest_magnitude'])]
+    
+    def __str__(self):
+        return f"Seismic: M{self.largest_magnitude} - {self.events_used} events @ {self.fetched_at}"
+
+
+class SolarWindEntropyBatch(models.Model):
+    """Tracks solar wind entropy fetches for auditing."""
+    
+    STORM_LEVEL_CHOICES = [
+        ('quiet', 'Quiet'),
+        ('moderate', 'Moderate'),
+        ('active', 'Active'),
+        ('storm', 'Storm'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Solar wind parameters
+    readings_used = models.IntegerField(help_text="Number of readings used")
+    average_speed_kmps = models.FloatField(help_text="Average solar wind speed in km/s")
+    peak_speed_kmps = models.FloatField(help_text="Peak solar wind speed in km/s")
+    average_density = models.FloatField(help_text="Average proton density (per cm³)")
+    average_temperature_k = models.FloatField(help_text="Average temperature in Kelvin")
+    
+    # Magnetic field
+    bx_nt = models.FloatField(default=0.0, help_text="Magnetic field X component (nT)")
+    by_nt = models.FloatField(default=0.0, help_text="Magnetic field Y component (nT)")
+    bz_nt = models.FloatField(default=0.0, help_text="Magnetic field Z component (nT)")
+    b_total_nt = models.FloatField(default=0.0, help_text="Total magnetic field magnitude (nT)")
+    
+    # Storm classification
+    storm_level = models.CharField(max_length=20, choices=STORM_LEVEL_CHOICES, default='quiet')
+    
+    # Entropy metrics
+    bytes_fetched = models.IntegerField()
+    quality_score = models.FloatField(help_text="Entropy quality score (0.0-1.0)")
+    
+    # Timestamps
+    readings_timestamp_start = models.DateTimeField(null=True, blank=True)
+    readings_timestamp_end = models.DateTimeField(null=True, blank=True)
+    fetched_at = models.DateTimeField(auto_now_add=True)
+    fetch_duration_ms = models.IntegerField(null=True, blank=True)
+    satellite_source = models.CharField(max_length=50, default='DSCOVR')
+    
+    class Meta:
+        db_table = 'solar_wind_entropy_batch'
+        verbose_name = 'Solar Wind Entropy Batch'
+        verbose_name_plural = 'Solar Wind Entropy Batches'
+        ordering = ['-fetched_at']
+        indexes = [models.Index(fields=['-fetched_at']), models.Index(fields=['storm_level'])]
+    
+    def __str__(self):
+        return f"Solar Wind: {self.average_speed_kmps:.0f} km/s ({self.storm_level}) @ {self.fetched_at}"
+
+
+class NaturalEntropyCertificate(models.Model):
+    """Unified certificate for passwords using multiple natural entropy sources."""
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='natural_certificates')
+    
+    # Password reference
+    password_hash_prefix = models.CharField(max_length=64, help_text="First 16 chars of SHA256 hash")
+    
+    # Sources used (stored as JSON list)
+    sources_used = models.JSONField(default=list, help_text="List of sources used")
+    
+    # Source-specific batch references
+    ocean_batch_id = models.UUIDField(null=True, blank=True)
+    lightning_batch_id = models.UUIDField(null=True, blank=True)
+    seismic_batch_id = models.UUIDField(null=True, blank=True)
+    solar_batch_id = models.UUIDField(null=True, blank=True)
+    quantum_certificate_id = models.UUIDField(null=True, blank=True)
+    
+    # Source details (JSON for flexibility)
+    ocean_details = models.JSONField(default=dict, blank=True)
+    lightning_details = models.JSONField(default=dict, blank=True)
+    seismic_details = models.JSONField(default=dict, blank=True)
+    solar_details = models.JSONField(default=dict, blank=True)
+    
+    # Mixing metadata
+    mixing_algorithm = models.CharField(max_length=100, default='XOR + SHA3-512 + SHAKE256')
+    total_entropy_bits = models.IntegerField()
+    password_length = models.IntegerField()
+    charset_used = models.CharField(max_length=100, default='standard')
+    
+    # Quality assessment
+    combined_quality_score = models.FloatField(help_text="Combined quality score (0.0-1.0)")
+    individual_quality_scores = models.JSONField(default=dict)
+    
+    # Timestamps and signature
+    generation_timestamp = models.DateTimeField(auto_now_add=True)
+    signature = models.CharField(max_length=256)
+    
+    # Optional vault link
+    vault_item_id = models.CharField(max_length=100, null=True, blank=True)
+    service_name = models.CharField(max_length=255, blank=True)
+    
+    class Meta:
+        db_table = 'natural_entropy_certificate'
+        verbose_name = 'Natural Entropy Certificate'
+        verbose_name_plural = 'Natural Entropy Certificates'
+        ordering = ['-generation_timestamp']
+        indexes = [
+            models.Index(fields=['user', '-generation_timestamp']),
+            models.Index(fields=['password_hash_prefix']),
+        ]
+    
+    def __str__(self):
+        sources = '+'.join(self.sources_used) if self.sources_used else 'unknown'
+        return f"NC-{str(self.id)[:8]} ({sources})"
+    
+    def to_dict(self):
+        """Convert to dictionary for API responses."""
+        return {
+            'certificate_id': str(self.id),
+            'password_hash_prefix': self.password_hash_prefix,
+            'sources_used': self.sources_used,
+            'mixing_algorithm': self.mixing_algorithm,
+            'total_entropy_bits': self.total_entropy_bits,
+            'password_length': self.password_length,
+            'quality_score': self.combined_quality_score,
+            'individual_scores': self.individual_quality_scores,
+            'generation_timestamp': self.generation_timestamp.isoformat(),
+            'signature': self.signature,
+            'ocean': self.ocean_details if 'ocean' in self.sources_used else None,
+            'lightning': self.lightning_details if 'lightning' in self.sources_used else None,
+            'seismic': self.seismic_details if 'seismic' in self.sources_used else None,
+            'solar': self.solar_details if 'solar' in self.sources_used else None,
+        }
+
+
+class UserEntropyPreferences(models.Model):
+    """User preferences for which entropy sources to use."""
+    
+    user = models.OneToOneField(User, on_delete=models.CASCADE, primary_key=True, related_name='entropy_preferences')
+    
+    # Enable/disable each source
+    use_quantum = models.BooleanField(default=True)
+    use_ocean = models.BooleanField(default=True)
+    use_lightning = models.BooleanField(default=True)
+    use_seismic = models.BooleanField(default=True)
+    use_solar = models.BooleanField(default=True)
+    use_genetic = models.BooleanField(default=False)
+    
+    # Minimum sources required
+    min_sources_required = models.IntegerField(default=2)
+    
+    # Notifications
+    notify_on_rare_events = models.BooleanField(default=True)
+    
+    # Statistics
+    total_passwords_generated = models.IntegerField(default=0)
+    favorite_source_combination = models.JSONField(default=list)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'user_entropy_preferences'
+        verbose_name = 'User Entropy Preferences'
+    
+    def __str__(self):
+        enabled = []
+        if self.use_quantum: enabled.append('Q')
+        if self.use_ocean: enabled.append('O')
+        if self.use_lightning: enabled.append('L')
+        if self.use_seismic: enabled.append('S')
+        if self.use_solar: enabled.append('W')
+        if self.use_genetic: enabled.append('G')
+        return f"{self.user.username}: [{'+'.join(enabled)}]"
+
+
+class GlobalEntropyStatistics(models.Model):
+    """Tracks global entropy activity for all sources (hourly snapshots)."""
+    
+    id = models.AutoField(primary_key=True)
+    
+    # Ocean statistics
+    ocean_active_buoys = models.IntegerField(default=0)
+    ocean_total_fetches_24h = models.IntegerField(default=0)
+    ocean_average_quality = models.FloatField(default=0.0)
+    
+    # Lightning statistics
+    lightning_strikes_24h = models.BigIntegerField(default=0)
+    lightning_active_regions = models.JSONField(default=list)
+    lightning_total_fetches_24h = models.IntegerField(default=0)
+    
+    # Seismic statistics
+    seismic_events_24h = models.IntegerField(default=0)
+    seismic_largest_magnitude_24h = models.FloatField(default=0.0)
+    seismic_total_fetches_24h = models.IntegerField(default=0)
+    
+    # Solar wind statistics
+    solar_current_speed_kmps = models.FloatField(default=0.0)
+    solar_storm_level = models.CharField(max_length=20, default='quiet')
+    solar_total_fetches_24h = models.IntegerField(default=0)
+    
+    # Overall statistics
+    total_passwords_24h = models.IntegerField(default=0)
+    total_entropy_bytes_24h = models.BigIntegerField(default=0)
+    average_sources_per_password = models.FloatField(default=0.0)
+    
+    recorded_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'global_entropy_statistics'
+        verbose_name = 'Global Entropy Statistics'
+        verbose_name_plural = 'Global Entropy Statistics'
+        ordering = ['-recorded_at']
+        get_latest_by = 'recorded_at'
+    
+    def __str__(self):
+        return f"Global stats @ {self.recorded_at}"
+
 
 # =============================================================================
 # Ocean Wave Entropy Models Import

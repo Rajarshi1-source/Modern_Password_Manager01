@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from decimal import Decimal
 from functools import lru_cache
+from enum import Enum
 
 # HTTP client
 try:
@@ -37,6 +38,69 @@ except ImportError:
     HTTPX_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Storm Chase Mode - Storm Severity Detection
+# =============================================================================
+
+class StormSeverity(Enum):
+    """Storm severity levels for entropy bonus calculation."""
+    NONE = "none"
+    STORM = "storm"           # Elevated conditions
+    SEVERE = "severe"         # Severe storm
+    EXTREME = "extreme"       # Hurricane/Typhoon conditions
+
+
+@dataclass
+class StormConditions:
+    """
+    Detected storm conditions from buoy readings.
+    
+    Used for "Storm Chase Mode" - during hurricanes and severe storms,
+    buoys report maximum chaos, providing excellent entropy!
+    
+    Thresholds based on NOAA/NWS classifications:
+    - Wave Height: ≥4m (storm), ≥6m (severe), ≥9m (extreme/hurricane)
+    - Wind Speed: ≥17 m/s (storm), ≥24 m/s (severe), ≥32 m/s (extreme)
+    - Pressure: ≤1000 hPa (low), ≤990 hPa (very low), ≤980 hPa (extreme)
+    """
+    severity: StormSeverity
+    is_storm: bool
+    wave_height_factor: float  # 0.0-1.0 contribution from waves
+    wind_factor: float         # 0.0-1.0 contribution from wind
+    pressure_factor: float     # 0.0-1.0 contribution from pressure drop
+    entropy_bonus: float       # Bonus added to quality score
+    
+    # Storm detection thresholds
+    WAVE_STORM_M = 4.0
+    WAVE_SEVERE_M = 6.0
+    WAVE_EXTREME_M = 9.0
+    
+    WIND_STORM_MPS = 17.0    # ~38 mph / ~61 km/h
+    WIND_SEVERE_MPS = 24.0   # ~54 mph / ~86 km/h
+    WIND_EXTREME_MPS = 32.0  # ~72 mph / ~115 km/h (hurricane)
+    
+    PRESSURE_LOW_HPA = 1000.0
+    PRESSURE_VERY_LOW_HPA = 990.0
+    PRESSURE_EXTREME_HPA = 980.0
+    
+    # Entropy bonuses per severity level
+    BONUS_STORM = 0.15
+    BONUS_SEVERE = 0.25
+    BONUS_EXTREME = 0.35
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize storm conditions for API response."""
+        return {
+            'severity': self.severity.value,
+            'is_storm': self.is_storm,
+            'wave_height_factor': self.wave_height_factor,
+            'wind_factor': self.wind_factor,
+            'pressure_factor': self.pressure_factor,
+            'entropy_bonus': self.entropy_bonus,
+        }
+
 
 
 # =============================================================================
@@ -99,9 +163,11 @@ class BuoyReading:
     @property
     def entropy_quality_score(self) -> float:
         """
-        Calculate quality score based on data completeness and variability.
+        Calculate quality score based on data completeness, variability, and storm conditions.
         
         Returns: 0.0 to 1.0, where 1.0 is perfect quality
+        
+        Storm Chase Mode: During hurricanes/storms, entropy quality is MAXIMUM!
         """
         # Count available parameters
         params = [
@@ -117,7 +183,82 @@ class BuoyReading:
         if self.wave_height_m is not None and self.wave_height_m > 1.0:
             wave_bonus = min(self.wave_height_m / 10.0, 0.2)  # Up to 0.2 bonus
         
-        return min(completeness + wave_bonus, 1.0)
+        # STORM CHASE MODE: Add storm bonus for maximum entropy!
+        storm_conditions = self.detect_storm_conditions()
+        storm_bonus = storm_conditions.entropy_bonus
+        
+        return min(completeness + wave_bonus + storm_bonus, 1.0)
+    
+    def detect_storm_conditions(self) -> 'StormConditions':
+        """
+        Detect storm/hurricane conditions from buoy readings.
+        
+        Storm Chase Mode: During hurricanes, buoys have MAXIMUM entropy!
+        High waves, strong winds, and low pressure = chaos = entropy gold.
+        
+        Returns:
+            StormConditions with severity level and entropy bonus
+        """
+        # Calculate individual factors (0.0 to 1.0)
+        wave_factor = 0.0
+        wind_factor = 0.0
+        pressure_factor = 0.0
+        
+        # Wave height factor
+        if self.wave_height_m is not None:
+            if self.wave_height_m >= StormConditions.WAVE_EXTREME_M:
+                wave_factor = 1.0
+            elif self.wave_height_m >= StormConditions.WAVE_SEVERE_M:
+                wave_factor = 0.7
+            elif self.wave_height_m >= StormConditions.WAVE_STORM_M:
+                wave_factor = 0.4
+        
+        # Wind speed factor (use gust if available, else sustained)
+        wind_speed = self.wind_gust_mps or self.wind_speed_mps
+        if wind_speed is not None:
+            if wind_speed >= StormConditions.WIND_EXTREME_MPS:
+                wind_factor = 1.0
+            elif wind_speed >= StormConditions.WIND_SEVERE_MPS:
+                wind_factor = 0.7
+            elif wind_speed >= StormConditions.WIND_STORM_MPS:
+                wind_factor = 0.4
+        
+        # Pressure factor (lower = more severe)
+        if self.pressure_hpa is not None:
+            if self.pressure_hpa <= StormConditions.PRESSURE_EXTREME_HPA:
+                pressure_factor = 1.0
+            elif self.pressure_hpa <= StormConditions.PRESSURE_VERY_LOW_HPA:
+                pressure_factor = 0.7
+            elif self.pressure_hpa <= StormConditions.PRESSURE_LOW_HPA:
+                pressure_factor = 0.4
+        
+        # Determine overall severity (weighted: waves 40%, wind 40%, pressure 20%)
+        combined_score = (wave_factor * 0.4) + (wind_factor * 0.4) + (pressure_factor * 0.2)
+        
+        # Determine severity level and bonus
+        if combined_score >= 0.7:
+            severity = StormSeverity.EXTREME
+            entropy_bonus = StormConditions.BONUS_EXTREME
+        elif combined_score >= 0.4:
+            severity = StormSeverity.SEVERE
+            entropy_bonus = StormConditions.BONUS_SEVERE
+        elif combined_score >= 0.2:
+            severity = StormSeverity.STORM
+            entropy_bonus = StormConditions.BONUS_STORM
+        else:
+            severity = StormSeverity.NONE
+            entropy_bonus = 0.0
+        
+        is_storm = severity != StormSeverity.NONE
+        
+        return StormConditions(
+            severity=severity,
+            is_storm=is_storm,
+            wave_height_factor=wave_factor,
+            wind_factor=wind_factor,
+            pressure_factor=pressure_factor,
+            entropy_bonus=entropy_bonus,
+        )
     
     def to_entropy_bytes(self) -> bytes:
         """
@@ -175,6 +316,7 @@ class BuoyReading:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
+        storm_conditions = self.detect_storm_conditions()
         return {
             'buoy_id': self.buoy_id,
             'timestamp': self.timestamp.isoformat(),
@@ -190,6 +332,7 @@ class BuoyReading:
             'longitude': self.longitude,
             'entropy_values': self.entropy_value_count,
             'quality_score': self.entropy_quality_score,
+            'storm_conditions': storm_conditions.to_dict(),
         }
 
 

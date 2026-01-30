@@ -18,6 +18,9 @@ import AccountRecovery from '../screens/AccountRecovery';
 import GeofenceScreen from '../screens/GeofenceScreen';
 import TrustedZonesScreen from '../screens/TrustedZonesScreen';
 
+// Import natural entropy screen
+import NaturalEntropyScreen from '../screens/NaturalEntropyScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -108,6 +111,11 @@ const SettingsNavigator = () => (
       name="Settings" 
       component={Settings}
       options={{ headerTitle: 'Settings' }}
+    />
+    <MainStack.Screen 
+      name="NaturalEntropy" 
+      component={NaturalEntropyScreen}
+      options={{ headerTitle: 'Natural Entropy' }}
     />
   </MainStack.Navigator>
 );
