@@ -15,8 +15,11 @@ from ..models import (
     UserNotificationSettings, SecurityAlert, AccountLockEvent,
     Notification
 )
+# Import duress code detection
+from .duress_code_service import get_duress_code_service
 
 logger = logging.getLogger(__name__)
+
 
 class SecurityService:
     """Enhanced service for analyzing security threats and taking protective actions"""
@@ -26,6 +29,78 @@ class SecurityService:
         self.lockout_duration_minutes = getattr(settings, 'LOCKOUT_DURATION_MINUTES', 30)
         self.suspicious_threshold = getattr(settings, 'SUSPICIOUS_THRESHOLD', 3)
         self.geo_db_path = getattr(settings, 'GEOIP_PATH', None)
+        self._duress_service = None
+    
+    @property
+    def duress_service(self):
+        """Lazy load duress code service to avoid circular imports"""
+        if self._duress_service is None:
+            self._duress_service = get_duress_code_service()
+        return self._duress_service
+    
+    def check_for_duress_code(self, user, password, request):
+        """
+        Check if the provided password is actually a duress code.
+        
+        This should be called during login AFTER the password is validated.
+        If it's a duress code, activate duress mode and return True.
+        
+        Args:
+            user: The authenticated user
+            password: The password/code that was entered
+            request: The HTTP request for context extraction
+            
+        Returns:
+            dict with:
+                - is_duress: bool - True if duress code was detected
+                - response: dict - Duress activation response (if applicable)
+        """
+        try:
+            # Check if we have duress code service
+            if not self.duress_service:
+                return {'is_duress': False, 'response': None}
+            
+            # Check if input is a duress code
+            result_type, duress_code = self.duress_service.verify_password_or_duress(
+                user, password
+            )
+            
+            if result_type == 'duress' and duress_code:
+                # Build request context for duress activation
+                ip_address, _ = get_client_ip(request)
+                request_context = {
+                    'ip_address': ip_address or '0.0.0.0',
+                    'user_agent': request.META.get('HTTP_USER_AGENT', ''),
+                    'device_fingerprint': request.data.get('device_fingerprint', {}),
+                    'geo_location': self._get_location_from_ip(ip_address) if ip_address else {},
+                    'behavioral_data': request.data.get('behavioral_data', {}),
+                    'stress_score': request.data.get('stress_score', 0.0),
+                }
+                
+                # Activate duress mode
+                activation_result = self.duress_service.activate_duress_mode(
+                    user=user,
+                    duress_code=duress_code,
+                    request_context=request_context,
+                    is_test=False
+                )
+                
+                logger.warning(
+                    f"Duress code activated for user {user.username} - "
+                    f"threat level: {duress_code.threat_level}"
+                )
+                
+                return {
+                    'is_duress': True,
+                    'response': activation_result
+                }
+            
+            return {'is_duress': False, 'response': None}
+            
+        except Exception as e:
+            logger.error(f"Error checking for duress code: {e}")
+            return {'is_duress': False, 'response': None}
+
     
     @transaction.atomic
     def analyze_login_attempt(self, user, request, is_successful, failure_reason=None):

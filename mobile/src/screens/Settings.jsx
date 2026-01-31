@@ -1,33 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  View, Text, StyleSheet, Switch, 
-  TouchableOpacity, Alert, ScrollView 
+import {
+  View, Text, StyleSheet, Switch,
+  TouchableOpacity, Alert, ScrollView
 } from 'react-native';
 import MobileSecureStorage from '../services/mobileSecureStorage';
 import { Ionicons } from '@expo/vector-icons';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { authService } from '../services/authService';
 
-const Settings = () => {
+const Settings = ({ navigation }) => {
   const [biometricAvailable, setBiometricAvailable] = useState(false);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricType, setBiometricType] = useState('');
-  
+
   useEffect(() => {
     checkBiometricStatus();
   }, []);
-  
+
   const checkBiometricStatus = async () => {
     try {
       // Check if device supports biometrics
       const available = await MobileSecureStorage.isHardwareSecurityAvailable();
       setBiometricAvailable(available);
-      
+
       if (available) {
         // Check if biometric login is enabled
         const enabled = await MobileSecureStorage.hasSavedCredentials();
         setBiometricEnabled(enabled);
-        
+
         // Determine biometric type (face or fingerprint)
         const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
         setBiometricType(types.includes(2) ? 'Face ID' : 'Fingerprint');
@@ -36,7 +36,7 @@ const Settings = () => {
       console.error('Error checking biometric status:', error);
     }
   };
-  
+
   const toggleBiometricAuth = async (value) => {
     if (value) {
       // Enable biometric auth
@@ -52,11 +52,11 @@ const Settings = () => {
                 Alert.alert('Error', 'Password is required');
                 return;
               }
-              
+
               try {
                 // Verify master password
                 const result = await authService.checkMasterPassword(password);
-                
+
                 if (result.success) {
                   // Store credentials for biometric auth
                   await MobileSecureStorage.storeCredentials(
@@ -94,21 +94,21 @@ const Settings = () => {
       );
     }
   };
-  
+
   return (
     <ScrollView style={styles.container}>
       <Text style={styles.title}>Security Settings</Text>
-      
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Authentication</Text>
-        
+
         {biometricAvailable ? (
           <View style={styles.settingItem}>
             <View style={styles.settingInfo}>
-              <Ionicons 
-                name={biometricType === 'Face ID' ? 'ios-face-id' : 'ios-finger-print'} 
-                size={24} 
-                color="#4A6CF7" 
+              <Ionicons
+                name={biometricType === 'Face ID' ? 'ios-face-id' : 'ios-finger-print'}
+                size={24}
+                color="#4A6CF7"
                 style={styles.icon}
               />
               <View>
@@ -132,7 +132,7 @@ const Settings = () => {
             Biometric authentication is not available on this device
           </Text>
         )}
-        
+
         <TouchableOpacity style={styles.settingItem}>
           <View style={styles.settingInfo}>
             <Ionicons name="ios-key-outline" size={24} color="#4A6CF7" style={styles.icon} />
@@ -140,6 +140,43 @@ const Settings = () => {
               <Text style={styles.settingTitle}>Change Master Password</Text>
               <Text style={styles.settingDescription}>
                 Update your master password
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="ios-chevron-forward" size={18} color="#9CA3AF" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Duress Protection Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Advanced Security</Text>
+
+        <TouchableOpacity
+          style={styles.settingItem}
+          onPress={() => navigation.navigate('DuressCode')}
+        >
+          <View style={styles.settingInfo}>
+            <Ionicons name="shield-checkmark" size={24} color="#dc2626" style={styles.icon} />
+            <View>
+              <Text style={styles.settingTitle}>🎖️ Duress Protection</Text>
+              <Text style={styles.settingDescription}>
+                Military-grade protection against coerced access
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="ios-chevron-forward" size={18} color="#9CA3AF" />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.settingItem}
+          onPress={() => navigation.navigate('NaturalEntropy')}
+        >
+          <View style={styles.settingInfo}>
+            <Ionicons name="leaf" size={24} color="#22c55e" style={styles.icon} />
+            <View>
+              <Text style={styles.settingTitle}>🌿 Natural Entropy</Text>
+              <Text style={styles.settingDescription}>
+                Generate randomness from nature
               </Text>
             </View>
           </View>

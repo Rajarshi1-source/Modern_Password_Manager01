@@ -49,6 +49,13 @@ const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCa
 // Natural Entropy Dashboard
 const UltimateEntropyDashboard = lazy(() => import('./Components/security/UltimateEntropyDashboard'));
 
+// Military-Grade Duress Code Components
+const DuressCodeSetup = lazy(() => import('./components/security/DuressCodeSetup'));
+const DuressCodeManager = lazy(() => import('./components/security/DuressCodeManager'));
+const DecoyVaultPreview = lazy(() => import('./components/security/DecoyVaultPreview'));
+const TrustedAuthorityManager = lazy(() => import('./components/security/TrustedAuthorityManager'));
+const DuressEventLog = lazy(() => import('./components/security/DuressEventLog'));
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */
@@ -1443,6 +1450,22 @@ function App() {
                 {/* Natural Entropy Dashboard */}
                 <Route path="/security/natural-entropy" element={
                   !isAuthenticated ? <Navigate to="/" /> : <UltimateEntropyDashboard />
+                } />
+                {/* Military-Grade Duress Code Routes */}
+                <Route path="/security/duress-setup" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <DuressCodeSetup />
+                } />
+                <Route path="/security/duress-codes" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <DuressCodeManager />
+                } />
+                <Route path="/security/duress-codes/decoy-preview" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <DecoyVaultPreview />
+                } />
+                <Route path="/security/duress-codes/authorities" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <TrustedAuthorityManager />
+                } />
+                <Route path="/security/duress-codes/events" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <DuressEventLog />
                 } />
               </Routes>
             </Suspense>

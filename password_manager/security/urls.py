@@ -13,6 +13,7 @@ from .api import adaptive_password_views
 from .api import ocean_entropy_views  # 🌊 Ocean Wave Entropy
 from .api import storm_chase_views     # 🌀 Storm Chase Mode
 from .api import natural_entropy_views # ⚡ Natural Entropy (Lightning/Seismic/Solar)
+from .api import duress_code_views      # 🎖️ Military-Grade Duress Codes
 
 
 @api_view(['GET'])
@@ -336,6 +337,34 @@ urlpatterns = [
          __import__('security.api.time_lock_views', fromlist=['VDFVerifyView']).VDFVerifyView.as_view(), 
          name='timelock-vdf-verify'),
     
+    # ==========================================================================
+    # 🎖️ Military-Grade Duress Codes Endpoints
+    # ==========================================================================
+    
+    # Duress Configuration
+    path('duress/config/', duress_code_views.duress_config, name='duress-config'),
+    
+    # Duress Codes CRUD
+    path('duress/codes/', duress_code_views.duress_codes_list, name='duress-codes-list'),
+    path('duress/codes/<uuid:code_id>/', duress_code_views.duress_code_detail, name='duress-code-detail'),
+    
+    # Decoy Vault
+    path('duress/decoy/', duress_code_views.decoy_vault, name='duress-decoy'),
+    
+    # Trusted Authorities
+    path('duress/authorities/', duress_code_views.trusted_authorities_list, name='duress-authorities-list'),
+    path('duress/authorities/<uuid:authority_id>/', duress_code_views.trusted_authority_detail, name='duress-authority-detail'),
+    
+    # Duress Events
+    path('duress/events/', duress_code_views.duress_events_list, name='duress-events-list'),
+    
+    # Evidence Packages
+    path('duress/evidence/<uuid:package_id>/', duress_code_views.evidence_package_detail, name='duress-evidence-detail'),
+    path('duress/evidence/<uuid:package_id>/export/', duress_code_views.evidence_package_export, name='duress-evidence-export'),
+    
+    # Test Activation (Safe Mode)
+    path('duress/test/', duress_code_views.test_duress_activation, name='duress-test'),
+
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),
     path('audit-log/', views.audit_log, name='security-audit-log'),

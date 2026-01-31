@@ -1,0 +1,926 @@
+/**
+ * DuressCodeSetup.css
+ * Styles for Military-Grade Duress Code setup wizard
+ */
+
+/* =============================================================================
+   Base Wizard Styles
+   ============================================================================= */
+
+.duress-setup-wizard {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 2rem;
+    background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 100%);
+    border-radius: 16px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* =============================================================================
+   Progress Indicator
+   ============================================================================= */
+
+.setup-progress {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 2rem;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+}
+
+.progress-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 1;
+    position: relative;
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    opacity: 0.5;
+}
+
+.progress-step.active,
+.progress-step.completed {
+    opacity: 1;
+}
+
+.progress-step.active {
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.progress-step.completed:hover {
+    background: rgba(99, 102, 241, 0.05);
+}
+
+.step-icon {
+    font-size: 1.5rem;
+}
+
+.step-title {
+    font-size: 0.75rem;
+    color: #a0aec0;
+    text-align: center;
+}
+
+.progress-step.active .step-title {
+    color: #fff;
+    font-weight: 600;
+}
+
+.step-connector {
+    position: absolute;
+    top: 1.5rem;
+    right: -50%;
+    width: 100%;
+    height: 2px;
+    background: rgba(99, 102, 241, 0.2);
+    z-index: -1;
+}
+
+.progress-step:last-child .step-connector {
+    display: none;
+}
+
+.progress-step.completed+.progress-step .step-connector::before,
+.progress-step.completed .step-connector {
+    background: linear-gradient(90deg, #6366f1, #8b5cf6);
+}
+
+/* =============================================================================
+   Error Display
+   ============================================================================= */
+
+.setup-error {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    color: #fca5a5;
+}
+
+.error-icon {
+    font-size: 1.25rem;
+}
+
+.error-message {
+    flex: 1;
+    font-size: 0.875rem;
+}
+
+.dismiss-btn {
+    padding: 0.25rem 0.5rem;
+    background: transparent;
+    border: none;
+    color: #fca5a5;
+    font-size: 1.25rem;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.dismiss-btn:hover {
+    opacity: 1;
+}
+
+/* =============================================================================
+   Navigation
+   ============================================================================= */
+
+.setup-navigation {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.nav-spacer {
+    flex: 1;
+}
+
+.nav-btn {
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cancel-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #a0aec0;
+}
+
+.cancel-btn:hover {
+    border-color: rgba(239, 68, 68, 0.5);
+    color: #ef4444;
+}
+
+.back-btn {
+    background: transparent;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: #a78bfa;
+}
+
+.back-btn:hover {
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.next-btn {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    border: none;
+    color: white;
+}
+
+.next-btn:hover {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+}
+
+.nav-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* =============================================================================
+   Common Elements
+   ============================================================================= */
+
+.primary-btn {
+    padding: 0.875rem 2rem;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    border: none;
+    border-radius: 8px;
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.primary-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(99, 102, 241, 0.4);
+}
+
+.primary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.secondary-btn {
+    padding: 0.75rem 1.5rem;
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 8px;
+    color: #a78bfa;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.secondary-btn:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.2);
+    border-color: rgba(99, 102, 241, 0.5);
+}
+
+.secondary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Form Styles */
+.form-group {
+    margin-bottom: 1.25rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #e2e8f0;
+}
+
+.form-group input,
+.form-group select {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: white;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.form-group input::placeholder {
+    color: #4a5568;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 24px;
+    transition: 0.3s;
+}
+
+.toggle-slider::before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: 0.3s;
+}
+
+.toggle-switch input:checked+.toggle-slider {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+}
+
+.toggle-switch input:checked+.toggle-slider::before {
+    transform: translateX(24px);
+}
+
+/* =============================================================================
+   Intro Step
+   ============================================================================= */
+
+.step-intro {
+    text-align: center;
+}
+
+.intro-header {
+    margin-bottom: 1.5rem;
+}
+
+.intro-icon {
+    display: block;
+    font-size: 4rem;
+    margin-bottom: 1rem;
+}
+
+.intro-header h2 {
+    font-size: 1.75rem;
+    color: white;
+    margin: 0;
+}
+
+.intro-description {
+    max-width: 600px;
+    margin: 0 auto 2rem;
+    color: #a0aec0;
+    line-height: 1.6;
+}
+
+.feature-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.feature-card {
+    padding: 1.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    text-align: left;
+    transition: all 0.3s ease;
+}
+
+.feature-card:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
+.feature-icon {
+    font-size: 2rem;
+    margin-bottom: 0.75rem;
+    display: block;
+}
+
+.feature-card h3 {
+    font-size: 1rem;
+    color: white;
+    margin: 0 0 0.5rem;
+}
+
+.feature-card p {
+    font-size: 0.8rem;
+    color: #718096;
+    margin: 0;
+    line-height: 1.4;
+}
+
+.intro-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: rgba(251, 191, 36, 0.1);
+    border: 1px solid rgba(251, 191, 36, 0.2);
+    border-radius: 8px;
+    margin-bottom: 2rem;
+    text-align: left;
+}
+
+.warning-icon {
+    font-size: 1.25rem;
+}
+
+.intro-warning p {
+    color: #fbbf24;
+    font-size: 0.875rem;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.start-btn {
+    margin-top: 1rem;
+}
+
+/* =============================================================================
+   Enable Step
+   ============================================================================= */
+
+.step-enable h2 {
+    color: white;
+    margin: 0 0 0.5rem;
+}
+
+.step-description {
+    color: #a0aec0;
+    margin-bottom: 2rem;
+}
+
+.settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.setting-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.25rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    transition: all 0.2s ease;
+}
+
+.setting-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.setting-item.enterprise-only {
+    opacity: 0.6;
+    position: relative;
+}
+
+.setting-info h3 {
+    font-size: 1rem;
+    color: white;
+    margin: 0 0 0.25rem;
+}
+
+.setting-info p {
+    font-size: 0.8rem;
+    color: #718096;
+    margin: 0;
+}
+
+.enterprise-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    border-radius: 4px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: white;
+    text-transform: uppercase;
+    margin-top: 0.5rem;
+}
+
+/* =============================================================================
+   Codes Step
+   ============================================================================= */
+
+.existing-codes {
+    margin-bottom: 2rem;
+}
+
+.existing-codes h3,
+.add-code-form h3 {
+    font-size: 1rem;
+    color: #e2e8f0;
+    margin: 0 0 1rem;
+}
+
+.codes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.code-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+}
+
+.code-icon {
+    font-size: 1.25rem;
+}
+
+.code-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.code-level {
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.code-hint {
+    font-size: 0.75rem;
+    color: #718096;
+}
+
+.code-activations {
+    font-size: 0.75rem;
+    color: #a0aec0;
+    padding: 0.25rem 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 20px;
+}
+
+.remove-btn {
+    padding: 0.25rem 0.5rem;
+    background: rgba(239, 68, 68, 0.1);
+    border: none;
+    border-radius: 4px;
+    color: #ef4444;
+    font-size: 1.25rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.remove-btn:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.2);
+}
+
+.add-code-form {
+    padding: 1.5rem;
+    background: rgba(99, 102, 241, 0.05);
+    border: 1px solid rgba(99, 102, 241, 0.1);
+    border-radius: 12px;
+}
+
+.strength-meter {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.strength-bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.strength-label {
+    font-size: 0.75rem;
+    color: #a0aec0;
+}
+
+.level-select {
+    appearance: none;
+    cursor: pointer;
+}
+
+.level-description {
+    font-size: 0.75rem;
+    color: #718096;
+    margin-top: 0.5rem;
+}
+
+/* =============================================================================
+   Authorities Step
+   ============================================================================= */
+
+.existing-authorities {
+    margin-bottom: 2rem;
+}
+
+.existing-authorities h3,
+.add-authority-form h3 {
+    font-size: 1rem;
+    color: #e2e8f0;
+    margin: 0 0 1rem;
+}
+
+.authorities-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.authority-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+}
+
+.auth-icon {
+    font-size: 1.25rem;
+}
+
+.auth-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.auth-name {
+    font-size: 0.875rem;
+    color: white;
+    font-weight: 500;
+}
+
+.auth-method {
+    font-size: 0.75rem;
+    color: #718096;
+}
+
+.auth-levels {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.level-badge {
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: white;
+    text-transform: uppercase;
+}
+
+.add-authority-form {
+    padding: 1.5rem;
+    background: rgba(99, 102, 241, 0.05);
+    border: 1px solid rgba(99, 102, 241, 0.1);
+    border-radius: 12px;
+}
+
+.level-checkboxes {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.level-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+.level-checkbox input {
+    width: auto;
+}
+
+/* =============================================================================
+   Decoy Step
+   ============================================================================= */
+
+.loading-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 3rem;
+    color: #a0aec0;
+}
+
+.spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(99, 102, 241, 0.2);
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.decoy-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 1.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: white;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.stat-label {
+    font-size: 0.75rem;
+    color: #718096;
+    margin-top: 0.5rem;
+}
+
+.decoy-preview {
+    margin-bottom: 1.5rem;
+}
+
+.decoy-preview h3 {
+    font-size: 1rem;
+    color: #e2e8f0;
+    margin: 0 0 1rem;
+}
+
+.preview-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.preview-item {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.875rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+}
+
+.item-icon {
+    font-size: 1.25rem;
+}
+
+.item-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.item-name {
+    font-size: 0.875rem;
+    color: white;
+}
+
+.item-meta {
+    font-size: 0.75rem;
+    color: #718096;
+}
+
+.fake-badge {
+    padding: 0.125rem 0.5rem;
+    background: rgba(239, 68, 68, 0.2);
+    border-radius: 4px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    color: #ef4444;
+}
+
+.regenerate-btn {
+    width: 100%;
+}
+
+/* =============================================================================
+   Test Step
+   ============================================================================= */
+
+.test-form {
+    max-width: 400px;
+    margin: 0 auto 2rem;
+}
+
+.test-input {
+    text-align: center;
+    font-size: 1.25rem;
+    letter-spacing: 0.1em;
+}
+
+.test-btn {
+    width: 100%;
+    margin-top: 1rem;
+}
+
+.test-result {
+    padding: 1.5rem;
+    border-radius: 12px;
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.test-result.success {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.test-result.failure {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.result-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+    display: block;
+}
+
+.test-result h3 {
+    font-size: 1.25rem;
+    color: white;
+    margin: 0 0 0.5rem;
+}
+
+.test-result p {
+    color: #a0aec0;
+    margin: 0.5rem 0;
+}
+
+.test-result ul {
+    list-style: none;
+    padding: 0;
+    margin: 1rem 0 0;
+}
+
+.test-result li {
+    color: #22c55e;
+    font-size: 0.875rem;
+    margin: 0.25rem 0;
+}
+
+.complete-setup {
+    text-align: center;
+}
+
+.complete-btn {
+    min-width: 200px;
+}
+
+/* =============================================================================
+   Responsive
+   ============================================================================= */
+
+@media (max-width: 768px) {
+    .duress-setup-wizard {
+        padding: 1rem;
+        margin: 0;
+        border-radius: 0;
+    }
+
+    .setup-progress {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+
+    .progress-step {
+        flex: 0 0 auto;
+    }
+
+    .step-title {
+        display: none;
+    }
+
+    .feature-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .decoy-stats {
+        grid-template-columns: repeat(3, 1fr);
+    }
+
+    .stat-value {
+        font-size: 1.5rem;
+    }
+}

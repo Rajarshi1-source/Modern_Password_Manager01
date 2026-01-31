@@ -21,6 +21,9 @@ import TrustedZonesScreen from '../screens/TrustedZonesScreen';
 // Import natural entropy screen
 import NaturalEntropyScreen from '../screens/NaturalEntropyScreen';
 
+// Import duress code screen
+import DuressCodeScreen from '../screens/DuressCodeScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -116,6 +119,11 @@ const SettingsNavigator = () => (
       name="NaturalEntropy" 
       component={NaturalEntropyScreen}
       options={{ headerTitle: 'Natural Entropy' }}
+    />
+    <MainStack.Screen 
+      name="DuressCode" 
+      component={DuressCodeScreen}
+      options={{ headerTitle: 'Duress Protection', headerShown: false }}
     />
   </MainStack.Navigator>
 );

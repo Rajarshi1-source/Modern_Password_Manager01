@@ -2919,17 +2919,5 @@ class GlobalEntropyStatistics(models.Model):
         return f"Global stats @ {self.recorded_at}"
 
 
-# =============================================================================
-# Ocean Wave Entropy Models Import
-# =============================================================================
-# Import ocean entropy models for Django migrations
-try:
-    from security.models.ocean_entropy_models import (
-        OceanEntropyBatch,
-        HybridPasswordCertificate,
-        BuoyHealthStatus,
-        OceanEntropyUsageStats,
-    )
-except ImportError:
-    # Models not yet available during initial setup
-    pass
+# Note: Ocean entropy models and duress code models are now imported via
+# security/models/__init__.py to convert the package to proper structure
