@@ -44,7 +44,7 @@
     "react-native-screens": "~4.19.0",
     "react-native-svg": "15.12.1",
     "react-native-web": "~0.19.13",
-    "react-native-webview": "13.12.5"
+    "react-native-webview": "13.16.0"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
