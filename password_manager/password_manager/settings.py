@@ -1232,3 +1232,61 @@ OCEAN_ENTROPY = {
     'MAX_REQUESTS_PER_HOUR_PER_BUOY': int(os.environ.get('OCEAN_MAX_REQUESTS_PER_HOUR', '60')),
 }
 
+
+# =============================================================================
+# 🍯 Honeypot Email Breach Detection Configuration
+# =============================================================================
+# Configuration for honeypot email aliases used to detect data breaches.
+# When a honeypot receives spam, it indicates the associated service was breached.
+
+HONEYPOT_EMAIL = {
+    # Feature Toggle
+    'ENABLED': os.environ.get('HONEYPOT_ENABLED', 'True').lower() == 'true',
+    
+    # Default Email Provider (simplelogin, anonaddy, or custom)
+    'DEFAULT_PROVIDER': os.environ.get('HONEYPOT_DEFAULT_PROVIDER', 'simplelogin'),
+    
+    # SimpleLogin Configuration (https://simplelogin.io)
+    'SIMPLELOGIN_API_KEY': os.environ.get('SIMPLELOGIN_API_KEY', ''),
+    'SIMPLELOGIN_BASE_URL': os.environ.get('SIMPLELOGIN_BASE_URL', 'https://app.simplelogin.io/api'),
+    
+    # AnonAddy Configuration (https://anonaddy.com)
+    'ANONADDY_API_KEY': os.environ.get('ANONADDY_API_KEY', ''),
+    'ANONADDY_BASE_URL': os.environ.get('ANONADDY_BASE_URL', 'https://app.anonaddy.com/api/v1'),
+    'ANONADDY_DOMAIN': os.environ.get('ANONADDY_DOMAIN', 'anonaddy.me'),
+    
+    # Custom SMTP Configuration (for enterprise deployments)
+    'CUSTOM_SMTP_DOMAIN': os.environ.get('HONEYPOT_SMTP_DOMAIN', ''),
+    'CUSTOM_SMTP_HOST': os.environ.get('HONEYPOT_SMTP_HOST', ''),
+    'CUSTOM_SMTP_PORT': int(os.environ.get('HONEYPOT_SMTP_PORT', '587')),
+    'CUSTOM_SMTP_USERNAME': os.environ.get('HONEYPOT_SMTP_USERNAME', ''),
+    'CUSTOM_SMTP_PASSWORD': os.environ.get('HONEYPOT_SMTP_PASSWORD', ''),
+    
+    # Webhook Configuration
+    'WEBHOOK_SECRET': os.environ.get('HONEYPOT_WEBHOOK_SECRET', ''),
+    'WEBHOOK_SIGNATURE_HEADER': os.environ.get('HONEYPOT_WEBHOOK_SIG_HEADER', 'X-SimpleLogin-Signature'),
+    
+    # Breach Detection Thresholds
+    'SPAM_THRESHOLD_FOR_BREACH': int(os.environ.get('HONEYPOT_SPAM_THRESHOLD', '1')),
+    'ACTIVITY_SPIKE_THRESHOLD': int(os.environ.get('HONEYPOT_ACTIVITY_SPIKE', '3')),
+    'HIGH_CONFIDENCE_THRESHOLD': float(os.environ.get('HONEYPOT_HIGH_CONFIDENCE', '0.8')),
+    
+    # User Limits
+    'DEFAULT_MAX_HONEYPOTS': int(os.environ.get('HONEYPOT_DEFAULT_MAX', '50')),
+    'PREMIUM_MAX_HONEYPOTS': int(os.environ.get('HONEYPOT_PREMIUM_MAX', '200')),
+    
+    # Notification Settings
+    'SECURITY_EMAIL': os.environ.get('SECURITY_EMAIL', 'security@securevault.com'),
+    'NOTIFY_ADMINS_ON_BREACH': os.environ.get('HONEYPOT_NOTIFY_ADMINS', 'True').lower() == 'true',
+    
+    # Data Retention (days)
+    'ACTIVITY_RETENTION_DAYS': int(os.environ.get('HONEYPOT_ACTIVITY_RETENTION', '365')),
+    'BREACH_RETENTION_DAYS': int(os.environ.get('HONEYPOT_BREACH_RETENTION', '730')),  # 2 years
+    
+    # Auto-Rotation Settings
+    'DEFAULT_AUTO_ROTATE': os.environ.get('HONEYPOT_DEFAULT_AUTO_ROTATE', 'False').lower() == 'true',
+    'DEFAULT_REQUIRE_CONFIRMATION': os.environ.get('HONEYPOT_REQUIRE_CONFIRM', 'True').lower() == 'true',
+}
+
+# Security email for breach notifications
+SECURITY_EMAIL = os.environ.get('SECURITY_EMAIL', 'security@securevault.com')

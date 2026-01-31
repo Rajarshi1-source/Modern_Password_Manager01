@@ -26,3 +26,12 @@ from .duress_models import (
     EvidencePackage,
     TrustedAuthority,
 )
+
+# Import honeypot models
+from .honeypot_models import (
+    HoneypotConfiguration,
+    HoneypotEmail,
+    HoneypotActivity,
+    HoneypotBreachEvent,
+    CredentialRotationLog,
+)

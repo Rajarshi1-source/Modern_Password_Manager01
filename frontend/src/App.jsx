@@ -56,6 +56,9 @@ const DecoyVaultPreview = lazy(() => import('./components/security/DecoyVaultPre
 const TrustedAuthorityManager = lazy(() => import('./components/security/TrustedAuthorityManager'));
 const DuressEventLog = lazy(() => import('./components/security/DuressEventLog'));
 
+// Honeypot Email Breach Detection
+const HoneypotDashboard = lazy(() => import('./components/security/HoneypotDashboard'));
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */

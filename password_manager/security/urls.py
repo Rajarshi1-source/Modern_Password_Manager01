@@ -14,6 +14,7 @@ from .api import ocean_entropy_views  # 🌊 Ocean Wave Entropy
 from .api import storm_chase_views     # 🌀 Storm Chase Mode
 from .api import natural_entropy_views # ⚡ Natural Entropy (Lightning/Seismic/Solar)
 from .api import duress_code_views      # 🎖️ Military-Grade Duress Codes
+from .api import honeypot_views         # 🍯 Honeypot Email Breach Detection
 
 
 @api_view(['GET'])
@@ -364,6 +365,33 @@ urlpatterns = [
     
     # Test Activation (Safe Mode)
     path('duress/test/', duress_code_views.test_duress_activation, name='duress-test'),
+
+    # ==========================================================================
+    # 🍯 Honeypot Email Breach Detection Endpoints
+    # ==========================================================================
+    
+    # Configuration
+    path('honeypot/config/', honeypot_views.HoneypotConfigView.as_view(), name='honeypot-config'),
+    
+    # Honeypot CRUD
+    path('honeypot/list/', honeypot_views.HoneypotListCreateView.as_view(), name='honeypot-list'),
+    path('honeypot/<uuid:honeypot_id>/', honeypot_views.HoneypotDetailView.as_view(), name='honeypot-detail'),
+    path('honeypot/<uuid:honeypot_id>/test/', honeypot_views.HoneypotTestView.as_view(), name='honeypot-test'),
+    
+    # Bulk Operations
+    path('honeypot/bulk-create/', honeypot_views.BulkCreateHoneypotsView.as_view(), name='honeypot-bulk-create'),
+    path('honeypot/check-all/', honeypot_views.CheckAllHoneypotsView.as_view(), name='honeypot-check-all'),
+    
+    # Breach Management
+    path('honeypot/breaches/', honeypot_views.BreachListView.as_view(), name='honeypot-breaches'),
+    path('honeypot/breaches/<uuid:breach_id>/', honeypot_views.BreachDetailView.as_view(), name='honeypot-breach-detail'),
+    path('honeypot/breaches/<uuid:breach_id>/rotate/', honeypot_views.BreachRotateView.as_view(), name='honeypot-breach-rotate'),
+    
+    # Activity Logs
+    path('honeypot/activities/', honeypot_views.ActivityListView.as_view(), name='honeypot-activities'),
+    
+    # Webhook (for email providers)
+    path('honeypot/webhook/', honeypot_views.HoneypotWebhookView.as_view(), name='honeypot-webhook'),
 
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),

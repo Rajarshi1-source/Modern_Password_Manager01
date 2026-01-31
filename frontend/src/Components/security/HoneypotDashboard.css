@@ -1,0 +1,1069 @@
+/**
+ * Honeypot Dashboard Styles
+ * 
+ * Styling for honeypot email breach detection components.
+ * Uses modern glassmorphism and gradient aesthetics.
+ */
+
+/* Variables */
+:root {
+    --honeypot-primary: #6366f1;
+    --honeypot-secondary: #8b5cf6;
+    --honeypot-success: #10b981;
+    --honeypot-warning: #f59e0b;
+    --honeypot-danger: #ef4444;
+    --honeypot-bg: rgba(15, 23, 42, 0.95);
+    --honeypot-card-bg: rgba(30, 41, 59, 0.8);
+    --honeypot-border: rgba(148, 163, 184, 0.1);
+    --honeypot-text: #f1f5f9;
+    --honeypot-text-muted: #94a3b8;
+}
+
+/* Dashboard Container */
+.honeypot-dashboard {
+    padding: 2rem;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    color: var(--honeypot-text);
+}
+
+.honeypot-dashboard.loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.loading-spinner {
+    text-align: center;
+    color: var(--honeypot-text-muted);
+}
+
+.loading-spinner .spin {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Header */
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--honeypot-border);
+}
+
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.header-icon {
+    color: var(--honeypot-primary);
+}
+
+.header-left h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin: 0;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.header-left p {
+    margin: 0;
+    color: var(--honeypot-text-muted);
+    font-size: 0.875rem;
+}
+
+.header-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1.25rem;
+    margin-bottom: 2rem;
+}
+
+.stat-card {
+    background: var(--honeypot-card-bg);
+    border-radius: 1rem;
+    padding: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    border: 1px solid var(--honeypot-border);
+    backdrop-filter: blur(10px);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+}
+
+.stat-card.warning {
+    border-color: var(--honeypot-danger);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.stat-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.stat-icon.green {
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--honeypot-success);
+}
+
+.stat-icon.orange {
+    background: rgba(245, 158, 11, 0.2);
+    color: var(--honeypot-warning);
+}
+
+.stat-icon.red {
+    background: rgba(239, 68, 68, 0.2);
+    color: var(--honeypot-danger);
+}
+
+.stat-icon.blue {
+    background: rgba(99, 102, 241, 0.2);
+    color: var(--honeypot-primary);
+}
+
+.stat-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.stat-label {
+    font-size: 0.875rem;
+    color: var(--honeypot-text-muted);
+    margin-top: 0.25rem;
+}
+
+/* Error Banner */
+.error-banner {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid var(--honeypot-danger);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+    color: #fca5a5;
+}
+
+.error-banner button {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: #fca5a5;
+    cursor: pointer;
+    font-size: 1.25rem;
+}
+
+/* Tabs */
+.tab-container {
+    background: var(--honeypot-card-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--honeypot-border);
+    overflow: hidden;
+    backdrop-filter: blur(10px);
+}
+
+.tabs {
+    display: flex;
+    border-bottom: 1px solid var(--honeypot-border);
+}
+
+.tab {
+    flex: 1;
+    padding: 1rem 1.5rem;
+    background: transparent;
+    border: none;
+    color: var(--honeypot-text-muted);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    transition: all 0.2s;
+}
+
+.tab:hover {
+    background: rgba(99, 102, 241, 0.1);
+    color: var(--honeypot-text);
+}
+
+.tab.active {
+    color: var(--honeypot-primary);
+    border-bottom: 2px solid var(--honeypot-primary);
+    background: rgba(99, 102, 241, 0.05);
+}
+
+.tab-content {
+    padding: 1.5rem;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: var(--honeypot-text-muted);
+}
+
+.empty-state svg {
+    opacity: 0.5;
+    margin-bottom: 1rem;
+}
+
+.empty-state h3 {
+    color: var(--honeypot-text);
+    margin-bottom: 0.5rem;
+}
+
+.empty-state.success svg {
+    color: var(--honeypot-success);
+    opacity: 1;
+}
+
+/* Honeypot List */
+.honeypot-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.honeypot-card {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 0.75rem;
+    padding: 1.25rem;
+    border: 1px solid var(--honeypot-border);
+    transition: all 0.2s;
+}
+
+.honeypot-card:hover {
+    border-color: var(--honeypot-primary);
+}
+
+.honeypot-card.breached {
+    border-color: var(--honeypot-danger);
+    background: rgba(239, 68, 68, 0.05);
+}
+
+.honeypot-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.honeypot-header h3 {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 600;
+}
+
+.status-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    text-transform: uppercase;
+}
+
+.status-green {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+}
+
+.status-orange {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fbbf24;
+}
+
+.status-red {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+}
+
+.status-gray {
+    background: rgba(148, 163, 184, 0.2);
+    color: #94a3b8;
+}
+
+.honeypot-details {
+    margin-bottom: 0.75rem;
+}
+
+.honeypot-email {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--honeypot-text-muted);
+    font-size: 0.875rem;
+    margin: 0 0 0.5rem 0;
+    font-family: monospace;
+}
+
+.honeypot-meta {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.8125rem;
+    color: var(--honeypot-text-muted);
+}
+
+.honeypot-meta span {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.breach-warning {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(239, 68, 68, 0.1);
+    color: #f87171;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    margin-bottom: 0.75rem;
+}
+
+.honeypot-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+/* Breach List */
+.breach-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.breach-card {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 0.75rem;
+    padding: 1.25rem;
+    border: 1px solid var(--honeypot-border);
+}
+
+.breach-card.severity-critical {
+    border-left: 4px solid #dc2626;
+}
+
+.breach-card.severity-high {
+    border-left: 4px solid #f97316;
+}
+
+.breach-card.severity-medium {
+    border-left: 4px solid #eab308;
+}
+
+.breach-card.severity-low {
+    border-left: 4px solid #22c55e;
+}
+
+.breach-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.breach-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.breach-title h3 {
+    margin: 0;
+    font-size: 1.125rem;
+}
+
+.severity-icon {
+    font-size: 1.25rem;
+}
+
+.breach-details {
+    font-size: 0.875rem;
+    color: var(--honeypot-text-muted);
+    margin-bottom: 1rem;
+}
+
+.breach-details p {
+    margin: 0.25rem 0;
+}
+
+.early-detection {
+    color: var(--honeypot-success) !important;
+    font-weight: 500;
+}
+
+.breach-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/* Settings */
+.settings-section {
+    max-width: 600px;
+}
+
+.settings-section h3 {
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+    font-size: 1.25rem;
+}
+
+.settings-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.setting-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.setting-item label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    cursor: pointer;
+}
+
+.setting-item input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--honeypot-primary);
+}
+
+.setting-item select {
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid var(--honeypot-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem;
+    color: var(--honeypot-text);
+    font-size: 0.9375rem;
+}
+
+.setting-item small {
+    color: var(--honeypot-text-muted);
+    font-size: 0.8125rem;
+    margin-left: 2rem;
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.5rem;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+}
+
+.btn-secondary {
+    background: rgba(148, 163, 184, 0.2);
+    color: var(--honeypot-text);
+    border: 1px solid var(--honeypot-border);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: rgba(148, 163, 184, 0.3);
+}
+
+.btn-sm {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--honeypot-text-muted);
+}
+
+.btn-ghost:hover {
+    color: var(--honeypot-text);
+    background: rgba(148, 163, 184, 0.1);
+}
+
+.btn-ghost.danger:hover {
+    color: var(--honeypot-danger);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 2rem;
+}
+
+.modal-content {
+    background: var(--honeypot-bg);
+    border-radius: 1rem;
+    border: 1px solid var(--honeypot-border);
+    max-width: 500px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-content.loading {
+    padding: 3rem;
+    text-align: center;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid var(--honeypot-border);
+}
+
+.modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    color: var(--honeypot-text-muted);
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+    transition: all 0.2s;
+}
+
+.close-btn:hover {
+    color: var(--honeypot-text);
+    background: rgba(148, 163, 184, 0.1);
+}
+
+/* Creator Modal */
+.honeypot-creator .creator-tabs {
+    display: flex;
+    padding: 0 1.5rem;
+    padding-top: 1rem;
+    gap: 1rem;
+}
+
+.honeypot-creator .creator-tabs .tab {
+    flex: none;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    background: transparent;
+    border: 1px solid var(--honeypot-border);
+}
+
+.honeypot-creator .creator-tabs .tab.active {
+    background: var(--honeypot-primary);
+    border-color: var(--honeypot-primary);
+    color: white;
+}
+
+.info-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin: 1rem 1.5rem;
+    font-size: 0.875rem;
+    color: #a5b4fc;
+}
+
+.info-banner svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.info-banner p {
+    margin: 0;
+}
+
+.message {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    margin: 0 1.5rem 1rem;
+    font-size: 0.875rem;
+}
+
+.message.error {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+}
+
+.message.success {
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #6ee7b7;
+}
+
+.creator-form {
+    padding: 1.5rem;
+}
+
+.form-group {
+    margin-bottom: 1.25rem;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--honeypot-text-muted);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 0.75rem;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid var(--honeypot-border);
+    border-radius: 0.5rem;
+    color: var(--honeypot-text);
+    font-size: 0.9375rem;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--honeypot-primary);
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder {
+    color: var(--honeypot-text-muted);
+}
+
+.form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--honeypot-border);
+}
+
+/* Bulk Form */
+.bulk-form .bulk-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.bulk-row {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.bulk-row input {
+    flex: 1;
+    padding: 0.625rem;
+    background: rgba(15, 23, 42, 0.8);
+    border: 1px solid var(--honeypot-border);
+    border-radius: 0.5rem;
+    color: var(--honeypot-text);
+}
+
+.add-row-btn {
+    width: 100%;
+}
+
+/* Bulk Results */
+.bulk-results {
+    padding: 1.5rem;
+}
+
+.bulk-results h3 {
+    margin-top: 0;
+}
+
+.results-section {
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    border-radius: 0.5rem;
+}
+
+.results-section.success {
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.results-section.error {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.results-section h4 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem 0;
+    font-size: 0.9375rem;
+}
+
+.results-section ul {
+    margin: 0;
+    padding-left: 1.5rem;
+}
+
+.results-section li {
+    margin: 0.25rem 0;
+    font-size: 0.875rem;
+}
+
+/* Timeline Modal */
+.timeline-modal {
+    max-width: 550px;
+}
+
+.timeline-modal.severity-critical {
+    border-left: 4px solid #dc2626;
+}
+
+.timeline-modal.severity-high {
+    border-left: 4px solid #f97316;
+}
+
+.timeline-modal.severity-medium {
+    border-left: 4px solid #eab308;
+}
+
+.timeline-modal.severity-low {
+    border-left: 4px solid #22c55e;
+}
+
+.breach-summary {
+    padding: 1.5rem;
+    border-bottom: 1px solid var(--honeypot-border);
+}
+
+.summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.summary-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.severity-badge {
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+}
+
+.severity-badge.critical {
+    background: #dc2626;
+    color: white;
+}
+
+.severity-badge.high {
+    background: #f97316;
+    color: white;
+}
+
+.severity-badge.medium {
+    background: #eab308;
+    color: #1e293b;
+}
+
+.severity-badge.low {
+    background: #22c55e;
+    color: white;
+}
+
+.summary-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+}
+
+.summary-stats .stat {
+    display: flex;
+    flex-direction: column;
+}
+
+.summary-stats .label {
+    font-size: 0.75rem;
+    color: var(--honeypot-text-muted);
+    text-transform: uppercase;
+}
+
+.summary-stats .value {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.summary-stats .value .success {
+    color: var(--honeypot-success);
+}
+
+.summary-stats .value .pending {
+    color: var(--honeypot-warning);
+}
+
+.summary-stats .stat.highlight {
+    background: rgba(16, 185, 129, 0.1);
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+}
+
+.summary-stats .stat.highlight .value {
+    color: var(--honeypot-success);
+}
+
+/* Timeline */
+.timeline-container {
+    padding: 1.5rem;
+}
+
+.timeline-container h4 {
+    margin: 0 0 1.25rem 0;
+    font-size: 1rem;
+}
+
+.timeline {
+    position: relative;
+    padding-left: 2rem;
+}
+
+.timeline::before {
+    content: '';
+    position: absolute;
+    left: 9px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--honeypot-border);
+}
+
+.timeline-event {
+    position: relative;
+    padding-bottom: 1.5rem;
+}
+
+.timeline-event:last-child {
+    padding-bottom: 0;
+}
+
+.event-dot {
+    position: absolute;
+    left: -2rem;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--honeypot-bg);
+    border-radius: 50%;
+}
+
+.event-icon {
+    font-size: 14px;
+}
+
+.event-icon.activity {
+    color: #60a5fa;
+}
+
+.event-icon.detected {
+    color: #f97316;
+}
+
+.event-icon.notified {
+    color: #a78bfa;
+}
+
+.event-icon.acknowledged {
+    color: #22d3ee;
+}
+
+.event-icon.disclosure {
+    color: #f87171;
+}
+
+.event-icon.resolved {
+    color: #34d399;
+}
+
+.event-content {
+    display: flex;
+    flex-direction: column;
+}
+
+.event-label {
+    font-weight: 500;
+}
+
+.event-time {
+    font-size: 0.8125rem;
+    color: var(--honeypot-text-muted);
+}
+
+.early-detection-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin: 0 1.5rem;
+    color: #6ee7b7;
+}
+
+.early-detection-banner svg {
+    flex-shrink: 0;
+    color: var(--honeypot-success);
+}
+
+.early-detection-banner strong {
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+.early-detection-banner p {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--honeypot-text-muted);
+}
+
+.timeline-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    border-top: 1px solid var(--honeypot-border);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .honeypot-dashboard {
+        padding: 1rem;
+    }
+
+    .dashboard-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+    }
+
+    .header-actions {
+        width: 100%;
+    }
+
+    .header-actions .btn {
+        flex: 1;
+    }
+
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .tabs {
+        overflow-x: auto;
+    }
+
+    .tab {
+        white-space: nowrap;
+    }
+
+    .modal-content {
+        margin: 1rem;
+        max-height: 80vh;
+    }
+
+    .summary-stats {
+        grid-template-columns: 1fr;
+    }
+}
