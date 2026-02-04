@@ -121,6 +121,40 @@ app.conf.update(
             'task': 'security.tasks.refresh_dna_tokens',
             'schedule': crontab(day_of_week=6, hour=3, minute=0),  # Saturday 3:00 AM
         },
+        
+        # =================================================================
+        # 🌑 Dark Protocol Network Tasks
+        # =================================================================
+        
+        # Rotate anonymous routing paths (every 5 minutes)
+        'dark-protocol-rotate-paths': {
+            'task': 'dark_protocol.rotate_network_paths',
+            'schedule': crontab(minute='*/5'),  # Every 5 minutes
+        },
+        
+        # Health check network nodes (every minute)
+        'dark-protocol-health-check': {
+            'task': 'dark_protocol.health_check_nodes',
+            'schedule': crontab(minute='*'),  # Every minute
+        },
+        
+        # Generate cover traffic for active sessions (every 2 minutes)
+        'dark-protocol-cover-traffic': {
+            'task': 'dark_protocol.generate_cover_traffic',
+            'schedule': crontab(minute='*/2'),  # Every 2 minutes
+        },
+        
+        # Cleanup expired sessions and bundles (every 15 minutes)
+        'dark-protocol-cleanup': {
+            'task': 'dark_protocol.cleanup_expired_sessions',
+            'schedule': crontab(minute='*/15'),  # Every 15 minutes
+        },
+        
+        # Analyze traffic patterns for cover traffic learning (hourly)
+        'dark-protocol-traffic-analysis': {
+            'task': 'dark_protocol.analyze_traffic_patterns',
+            'schedule': crontab(minute=0),  # Every hour
+        },
     },
 )
 

@@ -1,0 +1,234 @@
+/**
+ * Anonymous Vault Access Styles
+ * ================================
+ * 
+ * Floating indicator and status panel styling
+ */
+
+.anonymous-vault-wrapper {
+    position: relative;
+}
+
+/* Floating Indicator */
+.ava-indicator {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #333, #1a1a2e);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 1000;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.ava-indicator:hover {
+    transform: scale(1.1);
+    border-color: rgba(139, 92, 246, 0.5);
+}
+
+.ava-indicator.connected {
+    background: linear-gradient(135deg, #8b5cf6, #1a0a2e);
+    border-color: #8b5cf6;
+    box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+}
+
+.ava-icon {
+    font-size: 1.5rem;
+    z-index: 2;
+}
+
+.ava-pulse {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: rgba(139, 92, 246, 0.3);
+    animation: ava-pulse 2s infinite;
+    opacity: 0;
+}
+
+.ava-indicator.connected .ava-pulse {
+    opacity: 1;
+}
+
+@keyframes ava-pulse {
+    0% {
+        transform: scale(1);
+        opacity: 0.5;
+    }
+
+    100% {
+        transform: scale(1.5);
+        opacity: 0;
+    }
+}
+
+/* Status Panel */
+.ava-status-panel {
+    position: fixed;
+    bottom: 84px;
+    right: 24px;
+    width: 280px;
+    background: linear-gradient(135deg, #1a1a2e, #16213e);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 16px;
+    overflow: hidden;
+    z-index: 1001;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    animation: ava-slide-up 0.3s ease;
+}
+
+@keyframes ava-slide-up {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.ava-status-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.ava-status-header h4 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #e0e0e0;
+}
+
+.ava-close {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 1.25rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.ava-close:hover {
+    color: #e0e0e0;
+}
+
+.ava-status-body {
+    padding: 1rem;
+}
+
+/* Connection Status */
+.ava-connection-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+}
+
+.ava-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #6b7280;
+}
+
+.ava-connection-status.active .ava-status-dot {
+    background: #10b981;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+}
+
+.ava-connection-status span {
+    font-size: 0.9rem;
+    color: #e0e0e0;
+}
+
+/* Session Info */
+.ava-session-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.ava-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.ava-label {
+    font-size: 0.8rem;
+    color: #888;
+}
+
+.ava-value {
+    font-size: 0.85rem;
+    color: #8b5cf6;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* Error */
+.ava-error {
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(239, 68, 68, 0.1);
+    border-radius: 6px;
+    font-size: 0.8rem;
+    color: #ef4444;
+}
+
+/* Footer */
+.ava-status-footer {
+    padding: 0.75rem 1rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.ava-toggle-btn {
+    width: 100%;
+    padding: 0.6rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.ava-toggle-btn.connect {
+    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+    color: white;
+}
+
+.ava-toggle-btn.connect:hover {
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.ava-toggle-btn.disconnect {
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.ava-toggle-btn.disconnect:hover {
+    background: rgba(239, 68, 68, 0.2);
+}
+
+.ava-toggle-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

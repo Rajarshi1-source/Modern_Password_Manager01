@@ -15,6 +15,7 @@ from .api import storm_chase_views     # 🌀 Storm Chase Mode
 from .api import natural_entropy_views # ⚡ Natural Entropy (Lightning/Seismic/Solar)
 from .api import duress_code_views      # 🎖️ Military-Grade Duress Codes
 from .api import honeypot_views         # 🍯 Honeypot Email Breach Detection
+from .api import dark_protocol_views    # 🌑 Dark Protocol Network
 
 
 @api_view(['GET'])
@@ -392,6 +393,31 @@ urlpatterns = [
     
     # Webhook (for email providers)
     path('honeypot/webhook/', honeypot_views.HoneypotWebhookView.as_view(), name='honeypot-webhook'),
+
+    # ==========================================================================
+    # 🌑 Dark Protocol Network for Anonymous Vault Access
+    # ==========================================================================
+    
+    # Configuration
+    path('dark-protocol/config/', dark_protocol_views.DarkProtocolConfigView.as_view(), name='dark-protocol-config'),
+    
+    # Session Management
+    path('dark-protocol/session/', dark_protocol_views.DarkProtocolSessionView.as_view(), name='dark-protocol-session'),
+    
+    # Network Nodes
+    path('dark-protocol/nodes/', dark_protocol_views.DarkProtocolNodesView.as_view(), name='dark-protocol-nodes'),
+    
+    # Routing Paths
+    path('dark-protocol/route/', dark_protocol_views.DarkProtocolRouteView.as_view(), name='dark-protocol-route'),
+    
+    # Network Health
+    path('dark-protocol/health/', dark_protocol_views.DarkProtocolHealthView.as_view(), name='dark-protocol-health'),
+    
+    # Vault Proxy
+    path('dark-protocol/vault-proxy/', dark_protocol_views.DarkProtocolVaultProxyView.as_view(), name='dark-protocol-vault-proxy'),
+    
+    # Statistics
+    path('dark-protocol/stats/', dark_protocol_views.DarkProtocolStatsView.as_view(), name='dark-protocol-stats'),
 
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),

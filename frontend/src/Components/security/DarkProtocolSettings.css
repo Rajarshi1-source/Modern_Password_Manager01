@@ -1,0 +1,375 @@
+/**
+ * Dark Protocol Settings Styles
+ * ================================
+ * 
+ * Dark theme styling for the settings component
+ */
+
+.dp-settings {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    color: #e0e0e0;
+    max-width: 600px;
+    margin: 0 auto;
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.dp-settings-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    gap: 1rem;
+}
+
+.dp-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(139, 92, 246, 0.2);
+    border-top-color: #8b5cf6;
+    border-radius: 50%;
+    animation: dp-spin 1s linear infinite;
+}
+
+@keyframes dp-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Header */
+.dp-settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.dp-settings-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    background: linear-gradient(90deg, #e0e0e0, #8b5cf6);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.dp-close-btn {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+    transition: color 0.2s;
+}
+
+.dp-close-btn:hover {
+    color: #e0e0e0;
+}
+
+/* Error */
+.dp-settings-error {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+    font-size: 0.9rem;
+}
+
+.dp-settings-error button {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+}
+
+/* Body */
+.dp-settings-body {
+    padding: 1rem 1.5rem;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* Section */
+.dp-settings-section {
+    padding: 1rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.dp-settings-section:last-child {
+    border-bottom: none;
+}
+
+.dp-settings-section h4 {
+    margin: 0 0 1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #8b5cf6;
+}
+
+.dp-section-desc {
+    margin: 0 0 0.75rem;
+    font-size: 0.85rem;
+    color: #888;
+}
+
+/* Master Toggle */
+.dp-master-toggle {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+}
+
+.dp-toggle-info h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.dp-toggle-info p {
+    margin: 0.25rem 0 0;
+    font-size: 0.85rem;
+    color: #888;
+}
+
+/* Switch */
+.dp-switch {
+    position: relative;
+    display: inline-block;
+    width: 52px;
+    height: 28px;
+}
+
+.dp-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.dp-switch-slider {
+    position: absolute;
+    cursor: pointer;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 28px;
+    transition: 0.3s;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.dp-switch-slider:before {
+    position: absolute;
+    content: "";
+    height: 22px;
+    width: 22px;
+    left: 2px;
+    bottom: 2px;
+    background: #666;
+    border-radius: 50%;
+    transition: 0.3s;
+}
+
+.dp-switch input:checked+.dp-switch-slider {
+    background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+    border-color: transparent;
+}
+
+.dp-switch input:checked+.dp-switch-slider:before {
+    transform: translateX(24px);
+    background: white;
+}
+
+/* Setting Row */
+.dp-setting-row {
+    margin-bottom: 1rem;
+}
+
+.dp-setting-row:last-child {
+    margin-bottom: 0;
+}
+
+.dp-setting-row>label {
+    display: block;
+    font-size: 0.9rem;
+    color: #ccc;
+    margin-bottom: 0.5rem;
+}
+
+.dp-setting-row.checkbox>label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    cursor: pointer;
+}
+
+.dp-setting-row.checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #8b5cf6;
+    cursor: pointer;
+}
+
+.dp-checkbox-label {
+    font-size: 0.9rem;
+    color: #e0e0e0;
+}
+
+.dp-setting-desc {
+    margin: 0.25rem 0 0;
+    font-size: 0.8rem;
+    color: #666;
+}
+
+/* Range */
+.dp-range-container {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.dp-range-container input[type="range"] {
+    flex: 1;
+    accent-color: #8b5cf6;
+    height: 6px;
+}
+
+.dp-range-value {
+    min-width: 40px;
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    color: #8b5cf6;
+}
+
+/* Select */
+.dp-setting-row select {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #e0e0e0;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.dp-setting-row select:focus {
+    outline: none;
+    border-color: #8b5cf6;
+}
+
+/* Region Grid */
+.dp-region-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+}
+
+.dp-region-btn {
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #888;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.dp-region-btn:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+}
+
+.dp-region-btn.active {
+    background: rgba(139, 92, 246, 0.2);
+    border-color: #8b5cf6;
+    color: #8b5cf6;
+}
+
+/* Footer */
+.dp-settings-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(0, 0, 0, 0.2);
+}
+
+.dp-footer-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+/* Buttons */
+.dp-btn {
+    padding: 0.6rem 1.25rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: none;
+}
+
+.dp-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.dp-btn-primary {
+    background: linear-gradient(135deg, #8b5cf6, #7c3aed);
+    color: white;
+}
+
+.dp-btn-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.dp-btn-secondary {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+}
+
+.dp-btn-secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.dp-btn-text {
+    background: none;
+    color: #888;
+    padding: 0.6rem 0;
+}
+
+.dp-btn-text:hover {
+    color: #e0e0e0;
+}
+
+/* Responsive */
+@media (max-width: 500px) {
+    .dp-region-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .dp-settings-footer {
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .dp-footer-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+}

@@ -59,6 +59,9 @@ const DuressEventLog = lazy(() => import('./components/security/DuressEventLog')
 // Honeypot Email Breach Detection
 const HoneypotDashboard = lazy(() => import('./components/security/HoneypotDashboard'));
 
+// Dark Protocol Network for Anonymous Vault Access
+const DarkProtocolDashboard = lazy(() => import('./Components/security/DarkProtocolDashboard'));
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */
@@ -1469,6 +1472,10 @@ function App() {
                 } />
                 <Route path="/security/duress-codes/events" element={
                   !isAuthenticated ? <Navigate to="/" /> : <DuressEventLog />
+                } />
+                {/* Dark Protocol Network for Anonymous Vault Access */}
+                <Route path="/security/dark-protocol" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <DarkProtocolDashboard />
                 } />
               </Routes>
             </Suspense>

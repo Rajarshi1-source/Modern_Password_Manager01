@@ -1290,3 +1290,53 @@ HONEYPOT_EMAIL = {
 
 # Security email for breach notifications
 SECURITY_EMAIL = os.environ.get('SECURITY_EMAIL', 'security@securevault.com')
+
+# =============================================================================
+# 🌑 Dark Protocol Network Configuration
+# =============================================================================
+# Anonymous vault access using garlic routing and cover traffic
+# Provides government-level censorship resistance
+
+DARK_PROTOCOL = {
+    # Feature toggle
+    'ENABLED': os.environ.get('DARK_PROTOCOL_ENABLED', 'True').lower() == 'true',
+    
+    # Network settings
+    'DEFAULT_HOP_COUNT': int(os.environ.get('DARK_PROTOCOL_DEFAULT_HOPS', '3')),
+    'MAX_HOP_COUNT': int(os.environ.get('DARK_PROTOCOL_MAX_HOPS', '7')),
+    'MIN_NODE_TRUST_SCORE': float(os.environ.get('DARK_PROTOCOL_MIN_TRUST', '0.3')),
+    
+    # Session settings
+    'SESSION_TIMEOUT_MINUTES': int(os.environ.get('DARK_PROTOCOL_SESSION_TIMEOUT', '30')),
+    'PATH_ROTATION_MINUTES': int(os.environ.get('DARK_PROTOCOL_PATH_ROTATION', '5')),
+    
+    # Cover traffic
+    'COVER_TRAFFIC_ENABLED': os.environ.get('DARK_PROTOCOL_COVER_TRAFFIC', 'True').lower() == 'true',
+    'COVER_TRAFFIC_RATE': float(os.environ.get('DARK_PROTOCOL_COVER_RATE', '0.5')),
+    'COVER_TRAFFIC_INTERVAL_SECONDS': int(os.environ.get('DARK_PROTOCOL_COVER_INTERVAL', '5')),
+    
+    # Bridge nodes (for censorship circumvention)
+    'USE_BRIDGE_NODES': os.environ.get('DARK_PROTOCOL_USE_BRIDGES', 'False').lower() == 'true',
+    'BRIDGE_DISCOVERY_URL': os.environ.get('DARK_PROTOCOL_BRIDGE_DISCOVERY', ''),
+    
+    # Encryption
+    'ENCRYPTION_ALGORITHM': os.environ.get('DARK_PROTOCOL_ENCRYPTION', 'kyber-1024'),
+    'USE_LATTICE_CRYPTO': os.environ.get('DARK_PROTOCOL_USE_LATTICE', 'True').lower() == 'true',
+    
+    # Noise and padding
+    'MIN_PADDING_BYTES': int(os.environ.get('DARK_PROTOCOL_MIN_PADDING', '32')),
+    'MAX_PADDING_BYTES': int(os.environ.get('DARK_PROTOCOL_MAX_PADDING', '2048')),
+    
+    # Timing
+    'MIN_JITTER_MS': int(os.environ.get('DARK_PROTOCOL_MIN_JITTER', '10')),
+    'MAX_JITTER_MS': int(os.environ.get('DARK_PROTOCOL_MAX_JITTER', '500')),
+    
+    # Health checks
+    'HEALTH_CHECK_INTERVAL_SECONDS': int(os.environ.get('DARK_PROTOCOL_HEALTH_INTERVAL', '60')),
+    'NODE_TIMEOUT_MS': int(os.environ.get('DARK_PROTOCOL_NODE_TIMEOUT', '5000')),
+    
+    # Data retention
+    'SESSION_RETENTION_HOURS': int(os.environ.get('DARK_PROTOCOL_SESSION_RETENTION', '24')),
+    'TRAFFIC_BUNDLE_RETENTION_HOURS': int(os.environ.get('DARK_PROTOCOL_BUNDLE_RETENTION', '24')),
+    'HEALTH_RECORD_RETENTION_DAYS': int(os.environ.get('DARK_PROTOCOL_HEALTH_RETENTION', '7')),
+}
