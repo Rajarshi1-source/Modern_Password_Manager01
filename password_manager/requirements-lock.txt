@@ -52,7 +52,7 @@ cytoolz==1.1.0
 daphne==4.2.1
 defusedxml==0.7.1
 dj-rest-auth==7.0.1
-Django==4.2.27
+Django==4.2.28
 django-allauth==65.13.0
 django-appconf==1.1.0
 django-celery-beat==2.8.0

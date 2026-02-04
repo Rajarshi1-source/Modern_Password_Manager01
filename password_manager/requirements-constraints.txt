@@ -1,6 +1,6 @@
 # Small constraints to avoid the hyper/h2/pyasn1 conflicts and pin security-relevant transitive deps
 # Top-level primary pins (from your installed environment)
-Django==4.2.27
+Django==4.2.28
 djangorestframework==3.16.1
 djangorestframework-simplejwt==5.5.1
 celery==5.5.1
