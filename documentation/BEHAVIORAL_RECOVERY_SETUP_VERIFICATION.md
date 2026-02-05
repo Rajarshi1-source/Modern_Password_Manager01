@@ -373,7 +373,7 @@ curl http://127.0.0.1:8000/health/
 
 # Behavioral recovery status
 curl http://127.0.0.1:8000/api/behavioral-recovery/commitments/status/ \
-  -H "Authorization: Bearer YOUR_TOKEN"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 
 # Database check
 python manage.py shell

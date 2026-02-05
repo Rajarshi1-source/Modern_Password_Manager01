@@ -501,7 +501,7 @@ class TestOceanEntropyModels(TestCase):
             
             cert = HybridPasswordCertificate.objects.create(
                 user=self.user,
-                password_hash_prefix='abc123def456',
+                password_hash_prefix='abc123def456',  # gitleaks:allow
                 sources_used=['quantum', 'ocean'],
                 quantum_provider='ANU',
                 ocean_buoy_id='44013',

@@ -752,7 +752,7 @@ export class KyberService {
     
     try {
       // Split keys and ciphertext
-      const { kyberPrivateKey, x25519PrivateKey } = this._splitPrivateKey(privateKey);
+      const { kyberPrivateKey, x25519PrivateKey } = this._splitPrivateKey(privateKey); // gitleaks:allow
       const { kyberCiphertext, x25519EphemeralPK } = this._splitCiphertext(ciphertext);
       
       // Perform decapsulations

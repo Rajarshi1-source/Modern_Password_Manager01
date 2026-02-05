@@ -404,7 +404,7 @@ class DecoyVaultService:
         templates = {
             'WiFi Passwords': 'Home WiFi: FakePassword123\nOffice: WorkWifi456',
             'Server Access': 'SSH: fake.server.com\nUser: admin\nPort: 22',
-            'API Keys': 'Production: sk_fake_1234567890\nStaging: sk_test_0987654321',
+            'API Keys': 'Production: REDACTED_FAKE_KEY\nStaging: REDACTED_TEST_KEY',
             'Recovery Codes': '1234-5678-9012\n2345-6789-0123\n3456-7890-1234',
             'License Keys': 'XXXX-YYYY-ZZZZ-1234',
             'Meeting Notes': 'Weekly standup notes...',

@@ -83,7 +83,7 @@ curl https://api.ipify.org
 
 # Test access
 curl http://localhost:8000/api/vault/ \
-  -H "Authorization: Bearer your-token"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 
 # Expected responses:
 # - 200 OK (if IP is allowed)

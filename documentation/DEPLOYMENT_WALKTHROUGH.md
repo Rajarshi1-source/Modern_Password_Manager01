@@ -44,7 +44,7 @@ git --version
 Use this pre-configured Hardhat test account:
 ```
 Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-Private Key: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+Private Key: <YOUR_PRIVATE_KEY>
 ```
 
 ✅ **Pros**: Instant setup, no wallet needed  
@@ -162,7 +162,7 @@ dir
 # Create .env file
 @"
 ARBITRUM_TESTNET_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
-BLOCKCHAIN_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>
 "@ | Out-File -FilePath .env -Encoding utf8
 ```
 
@@ -172,7 +172,7 @@ BLOCKCHAIN_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7
 
 ```
 ARBITRUM_TESTNET_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
-BLOCKCHAIN_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>
 ```
 
 **If using your own wallet**: Replace the private key with yours from MetaMask
@@ -307,7 +307,7 @@ BLOCKCHAIN_NETWORK=testnet
 COMMITMENT_REGISTRY_ADDRESS_TESTNET=0xYOUR_CONTRACT_ADDRESS_HERE
 
 # Private Key (same as contracts/.env)
-BLOCKCHAIN_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>
 
 # Arbitrum RPC
 ARBITRUM_TESTNET_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc

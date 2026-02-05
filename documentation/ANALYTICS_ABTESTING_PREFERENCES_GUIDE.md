@@ -929,7 +929,7 @@ test('updates theme preference', async () => {
 
 2. Verify endpoint:
    ```bash
-   curl -H "Authorization: Bearer TOKEN" http://localhost:8000/api/user/preferences/
+   curl -H "Authorization: Bearer <YOUR_TOKEN>" http://localhost:8000/api/user/preferences/
    ```
 
 3. Check for sync errors:

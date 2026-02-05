@@ -34,7 +34,7 @@ class VaultItemCreationWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     
@@ -51,7 +51,7 @@ class VaultItemCreationWorkflowTest(TestCase):
             'item_type': 'password',
             'name': 'Test Login',
             'username': 'testuser',
-            'password': 'encryptedpass123',
+            'password': 'encryptedpass123',  # gitleaks:allow
             'url': 'https://example.com',
             'notes': 'Test notes',
             'encrypted_data': 'base64_encrypted_data_here'
@@ -123,7 +123,7 @@ class VaultItemReadWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     
@@ -184,7 +184,7 @@ class VaultItemUpdateWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     
@@ -251,7 +251,7 @@ class VaultItemDeleteWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     
@@ -318,7 +318,7 @@ class VaultBackupWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     
@@ -386,7 +386,7 @@ class VaultFolderManagementWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     
@@ -440,7 +440,7 @@ class VaultSecurityWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     
@@ -495,7 +495,7 @@ class VaultSecurityWorkflowTest(TestCase):
         weak_password_data = {
             'item_type': 'password',
             'name': 'Weak Password Item',
-            'password': '123456',  # Weak password
+            'password': '123456',  # gitleaks:allow  # Weak password
             'encrypted_data': 'encrypted'
         }
         
@@ -512,12 +512,12 @@ class VaultSharingWorkflowTest(TestCase):
         self.user1 = User.objects.create_user(
             username='user1',
             email='user1@example.com',
-            password='password1'
+            password='password1'  # gitleaks:allow
         )
         self.user2 = User.objects.create_user(
             username='user2',
             email='user2@example.com',
-            password='password2'
+            password='password2'  # gitleaks:allow
         )
         self.client.force_login(self.user1)
     
@@ -574,7 +574,7 @@ class VaultImportExportWorkflowTest(TestCase):
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
-            password='testpass123'
+            password='testpass123'  # gitleaks:allow
         )
         self.client.force_login(self.user)
     

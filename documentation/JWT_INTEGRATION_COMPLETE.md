@@ -219,8 +219,8 @@ npm run dev
 After login:
 ```
 Token stored in localStorage:
-  accessToken: eyJ0eXAiOiJKV1QiLCJ...
-  refreshToken: eyJ0eXAiOiJKV1QiLCJ...
+  accessToken: <YOUR_TOKEN>
+  refreshToken: <YOUR_TOKEN>
 ```
 
 ### 3. Test Authenticated Request

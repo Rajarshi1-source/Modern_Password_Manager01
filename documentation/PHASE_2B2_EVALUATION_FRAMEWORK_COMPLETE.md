@@ -604,7 +604,7 @@ create_recovery_experiments()
 Or via API:
 ```bash
 curl -X POST http://localhost:8000/api/behavioral-recovery/ab-tests/create/ \
-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
 ### 3. Frontend Setup

@@ -485,7 +485,7 @@ python manage.py runserver
 
 # In another terminal, test the API
 curl -X POST http://localhost:8000/api/email-masking/providers/configure/ \
-  -H "Authorization: Token YOUR_TOKEN" \
+  -H "Authorization: Token <YOUR_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "provider": "simplelogin",

@@ -288,7 +288,7 @@ python manage.py test_breach_alert <user_id> --severity HIGH
 - [ ] Test WebSocket connection with `wscat`:
   ```bash
   wscat -c "ws://localhost:8000/ws/breach-alerts/1/" \
-    -H "Authorization: Bearer YOUR_JWT_TOKEN"
+    -H "Authorization: Bearer <YOUR_TOKEN>"
   ```
 
 ### Frontend

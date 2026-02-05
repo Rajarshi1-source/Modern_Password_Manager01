@@ -124,11 +124,11 @@ python ml_dark_web/training/train_all_models.py --models all --samples 10000 --e
 
 ```bash
 # Get breach alerts
-curl -H "Authorization: Bearer YOUR_TOKEN" \
+curl -H "Authorization: Bearer <YOUR_TOKEN>" \
   http://localhost:8000/api/ml-darkweb/breach-alerts/
 
 # Mark alert as read
-curl -X POST -H "Authorization: Bearer YOUR_TOKEN" \
+curl -X POST -H "Authorization: Bearer <YOUR_TOKEN>" \
   http://localhost:8000/api/ml-darkweb/mark-alert-read/1/
 ```
 

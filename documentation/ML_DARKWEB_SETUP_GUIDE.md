@@ -206,7 +206,7 @@ Access admin at: `http://localhost:8000/admin/ml_dark_web/`
 ```bash
 curl -X POST http://localhost:8000/api/ml-darkweb/classify-text/ \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
   -d '{
     "text": "Massive data breach at TechCorp - 10 million users affected"
   }'

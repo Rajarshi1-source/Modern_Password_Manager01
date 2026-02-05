@@ -126,7 +126,7 @@ python manage.py shell
 **Option B: API Endpoint**
 ```bash
 curl -X POST http://localhost:8000/api/behavioral-recovery/ab-tests/create/ \
-  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
 **Expected output**: 3 experiments created

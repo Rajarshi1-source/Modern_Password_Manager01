@@ -41,7 +41,7 @@ Deploy the `CommitmentRegistry` smart contract to Arbitrum Sepolia testnet and c
 Hardhat comes with test accounts. Use this for quick testing:
 ```javascript
 // Account #0: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-// Private Key: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+// Private Key: <YOUR_PRIVATE_KEY>
 ```
 
 ---
@@ -96,7 +96,7 @@ BLOCKCHAIN_NETWORK=testnet
 ARBITRUM_TESTNET_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
 
 # Your wallet private key (from Step 1)
-BLOCKCHAIN_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>_PRIVATE_KEY_HERE
 
 # Contract address (leave empty for now, will update after deployment)
 COMMITMENT_REGISTRY_ADDRESS_TESTNET=
@@ -114,7 +114,7 @@ Create `contracts/.env`:
 ```bash
 # Arbitrum Sepolia
 ARBITRUM_TESTNET_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc
-BLOCKCHAIN_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_HERE
+BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>_PRIVATE_KEY_HERE
 
 # Optional: For contract verification on Arbiscan
 ARBISCAN_API_KEY=

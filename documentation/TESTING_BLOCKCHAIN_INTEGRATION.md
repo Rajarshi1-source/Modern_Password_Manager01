@@ -249,7 +249,7 @@ print("✅ On-chain verification:", is_valid_onchain)
 ```bash
 # Get anchor status (requires authentication)
 curl -X GET http://localhost:8000/api/blockchain/anchor-status/ \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
 Expected response:
@@ -273,7 +273,7 @@ Expected response:
 ```bash
 # Verify a specific commitment
 curl -X GET http://localhost:8000/api/blockchain/verify-commitment/COMMITMENT_ID/ \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
 Expected response:
@@ -297,7 +297,7 @@ Expected response:
 
 ```bash
 curl -X POST http://localhost:8000/api/blockchain/trigger-anchor/ \
-  -H "Authorization: Bearer ADMIN_ACCESS_TOKEN" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
   -H "Content-Type: application/json"
 ```
 

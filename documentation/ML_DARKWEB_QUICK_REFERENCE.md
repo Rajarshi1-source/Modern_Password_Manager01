@@ -159,7 +159,7 @@ celery -A password_manager flower
 ### System Statistics
 ```bash
 curl http://localhost:8000/api/ml-darkweb/admin/system_statistics/ \
-  -H "Authorization: Bearer ADMIN_TOKEN"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
 ---

@@ -370,7 +370,7 @@ python manage.py runserver
 
 # Step 4: Test API
 curl http://localhost:8000/api/email-masking/providers/ \
-  -H "Authorization: Token YOUR_TOKEN"
+  -H "Authorization: Token <YOUR_TOKEN>"
 ```
 
 #### 2. Shared Folders

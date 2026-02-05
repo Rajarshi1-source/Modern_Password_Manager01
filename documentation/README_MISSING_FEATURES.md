@@ -30,13 +30,13 @@ python manage.py runserver
 
 # 3. Configure provider (in Python shell or via API)
 curl -X POST http://localhost:8000/api/email-masking/providers/configure/ \
-  -H "Authorization: Token YOUR_TOKEN" \
+  -H "Authorization: Token <YOUR_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"provider": "simplelogin", "api_key": "sl_xxx", "is_default": true}'
 
 # 4. Create an alias
 curl -X POST http://localhost:8000/api/email-masking/aliases/create/ \
-  -H "Authorization: Token YOUR_TOKEN" \
+  -H "Authorization: Token <YOUR_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{"provider": "simplelogin", "name": "Test", "description": "Testing"}'
 ```

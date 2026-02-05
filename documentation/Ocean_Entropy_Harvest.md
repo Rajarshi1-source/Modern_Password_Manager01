@@ -3223,7 +3223,7 @@ python manage.py migrate
 ```bash
 # Generate password with all sources
 curl -X POST http://localhost:8000/api/passwords/generate-natural/ \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "length": 16,

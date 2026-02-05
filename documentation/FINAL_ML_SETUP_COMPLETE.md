@@ -133,7 +133,7 @@ curl http://127.0.0.1:8000/api/ml-security/model-info/
 ```bash
 curl -X POST http://127.0.0.1:8000/api/ml-security/password-strength/ \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
   -d '{"password": "Test123!@#"}'
 ```
 

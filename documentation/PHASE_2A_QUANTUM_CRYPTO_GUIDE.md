@@ -439,7 +439,7 @@ Filter commitments by:
 ```bash
 # Check commitment status
 curl http://localhost:8000/api/behavioral-recovery/commitments/status/ \
-  -H "Authorization: Bearer YOUR_TOKEN"
+  -H "Authorization: Bearer <YOUR_TOKEN>"
 ```
 
 Response includes:

@@ -68,7 +68,7 @@ npm run dev
 
 ```bash
 curl -X POST http://localhost:8000/auth/passkey-recovery/setup/ \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
   -H "Content-Type: application/json" \
   -d '{
     "passkey_credential_id": "abc123...",

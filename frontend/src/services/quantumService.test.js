@@ -31,7 +31,7 @@ describe('QuantumService', () => {
       const mockResponse = {
         data: {
           success: true,
-          password: 'xK9mP2nL5qR8',
+          password: 'xK9mP2nL5qR8', // gitleaks:allow
           certificate: {
             certificate_id: 'abc-123',
             provider: 'anu_qrng',

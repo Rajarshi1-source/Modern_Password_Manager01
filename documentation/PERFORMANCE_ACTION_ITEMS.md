@@ -77,7 +77,7 @@ Use your app normally for 10-15 minutes, then check:
 python manage.py createsuperuser  # if you don't have admin account
 
 # Then check performance summary
-curl -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+curl -H "Authorization: Bearer <YOUR_TOKEN>" \
   http://localhost:8000/api/performance/summary/
 ```
 

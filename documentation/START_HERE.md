@@ -37,7 +37,7 @@ I've built everything you need:
 
 **⚡ Quick Option**: Use Hardhat test account:
 ```
-Private Key: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+Private Key: <YOUR_PRIVATE_KEY>
 ```
 Then get test ETH from faucet.
 
@@ -51,7 +51,7 @@ cd contracts
 
 # Create .env file
 echo "ARBITRUM_TESTNET_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc" > .env
-echo "BLOCKCHAIN_PRIVATE_KEY=0xYOUR_PRIVATE_KEY" >> .env
+echo "BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>_PRIVATE_KEY" >> .env
 
 # Install dependencies
 npm install
@@ -76,7 +76,7 @@ CommitmentRegistry deployed to: 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
 BLOCKCHAIN_ENABLED=True
 BLOCKCHAIN_NETWORK=testnet
 COMMITMENT_REGISTRY_ADDRESS_TESTNET=0xYOUR_CONTRACT_ADDRESS
-BLOCKCHAIN_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
+BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>_PRIVATE_KEY
 CELERY_BROKER_URL=redis://localhost:6379/0
 ```
 

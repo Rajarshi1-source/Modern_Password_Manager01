@@ -93,7 +93,7 @@ PHASE_2B1_READY_TO_DEPLOY.md            ✅ This file!
 **Option B: Use Hardhat Test Account** (Quick)
 ```
 Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-Private Key: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+Private Key: <YOUR_PRIVATE_KEY>
 ```
 Then get test ETH from faucet.
 
@@ -105,7 +105,7 @@ cd contracts
 
 # 2. Create .env file
 echo "ARBITRUM_TESTNET_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc" > .env
-echo "BLOCKCHAIN_PRIVATE_KEY=0xYOUR_PRIVATE_KEY" >> .env
+echo "BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>_PRIVATE_KEY" >> .env
 
 # 3. Install dependencies (if not done)
 npm install
@@ -137,7 +137,7 @@ cd ../password_manager
 BLOCKCHAIN_ENABLED=True
 BLOCKCHAIN_NETWORK=testnet
 COMMITMENT_REGISTRY_ADDRESS_TESTNET=0xYOUR_CONTRACT_ADDRESS
-BLOCKCHAIN_PRIVATE_KEY=0xYOUR_PRIVATE_KEY
+BLOCKCHAIN_PRIVATE_KEY=<YOUR_PRIVATE_KEY>_PRIVATE_KEY
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
