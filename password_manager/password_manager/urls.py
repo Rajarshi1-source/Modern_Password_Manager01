@@ -119,6 +119,9 @@ urlpatterns = [
     
     # Mesh Dead Drop Password Sharing API routes
     path('api/mesh/', include('mesh_deaddrop.urls')),
+    
+    # Neuro-Feedback Password Training API routes
+    path('api/neuro-feedback/', include('neuro_feedback.urls')),
 ]
 
 # Add static file serving for development

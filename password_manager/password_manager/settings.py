@@ -126,6 +126,7 @@ INSTALLED_APPS = [
     'fhe_service',  # Fully Homomorphic Encryption Service
     'adversarial_ai',  # Adversarial AI Password Defense
     'mesh_deaddrop',  # Dead Drop Password Sharing via Mesh Networks
+    'neuro_feedback',  # Neuro-Feedback Password Training
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1375,4 +1376,46 @@ PREDICTIVE_INTENT = {
     # Privacy
     'HASH_SENSITIVE_DATA': os.environ.get('PREDICTIVE_HASH_DATA', 'True').lower() == 'true',
     'EXCLUDE_FINANCIAL_DOMAINS': os.environ.get('PREDICTIVE_EXCLUDE_FINANCIAL', 'False').lower() == 'true',
+}
+
+# =============================================================================
+# 🧠 Neuro-Feedback Password Training Configuration
+# =============================================================================
+# EEG-based password memory training with real-time neurofeedback
+
+NEURO_FEEDBACK = {
+    # Feature toggle
+    'ENABLED': os.environ.get('NEURO_FEEDBACK_ENABLED', 'False').lower() == 'true',
+    
+    # Supported EEG devices
+    'SUPPORTED_DEVICES': ['muse', 'muse_2', 'muse_s', 'neurosky', 'openbci', 'emotiv'],
+    
+    # Signal quality thresholds
+    'MIN_SIGNAL_QUALITY': float(os.environ.get('NEURO_MIN_SIGNAL_QUALITY', '0.7')),  # 0-1
+    
+    # Session settings
+    'SESSION_TIMEOUT_MINUTES': int(os.environ.get('NEURO_SESSION_TIMEOUT', '30')),
+    'OPTIMAL_TRAINING_DURATION': int(os.environ.get('NEURO_OPTIMAL_DURATION', '15')),  # Minutes
+    
+    # Brain state thresholds
+    'ALPHA_THRESHOLD': float(os.environ.get('NEURO_ALPHA_THRESHOLD', '0.6')),  # Memory-ready state
+    'FOCUS_THRESHOLD': float(os.environ.get('NEURO_FOCUS_THRESHOLD', '0.5')),
+    'MEMORY_READINESS_THRESHOLD': float(os.environ.get('NEURO_MEMORY_THRESHOLD', '0.6')),
+    
+    # Spaced repetition settings (SM-2 algorithm)
+    'SPACED_REP_MULTIPLIER': float(os.environ.get('NEURO_SR_MULTIPLIER', '2.5')),
+    'INITIAL_INTERVAL_HOURS': int(os.environ.get('NEURO_INITIAL_INTERVAL', '24')),
+    'MASTERY_THRESHOLD': float(os.environ.get('NEURO_MASTERY_THRESHOLD', '0.9')),
+    
+    # Password chunking
+    'MAX_PASSWORD_LENGTH': int(os.environ.get('NEURO_MAX_PASSWORD', '128')),
+    'CHUNK_SIZE': int(os.environ.get('NEURO_CHUNK_SIZE', '8')),  # Characters per chunk
+    
+    # Feedback settings
+    'BINAURAL_BEATS_ENABLED': os.environ.get('NEURO_BINAURAL_ENABLED', 'True').lower() == 'true',
+    'HAPTIC_FEEDBACK_ENABLED': os.environ.get('NEURO_HAPTIC_ENABLED', 'True').lower() == 'true',
+    
+    # Data retention
+    'SESSION_DATA_RETENTION_DAYS': int(os.environ.get('NEURO_SESSION_RETENTION', '90')),
+    'EVENT_DATA_RETENTION_DAYS': int(os.environ.get('NEURO_EVENT_RETENTION', '30')),
 }

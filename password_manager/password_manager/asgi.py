@@ -28,13 +28,15 @@ from ml_dark_web import routing as ml_dark_web_routing
 from adversarial_ai import routing as adversarial_ai_routing
 from security import routing as security_routing
 from ml_security import routing as ml_security_routing
+from neuro_feedback import routing as neuro_feedback_routing
 
 # Combine WebSocket URL patterns
 websocket_urlpatterns = (
     ml_dark_web_routing.websocket_urlpatterns +
     adversarial_ai_routing.websocket_urlpatterns +
     security_routing.websocket_urlpatterns +
-    ml_security_routing.websocket_urlpatterns
+    ml_security_routing.websocket_urlpatterns +
+    neuro_feedback_routing.websocket_urlpatterns
 )
 
 # ASGI application with WebSocket support

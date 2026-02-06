@@ -66,6 +66,9 @@ const DarkProtocolDashboard = lazy(() => import('./Components/security/DarkProto
 const PredictiveIntentDashboard = lazy(() => import('./Components/security/PredictiveIntentDashboard'));
 const PredictiveIntentSettings = lazy(() => import('./Components/security/PredictiveIntentSettings'));
 
+// Neuro-Feedback Password Training - EEG-based memory training
+const NeuroTrainingDashboard = lazy(() => import('./Components/neuro/NeuroTrainingDashboard'));
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */
@@ -1487,6 +1490,10 @@ function App() {
                 } />
                 <Route path="/settings/security/predictive-intent" element={
                   !isAuthenticated ? <Navigate to="/" /> : <PredictiveIntentSettings />
+                } />
+                {/* Neuro-Feedback Password Training - EEG-based memory training */}
+                <Route path="/neuro-training" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <NeuroTrainingDashboard />
                 } />
               </Routes>
             </Suspense>

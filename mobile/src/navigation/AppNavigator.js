@@ -24,6 +24,9 @@ import NaturalEntropyScreen from '../screens/NaturalEntropyScreen';
 // Import duress code screen
 import DuressCodeScreen from '../screens/DuressCodeScreen';
 
+// Import neuro-feedback training screen
+import NeuroTrainingScreen from '../screens/NeuroTrainingScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -124,6 +127,11 @@ const SettingsNavigator = () => (
       name="DuressCode" 
       component={DuressCodeScreen}
       options={{ headerTitle: 'Duress Protection', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="NeuroTraining" 
+      component={NeuroTrainingScreen}
+      options={{ headerTitle: 'Neuro Training', headerShown: false }}
     />
   </MainStack.Navigator>
 );
