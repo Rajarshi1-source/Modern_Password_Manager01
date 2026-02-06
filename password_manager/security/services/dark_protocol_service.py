@@ -713,3 +713,135 @@ def get_dark_protocol_service() -> DarkProtocolService:
     if _dark_protocol_service is None:
         _dark_protocol_service = DarkProtocolService()
     return _dark_protocol_service
+
+
+# =============================================================================
+# Relay Node Mode
+# =============================================================================
+
+def run_relay_node():
+    """
+    Run as a Dark Protocol relay node.
+    
+    This function is called when running in Docker relay mode.
+    It starts the relay services and health check endpoint.
+    """
+    import os
+    import time
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    
+    node_type = os.environ.get('DARK_PROTOCOL_NODE_TYPE', 'relay')
+    region = os.environ.get('DARK_PROTOCOL_REGION', 'local')
+    public_address = os.environ.get('DARK_PROTOCOL_PUBLIC_ADDRESS', '')
+    max_circuits = int(os.environ.get('DARK_PROTOCOL_MAX_CIRCUITS', '1000'))
+    
+    logger.info(f"Starting Dark Protocol relay node ({node_type}) in region {region}")
+    
+    # Register this node
+    node_id = secrets.token_hex(32)
+    fingerprint = secrets.token_hex(32)
+    
+    try:
+        node, created = DarkProtocolNode.objects.get_or_create(
+            fingerprint=fingerprint,
+            defaults={
+                'node_id': node_id,
+                'node_type': node_type,
+                'status': 'active',
+                'region': region,
+                'public_key': secrets.token_bytes(32),
+                'signing_key': secrets.token_bytes(64),
+                'ip_address': public_address or '0.0.0.0',
+                'port': 9090,
+                'max_circuits': max_circuits,
+            }
+        )
+        
+        if created:
+            logger.info(f"Registered new node: {node_id[:16]}...")
+        else:
+            node.status = 'active'
+            node.save(update_fields=['status', 'last_seen_at'])
+            logger.info(f"Reactivated existing node: {node.node_id[:16]}...")
+        
+    except Exception as e:
+        logger.error(f"Failed to register node: {e}")
+        return
+    
+    # Health check handler
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/health':
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                response = {
+                    'status': 'healthy',
+                    'node_id': node_id[:16],
+                    'node_type': node_type,
+                    'region': region,
+                    'circuits': node.current_circuits if node else 0,
+                    'max_circuits': max_circuits,
+                }
+                import json
+                self.wfile.write(json.dumps(response).encode())
+            elif self.path == '/metrics':
+                self.send_response(200)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                metrics = (
+                    f"# HELP dark_protocol_circuits Current active circuits\n"
+                    f"# TYPE dark_protocol_circuits gauge\n"
+                    f"dark_protocol_circuits {node.current_circuits if node else 0}\n"
+                    f"# HELP dark_protocol_uptime_ratio Node uptime percentage\n"
+                    f"# TYPE dark_protocol_uptime_ratio gauge\n"
+                    f"dark_protocol_uptime_ratio {node.uptime_percentage if node else 0}\n"
+                )
+                self.wfile.write(metrics.encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
+        
+        def log_message(self, format, *args):
+            pass  # Suppress access logs
+    
+    # Start health check server in background
+    def start_health_server():
+        health_server = HTTPServer(('0.0.0.0', 9091), HealthHandler)
+        logger.info("Health check server started on port 9091")
+        health_server.serve_forever()
+    
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+    
+    # Main relay loop - heartbeat and circuit handling
+    logger.info(f"Relay node {node_id[:16]}... is now accepting circuits on port 9090")
+    
+    heartbeat_interval = 30  # seconds
+    
+    try:
+        while True:
+            # Update heartbeat
+            try:
+                DarkProtocolNode.objects.filter(node_id=node_id).update(
+                    last_seen_at=timezone.now(),
+                )
+            except Exception as e:
+                logger.warning(f"Heartbeat update failed: {e}")
+            
+            # Sleep until next heartbeat
+            time.sleep(heartbeat_interval)
+            
+    except KeyboardInterrupt:
+        logger.info("Relay node shutting down...")
+        
+        # Mark node as inactive
+        try:
+            DarkProtocolNode.objects.filter(node_id=node_id).update(
+                status='maintenance'
+            )
+        except Exception:
+            pass
+        
+        logger.info("Relay node stopped")

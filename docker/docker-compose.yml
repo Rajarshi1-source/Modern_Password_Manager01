@@ -428,6 +428,70 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # ===========================================================================
+  # 🌑 Dark Protocol Relay Node - HARDENED
+  # ===========================================================================
+  # Optional: Self-hosted anonymous routing relay node
+  # Enable by setting DARK_PROTOCOL_RELAY_ENABLED=true
+  dark_protocol_relay:
+    build:
+      context: ./password_manager
+      dockerfile: Dockerfile
+    container_name: password_manager_dark_protocol_relay
+    restart: unless-stopped
+    profiles:
+      - dark-protocol # Only starts with: docker-compose --profile dark-protocol up
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    command: >
+      python -c " import os, sys os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'password_manager.settings') import django; django.setup() from security.services.dark_protocol_service import run_relay_node run_relay_node() "
+
+    ports:
+      - "${DARK_PROTOCOL_RELAY_PORT:-9090}:9090" # Relay traffic port
+      - "${DARK_PROTOCOL_METRICS_PORT:-9091}:9091" # Metrics/health port
+
+    environment:
+      - DARK_PROTOCOL_RELAY_MODE=true
+      - DARK_PROTOCOL_NODE_TYPE=${DARK_PROTOCOL_NODE_TYPE:-relay}
+      - DARK_PROTOCOL_REGION=${DARK_PROTOCOL_REGION:-local}
+      - DARK_PROTOCOL_PUBLIC_ADDRESS=${DARK_PROTOCOL_PUBLIC_ADDRESS:-}
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      # Relay-specific settings
+      - DARK_PROTOCOL_MAX_CIRCUITS=${DARK_PROTOCOL_MAX_CIRCUITS:-1000}
+      - DARK_PROTOCOL_BANDWIDTH_LIMIT_MBPS=${DARK_PROTOCOL_BANDWIDTH_LIMIT:-100}
+      - DARK_PROTOCOL_ENABLE_BRIDGE=${DARK_PROTOCOL_ENABLE_BRIDGE:-false}
+
+    depends_on:
+      - postgres
+      - redis
+
+    networks:
+      - backend_network
+      - dark_protocol_network # Isolated P2P network
+
+    user: "1000:1000"
+
+    security_opt:
+      - no-new-privileges:true
+
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9091/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
 # =============================================================================
 # Volumes
 # =============================================================================
@@ -453,3 +517,8 @@ networks:
   # Frontend network - frontend and nginx
   frontend_network:
     driver: bridge
+
+  # Dark Protocol P2P network - isolated relay node communication
+  dark_protocol_network:
+    driver: bridge
+    internal: true # P2P traffic only, no external access

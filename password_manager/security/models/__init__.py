@@ -35,3 +35,14 @@ from .honeypot_models import (
     HoneypotBreachEvent,
     CredentialRotationLog,
 )
+
+# Import dark protocol models
+from .dark_protocol_models import (
+    DarkProtocolNode,
+    GarlicSession,
+    CoverTrafficPattern,
+    RoutingPath,
+    TrafficBundle,
+    NetworkHealth,
+    DarkProtocolConfig,
+)
