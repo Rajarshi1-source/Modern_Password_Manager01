@@ -62,6 +62,10 @@ const HoneypotDashboard = lazy(() => import('./components/security/HoneypotDashb
 // Dark Protocol Network for Anonymous Vault Access
 const DarkProtocolDashboard = lazy(() => import('./Components/security/DarkProtocolDashboard'));
 
+// Predictive Intent Analysis - AI-powered password prediction
+const PredictiveIntentDashboard = lazy(() => import('./Components/security/PredictiveIntentDashboard'));
+const PredictiveIntentSettings = lazy(() => import('./Components/security/PredictiveIntentSettings'));
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */
@@ -1476,6 +1480,13 @@ function App() {
                 {/* Dark Protocol Network for Anonymous Vault Access */}
                 <Route path="/security/dark-protocol" element={
                   !isAuthenticated ? <Navigate to="/" /> : <DarkProtocolDashboard />
+                } />
+                {/* Predictive Intent Analysis - AI Password Prediction */}
+                <Route path="/settings/security/predictive-intent/dashboard" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <PredictiveIntentDashboard />
+                } />
+                <Route path="/settings/security/predictive-intent" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <PredictiveIntentSettings />
                 } />
               </Routes>
             </Suspense>

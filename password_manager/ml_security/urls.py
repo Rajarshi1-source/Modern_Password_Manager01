@@ -4,6 +4,7 @@ URL Configuration for ML Security API
 
 from django.urls import path
 from . import views
+from . import predictive_intent_views
 
 app_name = 'ml_security'
 
@@ -27,5 +28,16 @@ urlpatterns = [
     
     # ML Model Information
     path('models/info/', views.get_ml_model_info, name='ml_model_info'),
+    
+    # ==========================================================================
+    # Predictive Intent
+    # ==========================================================================
+    path('intent/predictions/', predictive_intent_views.get_predictions, name='intent_predictions'),
+    path('intent/context/', predictive_intent_views.send_context_signal, name='intent_context'),
+    path('intent/feedback/', predictive_intent_views.record_prediction_feedback, name='intent_feedback'),
+    path('intent/preloaded/', predictive_intent_views.get_preloaded_credentials, name='intent_preloaded'),
+    path('intent/settings/', predictive_intent_views.get_intent_settings, name='intent_settings_get'),
+    path('intent/settings/update/', predictive_intent_views.update_intent_settings, name='intent_settings_update'),
+    path('intent/stats/', predictive_intent_views.get_intent_statistics, name='intent_stats'),
+    path('intent/usage/', predictive_intent_views.record_usage, name='intent_usage'),
 ]
-

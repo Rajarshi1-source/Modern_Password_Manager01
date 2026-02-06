@@ -84,6 +84,8 @@ def load_models():
     from .password_strength import PasswordStrengthPredictor
     from .anomaly_detector import AnomalyDetector
     from .threat_analyzer import ThreatAnalyzer
+    from .intent_predictor import IntentPredictor
+    from .context_analyzer import ContextAnalyzer
     
     global _models_loaded
     
@@ -114,6 +116,20 @@ def load_models():
         logger.info("Threat analyzer model loaded")
     except Exception as e:
         logger.warning(f"Failed to load threat analyzer model: {e}")
+    
+    try:
+        # Load intent predictor model
+        _models['intent_predictor'] = IntentPredictor()
+        logger.info("Intent predictor model loaded")
+    except Exception as e:
+        logger.warning(f"Failed to load intent predictor model: {e}")
+    
+    try:
+        # Load context analyzer
+        _models['context_analyzer'] = ContextAnalyzer()
+        logger.info("Context analyzer loaded")
+    except Exception as e:
+        logger.warning(f"Failed to load context analyzer: {e}")
     
     load_time = time.time() - load_start
     logger.info(f"ML models loaded in {load_time:.2f}s")

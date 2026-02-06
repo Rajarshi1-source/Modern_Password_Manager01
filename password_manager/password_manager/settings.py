@@ -1340,3 +1340,39 @@ DARK_PROTOCOL = {
     'TRAFFIC_BUNDLE_RETENTION_HOURS': int(os.environ.get('DARK_PROTOCOL_BUNDLE_RETENTION', '24')),
     'HEALTH_RECORD_RETENTION_DAYS': int(os.environ.get('DARK_PROTOCOL_HEALTH_RETENTION', '7')),
 }
+
+# =============================================================================
+# 🔮 Predictive Intent Analysis Configuration
+# =============================================================================
+# AI-powered password prediction - learns browsing patterns and pre-loads
+# passwords before users request them
+
+PREDICTIVE_INTENT = {
+    # Feature toggle
+    'ENABLED': os.environ.get('PREDICTIVE_INTENT_ENABLED', 'True').lower() == 'true',
+    
+    # Confidence thresholds
+    'MIN_CONFIDENCE': float(os.environ.get('PREDICTIVE_MIN_CONFIDENCE', '0.7')),
+    'PRELOAD_CONFIDENCE': float(os.environ.get('PREDICTIVE_PRELOAD_CONFIDENCE', '0.85')),
+    
+    # Prediction limits
+    'MAX_PREDICTIONS': int(os.environ.get('PREDICTIVE_MAX_PREDICTIONS', '5')),
+    'PRELOAD_COUNT': int(os.environ.get('PREDICTIVE_PRELOAD_COUNT', '3')),
+    
+    # Pattern learning
+    'PATTERN_HISTORY_DAYS': int(os.environ.get('PREDICTIVE_HISTORY_DAYS', '90')),
+    'LEARN_FROM_VAULT_ACCESS': os.environ.get('PREDICTIVE_LEARN_VAULT', 'True').lower() == 'true',
+    'LEARN_FROM_AUTOFILL': os.environ.get('PREDICTIVE_LEARN_AUTOFILL', 'True').lower() == 'true',
+    
+    # Caching
+    'PRELOAD_EXPIRY_MINUTES': int(os.environ.get('PREDICTIVE_PRELOAD_EXPIRY', '15')),
+    'PREDICTION_EXPIRY_MINUTES': int(os.environ.get('PREDICTIVE_PREDICTION_EXPIRY', '15')),
+    
+    # Model settings
+    'MODEL_VERSION': os.environ.get('PREDICTIVE_MODEL_VERSION', '1.0'),
+    'RETRAIN_INTERVAL_HOURS': int(os.environ.get('PREDICTIVE_RETRAIN_INTERVAL', '24')),
+    
+    # Privacy
+    'HASH_SENSITIVE_DATA': os.environ.get('PREDICTIVE_HASH_DATA', 'True').lower() == 'true',
+    'EXCLUDE_FINANCIAL_DOMAINS': os.environ.get('PREDICTIVE_EXCLUDE_FINANCIAL', 'False').lower() == 'true',
+}
