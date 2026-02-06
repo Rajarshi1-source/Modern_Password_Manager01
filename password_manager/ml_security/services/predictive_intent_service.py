@@ -33,8 +33,8 @@ from ..predictive_intent_models import (
     PredictiveIntentSettings,
 )
 from vault.models import EncryptedVaultItem
-from .intent_predictor import get_intent_predictor
-from .context_analyzer import get_context_analyzer
+from ..ml_models.intent_predictor import get_intent_predictor
+from ..ml_models.context_analyzer import get_context_analyzer
 
 logger = logging.getLogger(__name__)
 
@@ -444,17 +444,27 @@ class PredictiveIntentService:
         """
         Preload high-confidence credentials for instant access.
         
+        Uses AES-256-GCM encryption with the session key for secure caching.
+        
         Args:
             user: The user
-            session_key: Session encryption key
+            session_key: Session encryption key (32 bytes for AES-256)
             session_key_id: Session key identifier
             
         Returns:
             List of preloaded credentials
         """
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        import json
+        
         settings_obj = self.get_or_create_settings(user)
         
         if not settings_obj.is_enabled:
+            return []
+        
+        # Validate session key length
+        if len(session_key) != 32:
+            logger.error("Invalid session key length for AES-256")
             return []
         
         # Get recent high-confidence predictions
@@ -470,6 +480,9 @@ class PredictiveIntentService:
             minutes=self.config.get('PRELOAD_EXPIRY_MINUTES', 15)
         )
         
+        # Initialize AES-GCM cipher
+        aesgcm = AESGCM(session_key)
+        
         for prediction in predictions:
             # Check if already preloaded
             existing = PreloadedCredential.objects.filter(
@@ -481,27 +494,123 @@ class PredictiveIntentService:
             if existing:
                 continue
             
-            # In production, encrypt the credential with session key
-            # For now, create placeholder
-            iv = secrets.token_bytes(16)
-            encrypted = b'placeholder_encrypted_credential'
-            
-            preload = PreloadedCredential.objects.create(
-                user=user,
-                vault_item=prediction.predicted_vault_item,
-                prediction=prediction,
-                encrypted_credential=encrypted,
-                encryption_iv=iv,
-                session_key_id=session_key_id,
-                preload_reason=prediction.prediction_reason,
-                confidence_at_preload=prediction.confidence_score,
-                expires_at=expires_at,
-                requires_biometric=settings_obj.preload_confidence_threshold < 0.9,
-            )
-            preloaded.append(preload)
+            try:
+                # Get credential data from vault item (encrypted_data field)
+                vault_item = prediction.predicted_vault_item
+                credential_data = {
+                    'item_id': str(vault_item.item_id),
+                    'encrypted_data': vault_item.encrypted_data,
+                    'preloaded_at': timezone.now().isoformat(),
+                }
+                
+                # Serialize to JSON bytes
+                plaintext = json.dumps(credential_data).encode('utf-8')
+                
+                # Generate unique IV (12 bytes for GCM)
+                iv = secrets.token_bytes(12)
+                
+                # Encrypt with AES-256-GCM (provides authentication)
+                encrypted = aesgcm.encrypt(iv, plaintext, None)
+                
+                # Log for audit trail
+                self._log_preload_event(user, vault_item, prediction)
+                
+                preload = PreloadedCredential.objects.create(
+                    user=user,
+                    vault_item=prediction.predicted_vault_item,
+                    prediction=prediction,
+                    encrypted_credential=encrypted,
+                    encryption_iv=iv,
+                    session_key_id=session_key_id,
+                    preload_reason=prediction.prediction_reason,
+                    confidence_at_preload=prediction.confidence_score,
+                    expires_at=expires_at,
+                    requires_biometric=settings_obj.preload_confidence_threshold < 0.9,
+                )
+                preloaded.append(preload)
+                
+            except Exception as e:
+                logger.error(f"Failed to preload credential: {e}")
+                continue
         
         logger.info(f"Preloaded {len(preloaded)} credentials for user {user.id}")
         return preloaded
+    
+    def decrypt_preloaded_credential(
+        self,
+        preload: PreloadedCredential,
+        session_key: bytes,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Decrypt a preloaded credential using the session key.
+        
+        Args:
+            preload: The PreloadedCredential object
+            session_key: Session encryption key (must match original)
+            
+        Returns:
+            Decrypted credential data or None if failed
+        """
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        import json
+        
+        try:
+            aesgcm = AESGCM(session_key)
+            
+            # Decrypt
+            plaintext = aesgcm.decrypt(
+                bytes(preload.encryption_iv),
+                bytes(preload.encrypted_credential),
+                None
+            )
+            
+            # Update usage tracking
+            preload.was_used = True
+            preload.used_at = timezone.now()
+            preload.delivery_count += 1
+            preload.save(update_fields=['was_used', 'used_at', 'delivery_count'])
+            
+            # Log access for audit
+            self._log_credential_access(preload.user, preload)
+            
+            return json.loads(plaintext.decode('utf-8'))
+            
+        except Exception as e:
+            logger.error(f"Failed to decrypt preloaded credential: {e}")
+            return None
+    
+    def _log_preload_event(self, user: User, vault_item, prediction):
+        """Log credential preload for audit trail."""
+        try:
+            from vault.models import AuditLog
+            AuditLog.objects.create(
+                user=user,
+                action='CREDENTIAL_PRELOADED',
+                details={
+                    'vault_item_id': str(vault_item.item_id),
+                    'prediction_id': str(prediction.id),
+                    'confidence': prediction.confidence_score,
+                    'reason': prediction.prediction_reason,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log preload event: {e}")
+    
+    def _log_credential_access(self, user: User, preload: PreloadedCredential):
+        """Log credential access for audit trail."""
+        try:
+            from vault.models import AuditLog
+            AuditLog.objects.create(
+                user=user,
+                action='PRELOADED_CREDENTIAL_ACCESSED',
+                details={
+                    'preload_id': str(preload.id),
+                    'vault_item_id': str(preload.vault_item_id),
+                    'delivery_count': preload.delivery_count,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log credential access: {e}")
     
     # =========================================================================
     # Feedback Recording

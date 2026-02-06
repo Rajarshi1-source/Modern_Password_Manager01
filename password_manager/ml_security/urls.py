@@ -40,4 +40,9 @@ urlpatterns = [
     path('intent/settings/update/', predictive_intent_views.update_intent_settings, name='intent_settings_update'),
     path('intent/stats/', predictive_intent_views.get_intent_statistics, name='intent_stats'),
     path('intent/usage/', predictive_intent_views.record_usage, name='intent_usage'),
+    
+    # GDPR Data Privacy
+    path('intent/export/', predictive_intent_views.export_prediction_data, name='intent_export'),
+    path('intent/data/', predictive_intent_views.delete_prediction_data, name='intent_delete_data'),
 ]
+

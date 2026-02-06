@@ -526,3 +526,224 @@ def record_usage(request):
             "Failed to record usage",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# =============================================================================
+# DATA PRIVACY APIs (GDPR Compliance)
+# =============================================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def export_prediction_data(request):
+    """
+    Export all user's predictive intent data (GDPR right to portability).
+    
+    Returns:
+    {
+        "success": true,
+        "export": {
+            "user_id": "123",
+            "exported_at": "datetime",
+            "settings": {...},
+            "usage_patterns": [...],
+            "predictions": [...],
+            "feedback": [...]
+        }
+    }
+    """
+    try:
+        from datetime import datetime
+        
+        user = request.user
+        
+        # Get settings
+        settings_data = None
+        try:
+            settings_obj = PredictiveIntentSettings.objects.get(user=user)
+            settings_data = {
+                'is_enabled': settings_obj.is_enabled,
+                'learn_from_vault_access': settings_obj.learn_from_vault_access,
+                'learn_from_autofill': settings_obj.learn_from_autofill,
+                'show_predictions': settings_obj.show_predictions,
+                'min_confidence_threshold': settings_obj.min_confidence_threshold,
+                'excluded_domains': settings_obj.excluded_domains,
+                'pattern_retention_days': settings_obj.pattern_retention_days,
+                'created_at': settings_obj.created_at.isoformat(),
+                'updated_at': settings_obj.updated_at.isoformat(),
+            }
+        except PredictiveIntentSettings.DoesNotExist:
+            pass
+        
+        # Get usage patterns (privacy-preserving - no raw data)
+        patterns = PasswordUsagePattern.objects.filter(user=user)
+        pattern_data = [
+            {
+                'id': str(p.id),
+                'domain': p.domain,
+                'domain_category': p.domain_category,
+                'day_of_week': p.day_of_week,
+                'time_of_day': p.time_of_day,
+                'hour_of_day': p.hour_of_day,
+                'access_method': p.access_method,
+                'access_time': p.access_time.isoformat(),
+            }
+            for p in patterns
+        ]
+        
+        # Get predictions
+        predictions = IntentPrediction.objects.filter(user=user)
+        prediction_data = [
+            {
+                'id': str(p.id),
+                'confidence_score': p.confidence_score,
+                'prediction_reason': p.prediction_reason,
+                'trigger_domain': p.trigger_domain,
+                'was_used': p.was_used,
+                'was_dismissed': p.was_dismissed,
+                'predicted_at': p.predicted_at.isoformat(),
+            }
+            for p in predictions
+        ]
+        
+        # Get feedback
+        feedback = PredictionFeedback.objects.filter(user=user)
+        feedback_data = [
+            {
+                'id': str(f.id),
+                'feedback_type': f.feedback_type,
+                'was_correct': f.was_correct,
+                'explicit_rating': f.explicit_rating,
+                'created_at': f.created_at.isoformat(),
+            }
+            for f in feedback
+        ]
+        
+        # Log export for audit
+        try:
+            from vault.models import AuditLog
+            AuditLog.objects.create(
+                user=user,
+                action='PREDICTIVE_DATA_EXPORTED',
+                details={
+                    'patterns_count': len(pattern_data),
+                    'predictions_count': len(prediction_data),
+                    'feedback_count': len(feedback_data),
+                }
+            )
+        except Exception:
+            pass
+        
+        return success_response({
+            'export': {
+                'user_id': str(user.id),
+                'username': user.username,
+                'exported_at': timezone.now().isoformat(),
+                'settings': settings_data,
+                'usage_patterns': pattern_data,
+                'predictions': prediction_data,
+                'feedback': feedback_data,
+                'summary': {
+                    'total_patterns': len(pattern_data),
+                    'total_predictions': len(prediction_data),
+                    'total_feedback': len(feedback_data),
+                }
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to export prediction data: {e}")
+        return error_response(
+            "Failed to export data",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_prediction_data(request):
+    """
+    Delete all user's predictive intent data (GDPR right to erasure).
+    
+    Query Parameters:
+    - confirm: Must be "true" to proceed with deletion
+    - include_settings: Also reset settings (default: false)
+    
+    Returns:
+    {
+        "success": true,
+        "deleted": {
+            "patterns": 150,
+            "predictions": 50,
+            "feedback": 30,
+            "preloaded": 5,
+            "settings_reset": false
+        }
+    }
+    """
+    try:
+        confirm = request.query_params.get('confirm', 'false').lower() == 'true'
+        include_settings = request.query_params.get('include_settings', 'false').lower() == 'true'
+        
+        if not confirm:
+            return error_response(
+                "Deletion requires confirm=true query parameter",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+        
+        user = request.user
+        
+        # Delete all predictive intent data
+        from .predictive_intent_models import ContextSignal
+        
+        patterns_count, _ = PasswordUsagePattern.objects.filter(user=user).delete()
+        predictions_count, _ = IntentPrediction.objects.filter(user=user).delete()
+        feedback_count, _ = PredictionFeedback.objects.filter(user=user).delete()
+        preloaded_count, _ = PreloadedCredential.objects.filter(user=user).delete()
+        signals_count, _ = ContextSignal.objects.filter(user=user).delete()
+        
+        settings_reset = False
+        if include_settings:
+            PredictiveIntentSettings.objects.filter(user=user).delete()
+            settings_reset = True
+        
+        # Log deletion for audit
+        try:
+            from vault.models import AuditLog
+            AuditLog.objects.create(
+                user=user,
+                action='PREDICTIVE_DATA_DELETED',
+                details={
+                    'patterns_deleted': patterns_count,
+                    'predictions_deleted': predictions_count,
+                    'feedback_deleted': feedback_count,
+                    'preloaded_deleted': preloaded_count,
+                    'settings_reset': settings_reset,
+                }
+            )
+        except Exception:
+            pass
+        
+        logger.info(
+            f"Deleted predictive data for user {user.id}: "
+            f"{patterns_count} patterns, {predictions_count} predictions"
+        )
+        
+        return success_response({
+            'deleted': {
+                'patterns': patterns_count,
+                'predictions': predictions_count,
+                'feedback': feedback_count,
+                'preloaded': preloaded_count,
+                'context_signals': signals_count,
+                'settings_reset': settings_reset,
+            },
+            'message': 'All predictive intent data has been permanently deleted'
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to delete prediction data: {e}")
+        return error_response(
+            "Failed to delete data",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+

@@ -155,6 +155,40 @@ app.conf.update(
             'task': 'dark_protocol.analyze_traffic_patterns',
             'schedule': crontab(minute=0),  # Every hour
         },
+        
+        # =================================================================
+        # 🔮 Predictive Intent Tasks
+        # =================================================================
+        
+        # Train intent prediction model (daily at 2 AM)
+        'predictive-intent-train-model': {
+            'task': 'ml_security.train_intent_model',
+            'schedule': crontab(hour=2, minute=0),  # 2:00 AM daily
+        },
+        
+        # Cleanup expired predictions and preloaded credentials (hourly)
+        'predictive-intent-cleanup': {
+            'task': 'ml_security.cleanup_expired_predictions',
+            'schedule': crontab(minute=0),  # Every hour
+        },
+        
+        # Cleanup old patterns based on retention settings (daily at 3 AM)
+        'predictive-intent-pattern-cleanup': {
+            'task': 'ml_security.cleanup_old_patterns',
+            'schedule': crontab(hour=3, minute=0),  # 3:00 AM daily
+        },
+        
+        # Preload morning credentials (daily at 6 AM)
+        'predictive-intent-morning-preload': {
+            'task': 'ml_security.preload_morning_credentials',
+            'schedule': crontab(hour=6, minute=0),  # 6:00 AM daily
+        },
+        
+        # Analyze usage patterns for statistics (daily at 4 AM)
+        'predictive-intent-analyze-patterns': {
+            'task': 'ml_security.analyze_usage_patterns',
+            'schedule': crontab(hour=4, minute=0),  # 4:00 AM daily
+        },
     },
 )
 
