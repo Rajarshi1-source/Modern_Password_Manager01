@@ -127,6 +127,7 @@ INSTALLED_APPS = [
     'adversarial_ai',  # Adversarial AI Password Defense
     'mesh_deaddrop',  # Dead Drop Password Sharing via Mesh Networks
     'neuro_feedback',  # Neuro-Feedback Password Training
+    'cognitive_auth',  # Cognitive Password Testing with Implicit Memory
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1418,4 +1419,42 @@ NEURO_FEEDBACK = {
     # Data retention
     'SESSION_DATA_RETENTION_DAYS': int(os.environ.get('NEURO_SESSION_RETENTION', '90')),
     'EVENT_DATA_RETENTION_DAYS': int(os.environ.get('NEURO_EVENT_RETENTION', '30')),
+}
+
+# =============================================================================
+# 🧪 Cognitive Password Testing with Implicit Memory
+# =============================================================================
+# Distinguishes password creators from attackers via reaction time patterns
+
+COGNITIVE_AUTH = {
+    # Feature toggle
+    'ENABLED': os.environ.get('COGNITIVE_AUTH_ENABLED', 'False').lower() == 'true',
+    
+    # Challenge types to include in verification sessions
+    'CHALLENGE_TYPES': ['scrambled', 'stroop', 'priming', 'partial'],
+    
+    # Session settings
+    'MIN_CHALLENGES': int(os.environ.get('COGNITIVE_MIN_CHALLENGES', '5')),
+    'MAX_CHALLENGES': int(os.environ.get('COGNITIVE_MAX_CHALLENGES', '10')),
+    'BASELINE_CALIBRATION_CHALLENGES': int(os.environ.get('COGNITIVE_CALIBRATION_CHALLENGES', '15')),
+    
+    # Timing thresholds (milliseconds)
+    'REACTION_TIME_THRESHOLD_MS': int(os.environ.get('COGNITIVE_REACTION_THRESHOLD', '2000')),
+    'CREATOR_ADVANTAGE_FACTOR': float(os.environ.get('COGNITIVE_CREATOR_ADVANTAGE', '0.3')),  # 30% faster
+    
+    # ML/Analysis settings
+    'ML_CONFIDENCE_THRESHOLD': float(os.environ.get('COGNITIVE_ML_THRESHOLD', '0.65')),
+    'ANOMALY_Z_THRESHOLD': float(os.environ.get('COGNITIVE_ANOMALY_Z', '2.5')),
+    'MIN_SAMPLES': int(os.environ.get('COGNITIVE_MIN_SAMPLES', '5')),
+    
+    # Verification triggers
+    'VERIFY_ON_LOGIN': os.environ.get('COGNITIVE_VERIFY_LOGIN', 'False').lower() == 'true',
+    'VERIFY_ON_SENSITIVE_ACTIONS': os.environ.get('COGNITIVE_VERIFY_SENSITIVE', 'True').lower() == 'true',
+    'PERIODIC_VERIFICATION_DAYS': int(os.environ.get('COGNITIVE_PERIODIC_DAYS', '30')),
+    
+    # Session expiry (minutes)
+    'SESSION_EXPIRY_MINUTES': int(os.environ.get('COGNITIVE_SESSION_EXPIRY', '10')),
+    
+    # Data retention
+    'SESSION_DATA_RETENTION_DAYS': int(os.environ.get('COGNITIVE_SESSION_RETENTION', '90')),
 }

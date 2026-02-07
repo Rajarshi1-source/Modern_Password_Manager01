@@ -69,6 +69,9 @@ const PredictiveIntentSettings = lazy(() => import('./Components/security/Predic
 // Neuro-Feedback Password Training - EEG-based memory training
 const NeuroTrainingDashboard = lazy(() => import('./Components/neuro/NeuroTrainingDashboard'));
 
+// Cognitive Password Testing with Implicit Memory
+const CognitiveVerification = lazy(() => import('./Components/security/cognitive/CognitiveVerification'));
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */
@@ -1494,6 +1497,10 @@ function App() {
                 {/* Neuro-Feedback Password Training - EEG-based memory training */}
                 <Route path="/neuro-training" element={
                   !isAuthenticated ? <Navigate to="/" /> : <NeuroTrainingDashboard />
+                } />
+                {/* Cognitive Password Testing with Implicit Memory */}
+                <Route path="/cognitive-verification" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <CognitiveVerification />
                 } />
               </Routes>
             </Suspense>

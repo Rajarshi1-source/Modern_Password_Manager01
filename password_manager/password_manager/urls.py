@@ -122,6 +122,9 @@ urlpatterns = [
     
     # Neuro-Feedback Password Training API routes
     path('api/neuro-feedback/', include('neuro_feedback.urls')),
+    
+    # Cognitive Auth Password Testing API routes
+    path('api/cognitive/', include('cognitive_auth.urls')),
 ]
 
 # Add static file serving for development

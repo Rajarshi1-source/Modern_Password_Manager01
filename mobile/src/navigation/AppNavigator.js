@@ -27,6 +27,9 @@ import DuressCodeScreen from '../screens/DuressCodeScreen';
 // Import neuro-feedback training screen
 import NeuroTrainingScreen from '../screens/NeuroTrainingScreen';
 
+// Import cognitive verification screen
+import CognitiveVerificationScreen from '../screens/CognitiveVerificationScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -132,6 +135,11 @@ const SettingsNavigator = () => (
       name="NeuroTraining" 
       component={NeuroTrainingScreen}
       options={{ headerTitle: 'Neuro Training', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="CognitiveVerification" 
+      component={CognitiveVerificationScreen}
+      options={{ headerTitle: 'Cognitive Verification', headerShown: false }}
     />
   </MainStack.Navigator>
 );

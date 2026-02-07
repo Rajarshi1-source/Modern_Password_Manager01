@@ -1,0 +1,253 @@
+/**
+ * Shared Challenge Styles
+ * ========================
+ */
+
+/* Common Challenge Container */
+.challenge {
+    width: 100%;
+    max-width: 500px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+}
+
+.challenge-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.challenge-header h4 {
+    margin: 0;
+    font-size: 1.125rem;
+    color: #fff;
+}
+
+.time-display {
+    font-size: 1.25rem;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.time-display span {
+    color: #22c55e;
+    transition: color 0.3s ease;
+}
+
+.time-display span.warning {
+    color: #ef4444;
+    animation: blink 0.5s ease-in-out infinite;
+}
+
+@keyframes blink {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* Options Grid */
+.options-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    width: 100%;
+    margin-top: 20px;
+}
+
+.option-button {
+    padding: 16px 20px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    color: #e1e4e8;
+    font-size: 1.125rem;
+    font-family: 'JetBrains Mono', monospace;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.option-button:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.15);
+    border-color: rgba(99, 102, 241, 0.5);
+}
+
+.option-button.selected {
+    background: rgba(99, 102, 241, 0.25);
+    border-color: #6366f1;
+}
+
+.option-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.option-text {
+    font-weight: 600;
+}
+
+/* Scrambled Challenge */
+.scrambled-display {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.scrambled-text {
+    font-size: 2.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    color: #6366f1;
+    letter-spacing: 4px;
+    background: rgba(99, 102, 241, 0.1);
+    padding: 16px 32px;
+    border-radius: 12px;
+    display: inline-block;
+}
+
+.hint {
+    margin-top: 16px;
+    color: #8b949e;
+    font-size: 0.875rem;
+}
+
+/* Stroop Challenge */
+.fixation-cross {
+    font-size: 4rem;
+    font-weight: 300;
+    color: #6366f1;
+}
+
+.stroop-stimulus {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 200px;
+}
+
+.stroop-word {
+    font-size: 4rem;
+    font-weight: 800;
+    font-family: 'JetBrains Mono', monospace;
+    text-transform: uppercase;
+    letter-spacing: 4px;
+}
+
+.stroop-instruction {
+    color: #a0a8b2;
+    font-size: 0.875rem;
+    text-align: center;
+    margin-bottom: 16px;
+}
+
+/* Priming Challenge */
+.mask-display,
+.prime-display {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 200px;
+}
+
+.mask-text {
+    font-size: 3rem;
+    font-family: 'JetBrains Mono', monospace;
+    color: #4b5563;
+    letter-spacing: 8px;
+}
+
+.prime-text {
+    font-family: 'JetBrains Mono', monospace;
+    color: #8b5cf6;
+    letter-spacing: 4px;
+    font-weight: 700;
+}
+
+.priming-instruction {
+    color: #a0a8b2;
+    font-size: 0.875rem;
+    text-align: center;
+    margin-bottom: 16px;
+}
+
+/* Partial Reveal Challenge */
+.partial-instruction {
+    color: #a0a8b2;
+    font-size: 0.875rem;
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.masked-password-display {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    margin-bottom: 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.5rem;
+}
+
+.visible-char {
+    color: #8b949e;
+    padding: 4px;
+}
+
+.gap-input {
+    width: 36px;
+    height: 44px;
+    text-align: center;
+    font-size: 1.5rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(99, 102, 241, 0.15);
+    border: 2px solid rgba(99, 102, 241, 0.4);
+    border-radius: 8px;
+    outline: none;
+    transition: all 0.2s ease;
+}
+
+.gap-input:focus {
+    border-color: #6366f1;
+    background: rgba(99, 102, 241, 0.25);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.gap-input:disabled {
+    opacity: 0.5;
+}
+
+.submit-button {
+    padding: 12px 32px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    border: none;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.submit-button:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+
+.submit-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

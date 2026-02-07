@@ -1,0 +1,335 @@
+/**
+ * Cognitive Verification Styles
+ */
+
+.cognitive-verification {
+    display: flex;
+    flex-direction: column;
+    min-height: 400px;
+    background: linear-gradient(135deg, #1a1d23 0%, #0d0f12 100%);
+    border-radius: 16px;
+    padding: 24px;
+    color: #e1e4e8;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+/* Header */
+.verification-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.verification-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #fff;
+}
+
+.close-button {
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #a0a8b2;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    font-size: 1.25rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.close-button:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+}
+
+/* Progress Bar */
+.progress-bar {
+    position: relative;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    margin-bottom: 24px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6366f1 0%, #8b5cf6 100%);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    position: absolute;
+    right: 0;
+    top: -22px;
+    font-size: 0.75rem;
+    color: #8b949e;
+}
+
+/* Challenge Container */
+.challenge-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 250px;
+}
+
+/* Footer */
+.verification-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    margin-top: 20px;
+}
+
+.timer-indicator {
+    width: 8px;
+    height: 8px;
+    background: #22c55e;
+    border-radius: 50%;
+    animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.instruction {
+    font-size: 0.875rem;
+    color: #8b949e;
+}
+
+/* Loading State */
+.cognitive-verification.loading {
+    justify-content: center;
+    align-items: center;
+}
+
+.loading-spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid rgba(99, 102, 241, 0.2);
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 16px;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Error State */
+.cognitive-verification.error {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+
+.error-icon {
+    font-size: 3rem;
+    margin-bottom: 16px;
+}
+
+.cognitive-verification.error button {
+    margin: 8px;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cognitive-verification.error button:first-of-type {
+    background: #6366f1;
+    color: #fff;
+    border: none;
+}
+
+.cognitive-verification.error button.secondary {
+    background: transparent;
+    color: #a0a8b2;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Results State */
+.cognitive-verification.results {
+    align-items: center;
+    text-align: center;
+}
+
+.result-icon {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.5rem;
+    margin-bottom: 20px;
+}
+
+.result-icon.success {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+    border: 2px solid #22c55e;
+}
+
+.result-icon.failed {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border: 2px solid #ef4444;
+}
+
+.results h2 {
+    margin: 0 0 24px;
+    font-size: 1.5rem;
+    color: #fff;
+}
+
+.result-details {
+    width: 100%;
+    max-width: 400px;
+}
+
+.score-circle {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto 24px;
+}
+
+.score-circle svg {
+    transform: rotate(-90deg);
+}
+
+.score-circle circle {
+    fill: none;
+    stroke-width: 8;
+    stroke-linecap: round;
+}
+
+.score-circle circle.bg {
+    stroke: rgba(255, 255, 255, 0.1);
+}
+
+.score-circle circle.progress {
+    stroke: #6366f1;
+    transition: stroke-dasharray 0.5s ease;
+}
+
+.score-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #fff;
+}
+
+.metrics {
+    display: flex;
+    justify-content: space-around;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.metric {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.metric label {
+    font-size: 0.75rem;
+    color: #8b949e;
+    margin-bottom: 4px;
+}
+
+.metric span {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: #fff;
+}
+
+.calibration-success {
+    background: rgba(34, 197, 94, 0.15);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    color: #22c55e;
+}
+
+.anomalies-warning {
+    background: rgba(234, 179, 8, 0.15);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    color: #eab308;
+    font-size: 0.875rem;
+}
+
+.result-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    margin-top: 16px;
+}
+
+.result-actions button {
+    padding: 12px 28px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.result-actions button.primary {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: #fff;
+    border: none;
+}
+
+.result-actions button.primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+}
+
+.result-actions button.secondary {
+    background: transparent;
+    color: #a0a8b2;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.result-actions button.secondary:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* Unknown Challenge */
+.unknown-challenge {
+    padding: 40px;
+    color: #8b949e;
+    font-style: italic;
+}
