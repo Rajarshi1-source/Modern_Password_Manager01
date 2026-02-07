@@ -72,6 +72,9 @@ const NeuroTrainingDashboard = lazy(() => import('./Components/neuro/NeuroTraini
 // Cognitive Password Testing with Implicit Memory
 const CognitiveVerification = lazy(() => import('./Components/security/cognitive/CognitiveVerification'));
 
+// Deepfake-Resistant Biometric Liveness
+const LivenessVerification = lazy(() => import('./Components/security/liveness/LivenessVerification'));
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */
@@ -1501,6 +1504,10 @@ function App() {
                 {/* Cognitive Password Testing with Implicit Memory */}
                 <Route path="/cognitive-verification" element={
                   !isAuthenticated ? <Navigate to="/" /> : <CognitiveVerification />
+                } />
+                {/* Deepfake-Resistant Biometric Liveness */}
+                <Route path="/liveness-verification" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <LivenessVerification />
                 } />
               </Routes>
             </Suspense>

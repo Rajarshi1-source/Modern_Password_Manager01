@@ -128,6 +128,7 @@ INSTALLED_APPS = [
     'mesh_deaddrop',  # Dead Drop Password Sharing via Mesh Networks
     'neuro_feedback',  # Neuro-Feedback Password Training
     'cognitive_auth',  # Cognitive Password Testing with Implicit Memory
+    'biometric_liveness',  # Deepfake-Resistant Biometric Liveness
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1457,4 +1458,33 @@ COGNITIVE_AUTH = {
     
     # Data retention
     'SESSION_DATA_RETENTION_DAYS': int(os.environ.get('COGNITIVE_SESSION_RETENTION', '90')),
+}
+
+# =============================================================================
+# 🎭 Deepfake-Resistant Biometric Liveness
+# =============================================================================
+# Advanced anti-spoofing that defeats deepfakes using micro-expressions,
+# gaze tracking, pulse oximetry, and thermal imaging
+
+BIOMETRIC_LIVENESS = {
+    # Feature toggle
+    'ENABLED': os.environ.get('BIOMETRIC_LIVENESS_ENABLED', 'False').lower() == 'true',
+    
+    # Detection thresholds
+    'LIVENESS_THRESHOLD': float(os.environ.get('LIVENESS_THRESHOLD', '0.85')),
+    'DEEPFAKE_THRESHOLD': float(os.environ.get('DEEPFAKE_THRESHOLD', '0.70')),
+    'PULSE_CONFIDENCE_MIN': float(os.environ.get('PULSE_CONFIDENCE_MIN', '0.75')),
+    
+    # Cognitive tasks
+    'COGNITIVE_TASK_TIMEOUT_MS': int(os.environ.get('LIVENESS_TASK_TIMEOUT', '5000')),
+    'GAZE_TRACKING_POINTS': int(os.environ.get('LIVENESS_GAZE_POINTS', '9')),
+    
+    # Session settings
+    'SESSION_TIMEOUT_SECONDS': int(os.environ.get('LIVENESS_SESSION_TIMEOUT', '120')),
+    'REQUIRED_CHALLENGES': ['gaze', 'expression', 'pulse'],
+    
+    # Thermal settings
+    'THERMAL_ENABLED': os.environ.get('LIVENESS_THERMAL_ENABLED', 'False').lower() == 'true',
+    'THERMAL_MIN_TEMP_C': float(os.environ.get('LIVENESS_THERMAL_MIN', '35.0')),
+    'THERMAL_MAX_TEMP_C': float(os.environ.get('LIVENESS_THERMAL_MAX', '38.0')),
 }

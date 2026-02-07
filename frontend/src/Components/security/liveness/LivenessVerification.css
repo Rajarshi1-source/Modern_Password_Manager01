@@ -1,0 +1,346 @@
+/* LivenessVerification.css - Styles for Biometric Liveness Verification */
+
+.liveness-verification {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.liveness-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.liveness-header h1 {
+    font-size: 2rem;
+    color: #fff;
+    margin-bottom: 0.5rem;
+}
+
+.liveness-header p {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Loading States */
+.liveness-loading,
+.liveness-processing {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+}
+
+.liveness-loading p,
+.liveness-processing p {
+    color: rgba(255, 255, 255, 0.8);
+    margin-top: 1rem;
+}
+
+.spinner {
+    width: 50px;
+    height: 50px;
+    border: 4px solid rgba(255, 255, 255, 0.2);
+    border-top-color: #00d4ff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Camera Capture */
+.liveness-capture {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.5rem;
+    width: 100%;
+    max-width: 600px;
+}
+
+.camera-container {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 4/3;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+}
+
+.camera-container video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transform: scaleX(-1);
+}
+
+.face-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.face-guide {
+    width: 60%;
+    aspect-ratio: 3/4;
+    border: 3px dashed rgba(0, 212, 255, 0.6);
+    border-radius: 50%;
+    animation: pulse-border 2s ease-in-out infinite;
+}
+
+@keyframes pulse-border {
+
+    0%,
+    100% {
+        border-color: rgba(0, 212, 255, 0.6);
+    }
+
+    50% {
+        border-color: rgba(0, 212, 255, 1);
+    }
+}
+
+/* Challenge Panel */
+.challenge-panel {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border-radius: 12px;
+    padding: 1.5rem;
+    width: 100%;
+    text-align: center;
+}
+
+.challenge-panel h3 {
+    color: #00d4ff;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    font-size: 0.9rem;
+    letter-spacing: 1px;
+}
+
+.challenge-panel p {
+    color: #fff;
+    font-size: 1.1rem;
+}
+
+/* Indicators Panel */
+.indicators-panel {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.indicator {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.75rem 1.25rem;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 100px;
+}
+
+.indicator.success {
+    background: rgba(0, 200, 151, 0.2);
+    border: 1px solid rgba(0, 200, 151, 0.5);
+}
+
+.indicator.warning {
+    background: rgba(255, 193, 7, 0.2);
+    border: 1px solid rgba(255, 193, 7, 0.5);
+}
+
+.indicator-label {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.6);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.indicator-value {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #fff;
+    margin-top: 0.25rem;
+}
+
+/* Action Buttons */
+.action-buttons {
+    display: flex;
+    gap: 1rem;
+    width: 100%;
+}
+
+.btn-complete,
+.btn-cancel,
+.btn-primary,
+.btn-secondary {
+    padding: 1rem 2rem;
+    border: none;
+    border-radius: 12px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    flex: 1;
+}
+
+.btn-complete,
+.btn-primary {
+    background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+    color: #fff;
+    box-shadow: 0 4px 15px rgba(0, 212, 255, 0.3);
+}
+
+.btn-complete:hover,
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 212, 255, 0.5);
+}
+
+.btn-cancel,
+.btn-secondary {
+    background: transparent;
+    color: rgba(255, 255, 255, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.btn-cancel:hover,
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+/* Result Display */
+.liveness-result {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    border-radius: 16px;
+    padding: 2.5rem;
+    text-align: center;
+    max-width: 400px;
+    width: 100%;
+}
+
+.liveness-result.success {
+    border: 2px solid rgba(0, 200, 151, 0.5);
+}
+
+.liveness-result.failed {
+    border: 2px solid rgba(255, 107, 107, 0.5);
+}
+
+.result-icon {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.5rem;
+    margin: 0 auto 1.5rem;
+}
+
+.liveness-result.success .result-icon {
+    background: rgba(0, 200, 151, 0.2);
+    color: #00c897;
+}
+
+.liveness-result.failed .result-icon {
+    background: rgba(255, 107, 107, 0.2);
+    color: #ff6b6b;
+}
+
+.liveness-result h2 {
+    color: #fff;
+    margin-bottom: 1.5rem;
+}
+
+.result-details {
+    margin-bottom: 1.5rem;
+}
+
+.score-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.score-value {
+    font-weight: 600;
+    color: #fff;
+}
+
+.verdict {
+    margin-top: 1rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.verdict strong {
+    color: #00d4ff;
+}
+
+/* Error State */
+.liveness-error {
+    background: rgba(255, 107, 107, 0.1);
+    border: 1px solid rgba(255, 107, 107, 0.3);
+    border-radius: 16px;
+    padding: 2rem;
+    text-align: center;
+    max-width: 400px;
+}
+
+.error-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.liveness-error h2 {
+    color: #ff6b6b;
+    margin-bottom: 0.5rem;
+}
+
+.liveness-error p {
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 1.5rem;
+}
+
+.liveness-error .btn-primary {
+    margin-bottom: 0.5rem;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+    .liveness-verification {
+        padding: 1rem;
+    }
+
+    .liveness-header h1 {
+        font-size: 1.5rem;
+    }
+
+    .action-buttons {
+        flex-direction: column;
+    }
+
+    .indicators-panel {
+        width: 100%;
+    }
+
+    .indicator {
+        flex: 1;
+    }
+}

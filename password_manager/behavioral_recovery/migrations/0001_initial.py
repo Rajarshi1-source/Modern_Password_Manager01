@@ -110,20 +110,18 @@ class Migration(migrations.Migration):
             name='RecoveryAuditLog',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('timestamp', models.DateTimeField(auto_now_add=True)),
-                ('event_type', models.CharField(choices=[('recovery_initiated', 'Recovery Initiated'), ('challenge_started', 'Challenge Started'), ('challenge_completed', 'Challenge Completed'), ('challenge_failed', 'Challenge Failed'), ('similarity_check', 'Similarity Check Performed'), ('recovery_completed', 'Recovery Completed'), ('recovery_failed', 'Recovery Failed'), ('adversarial_detected', 'Adversarial Attack Detected'), ('replay_detected', 'Replay Attack Detected'), ('suspicious_activity', 'Suspicious Activity')], max_length=50)),
+                ('timestamp', models.DateTimeField(auto_now_add=True, db_index=True)),
+                ('event_type', models.CharField(choices=[('recovery_initiated', 'Recovery Initiated'), ('challenge_completed', 'Challenge Completed'), ('challenge_failed', 'Challenge Failed'), ('adversarial_detected', 'Adversarial Activity Detected'), ('replay_detected', 'Replay Attack Detected'), ('suspicious_activity', 'Suspicious Activity'), ('recovery_completed', 'Recovery Completed'), ('recovery_failed', 'Recovery Failed')], help_text='Type of event logged', max_length=50)),
+                ('details', models.JSONField(blank=True, default=dict, help_text='Additional details about the event')),
+                ('severity', models.CharField(choices=[('info', 'Info'), ('warning', 'Warning'), ('critical', 'Critical')], default='info', help_text='Severity level of the event', max_length=20)),
                 ('ip_address', models.GenericIPAddressField(blank=True, null=True)),
                 ('user_agent', models.TextField(blank=True)),
-                ('device_fingerprint', models.CharField(blank=True, max_length=255)),
-                ('geolocation', models.JSONField(blank=True, null=True)),
-                ('event_data', models.JSONField(default=dict, help_text='Additional data about this event')),
-                ('risk_score', models.FloatField(blank=True, help_text='AI-assessed risk score for this event (0-1)', null=True)),
-                ('flagged_for_review', models.BooleanField(default=False)),
-                ('recovery_attempt', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, related_name='audit_logs', to='behavioral_recovery.behavioralrecoveryattempt')),
+                ('recovery_attempt', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='audit_logs', to='behavioral_recovery.behavioralrecoveryattempt')),
             ],
             options={
                 'ordering': ['-timestamp'],
-                'indexes': [models.Index(fields=['recovery_attempt', 'timestamp'], name='behavioral__recover_4d1cc7_idx'), models.Index(fields=['event_type', 'timestamp'], name='behavioral__event_t_32f1f6_idx'), models.Index(fields=['flagged_for_review'], name='behavioral__flagged_d08f7a_idx')],
+                'verbose_name': 'Recovery Audit Log',
+                'verbose_name_plural': 'Recovery Audit Logs',
             },
         ),
         migrations.AddIndex(
@@ -157,5 +155,17 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name='behavioralchallenge',
             index=models.Index(fields=['challenge_id'], name='behavioral__challen_f9ba55_idx'),
+        ),
+        migrations.AddIndex(
+            model_name='recoveryauditlog',
+            index=models.Index(fields=['recovery_attempt', '-timestamp'], name='behavioral__recover_0d06d9_idx'),
+        ),
+        migrations.AddIndex(
+            model_name='recoveryauditlog',
+            index=models.Index(fields=['event_type', '-timestamp'], name='behavioral__event_t_85d194_idx'),
+        ),
+        migrations.AddIndex(
+            model_name='recoveryauditlog',
+            index=models.Index(fields=['severity', '-timestamp'], name='behavioral__severit_7a77dc_idx'),
         ),
     ]

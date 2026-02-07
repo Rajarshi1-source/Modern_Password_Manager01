@@ -282,3 +282,14 @@ biofeedback>=0.1.0         # Neurofeedback utilities
 # ============================================================================
 # High-precision timing for reaction time analysis
 performance-timing>=0.1.0  # Performance timing utilities
+
+# ============================================================================
+# Deepfake-Resistant Biometric Liveness
+# ============================================================================
+# Computer vision and ML for liveness detection
+opencv-python>=4.9.0       # Computer vision for face/gaze analysis
+mediapipe>=0.10.9          # Face mesh and landmark detection
+dlib>=19.24.2              # Facial landmark detection
+face-recognition>=1.3.0    # Face embedding and recognition
+torch>=2.1.0               # PyTorch for deepfake detection
+heartpy>=1.2.7             # Heart rate analysis from rPPG

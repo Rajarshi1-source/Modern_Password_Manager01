@@ -30,6 +30,9 @@ import NeuroTrainingScreen from '../screens/NeuroTrainingScreen';
 // Import cognitive verification screen
 import CognitiveVerificationScreen from '../screens/CognitiveVerificationScreen';
 
+// Import biometric liveness screen
+import LivenessVerificationScreen from '../screens/LivenessVerificationScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -140,6 +143,11 @@ const SettingsNavigator = () => (
       name="CognitiveVerification" 
       component={CognitiveVerificationScreen}
       options={{ headerTitle: 'Cognitive Verification', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="LivenessVerification" 
+      component={LivenessVerificationScreen}
+      options={{ headerTitle: 'Liveness Verification', headerShown: false }}
     />
   </MainStack.Navigator>
 );

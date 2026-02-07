@@ -1,0 +1,185 @@
+/* PulseReadout.css - Pulse detection display styles */
+
+.pulse-readout {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 1.25rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.pulse-readout.active {
+    border-color: rgba(255, 71, 87, 0.3);
+}
+
+.readout-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.readout-icon {
+    font-size: 1.25rem;
+}
+
+.readout-header h3 {
+    color: #fff;
+    margin: 0;
+    font-size: 1rem;
+    flex: 1;
+}
+
+/* Signal Indicator */
+.signal-indicator {
+    display: flex;
+    gap: 3px;
+    align-items: flex-end;
+    height: 16px;
+}
+
+.signal-bar {
+    width: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+}
+
+.signal-bar:nth-child(1) {
+    height: 6px;
+}
+
+.signal-bar:nth-child(2) {
+    height: 10px;
+}
+
+.signal-bar:nth-child(3) {
+    height: 14px;
+}
+
+.signal-indicator.good .signal-bar {
+    background: #00c897;
+}
+
+.signal-indicator.fair .signal-bar:nth-child(1),
+.signal-indicator.fair .signal-bar:nth-child(2) {
+    background: #ffc107;
+}
+
+.signal-indicator.poor .signal-bar:nth-child(1) {
+    background: #ff6b6b;
+}
+
+/* Waveform */
+.waveform-container {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 1rem;
+}
+
+.waveform-container canvas {
+    display: block;
+    width: 100%;
+}
+
+/* Vitals Row */
+.vitals-row {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.vital-card {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 1rem;
+    text-align: center;
+    border: 1px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.vital-card.normal {
+    border-color: rgba(0, 200, 151, 0.3);
+}
+
+.vital-card.high,
+.vital-card.low {
+    border-color: rgba(255, 193, 7, 0.3);
+}
+
+.vital-icon {
+    font-size: 1.25rem;
+    margin-bottom: 0.5rem;
+}
+
+.vital-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1;
+}
+
+.vital-unit {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.5);
+    text-transform: uppercase;
+}
+
+.vital-label {
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Measuring Notice */
+.measuring-notice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.85rem;
+}
+
+.pulse-dot {
+    width: 8px;
+    height: 8px;
+    background: #ff4757;
+    border-radius: 50%;
+    animation: pulse-beat 1s ease-in-out infinite;
+}
+
+@keyframes pulse-beat {
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.3);
+        opacity: 0.7;
+    }
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+    .vitals-row {
+        flex-direction: column;
+    }
+
+    .vital-card {
+        flex-direction: row;
+        display: flex;
+        align-items: center;
+        text-align: left;
+        gap: 1rem;
+    }
+
+    .vital-value {
+        font-size: 1.5rem;
+    }
+}

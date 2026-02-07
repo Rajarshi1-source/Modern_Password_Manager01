@@ -125,6 +125,9 @@ urlpatterns = [
     
     # Cognitive Auth Password Testing API routes
     path('api/cognitive/', include('cognitive_auth.urls')),
+    
+    # Biometric Liveness Verification API routes
+    path('api/liveness/', include('biometric_liveness.urls')),
 ]
 
 # Add static file serving for development

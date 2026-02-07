@@ -30,6 +30,7 @@ from security import routing as security_routing
 from ml_security import routing as ml_security_routing
 from neuro_feedback import routing as neuro_feedback_routing
 from cognitive_auth import routing as cognitive_auth_routing
+from biometric_liveness import routing as biometric_liveness_routing
 
 # Combine WebSocket URL patterns
 websocket_urlpatterns = (
@@ -38,7 +39,8 @@ websocket_urlpatterns = (
     security_routing.websocket_urlpatterns +
     ml_security_routing.websocket_urlpatterns +
     neuro_feedback_routing.websocket_urlpatterns +
-    cognitive_auth_routing.websocket_urlpatterns
+    cognitive_auth_routing.websocket_urlpatterns +
+    biometric_liveness_routing.websocket_urlpatterns
 )
 
 # ASGI application with WebSocket support
