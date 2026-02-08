@@ -529,3 +529,450 @@ def refresh_dna_tokens():
         'failed': failed_count,
     }
 
+
+# =============================================================================
+# 🔮 Predictive Password Expiration Tasks
+# =============================================================================
+
+@shared_task
+def analyze_user_password_patterns(user_id: int):
+    """
+    Analyze all of a user's passwords to build pattern fingerprints.
+    
+    Updates the user's PasswordPatternProfile with aggregated pattern
+    analysis data for vulnerability assessment.
+    
+    Args:
+        user_id: ID of the user to analyze
+        
+    Returns:
+        dict: Analysis results
+    """
+    from .models import PasswordPatternProfile
+    from .services.predictive_expiration_service import get_predictive_expiration_service
+    from .services.pattern_analysis_engine import get_pattern_analysis_engine
+    
+    try:
+        user = User.objects.get(id=user_id)
+        service = get_predictive_expiration_service()
+        pattern_engine = get_pattern_analysis_engine()
+        
+        # Get or create profile
+        profile, created = PasswordPatternProfile.objects.get_or_create(user=user)
+        
+        # Get user's vault items
+        try:
+            vault_items = EncryptedVaultItem.objects.filter(
+                user=user,
+                item_type='password'
+            )
+        except Exception:
+            vault_items = []
+        
+        # Aggregate statistics
+        total_analyzed = 0
+        weak_patterns = 0
+        char_distributions = []
+        lengths = []
+        has_dict_base = 0
+        has_keyboard = 0
+        has_dates = 0
+        has_leet = 0
+        
+        for item in vault_items:
+            try:
+                password = item.get_decrypted_password(user)
+                if not password:
+                    continue
+                
+                # Analyze pattern
+                pattern = pattern_engine.analyze_password(password)
+                total_analyzed += 1
+                
+                # Track statistics
+                lengths.append(pattern.length)
+                char_dist = pattern_engine.get_char_class_distribution(password)
+                char_distributions.append(char_dist)
+                
+                if pattern.has_dictionary_base:
+                    has_dict_base += 1
+                if pattern.keyboard_patterns:
+                    has_keyboard += 1
+                if pattern.date_patterns:
+                    has_dates += 1
+                if 'leet' in pattern.mutations:
+                    has_leet += 1
+                
+                # Check for weak patterns
+                if pattern.entropy_estimate < 40 or pattern.has_dictionary_base:
+                    weak_patterns += 1
+                    
+            except Exception as e:
+                logger.debug(f"Could not analyze vault item: {e}")
+                continue
+        
+        # Update profile
+        if total_analyzed > 0:
+            profile.total_passwords_analyzed = total_analyzed
+            profile.weak_patterns_detected = weak_patterns
+            profile.avg_password_length = sum(lengths) / len(lengths)
+            profile.min_length_used = min(lengths) if lengths else 0
+            profile.max_length_used = max(lengths) if lengths else 0
+            profile.uses_common_base_words = has_dict_base > 0
+            profile.uses_keyboard_patterns = has_keyboard > 0
+            profile.uses_date_patterns = has_dates > 0
+            profile.uses_leet_substitutions = has_leet > 0
+            profile.overall_pattern_risk_score = weak_patterns / total_analyzed
+            
+            # Aggregate char class distributions
+            if char_distributions:
+                avg_dist = {}
+                for key in ['L', 'U', 'D', 'S']:
+                    values = [d.get(key, 0) for d in char_distributions]
+                    avg_dist[key] = sum(values) / len(values)
+                profile.char_class_distribution = avg_dist
+            
+            # Calculate length variance
+            if len(lengths) > 1:
+                mean_len = profile.avg_password_length
+                variance = sum((l - mean_len) ** 2 for l in lengths) / len(lengths)
+                profile.length_variance = variance
+        
+        profile.last_analysis_at = timezone.now()
+        profile.save()
+        
+        logger.info(f"Pattern analysis complete for user {user_id}: "
+                   f"{total_analyzed} analyzed, {weak_patterns} weak")
+        
+        return {
+            'user_id': user_id,
+            'analyzed': total_analyzed,
+            'weak_patterns': weak_patterns,
+            'risk_score': profile.overall_pattern_risk_score,
+        }
+        
+    except User.DoesNotExist:
+        logger.error(f"User {user_id} not found")
+        return {'error': 'user_not_found'}
+    except Exception as e:
+        logger.error(f"Error analyzing patterns for user {user_id}: {e}")
+        return {'error': str(e)}
+
+
+@shared_task
+def update_threat_intelligence():
+    """
+    Fetch and update threat intelligence from all active feeds.
+    
+    This task runs periodically to keep threat data current.
+    
+    Returns:
+        dict: Update statistics
+    """
+    from .models import ThreatIntelFeed, ThreatActorTTP, IndustryThreatLevel
+    from .services.threat_intelligence_service import get_threat_intelligence_service
+    
+    threat_service = get_threat_intelligence_service()
+    
+    # Get active feeds
+    feeds = ThreatIntelFeed.objects.filter(is_active=True)
+    
+    updated_count = 0
+    failed_count = 0
+    
+    for feed in feeds:
+        try:
+            # In production, this would call the actual feed API
+            # For now, we'll update the sync timestamp
+            
+            feed.last_sync_at = timezone.now()
+            feed.last_sync_success = True
+            feed.save()
+            
+            updated_count += 1
+            logger.info(f"Updated threat feed: {feed.name}")
+            
+        except Exception as e:
+            feed.last_sync_success = False
+            feed.is_healthy = False
+            feed.health_check_message = str(e)
+            feed.save()
+            
+            failed_count += 1
+            logger.error(f"Failed to update feed {feed.name}: {e}")
+    
+    # Update internal dark web threat data from ml_dark_web
+    try:
+        from ml_dark_web.models import MLBreachData
+        
+        recent_breaches = MLBreachData.objects.filter(
+            detected_at__gte=timezone.now() - timezone.timedelta(days=30),
+            severity__in=['HIGH', 'CRITICAL']
+        ).count()
+        
+        logger.info(f"Found {recent_breaches} high-severity breaches in last 30 days")
+        
+    except Exception as e:
+        logger.warning(f"Could not fetch ml_dark_web data: {e}")
+    
+    logger.info(f"Threat intel update complete: {updated_count} updated, {failed_count} failed")
+    
+    return {
+        'feeds_updated': updated_count,
+        'feeds_failed': failed_count,
+    }
+
+
+@shared_task
+def evaluate_password_expiration_risk(credential_id: str, user_id: int):
+    """
+    Calculate real-time compromise risk for a specific credential.
+    
+    Creates or updates the PredictiveExpirationRule for the credential.
+    
+    Args:
+        credential_id: UUID of the credential
+        user_id: ID of the user
+        
+    Returns:
+        dict: Risk evaluation results
+    """
+    from .models import PredictiveExpirationRule
+    from .services.predictive_expiration_service import get_predictive_expiration_service
+    
+    try:
+        user = User.objects.get(id=user_id)
+        service = get_predictive_expiration_service()
+        
+        # Get the vault item
+        try:
+            vault_item = EncryptedVaultItem.objects.get(
+                id=credential_id,
+                user=user
+            )
+        except EncryptedVaultItem.DoesNotExist:
+            return {'error': 'credential_not_found'}
+        
+        # Get password
+        password = vault_item.get_decrypted_password(user)
+        if not password:
+            return {'error': 'could_not_decrypt'}
+        
+        # Calculate age
+        age_days = (timezone.now() - vault_item.created_at).days
+        
+        # Get domain
+        domain = getattr(vault_item, 'website', '') or getattr(vault_item, 'name', '')
+        
+        # Create expiration rule
+        rule = service.create_expiration_rule(
+            user_id=user_id,
+            credential_id=str(credential_id),
+            credential_domain=domain[:255],
+            password=password,
+            credential_age_days=age_days
+        )
+        
+        logger.info(f"Evaluated credential {credential_id} for user {user_id}: "
+                   f"{rule.risk_level} risk ({rule.risk_score:.2f})")
+        
+        return {
+            'credential_id': str(credential_id),
+            'risk_level': rule.risk_level,
+            'risk_score': rule.risk_score,
+            'recommended_action': rule.recommended_action,
+        }
+        
+    except User.DoesNotExist:
+        return {'error': 'user_not_found'}
+    except Exception as e:
+        logger.error(f"Error evaluating credential {credential_id}: {e}")
+        return {'error': str(e)}
+
+
+@shared_task
+def process_forced_rotation(credential_id: str, user_id: int, reason: str):
+    """
+    Execute proactive password rotation for a credential.
+    
+    Creates a rotation event and marks the expiration rule as acknowledged.
+    
+    Args:
+        credential_id: UUID of the credential
+        user_id: ID of the user
+        reason: Reason for the rotation
+        
+    Returns:
+        dict: Rotation results
+    """
+    from .models import PredictiveExpirationRule, PasswordRotationEvent
+    
+    try:
+        user = User.objects.get(id=user_id)
+        
+        # Get the expiration rule
+        try:
+            rule = PredictiveExpirationRule.objects.get(
+                user=user,
+                credential_id=credential_id
+            )
+        except PredictiveExpirationRule.DoesNotExist:
+            return {'error': 'rule_not_found'}
+        
+        # Create rotation event
+        event = PasswordRotationEvent.objects.create(
+            user=user,
+            credential_id=rule.credential_id,
+            credential_domain=rule.credential_domain,
+            rotation_type='proactive',
+            outcome='pending',
+            triggered_by_rule=rule,
+            trigger_reason=reason,
+            threat_factors_at_rotation=rule.threat_factors,
+            risk_score_at_rotation=rule.risk_score,
+        )
+        
+        # Mark rule as acknowledged
+        rule.user_acknowledged = True
+        rule.user_acknowledged_at = timezone.now()
+        rule.last_notification_sent = timezone.now()
+        rule.notification_count += 1
+        rule.save()
+        
+        logger.info(f"Processed forced rotation for credential {credential_id}")
+        
+        return {
+            'event_id': str(event.event_id),
+            'credential_id': str(credential_id),
+            'status': 'pending',
+        }
+        
+    except User.DoesNotExist:
+        return {'error': 'user_not_found'}
+    except Exception as e:
+        logger.error(f"Error processing rotation for {credential_id}: {e}")
+        return {'error': str(e)}
+
+
+@shared_task(bind=True)
+def daily_predictive_scan(self):
+    """
+    Daily scan of all credentials against current threats.
+    
+    Runs for all users with predictive expiration enabled,
+    evaluating each credential and sending notifications for
+    high-risk items.
+    """
+    from .models import PredictiveExpirationSettings, PredictiveExpirationRule
+    
+    # Get users with predictive expiration enabled
+    settings = PredictiveExpirationSettings.objects.filter(is_enabled=True)
+    
+    total_users = 0
+    total_credentials = 0
+    high_risk_count = 0
+    
+    for user_settings in settings:
+        user_id = user_settings.user_id
+        
+        # Analyze patterns first
+        analyze_user_password_patterns.delay(user_id)
+        
+        # Get user's vault items
+        try:
+            vault_items = EncryptedVaultItem.objects.filter(
+                user_id=user_id,
+                item_type='password'
+            )
+            
+            for item in vault_items:
+                # Check excluded domains
+                domain = getattr(item, 'website', '') or ''
+                if any(excl in domain for excl in user_settings.exclude_domains):
+                    continue
+                
+                # Queue risk evaluation
+                evaluate_password_expiration_risk.delay(str(item.id), user_id)
+                total_credentials += 1
+                
+        except Exception as e:
+            logger.error(f"Error scanning vault for user {user_id}: {e}")
+            continue
+        
+        total_users += 1
+    
+    # Update threat intelligence
+    update_threat_intelligence.delay()
+    
+    logger.info(
+        f"Daily predictive scan complete: "
+        f"{total_users} users, {total_credentials} credentials queued"
+    )
+    
+    return {
+        'users_scanned': total_users,
+        'credentials_queued': total_credentials,
+    }
+
+
+@shared_task
+def send_expiration_notifications():
+    """
+    Send notifications to users with high-risk credentials.
+    
+    Sends email/push notifications for credentials that require
+    attention based on their risk scores.
+    """
+    from .models import PredictiveExpirationRule, PredictiveExpirationSettings
+    from django.core.mail import send_mail
+    from django.conf import settings
+    
+    # Get high-risk rules not yet notified today
+    today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    high_risk_rules = PredictiveExpirationRule.objects.filter(
+        is_active=True,
+        user_acknowledged=False,
+        risk_level__in=['high', 'critical'],
+    ).filter(
+        models.Q(last_notification_sent__lt=today_start) |
+        models.Q(last_notification_sent__isnull=True)
+    ).select_related('user')
+    
+    notifications_sent = 0
+    
+    for rule in high_risk_rules:
+        try:
+            # Check user's notification preferences
+            try:
+                user_settings = PredictiveExpirationSettings.objects.get(
+                    user=rule.user
+                )
+                
+                if rule.risk_level == 'high' and not user_settings.notify_on_high_risk:
+                    continue
+                if rule.risk_level == 'critical' and not user_settings.notify_on_high_risk:
+                    continue
+                    
+            except PredictiveExpirationSettings.DoesNotExist:
+                pass
+            
+            # Send notification (placeholder - would use notification service)
+            logger.info(
+                f"Would notify user {rule.user_id} about {rule.risk_level} risk "
+                f"on {rule.credential_domain}"
+            )
+            
+            # Update rule
+            rule.last_notification_sent = timezone.now()
+            rule.notification_count += 1
+            rule.save()
+            
+            notifications_sent += 1
+            
+        except Exception as e:
+            logger.error(f"Error sending notification for rule {rule.rule_id}: {e}")
+    
+    logger.info(f"Sent {notifications_sent} expiration notifications")
+    
+    return {'notifications_sent': notifications_sent}

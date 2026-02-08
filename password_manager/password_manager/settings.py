@@ -1488,3 +1488,51 @@ BIOMETRIC_LIVENESS = {
     'THERMAL_MIN_TEMP_C': float(os.environ.get('LIVENESS_THERMAL_MIN', '35.0')),
     'THERMAL_MAX_TEMP_C': float(os.environ.get('LIVENESS_THERMAL_MAX', '38.0')),
 }
+
+# =============================================================================
+# 🔮 Predictive Password Expiration Based on Threat Intelligence
+# =============================================================================
+# AI that predicts when passwords might be compromised using pattern analysis,
+# dark web monitoring, and threat actor TTPs for proactive rotation
+
+PREDICTIVE_EXPIRATION = {
+    # Feature toggle
+    'ENABLED': os.environ.get('PREDICTIVE_EXPIRATION_ENABLED', 'True').lower() == 'true',
+    
+    # Risk thresholds
+    'RISK_THRESHOLD_HIGH': float(os.environ.get('PREDICTIVE_RISK_THRESHOLD_HIGH', '0.7')),
+    'RISK_THRESHOLD_MEDIUM': float(os.environ.get('PREDICTIVE_RISK_THRESHOLD_MEDIUM', '0.4')),
+    
+    # Scanning settings
+    'SCAN_INTERVAL_HOURS': int(os.environ.get('PREDICTIVE_SCAN_INTERVAL', '24')),
+    'DAILY_SCAN_ENABLED': os.environ.get('PREDICTIVE_DAILY_SCAN', 'True').lower() == 'true',
+    
+    # Threat feed sources
+    'THREAT_FEED_SOURCES': [
+        'internal_dark_web',      # ml_dark_web integration
+        'misp',                   # MISP threat intel platform
+        'alienvault_otx',         # AlienVault OTX
+    ],
+    
+    # Pattern analysis
+    'PATTERN_SIMILARITY_THRESHOLD': float(os.environ.get('PREDICTIVE_PATTERN_THRESHOLD', '0.85')),
+    'MAX_CREDENTIAL_AGE_DAYS': int(os.environ.get('PREDICTIVE_MAX_AGE_DAYS', '90')),
+    
+    # Threat correlation
+    'INDUSTRY_THREAT_WEIGHT': float(os.environ.get('PREDICTIVE_INDUSTRY_WEIGHT', '0.3')),
+    'TTP_WEIGHT': float(os.environ.get('PREDICTIVE_TTP_WEIGHT', '0.4')),
+    'PATTERN_WEIGHT': float(os.environ.get('PREDICTIVE_PATTERN_WEIGHT', '0.3')),
+    
+    # Notification settings
+    'NOTIFICATION_ENABLED': os.environ.get('PREDICTIVE_NOTIFICATIONS', 'True').lower() == 'true',
+    'MAX_NOTIFICATIONS_PER_DAY': int(os.environ.get('PREDICTIVE_MAX_NOTIFICATIONS', '3')),
+    
+    # Auto-rotation settings
+    'AUTO_ROTATION_ENABLED': os.environ.get('PREDICTIVE_AUTO_ROTATE', 'False').lower() == 'true',
+    'FORCE_ROTATION_THRESHOLD': float(os.environ.get('PREDICTIVE_FORCE_ROTATE_THRESHOLD', '0.9')),
+    
+    # ML model settings
+    'ML_MODEL_PATH': os.environ.get('PREDICTIVE_ML_MODEL_PATH', 'models/pattern_classifier.pkl'),
+    'ML_CONFIDENCE_THRESHOLD': float(os.environ.get('PREDICTIVE_ML_CONFIDENCE', '0.75')),
+}
+

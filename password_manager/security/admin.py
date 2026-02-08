@@ -259,3 +259,304 @@ class ChemicalStorageCertificateAdmin(admin.ModelAdmin):
     list_filter = ('encoding_method', 'synthesis_provider', 'time_lock_enabled')
     search_fields = ('user__username', 'sequence_hash')
     readonly_fields = ('id', 'created_at', 'signature', 'sequence_hash')
+
+
+# =============================================================================
+# 🔮 Predictive Password Expiration Admin
+# =============================================================================
+
+from .models import (
+    PasswordPatternProfile,
+    ThreatActorTTP,
+    IndustryThreatLevel,
+    PredictiveExpirationRule,
+    PasswordRotationEvent,
+    ThreatIntelFeed,
+    PredictiveExpirationSettings,
+)
+
+
+@admin.register(PasswordPatternProfile)
+class PasswordPatternProfileAdmin(admin.ModelAdmin):
+    list_display = (
+        'user',
+        'total_passwords_analyzed',
+        'weak_patterns_detected',
+        'overall_pattern_risk_score',
+        'last_analysis_at',
+    )
+    list_filter = (
+        'uses_common_base_words',
+        'uses_keyboard_patterns',
+        'uses_leet_substitutions',
+    )
+    search_fields = ('user__username', 'user__email')
+    readonly_fields = (
+        'structure_fingerprint',
+        'created_at',
+        'updated_at',
+        'last_analysis_at',
+    )
+    
+    fieldsets = (
+        ('User', {
+            'fields': ('user',)
+        }),
+        ('Pattern Statistics', {
+            'fields': (
+                'char_class_distribution',
+                'avg_password_length',
+                'length_variance',
+                'min_length_used',
+                'max_length_used',
+            )
+        }),
+        ('Pattern Detection', {
+            'fields': (
+                'uses_common_base_words',
+                'uses_keyboard_patterns',
+                'uses_date_patterns',
+                'uses_leet_substitutions',
+                'common_mutations_used',
+            )
+        }),
+        ('Risk Score', {
+            'fields': (
+                'total_passwords_analyzed',
+                'weak_patterns_detected',
+                'overall_pattern_risk_score',
+            )
+        }),
+        ('Timestamps', {
+            'fields': ('last_analysis_at', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(ThreatActorTTP)
+class ThreatActorTTPAdmin(admin.ModelAdmin):
+    list_display = (
+        'name',
+        'actor_type',
+        'threat_level',
+        'is_currently_active',
+        'first_observed',
+        'last_active',
+    )
+    list_filter = (
+        'actor_type',
+        'threat_level',
+        'is_currently_active',
+    )
+    search_fields = ('name', 'aliases', 'description')
+    readonly_fields = ('actor_id', 'created_at', 'updated_at')
+    
+    fieldsets = (
+        ('Identity', {
+            'fields': ('actor_id', 'name', 'aliases', 'description')
+        }),
+        ('Classification', {
+            'fields': ('actor_type', 'threat_level', 'is_currently_active')
+        }),
+        ('Targeting', {
+            'fields': ('target_industries', 'target_regions')
+        }),
+        ('TTPs', {
+            'fields': ('password_patterns_exploited', 'attack_techniques')
+        }),
+        ('Timeline', {
+            'fields': ('first_observed', 'last_active', 'source')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(IndustryThreatLevel)
+class IndustryThreatLevelAdmin(admin.ModelAdmin):
+    list_display = (
+        'industry_name',
+        'industry_code',
+        'current_threat_level',
+        'threat_score',
+        'active_campaigns_count',
+        'threat_trend',
+    )
+    list_filter = ('current_threat_level', 'threat_trend')
+    search_fields = ('industry_name', 'industry_code')
+    readonly_fields = ('created_at', 'last_assessment_at')
+
+
+@admin.register(PredictiveExpirationRule)
+class PredictiveExpirationRuleAdmin(admin.ModelAdmin):
+    list_display = (
+        'credential_domain',
+        'user',
+        'risk_level',
+        'risk_score_display',
+        'recommended_action',
+        'user_acknowledged',
+        'last_evaluated_at',
+    )
+    list_filter = (
+        'risk_level',
+        'recommended_action',
+        'is_active',
+        'user_acknowledged',
+    )
+    search_fields = (
+        'user__username',
+        'credential_domain',
+    )
+    readonly_fields = (
+        'rule_id',
+        'credential_id',
+        'created_at',
+        'updated_at',
+        'last_evaluated_at',
+    )
+    
+    fieldsets = (
+        ('Credential', {
+            'fields': ('rule_id', 'user', 'credential_id', 'credential_domain')
+        }),
+        ('Risk Assessment', {
+            'fields': (
+                'risk_level',
+                'risk_score',
+                'prediction_confidence',
+                'threat_factors',
+            )
+        }),
+        ('Prediction', {
+            'fields': (
+                'predicted_compromise_date',
+                'pattern_similarity_score',
+                'industry_threat_correlation',
+            )
+        }),
+        ('Action', {
+            'fields': (
+                'recommended_action',
+                'recommended_rotation_date',
+                'is_active',
+            )
+        }),
+        ('User Response', {
+            'fields': (
+                'user_acknowledged',
+                'user_acknowledged_at',
+                'last_notification_sent',
+                'notification_count',
+            )
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at', 'last_evaluated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def risk_score_display(self, obj):
+        score = obj.risk_score
+        color = 'green' if score < 0.4 else 'orange' if score < 0.7 else 'red'
+        return format_html(
+            '<span style="color: {};">{:.1%}</span>',
+            color, score
+        )
+    risk_score_display.short_description = 'Risk Score'
+
+
+@admin.register(PasswordRotationEvent)
+class PasswordRotationEventAdmin(admin.ModelAdmin):
+    list_display = (
+        'event_id_short',
+        'user',
+        'credential_domain',
+        'rotation_type',
+        'outcome',
+        'initiated_at',
+    )
+    list_filter = ('rotation_type', 'outcome')
+    search_fields = ('user__username', 'credential_domain')
+    readonly_fields = (
+        'event_id',
+        'initiated_at',
+        'completed_at',
+    )
+    
+    def event_id_short(self, obj):
+        return f"ROT-{str(obj.event_id)[:8]}"
+    event_id_short.short_description = 'Event ID'
+
+
+@admin.register(ThreatIntelFeed)
+class ThreatIntelFeedAdmin(admin.ModelAdmin):
+    list_display = (
+        'name',
+        'feed_type',
+        'is_active',
+        'is_healthy',
+        'reliability_score',
+        'last_sync_at',
+    )
+    list_filter = ('feed_type', 'is_active', 'is_healthy')
+    search_fields = ('name', 'description')
+    readonly_fields = (
+        'feed_id',
+        'last_sync_at',
+        'last_sync_items_count',
+        'total_items_ingested',
+        'created_at',
+        'updated_at',
+    )
+
+
+@admin.register(PredictiveExpirationSettings)
+class PredictiveExpirationSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        'user',
+        'is_enabled',
+        'auto_rotation_enabled',
+        'force_rotation_threshold',
+        'industry',
+    )
+    list_filter = (
+        'is_enabled',
+        'auto_rotation_enabled',
+        'industry',
+    )
+    search_fields = ('user__username', 'user__email')
+    readonly_fields = ('created_at', 'updated_at')
+    
+    fieldsets = (
+        ('User', {
+            'fields': ('user',)
+        }),
+        ('Feature Toggles', {
+            'fields': ('is_enabled', 'auto_rotation_enabled')
+        }),
+        ('Thresholds', {
+            'fields': ('force_rotation_threshold', 'warning_threshold')
+        }),
+        ('Context', {
+            'fields': ('industry', 'organization_size')
+        }),
+        ('Notifications', {
+            'fields': (
+                'notify_on_high_risk',
+                'notify_on_medium_risk',
+                'notification_frequency_hours',
+            )
+        }),
+        ('Filtering', {
+            'fields': ('include_all_credentials', 'exclude_domains')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+

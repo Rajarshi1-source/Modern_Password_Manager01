@@ -75,6 +75,10 @@ const CognitiveVerification = lazy(() => import('./Components/security/cognitive
 // Deepfake-Resistant Biometric Liveness
 const LivenessVerification = lazy(() => import('./Components/security/liveness/LivenessVerification'));
 
+// Predictive Password Expiration - AI-powered threat intelligence
+const PredictiveExpirationDashboard = lazy(() => import('./Components/security/PredictiveExpirationDashboard'));
+
+
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
   /* Focus styles */

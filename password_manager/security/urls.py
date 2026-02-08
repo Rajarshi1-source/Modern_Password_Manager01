@@ -16,6 +16,7 @@ from .api import natural_entropy_views # ⚡ Natural Entropy (Lightning/Seismic/
 from .api import duress_code_views      # 🎖️ Military-Grade Duress Codes
 from .api import honeypot_views         # 🍯 Honeypot Email Breach Detection
 from .api import dark_protocol_views    # 🌑 Dark Protocol Network
+from .api import predictive_expiration_views  # 🔮 Predictive Password Expiration
 
 
 @api_view(['GET'])
@@ -418,6 +419,46 @@ urlpatterns = [
     
     # Statistics
     path('dark-protocol/stats/', dark_protocol_views.DarkProtocolStatsView.as_view(), name='dark-protocol-stats'),
+
+    # ==========================================================================
+    # 🔮 Predictive Password Expiration endpoints
+    # ==========================================================================
+    path('predictive-expiration/dashboard/', 
+         predictive_expiration_views.PredictiveExpirationDashboardView.as_view(), 
+         name='predictive-expiration-dashboard'),
+    path('predictive-expiration/credentials/', 
+         predictive_expiration_views.CredentialRiskListView.as_view(), 
+         name='predictive-expiration-credentials'),
+    path('predictive-expiration/credential/<uuid:id>/risk/', 
+         predictive_expiration_views.CredentialRiskDetailView.as_view(), 
+         name='predictive-expiration-credential-risk'),
+    path('predictive-expiration/credential/<uuid:id>/rotate/', 
+         predictive_expiration_views.ForceRotationView.as_view(), 
+         name='predictive-expiration-force-rotation'),
+    path('predictive-expiration/credential/<uuid:id>/acknowledge/', 
+         predictive_expiration_views.AcknowledgeRiskView.as_view(), 
+         name='predictive-expiration-acknowledge'),
+    path('predictive-expiration/threats/', 
+         predictive_expiration_views.ActiveThreatsView.as_view(), 
+         name='predictive-expiration-threats'),
+    path('predictive-expiration/threat-summary/', 
+         predictive_expiration_views.ThreatSummaryView.as_view(), 
+         name='predictive-expiration-threat-summary'),
+    path('predictive-expiration/settings/', 
+         predictive_expiration_views.PredictiveExpirationSettingsView.as_view(), 
+         name='predictive-expiration-settings'),
+    path('predictive-expiration/history/', 
+         predictive_expiration_views.RotationHistoryView.as_view(), 
+         name='predictive-expiration-history'),
+    path('predictive-expiration/analyze/', 
+         predictive_expiration_views.AnalyzeCredentialView.as_view(), 
+         name='predictive-expiration-analyze'),
+    path('predictive-expiration/pattern-profile/', 
+         predictive_expiration_views.PatternProfileView.as_view(), 
+         name='predictive-expiration-pattern-profile'),
+    path('predictive-expiration/industries/', 
+         predictive_expiration_views.IndustryThreatsView.as_view(), 
+         name='predictive-expiration-industries'),
 
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),

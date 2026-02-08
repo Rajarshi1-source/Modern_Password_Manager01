@@ -33,6 +33,9 @@ import CognitiveVerificationScreen from '../screens/CognitiveVerificationScreen'
 // Import biometric liveness screen
 import LivenessVerificationScreen from '../screens/LivenessVerificationScreen';
 
+// Import predictive expiration screen
+import PredictiveExpirationScreen from '../screens/PredictiveExpirationScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -148,6 +151,11 @@ const SettingsNavigator = () => (
       name="LivenessVerification" 
       component={LivenessVerificationScreen}
       options={{ headerTitle: 'Liveness Verification', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="PredictiveExpiration" 
+      component={PredictiveExpirationScreen}
+      options={{ headerTitle: 'Password Expiration', headerShown: false }}
     />
   </MainStack.Navigator>
 );

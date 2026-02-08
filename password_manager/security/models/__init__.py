@@ -46,3 +46,15 @@ from .dark_protocol_models import (
     NetworkHealth,
     DarkProtocolConfig,
 )
+
+# Import predictive expiration models
+from .predictive_expiration_models import (
+    PasswordPatternProfile,
+    ThreatActorTTP,
+    IndustryThreatLevel,
+    PredictiveExpirationRule,
+    PasswordRotationEvent,
+    ThreatIntelFeed,
+    PredictiveExpirationSettings,
+)
+
