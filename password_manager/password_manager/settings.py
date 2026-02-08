@@ -1536,3 +1536,32 @@ PREDICTIVE_EXPIRATION = {
     'ML_CONFIDENCE_THRESHOLD': float(os.environ.get('PREDICTIVE_ML_CONFIDENCE', '0.75')),
 }
 
+# =============================================================================
+# Cosmic Ray Entropy Configuration
+# =============================================================================
+# Settings for cosmic ray-based true random number generation.
+# Uses USB cosmic ray detectors (e.g., CosmicWatch) or simulation fallback.
+
+COSMIC_RAY_ENTROPY = {
+    # Master enable/disable for cosmic ray entropy
+    'ENABLED': os.environ.get('COSMIC_RAY_ENABLED', 'True').lower() == 'true',
+    
+    # Serial port configuration
+    # 'auto' = auto-detect CosmicWatch devices
+    'SERIAL_PORT': os.environ.get('COSMIC_RAY_SERIAL_PORT', 'auto'),
+    'BAUD_RATE': int(os.environ.get('COSMIC_RAY_BAUD_RATE', '9600')),
+    
+    # Event buffer settings
+    'EVENT_BUFFER_SIZE': int(os.environ.get('COSMIC_RAY_BUFFER_SIZE', '100')),
+    'MIN_EVENTS_FOR_ENTROPY': int(os.environ.get('COSMIC_RAY_MIN_EVENTS', '10')),
+    
+    # Simulation fallback (when no hardware detected)
+    'SIMULATION_FALLBACK': os.environ.get('COSMIC_RAY_SIMULATION', 'True').lower() == 'true',
+    
+    # Pool contribution when mixing with other entropy sources
+    'POOL_CONTRIBUTION_PERCENT': int(os.environ.get('COSMIC_RAY_POOL_PERCENT', '20')),
+    
+    # Continuous background collection (requires user opt-in)
+    # If False, events are collected on-demand only
+    'CONTINUOUS_COLLECTION': os.environ.get('COSMIC_RAY_CONTINUOUS', 'False').lower() == 'true',
+}

@@ -902,10 +902,111 @@ def get_solar_provider() -> SolarWindEntropyProvider:
     return SolarWindEntropyProvider()
 
 
+def get_cosmic_ray_provider():
+    """Get Cosmic Ray entropy provider instance."""
+    try:
+        from security.services.cosmic_ray_entropy_service import CosmicRayEntropyProvider
+        return CosmicRayEntropyProvider()
+    except ImportError:
+        logger.warning("Cosmic ray entropy provider not available")
+        return None
+
+
+def get_quantum_dice_provider():
+    """
+    Get Quantum Dice entropy provider (bridges to QuantumRNGProvider).
+    
+    This integrates the existing Quantum Dice feature (ANU, IBM, IonQ)
+    into the natural entropy sources interface.
+    """
+    try:
+        from security.services.quantum_rng_service import get_quantum_generator
+        return QuantumDiceNaturalBridge(get_quantum_generator())
+    except ImportError:
+        logger.warning("Quantum RNG service not available")
+        return None
+
+
+class QuantumDiceNaturalBridge:
+    """
+    Bridges QuantumRNGProvider to natural entropy provider interface.
+    
+    Allows Quantum Dice (ANU QRNG, IBM Quantum, IonQ) to be used
+    alongside natural entropy sources (Lightning, Seismic, Solar, Cosmic).
+    """
+    
+    def __init__(self, generator):
+        self.generator = generator
+        self.provider_name = "Quantum Dice (QRNG)"
+        self._last_source_info: Dict[str, Any] = {}
+    
+    def fetch_entropy(self, num_bytes: int) -> bytes:
+        """Fetch entropy from quantum sources (synchronous wrapper)."""
+        import asyncio
+        
+        async def _fetch():
+            entropy, cert = await self.generator.get_raw_random_bytes(num_bytes)
+            self._last_source_info = {
+                'provider': cert.provider,
+                'quantum_source': cert.quantum_source,
+                'certificate_id': cert.certificate_id,
+                'entropy_bits': cert.entropy_bits,
+            }
+            return entropy
+        
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Create new loop for sync context
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(asyncio.run, _fetch())
+                    return future.result(timeout=30)
+            else:
+                return loop.run_until_complete(_fetch())
+        except Exception as e:
+            logger.error(f"Quantum dice entropy fetch failed: {e}")
+            raise EntropyUnavailable(f"Quantum dice unavailable: {e}")
+    
+    def get_last_source_info(self) -> Dict[str, Any]:
+        """Get information about the last entropy source used."""
+        return self._last_source_info
+    
+    def is_available(self) -> bool:
+        """Check if quantum dice is available."""
+        try:
+            status = self.generator.get_pool_status()
+            return status.get('health', 'unknown') != 'unavailable'
+        except Exception:
+            return False
+
+
 def get_all_natural_providers() -> Dict[str, Any]:
-    """Get all natural entropy providers."""
-    return {
+    """
+    Get all natural entropy providers.
+    
+    Includes:
+    - Lightning: NOAA Geostationary Lightning Mapper
+    - Seismic: USGS Earthquake data
+    - Solar: NOAA Space Weather / DSCOVR
+    - Cosmic Ray: Muon detection (hardware or simulation)
+    - Quantum Dice: True quantum RNG (ANU, IBM, IonQ)
+    """
+    providers = {
         'lightning': get_lightning_provider(),
         'seismic': get_seismic_provider(),
         'solar': get_solar_provider(),
     }
+    
+    # Add cosmic ray if available
+    cosmic = get_cosmic_ray_provider()
+    if cosmic:
+        providers['cosmic_ray'] = cosmic
+    
+    # Add quantum dice bridge if available
+    quantum = get_quantum_dice_provider()
+    if quantum:
+        providers['quantum_dice'] = quantum
+    
+    return providers
+

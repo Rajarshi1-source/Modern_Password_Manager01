@@ -78,6 +78,9 @@ const LivenessVerification = lazy(() => import('./Components/security/liveness/L
 // Predictive Password Expiration - AI-powered threat intelligence
 const PredictiveExpirationDashboard = lazy(() => import('./Components/security/PredictiveExpirationDashboard'));
 
+// Cosmic Ray Entropy - True randomness from muon detection
+const CosmicRayEntropyDashboard = lazy(() => import('./Components/security/CosmicRayEntropyDashboard'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1195,6 +1198,7 @@ function App() {
             <h1>SecureVault</h1>
             <div className="nav-links">
               <Link to="/security/dashboard" className="nav-link">Security Dashboard</Link>
+              <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/settings" className="nav-link">Settings</Link>
               <button onClick={handleLogout} className="logout-btn">Logout</button>
             </div>
@@ -1512,6 +1516,14 @@ function App() {
                 {/* Deepfake-Resistant Biometric Liveness */}
                 <Route path="/liveness-verification" element={
                   !isAuthenticated ? <Navigate to="/" /> : <LivenessVerification />
+                } />
+                {/* Predictive Password Expiration - AI Threat Intelligence */}
+                <Route path="/security/predictive-expiration" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <PredictiveExpirationDashboard />
+                } />
+                {/* Cosmic Ray Entropy - True Randomness */}
+                <Route path="/security/cosmic-ray-entropy" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <CosmicRayEntropyDashboard />
                 } />
               </Routes>
             </Suspense>

@@ -36,6 +36,9 @@ import LivenessVerificationScreen from '../screens/LivenessVerificationScreen';
 // Import predictive expiration screen
 import PredictiveExpirationScreen from '../screens/PredictiveExpirationScreen';
 
+// Import cosmic ray entropy screen
+import CosmicRayScreen from '../screens/CosmicRayScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -156,6 +159,11 @@ const SettingsNavigator = () => (
       name="PredictiveExpiration" 
       component={PredictiveExpirationScreen}
       options={{ headerTitle: 'Password Expiration', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="CosmicRay" 
+      component={CosmicRayScreen}
+      options={{ headerTitle: 'Cosmic Ray Entropy', headerShown: false }}
     />
   </MainStack.Navigator>
 );

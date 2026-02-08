@@ -17,6 +17,7 @@ from .api import duress_code_views      # 🎖️ Military-Grade Duress Codes
 from .api import honeypot_views         # 🍯 Honeypot Email Breach Detection
 from .api import dark_protocol_views    # 🌑 Dark Protocol Network
 from .api import predictive_expiration_views  # 🔮 Predictive Password Expiration
+from .api import cosmic_ray_views        # 🌌 Cosmic Ray Entropy
 
 
 @api_view(['GET'])
@@ -459,6 +460,15 @@ urlpatterns = [
     path('predictive-expiration/industries/', 
          predictive_expiration_views.IndustryThreatsView.as_view(), 
          name='predictive-expiration-industries'),
+
+    # ==========================================================================
+    # 🌌 Cosmic Ray Entropy endpoints
+    # ==========================================================================
+    path('cosmic/status/', cosmic_ray_views.get_detector_status, name='cosmic-status'),
+    path('cosmic/generate-password/', cosmic_ray_views.generate_cosmic_password, name='cosmic-generate-password'),
+    path('cosmic/events/', cosmic_ray_views.get_recent_events, name='cosmic-events'),
+    path('cosmic/settings/', cosmic_ray_views.update_collection_settings, name='cosmic-settings'),
+    path('cosmic/entropy-batch/', cosmic_ray_views.generate_entropy_batch, name='cosmic-entropy-batch'),
 
     # Other endpoints
     path('health-check/', views.health_check, name='security-health-check'),
