@@ -29,7 +29,7 @@
     "date-fns": "^2.30.0",
     "firebase": "^11.7.1",
     "formik": "^2.4.6",
-    "framer-motion": "^12.25.0",
+    "framer-motion": "^12.26.2",
     "leaflet": "^1.9.4",
     "lodash": "^4.17.23",
     "lucide-react": "^0.562.0",
