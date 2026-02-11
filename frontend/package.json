@@ -22,7 +22,7 @@
     "@tsparticles/slim": "^3.9.1",
     "@types/leaflet": "^1.9.21",
     "argon2-browser": "^1.18.0",
-    "axios": "^1.8.4",
+    "axios": "^1.13.5",
     "chart.js": "^4.5.1",
     "crypto-js": "^4.2.0",
     "crystals-kyber-js": "^2.5.0",
