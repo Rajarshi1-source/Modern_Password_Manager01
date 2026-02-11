@@ -28,7 +28,7 @@ requests-oauthlib==2.0.0
 mozilla-django-oidc>=4.0.0
 
 # Cryptography & Security
-cryptography==44.0.2
+cryptography==46.0.5
 argon2-cffi==21.3.0
 argon2-cffi-bindings==21.2.0
 pyOpenSSL==25.0.0
