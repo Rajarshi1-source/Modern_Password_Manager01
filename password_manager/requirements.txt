@@ -5,7 +5,7 @@
 # ============================================================================
 
 # Core Django Framework
-Django==5.1.8
+Django==5.1.15
 djangorestframework==3.16.1
 djangorestframework-simplejwt==5.5.1
 asgiref==3.8.1
@@ -31,7 +31,7 @@ mozilla-django-oidc>=4.0.0
 cryptography==46.0.5
 argon2-cffi==21.3.0
 argon2-cffi-bindings==21.2.0
-pyOpenSSL==25.0.0
+pyOpenSSL>=25.3.0
 pycryptodome>=3.20.0
 pyotp==2.9.0
 
@@ -108,8 +108,8 @@ uritemplate==4.1.1
 packaging==25.0
 
 # Encoding
-cffi==1.17.1
-pycparser==2.22
+cffi>=2.0.0
+pycparser>=2.22
 pyasn1==0.6.2
 rsa==4.9.1
 six==1.17.0
