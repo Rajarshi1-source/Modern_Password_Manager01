@@ -60,26 +60,26 @@ const DuressEventLog = lazy(() => import('./components/security/DuressEventLog')
 const HoneypotDashboard = lazy(() => import('./components/security/HoneypotDashboard'));
 
 // Dark Protocol Network for Anonymous Vault Access
-const DarkProtocolDashboard = lazy(() => import('./Components/security/DarkProtocolDashboard'));
+const DarkProtocolDashboard = lazy(() => import('./components/security/DarkProtocolDashboard'));
 
 // Predictive Intent Analysis - AI-powered password prediction
-const PredictiveIntentDashboard = lazy(() => import('./Components/security/PredictiveIntentDashboard'));
-const PredictiveIntentSettings = lazy(() => import('./Components/security/PredictiveIntentSettings'));
+const PredictiveIntentDashboard = lazy(() => import('./components/security/PredictiveIntentDashboard'));
+const PredictiveIntentSettings = lazy(() => import('./components/security/PredictiveIntentSettings'));
 
 // Neuro-Feedback Password Training - EEG-based memory training
-const NeuroTrainingDashboard = lazy(() => import('./Components/neuro/NeuroTrainingDashboard'));
+const NeuroTrainingDashboard = lazy(() => import('./components/neuro/NeuroTrainingDashboard'));
 
 // Cognitive Password Testing with Implicit Memory
-const CognitiveVerification = lazy(() => import('./Components/security/cognitive/CognitiveVerification'));
+const CognitiveVerification = lazy(() => import('./components/security/cognitive/CognitiveVerification'));
 
 // Deepfake-Resistant Biometric Liveness
-const LivenessVerification = lazy(() => import('./Components/security/liveness/LivenessVerification'));
+const LivenessVerification = lazy(() => import('./components/security/liveness/LivenessVerification'));
 
 // Predictive Password Expiration - AI-powered threat intelligence
-const PredictiveExpirationDashboard = lazy(() => import('./Components/security/PredictiveExpirationDashboard'));
+const PredictiveExpirationDashboard = lazy(() => import('./components/security/PredictiveExpirationDashboard'));
 
 // Cosmic Ray Entropy - True randomness from muon detection
-const CosmicRayEntropyDashboard = lazy(() => import('./Components/security/CosmicRayEntropyDashboard'));
+const CosmicRayEntropyDashboard = lazy(() => import('./components/security/CosmicRayEntropyDashboard'));
 
 
 // Add global styles for accessibility
