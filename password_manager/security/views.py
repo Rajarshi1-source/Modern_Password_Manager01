@@ -23,6 +23,7 @@ from .serializers import (
     UserDeviceSerializer, SecurityAlertSerializer,
     UserNotificationSettingsSerializer, AccountLockEventSerializer
 )
+from vault.serializer import VaultItemSerializer
 from password_manager.api_utils import error_response, success_response
 
 # Create your views here.

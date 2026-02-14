@@ -13,7 +13,8 @@ from vault.models import (
     SharedFolder,
     SharedFolderMember,
     SharedVaultItem,
-    SharedFolderActivity
+    SharedFolderActivity,
+    SharedFolderKey
 )
 import logging
 

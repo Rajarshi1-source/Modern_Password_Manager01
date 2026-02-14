@@ -10,10 +10,13 @@ profile updates, and profile quality assessment.
 """
 
 import statistics
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
+
+if TYPE_CHECKING:
+    from ..models import CognitiveProfile
 
 
 class CognitiveProfileService:

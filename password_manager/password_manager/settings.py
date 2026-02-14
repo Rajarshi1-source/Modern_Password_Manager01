@@ -91,7 +91,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django.contrib.sites',
-    'django.contrib.gis',  # Required for GeoIP functionality
+    #'django.contrib.gis',  # Required for GeoIP functionality
     'django_extensions',
     
     # Third-party apps

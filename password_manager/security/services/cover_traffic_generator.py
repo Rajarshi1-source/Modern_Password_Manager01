@@ -19,8 +19,11 @@ import json
 import secrets
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from dataclasses import dataclass, field
+
+if TYPE_CHECKING:
+    from ..models.dark_protocol_models import CoverTrafficPattern
 
 from django.utils import timezone
 from django.conf import settings

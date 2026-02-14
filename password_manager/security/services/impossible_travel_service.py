@@ -19,8 +19,11 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from math import radians, sin, cos, sqrt, atan2, asin
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, TYPE_CHECKING
 import json
+
+if TYPE_CHECKING:
+    from ..models import LocationHistory, ImpossibleTravelEvent
 
 from django.conf import settings
 from django.utils import timezone

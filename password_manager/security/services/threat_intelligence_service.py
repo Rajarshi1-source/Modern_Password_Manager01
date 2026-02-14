@@ -16,6 +16,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from django.utils import timezone
 from django.db.models import Q
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..models import ThreatActorTTP
 
 logger = logging.getLogger(__name__)
 

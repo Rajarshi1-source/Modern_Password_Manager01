@@ -18,6 +18,7 @@ from celery import shared_task
 from django.utils import timezone
 from django.contrib.auth.models import User
 from django.db.models import Count, F
+from django.db import models
 
 logger = logging.getLogger(__name__)
 
