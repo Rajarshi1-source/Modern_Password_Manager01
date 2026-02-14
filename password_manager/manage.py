@@ -6,6 +6,11 @@ import sys
 
 def main():
     """Run administrative tasks."""
+    # Suppress liboqs installation spam on local Windows development
+    # This mocks the module so imports raise ImportError immediately instead of running the installer
+    if os.name == 'nt' and not os.environ.get('DOCKER_CONTAINER'):
+        sys.modules['oqs'] = None
+
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'password_manager.settings')
     try:
         from django.core.management import execute_from_command_line

@@ -902,7 +902,7 @@ BEHAVIORAL_RECOVERY = {
 
 # Post-Quantum Cryptography Configuration (Phase 2A)
 QUANTUM_CRYPTO = {
-    'ENABLED': os.environ.get('QUANTUM_CRYPTO_ENABLED', 'False').lower() == 'true',
+    'ENABLED': os.environ.get('QUANTUM_CRYPTO_ENABLED', 'True').lower() == 'true',
     'ALGORITHM': os.environ.get('QUANTUM_ALGORITHM', 'Kyber768'),
     'FALLBACK_ENABLED': os.environ.get('QUANTUM_FALLBACK_ENABLED', 'True').lower() == 'true',
     'HYBRID_MODE': True,  # Always use hybrid Kyber + AES-256-GCM

@@ -27,7 +27,7 @@ try:
     from oqs import KEM
     LIBOQS_AVAILABLE = True
     logger.info("liboqs-python available - using production Kyber-768")
-except ImportError:
+except (ImportError, Exception, SystemExit):
     LIBOQS_AVAILABLE = False
     if not _liboqs_warning_shown and not _SUPPRESS_CRYPTO_WARNINGS:
         _liboqs_warning_shown = True

@@ -35,7 +35,7 @@ try:
     import oqs
     LIBOQS_AVAILABLE = True
     logger.info("liboqs available - using real Kyber implementation")
-except ImportError:
+except (ImportError, Exception, SystemExit):
     LIBOQS_AVAILABLE = False
     logger.warning("liboqs not available - using simulated lattice crypto")
 

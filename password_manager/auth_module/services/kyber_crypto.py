@@ -39,7 +39,7 @@ try:
     oqs = oqs_lib
     LIBOQS_AVAILABLE = True
     logger.info("liboqs-python loaded - using real CRYSTALS-Kyber-768")
-except ImportError:
+except (ImportError, Exception, SystemExit):
     if not _warnings_shown['liboqs'] and not _SUPPRESS_CRYPTO_WARNINGS:
         _warnings_shown['liboqs'] = True
         if not _DEBUG_MODE:
