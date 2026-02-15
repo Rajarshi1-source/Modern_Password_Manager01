@@ -139,6 +139,8 @@ export default defineConfig({
       '@utils': resolve(__dirname, 'src/utils'),
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@workers': resolve(__dirname, 'src/workers'),
+      // Fix for argon2-browser WASM issue
+      'argon2-browser': 'argon2-browser/dist/argon2-bundled.min.js',
 
     },
     extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
