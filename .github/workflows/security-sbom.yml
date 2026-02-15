@@ -26,7 +26,13 @@ jobs:
       - name: Install SBOM tools
         run: |
           pip install --upgrade pip
-          pip install cyclonedx-bom cyclonedx-cli pip-audit
+          pip install cyclonedx-bom pip-audit
+
+      - name: Install CycloneDX CLI
+        run: |
+          curl -sL "https://github.com/CycloneDX/cyclonedx-cli/releases/download/v0.25.0/cyclonedx-linux-x64" -o cyclonedx-cli
+          chmod +x cyclonedx-cli
+          sudo mv cyclonedx-cli /usr/local/bin/
 
       - name: Generate CycloneDX SBOM
         run: |
