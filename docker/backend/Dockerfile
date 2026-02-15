@@ -87,7 +87,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     libgmp-dev \
     libmpfr-dev \
+    libmpfr-dev \
     libomp-dev \
+    gfortran \
+    libopenblas-dev \
+    liblapack-dev \
+    libjpeg-dev \
+    zlib1g-dev \
     git \
     && rm -rf /var/lib/apt/lists/*
 
