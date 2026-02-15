@@ -718,6 +718,7 @@ function App() {
 
   // Login/Signup toggle state
   const [isLoginMode, setIsLoginMode] = useState(true);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -1070,25 +1071,32 @@ function App() {
   }, [login, setError]);
 
   const handleLogout = async () => {
-    // Track logout event
+    setIsLoggingOut(true);
+
     try {
-      analyticsService.trackEvent('logout', 'authentication');
-      await analyticsService.endSession();
-    } catch (error) {
-      console.warn('Failed to track logout:', error);
+      // Track logout event
+      try {
+        analyticsService.trackEvent('logout', 'authentication');
+        await analyticsService.endSession();
+      } catch (error) {
+        console.warn('Failed to track logout:', error);
+      }
+
+      // Clear device fingerprint on logout
+      ApiService.clearDeviceFingerprint();
+
+      // Clear error tracker user context
+      errorTracker.clearUserContext();
+
+      // Use JWT logout from useAuth hook
+      await authLogout();
+
+      // Clear vault items
+      setVaultItems([]);
+      navigate('/');
+    } finally {
+      setIsLoggingOut(false);
     }
-
-    // Clear device fingerprint on logout
-    ApiService.clearDeviceFingerprint();
-
-    // Clear error tracker user context
-    errorTracker.clearUserContext();
-
-    // Use JWT logout from useAuth hook
-    await authLogout();
-
-    // Clear vault items
-    setVaultItems([]);
   };
 
   const toggleAuthMode = useCallback(() => {
@@ -1192,7 +1200,9 @@ function App() {
               <Link to="/security/dashboard" className="nav-link">Security Dashboard</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/settings" className="nav-link">Settings</Link>
-              <button onClick={handleLogout} className="logout-btn">Logout</button>
+              <button onClick={handleLogout} className="logout-btn" disabled={isLoggingOut}>
+                {isLoggingOut ? 'Logging out...' : 'Logout'}
+              </button>
             </div>
           </nav>
 
@@ -1412,10 +1422,10 @@ function App() {
             <a href="#main-content" className="skip-link">Skip to main content</a>
             <Suspense fallback={<LoadingIndicator />}>
               <Routes>
-                <Route path="/" element={MainContent()} />
-                <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : MainContent()} />
-                <Route path="/signup" element={isAuthenticated ? <Navigate to="/" /> : MainContent()} />
-                <Route path="/vault" element={!isAuthenticated ? <Navigate to="/" /> : MainContent()} />
+                <Route path="/" element={<MainContent />} />
+                <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <MainContent />} />
+                <Route path="/signup" element={isAuthenticated ? <Navigate to="/" /> : <MainContent />} />
+                <Route path="/vault" element={!isAuthenticated ? <Navigate to="/" /> : <MainContent />} />
                 <Route path="/auth/callback" element={<OAuthCallback />} />
                 <Route path="/password-recovery" element={
                   isAuthenticated ? <Navigate to="/" /> : <PasswordRecoveryPage />
