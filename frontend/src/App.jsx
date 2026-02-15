@@ -50,7 +50,7 @@ const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCa
 const UltimateEntropyDashboard = lazy(() => import('./Components/security/UltimateEntropyDashboard'));
 
 // Military-Grade Duress Code Components
-const DuressCodeSetup = lazy(() => import('./components/security/DuressCodeSetup'));
+const DuressCodeSetup = lazy(() => import('./Components/security/DuressCodeSetup'));
 const DuressCodeManager = lazy(() => import('./Components/security/DuressCodeManager'));
 const DecoyVaultPreview = lazy(() => import('./Components/security/DecoyVaultPreview'));
 const TrustedAuthorityManager = lazy(() => import('./Components/security/TrustedAuthorityManager'));
