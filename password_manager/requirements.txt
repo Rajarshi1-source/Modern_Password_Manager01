@@ -245,7 +245,7 @@ gymnasium>=0.29.0
 stable-baselines3>=2.0.0
 
 # Contextual Bandits
-vowpalwabbit>=9.0.0; python_version < "3.13" # Use scikit-learn for contextual bandits
+# vowpalwabbit>=9.0.0; python_version < "3.13" # Use scikit-learn for contextual bandits
 
 # ML utilities
 scikit-learn>=1.3.0 
@@ -254,7 +254,7 @@ python-Levenshtein>=0.21.0
 # Differential Privacy (Google's library for formal DP guarantees)
 # Note: pydp does not support Python 3.13+. Using last known compatible version.
 # For Python 3.13+, the code will use numpy fallback (see adaptive_password_service.py)
-pydp==0.1.16; python_version < "3.13"
+# pydp==0.1.16; python_version < "3.13"
 diffprivlib>=0.6.4 # IBM's library for Differential Privacy, ✅ Works on Python 3.13
 
 # Neural Networks for Memorability Prediction
