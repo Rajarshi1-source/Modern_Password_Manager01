@@ -264,7 +264,7 @@ torch>=2.0.0
 # Quantum Entanglement-Inspired Key Distribution
 # ============================================================================
 # Post-Quantum Cryptography (Kyber/NTRU lattice-based)
-liboqs-python>=0.10.0
+# liboqs-python>=0.10.0
 
 # Entropy Analysis
 scipy>=1.11.0
