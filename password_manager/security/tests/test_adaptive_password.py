@@ -762,6 +762,7 @@ class AdvancedPrivacyEngineTests(TestCase):
     
     def test_verify_privacy_budget_fresh(self):
         """Test privacy budget on fresh guard."""
+        from security.services.adaptive_password_service import PrivacyGuard
         fresh_guard = PrivacyGuard(epsilon=0.5, delta=1e-5)
         self.assertTrue(fresh_guard.verify_privacy_budget())
     

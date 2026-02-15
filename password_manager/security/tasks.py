@@ -926,6 +926,7 @@ def send_expiration_notifications():
     from .models import PredictiveExpirationRule, PredictiveExpirationSettings
     from django.core.mail import send_mail
     from django.conf import settings
+    from django.db import models
     
     # Get high-risk rules not yet notified today
     today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)

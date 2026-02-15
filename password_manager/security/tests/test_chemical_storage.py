@@ -113,6 +113,7 @@ class DNAEncoderTest(TestCase):
     
     def test_error_correction(self):
         """Test error correction is applied."""
+        from security.services.dna_encoder import DNAEncoder
         encoder_with_ecc = DNAEncoder(use_error_correction=True)
         encoder_without_ecc = DNAEncoder(use_error_correction=False)
         
