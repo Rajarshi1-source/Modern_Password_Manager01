@@ -2,16 +2,34 @@ import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import Particles, { initParticlesEngine } from '@tsparticles/react';
 import { loadSlim } from '@tsparticles/slim';
 
+// Global initialization promise to ensure it only runs once per session
+let particlesInitPromise = null;
+
 const ParticleBackground = () => {
   const [init, setInit] = useState(false);
 
   // Initialize particles engine once
   useEffect(() => {
-    initParticlesEngine(async (engine) => {
-      await loadSlim(engine);
-    }).then(() => {
-      setInit(true);
+    if (!particlesInitPromise) {
+      particlesInitPromise = initParticlesEngine(async (engine) => {
+        await loadSlim(engine);
+      });
+    }
+
+    particlesInitPromise.then(() => {
+      if (mountedRef.current) {
+        setInit(true);
+      }
+    }).catch(err => {
+      console.error("Failed to initialize particles:", err);
+      // Ensure we still show something if particles fail
+      if (mountedRef.current) {
+        setInit(true);
+      }
     });
+
+    const mountedRef = { current: true };
+    return () => { mountedRef.current = false; };
   }, []);
 
   const particlesLoaded = useCallback(async (container) => {

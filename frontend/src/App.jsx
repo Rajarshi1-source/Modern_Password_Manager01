@@ -1,4 +1,4 @@
-import React, { useState, useEffect, memo, useMemo, Suspense, lazy, useCallback } from 'react';
+import React, { useState, useEffect, memo, useMemo, Suspense, lazy, useCallback, useRef } from 'react';
 import axios from 'axios';
 import './App.css';
 import { AccessibilityProvider } from './contexts/AccessibilityContext';
@@ -848,12 +848,22 @@ function App() {
     if (isAuthenticated) {
       analyticsService.trackPageView(location.pathname);
     }
+    // Clear global errors on navigation
+    setError(null);
   }, [location, isAuthenticated]);
 
   // Fetch vault items from API
+  const vaultFetchedRef = useRef(false);
+
   useEffect(() => {
     if (isAuthenticated) {
-      fetchVaultItems();
+      if (!vaultFetchedRef.current) {
+        fetchVaultItems();
+        vaultFetchedRef.current = true;
+      }
+    } else {
+      vaultFetchedRef.current = false;
+      setVaultItems([]);
     }
   }, [isAuthenticated]);
 
@@ -886,7 +896,10 @@ function App() {
       setError(null);
     } catch (err) {
       console.error('Error fetching vault items:', err);
-      setError('Failed to load your password vault. Please try again.');
+      // Don't show error for 401s as useAuth handles redirect
+      if (err.response?.status !== 401) {
+        setError('Failed to load your password vault. Please try again.');
+      }
       setVaultItems([]); // Reset to empty array on error
     } finally {
       setLoading(false);
@@ -1007,7 +1020,7 @@ function App() {
       });
 
       // Registration succeeded! Show success message immediately
-      toast.success('Account created successfully! Logging you in...', {
+      toast.success('New Account created successfully.', {
         duration: 3000,
         icon: '🎉'
       });
@@ -1025,29 +1038,8 @@ function App() {
         console.warn('Failed to track signup:', error);
       }
 
-      // Now try to auto-login the user
-      try {
-        await login({
-          email: signupData.email,
-          password: signupData.password
-        });
-
-        // Initialize error tracker user context
-        errorTracker.setUserContext({
-          email: signupData.email,
-          signupTime: new Date().toISOString()
-        });
-      } catch (loginErr) {
-        // Registration succeeded but auto-login failed
-        // User can still login manually
-        console.warn('Auto-login after signup failed:', loginErr);
-        toast.success('Account created! Please log in with your credentials.', {
-          duration: 4000,
-          icon: '✅'
-        });
-        // Switch to login mode
-        setIsLoginMode(true);
-      }
+      // Switch to login mode so user can log in with new credentials
+      setIsLoginMode(true);
 
     } catch (err) {
       console.error('Signup failed:', err);
@@ -1523,7 +1515,11 @@ function App() {
                 } />
                 {/* Cosmic Ray Entropy - True Randomness */}
                 <Route path="/security/cosmic-ray-entropy" element={
-                  !isAuthenticated ? <Navigate to="/" /> : <CosmicRayEntropyDashboard />
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Cosmic Ray Dashboard">
+                      <CosmicRayEntropyDashboard />
+                    </ErrorBoundary>
+                  )
                 } />
               </Routes>
             </Suspense>

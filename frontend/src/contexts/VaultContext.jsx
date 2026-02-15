@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { VaultService } from '../services/vaultService';
 import firebaseService from '../services/firebaseService';
 import api from '../services/api';
+import { useAuth } from '../hooks/useAuth';
 
 const VaultContext = createContext();
 
@@ -22,32 +23,49 @@ export const VaultProvider = ({ children }) => {
   const [syncStatus, setSyncStatus] = useState('idle');
   const [firebaseInitialized, setFirebaseInitialized] = useState(false);
   const [pendingChanges, setPendingChanges] = useState([]);
+  // Fix stale closure in syncVault when called via setTimeout
+  const pendingChangesRef = useRef(pendingChanges);
+
+  useEffect(() => {
+    pendingChangesRef.current = pendingChanges;
+  }, [pendingChanges]);
+
   const [lastSyncTime, setLastSyncTime] = useState(localStorage.getItem('lastSyncTime') || new Date().toISOString());
   const [decryptedItems, setDecryptedItems] = useState(new Map());
   const [lazyLoadEnabled, setLazyLoadEnabled] = useState(true);
-  
+  const { isAuthenticated } = useAuth(); // Get auth status
+
   // Fix #8: Use useMemo for vaultService
   const vaultService = useMemo(() => new VaultService(), []);
-  
+
   const autoLockTimerRef = useRef(null);
   const broadcastChannelRef = useRef(null);
   const lastActivityRef = useRef(Date.now());
   const isMountedRef = useRef(true); // Fix #6: Track component mount state
-  
+
   // Clean up mounted ref on unmount
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
     };
   }, []);
-  
-  const updateActivity = () => { 
-    lastActivityRef.current = Date.now(); 
+
+  const updateActivity = () => {
+    lastActivityRef.current = Date.now();
   };
-  
-  
+
+
   // Fix #6: Check if component is mounted before updating state
   const checkIfInitialized = useCallback(async () => {
+    // Only check if user is authenticated
+    if (!isAuthenticated) {
+      if (isMountedRef.current) {
+        setIsInitialized(false);
+        setLoading(false); // Assuming loading should be false if not authenticated
+      }
+      return;
+    }
+
     try {
       const status = await vaultService.checkInitialization();
       if (isMountedRef.current) {
@@ -56,13 +74,22 @@ export const VaultProvider = ({ children }) => {
     } catch (error) {
       console.error('Failed to check initialization status', error);
     }
-  }, [vaultService]);
-  
-  // Check if vault is initialized on mount
+  }, [vaultService, isAuthenticated]);
+
+  // Check if vault is initialized on mount or when auth status changes
+  const initCheckRef = useRef(false);
+
   useEffect(() => {
-    checkIfInitialized();
-  }, [checkIfInitialized]);
-  
+    if (isAuthenticated) {
+      if (!initCheckRef.current) {
+        checkIfInitialized();
+        initCheckRef.current = true;
+      }
+    } else {
+      initCheckRef.current = false;
+    }
+  }, [checkIfInitialized, isAuthenticated]);
+
   const refreshItems = useCallback(async () => {
     try {
       const items = await vaultService.getVaultItems();
@@ -73,7 +100,7 @@ export const VaultProvider = ({ children }) => {
       console.error('Failed to refresh vault items', error);
     }
   }, [vaultService]);
-  
+
   const broadcastVaultUpdate = () => {
     if (broadcastChannelRef.current) {
       broadcastChannelRef.current.postMessage({ type: 'VAULT_UPDATED' });
@@ -81,7 +108,7 @@ export const VaultProvider = ({ children }) => {
       localStorage.setItem('vaultUpdated', Date.now().toString());
     }
   };
-  
+
   const broadcastVaultLock = () => {
     if (broadcastChannelRef.current) {
       broadcastChannelRef.current.postMessage({ type: 'LOCK_VAULT' });
@@ -94,20 +121,20 @@ export const VaultProvider = ({ children }) => {
     try {
       setLoading(true);
       setError(null);
-      
+
       // Initialize crypto service with master password
       const result = await vaultService.initialize(masterPassword);
-      
+
       if (!isMountedRef.current) return;
-      
+
       if (result.is_valid || result.status === 'setup_complete') {
         setIsUnlocked(true);
-        
+
         // Load vault items with lazy decryption enabled
         console.time('vault-unlock');
         const items = await vaultService.getVaultItems(lazyLoadEnabled);
         console.timeEnd('vault-unlock');
-        
+
         setItems(items);
       } else {
         setError('Invalid master password');
@@ -122,7 +149,7 @@ export const VaultProvider = ({ children }) => {
       }
     }
   };
-  
+
   /**
    * Decrypt a specific item on-demand
    * @param {string} itemId - The item ID to decrypt
@@ -133,54 +160,54 @@ export const VaultProvider = ({ children }) => {
     if (decryptedItems.has(itemId)) {
       return decryptedItems.get(itemId);
     }
-    
+
     // Find the item
     const item = items.find(i => i.item_id === itemId);
     if (!item) {
       throw new Error('Item not found');
     }
-    
+
     try {
       console.time(`on-demand-decrypt-${itemId}`);
       const decryptedItem = await vaultService.decryptItemOnDemand(item);
       console.timeEnd(`on-demand-decrypt-${itemId}`);
-      
+
       // Cache the decrypted item
       setDecryptedItems(prev => new Map(prev).set(itemId, decryptedItem));
-      
+
       // Update the item in the list
-      setItems(prevItems => 
+      setItems(prevItems =>
         prevItems.map(i => i.item_id === itemId ? decryptedItem : i)
       );
-      
+
       return decryptedItem;
     } catch (error) {
       console.error('On-demand decryption failed:', error);
       throw error;
     }
   }, [items, decryptedItems, vaultService]);
-  
+
   const handleLockVault = useCallback((broadcast = true) => {
     setIsUnlocked(false);
     setItems([]);
     // Clear crypto service
     vaultService.clearKeys();
-    
+
     // Reset last activity timestamp
     lastActivityRef.current = Date.now();
-    
+
     // Clear auto-lock timer
     clearTimeout(autoLockTimerRef.current);
-    
+
     // Broadcast lock event to other tabs if needed
     if (broadcast) {
       broadcastVaultLock();
     }
   }, [vaultService]);
-  
+
   // For backward compatibility
   const lockVault = () => handleLockVault(true);
-  
+
   // Handle storage events for cross-tab communication fallback
   const handleStorageEvent = useCallback((event) => {
     if (event.key === 'vaultLockState' && event.newValue === 'locked') {
@@ -191,12 +218,12 @@ export const VaultProvider = ({ children }) => {
       }
     }
   }, [handleLockVault, isUnlocked, refreshItems]);
-  
+
   // Initialize broadcast channel for cross-tab communication
   useEffect(() => {
     if (typeof BroadcastChannel !== 'undefined') {
       broadcastChannelRef.current = new BroadcastChannel('vault_state_channel');
-      
+
       broadcastChannelRef.current.onmessage = (event) => {
         if (event.data.type === 'LOCK_VAULT') {
           // Another tab locked the vault, lock this one too
@@ -208,7 +235,7 @@ export const VaultProvider = ({ children }) => {
           }
         }
       };
-      
+
       return () => {
         broadcastChannelRef.current.close();
       };
@@ -220,20 +247,20 @@ export const VaultProvider = ({ children }) => {
       };
     }
   }, [isUnlocked, handleLockVault, handleStorageEvent, refreshItems]);
-  
+
   // Setup activity monitoring for auto-lock
   useEffect(() => {
     // Only set up the timer if the vault is unlocked
     if (!isUnlocked) return;
-    
+
     // Convert minutes to milliseconds
     const timeoutMs = autoLockTimeout * 60 * 1000;
-    
+
     // Create the auto-lock timer that checks elapsed time since last activity
     const checkInactivity = () => {
       const now = Date.now();
       const timeElapsed = now - lastActivityRef.current;
-      
+
       if (timeElapsed >= timeoutMs) {
         // Lock vault if inactive for too long
         handleLockVault(true);
@@ -243,21 +270,21 @@ export const VaultProvider = ({ children }) => {
         autoLockTimerRef.current = setTimeout(checkInactivity, Math.min(remainingTime, 10000));
       }
     };
-    
+
     // Start monitoring inactivity
     autoLockTimerRef.current = setTimeout(checkInactivity, timeoutMs);
-    
+
     // Track user activity events
     const activityEvents = [
-      'mousedown', 'mousemove', 'keydown', 
+      'mousedown', 'mousemove', 'keydown',
       'scroll', 'touchstart', 'click', 'focus'
     ];
-    
+
     // Add event listeners for all activity types
     activityEvents.forEach(event => {
       window.addEventListener(event, updateActivity, { passive: true });
     });
-    
+
     // Clean up
     return () => {
       clearTimeout(autoLockTimerRef.current);
@@ -266,27 +293,27 @@ export const VaultProvider = ({ children }) => {
       });
     };
   }, [isUnlocked, autoLockTimeout, handleLockVault]);
-  
+
   // Handle Firebase real-time updates
   const handleFirebaseUpdate = useCallback(async (firebaseItems) => {
     if (!isUnlocked) return;
-    
+
     try {
       // Process items and decrypt first
       const processedItems = [];
       let hasChanges = false;
-      
+
       // Create a working copy of current items
       const currentItems = [...items];
-      
+
       for (const fbItem of firebaseItems) {
         try {
           const localItemIndex = currentItems.findIndex(item => item.id === fbItem.id);
-          
+
           if (localItemIndex === -1) {
             // New item from another device - decrypt it first
             const decryptedData = await vaultService.decryptItem(fbItem.encrypted_data);
-            
+
             processedItems.push({
               ...fbItem,
               type: fbItem.item_type,
@@ -297,11 +324,11 @@ export const VaultProvider = ({ children }) => {
             const localItem = currentItems[localItemIndex];
             const fbTimestamp = new Date(fbItem.last_modified).getTime();
             const localTimestamp = new Date(localItem.updated_at).getTime();
-            
+
             if (fbTimestamp > localTimestamp) {
               // Firebase has newer version - decrypt it
               const decryptedData = await vaultService.decryptItem(fbItem.encrypted_data);
-              
+
               // Update the item in current items array
               currentItems[localItemIndex] = {
                 ...fbItem,
@@ -319,21 +346,21 @@ export const VaultProvider = ({ children }) => {
           // Skip this item but continue processing others
         }
       }
-      
+
       // Only update state if component is still mounted and there are changes
       if (isMountedRef.current && hasChanges) {
         // For new items, append to existing
-        const newItems = currentItems.filter(item => 
+        const newItems = currentItems.filter(item =>
           !processedItems.some(pi => pi.id === item.id)
         );
-        
+
         setItems([...newItems, ...processedItems]);
       }
     } catch (error) {
       console.error("Error processing Firebase updates:", error);
     }
   }, [isUnlocked, vaultService, items]);
-  
+
   // Fix #9: Add firebaseInitialized to dependency array
   useEffect(() => {
     if (isUnlocked && !firebaseInitialized) {
@@ -354,251 +381,27 @@ export const VaultProvider = ({ children }) => {
           console.error('Failed to initialize Firebase:', error);
         }
       };
-      
+
       initializeFirebase();
     }
-    
+
     return () => {
       if (firebaseInitialized) {
         firebaseService.detachListeners();
       }
     };
   }, [isUnlocked, firebaseInitialized, handleFirebaseUpdate]);
-  
-  // Update addItem to sync with Firebase and limit pending changes
-  const addItem = async (item) => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const response = await vaultService.saveVaultItem(item);
-      
-      if (!isMountedRef.current) return;
-      
-      // Add new item to state
-      const newItem = {
-        id: response.data.id,
-        item_id: response.data.item_id,
-        type: item.type,
-        data: item.data,
-        favorite: false,
-        created_at: response.data.created_at,
-        updated_at: response.data.updated_at,
-        encrypted_data: response.data.encrypted_data
-      };
-      
-      setItems(prevItems => [...prevItems, newItem]);
-      
-      // Sync to Firebase
-      if (firebaseInitialized) {
-        await firebaseService.syncItem(newItem);
-      }
-      
-      // Broadcast update to other tabs
-      broadcastVaultUpdate();
-      
-      // Fix #5: Limit pendingChanges size
-      setPendingChanges(prev => {
-        const updated = [...prev, {
-          operation: 'add', 
-          item: newItem
-        }];
-        
-        // Auto-sync if too many pending changes
-        if (updated.length > MAX_PENDING_CHANGES) {
-          // Schedule sync in the next tick to avoid state update during render
-          setTimeout(() => syncVault(), 0);
-          return updated.slice(0, MAX_PENDING_CHANGES);
-        }
-        
-        return updated;
-      });
-      
-      return newItem;
-    } catch (error) {
-      if (isMountedRef.current) {
-        setError(error.message || 'Failed to add item');
-      }
-      throw error;
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  };
-  
-  const updateItem = async (item) => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      await vaultService.saveVaultItem(item);
-      
-      if (!isMountedRef.current) return;
-      
-      // Update item in state
-      setItems(prevItems => 
-        prevItems.map(i => i.id === item.id ? { ...i, ...item, updated_at: new Date().toISOString() } : i)
-      );
-      
-      // Broadcast update to other tabs
-      broadcastVaultUpdate();
-      
-      // Fix #5: Limit pendingChanges size
-      setPendingChanges(prev => {
-        const updated = [...prev, {
-          operation: 'update', 
-          item
-        }];
-        
-        // Auto-sync if too many pending changes
-        if (updated.length > MAX_PENDING_CHANGES) {
-          setTimeout(() => syncVault(), 0);
-          return updated.slice(0, MAX_PENDING_CHANGES);
-        }
-        
-        return updated;
-      });
-      
-      return item;
-    } catch (error) {
-      if (isMountedRef.current) {
-        setError(error.message || 'Failed to update item');
-      }
-      throw error;
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  };
-  
-  const deleteItem = async (itemId) => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      await vaultService.deleteVaultItem(itemId);
-      
-      if (!isMountedRef.current) return;
-      
-      // Remove item from state
-      setItems(prevItems => prevItems.filter(i => i.id !== itemId));
-      
-      // Broadcast update to other tabs
-      broadcastVaultUpdate();
-      
-      // Fix #5: Limit pendingChanges size
-      setPendingChanges(prev => {
-        const updated = [...prev, {
-          operation: 'delete', 
-          id: itemId
-        }];
-        
-        // Auto-sync if too many pending changes
-        if (updated.length > MAX_PENDING_CHANGES) {
-          setTimeout(() => syncVault(), 0);
-          return updated.slice(0, MAX_PENDING_CHANGES);
-        }
-        
-        return updated;
-      });
-    } catch (error) {
-      if (isMountedRef.current) {
-        setError(error.message || 'Failed to delete item');
-      }
-      throw error;
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  };
-  
-  const updateAutoLockTimeout = (minutes) => {
-    setAutoLockTimeout(minutes);
-    localStorage.setItem('autoLockTimeout', minutes.toString());
-    // Reset the timer with new timeout
-    if (isUnlocked) {
-      clearTimeout(autoLockTimerRef.current);
-      autoLockTimerRef.current = setTimeout(() => {
-        handleLockVault(true);
-      }, minutes * 60 * 1000);
-    }
-  };
-  
-  const generatePassword = (options) => {
-    return vaultService.cryptoService?.generatePassword(options);
-  };
-  
-  // Add these new methods for backup/restore
-  const createBackup = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const response = await api.post('/vault/create_backup/', {
-        name: `Backup ${new Date().toLocaleString()}`
-      });
-      
-      return response.data;
-    } catch (error) {
-      if (isMountedRef.current) {
-        setError('Failed to create backup: ' + error.message);
-      }
-      throw error;
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  };
-  
-  const getBackups = async () => {
-    try {
-      const response = await api.get('/vault/backups/');
-      return response.data;
-    } catch (error) {
-      if (isMountedRef.current) {
-        setError('Failed to load backups: ' + error.message);
-      }
-      throw error;
-    }
-  };
-  
-  const restoreBackup = async (backupId) => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const response = await api.post(`/vault/restore_backup/${backupId}/`);
-      
-      if (!isMountedRef.current) return;
-      
-      // Refresh vault after restore
-      await refreshItems();
-      
-      return response.data;
-    } catch (error) {
-      if (isMountedRef.current) {
-        setError('Failed to restore backup: ' + error.message);
-      }
-      throw error;
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
-    }
-  };
-  
+
   // Fix #1 and #4: Add error handling and status updates to syncVault
-  const syncVault = async () => {
-    if (pendingChanges.length === 0) return;
-    
+  const syncVault = useCallback(async () => {
+    // Use ref to avoid stale closure issues when called via setTimeout
+    const currentPendingChanges = pendingChangesRef.current;
+    if (currentPendingChanges.length === 0) return;
+
     try {
       // Update sync status
       setSyncStatus('syncing');
-      
+
       // Process all changes at once rather than in batches
       // Prepare changes in the format expected by the backend
       const syncData = {
@@ -606,9 +409,9 @@ export const VaultProvider = ({ children }) => {
         items: [],
         deleted_items: []
       };
-      
+
       // Process all pending changes
-      pendingChanges.forEach(change => {
+      currentPendingChanges.forEach(change => {
         if (change.operation === 'add' || change.operation === 'update') {
           // Convert frontend 'type' to backend 'item_type' format
           const itemData = {
@@ -621,36 +424,36 @@ export const VaultProvider = ({ children }) => {
             // Use consistent naming scheme with backend
             favorite: change.item.favorite || false
           };
-          
+
           // Remove redundant fields before sending to backend
           delete itemData.type; // Backend uses item_type
           delete itemData.data; // Backend doesn't need decrypted data
-          
+
           syncData.items.push(itemData);
         } else if (change.operation === 'delete') {
           syncData.deleted_items.push(change.id);
         }
       });
-      
+
       try {
         // Use the new syncVault method in vaultService
         const response = await vaultService.syncVault(syncData);
-        
+
         if (!isMountedRef.current) return;
-        
+
         // Check for expected response format
         if (response.success && response.items) {
           // Process any server changes and update local state if needed
           const serverItems = response.items;
           const serverDeletedIds = response.deleted_items || [];
-          
+
           // Check if we need to update local items with server changes
           if (serverItems.length > 0 || serverDeletedIds.length > 0) {
             // Process server deletions
-            setItems(prevItems => 
+            setItems(prevItems =>
               prevItems.filter(item => !serverDeletedIds.includes(item.item_id))
             );
-            
+
             // Process server items - need to decrypt them first
             const processedItems = await Promise.all(
               serverItems.map(async (serverItem) => {
@@ -673,40 +476,40 @@ export const VaultProvider = ({ children }) => {
                 }
               })
             );
-            
+
             // Filter out failed decryptions and update local items
             const validItems = processedItems.filter(item => item !== null);
             if (validItems.length > 0) {
               setItems(prevItems => {
                 // Create a map for O(1) lookups
                 const itemMap = new Map(prevItems.map(item => [item.id, item]));
-                
+
                 // Update existing items or add new ones
                 validItems.forEach(item => {
                   itemMap.set(item.id, item);
                 });
-                
+
                 return Array.from(itemMap.values());
               });
             }
           }
-          
+
           // Update last sync time
           const newSyncTime = response.sync_time || new Date().toISOString();
           setLastSyncTime(newSyncTime);
           localStorage.setItem('lastSyncTime', newSyncTime);
         }
-        
+
         // Clear pending changes and update status
         setPendingChanges([]);
         setSyncStatus('success');
         setError(null);
-        
+
       } catch (syncError) {
         console.error('Sync request failed:', syncError);
         setSyncStatus('error');
         setError(syncError.message || 'Failed to sync with server');
-        
+
         // Don't clear pendingChanges so we can retry later
       }
     } catch (error) {
@@ -714,9 +517,237 @@ export const VaultProvider = ({ children }) => {
       setSyncStatus('error');
       setError('Error preparing data for sync: ' + error.message);
     }
+  }, [lastSyncTime, vaultService]);
+
+  // Update addItem to sync with Firebase and limit pending changes
+  const addItem = useCallback(async (item) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const response = await vaultService.saveVaultItem(item);
+
+      if (!isMountedRef.current) return;
+
+      // Add new item to state
+      const newItem = {
+        id: response.data.id,
+        item_id: response.data.item_id,
+        type: item.type,
+        data: item.data,
+        favorite: false,
+        created_at: response.data.created_at,
+        updated_at: response.data.updated_at,
+        encrypted_data: response.data.encrypted_data
+      };
+
+      setItems(prevItems => [...prevItems, newItem]);
+
+      // Sync to Firebase
+      if (firebaseInitialized) {
+        await firebaseService.syncItem(newItem);
+      }
+
+      // Broadcast update to other tabs
+      broadcastVaultUpdate();
+
+      // Fix #5: Limit pendingChanges size
+      setPendingChanges(prev => {
+        const updated = [...prev, {
+          operation: 'add',
+          item: newItem
+        }];
+
+        // Auto-sync if too many pending changes
+        if (updated.length > MAX_PENDING_CHANGES) {
+          // Schedule sync in the next tick to avoid state update during render
+          setTimeout(() => syncVault(), 0);
+          return updated.slice(0, MAX_PENDING_CHANGES);
+        }
+
+        return updated;
+      });
+
+      return newItem;
+    } catch (error) {
+      if (isMountedRef.current) {
+        setError(error.message || 'Failed to add item');
+      }
+      throw error;
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [vaultService, firebaseInitialized, syncVault]);
+
+  const updateItem = useCallback(async (item) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      await vaultService.saveVaultItem(item);
+
+      if (!isMountedRef.current) return;
+
+      // Update item in state
+      setItems(prevItems =>
+        prevItems.map(i => i.id === item.id ? { ...i, ...item, updated_at: new Date().toISOString() } : i)
+      );
+
+      // Broadcast update to other tabs
+      broadcastVaultUpdate();
+
+      // Fix #5: Limit pendingChanges size
+      setPendingChanges(prev => {
+        const updated = [...prev, {
+          operation: 'update',
+          item
+        }];
+
+        // Auto-sync if too many pending changes
+        if (updated.length > MAX_PENDING_CHANGES) {
+          setTimeout(() => syncVault(), 0);
+          return updated.slice(0, MAX_PENDING_CHANGES);
+        }
+
+        return updated;
+      });
+
+      return item;
+    } catch (error) {
+      if (isMountedRef.current) {
+        setError(error.message || 'Failed to update item');
+      }
+      throw error;
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [vaultService, syncVault]);
+
+  const deleteItem = useCallback(async (itemId) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      await vaultService.deleteVaultItem(itemId);
+
+      if (!isMountedRef.current) return;
+
+      // Remove item from state
+      setItems(prevItems => prevItems.filter(i => i.id !== itemId));
+
+      // Broadcast update to other tabs
+      broadcastVaultUpdate();
+
+      // Fix #5: Limit pendingChanges size
+      setPendingChanges(prev => {
+        const updated = [...prev, {
+          operation: 'delete',
+          id: itemId
+        }];
+
+        // Auto-sync if too many pending changes
+        if (updated.length > MAX_PENDING_CHANGES) {
+          setTimeout(() => syncVault(), 0);
+          return updated.slice(0, MAX_PENDING_CHANGES);
+        }
+
+        return updated;
+      });
+    } catch (error) {
+      if (isMountedRef.current) {
+        setError(error.message || 'Failed to delete item');
+      }
+      throw error;
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [vaultService, syncVault]);
+
+  const updateAutoLockTimeout = (minutes) => {
+    setAutoLockTimeout(minutes);
+    localStorage.setItem('autoLockTimeout', minutes.toString());
+    // Reset the timer with new timeout
+    if (isUnlocked) {
+      clearTimeout(autoLockTimerRef.current);
+      autoLockTimerRef.current = setTimeout(() => {
+        handleLockVault(true);
+      }, minutes * 60 * 1000);
+    }
   };
-  
-  const value = {
+
+  const generatePassword = (options) => {
+    return vaultService.cryptoService?.generatePassword(options);
+  };
+
+  // Add these new methods for backup/restore
+  const createBackup = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const response = await api.post('/vault/create_backup/', {
+        name: `Backup ${new Date().toLocaleString()}`
+      });
+
+      return response.data;
+    } catch (error) {
+      if (isMountedRef.current) {
+        setError('Failed to create backup: ' + error.message);
+      }
+      throw error;
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const getBackups = async () => {
+    try {
+      const response = await api.get('/vault/backups/');
+      return response.data;
+    } catch (error) {
+      if (isMountedRef.current) {
+        setError('Failed to load backups: ' + error.message);
+      }
+      throw error;
+    }
+  };
+
+  const restoreBackup = async (backupId) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const response = await api.post(`/vault/restore_backup/${backupId}/`);
+
+      if (!isMountedRef.current) return;
+
+      // Refresh vault after restore
+      await refreshItems();
+
+      return response.data;
+    } catch (error) {
+      if (isMountedRef.current) {
+        setError('Failed to restore backup: ' + error.message);
+      }
+      throw error;
+    } finally {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+    }
+  };
+
+
+
+  const value = useMemo(() => ({
     isInitialized,
     isUnlocked,
     items,
@@ -740,8 +771,13 @@ export const VaultProvider = ({ children }) => {
     decryptItem,  // New: on-demand decryption
     lazyLoadEnabled,  // New: lazy load setting
     setLazyLoadEnabled  // New: toggle lazy loading
-  };
-  
+  }), [
+    isInitialized, isUnlocked, items, loading, error, autoLockTimeout,
+    syncStatus, pendingChanges, lastSyncTime, lazyLoadEnabled,
+    unlockVault, lockVault, addItem, updateItem, deleteItem,
+    syncVault, decryptItem
+  ]);
+
   return (
     <VaultContext.Provider value={value}>
       {children}

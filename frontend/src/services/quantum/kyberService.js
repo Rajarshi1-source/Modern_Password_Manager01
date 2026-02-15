@@ -173,7 +173,7 @@ export class KyberService {
         console.log(`[Kyber] Attempting to load: ${impl.name}...`);
         const module = await impl.loader();
         
-        // Check for Kyber768 availability
+        // 1. Check for standard Kyber768 class/object (crystals-kyber-js, mlkem style)
         if (module.Kyber768 || module.kyber768 || module.default?.Kyber768) {
           const kyber768 = module.Kyber768 || module.kyber768 || module.default.Kyber768;
           
@@ -184,6 +184,40 @@ export class KyberService {
           
           console.log(`[Kyber] ✅ Loaded ${impl.name}`);
           return instance;
+        }
+
+        // 2. Check for pqc-kyber style (flat exports with specific methods)
+        // It exports keypair, encapsulate, decapsulate functions directly
+        if (typeof module.keypair === 'function' && typeof module.encapsulate === 'function') {
+           console.log(`[Kyber] ✅ Loaded ${impl.name} (using adapter)`);
+           
+           // Return adapter object conforming to required interface
+           return {
+             keypair: async () => {
+               const keys = module.keypair();
+               const result = {
+                 publicKey: keys.pubkey,
+                 secretKey: keys.secret,
+               };
+               // pqc-kyber objects might need manual freeing if they don't auto-GC
+               // Standard wasm-bindgen handles GC automatically for simple structs usually
+               if (keys.free) keys.free();
+               return result;
+             },
+             encapsulate: async (pk) => {
+               const kex = module.encapsulate(pk);
+               // Wait, 'kex' has 'ciphertext' and 'sharedSecret'
+               const result = {
+                 ciphertext: kex.ciphertext,
+                 sharedSecret: kex.sharedSecret
+               };
+               if (kex.free) kex.free();
+               return result;
+             },
+             decapsulate: async (ct, sk) => {
+               return await module.decapsulate(ct, sk);
+             }
+           };
         }
         
       } catch (error) {

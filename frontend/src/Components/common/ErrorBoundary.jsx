@@ -81,11 +81,11 @@ const ErrorDetails = styled.details`
   }
 `;
 
-const ErrorFallback = ({ error, resetError }) => {
+const ErrorFallback = ({ error, resetError, message }) => {
   const handleReportError = () => {
     // In a real app, send error to monitoring service
     console.error('User reported error:', error);
-    
+
     // You could also copy error details to clipboard
     if (navigator.clipboard) {
       navigator.clipboard.writeText(error.stack || error.message);
@@ -97,18 +97,18 @@ const ErrorFallback = ({ error, resetError }) => {
       <ErrorIcon>
         <FaExclamationTriangle />
       </ErrorIcon>
-      
+
       <ErrorTitle>Something went wrong</ErrorTitle>
-      
+
       <ErrorMessage>
-        We encountered an unexpected error. Please try refreshing the page or contact support if the problem persists.
+        {message || 'We encountered an unexpected error. Please try refreshing the page or contact support if the problem persists.'}
       </ErrorMessage>
-      
+
       <ActionButton onClick={resetError}>
         <FaSync />
         Try Again
       </ActionButton>
-      
+
       {process.env.NODE_ENV === 'development' && error && (
         <ErrorDetails>
           <summary>Error Details (Development Only)</summary>
@@ -122,18 +122,18 @@ const ErrorFallback = ({ error, resetError }) => {
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { 
-      hasError: false, 
+    this.state = {
+      hasError: false,
       error: null,
-      errorInfo: null 
+      errorInfo: null
     };
   }
 
   static getDerivedStateFromError(error) {
     // Update state so the next render will show the fallback UI
-    return { 
+    return {
       hasError: true,
-      error 
+      error
     };
   }
 
@@ -142,13 +142,13 @@ class ErrorBoundary extends React.Component {
     if (process.env.NODE_ENV === 'development') {
       console.error('Error caught by boundary:', error, errorInfo);
     }
-    
+
     // In production, send to error reporting service
     if (process.env.NODE_ENV === 'production') {
       // Example: Send to Sentry, LogRocket, etc.
       this.reportError(error, errorInfo);
     }
-    
+
     this.setState({
       error,
       errorInfo
@@ -161,7 +161,7 @@ class ErrorBoundary extends React.Component {
     // - Sentry: Sentry.captureException(error)
     // - LogRocket: LogRocket.captureException(error)
     // - Custom analytics
-    
+
     console.error('Error reported to monitoring service:', {
       error: error.toString(),
       stack: error.stack,
@@ -183,9 +183,10 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <ErrorFallback 
+        <ErrorFallback
           error={this.state.error}
           resetError={this.resetError}
+          message={this.props.fallbackMessage}
         />
       );
     }

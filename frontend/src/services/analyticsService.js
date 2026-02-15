@@ -154,6 +154,19 @@ class AnalyticsService {
       }, { passive: true, capture: true });
     });
   }
+
+  /**
+   * Start a new session explicitly
+   */
+  startSession() {
+    this.sessionId = this.generateSessionId();
+    this.sessionStartTime = Date.now();
+    this.trackEvent('session_start', {
+      sessionId: this.sessionId,
+      manual: true
+    });
+    return Promise.resolve();
+  }
   
   /**
    * Track visibility changes (tab switching)

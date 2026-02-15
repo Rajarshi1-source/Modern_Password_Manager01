@@ -15,7 +15,7 @@ router = DefaultRouter()
 router.register(r'vault', CrudVaultItemViewSet, basename='vault')
 
 # API endpoints for authentication and key management
-router.register(r'api/vault', ApiVaultItemViewSet, basename='api-vault')
+router.register(r'', ApiVaultItemViewSet, basename='api-vault')
 
 # API endpoints for folder management
 router.register(r'folders', FolderViewSet, basename='folders')

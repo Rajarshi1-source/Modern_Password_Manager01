@@ -10,9 +10,7 @@ export default defineConfig({
       jsxRuntime: 'automatic',  // Automatic JSX runtime
       fastRefresh: true,        // Disable Fast Refresh for faster builds in development
     }),
-    wasm({
-      filter: (id) => !id.includes('argon2.wasm')
-    }),
+    wasm(),
     topLevelAwait()
   ],
   
@@ -67,7 +65,11 @@ export default defineConfig({
         // ADD: explicitly pre-bundle the problematic packages
         'long',
         '@tensorflow/tfjs-core',
-        '@tensorflow/tfjs'         // if you import tfjs-core or tfjs directlyi n your code
+        '@tensorflow/tfjs',
+        // ADD: explicit inclusion for WASM packages
+        'pqc-kyber',
+        'crystals-kyber-js',
+        'mlkem'
       ],
       // Exclude large optional/lazy-loaded packages
       exclude: [
@@ -76,12 +78,8 @@ export default defineConfig({
         '@tensorflow-models/universal-sentence-encoder',
         '@grpc/grpc-js',
         'firebase',
-        'argon2-browser',
-        'tfhe',
-        // Keep Kyber libs excluded (loaded dynamically)
-        'mlkem',
-        'pqc-kyber', 
-        'crystals-kyber-js'
+        'argon2-browser', // Keep argon2-browser excluded as it has issues when optimized
+        'tfhe'
       ],
       // Target ES2020 for compatibility with Kyber WASM
       esbuildOptions: {
@@ -141,7 +139,7 @@ export default defineConfig({
       '@utils': resolve(__dirname, 'src/utils'),
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@workers': resolve(__dirname, 'src/workers'),
-      'argon2-browser': resolve(__dirname, 'node_modules/argon2-browser/dist/argon2-bundled.min.js'),
+
     },
     extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
   },

@@ -1,4 +1,4 @@
-import apiClient from './apiClient';
+import { api as apiClient } from './api';
 
 /**
  * Cosmic Ray Entropy Service
