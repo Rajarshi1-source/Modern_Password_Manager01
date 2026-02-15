@@ -297,3 +297,8 @@ dlib>=19.24.2              # Facial landmark detection
 face-recognition>=1.3.0    # Face embedding and recognition
 torch>=2.1.0               # PyTorch for deepfake detection
 heartpy>=1.2.7             # Heart rate analysis from rPPG
+
+# ============================================================================
+# Web Scraping & Dark Web Monitoring
+# ============================================================================
+scrapy>=2.14.1

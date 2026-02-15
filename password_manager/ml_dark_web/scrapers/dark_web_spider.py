@@ -8,9 +8,15 @@ Supports:
 - Rate limiting and politeness
 """
 
-import scrapy
-from scrapy import signals
-from scrapy.exceptions import DropItem
+try:
+    import scrapy
+    from scrapy import signals
+    from scrapy.exceptions import DropItem
+except ImportError:
+    scrapy = None
+    signals = None
+    DropItem = None
+
 import re
 import logging
 from datetime import datetime
@@ -18,8 +24,15 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+# Dummy base class for when Scrapy is not available
+if scrapy:
+    BaseSpider = scrapy.Spider
+else:
+    class BaseSpider:
+        def __init__(self, *args, **kwargs):
+            pass
 
-class BreachForumSpider(scrapy.Spider):
+class BreachForumSpider(BaseSpider):
     """
     Spider for scraping breach-related forums
     
@@ -59,13 +72,16 @@ class BreachForumSpider(scrapy.Spider):
         self.source_id = source_id
         
         # Set proxy settings
-        if use_tor:
+        if use_tor and scrapy:
             self.custom_settings['DOWNLOADER_MIDDLEWARES'] = {
                 'scrapy.downloadermiddlewares.httpproxy.HttpProxyMiddleware': 750,
             }
     
     def start_requests(self):
         """Generate initial requests with proxy settings"""
+        if not scrapy:
+            return
+
         for url in self.start_urls:
             meta = {}
             
@@ -183,7 +199,7 @@ class BreachForumSpider(scrapy.Spider):
         # You can implement retry logic or error reporting here
 
 
-class PastebinSpider(scrapy.Spider):
+class PastebinSpider(BaseSpider):
     """
     Spider for scraping pastebin-style sites
     
@@ -210,6 +226,9 @@ class PastebinSpider(scrapy.Spider):
     
     def start_requests(self):
         """Generate initial requests"""
+        if not scrapy:
+            return
+
         for url in self.start_urls:
             meta = {}
             if self.use_tor:
@@ -256,7 +275,7 @@ class PastebinSpider(scrapy.Spider):
         return indicators
 
 
-class GenericDarkWebSpider(scrapy.Spider):
+class GenericDarkWebSpider(BaseSpider):
     """
     Generic spider for dark web content
     
@@ -280,6 +299,9 @@ class GenericDarkWebSpider(scrapy.Spider):
     
     def start_requests(self):
         """Generate initial requests"""
+        if not scrapy:
+            return
+
         for url in self.start_urls:
             meta = {}
             if self.use_tor:
