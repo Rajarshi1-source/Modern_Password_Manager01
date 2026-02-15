@@ -47,8 +47,8 @@ RUN cmake -GNinja .. \
     && ninja install
 
 # Set library path for liboqs
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
-ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 # Install liboqs-python wrapper
 # Install liboqs-python wrapper
@@ -123,7 +123,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
     DJANGO_SETTINGS_MODULE=password_manager.settings \
     PATH="/opt/venv/bin:$PATH" \
-    LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}" \
+    LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}" \
     # Application settings
     APP_HOME=/app \
     APP_USER=appuser \

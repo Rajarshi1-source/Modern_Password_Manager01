@@ -254,7 +254,7 @@ python-Levenshtein>=0.21.0
 # Differential Privacy (Google's library for formal DP guarantees)
 # Note: pydp does not support Python 3.13+. Using last known compatible version.
 # For Python 3.13+, the code will use numpy fallback (see adaptive_password_service.py)
-pydp==0.2.4; python_version < "3.13" # ❌ No Python 3.13 version exists
+pydp==0.1.16; python_version < "3.13"
 diffprivlib>=0.6.4 # IBM's library for Differential Privacy, ✅ Works on Python 3.13
 
 # Neural Networks for Memorability Prediction
