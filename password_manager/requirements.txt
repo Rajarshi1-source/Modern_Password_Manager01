@@ -291,7 +291,7 @@ neurokit2>=0.2.0           # Biosignal processing toolkit
 # Deepfake-Resistant Biometric Liveness
 # ============================================================================
 # Computer vision and ML for liveness detection
-opencv-python>=4.9.0       # Computer vision for face/gaze analysis
+opencv-python-headless>=4.9.0       # Computer vision for face/gaze analysis
 mediapipe>=0.10.9          # Face mesh and landmark detection
 dlib>=19.24.2              # Facial landmark detection
 face-recognition>=1.3.0    # Face embedding and recognition
