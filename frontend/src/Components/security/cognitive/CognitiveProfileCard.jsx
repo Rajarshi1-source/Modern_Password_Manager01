@@ -7,7 +7,7 @@
 
 import React, { useState, useEffect } from 'react';
 import './CognitiveProfileCard.css';
-import cognitiveAuthService from '../../services/cognitiveAuthService';
+import cognitiveAuthService from '../../../services/cognitiveAuthService';
 
 const CognitiveProfileCard = ({ onCalibrate }) => {
     const [profile, setProfile] = useState(null);

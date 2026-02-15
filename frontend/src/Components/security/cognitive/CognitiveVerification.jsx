@@ -8,7 +8,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import './CognitiveVerification.css';
-import cognitiveAuthService from '../../services/cognitiveAuthService';
+import cognitiveAuthService from '../../../services/cognitiveAuthService';
 import ScrambledRecognition from './ScrambledRecognition';
 import StroopTest from './StroopTest';
 import PrimingChallenge from './PrimingChallenge';
