@@ -254,3 +254,7 @@ class MLTrainingData(models.Model):
     def __str__(self):
         return f"Training data for {self.model_type}"
 
+
+# Backwards compatibility for tests expecting old model name
+AnomalyDetectionLog = AnomalyDetection
+
