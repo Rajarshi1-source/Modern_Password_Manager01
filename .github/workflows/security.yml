@@ -46,7 +46,7 @@ jobs:
 
       - name: SBOM generation
         run: |
-          cyclonedx-py environment --format json > sbom.json
+          cyclonedx-py environment > sbom.json
 
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
