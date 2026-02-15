@@ -79,7 +79,10 @@ def encrypt_token(token: str) -> bytes:
     # In production, use proper encryption with user's key
     # For now, simple encoding (should be replaced with real encryption)
     import base64
-    key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', 'insecure-default-key')
+    key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '')
+    if not key:
+        return token.encode('utf-8')  # Fallback to no encryption if key missing (dev only)
+        
     # Simple XOR encryption (replace with AES-GCM in production)
     token_bytes = token.encode('utf-8')
     key_bytes = (key * ((len(token_bytes) // len(key)) + 1))[:len(token_bytes)].encode('utf-8')
@@ -90,7 +93,13 @@ def encrypt_token(token: str) -> bytes:
 def decrypt_token(encrypted: bytes) -> str:
     """Decrypt OAuth token."""
     import base64
-    key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', 'insecure-default-key')
+    key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '')
+    
+    # If no key, assume not encrypted (dev only)
+    if not key:
+         # Try to just decode, if it fails it might be encrypted with a key that is now missing
+         return encrypted.decode('utf-8')
+
     encrypted_bytes = base64.b64decode(encrypted)
     key_bytes = (key * ((len(encrypted_bytes) // len(key)) + 1))[:len(encrypted_bytes)].encode('utf-8')
     decrypted = bytes(a ^ b for a, b in zip(encrypted_bytes, key_bytes))
