@@ -26,6 +26,7 @@ from .models import (
     MLModelMetadata,
     UserBehaviorProfile,
     AnomalyDetection,  # Correct model name
+    AnomalyDetectionLog,  # Backwards compatibility alias
     ThreatPrediction,  # Correct model name
 )
 
