@@ -1,6 +1,7 @@
 # Import models from the new vault_models module
-from .vault_models import EncryptedVaultItem
+from .vault_models import EncryptedVaultItem, VaultItem
 from .folder_models import VaultFolder
+from .backup_models import VaultBackup
 
 # Import models from other specialized modules
 from .Breach_Alerts import BreachAlert
@@ -16,7 +17,9 @@ from .shared_folder_models import (
 # Expose these models at the module level
 __all__ = [
     'EncryptedVaultItem',
+    'VaultItem',
     'VaultFolder',
+    'VaultBackup',
     'BreachAlert',
     'UserSalt',
     'AuditLog',
