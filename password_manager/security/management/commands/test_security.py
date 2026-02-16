@@ -44,7 +44,9 @@ import sys
 import os
 
 # Add tests directory to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../..'))
+root_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
+if root_path not in sys.path:
+    sys.path.insert(0, root_path)
 
 from tests.manual_security_tests import (
     SecurityTestRunner,
