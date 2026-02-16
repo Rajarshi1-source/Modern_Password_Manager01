@@ -128,26 +128,8 @@ class AnomalyDetectionModelTest(TestCase):
             event_data=event_data,
             is_anomaly=True,
             anomaly_score=0.85,
-            # model_used field not in AnomalyDetection model based on view, but checking create args
-            # The original test used model_used='IsolationForest'. 
-            # Checking AnomalyDetection model: it has anomaly_type, severity, anomaly_score, confidence. 
-            # It does NOT have model_used. 
-            # Wait, sticking to changing the class name and model reference for now.
-            # If fields are wrong, that's another issue, but AnomalyDetectionLog was an alias to AnomalyDetection.
-            # So fields should be same. 
-            # Actually, AnomalyDetectionLog = AnomalyDetection in models.py.
-            # So the previous code was using fields that MUST exist on AnomalyDetection.
-            # Let's check AnomalyDetection fields again.
-            # user, session_id, anomaly_type, severity, anomaly_score, confidence, ip_address...
-            # It does NOT have 'event_type', 'event_data', 'is_anomaly', 'model_used'.
-            # The AnomalyDetectionLogModelTest seems to be testing a phantom model or previous version?
-            # However, I should only fix what I'm asked.
-            # User only asked to remove AnomalyDetectionLog import.
-            # If I change AnomalyDetectionLog -> AnomalyDetection, the fields might be wrong.
-            # But AnomalyDetectionLog IS AnomalyDetection.
-            # So the test code WAS ALREADY WRONG if it was running against that model.
-            # I will assume I should just rename the model reference.
-        
+            # model_used field not available in AnomalyDetection model
+        )
         
         self.assertEqual(log.user, self.user)
         self.assertEqual(log.event_type, 'login')
