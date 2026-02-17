@@ -31,7 +31,7 @@ describe('QuantumService', () => {
       const mockResponse = {
         data: {
           success: true,
-          password: 'xK9mP2nL5qR8', // gitleaks:allow
+          password: 'testPassword123', // gitleaks:allow
           certificate: {
             certificate_id: 'abc-123',
             provider: 'anu_qrng',
@@ -53,7 +53,7 @@ describe('QuantumService', () => {
       });
       
       expect(result.success).toBe(true);
-      expect(result.password).toBe('xK9mP2nL5qR8');
+      expect(result.password).toBe('testPassword123');
       expect(result.certificate).toBeDefined();
       expect(result.quantumCertified).toBe(true);
     });

@@ -85,7 +85,7 @@ class PrivacyGuardTests(TestCase):
         from security.services.adaptive_password_service import TypingPattern
         
         pattern = TypingPattern(
-            password_hash_prefix="abc123def456ghij",  # gitleaks:allow
+            password_hash_prefix="testprefix123456",  # gitleaks:allow
             password_length=12,
             error_positions=[3, 7],
             timing_buckets={0: 100, 1: 150, 2: 200},
@@ -401,7 +401,7 @@ class AdaptivePasswordModelsTests(TestCase):
         
         session = TypingSession.objects.create(
             user=self.user,
-            password_hash_prefix="abc123def456ghij",  # gitleaks:allow
+            password_hash_prefix="testprefix123456",  # gitleaks:allow
             password_length=12,
             success=True,
             error_positions=[],
@@ -418,8 +418,8 @@ class AdaptivePasswordModelsTests(TestCase):
         # Create first adaptation
         first = PasswordAdaptation.objects.create(
             user=self.user,
-            password_hash_prefix="original123456",  # gitleaks:allow
-            adapted_hash_prefix="adapted1234567",  # gitleaks:allow
+            password_hash_prefix="testorig123456",  # gitleaks:allow
+            adapted_hash_prefix="testadapt123456",  # gitleaks:allow
             adaptation_generation=1,
             adaptation_type='substitution',
             confidence_score=0.85,
@@ -429,8 +429,8 @@ class AdaptivePasswordModelsTests(TestCase):
         # Create second adaptation linked to first
         second = PasswordAdaptation.objects.create(
             user=self.user,
-            password_hash_prefix="adapted1234567",  # gitleaks:allow
-            adapted_hash_prefix="adapted2345678",  # gitleaks:allow
+            password_hash_prefix="testadapt123456",  # gitleaks:allow
+            adapted_hash_prefix="testadapt234567",  # gitleaks:allow
             previous_adaptation=first,
             adaptation_generation=2,
             adaptation_type='substitution',
