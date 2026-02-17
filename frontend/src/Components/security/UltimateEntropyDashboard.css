@@ -3,10 +3,20 @@
    ============================================================================= */
 
 .ultimate-dashboard {
+    /* Theme Variables */
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e1b4b;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --accent-cyan: #06b6d4;
+    --accent-purple: #8b5cf6;
+    --accent-pink: #ec4899;
+    --success: #22c55e;
+
     min-height: 100vh;
-    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+    background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-primary) 100%);
     padding: 24px;
-    color: #f8fafc;
+    color: var(--text-primary);
 }
 
 .ultimate-dashboard.loading {
@@ -224,6 +234,19 @@
     border-color: #3b82f6;
 }
 
+/* Global Focus Styles */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+    outline: 2px solid var(--accent-cyan);
+    outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+input:focus:not(:focus-visible) {
+    outline: none;
+}
+
 /* Generate Button */
 .generate-button {
     width: 100%;
@@ -292,6 +315,8 @@
     padding: 16px;
     border-radius: 12px;
     margin-bottom: 16px;
+    position: relative;
+    /* Context for absolute positioning of reveal/copy buttons */
 }
 
 .password-display code {
@@ -301,6 +326,20 @@
     color: #22c55e;
     word-break: break-all;
     text-align: left;
+    transition: filter 0.2s ease;
+}
+
+/* Masked Password State */
+.password-display.masked code {
+    filter: blur(5px);
+    user-select: none;
+    cursor: default;
+}
+
+.password-display.masked:hover code,
+.password-display.masked:focus-within code {
+    filter: none;
+    user-select: text;
 }
 
 .password-display button {

@@ -47,6 +47,20 @@
     animation: spin 1s linear infinite;
 }
 
+@keyframes pulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    50% {
+        transform: scale(1.1);
+        opacity: 0.8;
+    }
+}
+
 @keyframes spin {
     to {
         transform: rotate(360deg);
@@ -396,6 +410,16 @@
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 1rem;
+}
+
+@media (max-width: 992px) {
+    .cosmic-content {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .status-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
 .status-item {

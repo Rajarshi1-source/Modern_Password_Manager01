@@ -1416,6 +1416,23 @@ class EntangledDevicePair(models.Model):
             )
         ]
     
+    def save(self, *args, **kwargs):
+        # Database-level conditional unique constraints might not be supported 
+        # on all backends or older Django versions, so we enforce it here too.
+        if self.status == 'active':
+            existing = EntangledDevicePair.objects.filter(
+                device_a=self.device_a,
+                device_b=self.device_b,
+                status='active'
+            ).exclude(pk=self.pk).exists()
+            
+            if existing:
+                # Import IntegrityError here to avoid circular imports if it's at top
+                from django.db import IntegrityError
+                raise IntegrityError("An active entangled pair already exists for these devices.")
+                
+        super().save(*args, **kwargs)
+    
     def __str__(self):
         return f"Entangled: {self.device_a.device_name} <-> {self.device_b.device_name} ({self.status})"
     
@@ -2173,6 +2190,11 @@ class TimeLockCapsule(models.Model):
         User, on_delete=models.CASCADE,
         related_name='time_lock_capsules'
     )
+    
+    @property
+    def user(self):
+        """Alias for owner to maintain consistency with other models."""
+        return self.owner
     
     # Encrypted content
     encrypted_data = models.BinaryField(

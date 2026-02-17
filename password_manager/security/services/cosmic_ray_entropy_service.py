@@ -18,6 +18,7 @@ Their arrival times are fundamentally unpredictable due to:
 - Stochastic particle physics processes
 - Atmospheric variations
 - Cosmic source fluctuations
+- Quantum tunneling events in detector geometry
 
 Security Properties:
 - True randomness from quantum processes (particle decay)
@@ -30,6 +31,7 @@ Security Properties:
 
 import os
 import time
+import math
 import struct
 import hashlib
 import logging
@@ -67,42 +69,34 @@ class CosmicRayConfig:
         return getattr(settings, 'COSMIC_RAY_ENTROPY', {})
     
     @classmethod
-    @property
     def ENABLED(cls) -> bool:
         return cls._get_settings().get('ENABLED', True)
     
     @classmethod
-    @property
     def SERIAL_PORT(cls) -> str:
         return cls._get_settings().get('SERIAL_PORT', 'auto')
     
     @classmethod
-    @property
     def BAUD_RATE(cls) -> int:
         return cls._get_settings().get('BAUD_RATE', 9600)
     
     @classmethod
-    @property
     def EVENT_BUFFER_SIZE(cls) -> int:
         return cls._get_settings().get('EVENT_BUFFER_SIZE', 100)
     
     @classmethod
-    @property
     def MIN_EVENTS_FOR_ENTROPY(cls) -> int:
         return cls._get_settings().get('MIN_EVENTS_FOR_ENTROPY', 10)
     
     @classmethod
-    @property
     def SIMULATION_FALLBACK(cls) -> bool:
         return cls._get_settings().get('SIMULATION_FALLBACK', True)
     
     @classmethod
-    @property
     def POOL_CONTRIBUTION_PERCENT(cls) -> int:
         return cls._get_settings().get('POOL_CONTRIBUTION_PERCENT', 20)
     
     @classmethod
-    @property
     def CONTINUOUS_COLLECTION(cls) -> bool:
         """If True, collect events continuously. If False, on-demand only."""
         return cls._get_settings().get('CONTINUOUS_COLLECTION', False)
@@ -491,14 +485,13 @@ class SimulatedCosmicDetector:
         u = struct.unpack('<Q', rand_bytes)[0] / (2**64)
         
         # Exponential distribution (inter-arrival times for Poisson)
-        # Clamp to avoid infinite wait
+        # Clamp to avoid infinite wait or log(0)
         u = max(u, 1e-10)
-        wait_time = -1.0 / self.MEAN_EVENT_RATE * (
-            # Natural log approximation with cryptographic input
-            -0.5 + u * 2  # Simplified for simulation
-        )
         
-        return max(0.01, min(wait_time, 10.0))  # Clamp to reasonable range
+        # Proper exponential distribution: -ln(u) / lambda
+        wait_time = -math.log(u) / self.MEAN_EVENT_RATE
+        
+        return max(0.001, min(wait_time, 60.0))  # Clamp to reasonable range (60s max)
     
     def generate_event(self) -> CosmicRayEvent:
         """
@@ -900,7 +893,8 @@ def get_cosmic_provider() -> CosmicRayEntropyProvider:
 
 async def generate_cosmic_password(
     length: int = 16,
-    charset: Optional[str] = None
+    charset: Optional[str] = None,
+    max_retries: int = 3
 ) -> Tuple[str, Dict]:
     """
     Generate a password using cosmic ray entropy.
@@ -908,6 +902,7 @@ async def generate_cosmic_password(
     Args:
         length: Password length (8-128)
         charset: Optional custom character set
+        max_retries: Number of retry attempts for entropy generation
         
     Returns:
         Tuple of (password, generation_info)
@@ -924,29 +919,58 @@ async def generate_cosmic_password(
         )
     
     length = max(8, min(128, length))
-    
-    # Get entropy (extra for rejection sampling)
-    entropy_bytes, source_id = await provider.fetch_random_bytes(length * 2)
-    
-    # Generate password using rejection sampling
-    password_chars = []
     charset_len = len(charset)
-    byte_index = 0
     
-    while len(password_chars) < length and byte_index < len(entropy_bytes):
-        byte_val = entropy_bytes[byte_index]
-        byte_index += 1
-        
-        max_valid = (256 // charset_len) * charset_len
-        if byte_val < max_valid:
-            password_chars.append(charset[byte_val % charset_len])
+    # Calculate required entropy bytes (with margin for rejection sampling)
+    # Each byte gives us 256 possibilities; we need enough for rejection sampling
+    required_bytes = max(length * 4, 64)  # Generous margin
     
-    password = "".join(password_chars)
+    for attempt in range(max_retries):
+        try:
+            # Get entropy (extra for rejection sampling)
+            entropy_bytes, source_id = await provider.fetch_random_bytes(required_bytes)
+            
+            # Generate password using rejection sampling
+            password_chars = []
+            byte_index = 0
+            
+            while len(password_chars) < length and byte_index < len(entropy_bytes):
+                byte_val = entropy_bytes[byte_index]
+                byte_index += 1
+                
+                # Rejection sampling for uniform distribution
+                # Only accept bytes that fall within the exact multiple of charset_len
+                max_valid = (256 // charset_len) * charset_len
+                if byte_val < max_valid:
+                    password_chars.append(charset[byte_val % charset_len])
+            
+            # Check if we generated enough characters
+            if len(password_chars) < length:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Insufficient entropy on attempt {attempt + 1}, retrying...")
+                    continue
+                else:
+                    # Fallback: use remaining bytes with modulo (slight bias, but functional)
+                    # We continue from where we left off or restart if needed
+                    while len(password_chars) < length and byte_index < len(entropy_bytes):
+                        password_chars.append(charset[entropy_bytes[byte_index] % charset_len])
+                        byte_index += 1
+            
+            password = "".join(password_chars)
+            
+            info = {
+                'source': source_id,
+                'entropy_bits': len(entropy_bytes) * 8,
+                'status': provider.get_last_source_info(),
+                'retries_needed': attempt
+            }
+            
+            return password, info
+            
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Failed to generate cosmic password after {max_retries} attempts: {e}")
+                raise RuntimeError(f"Failed to generate cosmic password: {e}")
+            logger.warning(f"Attempt {attempt + 1} failed: {e}, retrying...")
     
-    info = {
-        'source': source_id,
-        'entropy_bits': len(entropy_bytes) * 8,
-        'status': provider.get_last_source_info()
-    }
-    
-    return password, info
+    raise RuntimeError("Unexpected exit from retry loop")
