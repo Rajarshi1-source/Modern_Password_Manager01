@@ -199,7 +199,7 @@ class AttackerAI:
             reasoning = "Contains recognizable patterns"
         else:
             success_prob = 0.1
-            time_estimate = 3600  # 1 hour
+            time_estimate = 604800  # 1 week — exhausting full wordlists takes days
             reasoning = "Not found in common dictionaries"
         
         return AttackResult(

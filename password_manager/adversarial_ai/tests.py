@@ -480,8 +480,7 @@ class AdversarialModelsTestCase(TestCase):
             battle=battle,
             title='Test Recommendation',
             description='Add special characters',
-            priority='medium',
-            category='character_composition'
+            priority='medium'
         )
         
         self.assertIsNotNone(recommendation.id)
@@ -598,8 +597,7 @@ class AdversarialAPITestCase(APITestCase):
             battle=battle,
             title='Test Recommendation',
             description='Add special characters',
-            priority='medium',
-            category='character_composition'
+            priority='medium'
         )
         
         response = self.client.post(
