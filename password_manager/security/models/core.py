@@ -2273,6 +2273,8 @@ class TimeLockCapsule(models.Model):
             models.Index(fields=['owner', 'status']),
             models.Index(fields=['unlock_at', 'status']),
             models.Index(fields=['capsule_type']),
+            # Add composite index for common query pattern
+            models.Index(fields=['status', 'unlock_at'], name='status_unlock_idx'),
         ]
     
     def __str__(self):

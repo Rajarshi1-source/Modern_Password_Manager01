@@ -153,7 +153,13 @@
     font-size: 0.9rem;
 }
 
-.form-group input:focus {
+.form-group input:focus-visible {
+    outline: 2px solid #4facfe;
+    outline-offset: 2px;
+    border-color: #4facfe;
+}
+
+.form-group input:focus:not(:focus-visible) {
     outline: none;
     border-color: #4facfe;
 }
@@ -191,6 +197,7 @@
     border-radius: 4px;
     outline: none;
     -webkit-appearance: none;
+    appearance: none;
 }
 
 .form-group input[type="range"]::-webkit-slider-thumb {

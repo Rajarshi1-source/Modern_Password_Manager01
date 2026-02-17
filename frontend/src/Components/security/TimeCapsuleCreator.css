@@ -111,8 +111,15 @@
     font-size: 0.9rem;
 }
 
-.form-group input:focus,
-.form-group textarea:focus {
+.form-group input:focus-visible,
+.form-group textarea:focus-visible {
+    outline: 2px solid #ffd700;
+    outline-offset: 2px;
+    border-color: #ffd700;
+}
+
+.form-group input:focus:not(:focus-visible),
+.form-group textarea:focus:not(:focus-visible) {
     outline: none;
     border-color: #ffd700;
 }

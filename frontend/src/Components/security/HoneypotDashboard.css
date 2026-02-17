@@ -707,9 +707,17 @@
     transition: border-color 0.2s;
 }
 
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus {
+.form-group input:focus-visible,
+.form-group select:focus-visible,
+.form-group textarea:focus-visible {
+    outline: 2px solid var(--honeypot-primary);
+    outline-offset: 2px;
+    border-color: var(--honeypot-primary);
+}
+
+.form-group input:focus:not(:focus-visible),
+.form-group select:focus:not(:focus-visible),
+.form-group textarea:focus:not(:focus-visible) {
     outline: none;
     border-color: var(--honeypot-primary);
 }
