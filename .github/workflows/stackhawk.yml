@@ -1,9 +1,9 @@
-# This workflow uses actions that are not certified by GitHub.
+﻿# This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
 
-#           🦅 STACKHAWK        https://stackhawk.com
+#           ðŸ¦… STACKHAWK        https://stackhawk.com
 
 # The StackHawk HawkScan action makes it easy to integrate dynamic application security testing (DAST) into your
 # CI pipeline. See the Getting Started guide (https://docs.stackhawk.com/hawkscan/) to get up and running with
@@ -52,11 +52,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Start your service
-        run: ./your-service.sh &                  # ✏️ Update this to run your own service to be scanned
+        run: ./your-service.sh &                  # âœï¸ Update this to run your own service to be scanned
 
       - name: Run HawkScan
         uses: stackhawk/hawkscan-action@4c3258cd62248dac6d9fe91dd8d45928c697dee0
-        continue-on-error: true                   # ✏️ Set to false to break your build on scan errors
+        continue-on-error: true                   # âœï¸ Set to false to break your build on scan errors
         with:
           apiKey: ${{ secrets.HAWK_API_KEY }}
           codeScanningAlerts: true

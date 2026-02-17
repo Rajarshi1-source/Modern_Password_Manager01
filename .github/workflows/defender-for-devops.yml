@@ -1,4 +1,4 @@
-# This workflow uses actions that are not certified by GitHub.
+﻿# This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
@@ -28,11 +28,17 @@ on:
 
 jobs:
   MSDO:
-    # currently only windows latest is supported
-    runs-on: windows-latest
+    # Switched to ubuntu-latest to avoid path length issues
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
+      id-token: write
+
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      PYTHONIOENCODING: utf-8
 
     steps:
     - uses: actions/checkout@v4

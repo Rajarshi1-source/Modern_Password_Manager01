@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # GitHub Actions CI/CD Pipeline - Password Manager
 # =============================================================================
 # Complete CI/CD pipeline for:
@@ -461,7 +461,7 @@ jobs:
           curl -f https://yourapp.com/api/health/ || exit 1
           curl -f https://yourapp.com/health || exit 1
           
-          echo "✅ Smoke tests passed!"
+          echo "âœ… Smoke tests passed!"
       
       - name: Notify deployment success
         if: success()
@@ -469,13 +469,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "✅ Production deployment successful!",
+              "text": "âœ… Production deployment successful!",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Password Manager Production Deployment*\n✅ Deployment completed successfully\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*URL:* https://yourapp.com"
+                    "text": "*Password Manager Production Deployment*\nâœ… Deployment completed successfully\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*URL:* https://yourapp.com"
                   }
                 }
               ]
@@ -490,13 +490,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "❌ Production deployment failed!",
+              "text": "âŒ Production deployment failed!",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Password Manager Production Deployment FAILED*\n❌ Please check the workflow logs\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    "text": "*Password Manager Production Deployment FAILED*\nâŒ Please check the workflow logs\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                   }
                 }
               ]
@@ -542,7 +542,7 @@ jobs:
           kubectl rollout status deployment/backend -n password-manager --timeout=300s
           kubectl rollout status deployment/frontend -n password-manager --timeout=300s
           
-          echo "✅ Rollback completed!"
+          echo "âœ… Rollback completed!"
       
       - name: Cleanup
         if: always()

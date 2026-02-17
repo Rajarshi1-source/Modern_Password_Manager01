@@ -1,4 +1,4 @@
-name: Security & Supply Chain Audit
+﻿name: Security & Supply Chain Audit
 
 on:
   pull_request:

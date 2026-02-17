@@ -33,7 +33,7 @@ services:
       python manage.py runserver 0.0.0.0:8000
     environment:
       - DEBUG=True
-      - SECRET_KEY=dev-secret-key-not-for-production
+      - SECRET_KEY=${DEV_SECRET_KEY}
     volumes:
       - ../password_manager:/app
     ports:
@@ -44,10 +44,7 @@ services:
   # ===========================================================================
   websocket:
     command: >
-      daphne password_manager.asgi:application
-      --bind 0.0.0.0
-      --port 8001
-      --verbosity 2
+      daphne password_manager.asgi:application --bind 0.0.0.0 --port 8001 --verbosity 2
     environment:
       - DEBUG=True
     volumes:
@@ -60,8 +57,7 @@ services:
   # ===========================================================================
   celery_worker:
     command: >
-      watchmedo auto-restart --directory=/app --pattern=*.py --recursive --
-      celery -A password_manager worker --loglevel=debug --concurrency=2
+      watchmedo auto-restart --directory=/app --pattern=*.py --recursive -- celery -A password_manager worker --loglevel=debug --concurrency=2
     environment:
       - DEBUG=True
     volumes:
@@ -101,4 +97,3 @@ services:
   nginx:
     profiles:
       - production
-

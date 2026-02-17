@@ -1,16 +1,16 @@
-# This workflow uses actions that are not certified by GitHub.
+﻿# This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
 # separate terms of service, privacy policy, and support
 # documentation.
 
 # EthicalCheck addresses the critical need to continuously security test APIs in development and in production.
 
-# EthicalCheck provides the industry’s only free & automated API security testing service that uncovers security vulnerabilities using OWASP API list.
+# EthicalCheck provides the industryâ€™s only free & automated API security testing service that uncovers security vulnerabilities using OWASP API list.
 # Developers relies on EthicalCheck to evaluate every update and release, ensuring that no APIs go to production with exploitable vulnerabilities.
 
 # You develop the application and API, we bring complete and continuous security testing to you, accelerating development.
 
-# Know your API and Applications are secure with EthicalCheck – our free & automated API security testing service.
+# Know your API and Applications are secure with EthicalCheck â€“ our free & automated API security testing service.
 
 # How EthicalCheck works?
 # EthicalCheck functions in the following simple steps.

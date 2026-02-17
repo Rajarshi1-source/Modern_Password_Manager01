@@ -1,0 +1,6 @@
+audit-evidence/
+compliance_bundle/
+*.spdx.json
+*.cyclonedx.json
+gdn_internal/
+password_manager/staticfiles/

@@ -1,4 +1,4 @@
-name: CI — build, SBOM, sign, attest
+﻿name: CI â€” build, SBOM, sign, attest
 
 on:
   push:
