@@ -55,6 +55,34 @@ def derive_key_from_password(password, salt, time_cost=4, memory_cost=131072, pa
         logger.error(f'Argon2 key derivation failed: {e}')
         raise ValueError('Key derivation failed')
 
+def encrypt_vault_item(data, key):
+    """Encrypt vault item data using Fernet symmetric encryption."""
+    import json
+    if isinstance(data, dict):
+        data = json.dumps(data)
+    if isinstance(data, str):
+        data = data.encode('utf-8')
+    padded_key = hashlib.sha256(key if isinstance(key, bytes) else key.encode()).digest()
+    fernet_key = base64.urlsafe_b64encode(padded_key)
+    f = Fernet(fernet_key)
+    return f.encrypt(data).decode('utf-8')
+
+
+def decrypt_vault_item(encrypted_data, key):
+    """Decrypt vault item data."""
+    import json
+    padded_key = hashlib.sha256(key if isinstance(key, bytes) else key.encode()).digest()
+    fernet_key = base64.urlsafe_b64encode(padded_key)
+    f = Fernet(fernet_key)
+    decrypted = f.decrypt(
+        encrypted_data.encode('utf-8') if isinstance(encrypted_data, str) else encrypted_data
+    )
+    try:
+        return json.loads(decrypted.decode('utf-8'))
+    except json.JSONDecodeError:
+        return decrypted.decode('utf-8')
+
+
 def derive_auth_key(password, salt, iterations=100000):
     """Derive authentication key for verifying master password"""
     kdf = PBKDF2HMAC(

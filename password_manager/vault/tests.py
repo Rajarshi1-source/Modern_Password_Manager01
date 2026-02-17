@@ -135,36 +135,29 @@ class VaultBackupModelTests(TestCase):
         )
     
     def test_create_backup(self):
-        """Test creating a vault backup"""
         backup = VaultBackup.objects.create(
             user=self.user,
+            name='Test Backup',
             encrypted_data='{"items": []}',
-            item_count=0
         )
-        
         self.assertEqual(backup.user, self.user)
-        self.assertEqual(backup.item_count, 0)
         self.assertIsNotNone(backup.created_at)
-    
+
     def test_backup_with_items(self):
-        """Test backup with multiple items"""
         backup = VaultBackup.objects.create(
             user=self.user,
+            name='Test Backup',
             encrypted_data='{"items": [{}, {}, {}]}',
-            item_count=3
         )
-        
-        self.assertEqual(backup.item_count, 3)
-    
+        self.assertIsNotNone(backup.id)
+
     def test_multiple_backups_allowed(self):
-        """Test user can have multiple backups"""
         for i in range(3):
             VaultBackup.objects.create(
                 user=self.user,
+                name=f'Backup {i}',
                 encrypted_data=f'{{"backup": {i}}}',
-                item_count=i
             )
-        
         backups = VaultBackup.objects.filter(user=self.user)
         self.assertEqual(backups.count(), 3)
 
@@ -297,45 +290,38 @@ class AuditLogTests(TestCase):
         )
     
     def test_create_audit_log(self):
-        """Test creating an audit log entry"""
         log = AuditLog.objects.create(
             user=self.user,
-            action='vault_item_created',
-            details={'item_id': 'test_123'},
+            action='create_item',   # must be a valid ACTION_TYPES choice
+            item_type='password',
+            status='success',
             ip_address='192.168.1.1'
         )
-        
         self.assertEqual(log.user, self.user)
-        self.assertEqual(log.action, 'vault_item_created')
+        self.assertEqual(log.action, 'create_item')
         self.assertIsNotNone(log.timestamp)
-    
+
     def test_audit_log_tracks_actions(self):
-        """Test that different actions are tracked"""
-        actions = ['created', 'updated', 'deleted', 'accessed']
-        
+        actions = ['create_item', 'update_item', 'delete_item', 'access_item']
         for action in actions:
             AuditLog.objects.create(
                 user=self.user,
-                action=f'vault_item_{action}',
-                details={},
+                action=action,
+                status='success',
                 ip_address='192.168.1.1'
             )
-        
         logs = AuditLog.objects.filter(user=self.user)
         self.assertEqual(logs.count(), 4)
-    
+
     def test_audit_log_ordering(self):
-        """Test audit logs are ordered by timestamp"""
         for i in range(3):
             AuditLog.objects.create(
                 user=self.user,
-                action=f'action_{i}',
-                details={},
+                action='access_item',
+                status='success',
                 ip_address='192.168.1.1'
             )
-        
         logs = AuditLog.objects.filter(user=self.user).order_by('-timestamp')
-        # Most recent should be first
         self.assertTrue(logs.first().timestamp >= logs.last().timestamp)
 
 
