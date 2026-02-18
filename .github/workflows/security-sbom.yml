@@ -1,4 +1,4 @@
-﻿name: Security SBOM & Supply Chain Audit
+name: Security SBOM & Supply Chain Audit
 
 on:
   push:

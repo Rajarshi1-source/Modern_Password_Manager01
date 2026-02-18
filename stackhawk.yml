@@ -1,0 +1,17 @@
+app:
+  applicationId: ${APP_ID}
+  env: ${APP_ENV:Development}
+  url: http://localhost:8000
+
+authentication:
+  loggedInPath: /api/v1/users/me/
+  loggedOutPath: /api/v1/auth/login/
+  cookieAuthorization:
+    cookieNames:
+      - sessionid
+      - csrftoken
+
+hawk:
+  spider:
+    base: false
+    ajax: true

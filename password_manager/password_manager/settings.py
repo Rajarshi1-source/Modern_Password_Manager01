@@ -68,7 +68,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1.15/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(50)
+SECRET_KEY = os.environ.get('SECRET_KEY')
+
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = secrets.token_urlsafe(50)
+        warnings.warn("SECRET_KEY not set in environment. Using random key for development.")
+    else:
+        # In production, fail if SECRET_KEY is not set
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured("The SECRET_KEY setting must not be empty in production.")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # Default to True for development - set DEBUG=False in production environment
@@ -221,11 +230,11 @@ DATABASES = {
     },
     'postgresql': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'password_manager',
-        'USER': 'user',
-        'PASSWORD': 'password123',
-        'HOST': 'localhost',
-        'PORT': '5432',
+        'NAME': os.environ.get('DB_NAME', 'password_manager'),
+        'USER': os.environ.get('DB_USER', 'user'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'password123'),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
     }    
 }
 
@@ -454,10 +463,9 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 
 # Add production origins from environment
-if not DEBUG:
-    csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
-    if csrf_origins_env:
-        CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()])
+csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
+if csrf_origins_env:
+    CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()])
 
 # Logging configuration
 LOGGING = {
@@ -735,10 +743,9 @@ CORS_EXPOSE_HEADERS = [
 CORS_PREFLIGHT_MAX_AGE = 86400  # 24 hours
 
 # Add production origins from environment
-if not DEBUG:
-    env_origins = os.environ.get('CORS_ALLOWED_ORIGINS', '').strip()
-    if env_origins:
-        CORS_ALLOWED_ORIGINS.extend([origin.strip() for origin in env_origins.split(',') if origin.strip()])
+env_origins = os.environ.get('CORS_ALLOWED_ORIGINS', '').strip()
+if env_origins:
+    CORS_ALLOWED_ORIGINS.extend([origin.strip() for origin in env_origins.split(',') if origin.strip()])
 
 # Rate limiting: lenient in development, strict in production
 REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'].update({
