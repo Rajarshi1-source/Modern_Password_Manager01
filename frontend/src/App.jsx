@@ -81,6 +81,9 @@ const PredictiveExpirationDashboard = lazy(() => import('./Components/security/P
 // Cosmic Ray Entropy - True randomness from muon detection
 const CosmicRayEntropyDashboard = lazy(() => import('./Components/security/CosmicRayEntropyDashboard'));
 
+// Password Archaeology & Time Travel
+const PasswordTimeline = lazy(() => import('./Components/security/PasswordTimeline'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1199,6 +1202,7 @@ function App() {
             <div className="nav-links">
               <Link to="/security/dashboard" className="nav-link">Security Dashboard</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
+              <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/settings" className="nav-link">Settings</Link>
               <button onClick={handleLogout} className="logout-btn" disabled={isLoggingOut}>
                 {isLoggingOut ? 'Logging out...' : 'Logout'}
@@ -1530,6 +1534,10 @@ function App() {
                       <CosmicRayEntropyDashboard />
                     </ErrorBoundary>
                   )
+                } />
+                {/* Password Archaeology & Time Travel */}
+                <Route path="/security/password-archaeology" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <PasswordTimeline />
                 } />
               </Routes>
             </Suspense>

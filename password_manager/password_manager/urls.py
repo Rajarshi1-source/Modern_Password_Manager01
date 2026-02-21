@@ -128,6 +128,9 @@ urlpatterns = [
     
     # Biometric Liveness Verification API routes
     path('api/liveness/', include('biometric_liveness.urls')),
+    
+    # Password Archaeology & Time Travel API routes
+    path('api/archaeology/', include('password_archaeology.urls')),
 ]
 
 # Add static file serving for development

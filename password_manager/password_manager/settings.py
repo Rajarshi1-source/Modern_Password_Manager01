@@ -138,6 +138,7 @@ INSTALLED_APPS = [
     'neuro_feedback',  # Neuro-Feedback Password Training
     'cognitive_auth',  # Cognitive Password Testing with Implicit Memory
     'biometric_liveness',  # Deepfake-Resistant Biometric Liveness
+    'password_archaeology',  # Password Archaeology & Time Travel
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
