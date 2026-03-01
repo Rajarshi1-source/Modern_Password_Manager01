@@ -266,9 +266,9 @@ class Command(BaseCommand):
 
         # Summary
         self.stdout.write(self.style.SUCCESS(
-            f"\n✅ Seeded archaeology data for {user.username}:\n"
-            f"   • {created_count['history']} password history entries\n"
-            f"   • {created_count['events']} security events\n"
-            f"   • {created_count['snapshots']} strength snapshots\n"
-            f"   • {created_count['achievements']} achievements\n"
+            f"\n[OK] Seeded archaeology data for {user.username}:\n"
+            f"   - {created_count['history']} password history entries\n"
+            f"   - {created_count['events']} security events\n"
+            f"   - {created_count['snapshots']} strength snapshots\n"
+            f"   - {created_count['achievements']} achievements\n"
         ))

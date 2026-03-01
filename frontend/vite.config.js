@@ -69,7 +69,8 @@ export default defineConfig({
         // ADD: explicit inclusion for WASM packages
         'pqc-kyber',
         'crystals-kyber-js',
-        'mlkem'
+        'mlkem',
+        'argon2-browser',
       ],
       // Exclude large optional/lazy-loaded packages
       exclude: [
@@ -78,7 +79,7 @@ export default defineConfig({
         '@tensorflow-models/universal-sentence-encoder',
         '@grpc/grpc-js',
         'firebase',
-        'argon2-browser', // Keep argon2-browser excluded as it has issues when optimized
+        // 'argon2-browser', // Keep argon2-browser excluded as it has issues when optimized
         'tfhe'
       ],
       // Target ES2020 for compatibility with Kyber WASM
