@@ -188,7 +188,7 @@ murmurhash==1.0.15
 namex==0.1.0
 networkx==3.5
 neurokit2==0.2.12
-nltk==3.9.2
+nltk==3.9.3
 numpy==2.3.5
 oauthlib==3.2.2
 opencv-contrib-python==4.13.0.92
