@@ -4,7 +4,7 @@ djangorestframework==3.16.1
 djangorestframework-simplejwt==5.5.1
 
 # Auth & Security
-django-allauth==65.13.0
+django-allauth==65.14.1
 dj-rest-auth==7.0.1
 cryptography==46.0.5
 argon2-cffi==21.3.0

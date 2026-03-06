@@ -64,7 +64,7 @@ diffprivlib==0.6.6
 dill==0.4.1
 dj-rest-auth==7.0.1
 Django==5.1.15
-django-allauth==65.13.0
+django-allauth==65.14.1
 django-appconf==1.1.0
 django-celery-beat==2.8.0
 django-cors-headers==4.0.0
