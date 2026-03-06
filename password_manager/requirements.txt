@@ -5,7 +5,7 @@
 # ============================================================================
 
 # Core Django Framework
-Django==5.1.15
+Django==4.2.29
 djangorestframework==3.16.1
 djangorestframework-simplejwt==5.5.1
 fido2>=1.1.3
