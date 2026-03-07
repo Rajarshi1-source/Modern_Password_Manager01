@@ -129,6 +129,7 @@
 /* Section Cards */
 .section-card {
     background: rgba(30, 41, 59, 0.6);
+    -webkit-backdrop-filter: blur(12px);
     backdrop-filter: blur(12px);
     border-radius: 16px;
     padding: 20px;
