@@ -131,6 +131,9 @@ urlpatterns = [
     
     # Password Archaeology & Time Travel API routes
     path('api/archaeology/', include('password_archaeology.urls')),
+    
+    # AI-Powered Security Assistant API routes
+    path('api/ai-assistant/', include('ai_assistant.urls')),
 ]
 
 # Add static file serving for development

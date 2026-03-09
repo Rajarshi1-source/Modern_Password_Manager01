@@ -84,6 +84,9 @@ const CosmicRayEntropyDashboard = lazy(() => import('./Components/security/Cosmi
 // Password Archaeology & Time Travel
 const PasswordTimeline = lazy(() => import('./Components/security/PasswordTimeline'));
 
+// AI-Powered Security Assistant
+const SecurityAssistant = lazy(() => import('./Components/security/SecurityAssistant'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1203,6 +1206,7 @@ function App() {
               <Link to="/security/dashboard" className="nav-link">Security Dashboard</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
+              <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
               <Link to="/settings" className="nav-link">Settings</Link>
               <button onClick={handleLogout} className="logout-btn" disabled={isLoggingOut}>
                 {isLoggingOut ? 'Logging out...' : 'Logout'}
@@ -1538,6 +1542,10 @@ function App() {
                 {/* Password Archaeology & Time Travel */}
                 <Route path="/security/password-archaeology" element={
                   !isAuthenticated ? <Navigate to="/" /> : <PasswordTimeline />
+                } />
+                {/* AI-Powered Security Assistant */}
+                <Route path="/security/ai-assistant" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <SecurityAssistant />
                 } />
               </Routes>
             </Suspense>

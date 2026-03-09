@@ -39,6 +39,9 @@ import PredictiveExpirationScreen from '../screens/PredictiveExpirationScreen';
 // Import cosmic ray entropy screen
 import CosmicRayScreen from '../screens/CosmicRayScreen';
 
+// Import AI assistant screen
+import AIAssistantScreen from '../screens/AIAssistantScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -164,6 +167,11 @@ const SettingsNavigator = () => (
       name="CosmicRay" 
       component={CosmicRayScreen}
       options={{ headerTitle: 'Cosmic Ray Entropy', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="AIAssistant" 
+      component={AIAssistantScreen}
+      options={{ headerTitle: 'Security Assistant', headerShown: false }}
     />
   </MainStack.Navigator>
 );

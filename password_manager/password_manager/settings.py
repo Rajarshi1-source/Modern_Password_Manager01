@@ -139,6 +139,7 @@ INSTALLED_APPS = [
     'cognitive_auth',  # Cognitive Password Testing with Implicit Memory
     'biometric_liveness',  # Deepfake-Resistant Biometric Liveness
     'password_archaeology',  # Password Archaeology & Time Travel
+    'ai_assistant',  # AI-Powered Security Assistant (Claude API)
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1573,3 +1574,15 @@ COSMIC_RAY_ENTROPY = {
     # If False, events are collected on-demand only
     'CONTINUOUS_COLLECTION': os.environ.get('COSMIC_RAY_CONTINUOUS', 'False').lower() == 'true',
 }
+
+# ==============================================================================
+# AI-POWERED SECURITY ASSISTANT (Claude API)
+# ==============================================================================
+# Conversational AI assistant for password security queries and recommendations.
+# Powered by Anthropic's Claude API.
+
+AI_ASSISTANT_ENABLED = os.environ.get('AI_ASSISTANT_ENABLED', 'True').lower() == 'true'
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+AI_ASSISTANT_MODEL = os.environ.get('AI_ASSISTANT_MODEL', 'claude-sonnet-4-20250514')
+AI_ASSISTANT_MAX_TOKENS = int(os.environ.get('AI_ASSISTANT_MAX_TOKENS', '4096'))
+AI_ASSISTANT_RATE_LIMIT = os.environ.get('AI_ASSISTANT_RATE_LIMIT', '20/hour')
