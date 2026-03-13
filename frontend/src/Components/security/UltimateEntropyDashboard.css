@@ -333,6 +333,7 @@ input:focus:not(:focus-visible) {
 /* Masked Password State */
 .password-display.masked code {
     filter: blur(5px);
+    -webkit-user-select: none;
     user-select: none;
     cursor: default;
 }
@@ -340,6 +341,7 @@ input:focus:not(:focus-visible) {
 .password-display.masked:hover code,
 .password-display.masked:focus-within code {
     filter: none;
+    -webkit-user-select: text;
     user-select: text;
 }
 
@@ -423,6 +425,14 @@ input:focus:not(:focus-visible) {
 
 .activity-status {
     font-size: 12px;
+}
+
+.activity-status--online {
+    color: #22c55e;
+}
+
+.activity-status--offline {
+    color: #ef4444;
 }
 
 .activity-detail {

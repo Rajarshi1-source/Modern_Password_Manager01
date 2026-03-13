@@ -272,23 +272,27 @@ export default function UltimateEntropyDashboard() {
                         <h2>🔐 Generate Password</h2>
 
                         <div className="control-group">
-                            <label>Password Length: {passwordLength}</label>
+                            <label htmlFor="password-length">Password Length: {passwordLength}</label>
                             <input
+                                id="password-length"
                                 type="range"
                                 min={8}
                                 max={64}
                                 value={passwordLength}
                                 onChange={e => setPasswordLength(parseInt(e.target.value))}
                                 className="length-slider"
+                                title={`Password length: ${passwordLength} characters`}
                             />
                         </div>
 
                         <div className="control-group">
-                            <label>Character Set</label>
+                            <label htmlFor="charset-select">Character Set</label>
                             <select
+                                id="charset-select"
                                 value={charset}
                                 onChange={e => setCharset(e.target.value)}
                                 className="charset-select"
+                                title="Select the character set used for password generation"
                             >
                                 <option value="standard">Standard (letters + numbers + symbols)</option>
                                 <option value="alphanumeric">Alphanumeric (no symbols)</option>
@@ -382,7 +386,7 @@ export default function UltimateEntropyDashboard() {
                                     <span className="activity-icon">{source.icon}</span>
                                     <div className="activity-content">
                                         <div className="activity-title">{source.name}</div>
-                                        <div className="activity-status" style={{ color: source.available ? '#22c55e' : '#ef4444' }}>
+                                        <div className={`activity-status ${source.available ? 'activity-status--online' : 'activity-status--offline'}`}>
                                             {source.available ? 'Online' : 'Offline'}
                                         </div>
                                         {source.activity && (

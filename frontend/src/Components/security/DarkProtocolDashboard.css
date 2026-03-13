@@ -181,6 +181,7 @@
     border: 1px solid rgba(139, 92, 246, 0.2);
     border-radius: 16px;
     margin-bottom: 1.5rem;
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
 
@@ -313,6 +314,7 @@
     border-radius: 16px;
     padding: 1.5rem;
     margin-bottom: 1.5rem;
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
 
@@ -367,6 +369,7 @@
     border: 1px solid rgba(139, 92, 246, 0.2);
     border-radius: 16px;
     padding: 1.5rem;
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
 
@@ -510,6 +513,7 @@
     border: 1px solid rgba(139, 92, 246, 0.2);
     border-radius: 16px;
     padding: 1.5rem;
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
 
@@ -591,6 +595,7 @@
     align-items: center;
     justify-content: center;
     z-index: 1000;
+    -webkit-backdrop-filter: blur(5px);
     backdrop-filter: blur(5px);
 }
 

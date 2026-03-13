@@ -113,6 +113,7 @@
 /* Challenge Panel */
 .challenge-panel {
     background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
     border-radius: 12px;
     padding: 1.5rem;
@@ -225,6 +226,7 @@
 /* Result Display */
 .liveness-result {
     background: rgba(255, 255, 255, 0.1);
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
     border-radius: 16px;
     padding: 2.5rem;

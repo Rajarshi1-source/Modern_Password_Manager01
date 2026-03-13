@@ -77,8 +77,8 @@
     font-weight: 700;
     margin: 0;
     background: linear-gradient(135deg, #6366f1, #8b5cf6);
-    background-clip: text;
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -109,6 +109,7 @@
     align-items: center;
     gap: 1rem;
     border: 1px solid var(--honeypot-border);
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
     transition: transform 0.2s, box-shadow 0.2s;
 }
@@ -197,6 +198,7 @@
     border-radius: 1rem;
     border: 1px solid var(--honeypot-border);
     overflow: hidden;
+    -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
 }
 
@@ -558,6 +560,7 @@
     right: 0;
     bottom: 0;
     background: rgba(0, 0, 0, 0.7);
+    -webkit-backdrop-filter: blur(4px);
     backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
