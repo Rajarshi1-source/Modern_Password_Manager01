@@ -100,23 +100,53 @@ export default defineConfig({
     rollupOptions: {
       external: ['fs', 'path', 'crypto'],
       output: {
-        // Simpler chunking strategy
         manualChunks(id) {
-          // Core vendors
-          if (id.includes('node_modules')) {
-            // Core React libraries
-            if (id.includes('react') || id.includes('react-dom')) {
-              return 'react-vendor';
-            }
-            // Firebase (large dependency)
-            if (id.includes('firebase')) {
-              return 'firebase';
-            }
-            // Everything else goes to vendor
-            return 'vendor';
-        }
-      }
-    }
+          if (!id.includes('node_modules')) return undefined;
+
+          // Firebase — 229KB gzipped, isolated to its own chunk
+          if (id.includes('/firebase/') || id.includes('/@firebase/')) {
+            return 'firebase';
+          }
+
+          // TensorFlow.js — very large, already lazy-loaded in the app
+          if (id.includes('/@tensorflow/') || /\/tfjs[/-]/.test(id)) {
+            return 'tensorflow';
+          }
+
+          // Post-quantum crypto — WASM-heavy, benefits from separate caching
+          if (
+            id.includes('/pqc-kyber/') ||
+            id.includes('/crystals-kyber-js/') ||
+            id.includes('/mlkem/')
+          ) {
+            return 'pqc-crypto';
+          }
+
+          // Crypto primitives — argon2, noble, stablelib
+          if (
+            id.includes('/argon2-browser/') ||
+            id.includes('/@noble/') ||
+            id.includes('/@stablelib/')
+          ) {
+            return 'crypto-primitives';
+          }
+
+          // React core ONLY — precise path matching prevents the circular dep.
+          // The old id.includes('react') matched react-router-dom, which depends
+          // on packages in vendor, creating: vendor → react-vendor → vendor.
+          if (
+            id.includes('/node_modules/react/') ||
+            id.includes('/node_modules/react-dom/') ||
+            id.includes('/node_modules/scheduler/')
+          ) {
+            return 'react-vendor';
+          }
+
+          // Remaining node_modules
+          return 'vendor';
+        },
+      },
+    },
   },
 
   // ADD: make sure mixed ESM/CJS packages are properly transformed

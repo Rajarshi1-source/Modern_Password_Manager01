@@ -14,6 +14,38 @@
 
 import * as tf from '@tensorflow/tfjs';
 
+/**
+ * Custom L2 normalization layer.
+ * Replaces tf.layers.lambda() which does not exist in TF.js 3.x.
+ */
+class L2NormalizationLayer extends tf.layers.Layer {
+  constructor(config) {
+    super(config || {});
+  }
+
+  call(inputs) {
+    return tf.tidy(() => {
+      const tensor = Array.isArray(inputs) ? inputs[0] : inputs;
+      return tf.div(tensor, tf.norm(tensor, 'euclidean', -1, true).add(1e-10));
+    });
+  }
+
+  computeOutputShape(inputShape) {
+    return inputShape;
+  }
+
+  getConfig() {
+    return super.getConfig();
+  }
+
+  static get className() {
+    return 'L2NormalizationLayer';
+  }
+}
+
+// Required for model save/load serialization
+tf.serialization.registerClass(L2NormalizationLayer);
+
 export class TransformerModel {
   constructor(config = {}) {
     this.config = {
@@ -52,7 +84,7 @@ export class TransformerModel {
       }
       
       // Global average pooling over sequence
-      x = tf.layers.globalAveragePooling1D().apply(x);
+      x = tf.layers.globalAveragePooling1d().apply(x);
       
       // Dense layers for dimensionality reduction
       x = tf.layers.dense({
@@ -70,9 +102,7 @@ export class TransformerModel {
       }).apply(x);
       
       // L2 normalization for cosine similarity
-      x = tf.layers.lambda({
-        func: tensor => tf.div(tensor, tf.norm(tensor, 'euclidean', -1, true).add(1e-10))
-      }).apply(x);
+      x = new L2NormalizationLayer({ name: 'l2_normalization' }).apply(x);
       
       // Create model
       this.model = tf.model({ inputs: input, outputs: x });
