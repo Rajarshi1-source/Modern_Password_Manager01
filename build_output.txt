@@ -1,0 +1,507 @@
+﻿[36mvite v7.3.1 [32mbuilding client environment for production...[36m[39m
+transforming...
+node.exe : [33mnode
+_modules/crystals-ky
+ber-js/esm/src/sha3/
+sha3.js (285:0): A 
+comment
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: ([33   
+ mnode_modul...5    
+:0): A comment:    
+String) [], Rem    
+oteException
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+
+"// export const 
+sha3_224: CHash = 
+/* @__PURE__ */ 
+genKeccak("
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/cr
+ystals-kyber-js/esm/
+src/sha3/sha3.js 
+(289:0): A comment
+
+"//   /* @__PURE__ 
+*/ oidNist(0x07),"
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/cr
+ystals-kyber-js/esm/
+src/sha3/sha3.js 
+(295:0): A comment
+
+"// export const 
+sha3_384: CHash = 
+/* @__PURE__ */ 
+genKeccak("
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/cr
+ystals-kyber-js/esm/
+src/sha3/sha3.js 
+(299:0): A comment
+
+"//   /* @__PURE__ 
+*/ oidNist(0x09),"
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/cr
+ystals-kyber-js/esm/
+src/sha3/sha3.js 
+(323:0): A comment
+
+"//   /* @__PURE__ 
+*/"
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/cr
+ystals-kyber-js/esm/
+src/sha3/sha3.js 
+(324:0): A comment
+
+"//   
+genShake(0x1f, 168, 
+32, /* @__PURE__ */ 
+oidNist(0x0b));"
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/cr
+ystals-kyber-js/esm/
+src/sha3/sha3.js 
+(327:0): A comment
+
+"//   /* @__PURE__ 
+*/"
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/cr
+ystals-kyber-js/esm/
+src/sha3/sha3.js 
+(328:0): A comment
+
+"//   
+genShake(0x1f, 136, 
+64, /* @__PURE__ */ 
+oidNist(0x0c));"
+
+in "node_modules/cry
+stals-kyber-js/esm/s
+rc/sha3/sha3.js" 
+contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (285:0): A 
+comment
+
+"// export const 
+sha3_224: CHash = 
+/* @__PURE__ */ 
+genKeccak("
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (289:0): A 
+comment
+
+"//   /* @__PURE__ 
+*/ oidNist(0x07),"
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (295:0): A 
+comment
+
+"// export const 
+sha3_384: CHash = 
+/* @__PURE__ */ 
+genKeccak("
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (299:0): A 
+comment
+
+"//   /* @__PURE__ 
+*/ oidNist(0x09),"
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (323:0): A 
+comment
+
+"//   /* @__PURE__ 
+*/"
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (324:0): A 
+comment
+
+"//   
+genShake(0x1f, 168, 
+32, /* @__PURE__ */ 
+oidNist(0x0b));"
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (327:0): A 
+comment
+
+"//   /* @__PURE__ 
+*/"
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33mnode_modules/ml
+kem/esm/src/sha3/sha
+3.js (328:0): A 
+comment
+
+"//   
+genShake(0x1f, 136, 
+64, /* @__PURE__ */ 
+oidNist(0x0c));"
+
+in "node_modules/mlk
+em/esm/src/sha3/sha3
+.js" contains an 
+annotation that 
+Rollup cannot 
+interpret due to 
+the position of the 
+comment. The 
+comment will be 
+removed to avoid 
+issues.[39m
+[33msrc/ml/behavior
+alDNA/TransformerMod
+el.js (30:20): "glob
+alAveragePooling1D" 
+is not exported by "
+node_modules/@tensor
+flow/tfjs-layers/dis
+t/exports_layers.js"
+, imported by "src/m
+l/behavioralDNA/Tran
+sformerModel.js".[3
+9m
+[33msrc/ml/behavior
+alDNA/TransformerMod
+el.js (42:20): 
+"lambda" is not 
+exported by "node_mo
+dules/@tensorflow/tf
+js-layers/dist/expor
+ts_layers.js", 
+imported by "src/ml/
+behavioralDNA/Transf
+ormerModel.js".[39m
+[32mΓ£ô[39m 5001 modules transformed.
+[33mCircular 
+chunk: vendor -> 
+react-vendor -> 
+vendor. Please 
+adjust the manual 
+chunk logic for 
+these chunks.[39m
+rendering chunks...
+[33m[plugin 
+vite:reporter] 
+(!) C:/Users/RAJARSH
+I/Password_manager/f
+rontend/src/services
+/quantum/kyberServic
+e.js is dynamically 
+imported by C:/Users
+/RAJARSHI/Password_m
+anager/frontend/src/
+App.jsx but also 
+statically imported 
+by C:/Users/RAJARSHI
+/Password_manager/fr
+ontend/src/services/
+quantum/index.js, 
+dynamic import will 
+not move module 
+into another chunk.
+[39m
+[33m[plugin 
+vite:reporter] 
+(!) C:/Users/RAJARSH
+I/Password_manager/f
+rontend/src/services
+/analyticsService.js
+ is dynamically 
+imported by C:/Users
+/RAJARSHI/Password_m
+anager/frontend/src/
+services/preferences
+Service.js but also 
+statically imported 
+by C:/Users/RAJARSHI
+/Password_manager/fr
+ontend/src/App.jsx, 
+C:/Users/RAJARSHI/Pa
+ssword_manager/front
+end/src/Components/e
+mailmasking/EmailMas
+kingDashboard.jsx, C
+:/Users/RAJARSHI/Pas
+sword_manager/fronte
+nd/src/Components/se
+ttings/SettingsPage.
+jsx, dynamic import 
+will not move 
+module into another 
+chunk.
+[39m
+computing gzip size...
+[2mdist/[22m[32mindex.html                                         [39m[1m[2m    1.43 kB[22m[1m[22m[2m Γöé gzip:   0.67 kB[22m
+[2mdist/[22m[32massets/pqc_kyber_bg-DEL1ejt-.wasm                  [39m[1m[2m   64.96 kB[22m[1m[22m[2m Γöé gzip:  25.98 kB[22m
+[2mdist/[22m[35massets/style-DrTeGQ5o.css                          [39m[1m[2m  180.16 kB[22m[1m[22m[2m Γöé gzip:  29.63 kB[22m
+[2mdist/[22m[36massets/predictiveIntentService-GKr5PDqg.js         [39m[1m[2m    4.68 kB[22m[1m[22m[2m Γöé gzip:   1.58 kB[22m
+[2mdist/[22m[36massets/VerifyIdentity-BDQ89Mzr.js                  [39m[1m[2m    5.17 kB[22m[1m[22m[2m Γöé gzip:   1.97 kB[22m
+[2mdist/[22m[36massets/OAuthCallback-DoUDhJBe.js                   [39m[1m[2m    5.32 kB[22m[1m[22m[2m Γöé gzip:   1.97 kB[22m
+[2mdist/[22m[36massets/duressCodeService-DibpsoMW.js               [39m[1m[2m    5.49 kB[22m[1m[22m[2m Γöé gzip:   1.59 kB[22m
+[2mdist/[22m[36massets/SocialMediaLogin-BP6Y8llE.js                [39m[1m[2m    5.89 kB[22m[1m[22m[2m Γöé gzip:   2.14 kB[22m
+[2mdist/[22m[36massets/DecoyVaultPreview-BMZ9ghfT.js               [39m[1m[2m    5.90 kB[22m[1m[22m[2m Γöé gzip:   2.04 kB[22m
+[2mdist/[22m[36massets/adversarialService-C1BDfLi_.js              [39m[1m[2m    5.99 kB[22m[1m[22m[2m Γöé gzip:   2.01 kB[22m
+[2mdist/[22m[36massets/PasswordStrengthMeterML-DHwFxaQ2.js         [39m[1m[2m    6.03 kB[22m[1m[22m[2m Γöé gzip:   2.10 kB[22m
+[2mdist/[22m[36massets/PredictiveIntentDashboard-D1i7slBD.js       [39m[1m[2m    6.05 kB[22m[1m[22m[2m Γöé gzip:   1.79 kB[22m
+[2mdist/[22m[36massets/PasskeyManagement-Bp3QVhZJ.js               [39m[1m[2m    6.13 kB[22m[1m[22m[2m Γöé gzip:   2.30 kB[22m
+[2mdist/[22m[36massets/LivenessVerification-88jnLlSP.js            [39m[1m[2m    7.53 kB[22m[1m[22m[2m Γöé gzip:   2.61 kB[22m
+[2mdist/[22m[36massets/PredictiveIntentSettings-B9PvrCom.js        [39m[1m[2m    7.80 kB[22m[1m[22m[2m Γöé gzip:   1.92 kB[22m
+[2mdist/[22m[36massets/RecoveryDashboard-DFJx4-RH.js               [39m[1m[2m    7.87 kB[22m[1m[22m[2m Γöé gzip:   2.10 kB[22m
+[2mdist/[22m[36massets/DuressCodeManager-BkzDYnEa.js               [39m[1m[2m    8.25 kB[22m[1m[22m[2m Γöé gzip:   2.29 kB[22m
+[2mdist/[22m[36massets/PerformanceMonitoring-CuiJyJ4E.js           [39m[1m[2m    8.78 kB[22m[1m[22m[2m Γöé gzip:   2.68 kB[22m
+[2mdist/[22m[36massets/TrustedAuthorityManager-AdoH6Ab8.js         [39m[1m[2m    8.89 kB[22m[1m[22m[2m Γöé gzip:   2.73 kB[22m
+[2mdist/[22m[36massets/RecoveryKeySetup-BvPhoqbA.js                [39m[1m[2m    9.17 kB[22m[1m[22m[2m Γöé gzip:   2.87 kB[22m
+[2mdist/[22m[36massets/SecurityAssistant-BVYIZkbr.js               [39m[1m[2m    9.34 kB[22m[1m[22m[2m Γöé gzip:   3.32 kB[22m
+[2mdist/[22m[36massets/PasskeyPrimaryRecoveryInitiate-D-VOx-Os.js  [39m[1m[2m    9.86 kB[22m[1m[22m[2m Γöé gzip:   3.24 kB[22m
+[2mdist/[22m[36massets/PasskeyPrimaryRecoverySetup-DCzrcBvl.js     [39m[1m[2m   10.26 kB[22m[1m[22m[2m Γöé gzip:   3.59 kB[22m
+[2mdist/[22m[36massets/CosmicRayEntropyDashboard-BWg40pEA.js       [39m[1m[2m   10.33 kB[22m[1m[22m[2m Γöé gzip:   3.52 kB[22m
+[2mdist/[22m[36massets/GeneticOAuthCallback-BTRkxWUy.js            [39m[1m[2m   11.55 kB[22m[1m[22m[2m Γöé gzip:   4.22 kB[22m
+[2mdist/[22m[36massets/DuressEventLog-CRUpBoNW.js                  [39m[1m[2m   11.93 kB[22m[1m[22m[2m Γöé gzip:   2.87 kB[22m
+[2mdist/[22m[36massets/QuantumRecoverySetup-nhTFriAo.js            [39m[1m[2m   13.68 kB[22m[1m[22m[2m Γöé gzip:   4.42 kB[22m
+[2mdist/[22m[36massets/PredictiveExpirationDashboard-CnNq6A2s.js   [39m[1m[2m   13.94 kB[22m[1m[22m[2m Γöé gzip:   3.57 kB[22m
+[2mdist/[22m[36massets/CognitiveVerification-DPCIeFJb.js           [39m[1m[2m   15.39 kB[22m[1m[22m[2m Γöé gzip:   4.59 kB[22m
+[2mdist/[22m[36massets/fheService-BwiMN7Gr.js                      [39m[1m[2m   16.77 kB[22m[1m[22m[2m Γöé gzip:   4.85 kB[22m
+[2mdist/[22m[36massets/UltimateEntropyDashboard-w52HAclc.js        [39m[1m[2m   17.76 kB[22m[1m[22m[2m Γöé gzip:   5.92 kB[22m
+[2mdist/[22m[36massets/DarkProtocolDashboard-DBNHftao.js           [39m[1m[2m   18.01 kB[22m[1m[22m[2m Γöé gzip:   4.55 kB[22m
+[2mdist/[22m[36massets/DuressCodeSetup-CdHB8NSN.js                 [39m[1m[2m   19.19 kB[22m[1m[22m[2m Γöé gzip:   5.21 kB[22m
+[2mdist/[22m[36massets/AccountProtection-B8et5ji0.js               [39m[1m[2m   19.51 kB[22m[1m[22m[2m Γöé gzip:   4.54 kB[22m
+[2mdist/[22m[36massets/NotificationSettings-B9L18Ird.js            [39m[1m[2m   21.01 kB[22m[1m[22m[2m Γöé gzip:   5.12 kB[22m
+[2mdist/[22m[36massets/HoneypotDashboard-DH1Rba6T.js               [39m[1m[2m   22.52 kB[22m[1m[22m[2m Γöé gzip:   5.60 kB[22m
+[2mdist/[22m[36massets/NeuroTrainingDashboard-Cdv8hgg6.js          [39m[1m[2m   24.57 kB[22m[1m[22m[2m Γöé gzip:   6.69 kB[22m
+[2mdist/[22m[36massets/SharedFoldersDashboard-JM2U_u16.js          [39m[1m[2m   30.02 kB[22m[1m[22m[2m Γöé gzip:   6.40 kB[22m
+[2mdist/[22m[36massets/HomomorphicSharingDashboard-DQ-ZawRw.js     [39m[1m[2m   30.59 kB[22m[1m[22m[2m Γöé gzip:   7.75 kB[22m
+[2mdist/[22m[36massets/PasswordTimeline-Du8r4yfW.js                [39m[1m[2m   31.08 kB[22m[1m[22m[2m Γöé gzip:   7.50 kB[22m
+[2mdist/[22m[36massets/BreachAlertsDashboard-DDMl2eNv.js           [39m[1m[2m   31.46 kB[22m[1m[22m[2m Γöé gzip:   9.12 kB[22m
+[2mdist/[22m[36massets/EmailMaskingDashboard-_1hEx4au.js           [39m[1m[2m   35.04 kB[22m[1m[22m[2m Γöé gzip:   7.92 kB[22m
+[2mdist/[22m[36massets/PasswordRecovery-Ci4zzX7C.js                [39m[1m[2m   39.19 kB[22m[1m[22m[2m Γöé gzip:   9.70 kB[22m
+[2mdist/[22m[36massets/SecurityDashboard-BFgpk1Uu.js               [39m[1m[2m   44.09 kB[22m[1m[22m[2m Γöé gzip:  10.33 kB[22m
+[2mdist/[22m[36massets/SettingsPage-Dy8RceVM.js                    [39m[1m[2m   48.96 kB[22m[1m[22m[2m Γöé gzip:  11.03 kB[22m
+[2mdist/[22m[36massets/index-CwtRFN-g.js                           [39m[1m[2m  211.69 kB[22m[1m[22m[2m Γöé gzip:  56.03 kB[22m
+[2mdist/[22m[36massets/firebase-CZol0Nhe.js                        [39m[1m[2m  229.15 kB[22m[1m[22m[2m Γöé gzip:  68.58 kB[22m
+[2mdist/[22m[36massets/react-vendor-Cf95kwxw.js                    [39m[1m[2m  412.59 kB[22m[1m[22m[2m Γöé gzip: 137.13 kB[22m
+[2mdist/[22m[36massets/vendor-DO221jRR.js                          [39m[1m[33m2,497.49 kB[39m[22m[2m Γöé gzip: 720.19 kB[22m
+[33m
+(!) Some chunks are 
+larger than 1500 kB 
+after minification. 
+Consider:
+- Using dynamic 
+import() to 
+code-split the 
+application
+- Use build.rollupOp
+tions.output.manualC
+hunks to improve 
+chunking: https://ro
+llupjs.org/configura
+tion-options/#output
+-manualchunks
+- Adjust chunk size 
+limit for this 
+warning via build.ch
+unkSizeWarningLimit.
+[39m
+[32mΓ£ô built in 1m 37s[39m

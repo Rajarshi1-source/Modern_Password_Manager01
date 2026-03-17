@@ -133,6 +133,7 @@ INSTALLED_APPS = [
     'behavioral_recovery',  # Behavioral Biometric Recovery
     'blockchain',  # Blockchain Anchoring (Phase 2B)
     'fhe_service',  # Fully Homomorphic Encryption Service
+    'fhe_sharing',  # Homomorphic Password Sharing (FHE autofill tokens)
     'adversarial_ai',  # Adversarial AI Password Defense
     'mesh_deaddrop',  # Dead Drop Password Sharing via Mesh Networks
     'neuro_feedback',  # Neuro-Feedback Password Training
@@ -1084,6 +1085,19 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'security.tasks.adaptive_tasks.update_rl_model_from_feedback',
         'schedule': crontab(day_of_week='monday', hour='4', minute='0'),  # Monday 4:00 AM
     },
+}
+
+# ==============================================================================
+# FHE Homomorphic Password Sharing Configuration
+# ==============================================================================
+FHE_SHARING_SETTINGS = {
+    'DEFAULT_EXPIRY_HOURS': 72,         # Default share expiration (3 days)
+    'MAX_EXPIRY_DAYS': 90,              # Maximum share lifetime
+    'MAX_USES_DEFAULT': None,           # Unlimited uses by default
+    'MAX_USES_LIMIT': 10000,            # Hard limit on max_uses
+    'DOMAIN_BINDING_REQUIRED': True,    # Require domain binding for shares
+    'AUDIT_RETENTION_DAYS': 365,        # Keep audit logs for 1 year
+    'CLEANUP_INTERVAL_HOURS': 6,        # Cleanup expired shares every 6 hours
 }
 
 # ==============================================================================

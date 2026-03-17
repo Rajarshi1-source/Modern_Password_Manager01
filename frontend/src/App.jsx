@@ -87,6 +87,9 @@ const PasswordTimeline = lazy(() => import('./Components/security/PasswordTimeli
 // AI-Powered Security Assistant
 const SecurityAssistant = lazy(() => import('./Components/security/SecurityAssistant'));
 
+// Homomorphic Password Sharing (FHE autofill tokens)
+const HomomorphicSharingDashboard = lazy(() => import('./Components/sharedfolders/HomomorphicSharingDashboard'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1470,6 +1473,9 @@ function App() {
                 } />
                 <Route path="/shared-folders" element={
                   !isAuthenticated ? <Navigate to="/" /> : <SharedFoldersDashboard />
+                } />
+                <Route path="/homomorphic-sharing" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <HomomorphicSharingDashboard />
                 } />
                 {/* Admin Recovery Dashboard */}
                 <Route path="/admin/recovery-dashboard" element={

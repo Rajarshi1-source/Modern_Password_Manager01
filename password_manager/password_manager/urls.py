@@ -114,6 +114,9 @@ urlpatterns = [
     # FHE (Fully Homomorphic Encryption) API routes
     path('api/fhe/', include('fhe_service.urls')),
     
+    # FHE Homomorphic Password Sharing API routes
+    path('api/fhe-sharing/', include('fhe_sharing.urls')),
+    
     # Adversarial AI Password Defense API routes
     path('api/adversarial/', include('adversarial_ai.urls')),
     

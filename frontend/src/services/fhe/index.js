@@ -4,6 +4,7 @@
  * Exports:
  * - fheService: Main FHE client service
  * - fheKeyManager: Key management service for IndexedDB storage
+ * - fheSharingService: Homomorphic Password Sharing service
  * - FHE_CONFIG: Configuration constants
  * - EncryptionTier: Encryption tier enum
  */
@@ -20,4 +21,6 @@ export {
   DB_CONFIG, 
   KEY_SETTINGS 
 } from './fheKeys';
+
+export { default as fheSharingService } from './fheSharingService';
 

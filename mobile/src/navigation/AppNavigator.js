@@ -42,6 +42,9 @@ import CosmicRayScreen from '../screens/CosmicRayScreen';
 // Import AI assistant screen
 import AIAssistantScreen from '../screens/AIAssistantScreen';
 
+// Import homomorphic sharing screen
+import HomomorphicSharingScreen from '../screens/HomomorphicSharingScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -172,6 +175,11 @@ const SettingsNavigator = () => (
       name="AIAssistant" 
       component={AIAssistantScreen}
       options={{ headerTitle: 'Security Assistant', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="HomomorphicSharing" 
+      component={HomomorphicSharingScreen}
+      options={{ headerTitle: 'FHE Sharing', headerShown: false }}
     />
   </MainStack.Navigator>
 );
