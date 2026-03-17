@@ -7,38 +7,34 @@ import topLevelAwait from 'vite-plugin-top-level-await'
 export default defineConfig({
   plugins: [
     react({
-      jsxRuntime: 'automatic',  // Automatic JSX runtime
-      fastRefresh: true,        // Disable Fast Refresh for faster builds in development
+      jsxRuntime: 'automatic',
+      fastRefresh: true,
     }),
     wasm(),
     topLevelAwait()
   ],
-  
-  // Development server configuration (CRITICAL - keeps your API working)
+
+  // Development server configuration
   server: {
-    port: 5173,  // Vite default (change to 3000 if you prefer)
+    port: 5173,
     host: true,
     strictPort: false,
     proxy: {
-      // Proxy API calls to Django dev server
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
       },
-      // Proxy auth endpoints (JWT token endpoints)
       '/auth': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
       },
-      // Proxy dj-rest-auth endpoints
       '/dj-rest-auth': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         secure: false,
       },
-      // Proxy WebSocket connections to Django/Daphne
       '/ws': {
         target: 'ws://127.0.0.1:8000',
         ws: true,
@@ -47,73 +43,67 @@ export default defineConfig({
       }
     }
   },
-  
-    // OPTIMIZED: Pre-bundle commonly used dependencies
-    optimizeDeps: {
-      //Only include packages imported at entry point
-      include: [
-        'react',
-        'react-dom/client',
-        'react-router-dom',
-        'axios',
-        'styled-components',
-        'react-hot-toast',
-        'react-icons/fa',
-        'lucide-react',
-        'lodash',
-        'framer-motion',
-        // ADD: explicitly pre-bundle the problematic packages
-        'long',
-        '@tensorflow/tfjs-core',
-        '@tensorflow/tfjs',
-        // ADD: explicit inclusion for WASM packages
-        'pqc-kyber',
-        'crystals-kyber-js',
-        'mlkem',
-        'argon2-browser',
-      ],
-      // Exclude large optional/lazy-loaded packages
-      exclude: [
-        '@tensorflow/tfjs',
-        '@tensorflow/tfjs-backend-webgl',
-        '@tensorflow-models/universal-sentence-encoder',
-        '@grpc/grpc-js',
-        'firebase',
-        // 'argon2-browser', // Keep argon2-browser excluded as it has issues when optimized
-        'tfhe'
-      ],
-      // Target ES2020 for compatibility with Kyber WASM
-      esbuildOptions: {
-        target: 'es2020',
-        // make sure esbuild bundles for the browser platform (helps cjs -> esm transform)
-        platform: 'browser',
-      },
-    },
 
-  // Build configuration
-  // SIMPLIFIED: let Vite handle chunking automatically
+  // Pre-bundle commonly used dependencies
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom/client',
+      'react-router-dom',
+      'axios',
+      'styled-components',
+      'react-hot-toast',
+      'react-icons/fa',
+      'lucide-react',
+      'lodash',
+      'framer-motion',
+      'long',
+      '@tensorflow/tfjs-core',
+      '@tensorflow/tfjs',
+      'pqc-kyber',
+      'crystals-kyber-js',
+      'mlkem',
+      'argon2-browser',
+    ],
+    exclude: [
+      '@tensorflow/tfjs',
+      '@tensorflow/tfjs-backend-webgl',
+      '@tensorflow-models/universal-sentence-encoder',
+      '@grpc/grpc-js',
+      'firebase',
+      'tfhe'
+    ],
+    esbuildOptions: {
+      target: 'es2020',
+      platform: 'browser',
+    },
+  },
+
+  // Build configuration — minify and cssCodeSplit MUST live inside build
   build: {
     target: 'es2020',
     outDir: 'dist',
-    sourcemap: false, //Disable sourcemaps for faster builds
-    chunkSizeWarningLimit: 1500, // Increase limit to 1MB
+    sourcemap: false,
+    chunkSizeWarningLimit: 1500,
+    minify: 'esbuild',
+    cssCodeSplit: false,
     rollupOptions: {
       external: ['fs', 'path', 'crypto'],
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
 
-          // Firebase — 229KB gzipped, isolated to its own chunk
+          // Firebase — large, lazy-loaded
           if (id.includes('/firebase/') || id.includes('/@firebase/')) {
             return 'firebase';
           }
 
-          // TensorFlow.js — very large, already lazy-loaded in the app
+          // TensorFlow.js — very large, lazy-loaded in app
           if (id.includes('/@tensorflow/') || /\/tfjs[/-]/.test(id)) {
             return 'tensorflow';
           }
 
-          // Post-quantum crypto — WASM-heavy, benefits from separate caching
+          // Post-quantum crypto — WASM-heavy
           if (
             id.includes('/pqc-kyber/') ||
             id.includes('/crystals-kyber-js/') ||
@@ -122,7 +112,7 @@ export default defineConfig({
             return 'pqc-crypto';
           }
 
-          // Crypto primitives — argon2, noble, stablelib
+          // Crypto primitives
           if (
             id.includes('/argon2-browser/') ||
             id.includes('/@noble/') ||
@@ -131,13 +121,34 @@ export default defineConfig({
             return 'crypto-primitives';
           }
 
-          // React core ONLY — precise path matching prevents the circular dep.
-          // The old id.includes('react') matched react-router-dom, which depends
-          // on packages in vendor, creating: vendor → react-vendor → vendor.
+          // Three.js and WebGL
+          if (
+            id.includes('/three/') ||
+            id.includes('/@react-three/') ||
+            id.includes('/three-mesh-bvh/')
+          ) {
+            return 'three-vendor';
+          }
+
+          // Charts
+          if (id.includes('/chart.js/') || id.includes('/react-chartjs-2/')) {
+            return 'charts-vendor';
+          }
+
+          // Animation
+          if (id.includes('/framer-motion/')) {
+            return 'animation-vendor';
+          }
+
+          // FIX for circular dep: react-router-dom depends on react, so it MUST
+          // be in react-vendor, not vendor. Previously react-router-dom fell into
+          // vendor, which then imported react-vendor → circular warning.
           if (
             id.includes('/node_modules/react/') ||
             id.includes('/node_modules/react-dom/') ||
-            id.includes('/node_modules/scheduler/')
+            id.includes('/node_modules/scheduler/') ||
+            id.includes('/node_modules/react-router') ||   // react-router + react-router-dom
+            id.includes('/node_modules/@remix-run/')        // react-router-dom's internals
           ) {
             return 'react-vendor';
           }
@@ -149,17 +160,6 @@ export default defineConfig({
     },
   },
 
-  // ADD: make sure mixed ESM/CJS packages are properly transformed
-  commonjsOptions: {
-    transformMixedEsModules: true,
-    include: [/node_modules/, /node_modules\/@tensorflow\/.*/],
-  },
-  // Reduce minification time (optional - use it builds are slow)
-  minify: 'esbuild', // Faster than terser
-  //Disable CSS code splitting for faster builds
-  cssCodeSplit: false,
-},
-  
   // Path resolution
   resolve: {
     alias: {
@@ -170,30 +170,26 @@ export default defineConfig({
       '@utils': resolve(__dirname, 'src/utils'),
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@workers': resolve(__dirname, 'src/workers'),
-      // Fix for argon2-browser WASM issue
       'argon2-browser': 'argon2-browser/dist/argon2-bundled.min.js',
-
     },
     extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
   },
-  
+
   // Environment variables
   define: {
     global: 'globalThis',
   },
-  
-  // Assets configuration for WASM
-  // WASM support (CRITICAL for Kyber crypto)
+
+  // WASM asset support
   assetsInclude: ['**/*.wasm'],
-  
-  // Worker configuration for WASM (CRITICAL for Kyber worker)
+
+  // Worker format for WASM workers
   worker: {
     format: 'es'
   },
 
-  // Cache configuration for faster rebuilds
+  // Cache dir for faster rebuilds
   cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
 
-  // Clear screen for cleaner output
   clearScreen: true,
 })
