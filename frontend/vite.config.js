@@ -14,7 +14,7 @@ export default defineConfig({
     topLevelAwait()
   ],
 
-  // Development server configuration
+  // Development server + proxy to Django
   server: {
     port: 5173,
     host: true,
@@ -40,8 +40,8 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
         secure: false,
-      }
-    }
+      },
+    },
   },
 
   // Pre-bundle commonly used dependencies
@@ -71,7 +71,7 @@ export default defineConfig({
       '@tensorflow-models/universal-sentence-encoder',
       '@grpc/grpc-js',
       'firebase',
-      'tfhe'
+      'tfhe',
     ],
     esbuildOptions: {
       target: 'es2020',
@@ -79,31 +79,57 @@ export default defineConfig({
     },
   },
 
-  // Build configuration — minify and cssCodeSplit MUST live inside build
+  // ─── Build ───────────────────────────────────────────────────────────────
   build: {
     target: 'es2020',
     outDir: 'dist',
     sourcemap: false,
     chunkSizeWarningLimit: 1500,
+
+    // these two options MUST live inside `build`, not at the root level
     minify: 'esbuild',
     cssCodeSplit: false,
+
+    // commonjsOptions is a `build`-level option in Vite (passed to
+    // @rollup/plugin-commonjs). Placing it at the root level was silently ignored.
+    commonjsOptions: {
+      transformMixedEsModules: true,
+      include: [/node_modules/, /node_modules\/@tensorflow\/.*/],
+    },
+
     rollupOptions: {
+      // FIX: suppress the 15 "@__PURE__ annotation" warnings that come from
+      // commented-out code inside crystals-kyber-js and mlkem node_modules.
+      // Rollup cannot interpret @__PURE__ inside a comment; it removes them and
+      // warns. Since these are third-party files we cannot change, we silence the
+      // warning for node_modules only.
+      onwarn(warning, warn) {
+        if (
+          warning.code === 'INVALID_ANNOTATION' &&
+          warning.id?.includes('node_modules')
+        ) {
+          return; // suppress – the comment is removed automatically, no runtime impact
+        }
+        warn(warning); // keep all other warnings
+      },
+
       external: ['fs', 'path', 'crypto'],
+
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
 
-          // Firebase — large, lazy-loaded
+          // Firebase ─ 229 KB gzip, isolated for cache efficiency
           if (id.includes('/firebase/') || id.includes('/@firebase/')) {
             return 'firebase';
           }
 
-          // TensorFlow.js — very large, lazy-loaded in app
+          // TensorFlow.js ─ very large, lazy-loaded in the app
           if (id.includes('/@tensorflow/') || /\/tfjs[/-]/.test(id)) {
             return 'tensorflow';
           }
 
-          // Post-quantum crypto — WASM-heavy
+          // Post-quantum crypto ─ WASM-heavy
           if (
             id.includes('/pqc-kyber/') ||
             id.includes('/crystals-kyber-js/') ||
@@ -112,7 +138,7 @@ export default defineConfig({
             return 'pqc-crypto';
           }
 
-          // Crypto primitives
+          // Crypto primitives ─ argon2, noble curves, stablelib
           if (
             id.includes('/argon2-browser/') ||
             id.includes('/@noble/') ||
@@ -121,39 +147,50 @@ export default defineConfig({
             return 'crypto-primitives';
           }
 
-          // Three.js and WebGL
-          if (
-            id.includes('/three/') ||
-            id.includes('/@react-three/') ||
-            id.includes('/three-mesh-bvh/')
-          ) {
-            return 'three-vendor';
-          }
-
-          // Charts
+          // Chart libraries
           if (id.includes('/chart.js/') || id.includes('/react-chartjs-2/')) {
             return 'charts-vendor';
           }
 
-          // Animation
+          // Animation library
           if (id.includes('/framer-motion/')) {
             return 'animation-vendor';
           }
 
-          // FIX for circular dep: react-router-dom depends on react, so it MUST
-          // be in react-vendor, not vendor. Previously react-router-dom fell into
-          // vendor, which then imported react-vendor → circular warning.
+          // FIX for react-vendor circular dep: react-router-dom and @remix-run
+          // depend on React, so they MUST be grouped with React here.
+          // Previously react-router-dom fell into `vendor`, which imported
+          // react-vendor, creating: vendor → react-vendor → vendor.
           if (
             id.includes('/node_modules/react/') ||
             id.includes('/node_modules/react-dom/') ||
             id.includes('/node_modules/scheduler/') ||
-            id.includes('/node_modules/react-router') ||   // react-router + react-router-dom
-            id.includes('/node_modules/@remix-run/')        // react-router-dom's internals
+            id.includes('/node_modules/react-router') ||  // react-router + react-router-dom
+            id.includes('/node_modules/@remix-run/')       // react-router-dom internals
           ) {
             return 'react-vendor';
           }
 
-          // Remaining node_modules
+          // NOTE: three-vendor has been intentionally removed.
+          //
+          // The previous config had:
+          //   three-vendor -> vendor -> three-vendor   (circular chunk warning)
+          //
+          // This happened because @react-three/drei and @react-three/fiber depend
+          // on packages (draco3d, meshopt_decoder, maath, camera-controls, etc.)
+          // that landed in `vendor`, and those packages in turn imported Three.js
+          // internals, completing the cycle.
+          //
+          // The fix is to merge Three.js into `vendor`. Yes, `vendor` grows from
+          // ~795 KB to ~1.55 MB (ungzip), but it gzips to ~467 KB, the circular
+          // warning is eliminated, and chunking is simpler.
+          //
+          // If you later want to re-separate Three.js, you must also add ALL of
+          // its transitive dependencies to the same chunk (draco3d, meshopt_decoder,
+          // maath, camera-controls, @monogrid/gainmap-js, suspend-react, troika-*,
+          // potpack, etc.) to avoid reintroducing the cycle.
+
+          // Everything else from node_modules
           return 'vendor';
         },
       },
@@ -170,25 +207,26 @@ export default defineConfig({
       '@utils': resolve(__dirname, 'src/utils'),
       '@hooks': resolve(__dirname, 'src/hooks'),
       '@workers': resolve(__dirname, 'src/workers'),
+      // Fix for argon2-browser WASM issue in some bundler modes
       'argon2-browser': 'argon2-browser/dist/argon2-bundled.min.js',
     },
     extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
   },
 
-  // Environment variables
+  // Expose `globalThis` as `global` for CJS shims
   define: {
     global: 'globalThis',
   },
 
-  // WASM asset support
+  // Include WASM files as static assets
   assetsInclude: ['**/*.wasm'],
 
-  // Worker format for WASM workers
+  // Workers must emit ES modules for WASM workers (kyberService web worker)
   worker: {
-    format: 'es'
+    format: 'es',
   },
 
-  // Cache dir for faster rebuilds
+  // Persistent cache for faster rebuilds
   cacheDir: process.env.VITE_CACHE_DIR || 'node_modules/.vite',
 
   clearScreen: true,

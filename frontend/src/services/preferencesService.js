@@ -1,7 +1,7 @@
 /**
- * User Preferences Service
- * =========================
- * 
+ * User Preferences Service Implementation
+ * =======================================
+ *
  * Comprehensive user preference management with local storage,
  * backend synchronization, and cross-device support.
  * 
@@ -28,9 +28,24 @@
  *   preferencesService.onChange('theme.mode', (value) => {
  *     console.log('Theme changed to:', value);
  *   });
+ * =========================
+ *
+ * FIX applied: analyticsService was previously loaded with a dynamic import()
+ * inside handleSpecialPreference(), which triggered this Rollup build warning:
+ *
+ *   analyticsService.js is dynamically imported by preferencesService.js but
+ *   also statically imported by App.jsx, EmailMaskingDashboard.jsx, and
+ *   SettingsPage.jsx — dynamic import will not move module into another chunk.
+ *
+ * Because those three files statically import analyticsService, it is already
+ * included in the main bundle on every page load. The dynamic import() inside
+ * this file therefore provided no lazy-loading benefit and only confused
+ * Rollup's chunk analysis. The fix is a normal static import at the top.
  */
 
 import axios from 'axios';
+// FIX: static import replaces the dynamic import() call in handleSpecialPreference
+import analyticsService from './analyticsService';
 
 // Default preferences
 const DEFAULT_PREFERENCES = {
@@ -607,12 +622,16 @@ class PreferencesService {
       }
     }
     
-    // Analytics changes
+    // Analytics opt-in / opt-out
+    // FIX: was previously `import('./analyticsService').then(...)` which triggered:
+    //   "analyticsService.js is dynamically imported by preferencesService.js but
+    //    also statically imported by App.jsx, EmailMaskingDashboard.jsx, and
+    //    SettingsPage.jsx — dynamic import will not move module into another chunk."
+    // analyticsService is already in the main bundle (statically imported by
+    // App.jsx), so the dynamic import() gave no lazy-loading benefit and only
+    // confused Rollup's chunk analysis. Use the static import directly instead.
     if (path === 'privacy.analytics') {
-      // Import and toggle analytics service
-      import('./analyticsService').then(({ analyticsService }) => {
-        analyticsService.setEnabled(value);
-      });
+      analyticsService.setEnabled(value);
     }
   }
   
