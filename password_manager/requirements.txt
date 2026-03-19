@@ -111,7 +111,7 @@ packaging==25.0
 # Encoding
 cffi>=2.0.0
 pycparser>=2.22
-pyasn1==0.6.2
+pyasn1==0.6.3
 rsa==4.9.1
 six==1.17.0
 
