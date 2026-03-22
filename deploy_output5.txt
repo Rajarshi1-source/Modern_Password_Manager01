@@ -1,0 +1,2 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ΓÜÖ∩╕Å  suppress all logs with { quiet: true }
+Downloading solc 0.8.28

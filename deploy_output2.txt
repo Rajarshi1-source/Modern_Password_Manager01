@@ -1,0 +1,55 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ΓÜÖ∩╕Å  specify custom .env file path with { path: '/custom/path/.env' }
+Downloading solc 0.8.20
+Downloading solc 0.8.20 (WASM build)
+
+node.exe : 
+TypeError: Member "t
+oEthSignedMessageHas
+h" not found or not 
+visible after 
+argument-dependent 
+lookup in bytes32.
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (Type   
+ Error: Memb...k    
+up in bytes32.:    
+String) [], Rem    
+oteException
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+  --> .\contracts\Co
+mmitmentRegistry.sol
+:67:26:
+   |
+67 |         
+address signer = mes
+sageHash.toEthSigned
+MessageHash().recove
+r(signature);
+   |                
+          ^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
+^^^^
+
+Error HHE910: 
+Compilation failed
+
+For more info go to 
+https://hardhat.org/
+HHE910 or run 
+Hardhat with 
+--show-stack-traces

@@ -1,0 +1,120 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ΓÜÖ∩╕Å  override existing env vars with { override: true }
+node.exe : Error 
+HHE909: Failed to 
+create compilation 
+job for file "C:\Use
+rs\RAJARSHI\Password
+_manager\contracts\c
+ontracts\CommitmentR
+egistry.sol" using 
+the build profile 
+"default".
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (Erro   
+ r HHE909: F...f    
+ile "default".:    
+String) [], Rem    
+oteException
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+
+No solc version 
+enabled in this 
+profile is 
+compatible with a 
+dependency of this 
+file:
+  * .\contracts\Comm
+itmentRegistry.sol
+  * .\node_modules\@
+openzeppelin\contrac
+ts\utils\cryptograph
+y\MessageHashUtils.s
+ol
+
+HardhatError: 
+HHE909: Failed to 
+create compilation 
+job for file "C:\Use
+rs\RAJARSHI\Password
+_manager\contracts\c
+ontracts\CommitmentR
+egistry.sol" using 
+the build profile 
+"default".
+
+No solc version 
+enabled in this 
+profile is 
+compatible with a 
+dependency of this 
+file:
+  * .\contracts\Comm
+itmentRegistry.sol
+  * .\node_modules\@
+openzeppelin\contrac
+ts\utils\cryptograph
+y\MessageHashUtils.s
+ol
+    at throwIfSolidi
+tyBuildFailed (C:\Us
+ers\RAJARSHI\Passwor
+d_manager\contracts\
+node_modules\hardhat
+\src\internal\builti
+n-plugins\solidity\b
+uild-results.ts:30:1
+1)
+    at 
+buildForScope (C:\Us
+ers\RAJARSHI\Passwor
+d_manager\contracts\
+node_modules\hardhat
+\src\internal\builti
+n-plugins\solidity\t
+asks\build.ts:113:3)
+    at async 
+buildAction (C:\User
+s\RAJARSHI\Password_
+manager\contracts\no
+de_modules\hardhat\s
+rc\internal\builtin-
+plugins\solidity\tas
+ks\build.ts:29:38)
+    at async runScri
+ptWithHardhat (C:\Us
+ers\RAJARSHI\Passwor
+d_manager\contracts\
+node_modules\hardhat
+\dist\src\internal\b
+uiltin-plugins\run\t
+ask-action.js:11:9)
+    at async 
+Promise.all (index 
+0)
+    at async main (C
+:\Users\RAJARSHI\Pas
+sword_manager\contra
+cts\node_modules\har
+dhat\src\internal\cl
+i\main.ts:221:26)
+    at async file://
+/C:/Users/RAJARSHI/P
+assword_manager/cont
+racts/node_modules/h
+ardhat/dist/src/cli.
+js:21:1

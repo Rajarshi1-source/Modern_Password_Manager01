@@ -1,0 +1,54 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ≡ƒöÉ encrypt with Dotenvx: https://dotenvx.com
+Downloading solc 0.8.28
+Downloading solc 0.8.28 (WASM build)
+
+node.exe : 
+TypeError: Function 
+cannot be declared 
+as view because 
+this expression 
+(potentially) 
+modifies the state.
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (Type   
+ Error: Func...f    
+ies the state.:    
+String) [], Rem    
+oteException
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+   --> .\contracts\C
+ommitmentRegistry.so
+l:123:14:
+    |
+123 |         emit C
+ommitmentVerified(me
+rkleRoot, leafHash, 
+isValid);
+    |              ^
+^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^
+
+Error HHE910: 
+Compilation failed
+
+For more info go to 
+https://hardhat.org/
+HHE910 or run 
+Hardhat with 
+--show-stack-traces

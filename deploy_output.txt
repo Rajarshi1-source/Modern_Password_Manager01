@@ -1,0 +1,55 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ≡ƒöÉ prevent building .env in docker: https://dotenvx.com/prebuild
+node.exe : Error 
+HHE15: Invalid 
+config:
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (Erro   
+ r HHE15: Invali    
+d config::Strin    
+g) [], RemoteEx    
+ception
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+	* Config error in c
+onfig.networks.arbit
+rumSepolia.type: 
+Invalid 
+discriminator 
+value. Expected 
+'http' | 
+'edr-simulated'
+	* Config error in c
+onfig.networks.arbit
+rumOne.type: 
+Invalid 
+discriminator 
+value. Expected 
+'http' | 
+'edr-simulated'
+	* Config error in c
+onfig.networks.hardh
+at.type: Invalid 
+discriminator 
+value. Expected 
+'http' | 
+'edr-simulated'
+
+For more info go to 
+https://hardhat.org/
+HHE15 or run 
+Hardhat with 
+--show-stack-traces

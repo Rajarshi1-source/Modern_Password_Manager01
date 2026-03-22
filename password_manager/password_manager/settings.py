@@ -141,6 +141,7 @@ INSTALLED_APPS = [
     'biometric_liveness',  # Deepfake-Resistant Biometric Liveness
     'password_archaeology',  # Password Archaeology & Time Travel
     'ai_assistant',  # AI-Powered Security Assistant (Claude API)
+    'smart_contracts',  # Smart Contract Automation (Blockchain Conditional Access)
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1023,6 +1024,22 @@ BLOCKCHAIN_ANCHORING = {
     'BATCH_INTERVAL_HOURS': int(os.environ.get('BLOCKCHAIN_BATCH_INTERVAL_HOURS', '24')),
 }
 
+# Smart Contract Automation Configuration
+SMART_CONTRACT_AUTOMATION = {
+    'ENABLED': os.environ.get('SMART_CONTRACTS_ENABLED', 'False').lower() == 'true',
+    'TIMELOCKED_VAULT_ADDRESS': os.environ.get('TIMELOCKED_VAULT_ADDRESS', ''),
+    'CHAINLINK_ETH_USD_ORACLE': os.environ.get(
+        'CHAINLINK_ETH_USD_ORACLE',
+        '0x694AA1769357215DE4FAC081bf1f309aDC325306'  # Sepolia ETH/USD
+    ),
+    'DEFAULT_CHECK_IN_INTERVAL_DAYS': int(os.environ.get('SC_DEFAULT_CHECKIN_DAYS', '30')),
+    'DEFAULT_GRACE_PERIOD_DAYS': int(os.environ.get('SC_DEFAULT_GRACE_DAYS', '7')),
+    'MAX_MULTI_SIG_SIGNERS': int(os.environ.get('SC_MAX_MULTISIG_SIGNERS', '10')),
+    'DAO_DEFAULT_QUORUM_PERCENT': int(os.environ.get('SC_DAO_QUORUM_PERCENT', '51')),
+    'DAO_VOTING_PERIOD_DAYS': int(os.environ.get('SC_DAO_VOTING_DAYS', '7')),
+    'ORACLE_CACHE_TTL_SECONDS': int(os.environ.get('SC_ORACLE_CACHE_TTL', '300')),
+}
+
 # ==============================================================================
 # CELERY CONFIGURATION (Phase 2B.1)
 # ==============================================================================
@@ -1084,6 +1101,19 @@ CELERY_BEAT_SCHEDULE = {
     'update-adaptation-rl-model': {
         'task': 'security.tasks.adaptive_tasks.update_rl_model_from_feedback',
         'schedule': crontab(day_of_week='monday', hour='4', minute='0'),  # Monday 4:00 AM
+    },
+    # Smart Contract Automation Tasks
+    'check-dead-mans-switch': {
+        'task': 'smart_contracts.tasks.check_dead_mans_switches',
+        'schedule': crontab(minute='0', hour='*/1'),  # Every hour
+    },
+    'evaluate-contract-conditions': {
+        'task': 'smart_contracts.tasks.evaluate_pending_conditions',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+    },
+    'sync-onchain-vault-state': {
+        'task': 'smart_contracts.tasks.sync_onchain_state',
+        'schedule': crontab(minute='*/30'),  # Every 30 minutes
     },
 }
 

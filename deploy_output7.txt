@@ -1,0 +1,46 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ≡ƒ¢á∩╕Å  run anywhere with `dotenvx run -- yourcommand`
+
+node.exe : 
+CompilerError: 
+Stack too deep. Try 
+compiling with 
+`--via-ir` (cli) or 
+the equivalent 
+`viaIR: true` 
+(standard JSON) 
+while enabling the 
+optimizer. 
+Otherwise, try 
+removing local 
+variables.
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (Comp   
+ ilerError: ...o    
+cal variables.:    
+String) [], Rem    
+oteException
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+
+Error HHE910: 
+Compilation failed
+
+For more info go to 
+https://hardhat.org/
+HHE910 or run 
+Hardhat with 
+--show-stack-traces

@@ -1,0 +1,97 @@
+﻿node.exe : npm warn 
+gitignore-fallback 
+No .npmignore file 
+found, using 
+.gitignore for file 
+exclusion. Consider 
+creating a 
+.npmignore file to 
+explicitly control 
+published files.
+At C:\nvm4w\nodejs\n
+pm.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npm-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (npm    
+ warn gitign...u    
+blished files.:    
+String) [], Rem    
+oteException
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+npm warn skipping 
+integrity check for 
+git dependency ssh:/
+/git@github.com/matt
+er-labs/era-contract
+s.git
+npm warn deprecated 
+inflight@1.0.6: 
+This module is not 
+supported, and 
+leaks memory. Do 
+not use it. Check 
+out lru-cache if 
+you want a good and 
+tested way to 
+coalesce async 
+requests by a key 
+value, which is 
+much more 
+comprehensive and 
+powerful.
+npm warn deprecated 
+rimraf@2.7.1: 
+Rimraf versions 
+prior to v4 are no 
+longer supported
+npm warn deprecated 
+glob@7.2.3: Old 
+versions of glob 
+are not supported, 
+and contain widely 
+publicized security 
+vulnerabilities, 
+which have been 
+fixed in the 
+current version. 
+Please update. 
+Support for old 
+versions may be 
+purchased (at 
+exorbitant rates) 
+by contacting 
+i@izs.me
+npm warn 
+gitignore-fallback 
+No .npmignore file 
+found, using 
+.gitignore for file 
+exclusion. Consider 
+creating a 
+.npmignore file to 
+explicitly control 
+published files.
+
+added 298 packages, and audited 299 packages in 6m
+
+66 packages are looking for funding
+  run `npm fund` for details
+
+18 vulnerabilities (13 low, 3 moderate, 2 high)
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.

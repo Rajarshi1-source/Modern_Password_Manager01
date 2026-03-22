@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
  * @title CommitmentRegistry
@@ -11,6 +12,7 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
  */
 contract CommitmentRegistry is Ownable {
     using ECDSA for bytes32;
+    using MessageHashUtils for bytes32;
 
     /// @dev Commitment structure for batch anchoring
     struct Commitment {
@@ -64,7 +66,7 @@ contract CommitmentRegistry is Ownable {
         bytes32 messageHash = keccak256(
             abi.encodePacked(merkleRoot, batchSize)
         );
-        address signer = messageHash.toEthSignedMessageHash().recover(signature);
+        address signer = ECDSA.recover(MessageHashUtils.toEthSignedMessageHash(messageHash), signature);
         require(signer == owner(), "Invalid signature");
 
         // Store commitment
@@ -97,7 +99,7 @@ contract CommitmentRegistry is Ownable {
         bytes32 merkleRoot,
         bytes32 leafHash,
         bytes32[] calldata proof
-    ) external view returns (bool) {
+    ) external returns (bool) {
         require(commitments[merkleRoot].exists, "Root not found");
 
         bytes32 computedHash = leafHash;

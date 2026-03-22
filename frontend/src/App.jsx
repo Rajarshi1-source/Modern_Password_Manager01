@@ -90,6 +90,9 @@ const SecurityAssistant = lazy(() => import('./Components/security/SecurityAssis
 // Homomorphic Password Sharing (FHE autofill tokens)
 const HomomorphicSharingDashboard = lazy(() => import('./Components/sharedfolders/HomomorphicSharingDashboard'));
 
+// Smart Contract Vault Automation
+const SmartContractVaultDashboard = lazy(() => import('./Components/security/SmartContractVaultDashboard'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1552,6 +1555,14 @@ function App() {
                 {/* AI-Powered Security Assistant */}
                 <Route path="/security/ai-assistant" element={
                   !isAuthenticated ? <Navigate to="/" /> : <SecurityAssistant />
+                } />
+                {/* Smart Contract Vault Automation */}
+                <Route path="/security/smart-contracts" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Smart Contract Dashboard">
+                      <SmartContractVaultDashboard />
+                    </ErrorBoundary>
+                  )
                 } />
               </Routes>
             </Suspense>

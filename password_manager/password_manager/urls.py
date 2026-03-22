@@ -137,6 +137,9 @@ urlpatterns = [
     
     # AI-Powered Security Assistant API routes
     path('api/ai-assistant/', include('ai_assistant.urls')),
+    
+    # Smart Contract Automation API routes
+    path('api/smart-contracts/', include('smart_contracts.urls')),
 ]
 
 # Add static file serving for development

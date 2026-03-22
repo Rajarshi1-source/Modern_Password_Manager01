@@ -1,0 +1,25 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ΓÜÖ∩╕Å  load multiple .env files with { path: ['.env.local', '.env'] }
+
+hre keys: [
+  'userConfig',    'config',
+  'hooks',         'interruptions',
+  'globalOptions', 'versions',
+  'network',       'artifacts',
+  'solidity',      '_coverage',
+  '_gasAnalytics', 'tasks'
+]
+hre.network: {
+  connect: [AsyncFunction: connect],
+  createServer: [AsyncFunction: createServer]
+}
+hre.network keys: [ 'connect', 'createServer' ]
+No hre.network.provider
+hre.config.networks keys: [
+  'arbitrumSepolia',
+  'arbitrumOne',
+  'hardhat',
+  'localhost',
+  'default',
+  'node'
+]
+Network name: undefined

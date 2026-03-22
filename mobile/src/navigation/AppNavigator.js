@@ -45,6 +45,9 @@ import AIAssistantScreen from '../screens/AIAssistantScreen';
 // Import homomorphic sharing screen
 import HomomorphicSharingScreen from '../screens/HomomorphicSharingScreen';
 
+// Import smart contract screen
+import SmartContractScreen from '../screens/SmartContractScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -180,6 +183,11 @@ const SettingsNavigator = () => (
       name="HomomorphicSharing" 
       component={HomomorphicSharingScreen}
       options={{ headerTitle: 'FHE Sharing', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="SmartContracts" 
+      component={SmartContractScreen}
+      options={{ headerTitle: 'Smart Contracts', headerShown: false }}
     />
   </MainStack.Navigator>
 );

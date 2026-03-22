@@ -1,0 +1,102 @@
+﻿node.exe : An 
+unexpected error 
+occurred:
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (An u   
+ nexpected error    
+ occurred::Stri    
+ng) [], RemoteE    
+xception
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+
+Error: Cannot find 
+module '@nomicfounda
+tion/hardhat-chai-ma
+tchers'
+Require stack:
+- C:\Users\RAJARSHI\
+Password_manager\con
+tracts\node_modules\
+@nomicfoundation\har
+dhat-toolbox\index.j
+s
+    at node:internal
+/modules/cjs/loader:
+1421:15
+    at 
+m._resolveFilename (
+file:///C:/Users/RAJ
+ARSHI/Password_manag
+er/contracts/node_mo
+dules/tsx/dist/regis
+ter-B7jrtLTO.mjs:1:7
+89)
+    at 
+defaultResolveImpl (
+node:internal/module
+s/cjs/loader:1059:19
+)
+    at resolveForCJS
+WithHooks (node:inte
+rnal/modules/cjs/loa
+der:1064:22)
+    at Module._load 
+(node:internal/modul
+es/cjs/loader:1227:3
+7)
+    at TracingChanne
+l.traceSync (node:di
+agnostics_channel:32
+8:14)
+    at 
+wrapModuleLoad (node
+:internal/modules/cj
+s/loader:245:24)
+    at 
+Module.require (node
+:internal/modules/cj
+s/loader:1504:12)
+    at require (node
+:internal/modules/he
+lpers:152:16)
+    at 
+Object.<anonymous> (
+C:\Users\RAJARSHI\Pa
+ssword_manager\contr
+acts\node_modules\@n
+omicfoundation\hardh
+at-toolbox\src\index
+.ts:1:1) {
+  code: 
+'MODULE_NOT_FOUND',
+  requireStack: [
+    'C:\\Users\\RAJA
+RSHI\\Password_manag
+er\\contracts\\node_
+modules\\@nomicfound
+ation\\hardhat-toolb
+ox\\index.js'
+  ]
+}
+
+If you think this 
+is a bug in 
+Hardhat, please 
+report it here: http
+s://hardhat.org/repo
+rt-bug

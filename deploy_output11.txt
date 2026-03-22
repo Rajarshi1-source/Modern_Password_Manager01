@@ -1,0 +1,41 @@
+﻿[dotenv@17.3.1] injecting env (89) from ..\password_manager\.env -- tip: ΓÜÖ∩╕Å  specify custom .env file path with { path: '/custom/path/.env' }
+
+node.exe : 
+Deployment failed: 
+TypeError: Cannot 
+read properties of 
+undefined (reading 
+'request')
+At C:\nvm4w\nodejs\n
+px.ps1:16 char:5
++     & 
+"$basedir/node$exe" 
+ "$basedir/node_modu
+les/npm/bin/npx-cli.
+js" ...
++     ~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~
+    + CategoryInfo  
+            : NotS  
+  pecified: (Depl   
+ oyment fail...d    
+ing 'request'):    
+String) [], Rem    
+oteException
+    + FullyQualifie 
+   dErrorId : Nati  
+  veCommandError
+ 
+    at main (file://
+/C:/Users/RAJARSHI/P
+assword_manager/cont
+racts/scripts/deploy
+-timelocked-vault.js
+:18:49)
+    at file:///C:/Us
+ers/RAJARSHI/Passwor
+d_manager/contracts/
+scripts/deploy-timel
+ocked-vault.js:79:1
