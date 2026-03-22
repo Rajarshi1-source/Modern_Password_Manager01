@@ -82,8 +82,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest",
+    "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "lint": "eslint .",
+    "format:check": "eslint .",
     "type-check": "tsc --noEmit"
   }
 }
