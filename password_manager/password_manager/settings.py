@@ -236,7 +236,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.environ.get('DB_NAME', 'password_manager'),
         'USER': os.environ.get('DB_USER', 'user'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'password123'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', '' if not DEBUG else 'localdevpassword'),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '5432'),
     }    
@@ -427,10 +427,10 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # This placeholder ensures CORS is configured before other settings reference it
 
 # AWS S3 settings
-AWS_ACCESS_KEY_ID = 'your-access-key'
-AWS_SECRET_ACCESS_KEY = 'your-secret-key'
-AWS_STORAGE_BUCKET_NAME = 'password-manager-bucket'
-AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
+AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', '')
+AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com' if AWS_STORAGE_BUCKET_NAME else ''
 AWS_S3_OBJECT_PARAMETERS = {
     'CacheControl': 'max-age=86400',
 }
@@ -565,8 +565,8 @@ EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.smtp.
 EMAIL_HOST = os.environ.get('EMAIL_HOST', 'smtp.example.com')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'your-email@example.com')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'your-email-password')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 
 # Email addresses
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'SecureVault <noreply@securevault.com>')
@@ -586,15 +586,15 @@ ACCOUNT_LOGOUT_ON_GET = True
 ACCOUNT_UNIQUE_EMAIL = True
 
 # Authy settings
-AUTHY_API_KEY = os.environ.get('AUTHY_API_KEY', 'your_authy_api_key')
+AUTHY_API_KEY = os.environ.get('AUTHY_API_KEY', '')
 
 # Push notification settings
 PUSH_NOTIFICATIONS_SETTINGS = {
-    'FCM_API_KEY': os.environ.get('FCM_API_KEY', 'your_fcm_api_key'),
-    'GCM_API_KEY': os.environ.get('GCM_API_KEY', 'your_gcm_api_key'),
+    'FCM_API_KEY': os.environ.get('FCM_API_KEY', ''),
+    'GCM_API_KEY': os.environ.get('GCM_API_KEY', ''),
     'APNS_CERTIFICATE': os.path.join(BASE_DIR, 'certs', 'apns-cert.pem'),
     'WP_PRIVATE_KEY': os.path.join(BASE_DIR, 'certs', 'windows_private.pem'),
-    'WP_CLAIMS': {'sub': 'mailto:dev@passwordmanager.com'}
+    'WP_CLAIMS': {'sub': f"mailto:{os.environ.get('WP_VAPID_EMAIL', 'admin@example.com')}"}
 }
 
 # JWT Settings
@@ -631,13 +631,13 @@ SIMPLE_JWT = {
 INSTALLED_APPS += ['rest_framework_simplejwt.token_blacklist']
 
 # Firebase Settings
-FIREBASE_PROJECT_ID = 'your-firebase-project-id'
-FIREBASE_PRIVATE_KEY_ID = 'your-firebase-private-key-id'
-FIREBASE_PRIVATE_KEY = 'your-firebase-private-key'
-FIREBASE_CLIENT_EMAIL = 'your-firebase-client-email'
-FIREBASE_CLIENT_ID = 'your-firebase-client-id'
-FIREBASE_CLIENT_CERT_URL = 'your-firebase-client-cert-url'
-FIREBASE_DATABASE_URL = 'https://your-project-id.firebaseio.com'
+FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID', '')
+FIREBASE_PRIVATE_KEY_ID = os.environ.get('FIREBASE_PRIVATE_KEY_ID', '')
+FIREBASE_PRIVATE_KEY = os.environ.get('FIREBASE_PRIVATE_KEY', '').replace('\\n', '\n')
+FIREBASE_CLIENT_EMAIL = os.environ.get('FIREBASE_CLIENT_EMAIL', '')
+FIREBASE_CLIENT_ID = os.environ.get('FIREBASE_CLIENT_ID', '')
+FIREBASE_CLIENT_CERT_URL = os.environ.get('FIREBASE_CLIENT_CERT_URL', '')
+FIREBASE_DATABASE_URL = os.environ.get('FIREBASE_DATABASE_URL', '')
 
 # GeoIP Database Configuration
 # Download GeoLite2-City.mmdb and GeoLite2-Country.mmdb from MaxMind
@@ -660,7 +660,8 @@ GEOIP_COUNTRY = 'GeoLite2-Country.mmdb'
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_DURATION_MINUTES = 30
 SUSPICIOUS_THRESHOLD = 3
-BLACKLISTED_IPS = {'192.168.1.100', '10.0.0.5'}  # Example IPs
+_blacklisted = os.environ.get('BLACKLISTED_IPS', '')
+BLACKLISTED_IPS = set(_blacklisted.split(',')) if _blacklisted else set()
 
 # IP Whitelisting (Enterprise Feature - Optional)
 # Set ALLOWED_IP_RANGES in .env for IP restriction
@@ -677,9 +678,9 @@ IP_WHITELISTING_ENABLED = os.environ.get('IP_WHITELISTING_ENABLED', 'False').low
 # TWILIO_ACCOUNT_SID=your_actual_account_sid
 # TWILIO_AUTH_TOKEN=your_actual_auth_token
 # TWILIO_PHONE_NUMBER=+1234567890
-TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', 'your_twilio_sid')
-TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', 'your_twilio_token')
-TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER', '+1234567890')
+TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN', '')
+TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER', '')
 TWILIO_ENABLED = os.environ.get('TWILIO_ENABLED', 'False').lower() == 'true'
 
 # Enhanced Security Configuration
@@ -1030,7 +1031,7 @@ SMART_CONTRACT_AUTOMATION = {
     'TIMELOCKED_VAULT_ADDRESS': os.environ.get('TIMELOCKED_VAULT_ADDRESS', ''),
     'CHAINLINK_ETH_USD_ORACLE': os.environ.get(
         'CHAINLINK_ETH_USD_ORACLE',
-        '0x694AA1769357215DE4FAC081bf1f309aDC325306'  # Sepolia ETH/USD
+        ''
     ),
     'DEFAULT_CHECK_IN_INTERVAL_DAYS': int(os.environ.get('SC_DEFAULT_CHECKIN_DAYS', '30')),
     'DEFAULT_GRACE_PERIOD_DAYS': int(os.environ.get('SC_DEFAULT_GRACE_DAYS', '7')),
