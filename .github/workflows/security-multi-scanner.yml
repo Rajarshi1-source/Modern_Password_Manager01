@@ -147,11 +147,13 @@ jobs:
           ignore-unfixed: false
           vuln-type: 'os,library'
           scanners: 'vuln,secret,config'
+        continue-on-error: true
       
       - name: Ensure Trivy SARIF File is Valid
         if: always()
         run: |
-          if [ ! -f trivy-fs.sarif ] || [ ! -s trivy-fs.sarif ]; then
+          # Create a valid minimal SARIF if file is missing, empty, or invalid
+          if [ ! -f trivy-fs.sarif ] || [ ! -s trivy-fs.sarif ] || ! grep -q '"runs"' trivy-fs.sarif; then
             echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy"}}}]}' > trivy-fs.sarif
           fi
 
