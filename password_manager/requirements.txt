@@ -226,7 +226,7 @@ zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
 # Genetic Password Evolution
 # ============================================================================
 # DNA file parsing (23andMe, AncestryDNA, VCF formats)
-biopython>=1.87  # CVE-2025-68463 (XXE in Bio.Entrez) fixed in 1.87
+biopython>=1.85  # CVE-2025-68463 (XXE in Bio.Entrez) fixed in 1.87 but not compatible with python 3.13
 
 # Async HTTP client for DNA provider APIs
 httpx>=0.27.0
