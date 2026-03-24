@@ -152,7 +152,7 @@ jobs:
         if: always()
         run: |
           if [ ! -f trivy-fs.sarif ] || [ ! -s trivy-fs.sarif ]; then
-            echo '{"version":"2.1.0","runs":[]}' > trivy-fs.sarif
+            echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy"}}}]}' > trivy-fs.sarif
           fi
 
       # FIX #2: Pinned to commit hash
