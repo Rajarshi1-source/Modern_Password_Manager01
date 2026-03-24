@@ -37,6 +37,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
+          cache-dependency-path: 'password_manager/requirements.txt'
       
       - name: Install dependencies
         run: |

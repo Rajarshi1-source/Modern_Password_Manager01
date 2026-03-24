@@ -140,7 +140,7 @@ Be friendly, professional, and reassuring. Security can be intimidating — make
         sanitized = re.sub(
             r'(?:password|secret|key|token|credential)\s*[:=]\s*["\']?[\w!@#$%^&*()\-+=]{8,}["\']?',
             '[REDACTED]',
-            sanitized if 'sanitized' in dir() else response_text,
+            response_text,
             flags=re.IGNORECASE
         )
         
@@ -148,7 +148,7 @@ Be friendly, professional, and reassuring. Security can be intimidating — make
         sanitized = re.sub(
             r'(?:sk-|pk-|api[_-]?key[_-]?)[\w\-]{20,}',
             '[REDACTED_KEY]',
-            response_text if sanitized == response_text else sanitized,
+            sanitized,
             flags=re.IGNORECASE
         )
         
