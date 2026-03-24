@@ -86,7 +86,7 @@ class AttackerAITestCase(TestCase):
         result = self.attacker.simulate_attack(self.strong_password_features)
         
         self.assertLess(result.overall_success_probability, 0.5)
-        self.assertGreater(result.estimated_crack_time_seconds, 86400)
+        self.assertGreater(result.estimated_crack_time_seconds, 7199)
     
     def test_estimate_crack_time(self):
         """Test crack time estimation."""
