@@ -72,12 +72,16 @@ jobs:
           oras push ${{ env.IMAGE }}:sbom --artifact-type application/vnd.cyclonedx+json sbom.image.cyclonedx.json
         continue-on-error: true
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.5.0
+
       - name: Sign SBOM with cosign (keyless)
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
-          pip install cosign==2.1.1 || true
-          cosign sign-blob --yes sbom.image.cyclonedx.json
+          cosign sign-blob --yes \
+            --output-signature sbom.sig \
+            sbom.image.cyclonedx.json
         continue-on-error: true
 
       - name: Upload artifacts

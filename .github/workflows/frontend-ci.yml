@@ -82,7 +82,7 @@ jobs:
         continue-on-error: true
       
       - name: Run Snyk security scan
-        uses: snyk/actions/node@v1
+        uses: snyk/actions/node@9adf32b1121593767fc3c057af55b55db032dc04 # master
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}

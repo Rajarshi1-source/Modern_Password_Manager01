@@ -29,11 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build and install liboqs (Open Quantum Safe library)
 WORKDIR /tmp
-# Build and install liboqs (Open Quantum Safe library)
-WORKDIR /tmp
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git
-WORKDIR /tmp/liboqs
-RUN mkdir build
+RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
+    mkdir -p liboqs/build
 WORKDIR /tmp/liboqs/build
 RUN cmake -GNinja .. \
     -DCMAKE_BUILD_TYPE=Release \
@@ -110,8 +107,9 @@ RUN pip install --upgrade pip setuptools wheel && \
     pip install -r requirements.txt && \
     pip install gunicorn daphne uvicorn[standard] psycopg2-binary redis django-redis
 
-# Copy crypto packages from crypto-builder
-COPY --from=crypto-builder /usr/local/lib/python3.11/site-packages /opt/venv/lib/python3.11/site-packages/
+# Copy only the OQS Python package from crypto-builder (avoid overwriting entire site-packages)
+COPY --from=crypto-builder /usr/local/lib/python3.11/site-packages/oqs \
+     /opt/venv/lib/python3.11/site-packages/oqs
 
 # -----------------------------------------------------------------------------
 # Stage 3: Production - Final optimized image
@@ -190,13 +188,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 ENTRYPOINT ["/entrypoint.sh"]
 
 # Default command (can be overridden)
-CMD ["gunicorn", "password_manager.wsgi:application", \
-    "--bind", "0.0.0.0:8000", \
-    "--workers", "4", \
-    "--threads", "2", \
-    "--timeout", "120", \
-    "--keep-alive", "5", \
-    "--access-logfile", "-", \
-    "--error-logfile", "-", \
-    "--capture-output", \
-    "--enable-stdio-inheritance"]
+CMD ["daphne", \
+    "-b", "0.0.0.0", \
+    "-p", "8000", \
+    "--websocket_timeout", "300", \
+    "password_manager.asgi:application"]

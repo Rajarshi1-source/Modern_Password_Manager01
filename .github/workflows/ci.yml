@@ -111,7 +111,11 @@ jobs:
         env:
           DEBUG: 'True'
           SECRET_KEY: 'test-secret-key-for-ci'
-          DATABASE_URL: postgres://test_user:test_password@localhost:5432/test_db
+          DB_NAME: test_db
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: localhost
+          DB_PORT: '5432'
           REDIS_URL: redis://localhost:6379/0
         run: |
           cd password_manager
@@ -121,7 +125,11 @@ jobs:
         env:
           DEBUG: 'True'
           SECRET_KEY: 'test-secret-key-for-ci'
-          DATABASE_URL: postgres://test_user:test_password@localhost:5432/test_db
+          DB_NAME: test_db
+          DB_USER: test_user
+          DB_PASSWORD: test_password
+          DB_HOST: localhost
+          DB_PORT: '5432'
           REDIS_URL: redis://localhost:6379/0
           CELERY_BROKER_URL: redis://localhost:6379/1
         run: |
@@ -356,10 +364,21 @@ jobs:
         run: |
           export KUBECONFIG=kubeconfig
           
-          # Create database backup
-          kubectl exec -n password-manager deployment/backend -- \
-            python manage.py dumpdata --natural-foreign --natural-primary \
-            -o /app/backup_$(date +%Y%m%d_%H%M%S).json || true
+          # Wait for at least one backend pod to be ready before backup
+          kubectl wait pod \
+            -l app=password-manager,component=backend \
+            -n password-manager \
+            --for=condition=Ready \
+            --timeout=120s
+          
+          BACKEND_POD=$(kubectl get pod -n password-manager \
+            -l app=password-manager,component=backend \
+            -o jsonpath='{.items[0].metadata.name}')
+          
+          kubectl exec -n password-manager "$BACKEND_POD" -- \
+            python manage.py dumpdata \
+            --natural-foreign --natural-primary \
+            -o /app/backup_$(date +%Y%m%d_%H%M%S).json || echo "Backup failed, continuing"
       
       - name: Deploy to Kubernetes (Production)
         run: |
@@ -402,7 +421,7 @@ jobs:
           curl -f https://yourapp.com/api/health/ || exit 1
           curl -f https://yourapp.com/health || exit 1
           
-          echo "âœ… Smoke tests passed!"
+          echo " Smoke tests passed!"
       
       - name: Notify deployment success
         if: success()
@@ -410,13 +429,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "âœ… Production deployment successful!",
+              "text": " Production deployment successful!",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Password Manager Production Deployment*\nâœ… Deployment completed successfully\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*URL:* https://yourapp.com"
+                    "text": "*Password Manager Production Deployment*\n Deployment completed successfully\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*URL:* https://yourapp.com"
                   }
                 }
               ]
@@ -431,13 +450,13 @@ jobs:
         with:
           payload: |
             {
-              "text": "âŒ Production deployment failed!",
+              "text": " Production deployment failed!",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Password Manager Production Deployment FAILED*\nâŒ Please check the workflow logs\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    "text": "*Password Manager Production Deployment FAILED*\n Please check the workflow logs\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                   }
                 }
               ]
@@ -483,7 +502,7 @@ jobs:
           kubectl rollout status deployment/backend -n password-manager --timeout=300s
           kubectl rollout status deployment/frontend -n password-manager --timeout=300s
           
-          echo "âœ… Rollback completed!"
+          echo " Rollback completed!"
       
       - name: Cleanup
         if: always()

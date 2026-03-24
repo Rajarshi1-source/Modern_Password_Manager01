@@ -73,7 +73,7 @@ spec:
                 - pm_user
             initialDelaySeconds: 5
             periodSeconds: 5
-        volumes:
+      volumes:
         - name: postgres-data
           persistentVolumeClaim:
             claimName: postgres-pvc
@@ -266,27 +266,28 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: password-manager-sa
+      initContainers:
+        - name: migrate
+          image: ghcr.io/yourusername/password-manager/backend:latest
+          command: ["python", "manage.py", "migrate", "--noinput"]
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
       containers:
         - name: backend
           image: ghcr.io/yourusername/password-manager/backend:latest
           imagePullPolicy: Always
           command:
-            - gunicorn
-            - password_manager.wsgi:application
+            - daphne
+            - password_manager.asgi:application
             - --bind
-            - 0.0.0.0:8000
-            - --workers
-            - "4"
-            - --threads
-            - "2"
-            - --timeout
-            - "120"
-            - --keep-alive
-            - "5"
-            - --access-logfile
-            - "-"
-            - --error-logfile
-            - "-"
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --verbosity
+            - "1"
           ports:
             - containerPort: 8000
           envFrom:
@@ -295,8 +296,6 @@ spec:
             - secretRef:
                 name: app-secrets
           env:
-            - name: RUN_MIGRATIONS
-              value: "true"
             - name: COLLECT_STATIC
               value: "true"
           volumeMounts:

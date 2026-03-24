@@ -138,12 +138,14 @@ services:
     command: >
       sh -c "python manage.py migrate &&
              python manage.py collectstatic --noinput &&
-             gunicorn password_manager.wsgi:application --bind 0.0.0.0:8000 --workers 4"
+             daphne -b 0.0.0.0 -p 8000 password_manager.asgi:application"
 
     volumes:
       - ./password_manager:/app:ro # Read-only app code
       - static_volume:/app/staticfiles
       - media_volume:/app/media
+      - ./password_manager/logs:/app/logs  # writable log dir
+      - ./password_manager/geoip:/app/geoip  # writable GeoIP dir
 
     ports:
       - "${BACKEND_PORT:-8000}:8000"
@@ -272,7 +274,7 @@ services:
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
-      - SECRET_KEY=${SECRET_KEY}
+      - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -319,7 +321,7 @@ services:
     # ✅ FIX #3: Mandatory secrets
     environment:
       - DEBUG=${DEBUG:-False}
-      - SECRET_KEY=${SECRET_KEY}
+      - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -453,7 +455,13 @@ services:
           memory: 512M
 
     command: >
-      python -c " import os, sys os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'password_manager.settings') import django; django.setup() from security.services.dark_protocol_service import run_relay_node run_relay_node() "
+      sh -c "python -c '
+      import os, sys;
+      os.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"password_manager.settings\");
+      import django; django.setup();
+      from security.services.dark_protocol_service import run_relay_node;
+      run_relay_node()
+      '"
 
     ports:
       - "${DARK_PROTOCOL_RELAY_PORT:-9090}:9090" # Relay traffic port
@@ -464,7 +472,7 @@ services:
       - DARK_PROTOCOL_NODE_TYPE=${DARK_PROTOCOL_NODE_TYPE:-relay}
       - DARK_PROTOCOL_REGION=${DARK_PROTOCOL_REGION:-local}
       - DARK_PROTOCOL_PUBLIC_ADDRESS=${DARK_PROTOCOL_PUBLIC_ADDRESS:-}
-      - SECRET_KEY=${SECRET_KEY}
+      - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
       - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       # Relay-specific settings

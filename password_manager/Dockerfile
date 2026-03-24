@@ -28,7 +28,7 @@ COPY ml_dark_web/requirements_ml_darkweb.txt /app/ml_dark_web/
 RUN pip install --no-cache-dir -r ml_dark_web/requirements_ml_darkweb.txt || true
 
 # Install spaCy model (optional)
-RUN python -m spacy download en_core_web_sm || true
+RUN python -m spacy download en_core_web_sm --no-deps || true
 
 # Copy project
 COPY . /app/
@@ -51,6 +51,10 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/api/health/ || exit 1
 
+# Set Docker environment flags
+ENV DOCKER_CONTAINER=true
+ENV RUN_MAIN=true
+
 # Default command (can be overridden in docker-compose.yml)
-CMD ["gunicorn", "password_manager.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "4"]
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "password_manager.asgi:application"]
 

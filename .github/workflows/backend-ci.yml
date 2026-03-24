@@ -175,14 +175,16 @@ jobs:
       - name: Run tests
         working-directory: ./password_manager
         env:
+          PYTHONPATH: ${{ github.workspace }}/password_manager
           SECRET_KEY: test-secret-key-for-ci-only
-          DEBUG: False
+          DEBUG: 'False'
           DB_HOST: localhost
           DB_NAME: test_db
           DB_USER: postgres
           DB_PASSWORD: postgres
           REDIS_URL: redis://localhost:6379/0
-        run: pytest --cov=. --cov-report=xml --cov-report=html
+          CELERY_BROKER_URL: redis://localhost:6379/1
+        run: pytest --cov=. --cov-report=xml --cov-report=html -x
         continue-on-error: true
       
       - name: Upload coverage reports

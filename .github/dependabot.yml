@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/contracts"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # tmp is pinned via overrides because patch-package@6.5.1 (via @chainlink/contracts)
+      # constrains it to ^0.0.33. Remove this ignore when @chainlink/contracts upgrades patch-package.
+      - dependency-name: "tmp"
+        versions: ["< 0.2.4"]

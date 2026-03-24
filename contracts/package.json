@@ -19,5 +19,13 @@
   },
   "dependencies": {
     "dotenv": "^17.2.3"
+  },
+  "overrides": {
+    "tmp": ">=0.2.4",
+    "@openzeppelin/contracts-upgradeable": "^4.9.6"
+  },
+  "resolutions": {
+    "tmp": ">=0.2.4",
+    "@openzeppelin/contracts-upgradeable": "^4.9.6"
   }
 }
