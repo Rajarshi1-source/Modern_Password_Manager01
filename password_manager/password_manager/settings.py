@@ -91,7 +91,7 @@ ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8
 
 INSTALLED_APPS = [
     # Django Channels must be before django.contrib.staticfiles
-    # 'daphne',  # ASGI server for Channels - DISABLED to use WSGI in development
+    'daphne',  # ASGI server for Channels
     
     'django.contrib.admin',
     'django.contrib.auth',
