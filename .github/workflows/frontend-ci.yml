@@ -267,17 +267,13 @@ jobs:
       
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         with:
-          vercel-token: ${{ env.VERCEL_TOKEN }}
-          vercel-org-id: ${{ env.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ env.VERCEL_PROJECT_ID }}
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           vercel-args: '--prod'
           working-directory: ./frontend
-          scope: ${{ env.VERCEL_ORG_ID }}
+          scope: ${{ secrets.VERCEL_ORG_ID }}
 
   # ===========================================================================
   # NOTIFY DEPLOYMENT
@@ -294,7 +290,7 @@ jobs:
     steps:
       - name: Send Slack notification
         uses: 8398a7/action-slack@v3
-        if: always()
+        if: always() && env.SLACK_WEBHOOK_URL != ''
         with:
           status: ${{ job.status }}
           fields: repo,message,commit,author,action,eventName,ref,workflow,job,took
