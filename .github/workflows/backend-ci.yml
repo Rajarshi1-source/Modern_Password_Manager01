@@ -14,7 +14,7 @@ on:
       - 'docker/backend/**'
 
 env:
-  PYTHON_VERSION: '3.10'
+  PYTHON_VERSION: '3.11'
   POSTGRES_VERSION: '15'
 
 jobs:
