@@ -40,9 +40,10 @@ RUN mkdir -p /app/staticfiles /app/media /app/logs
 # RUN python manage.py collectstatic --noinput || true
 
 # Create non-root user
-RUN adduser --disabled-password --gecos '' appuser && \
-    chown -R appuser:appuser /app
-USER appuser
+RUN addgroup --gid 1000 appgroup && \
+    adduser --uid 1000 --gid 1000 --disabled-password --gecos '' appuser && \
+    chown -R 1000:1000 /app
+USER 1000:1000
 
 # Expose port
 EXPOSE 8000

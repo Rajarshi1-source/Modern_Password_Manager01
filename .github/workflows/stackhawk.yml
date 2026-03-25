@@ -3,7 +3,7 @@
 # separate terms of service, privacy policy, and support
 # documentation.
 
-#           ðŸ¦… STACKHAWK        https://stackhawk.com
+#           STACKHAWK        https://stackhawk.com
 
 # The StackHawk HawkScan action makes it easy to integrate dynamic application security testing (DAST) into your
 # CI pipeline. See the Getting Started guide (https://docs.stackhawk.com/hawkscan/) to get up and running with
@@ -52,11 +52,11 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Start your service
-        run: python manage.py runserver 0.0.0.0:8000 &
+        run: cd password_manager && python manage.py runserver 0.0.0.0:8000 &
 
       - name: Run HawkScan
         uses: stackhawk/hawkscan-action@4c3258cd62248dac6d9fe91dd8d45928c697dee0
-        continue-on-error: true                   # âœï¸ Set to false to break your build on scan errors
+        continue-on-error: true                   # Set to false to break your build on scan errors
         with:
           apiKey: ${{ secrets.HAWK_API_KEY }}
           codeScanningAlerts: true

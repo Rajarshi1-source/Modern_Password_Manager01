@@ -12,6 +12,7 @@ import hashlib
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import uuid
+import os
 
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -404,7 +405,7 @@ class DecoyVaultService:
         templates = {
             'WiFi Passwords': 'Home WiFi: FakePassword123\nOffice: WorkWifi456',
             'Server Access': 'SSH: fake.server.com\nUser: admin\nPort: 22',
-            'API Keys': 'Production: REDACTED_PRODUCTION_KEY\\nStaging: REDACTED_STAGING_KEY',  # gitleaks:allow
+            'API Keys': f"Production: {os.getenv('STRIPE_API_KEY', 'sk_test_fake123')}\\nStaging: {os.getenv('STRIPE_STAGING_KEY', 'sk_test_fake456')}",  # pragma: allowlist secret
             'Recovery Codes': '1234-5678-9012\n2345-6789-0123\n3456-7890-1234',
             'License Keys': 'XXXX-YYYY-ZZZZ-1234',
             'Meeting Notes': 'Weekly standup notes...',

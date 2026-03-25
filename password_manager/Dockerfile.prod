@@ -55,4 +55,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 
 EXPOSE 8000
 
-CMD ["gunicorn", "password_manager.wsgi:application", "-b", "0.0.0.0:8000"]
+CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "password_manager.asgi:application"]

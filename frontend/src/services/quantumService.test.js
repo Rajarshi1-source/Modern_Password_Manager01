@@ -31,7 +31,7 @@ describe('QuantumService', () => {
       const mockResponse = {
         data: {
           success: true,
-          password: 'testPassword123', // gitleaks:allow
+          password: 'testPassword123', // pragma: allowlist secret
           certificate: {
             certificate_id: 'abc-123',
             provider: 'anu_qrng',

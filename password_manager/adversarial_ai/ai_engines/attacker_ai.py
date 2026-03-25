@@ -253,7 +253,7 @@ class AttackerAI:
     def _simulate_pattern_attack(self, features: Dict) -> AttackResult:
         """Simulate keyboard walk and pattern-based attacks."""
         has_patterns = features.get('has_common_patterns', False)
-        pattern_info = features.get('pattern_info', {})
+        pattern_info = features.get('pattern_info') or {}
         
         keyboard_walk = pattern_info.get('keyboard_walk', False)
         date_pattern = pattern_info.get('date_pattern', False)

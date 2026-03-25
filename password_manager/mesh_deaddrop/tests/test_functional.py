@@ -51,7 +51,7 @@ class CreateDeadDropFunctionalTest(TestCase):
     def test_create_dead_drop_with_secret_splitting(self):
         """Test complete flow of creating a dead drop with secret splitting."""
         # 1. Define the secret
-        secret = "test-secret-password-123"  # gitleaks:allow
+        secret = "test-secret-password-123"  # pragma: allowlist secret
         
         # 2. Create dead drop record
         dead_drop = DeadDrop.objects.create(
@@ -245,7 +245,7 @@ class CollectFragmentsFunctionalTest(TestCase):
         self.location_service = LocationVerificationService()
         
         # The secret to share
-        self.secret = "test-collect-secret"  # gitleaks:allow
+        self.secret = "test-collect-secret"  # pragma: allowlist secret
         
         # Location for the dead drop
         self.target_lat = Decimal('40.7128')
@@ -391,7 +391,7 @@ class PartialCollectionFunctionalTest(TestCase):
         self.shamir = ShamirSecretSharingService()
         self.crypto = MeshCryptoService()
         
-        self.secret = "test-partial-secret"  # gitleaks:allow
+        self.secret = "test-partial-secret"  # pragma: allowlist secret
         
         self.dead_drop = DeadDrop.objects.create(
             owner=self.user,
@@ -550,7 +550,7 @@ class NFCVerificationFunctionalTest(TestCase):
             title='NFC Required Drop',
             latitude=Decimal('40.7128'),
             longitude=Decimal('-74.0060'),
-            encrypted_secret=b'test-nfc-secret',  # gitleaks:allow
+            encrypted_secret=b'test-nfc-secret',  # pragma: allowlist secret
             secret_hash='hash',
             required_fragments=3,
             total_fragments=5,

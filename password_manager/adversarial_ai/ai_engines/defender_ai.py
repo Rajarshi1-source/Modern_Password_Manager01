@@ -291,7 +291,7 @@ class DefenderAI:
         if features.get('has_common_patterns', False):
             vulnerabilities.append("contains_patterns")
         
-        pattern_info = features.get('pattern_info', {})
+        pattern_info = features.get('pattern_info') or {}
         if pattern_info.get('keyboard_walk', False):
             vulnerabilities.append("keyboard_walk")
         if pattern_info.get('date_pattern', False):

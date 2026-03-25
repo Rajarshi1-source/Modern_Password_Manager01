@@ -179,7 +179,7 @@ class BreachLearningSystem:
         ))
         
         # Pattern type if detected
-        pattern_info = features.get('pattern_info', {})
+        pattern_info = features.get('pattern_info') or {}
         if pattern_info.get('keyboard_walk', False):
             patterns.append(AnonymizedPattern(
                 pattern_type='keyboard_pattern',

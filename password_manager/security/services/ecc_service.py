@@ -111,7 +111,7 @@ class ECCService:
         Perform Curve25519 ECDH
         
         Args:
-            private_key: X25519PrivateKey object  # gitleaks:allow
+            private_key: X25519PrivateKey object  # pragma: allowlist secret
             peer_public_key_bytes: bytes of peer's public key
             
         Returns:

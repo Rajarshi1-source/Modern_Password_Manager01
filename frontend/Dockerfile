@@ -13,8 +13,8 @@ RUN npm ci
 # Copy project files
 COPY --chown=node:node . .
 
-# Switch to non-root user
-USER node
+# Switch to non-root user (node user has uid/gid 1000)
+USER 1000:1000
 
 # Health check AFTER user switch
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
