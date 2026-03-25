@@ -29,7 +29,7 @@ brainflow==5.20.1
 CacheControl==0.14.3
 cachetools==6.2.1
 catalogue==2.0.10
-cbor2==5.8.0
+cbor2==5.9.0
 celery==5.5.1
 certifi==2025.11.12
 certvalidator==0.11.1
