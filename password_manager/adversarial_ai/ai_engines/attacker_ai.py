@@ -181,8 +181,8 @@ class AttackerAI:
     
     def _simulate_dictionary_attack(self, features: Dict) -> AttackResult:
         """Simulate dictionary attack."""
-        guessability = features.get('guessability_score', 50)
-        has_patterns = features.get('has_common_patterns', False)
+        guessability = features.get('guessability_score') or 50
+        has_patterns = features.get('has_common_patterns') or False
         
         # Higher guessability = more likely in dictionary
         if guessability > 80:
@@ -217,10 +217,10 @@ class AttackerAI:
     
     def _simulate_rule_based_attack(self, features: Dict) -> AttackResult:
         """Simulate rule-based mutation attack (hashcat rules)."""
-        length = features.get('length', 0)
-        has_digit = features.get('has_digit', False)
-        has_special = features.get('has_special', False)
-        diversity = features.get('character_diversity', 0)
+        length = features.get('length') or 0
+        has_digit = features.get('has_digit') or False
+        has_special = features.get('has_special') or False
+        diversity = features.get('character_diversity') or 0
         
         # Check for common mutation patterns
         # e.g., "Password1!", "p@ssw0rd", etc.
@@ -252,7 +252,7 @@ class AttackerAI:
     
     def _simulate_pattern_attack(self, features: Dict) -> AttackResult:
         """Simulate keyboard walk and pattern-based attacks."""
-        has_patterns = features.get('has_common_patterns', False)
+        has_patterns = features.get('has_common_patterns') or False
         pattern_info = features.get('pattern_info') or {}
         
         keyboard_walk = pattern_info.get('keyboard_walk', False)
@@ -298,18 +298,18 @@ class AttackerAI:
         Simulate brute force attack.
         Uses entropy and length to estimate time.
         """
-        entropy = features.get('entropy', 0)
-        length = features.get('length', 0)
+        entropy = features.get('entropy') or 0
+        length = features.get('length') or 0
         
         # Calculate keyspace
         charset_size = 0
-        if features.get('has_lower', False):
+        if features.get('has_lower') or False:
             charset_size += 26
-        if features.get('has_upper', False):
+        if features.get('has_upper') or False:
             charset_size += 26
-        if features.get('has_digit', False):
+        if features.get('has_digit') or False:
             charset_size += 10
-        if features.get('has_special', False):
+        if features.get('has_special') or False:
             charset_size += 32
         
         if charset_size == 0:
@@ -360,8 +360,8 @@ class AttackerAI:
         Simulate Markov chain attack.
         These attacks guess based on character transition probabilities.
         """
-        entropy = features.get('entropy', 0)
-        diversity = features.get('character_diversity', 0)
+        entropy = features.get('entropy') or 0
+        diversity = features.get('character_diversity') or 0
         
         # Markov attacks work well on natural-looking passwords
         # Low entropy + natural patterns = vulnerable
@@ -395,8 +395,8 @@ class AttackerAI:
         """
         Simulate hybrid attack (dictionary + brute force on parts).
         """
-        length = features.get('length', 0)
-        guessability = features.get('guessability_score', 50)
+        length = features.get('length') or 0
+        guessability = features.get('guessability_score') or 50
         
         # Hybrid attacks work when password has guessable core + random parts
         if length < 12 and guessability > 50:

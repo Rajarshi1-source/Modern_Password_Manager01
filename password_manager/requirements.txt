@@ -32,7 +32,7 @@ mozilla-django-oidc>=4.0.0
 cryptography==46.0.5
 argon2-cffi==21.3.0
 argon2-cffi-bindings==21.2.0
-pyOpenSSL>=25.3.0
+pyOpenSSL>=26.0.0
 pycryptodome>=3.20.0
 pyotp==2.9.0
 
@@ -218,7 +218,7 @@ pip-audit>=2.6.0
 # ============================================================================
 pymongo==4.6.3
 aiohttp>=3.13.3 # not directly required, pinned by Snyk to avoid a vulnerability
-authlib>=1.6.6 # not directly required, pinned by Snyk to avoid a vulnerability
+authlib>=1.6.9 # not directly required, pinned by Snyk to avoid a vulnerability
 filelock>=3.20.3 # not directly required, pinned by Snyk to avoid a vulnerability
 zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
 
@@ -301,9 +301,18 @@ heartpy>=1.2.7             # Heart rate analysis from rPPG
 # ============================================================================
 # Web Scraping & Dark Web Monitoring
 # ============================================================================
-scrapy>=2.14.1
+scrapy>=2.14.2
 
 # ============================================================================
 # AI-Powered Security Assistant (Claude API)
 # ============================================================================
 anthropic>=0.40.0
+
+# ============================================================================
+# Security overrides for transitive dependencies
+# ============================================================================
+cbor2>=5.9.0
+keras>=3.13.2
+nltk>=3.9.3
+tornado>=6.5.5
+ujson>=5.12.0

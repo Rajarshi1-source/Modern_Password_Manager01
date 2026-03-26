@@ -217,28 +217,28 @@ class DefenderAI:
         score = 0.0
         
         # Length contribution (up to 30%)
-        length = features.get('length', 0)
+        length = features.get('length') or 0
         length_score = min(length / 20, 1.0) * 0.30
         score += length_score
         
         # Entropy contribution (up to 30%)
-        entropy = features.get('entropy', 0)
+        entropy = features.get('entropy') or 0
         entropy_score = min(entropy / 80, 1.0) * 0.30
         score += entropy_score
         
         # Character diversity (up to 20%)
-        diversity = features.get('character_diversity', 0)
+        diversity = features.get('character_diversity') or 0
         score += diversity * 0.20
         
         # Absence of patterns (up to 20%)
-        has_patterns = features.get('has_common_patterns', False)
+        has_patterns = features.get('has_common_patterns') or False
         if not has_patterns:
             score += 0.20
         else:
             score += 0.05  # Small credit for having a password at all
         
         # Penalty for high guessability
-        guessability = features.get('guessability_score', 50)
+        guessability = features.get('guessability_score') or 50
         if guessability > 70:
             score *= 0.7  # 30% penalty
         elif guessability > 50:
@@ -264,7 +264,7 @@ class DefenderAI:
         vulnerabilities = []
         
         # Length vulnerabilities
-        length = features.get('length', 0)
+        length = features.get('length') or 0
         if length < 8:
             vulnerabilities.append("critically_short")
         elif length < 12:
@@ -273,34 +273,34 @@ class DefenderAI:
             vulnerabilities.append("moderate_length")
         
         # Entropy vulnerabilities
-        entropy = features.get('entropy', 0)
+        entropy = features.get('entropy') or 0
         if entropy < 30:
             vulnerabilities.append("low_entropy")
         elif entropy < 50:
             vulnerabilities.append("moderate_entropy")
         
         # Character class vulnerabilities
-        if not features.get('has_upper', False):
+        if not (features.get('has_upper') or False):
             vulnerabilities.append("no_uppercase")
-        if not features.get('has_digit', False):
+        if not (features.get('has_digit') or False):
             vulnerabilities.append("no_digits")
-        if not features.get('has_special', False):
+        if not (features.get('has_special') or False):
             vulnerabilities.append("no_special")
         
         # Pattern vulnerabilities
-        if features.get('has_common_patterns', False):
+        if features.get('has_common_patterns') or False:
             vulnerabilities.append("contains_patterns")
         
         pattern_info = features.get('pattern_info') or {}
-        if pattern_info.get('keyboard_walk', False):
+        if pattern_info.get('keyboard_walk') or False:
             vulnerabilities.append("keyboard_walk")
-        if pattern_info.get('date_pattern', False):
+        if pattern_info.get('date_pattern') or False:
             vulnerabilities.append("date_pattern")
-        if pattern_info.get('repeated_chars', False):
+        if pattern_info.get('repeated_chars') or False:
             vulnerabilities.append("repeated_chars")
         
         # Guessability
-        guessability = features.get('guessability_score', 50)
+        guessability = features.get('guessability_score') or 50
         if guessability > 80:
             vulnerabilities.append("highly_guessable")
         elif guessability > 60:
@@ -312,29 +312,29 @@ class DefenderAI:
         """Identify password strengths."""
         strengths = []
         
-        length = features.get('length', 0)
+        length = features.get('length') or 0
         if length >= 20:
             strengths.append("excellent_length")
         elif length >= 16:
             strengths.append("good_length")
         
-        entropy = features.get('entropy', 0)
+        entropy = features.get('entropy') or 0
         if entropy >= 80:
             strengths.append("high_entropy")
         elif entropy >= 60:
             strengths.append("good_entropy")
         
-        diversity = features.get('character_diversity', 0)
+        diversity = features.get('character_diversity') or 0
         if diversity >= 0.8:
             strengths.append("excellent_diversity")
         elif diversity >= 0.6:
             strengths.append("good_diversity")
         
-        if features.get('has_upper', False) and features.get('has_lower', False) \
-           and features.get('has_digit', False) and features.get('has_special', False):
+        if (features.get('has_upper') or False) and (features.get('has_lower') or False) \
+           and (features.get('has_digit') or False) and (features.get('has_special') or False):
             strengths.append("all_character_types")
         
-        if not features.get('has_common_patterns', False):
+        if not (features.get('has_common_patterns') or False):
             strengths.append("no_obvious_patterns")
         
         return strengths
