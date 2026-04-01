@@ -255,7 +255,7 @@ python-Levenshtein>=0.21.0
 # Note: pydp does not support Python 3.13+. Using last known compatible version.
 # For Python 3.13+, the code will use numpy fallback (see adaptive_password_service.py)
 # pydp==0.1.16; python_version < "3.13"
-diffprivlib>=0.6.4 # IBM's library for Differential Privacy, ✅ Works on Python 3.13
+diffprivlib>=0.6.4 # IBM's library for Differential Privacy (works on Python 3.13)
 
 # Neural Networks for Memorability Prediction
 torch>=2.0.0
@@ -285,7 +285,7 @@ neurokit2>=0.2.0           # Biosignal processing toolkit
 # Cognitive Password Testing with Implicit Memory
 # ============================================================================
 # High-precision timing for reaction time analysis
-# performance-timing>=0.1.0  # Performance timing utilities # ❌ Non-existent package (use time.perf_counter() instead)
+# performance-timing>=0.1.0  # Performance timing utilities (non-existent package; use time.perf_counter() instead)
 
 # ============================================================================
 # Deepfake-Resistant Biometric Liveness
