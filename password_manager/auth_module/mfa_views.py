@@ -26,16 +26,68 @@ from .mfa_models import (
     AuthenticationAttempt, ContinuousAuthSession,
     AdaptiveMFALog
 )
-from ml_security.ml_models.biometric_authenticator import BiometricAuthenticator
-from ml_security.ml_models.anomaly_detector import AnomalyDetector
-from ml_security.ml_models.threat_analyzer import ThreatAnalyzer
 
 logger = logging.getLogger(__name__)
 
-# Initialize ML models
-biometric_auth = BiometricAuthenticator()
-anomaly_detector = AnomalyDetector()
-threat_analyzer = ThreatAnalyzer()
+# Lazy-loaded ML model instances (avoids startup crash if ML deps are missing)
+_biometric_auth = None
+_anomaly_detector = None
+_threat_analyzer = None
+
+
+def _get_biometric_auth():
+    """Lazily load BiometricAuthenticator to avoid module-level import crash."""
+    global _biometric_auth
+    if _biometric_auth is None:
+        try:
+            from ml_security.ml_models.biometric_authenticator import BiometricAuthenticator
+            _biometric_auth = BiometricAuthenticator()
+        except Exception as e:
+            logger.error(f"Failed to load BiometricAuthenticator: {e}")
+            raise
+    return _biometric_auth
+
+
+def _get_anomaly_detector():
+    """Lazily load AnomalyDetector to avoid module-level import crash."""
+    global _anomaly_detector
+    if _anomaly_detector is None:
+        try:
+            from ml_security.ml_models.anomaly_detector import AnomalyDetector
+            _anomaly_detector = AnomalyDetector()
+        except Exception as e:
+            logger.error(f"Failed to load AnomalyDetector: {e}")
+            raise
+    return _anomaly_detector
+
+
+def _get_threat_analyzer():
+    """Lazily load ThreatAnalyzer to avoid module-level import crash."""
+    global _threat_analyzer
+    if _threat_analyzer is None:
+        try:
+            from ml_security.ml_models.threat_analyzer import ThreatAnalyzer
+            _threat_analyzer = ThreatAnalyzer()
+        except Exception as e:
+            logger.error(f"Failed to load ThreatAnalyzer: {e}")
+            raise
+    return _threat_analyzer
+
+
+# Re-export BiometricAuthenticator class for mfa_integration.py
+# which does: from .mfa_views import BiometricAuthenticator
+def _lazy_biometric_authenticator_class():
+    from ml_security.ml_models.biometric_authenticator import BiometricAuthenticator
+    return BiometricAuthenticator
+
+
+class BiometricAuthenticator:
+    """Proxy class that lazily delegates to the real BiometricAuthenticator."""
+    
+    def __getattr__(self, name):
+        real_class = _lazy_biometric_authenticator_class()
+        real_instance = _get_biometric_auth()
+        return getattr(real_instance, name)
 
 
 @api_view(['POST'])
@@ -64,9 +116,10 @@ def register_face(request):
         # Decode base64 image
         try:
             image_data = base64.b64decode(face_image_b64)
-            # Convert to numpy array (in production, use proper image processing)
-            # For now, create dummy 160x160x3 image
-            face_image = np.random.rand(160, 160, 3)  # Replace with actual image processing
+            # TODO: Replace placeholder with actual image decoding pipeline
+            # e.g., PIL/cv2 decode → resize → normalize
+            logger.warning("Biometric face registration using placeholder data — real image processing not yet implemented")
+            face_image = np.random.rand(160, 160, 3)
         except Exception as e:
             return Response({
                 'success': False,
@@ -74,7 +127,7 @@ def register_face(request):
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Register face with ML model
-        result = biometric_auth.register_face(str(user.id), face_image)
+        result = _get_biometric_auth().register_face(str(user.id), face_image)
         
         if result['success']:
             # Create BiometricProfile
@@ -145,9 +198,10 @@ def register_voice(request):
         # Decode base64 audio
         try:
             audio_data = base64.b64decode(voice_audio_b64)
-            # Convert to numpy array and extract MFCC features
-            # For now, create dummy features
-            voice_features = np.random.rand(40, 100, 1)  # Replace with actual audio processing
+            # TODO: Replace placeholder with actual audio → MFCC pipeline
+            # e.g., librosa/soundfile decode → extract MFCC features
+            logger.warning("Biometric voice registration using placeholder data — real audio processing not yet implemented")
+            voice_features = np.random.rand(40, 100, 1)
         except Exception as e:
             return Response({
                 'success': False,
@@ -155,7 +209,7 @@ def register_voice(request):
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Register voice with ML model
-        result = biometric_auth.register_voice(str(user.id), voice_features)
+        result = _get_biometric_auth().register_voice(str(user.id), voice_features)
         
         if result['success']:
             # Create BiometricProfile
@@ -236,13 +290,15 @@ def authenticate_biometric(request):
             data = base64.b64decode(biometric_data_b64)
             
             if biometric_type == 'face':
-                # Process face image
-                biometric_features = np.random.rand(160, 160, 3)  # Replace with actual processing
-                result = biometric_auth.authenticate_face(str(user.id), biometric_features)
+                # TODO: Replace placeholder with actual image decoding pipeline
+                logger.warning("Biometric face auth using placeholder data — real image processing not yet implemented")
+                biometric_features = np.random.rand(160, 160, 3)
+                result = _get_biometric_auth().authenticate_face(str(user.id), biometric_features)
             elif biometric_type == 'voice':
-                # Process voice audio
-                biometric_features = np.random.rand(40, 100, 1)  # Replace with actual processing
-                result = biometric_auth.authenticate_voice(str(user.id), biometric_features)
+                # TODO: Replace placeholder with actual audio → MFCC pipeline
+                logger.warning("Biometric voice auth using placeholder data — real audio processing not yet implemented")
+                biometric_features = np.random.rand(40, 100, 1)
+                result = _get_biometric_auth().authenticate_voice(str(user.id), biometric_features)
             else:
                 return Response({
                     'authenticated': False,
@@ -395,12 +451,14 @@ def update_continuous_auth(request):
         behavior_features = None
         
         if request.data.get('face_image'):
-            # Process face (dummy data for now)
+            # TODO: Replace placeholder with actual image decoding pipeline
+            logger.warning("Continuous auth face check using placeholder data")
             face_image = np.random.rand(160, 160, 3)
             session.face_checks_count += 1
         
         if request.data.get('voice_audio'):
-            # Process voice (dummy data for now)
+            # TODO: Replace placeholder with actual audio → MFCC pipeline
+            logger.warning("Continuous auth voice check using placeholder data")
             voice_features = np.random.rand(40, 100, 1)
             session.voice_checks_count += 1
         
@@ -411,7 +469,7 @@ def update_continuous_auth(request):
             session.behavioral_checks_count += 1
         
         # Perform continuous authentication
-        auth_result = biometric_auth.continuous_authenticate(
+        auth_result = _get_biometric_auth().continuous_authenticate(
             str(user.id),
             face_image=face_image,
             voice_features=voice_features,
@@ -503,7 +561,7 @@ def assess_mfa_risk(request):
             }
             
             # Get ML risk assessment
-            ml_result = threat_analyzer.analyze_threat(session_data)
+            ml_result = _get_threat_analyzer().analyze_threat(session_data)
             risk_score = max(risk_score, ml_result.get('risk_score', 0.0))
             
             if ml_result.get('is_threat'):

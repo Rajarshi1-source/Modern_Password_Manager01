@@ -142,8 +142,11 @@ def match_credentials_against_breach(self, breach_id: int):
         
         for i in range(0, monitored_credentials.count(), batch_size):
             batch = monitored_credentials[i:i + batch_size]
+            batch_cred_ids = []
             
             for cred in batch:
+                batch_cred_ids.append(cred.id)
+                
                 # Find matches
                 credential_matches = matcher.find_matches(
                     cred.email_hash,
@@ -177,10 +180,12 @@ def match_credentials_against_breach(self, breach_id: int):
                         
                         # Create alert async
                         create_breach_alert.delay(match.id)
-                
-                # Update last checked
-                cred.last_checked = timezone.now()
-                cred.save(update_fields=['last_checked'])
+            
+            # Batch update last_checked for all credentials in this batch (single UPDATE)
+            if batch_cred_ids:
+                UserCredentialMonitoring.objects.filter(
+                    id__in=batch_cred_ids
+                ).update(last_checked=timezone.now())
         
         # Update breach status
         breach.processing_status = 'matched' if matches_found > 0 else 'completed'

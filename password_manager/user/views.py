@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.db.models import Q
 from .models import EmergencyContact, EmergencyAccessRequest
 from vault.models.vault_models import EncryptedVaultItem
-from vault.serializer import VaultItemSerializer
+from vault.serializer import VaultItemSerializer, EmergencyVaultSerializer
 import uuid
 import json
 from django.core.mail import send_mail
@@ -569,10 +569,12 @@ def access_emergency_vault(request, request_id):
     
     # Get vault items
     vault_owner = access_request.emergency_contact.vault_owner
-    vault_items = EncryptedVaultItem.objects.filter(user=vault_owner, deleted=False)
+    vault_items = EncryptedVaultItem.objects.filter(
+        user=vault_owner, deleted=False
+    ).only('item_id', 'encrypted_data', 'item_type')  # Only fetch needed fields
     
-    # Serialize items
-    serializer = VaultItemSerializer(vault_items, many=True)
+    # Use restricted serializer — strips metadata (tags, favorites, timestamps, folders)
+    serializer = EmergencyVaultSerializer(vault_items, many=True)
     
     # For view-only access, we might want to restrict certain operations
     access_type = access_request.emergency_contact.access_type
@@ -581,5 +583,6 @@ def access_emergency_vault(request, request_id):
         'vault_owner': vault_owner.username,
         'access_type': access_type,
         'items': serializer.data,
+        'item_count': vault_items.count(),
         'expires_at': access_request.expires_at
     })

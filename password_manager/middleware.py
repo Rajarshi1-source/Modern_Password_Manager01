@@ -13,6 +13,19 @@ import ipaddress
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self' ws: wss: https://api.haveibeenpwned.com; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+
 
 # FIX: Middleware to exempt /auth/ and /api/auth/ paths from CSRF
 # This is more reliable than view-level decorators for DRF ViewSets
@@ -174,17 +187,9 @@ class SecurityHeadersMiddleware:
     
     def _add_security_headers(self, request, response):
         """Add security headers to the response"""
-        # Content Security Policy - Restrict sources of content
-        response['Content-Security-Policy'] = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
-            "img-src 'self' data: blob:; "
-            "connect-src 'self' ws: wss: https://api.haveibeenpwned.com; "
-            "frame-ancestors 'none'; "
-            "form-action 'self'"
-        )
+        # Content Security Policy - Restrict execution to trusted sources.
+        csp_policy = getattr(settings, 'SECURITY_CSP_POLICY', DEFAULT_CSP)
+        response['Content-Security-Policy'] = csp_policy
         
         # Prevent browsers from using MIME sniffing
         response['X-Content-Type-Options'] = 'nosniff'

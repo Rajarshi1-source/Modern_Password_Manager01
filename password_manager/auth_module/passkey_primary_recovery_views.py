@@ -456,10 +456,22 @@ def fallback_to_social_mesh_recovery(request):
         user = primary_attempt.user
         
         # Check if social mesh recovery is set up
-        from .quantum_recovery_models import RecoveryTrustShard
+        from .quantum_recovery_models import RecoveryShard, PasskeyRecoverySetup
         
-        active_shards = RecoveryTrustShard.objects.filter(
-            user=user,
+        try:
+            recovery_setup = PasskeyRecoverySetup.objects.get(
+                user=user,
+                is_active=True
+            )
+        except PasskeyRecoverySetup.DoesNotExist:
+            return Response({
+                "error": "No social mesh recovery set up",
+                "message": "You need to set up guardian-based recovery first.",
+                "setup_url": "/recovery/setup"
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        active_shards = RecoveryShard.objects.filter(
+            recovery_setup=recovery_setup,
             is_active=True
         )
         
@@ -470,12 +482,6 @@ def fallback_to_social_mesh_recovery(request):
                 "setup_url": "/recovery/setup"
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        # Import the social mesh recovery initiation view
-        from .quantum_recovery_views import initiate_passkey_recovery as initiate_social_mesh
-        
-        # Create a mock request for social mesh recovery
-        # In a real implementation, you'd call the function directly with proper parameters
-        
         # For now, just mark primary attempt as fallback initiated
         primary_attempt.initiate_fallback()
         
@@ -484,7 +490,7 @@ def fallback_to_social_mesh_recovery(request):
         return Response({
             "message": "Fallback to social mesh recovery initiated",
             "instructions": "Temporal challenges will be sent to your guardians. They need to verify their identity to help you recover.",
-            "threshold": active_shards.first().threshold,
+            "threshold": recovery_setup.threshold_shards,
             "total_guardians": active_shards.count(),
             "estimated_time": "3-7 days",
             "primary_attempt_id": primary_attempt_id,
@@ -581,17 +587,25 @@ def get_recovery_status(request):
         ).count()
         
         # Check social mesh recovery
-        from .quantum_recovery_models import RecoveryTrustShard, RecoveryGuardian
+        from .quantum_recovery_models import RecoveryShard, RecoveryGuardian, PasskeyRecoverySetup
         
-        active_shards = RecoveryTrustShard.objects.filter(
-            user=user,
-            is_active=True
-        ).count()
-        
-        accepted_guardians = RecoveryGuardian.objects.filter(
-            user=user,
-            status='accepted'
-        ).count()
+        active_shards = 0
+        accepted_guardians = 0
+        try:
+            recovery_setup = PasskeyRecoverySetup.objects.get(
+                user=user,
+                is_active=True
+            )
+            active_shards = RecoveryShard.objects.filter(
+                recovery_setup=recovery_setup,
+                is_active=True
+            ).count()
+            accepted_guardians = RecoveryGuardian.objects.filter(
+                recovery_setup=recovery_setup,
+                status='active'
+            ).count()
+        except PasskeyRecoverySetup.DoesNotExist:
+            pass
         
         # Generate recommendations
         recommendations = []

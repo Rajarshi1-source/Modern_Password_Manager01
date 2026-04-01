@@ -112,3 +112,26 @@ class BackupSerializer(serializers.ModelSerializer):
             return len(backup_data.get('items', []))
         except:
             return 0
+
+
+class EmergencyVaultSerializer(serializers.ModelSerializer):
+    """
+    Restricted serializer for emergency vault access.
+    
+    Only exposes the minimum fields needed for emergency recovery:
+    - item_id and item_type for identification
+    - encrypted_data for the actual vault content (still encrypted)
+    
+    Strips metadata that would leak organizational information:
+    - No tags, favorites, folder_id (organizational structure)
+    - No timestamps (temporal patterns)
+    - No last_used_at (usage patterns)
+    """
+    class Meta:
+        model = EncryptedVaultItem
+        fields = [
+            'item_id',
+            'encrypted_data',
+            'item_type',
+        ]
+        read_only_fields = fields

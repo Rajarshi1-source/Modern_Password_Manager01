@@ -440,10 +440,10 @@ class VaultTestHelpers:
         )
     
     @staticmethod
-    def create_test_backup(user, item_count=0):
+    def create_test_backup(user):
         """Create a test backup"""
         return VaultBackup.objects.create(
             user=user,
+            name='Test Backup',
             encrypted_data='{"items": []}',
-            item_count=item_count
         )

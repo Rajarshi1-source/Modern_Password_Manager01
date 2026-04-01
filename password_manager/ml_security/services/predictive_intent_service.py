@@ -695,41 +695,37 @@ class PredictiveIntentService:
         Returns:
             Statistics dict
         """
+        from django.db.models import Count, Q
+        
         now = timezone.now()
         week_ago = now - timedelta(days=7)
         month_ago = now - timedelta(days=30)
         
-        # Prediction counts
-        total_predictions = IntentPrediction.objects.filter(
-            user=user
-        ).count()
-        
-        predictions_used = IntentPrediction.objects.filter(
-            user=user,
-            was_used=True,
-        ).count()
-        
-        predictions_dismissed = IntentPrediction.objects.filter(
-            user=user,
-            was_dismissed=True,
-        ).count()
+        # All-time prediction stats in a single aggregate query
+        all_time = IntentPrediction.objects.filter(user=user).aggregate(
+            total=Count('id'),
+            used=Count('id', filter=Q(was_used=True)),
+            dismissed=Count('id', filter=Q(was_dismissed=True)),
+        )
+        total_predictions = all_time['total']
+        predictions_used = all_time['used']
+        predictions_dismissed = all_time['dismissed']
         
         # Calculate accuracy
         accuracy = 0.0
         if total_predictions > 0:
             accuracy = predictions_used / total_predictions
         
-        # Recent trends
-        recent_predictions = IntentPrediction.objects.filter(
+        # Recent trends in a single aggregate query
+        recent = IntentPrediction.objects.filter(
             user=user,
             predicted_at__gte=week_ago,
-        ).count()
-        
-        recent_used = IntentPrediction.objects.filter(
-            user=user,
-            was_used=True,
-            predicted_at__gte=week_ago,
-        ).count()
+        ).aggregate(
+            total=Count('id'),
+            used=Count('id', filter=Q(was_used=True)),
+        )
+        recent_predictions = recent['total']
+        recent_used = recent['used']
         
         recent_accuracy = 0.0
         if recent_predictions > 0:
@@ -741,7 +737,6 @@ class PredictiveIntentService:
         ).count()
         
         # Top domains
-        from django.db.models import Count
         top_domains = list(
             PasswordUsagePattern.objects.filter(
                 user=user,

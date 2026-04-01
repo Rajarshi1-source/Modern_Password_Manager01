@@ -271,6 +271,13 @@ class RecoveryAttempt(models.Model):
     def __str__(self):
         return f"Recovery Attempt {self.id} by {self.recovery_setup.user.username} - {self.status}"
     
+    @property
+    def challenge_success_rate(self):
+        """Computed challenge success rate from completed/sent counts."""
+        if self.challenges_sent == 0:
+            return 0.0
+        return round(self.challenges_completed / self.challenges_sent, 4)
+    
     def is_expired(self):
         """Check if recovery attempt has expired"""
         return timezone.now() > self.expires_at

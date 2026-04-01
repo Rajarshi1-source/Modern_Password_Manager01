@@ -80,19 +80,40 @@ def load_models():
     
     This function implements a singleton pattern to ensure models are
     only loaded once, even if called multiple times during Django startup.
+    
+    Guards:
+    - Module-level `_models_loaded` flag (in-process singleton)
+    - Reloader parent process detection (prevents fork-reset double load)
+    - Management command detection (no need for ML in migrate/shell/etc.)
     """
+    import sys
+
+    global _models_loaded
+    
+    # Guard 1: Already loaded in this process
+    if _models_loaded:
+        logger.debug("ML models already loaded, skipping reload")
+        return _models
+
+    # Guard 2: Skip in Django's reloader parent process
+    if os.environ.get('RUN_MAIN') != 'true' and 'runserver' in sys.argv:
+        logger.debug("Skipping ML model load in reloader parent process")
+        return _models
+
+    # Guard 3: Skip ML loading for management commands that don't serve requests
+    NON_SERVER_COMMANDS = {
+        'makemigrations', 'migrate', 'shell', 'collectstatic',
+        'check', 'test', 'dbshell', 'showmigrations',
+    }
+    if any(cmd in sys.argv for cmd in NON_SERVER_COMMANDS):
+        logger.debug("Skipping ML model load for management command")
+        return _models
+
     from .password_strength import PasswordStrengthPredictor
     from .anomaly_detector import AnomalyDetector
     from .threat_analyzer import ThreatAnalyzer
     from .intent_predictor import IntentPredictor
     from .context_analyzer import ContextAnalyzer
-    
-    global _models_loaded
-    
-    # Prevent loading models multiple times
-    if _models_loaded:
-        logger.debug("ML models already loaded, skipping reload")
-        return _models
     
     load_start = time.time()
     

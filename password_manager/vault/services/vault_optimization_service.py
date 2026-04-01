@@ -57,7 +57,7 @@ class VaultCacheManager:
     PREFIX_STATS = 'vault:stats:'
     PREFIX_FOLDERS = 'vault:folders:'
     PREFIX_ITEM_META = 'vault:meta:'
-    PREFIX_AUTH_HASH = 'vault:auth:'
+    PREFIX_AUTH = 'vault:auth:'
     
     # TTL values (seconds)
     TTL_SALT = 300  # 5 minutes

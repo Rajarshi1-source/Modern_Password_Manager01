@@ -1,3 +1,6 @@
+import os
+import sys
+
 from django.apps import AppConfig
 
 
@@ -8,6 +11,10 @@ class MlSecurityConfig(AppConfig):
     
     def ready(self):
         """Initialize ML models on app startup"""
+        # Skip in the reloader parent process — only load in the child worker
+        if os.environ.get('RUN_MAIN') != 'true' and 'runserver' in sys.argv:
+            return
+
         from .ml_models import load_models
         try:
             load_models()

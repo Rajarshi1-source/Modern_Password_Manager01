@@ -141,7 +141,16 @@ class MLDarkWebViewSet(viewsets.ViewSet):
             
             matches = MLBreachMatch.objects.filter(
                 user=request.user
-            ).select_related('breach', 'monitored_credential')
+            ).select_related(
+                'breach__source',
+                'monitored_credential',
+            ).only(
+                'id', 'similarity_score', 'confidence_score',
+                'detected_at', 'resolved', 'alert_created',
+                'breach__breach_id', 'breach__title', 'breach__severity',
+                'breach__source__name',
+                'monitored_credential__domain',
+            )
             
             if resolved_filter is not None:
                 resolved_bool = resolved_filter.lower() == 'true'
@@ -255,7 +264,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
             # Get recent activity
             recent_matches = MLBreachMatch.objects.filter(
                 user=request.user
-            ).order_by('-detected_at')[:5]
+            ).select_related('breach').order_by('-detected_at')[:5]
             
             recent_activity = [{
                 'breach_title': match.breach.title,
@@ -414,23 +423,30 @@ class MLDarkWebAdminViewSet(viewsets.ViewSet):
     def system_statistics(self, request):
         """Get overall system statistics"""
         try:
+            # Consolidate into fewer aggregate queries to avoid N+1
+            breach_agg = MLBreachData.objects.aggregate(
+                total=Count('id'),
+                active=Count('id', filter=Q(processing_status='matched')),
+                avg_confidence=Avg('confidence_score'),
+            )
+            match_agg = MLBreachMatch.objects.aggregate(
+                total=Count('id'),
+                unresolved=Count('id', filter=Q(resolved=False)),
+            )
+            cred_agg = UserCredentialMonitoring.objects.aggregate(
+                monitored_users=Count('user', distinct=True),
+                total_active=Count('id', filter=Q(is_active=True)),
+            )
+
             stats = {
-                'total_breaches': MLBreachData.objects.count(),
-                'active_breaches': MLBreachData.objects.filter(
-                    processing_status='matched'
-                ).count(),
-                'total_matches': MLBreachMatch.objects.count(),
-                'unresolved_matches': MLBreachMatch.objects.filter(
-                    resolved=False
-                ).count(),
-                'monitored_users': UserCredentialMonitoring.objects.values('user').distinct().count(),
-                'total_monitored_credentials': UserCredentialMonitoring.objects.filter(
-                    is_active=True
-                ).count(),
+                'total_breaches': breach_agg['total'],
+                'active_breaches': breach_agg['active'],
+                'total_matches': match_agg['total'],
+                'unresolved_matches': match_agg['unresolved'],
+                'monitored_users': cred_agg['monitored_users'],
+                'total_monitored_credentials': cred_agg['total_active'],
                 'active_sources': BreachSource.objects.filter(is_active=True).count(),
-                'average_confidence': MLBreachData.objects.aggregate(
-                    Avg('confidence_score')
-                )['confidence_score__avg'] or 0,
+                'average_confidence': breach_agg['avg_confidence'] or 0,
                 'breaches_by_severity': dict(
                     MLBreachData.objects.values('severity').annotate(
                         count=Count('id')

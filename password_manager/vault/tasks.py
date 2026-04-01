@@ -57,7 +57,6 @@ def process_audit_log(self, user_id: int, action: str, details: Dict = None):
             status='success',
             ip_address=details.get('ip_address') if details else None,
             user_agent=details.get('user_agent') if details else None,
-            extra_data=details
         )
         
         logger.info(f"Audit log created: user={user_id}, action={action}")

@@ -13,7 +13,7 @@ import hashlib
 import logging
 from pathlib import Path
 
-from .ml_config import MLDarkWebConfig
+from .ml_config import MLDarkWebConfig, PREPROCESSING_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,8 @@ class BreachClassifierService:
         text = text.strip()
         
         # Truncate if too long
-        if len(text) > self.config.PREPROCESSING_CONFIG['max_text_length']:
-            text = text[:self.config.PREPROCESSING_CONFIG['max_text_length']]
+        if len(text) > PREPROCESSING_CONFIG['max_text_length']:
+            text = text[:PREPROCESSING_CONFIG['max_text_length']]
         
         return text
     

@@ -11,8 +11,8 @@ import logging
 
 from .mfa_models import BiometricFactor, MFAPolicy, AuthenticationAttempt
 from .mfa_views import BiometricAuthenticator
-from ..two_factor.models import TOTPDevice  # Existing 2FA model
-from authy_service import AuthyService  # Existing Authy integration
+from two_factor.models import TOTPDevice
+from .services.authy_service import AuthyService
 
 User = get_user_model()
 logger = logging.getLogger(__name__)

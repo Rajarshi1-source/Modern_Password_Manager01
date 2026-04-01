@@ -77,7 +77,18 @@ def get_predictions(request):
         }
         
         # Get predictions
-        predictions = service.get_predictions(request.user, context)
+        raw_predictions = service.get_predictions(request.user, context)
+        
+        # Re-fetch with select_related to avoid N+1 on vault item FK
+        if raw_predictions:
+            prediction_ids = [p.id for p in raw_predictions]
+            predictions = IntentPrediction.objects.filter(
+                id__in=prediction_ids
+            ).select_related(
+                'predicted_vault_item'
+            ).order_by('-confidence_score', 'rank')
+        else:
+            predictions = []
         
         # Serialize
         prediction_data = []

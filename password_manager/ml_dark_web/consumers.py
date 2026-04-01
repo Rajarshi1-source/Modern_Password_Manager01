@@ -195,10 +195,8 @@ class BreachAlertConsumer(AsyncWebsocketConsumer):
             
             return MLBreachMatch.objects.filter(
                 user_id=user_id,
-                is_active=True,
-                alert_created=True
-            ).exclude(
-                is_resolved=True
+                alert_created=True,
+                resolved=False,
             ).count()
             
         except Exception as e:

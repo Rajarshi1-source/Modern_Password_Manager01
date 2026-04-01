@@ -67,7 +67,8 @@ class PgVectorService:
                     return_tensors='pt'
                 )
                 
-                with classifier.torch.no_grad():
+                import torch
+                with torch.no_grad():
                     outputs = classifier.model(**inputs)
                     # Use [CLS] token embedding
                     embedding = outputs.last_hidden_state[:, 0, :].numpy()[0]

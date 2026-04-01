@@ -67,6 +67,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.1.15/howto/deployment/checklist/
 
+# SECURITY WARNING: don't run with debug turned on in production!
+# Default to True for development - set DEBUG=False in production environment
+DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
+
+# Development mode flag (defaults to match DEBUG)
+DEVELOPMENT = os.environ.get('DEVELOPMENT', str(DEBUG)).lower() == 'true'
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('SECRET_KEY')
 
@@ -78,10 +85,6 @@ if not SECRET_KEY:
         # In production, fail if SECRET_KEY is not set
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured("The SECRET_KEY setting must not be empty in production.")
-
-# SECURITY WARNING: don't run with debug turned on in production!
-# Default to True for development - set DEBUG=False in production environment
-DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
 
 # Parse ALLOWED_HOSTS from environment variable
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8000,[::1]').split(',')
@@ -122,6 +125,7 @@ INSTALLED_APPS = [
     'api',
     'vault',
     'auth_module',
+    'two_factor',  # Two-Factor Authentication (TOTP)
     'user',
     'logging_manager',
     'security',
@@ -148,6 +152,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount.providers.github',
     'push_notifications',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',  # Token blacklisting for JWT rotation
 ]
 
 MIDDLEWARE = [
@@ -206,23 +211,27 @@ WSGI_APPLICATION = 'password_manager.wsgi.application'
 ASGI_APPLICATION = 'password_manager.asgi.application'
 
 # Django Channels Layer Configuration
-# For development, use in-memory channel layer
-# For production, use Redis: 'channels_redis.core.RedisChannelLayer'
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels.layers.InMemoryChannelLayer',
-    },
-}
-
-# For production with Redis (uncomment when Redis is available):
-# CHANNEL_LAYERS = {
-#     'default': {
-#         'BACKEND': 'channels_redis.core.RedisChannelLayer',
-#         'CONFIG': {
-#             'hosts': [(os.environ.get('REDIS_HOST', 'localhost'), 6379)],
-#         },
-#     },
-# }
+# Uses Redis when USE_REDIS_CHANNELS=True, otherwise In-Memory for development
+if os.environ.get('USE_REDIS_CHANNELS', 'False').lower() == 'true':
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [(
+                    os.environ.get('REDIS_HOST', 'localhost'),
+                    int(os.environ.get('REDIS_PORT', 6379))
+                )],
+                'capacity': 1500,
+                'expiry': 10,
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer'
+        }
+    }
 # Database configuration
 # https://docs.djangoproject.com/en/5.1.15/ref/settings/#databases
 
@@ -298,47 +307,7 @@ KYBER_CACHE_SETTINGS = {
     'LRU_CACHE_SIZE': 256,
 }
 
-# ==============================================================================
-# DJANGO CHANNELS CONFIGURATION (WebSocket Support)
-# ==============================================================================
 
-# Channel Layers - For WebSocket communication
-# Using Redis for production, In-Memory for development
-if DEBUG:
-    # In-Memory Channel Layer (Development Only)
-    CHANNEL_LAYERS = {
-        "default": {
-            "BACKEND": "channels.layers.InMemoryChannelLayer"
-        }
-    }
-else:
-    # Redis Channel Layer (Production)
-    CHANNEL_LAYERS = {
-        'default': {
-            'BACKEND': 'channels_redis.core.RedisChannelLayer',
-            'CONFIG': {
-                "hosts": [os.environ.get('REDIS_URL', 'redis://localhost:6379')],
-                "capacity": 1500,  # Max messages per channel
-                "expiry": 10,  # Message expiry time in seconds
-            },
-        },
-    }
-
-# You can override to use Redis in development by setting environment variable:
-if os.environ.get('USE_REDIS_CHANNELS', 'False').lower() == 'true':
-    CHANNEL_LAYERS = {
-        'default': {
-            'BACKEND': 'channels_redis.core.RedisChannelLayer',
-            'CONFIG': {
-                "hosts": [(
-                    os.environ.get('REDIS_HOST', 'localhost'),
-                    int(os.environ.get('REDIS_PORT', 6379))
-                )],
-                "capacity": 1500,
-                "expiry": 10,
-            },
-        },
-    }
 
 # Password validation
 # https://docs.djangoproject.com/en/5.1.15/ref/settings/#auth-password-validators
@@ -379,14 +348,19 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.ScopedRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '10/minute',
-        'user': '60/minute', 
-        'auth': '3/minute',  # Stricter login attempts
+        'anon': os.environ.get('RATE_LIMIT_ANON', '100/minute') if DEBUG else os.environ.get('RATE_LIMIT_ANON', '10/minute'),
+        'user': os.environ.get('RATE_LIMIT_USER', '200/minute') if DEBUG else os.environ.get('RATE_LIMIT_USER', '60/minute'),
+        'auth': os.environ.get('RATE_LIMIT_AUTH', '30/minute') if DEBUG else os.environ.get('RATE_LIMIT_AUTH', '3/minute'),
         'password_check': '5/hour',  # Reduced breach checks
         'security': '20/hour',  # Security operations
         'passkey': '10/minute',  # WebAuthn operations
         'vault': '100/hour',  # Reasonable vault operations
         'dj_rest_auth': '10/minute',  # dj-rest-auth operations
+        'ml_inference': '10/minute',      # BERT, Siamese ML models
+        'fhe_operation': '5/minute',      # FHE encrypt/decrypt
+        'biometric_frame': '60/minute',   # Video frame submission
+        'websocket_connect': '5/minute',  # WS connection rate
+        'dark_web_scan': '1/hour',        # Manual scan trigger
     }
 }
 
@@ -415,6 +389,10 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
+# Media files (user uploads)
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1.15/ref/settings/#default-auto-field
 
@@ -436,6 +414,10 @@ AWS_S3_OBJECT_PARAMETERS = {
 }
 AWS_DEFAULT_ACL = 'private'
 
+# Google Cloud Storage Configuration (for vault backups)
+CLOUD_STORAGE_BUCKET = os.environ.get('CLOUD_STORAGE_BUCKET', '')
+GOOGLE_CLOUD_CREDENTIALS = os.environ.get('GOOGLE_CLOUD_CREDENTIALS', '')
+
 # Site ID for django-allauth
 SITE_ID = 1
 
@@ -443,18 +425,7 @@ SITE_ID = 1
 SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = os.environ.get('DJANGO_SESSION_COOKIE_SECURE', 'False') == 'True'
 CSRF_COOKIE_SECURE = os.environ.get('DJANGO_CSRF_COOKIE_SECURE', 'False') == 'True'
-SECURE_HSTS_SECONDS = 31536000  # 1 year
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
-SECURE_BROWSER_XSS_FILTER = True
-SECURE_CONTENT_TYPE_NOSNIFF = True
-X_FRAME_OPTIONS = 'DENY'
 
-# Additional CSRF protection
-CSRF_COOKIE_HTTPONLY = True
-# Use 'Lax' for development with JWT (not needed for API calls with Authorization header)
-# Set to 'Strict' in production if using cookie-based auth
-CSRF_COOKIE_SAMESITE = 'Lax' if DEBUG else 'Strict'
 
 # CSRF Trusted Origins (for SPA development)
 CSRF_TRUSTED_ORIGINS = [
@@ -471,47 +442,7 @@ csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
 if csrf_origins_env:
     CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()])
 
-# Logging configuration
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'formatters': {
-        'verbose': {
-            'format': '{levelname} {asctime} {module} {message}',
-            'style': '{',
-        },
-    },
-    'handlers': {
-        'db': {
-            'level': 'INFO',
-            'class': 'logging_manager.handlers.DatabaseLogHandler',
-            'formatter': 'verbose',
-        },
-        'file': {
-            'level': 'DEBUG',
-            'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'logs/debug.log'),
-            'formatter': 'verbose',
-        },
-    },
-    'loggers': {
-        'django': {
-            'handlers': ['file', 'db'],
-            'level': 'INFO',
-            'propagate': True,
-        },
-        'security': {
-            'handlers': ['file', 'db'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-        'vault': {
-            'handlers': ['file', 'db'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-    },
-}
+# NOTE: Logging configuration merged into Enhanced Logging block below
 
 # Authentication backends
 AUTHENTICATION_BACKENDS = [
@@ -627,8 +558,6 @@ SIMPLE_JWT = {
     'USER_ID_CLAIM': 'user_id',
 }
 
-# Add to INSTALLED_APPS for token blacklisting
-INSTALLED_APPS += ['rest_framework_simplejwt.token_blacklist']
 
 # Firebase Settings
 FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID', '')
@@ -750,16 +679,30 @@ CORS_PREFLIGHT_MAX_AGE = 86400  # 24 hours
 # Add production origins from environment
 env_origins = os.environ.get('CORS_ALLOWED_ORIGINS', '').strip()
 if env_origins:
-    CORS_ALLOWED_ORIGINS.extend([origin.strip() for origin in env_origins.split(',') if origin.strip()])
+    parsed_origins = [origin.strip() for origin in env_origins.split(',') if origin.strip()]
+    if '*' in parsed_origins:
+        raise ValueError("Wildcard CORS origin '*' is not allowed. Set explicit frontend origins only.")
+    CORS_ALLOWED_ORIGINS.extend(parsed_origins)
 
-# Rate limiting: lenient in development, strict in production
-REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'].update({
-    'anon': os.environ.get('RATE_LIMIT_ANON', '100/minute') if DEBUG else os.environ.get('RATE_LIMIT_ANON', '10/minute'),
-    'user': os.environ.get('RATE_LIMIT_USER', '200/minute') if DEBUG else os.environ.get('RATE_LIMIT_USER', '60/minute'), 
-    'auth': os.environ.get('RATE_LIMIT_AUTH', '30/minute') if DEBUG else os.environ.get('RATE_LIMIT_AUTH', '3/minute'),
-    'password_check': '5/hour',
-    'vault': '100/hour',
-})
+# Hard fail if wildcard sneaks in from any source.
+if '*' in CORS_ALLOWED_ORIGINS:
+    raise ValueError("Wildcard CORS origin '*' is not allowed. Use explicit trusted origins.")
+
+# Strict CSP policy used by SecurityHeadersMiddleware.
+SECURITY_CSP_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: blob:; "
+    "connect-src 'self' wss: ws: https://api.haveibeenpwned.com; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+
+
 
 # ==============================================================================
 # SESSION & CSRF CONFIGURATION (For admin/WebSocket only - API uses JWT)
@@ -774,13 +717,13 @@ SESSION_COOKIE_SAMESITE = 'Lax' if DEBUG else 'Strict'  # Relaxed for dev
 # CSRF configuration (not needed for JWT API calls, but used for admin/forms)
 CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = 'Lax' if DEBUG else 'Strict'  # Relaxed for dev
-CSRF_USE_SESSIONS = True
+CSRF_USE_SESSIONS = False  # Use cookie-based CSRF (default); sessions not needed for JWT API
 
 # Ensure logs directory exists
 LOGS_DIR = os.path.join(BASE_DIR, 'logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
 
-# Enhanced Logging configuration
+# Enhanced Logging configuration (merged — includes DatabaseLogHandler)
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -795,6 +738,11 @@ LOGGING = {
         },
     },
     'handlers': {
+        'db': {
+            'level': 'INFO',
+            'class': 'logging_manager.handlers.DatabaseLogHandler',
+            'formatter': 'verbose',
+        },
         'file': {
             'level': 'INFO',
             'class': 'logging.FileHandler',
@@ -803,7 +751,7 @@ LOGGING = {
         },
         'security_file': {
             'level': 'WARNING',
-            'class': 'logging.FileHandler', 
+            'class': 'logging.FileHandler',
             'filename': os.path.join(LOGS_DIR, 'security.log'),
             'formatter': 'verbose',
         },
@@ -819,13 +767,18 @@ LOGGING = {
     },
     'loggers': {
         'django': {
-            'handlers': ['file'],
+            'handlers': ['file', 'db'],
             'level': 'INFO',
             'propagate': False,
         },
         'security': {
-            'handlers': ['security_file', 'console'],
+            'handlers': ['security_file', 'console', 'db'],
             'level': 'WARNING',
+            'propagate': False,
+        },
+        'vault': {
+            'handlers': ['file', 'db'],
+            'level': 'INFO',
             'propagate': False,
         },
         'auth_module': {
@@ -1053,70 +1006,8 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
-# Celery Beat Schedule (Periodic Tasks)
-from celery.schedules import crontab
-
-CELERY_BEAT_SCHEDULE = {
-    # Anchor commitments to blockchain every 24 hours
-    'anchor-commitments-to-blockchain': {
-        'task': 'blockchain.tasks.anchor_pending_commitments',
-        'schedule': crontab(hour='2', minute='0'),  # 2:00 AM UTC daily
-    },
-    # Verify blockchain anchors every 6 hours
-    'verify-blockchain-anchors': {
-        'task': 'blockchain.tasks.verify_blockchain_anchors',
-        'schedule': crontab(minute='0', hour='*/6'),  # Every 6 hours
-    },
-    # Clean up old pending commitments weekly
-    'cleanup-old-pending-commitments': {
-        'task': 'blockchain.tasks.cleanup_old_pending_commitments',
-        'schedule': crontab(day_of_week='sunday', hour='3', minute='0'),  # Sunday 3:00 AM UTC
-    },
-    # Vault maintenance tasks
-    'cleanup-audit-logs-daily': {
-        'task': 'vault.tasks.cleanup_old_audit_logs',
-        'schedule': crontab(hour='4', minute='0'),  # 4:00 AM UTC daily
-    },
-    'cleanup-deleted-items-weekly': {
-        'task': 'vault.tasks.cleanup_deleted_items',
-        'schedule': crontab(day_of_week='sunday', hour='5', minute='0'),  # Sunday 5:00 AM UTC
-    },
-    'cleanup-cache-hourly': {
-        'task': 'vault.tasks.cleanup_expired_cache',
-        'schedule': crontab(minute='30'),  # Every hour at :30
-    },
-    # ==========================================================================
-    # Adaptive Password Tasks
-    # ==========================================================================
-    # Aggregate typing profiles hourly
-    'aggregate-typing-profiles': {
-        'task': 'security.tasks.adaptive_tasks.aggregate_typing_profiles',
-        'schedule': crontab(minute='15'),  # Every hour at :15
-    },
-    # Cleanup expired adaptation suggestions daily
-    'cleanup-expired-adaptations': {
-        'task': 'security.tasks.adaptive_tasks.cleanup_expired_adaptations',
-        'schedule': crontab(hour='3', minute='30'),  # 3:30 AM UTC daily
-    },
-    # Update RL model weekly
-    'update-adaptation-rl-model': {
-        'task': 'security.tasks.adaptive_tasks.update_rl_model_from_feedback',
-        'schedule': crontab(day_of_week='monday', hour='4', minute='0'),  # Monday 4:00 AM
-    },
-    # Smart Contract Automation Tasks
-    'check-dead-mans-switch': {
-        'task': 'smart_contracts.tasks.check_dead_mans_switches',
-        'schedule': crontab(minute='0', hour='*/1'),  # Every hour
-    },
-    'evaluate-contract-conditions': {
-        'task': 'smart_contracts.tasks.evaluate_pending_conditions',
-        'schedule': crontab(minute='*/15'),  # Every 15 minutes
-    },
-    'sync-onchain-vault-state': {
-        'task': 'smart_contracts.tasks.sync_onchain_state',
-        'schedule': crontab(minute='*/30'),  # Every 30 minutes
-    },
-}
+# NOTE: Celery Beat Schedule is defined in celery.py — do NOT import celery here.
+# Settings should not import application code (breaks clean installs).
 
 # ==============================================================================
 # FHE Homomorphic Password Sharing Configuration

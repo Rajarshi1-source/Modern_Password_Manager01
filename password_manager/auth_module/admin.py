@@ -86,8 +86,8 @@ class RecoveryGuardianAdmin(admin.ModelAdmin):
     guardian_email_display.short_description = 'Guardian Email'
     
     def total_recoveries(self, obj):
-        return obj.total_recoveries_assisted
-    total_recoveries.short_description = 'Recoveries Assisted'
+        return obj.total_approvals_given
+    total_recoveries.short_description = 'Approvals Given'
 
 
 @admin.register(RecoveryAttempt)
@@ -115,19 +115,17 @@ class RecoveryAttemptAdmin(admin.ModelAdmin):
         ('Challenge Tracking', {
             'fields': (
                 'challenges_sent', 'challenges_completed', 'challenges_failed',
-                'challenge_success_rate'
             )
         }),
         ('Trust Scoring', {
             'fields': (
-                'trust_score', 'device_recognition_score',
-                'behavioral_match_score', 'temporal_consistency_score'
+                'trust_score',
             )
         }),
         ('Security Context', {
             'fields': (
                 'initiated_from_ip', 'initiated_from_device_fingerprint',
-                'initiated_from_location', 'initiated_from_user_agent'
+                'initiated_from_location'
             )
         }),
         ('Security Alerts', {
@@ -138,7 +136,7 @@ class RecoveryAttemptAdmin(admin.ModelAdmin):
             )
         }),
         ('Recovery Result', {
-            'fields': ('recovery_successful', 'failure_reason', 'forensic_log')
+            'fields': ('recovery_successful', 'failure_reason')
         }),
     )
     
