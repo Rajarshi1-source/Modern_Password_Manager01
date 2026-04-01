@@ -21,8 +21,9 @@ class LivenessProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'is_calibrated', 'calibration_samples',
             'profile_confidence', 'liveness_threshold', 
-            'baseline_expression_timing', 'baseline_gaze_patterns',
-            'baseline_pulse_signature', 'created_at', 'last_calibration_at'
+            'baseline_expression_patterns', 'baseline_gaze_pattern',
+            'baseline_pulse_signature', 'baseline_thermal_signature',
+            'created_at', 'last_calibration_at'
         ]
         read_only_fields = ['id', 'user', 'created_at']
 
@@ -46,11 +47,11 @@ class LivenessChallengeSerializer(serializers.ModelSerializer):
     class Meta:
         model = LivenessChallenge
         fields = [
-            'id', 'challenge_type', 'sequence', 'status',
-            'instruction', 'target_data', 'time_limit_ms',
-            'started_at', 'completed_at'
+            'id', 'challenge_type', 'sequence_number', 'difficulty',
+            'challenge_data', 'expected_response', 'time_limit_ms',
+            'presented_at', 'completed_at', 'is_passed', 'score'
         ]
-        read_only_fields = ['id', 'started_at', 'completed_at']
+        read_only_fields = ['id', 'presented_at', 'completed_at', 'is_passed', 'score']
 
 
 class ChallengeResponseSerializer(serializers.ModelSerializer):
@@ -59,11 +60,14 @@ class ChallengeResponseSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChallengeResponse
         fields = [
-            'id', 'challenge', 'response_type', 'response_data',
-            'reaction_time_ms', 'gaze_accuracy', 'expression_score',
-            'is_valid', 'score', 'created_at'
+            'id', 'challenge', 'response_data',
+            'reaction_time_ms', 'total_duration_ms',
+            'face_detected', 'multiple_faces_detected',
+            'blink_detected', 'micro_movement_detected', 'natural_skin_texture',
+            'texture_liveness_score', 'depth_liveness_score', 'motion_liveness_score',
+            'client_timestamp', 'server_received_at'
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'server_received_at']
 
 
 class PulseOximetryReadingSerializer(serializers.ModelSerializer):
@@ -72,11 +76,12 @@ class PulseOximetryReadingSerializer(serializers.ModelSerializer):
     class Meta:
         model = PulseOximetryReading
         fields = [
-            'id', 'session', 'timestamp_ms', 'frame_number',
+            'id', 'session', 'timestamp', 'frame_number',
             'heart_rate_bpm', 'heart_rate_variability', 'spo2_estimate',
-            'ppg_signal_quality', 'rgb_mean_values', 'is_valid'
+            'signal_quality', 'rgb_means', 'ppg_signal_segment',
+            'is_consistent_with_living'
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'timestamp']
 
 
 class ThermalReadingSerializer(serializers.ModelSerializer):
@@ -85,12 +90,12 @@ class ThermalReadingSerializer(serializers.ModelSerializer):
     class Meta:
         model = ThermalReading
         fields = [
-            'id', 'session', 'timestamp_ms', 'frame_number',
-            'average_temp_c', 'min_temp_c', 'max_temp_c',
-            'has_natural_gradient', 'matches_living_tissue',
-            'heat_map_features', 'is_valid'
+            'id', 'session', 'timestamp', 'frame_number',
+            'average_face_temp_c', 'temp_range_c',
+            'has_natural_thermal_gradient', 'matches_living_tissue_range',
+            'heat_map_features'
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'timestamp']
 
 
 class GazeTrackingDataSerializer(serializers.ModelSerializer):
@@ -99,8 +104,8 @@ class GazeTrackingDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = GazeTrackingData
         fields = [
-            'id', 'session', 'timestamp_ms', 'gaze_x', 'gaze_y',
-            'target_x', 'target_y', 'accuracy', 'head_pose',
+            'id', 'challenge', 'timestamp_ms', 'gaze_x', 'gaze_y',
+            'target_x', 'target_y',
             'confidence', 'is_fixation'
         ]
         read_only_fields = ['id']
@@ -112,11 +117,11 @@ class MicroExpressionEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = MicroExpressionEvent
         fields = [
-            'id', 'session', 'timestamp_ms', 'duration_ms',
+            'id', 'session', 'timestamp', 'frame_number', 'duration_ms',
             'expression_type', 'action_units', 'intensity',
-            'naturalness_score', 'is_genuine'
+            'onset_natural', 'offset_natural', 'asymmetry_score'
         ]
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'timestamp']
 
 
 class LivenessSessionSerializer(serializers.ModelSerializer):
@@ -131,9 +136,9 @@ class LivenessSessionSerializer(serializers.ModelSerializer):
             'started_at', 'completed_at', 'expires_at',
             'overall_liveness_score', 'deepfake_probability', 'confidence',
             'micro_expression_score', 'gaze_tracking_score',
-            'pulse_oximetry_score', 'thermal_score',
-            'total_frames_processed', 'challenges',
-            'device_fingerprint', 'ip_address', 'verdict', 'verdict_reason'
+            'pulse_oximetry_score', 'thermal_score', 'texture_artifact_score',
+            'total_frames_processed', 'face_detection_rate', 'challenges',
+            'device_fingerprint', 'user_agent', 'ip_address'
         ]
         read_only_fields = [
             'id', 'user', 'created_at', 'started_at', 'completed_at',

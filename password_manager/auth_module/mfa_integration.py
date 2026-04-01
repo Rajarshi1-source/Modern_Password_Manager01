@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 from rest_framework.exceptions import AuthenticationFailed
 import logging
 
-from .mfa_models import BiometricFactor, MFAPolicy, AuthenticationAttempt
+from .mfa_models import BiometricProfile, MFAPolicy, AuthenticationAttempt
 from .mfa_views import BiometricAuthenticator
 from two_factor.models import TOTPDevice
 from .services.authy_service import AuthyService
@@ -56,7 +56,7 @@ class MFAIntegrationService:
             factors['all_factors'].extend(['sms', 'email'])
         
         # Check biometric MFA
-        biometric_factors = BiometricFactor.objects.filter(
+        biometric_factors = BiometricProfile.objects.filter(
             user=self.user,
             is_active=True
         )
@@ -120,7 +120,7 @@ class MFAIntegrationService:
         required_count = 1
         allow_any = True
         
-        if policy.adaptive_mfa_enabled:
+        if policy.enable_adaptive_mfa:
             # Adaptive MFA: adjust based on risk
             if risk_level == 'high':
                 # High risk: require biometric + traditional 2FA
@@ -133,7 +133,7 @@ class MFAIntegrationService:
                 allow_any = True
             else:
                 # Low risk: optional 2FA (for trusted devices)
-                if policy.remember_trusted_devices and self._is_trusted_device(request_data):
+                if getattr(policy, 'remember_trusted_devices', False) and self._is_trusted_device(request_data):
                     required_count = 0
                 else:
                     required_count = 1
@@ -141,16 +141,16 @@ class MFAIntegrationService:
         
         # Override for sensitive operations
         if operation_type in ['export_vault', 'delete_account', 'change_master_password']:
-            if policy.require_biometric_for_sensitive:
+            if getattr(policy, 'require_biometric_for_sensitive', policy.require_reauth_for_sensitive_ops):
                 required_factors = ['face', 'voice', 'totp']
                 required_count = 1
                 allow_any = True  # Any biometric OR TOTP
         
         # Check for new device/location requirements
-        if policy.require_mfa_on_new_device and self._is_new_device(request_data):
+        if getattr(policy, 'require_mfa_on_new_device', True) and self._is_new_device(request_data):
             required_count = max(required_count, 1)
         
-        if policy.require_mfa_on_new_location and self._is_new_location(request_data):
+        if getattr(policy, 'require_mfa_on_new_location', True) and self._is_new_location(request_data):
             required_count = max(required_count, 1)
         
         return {
@@ -204,11 +204,14 @@ class MFAIntegrationService:
                 # Log attempt
                 AuthenticationAttempt.objects.create(
                     user=self.user,
-                    factor_type=factor_type,
-                    success=result.get('success', False),
-                    ip_address=request_data.get('ip_address'),
-                    device_info=request_data.get('user_agent'),
-                    location=request_data.get('location')
+                    username=self.user.username,
+                    factors_used=[factor_type],
+                    factors_required=1,
+                    factors_completed=1 if result.get('success') else 0,
+                    result='success' if result.get('success') else 'failure',
+                    ip_address=request_data.get('ip_address') or '0.0.0.0',
+                    user_agent=request_data.get('user_agent', ''),
+                    device_fingerprint=request_data.get('device_fingerprint', ''),
                 )
                 
             except Exception as e:
@@ -296,15 +299,15 @@ class MFAIntegrationService:
         # Check last successful auth from this device within trust period
         recent_success = AuthenticationAttempt.objects.filter(
             user=self.user,
-            success=True,
-            device_info__contains=device_fingerprint
-        ).order_by('-timestamp').first()
+            result='success',
+            device_fingerprint__contains=device_fingerprint
+        ).order_by('-attempt_timestamp').first()
         
         if recent_success:
             from django.utils import timezone
             from datetime import timedelta
             trust_period = timedelta(days=30)
-            return (timezone.now() - recent_success.timestamp) < trust_period
+            return (timezone.now() - recent_success.attempt_timestamp) < trust_period
         
         return False
     
@@ -316,8 +319,8 @@ class MFAIntegrationService:
         
         return not AuthenticationAttempt.objects.filter(
             user=self.user,
-            device_info__contains=device_fingerprint,
-            success=True
+            device_fingerprint__contains=device_fingerprint,
+            result='success'
         ).exists()
     
     def _is_new_location(self, request_data):
@@ -328,8 +331,8 @@ class MFAIntegrationService:
         
         return not AuthenticationAttempt.objects.filter(
             user=self.user,
-            location__contains=location,
-            success=True
+            location_data__contains=location,
+            result='success'
         ).exists()
     
     @staticmethod
@@ -364,7 +367,7 @@ def verify_mfa_for_request(user, request):
     
     # Extract request data
     request_data = {
-        'ip_address': request.META.get('REMOTE_ADDR'),
+        'ip_address': request.META.get('REMOTE_ADDR', '0.0.0.0'),
         'user_agent': request.META.get('HTTP_USER_AGENT'),
         'device_fingerprint': request.META.get('HTTP_X_DEVICE_FINGERPRINT'),
         'location': request.META.get('HTTP_X_LOCATION')

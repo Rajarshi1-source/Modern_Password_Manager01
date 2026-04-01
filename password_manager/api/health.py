@@ -47,7 +47,7 @@ def health_check(request):
     
     # Check if we're in debug mode (security check)
     health_status['checks']['debug_mode'] = settings.DEBUG
-    if settings.DEBUG and not settings.DEVELOPMENT:
+    if settings.DEBUG and not getattr(settings, 'DEVELOPMENT', False):
         health_status['checks']['security_warning'] = 'DEBUG is enabled in production'
         logger.warning("DEBUG mode is enabled in production environment")
     

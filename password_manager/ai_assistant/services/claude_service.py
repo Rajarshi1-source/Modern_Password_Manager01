@@ -74,22 +74,28 @@ class ClaudeService:
         """
         Check and enforce per-user rate limiting.
         
-        Uses Django cache to track request counts.
+        Uses Django cache with atomic operations to track request counts.
         """
         cache_key = f"ai_assistant_rate_{user_id}"
-        current_count = cache.get(cache_key, 0)
         
-        if current_count >= self.rate_limit:
+        # cache.add() is atomic: sets only if key doesn't exist
+        if cache.add(cache_key, 1, self.RATE_LIMIT_WINDOW):
+            # Key was newly created with value 1 — first request in window
+            return
+        
+        # Key already exists — atomically increment and check
+        try:
+            current_count = cache.incr(cache_key)
+        except ValueError:
+            # Key expired between add() and incr() — reset
+            cache.set(cache_key, 1, self.RATE_LIMIT_WINDOW)
+            return
+        
+        if current_count > self.rate_limit:
             raise ClaudeServiceError(
                 f"Rate limit exceeded. Maximum {self.rate_limit} requests per hour. "
                 "Please try again later."
             )
-        
-        # Increment counter
-        if current_count == 0:
-            cache.set(cache_key, 1, self.RATE_LIMIT_WINDOW)
-        else:
-            cache.incr(cache_key)
     
     def _build_system_prompt(self, user, vault_context=None):
         """

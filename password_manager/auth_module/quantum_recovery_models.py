@@ -14,6 +14,8 @@ from django.utils import timezone
 from django.core.validators import MinValueValidator, MaxValueValidator
 import json
 import uuid
+import hashlib
+import time as _time
 
 
 class RecoveryShardType(models.TextChoices):
@@ -486,7 +488,12 @@ class RecoveryAuditLog(models.Model):
     
     # Cryptographic timestamp (for immutability verification)
     timestamp = models.DateTimeField(auto_now_add=True)
-    cryptographic_hash = models.CharField(max_length=64, help_text="SHA-256 hash of previous log entry")
+    cryptographic_hash = models.CharField(
+        max_length=64,
+        help_text="SHA-256 hash of previous log entry",
+        default='',
+        blank=True,
+    )
     
     class Meta:
         verbose_name = "Recovery Audit Log"

@@ -19,6 +19,8 @@ from django.db import transaction
 from datetime import timedelta
 import uuid
 import secrets
+import hashlib
+import time
 import logging
 
 from .quantum_recovery_models import (
@@ -205,8 +207,11 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                         'threshold_shards': threshold_shards,
                         'guardians_count': len(guardians_data)
                     },
-                    ip_address=request.META.get('REMOTE_ADDR'),
-                    user_agent=request.META.get('HTTP_USER_AGENT', '')
+                    ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    cryptographic_hash=hashlib.sha256(
+                        f"{user.id}:{time.time()}".encode()
+                    ).hexdigest(),
                 )
             
             return Response({
@@ -343,8 +348,11 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     event_data={
                         'attempt_id': str(attempt.id)
                     },
-                    ip_address=request.META.get('REMOTE_ADDR'),
-                    user_agent=request.META.get('HTTP_USER_AGENT', '')
+                    ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    cryptographic_hash=hashlib.sha256(
+                        f"{user.id}:{time.time()}".encode()
+                    ).hexdigest(),
                 )
             
             return Response({
@@ -439,7 +447,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'challenge_id': str(challenge_id),
                     'correct': is_correct
                 },
-                ip_address=request.META.get('REMOTE_ADDR')
+                ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+                cryptographic_hash=hashlib.sha256(
+                    f"{attempt.recovery_setup.user.id}:{time.time()}".encode()
+                ).hexdigest(),
             )
             
             return Response({
@@ -493,7 +504,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'attempt_id': str(attempt_id),
                     'reason': 'canary_alert'
                 },
-                ip_address=request.META.get('REMOTE_ADDR')
+                ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+                cryptographic_hash=hashlib.sha256(
+                    f"{request.user.id}:{time.time()}".encode()
+                ).hexdigest(),
             )
             
             return Response({
@@ -540,7 +554,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'duration_days': duration_days,
                     'until': recovery_setup.travel_lock_until.isoformat()
                 },
-                ip_address=request.META.get('REMOTE_ADDR')
+                ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+                cryptographic_hash=hashlib.sha256(
+                    f"{request.user.id}:{time.time()}".encode()
+                ).hexdigest(),
             )
             
             return Response({
@@ -619,7 +636,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                             event_data={
                                 'shard_id': str(shard.id)
                             },
-                            ip_address=request.META.get('REMOTE_ADDR')
+                            ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+                            cryptographic_hash=hashlib.sha256(
+                                f"{recovery_setup.user.id}:{time.time()}".encode()
+                            ).hexdigest(),
                         )
                         
                         return Response({
@@ -689,7 +709,10 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                         'shards_used': len(decrypted_shards),
                         'trust_score': attempt.trust_score
                     },
-                    ip_address=request.META.get('REMOTE_ADDR')
+                    ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+                    cryptographic_hash=hashlib.sha256(
+                        f"{recovery_setup.user.id}:{time.time()}".encode()
+                    ).hexdigest(),
                 )
             
             return Response({
@@ -749,7 +772,11 @@ def accept_guardian_invitation(request):
             event_type='guardian_accepted',
             event_data={
                 'guardian_id': str(guardian.id)
-            }
+            },
+            ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+            cryptographic_hash=hashlib.sha256(
+                f"{recovery_setup.user.id}:{time.time()}".encode()
+            ).hexdigest(),
         )
         
         return Response({
@@ -822,7 +849,11 @@ def guardian_approve_recovery(request):
             event_data={
                 'guardian_id': str(guardian.id),
                 'approval_id': str(approval.id)
-            }
+            },
+            ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+            cryptographic_hash=hashlib.sha256(
+                f"{attempt.recovery_setup.user.id}:{time.time()}".encode()
+            ).hexdigest(),
         )
         
         return Response({

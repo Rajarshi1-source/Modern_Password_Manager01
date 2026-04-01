@@ -166,14 +166,12 @@ def send_message(request, session_id):
     
     try:
         # Get conversation history (last 20 messages for context window)
+        # Exclude the message we just saved — it will be passed separately
         history = list(
-            session.messages.order_by('timestamp')
+            session.messages.exclude(id=user_msg.id)
+            .order_by('timestamp')
             .values('role', 'content')[:20]
         )
-        # Remove the just-added user message from history 
-        # (it will be passed separately)
-        if history and history[-1]['content'] == user_message_content:
-            history = history[:-1]
         
         # Build vault context
         query_service = QueryAnalyzerService()

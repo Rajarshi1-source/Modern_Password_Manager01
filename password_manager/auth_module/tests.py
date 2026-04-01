@@ -714,7 +714,13 @@ class AuthSecurityTest(TestCase):
     def test_password_hashing(self):
         """Test that passwords are properly hashed"""
         self.assertNotEqual(self.user.password, 'testpass123')
-        self.assertTrue(self.user.password.startswith('pbkdf2_sha256$'))
+        # Argon2 is configured as default in settings.py PASSWORD_HASHERS,
+        # but PBKDF2 is also an accepted hasher
+        self.assertTrue(
+            self.user.password.startswith('argon2$') or
+            self.user.password.startswith('pbkdf2_sha256$'),
+            f"Password uses unexpected hasher: {self.user.password[:20]}"
+        )
     
     def test_password_validation(self):
         """Test password validation rules"""
