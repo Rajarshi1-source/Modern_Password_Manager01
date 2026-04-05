@@ -1,3 +1,4 @@
+import os
 import requests
 import hashlib
 import logging
@@ -9,8 +10,8 @@ logger = logging.getLogger(__name__)
 HIBP_API_URL = "https://haveibeenpwned.com/api/v3"
 HIBP_PASSWORD_API_URL = "https://api.pwnedpasswords.com/range"
 
-# Add your API key here if you have one
-HIBP_API_KEY = ""  # Use environment variables in production
+# Set HIBP_API_KEY in the environment for email breach checks (Have I Been Pwned API v3).
+HIBP_API_KEY = os.environ.get("HIBP_API_KEY", "")
 
 def hash_password(password):
     """
