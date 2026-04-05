@@ -2,7 +2,10 @@ import os
 import hashlib
 import logging
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Tuple
+from urllib.parse import quote
 
 import requests
 
@@ -11,13 +14,13 @@ logger = logging.getLogger(__name__)
 # HIBP API endpoints
 HIBP_API_URL = "https://haveibeenpwned.com/api/v3"
 HIBP_PASSWORD_API_URL = "https://api.pwnedpasswords.com/range"
-HIBP_EMAIL_API_URL = "https://haveibeenpwned.com/api/v3/breachedaccount"
+HIBP_EMAIL_API_URL = f"{HIBP_API_URL}/breachedaccount"
 # SHA-1 is REQUIRED by the HIBP API protocol — do NOT change this.
 # HIBP's database contains SHA-1 hashes. Substituting SHA-3 or SHA-512
 # would cause all passwords to return "not breached" (silent false negatives).
 # SHA-1's weaknesses (collision attacks) are irrelevant here — this hash
 # is used only as a k-anonymity lookup key, never for authentication or storage.
-# Set the HIBP_API_KEY in the environment variables for email breach checks (Have I Been Pwned API V3)
+# Snapshot at import; email breach checks use os.environ at request time (see get_breached_sites_for_email).
 HIBP_API_KEY = os.environ.get("HIBP_API_KEY", "")
 
 _PWNED_HEADERS = {
@@ -25,13 +28,30 @@ _PWNED_HEADERS = {
     "Add-Padding": "true",
 }
 
-_HIBP_HEADERS = {
-    "User-Agent": "SecureVault-PasswordManager/1.0",
-    "hibp-api-key": HIBP_API_KEY,
-}
-
 _HIBP_REQUEST_TIMEOUT = 10
 _HIBP_429_MAX_RETRIES = 3
+
+
+def _retry_after_seconds(header: str | None, default: int = 2) -> int:
+    """Parse Retry-After as seconds or HTTP-date (RFC 7231)."""
+    if not header or not str(header).strip():
+        return default
+    header = str(header).strip()
+    try:
+        secs = int(header)
+        return max(secs, 0) or default
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(header)
+        if when is None:
+            return default
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        delay = (when - datetime.now(when.tzinfo)).total_seconds()
+        return max(int(delay), 0) or default
+    except (TypeError, ValueError, OverflowError):
+        return default
 
 
 def _sha1_hex(password: str) -> str:
@@ -146,13 +166,22 @@ def get_breached_sites_for_email(
     if not email or "@" not in email:
         raise ValueError("Invalid email address")
 
-    if not HIBP_API_KEY:
+    # Read at call time so keys loaded after import (e.g. Django / dotenv) still work.
+    api_key = os.environ.get("HIBP_API_KEY", "")
+    if not api_key:
         logger.error(
             "HIBP_API_KEY is not set. Email breach checks require a paid API key "
             "(https://haveibeenpwned.com/API/Key). Skipping check."
         )
         return []
 
+    account = email.strip()
+    # HIBP: account in path must be URL-encoded.
+    breached_url = f"{HIBP_EMAIL_API_URL}/{quote(account, safe='')}"
+    headers = {
+        "User-Agent": "SecureVault-PasswordManager/1.0",
+        "hibp-api-key": api_key,
+    }
     params = {
         "truncateResponse": "false",
         "includeUnverified": "true" if include_unverified else "false",
@@ -161,8 +190,8 @@ def get_breached_sites_for_email(
     for attempt in range(_HIBP_429_MAX_RETRIES + 1):
         try:
             response = requests.get(
-                f"{HIBP_API_URL}/breachedaccount/{email}",
-                headers=_HIBP_HEADERS,
+                breached_url,
+                headers=headers,
                 params=params,
                 timeout=_HIBP_REQUEST_TIMEOUT,
             )
@@ -177,10 +206,9 @@ def get_breached_sites_for_email(
                         _HIBP_429_MAX_RETRIES,
                     )
                     return []
-                try:
-                    retry_after = int(response.headers.get("Retry-After", 2))
-                except ValueError:
-                    retry_after = 2
+                retry_after = _retry_after_seconds(
+                    response.headers.get("Retry-After"), default=2
+                )
                 logger.warning("HIBP rate limited. Retry after %ds.", retry_after)
                 time.sleep(retry_after)
                 continue
@@ -190,7 +218,11 @@ def get_breached_sites_for_email(
                 return []
 
             response.raise_for_status()
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as e:
+                logger.error("HIBP returned invalid JSON: %s", e)
+                return []
 
         except requests.exceptions.Timeout:
             logger.error(
