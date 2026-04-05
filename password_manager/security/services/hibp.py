@@ -1,134 +1,205 @@
 import os
-import requests
 import hashlib
 import logging
 import time
+from typing import Tuple
+
+import requests
 
 logger = logging.getLogger(__name__)
 
 # HIBP API endpoints
 HIBP_API_URL = "https://haveibeenpwned.com/api/v3"
 HIBP_PASSWORD_API_URL = "https://api.pwnedpasswords.com/range"
-
-# Set HIBP_API_KEY in the environment for email breach checks (Have I Been Pwned API v3).
+HIBP_EMAIL_API_URL = "https://haveibeenpwned.com/api/v3/breachedaccount"
+# SHA-1 is REQUIRED by the HIBP API protocol — do NOT change this.
+# HIBP's database contains SHA-1 hashes. Substituting SHA-3 or SHA-512
+# would cause all passwords to return "not breached" (silent false negatives).
+# SHA-1's weaknesses (collision attacks) are irrelevant here — this hash
+# is used only as a k-anonymity lookup key, never for authentication or storage.
+# Set the HIBP_API_KEY in the environment variables for email breach checks (Have I Been Pwned API V3)
 HIBP_API_KEY = os.environ.get("HIBP_API_KEY", "")
 
-def hash_password(password):
-    """
-    Create SHA-1 hash of a password for checking against the HIBP API
-    
-    Args:
-        password (str): The password to hash
-        
-    Returns:
-        str: SHA-1 hash of the password in uppercase
-    """
-    sha1 = hashlib.sha1()
-    sha1.update(password.encode('utf-8'))
-    return sha1.hexdigest().upper()
+_PWNED_HEADERS = {
+    "User-Agent": "SecureVault-PasswordManager/1.0 (k-anonymity check)",
+    "Add-Padding": "true",
+}
+
+_HIBP_HEADERS = {
+    "User-Agent": "SecureVault-PasswordManager/1.0",
+    "hibp-api-key": HIBP_API_KEY,
+}
+
+_HIBP_REQUEST_TIMEOUT = 10
+_HIBP_429_MAX_RETRIES = 3
 
 
-def check_password_prefix(prefix):
+def _sha1_hex(password: str) -> str:
     """
-    Check if a password hash prefix appears in breached data
-    
+    SHA-1 hash a password for HIBP lookup.
+
+    SHA-1 is mandated by the HIBP k-anonymity API — this is intentional.
+    Do NOT replace with SHA-3 or SHA-512.
+    """
+    return (
+        hashlib.sha1(password.encode("utf-8"), usedforsecurity=False)
+        .hexdigest()
+        .upper()
+    )
+
+
+def hash_password(password: str) -> str:
+    """Backward-compatible name for _sha1_hex (HIBP k-anonymity protocol)."""
+    return _sha1_hex(password)
+
+
+def check_password_prefix(prefix: str) -> dict:
+    """
+    Query HIBP range API with a 5-char SHA-1 prefix (k-anonymity model).
+    The full password hash is never sent over the network.
+
     Args:
-        prefix (str): First 5 characters of SHA-1 hash
-        
+        prefix: First 5 hex characters of the SHA-1 hash.
+
     Returns:
-        dict: Dictionary of hash suffixes and occurrence counts
+        Dict mapping uppercase hash suffixes to breach counts.
+        Returns empty dict on network failure (fail-open — caller must handle).
     """
-    if not prefix or len(prefix) != 5:
-        raise ValueError("Prefix must be exactly 5 characters")
-    
+    if not prefix or len(prefix) != 5 or not all(
+        c in "0123456789ABCDEFabcdef" for c in prefix
+    ):
+        raise ValueError(f"Prefix must be exactly 5 hex characters, got: {prefix!r}")
+
     try:
-        response = requests.get(f"{HIBP_PASSWORD_API_URL}/{prefix}")
+        response = requests.get(
+            f"{HIBP_PASSWORD_API_URL}/{prefix.upper()}",
+            headers=_PWNED_HEADERS,
+            timeout=_HIBP_REQUEST_TIMEOUT,
+        )
         response.raise_for_status()
-        
-        # Parse response (format: hash_suffix:count)
+
         result = {}
         for line in response.text.splitlines():
-            parts = line.split(':')
-            if len(parts) == 2:
-                hash_suffix = parts[0].strip()
-                count = int(parts[1].strip())
-                result[hash_suffix] = count
-                
+            if ":" not in line:
+                continue
+            suffix, _, count_str = line.partition(":")
+            try:
+                result[suffix.strip().upper()] = int(count_str.strip())
+            except ValueError:
+                logger.warning("Unexpected HIBP line format: %r", line)
         return result
-        
+
+    except requests.exceptions.Timeout:
+        logger.error("HIBP API timed out for prefix %s***", prefix[:2])
+        return {}
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error checking password breach: {str(e)}")
-        # Return empty dict rather than failing
+        logger.error("HIBP request failed: %s", e)
         return {}
 
 
-def is_password_breached(password_hash):
+def is_password_breached(password_or_hash: str) -> Tuple[bool, int]:
     """
-    Check if a password has been breached
-    
+    Check if a password appears in known data breaches (k-anonymity).
+
+    Accepts either a 40-character SHA-1 hex hash (as sent by the client API)
+    or a plaintext password (hashed locally before any network call).
+
     Args:
-        password_hash (str): SHA-1 hash of the password or the password itself
-        
+        password_or_hash: SHA-1 hex hash or plaintext password.
+
     Returns:
-        tuple: (bool, int) - Whether the password was breached and how many times
+        (is_breached, breach_count) — count is 0 if not breached.
     """
-    # If input is not a hash, hash it
-    if len(password_hash) != 40 or not all(c in '0123456789abcdefABCDEF' for c in password_hash):
-        password_hash = hash_password(password_hash)
-    
-    prefix = password_hash[:5]
-    suffix = password_hash[5:]
-    
+    if not password_or_hash:
+        raise ValueError("Password or hash must not be empty")
+
+    if len(password_or_hash) == 40 and all(
+        c in "0123456789abcdefABCDEF" for c in password_or_hash
+    ):
+        full_hash = password_or_hash.upper()
+    else:
+        full_hash = _sha1_hex(password_or_hash)
+
+    prefix = full_hash[:5]
+    suffix = full_hash[5:]
+
     breach_data = check_password_prefix(prefix)
-    
-    if suffix.upper() in breach_data:
-        return True, breach_data[suffix.upper()]
-    
-    return False, 0
+    count = breach_data.get(suffix, 0)
+    return count > 0, count
 
 
-def get_breached_sites_for_email(email, include_unverified=False):
+def get_breached_sites_for_email(
+    email: str, include_unverified: bool = False
+) -> list:
     """
-    Check if an email appears in any breached sites
-    
+    Check if an email address appears in any known data breaches.
+
+    Requires a valid HIBP_API_KEY environment variable (v3 API mandate).
+
     Args:
-        email (str): Email to check
-        include_unverified (bool): Whether to include unverified breaches
-        
+        email: Email address to check.
+        include_unverified: Whether to include unverified breaches.
+
     Returns:
-        list: List of breaches the email appears in
+        List of breach objects, or empty list if none found, skipped, or on error.
     """
+    if not email or "@" not in email:
+        raise ValueError("Invalid email address")
+
     if not HIBP_API_KEY:
-        # In production you should use an API key
-        logger.warning("No HIBP API key provided. Email breach checks will be rate limited.")
-        # Add delay to avoid rate limiting
-        time.sleep(1.5)
-    
-    headers = {
-        'User-Agent': 'SecureVault Password Manager',
-        'hibp-api-key': HIBP_API_KEY
-    }
-    
-    params = {
-        'truncateResponse': 'false',
-        'includeUnverified': 'true' if include_unverified else 'false'
-    }
-    
-    try:
-        response = requests.get(
-            f"{HIBP_API_URL}/breachedaccount/{email}",
-            headers=headers,
-            params=params
+        logger.error(
+            "HIBP_API_KEY is not set. Email breach checks require a paid API key "
+            "(https://haveibeenpwned.com/API/Key). Skipping check."
         )
-        
-        if response.status_code == 404:
-            # No breaches found
+        return []
+
+    params = {
+        "truncateResponse": "false",
+        "includeUnverified": "true" if include_unverified else "false",
+    }
+
+    for attempt in range(_HIBP_429_MAX_RETRIES + 1):
+        try:
+            response = requests.get(
+                f"{HIBP_API_URL}/breachedaccount/{email}",
+                headers=_HIBP_HEADERS,
+                params=params,
+                timeout=_HIBP_REQUEST_TIMEOUT,
+            )
+
+            if response.status_code == 404:
+                return []
+
+            if response.status_code == 429:
+                if attempt >= _HIBP_429_MAX_RETRIES:
+                    logger.error(
+                        "HIBP rate limited after %d retries for email check",
+                        _HIBP_429_MAX_RETRIES,
+                    )
+                    return []
+                try:
+                    retry_after = int(response.headers.get("Retry-After", 2))
+                except ValueError:
+                    retry_after = 2
+                logger.warning("HIBP rate limited. Retry after %ds.", retry_after)
+                time.sleep(retry_after)
+                continue
+
+            if response.status_code == 401:
+                logger.error("HIBP API key is invalid or expired.")
+                return []
+
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.Timeout:
+            logger.error(
+                "HIBP email check timed out for domain %s",
+                email.split("@", 1)[-1],
+            )
             return []
-        
-        response.raise_for_status()
-        return response.json()
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error checking email breach: {str(e)}")
-        # Return empty list rather than failing
-        return [] 
+        except requests.exceptions.RequestException as e:
+            logger.error("HIBP email request failed: %s", e)
+            return []
+
+    return []
