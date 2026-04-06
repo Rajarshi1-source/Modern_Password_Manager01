@@ -190,7 +190,12 @@ def check_password_breach(request):
     try:
         # This should be a SHA-1 hash of the password
         is_breached, count = hibp.is_password_breached(password_hash)
-        
+        if is_breached is None:
+            return error_response(
+                "Breach check service unavailable",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         return success_response({
             'is_breached': is_breached,
             'count': count

@@ -449,9 +449,7 @@ class AccountProtectionService:
     
     def is_ip_blacklisted(self, ip_address):
         """Check if IP is blacklisted"""
-        # Implement your IP blacklist logic here
-        # This could check against external threat intelligence feeds
-        return False
+        return ip_address in getattr(settings, 'BLACKLISTED_IPS', set())
     
     def unlock_social_accounts(self, user, platforms=None):
         """Manually unlock social media accounts"""

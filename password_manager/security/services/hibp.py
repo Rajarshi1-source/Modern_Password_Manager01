@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -30,6 +30,9 @@ _PWNED_HEADERS = {
 
 _HIBP_REQUEST_TIMEOUT = 10
 _HIBP_429_MAX_RETRIES = 3
+
+# Returned by check_password_prefix on timeout/HTTP error — not a mapping; do not treat as {}.
+_BREACH_UNKNOWN = object()
 
 
 def _retry_after_seconds(header: str | None, default: int = 2) -> int:
@@ -73,7 +76,7 @@ def hash_password(password: str) -> str:
     return _sha1_hex(password)
 
 
-def check_password_prefix(prefix: str) -> dict:
+def check_password_prefix(prefix: str) -> Dict[str, int] | object:
     """
     Query HIBP range API with a 5-char SHA-1 prefix (k-anonymity model).
     The full password hash is never sent over the network.
@@ -82,8 +85,9 @@ def check_password_prefix(prefix: str) -> dict:
         prefix: First 5 hex characters of the SHA-1 hash.
 
     Returns:
-        Dict mapping uppercase hash suffixes to breach counts.
-        Returns empty dict on network failure (fail-open — caller must handle).
+        Dict mapping uppercase hash suffixes to breach counts (may be empty if API
+        returns no lines for this prefix). On timeout or request failure, returns
+        ``_BREACH_UNKNOWN`` — callers must not treat that like an empty dict.
     """
     if not prefix or len(prefix) != 5 or not all(
         c in "0123456789ABCDEFabcdef" for c in prefix
@@ -111,13 +115,13 @@ def check_password_prefix(prefix: str) -> dict:
 
     except requests.exceptions.Timeout:
         logger.error("HIBP API timed out for prefix %s***", prefix[:2])
-        return {}
+        return _BREACH_UNKNOWN
     except requests.exceptions.RequestException as e:
         logger.error("HIBP request failed: %s", e)
-        return {}
+        return _BREACH_UNKNOWN
 
 
-def is_password_breached(password_or_hash: str) -> Tuple[bool, int]:
+def is_password_breached(password_or_hash: str) -> Tuple[Optional[bool], int]:
     """
     Check if a password appears in known data breaches (k-anonymity).
 
@@ -128,7 +132,9 @@ def is_password_breached(password_or_hash: str) -> Tuple[bool, int]:
         password_or_hash: SHA-1 hex hash or plaintext password.
 
     Returns:
-        (is_breached, breach_count) — count is 0 if not breached.
+        (is_breached, breach_count). ``is_breached`` is None if the check could not
+        be completed (service unavailable); count is 0 in that case. Otherwise
+        count is 0 if not breached.
     """
     if not password_or_hash:
         raise ValueError("Password or hash must not be empty")
@@ -144,6 +150,8 @@ def is_password_breached(password_or_hash: str) -> Tuple[bool, int]:
     suffix = full_hash[5:]
 
     breach_data = check_password_prefix(prefix)
+    if breach_data is _BREACH_UNKNOWN:
+        return None, 0
     count = breach_data.get(suffix, 0)
     return count > 0, count
 

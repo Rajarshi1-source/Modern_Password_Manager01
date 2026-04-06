@@ -661,6 +661,7 @@ CORS_ALLOW_METHODS = [
 CORS_ALLOW_HEADERS = [
     'Authorization',           # Required for JWT (Bearer token)
     'Content-Type',
+    'X-CSRFToken',            # Required for Django admin/form CSRF on cross-origin requests
     'X-Device-Fingerprint',   # Custom security header
     'Accept',
     'Origin',
