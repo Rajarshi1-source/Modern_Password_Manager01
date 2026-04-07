@@ -38,7 +38,8 @@ class PasswordStrengthPrediction(models.Model):
         ]
     
     def __str__(self):
-        return f"Password strength: {self.strength} (confidence: {self.confidence_score:.2f})"
+        user_str = self.user.username if self.user else 'anonymous'
+        return f"Password strength: {self.strength} for {user_str} (confidence: {self.confidence_score:.2f})"
 
 
 class UserBehaviorProfile(models.Model):

@@ -27,7 +27,7 @@ from mesh_deaddrop.models import (
     NFCBeacon,
     DeadDropAccess
 )
-from mesh_deaddrop.services.shamir_service import ShamirSecretSharingService
+from mesh_deaddrop.services.shamir_service import ShamirSecretSharingService, Share
 from mesh_deaddrop.services.mesh_crypto_service import MeshCryptoService
 from mesh_deaddrop.services.location_verification_service import LocationVerificationService
 from mesh_deaddrop.services.fragment_distribution_service import FragmentDistributionService
@@ -69,15 +69,15 @@ class CreateDeadDropFunctionalTest(TestCase):
         )
         
         # 3. Split secret into shares
-        shares = self.shamir.split_secret(secret.encode(), k=3, n=5)
+        result = self.shamir.split_secret(secret.encode(), k=3, n=5)
         
         # 4. Create fragment records
-        for index, share_data in shares:
+        for share in result.shares:
             DeadDropFragment.objects.create(
                 dead_drop=dead_drop,
-                fragment_index=index,
-                encrypted_fragment=share_data,
-                fragment_hash=self.crypto.hash_fragment(share_data)
+                fragment_index=share.index,
+                encrypted_fragment=share.value,
+                fragment_hash=self.crypto.hash_secret(share.value)
             )
         
         # 5. Verify creation
@@ -87,10 +87,10 @@ class CreateDeadDropFunctionalTest(TestCase):
         # 6. Verify we can reconstruct with k=3 fragments
         fragments = list(dead_drop.fragments.all()[:3])
         shares_to_reconstruct = [
-            (f.fragment_index, f.encrypted_fragment)
+            Share(index=f.fragment_index, value=bytes(f.encrypted_fragment))
             for f in fragments
         ]
-        reconstructed = self.shamir.reconstruct_secret(shares_to_reconstruct, k=3)
+        reconstructed = self.shamir.reconstruct_secret(shares_to_reconstruct)
         self.assertEqual(reconstructed.decode(), secret)
     
     def test_create_high_threshold_dead_drop(self):
@@ -109,14 +109,14 @@ class CreateDeadDropFunctionalTest(TestCase):
             expires_at=timezone.now() + timedelta(hours=24)
         )
         
-        shares = self.shamir.split_secret(secret.encode(), k=5, n=7)
+        result = self.shamir.split_secret(secret.encode(), k=5, n=7)
         
-        for index, share_data in shares:
+        for share in result.shares:
             DeadDropFragment.objects.create(
                 dead_drop=dead_drop,
-                fragment_index=index,
-                encrypted_fragment=share_data,
-                fragment_hash=self.crypto.hash_fragment(share_data)
+                fragment_index=share.index,
+                encrypted_fragment=share.value,
+                fragment_hash=self.crypto.hash_secret(share.value)
             )
         
         self.assertEqual(dead_drop.threshold_display, '5-of-7')
@@ -168,13 +168,13 @@ class DistributeFragmentsFunctionalTest(TestCase):
             expires_at=timezone.now() + timedelta(days=7)
         )
         
-        shares = self.shamir.split_secret(secret.encode(), k=3, n=5)
+        result = self.shamir.split_secret(secret.encode(), k=3, n=5)
         self.fragments = []
-        for index, share_data in shares:
+        for share in result.shares:
             fragment = DeadDropFragment.objects.create(
                 dead_drop=self.dead_drop,
-                fragment_index=index,
-                encrypted_fragment=share_data,
+                fragment_index=share.index,
+                encrypted_fragment=share.value,
                 fragment_hash='hash'
             )
             self.fragments.append(fragment)
@@ -267,10 +267,10 @@ class CollectFragmentsFunctionalTest(TestCase):
         )
         
         # Create nodes with fragments
-        shares = self.shamir.split_secret(self.secret.encode(), k=3, n=5)
+        result = self.shamir.split_secret(self.secret.encode(), k=3, n=5)
         self.nodes = []
         
-        for i, (index, share_data) in enumerate(shares):
+        for i, share in enumerate(result.shares):
             node = MeshNode.objects.create(
                 device_name=f'CollectNode-{i}',
                 device_type='phone_android',
@@ -284,8 +284,8 @@ class CollectFragmentsFunctionalTest(TestCase):
             
             DeadDropFragment.objects.create(
                 dead_drop=self.dead_drop,
-                fragment_index=index,
-                encrypted_fragment=share_data,
+                fragment_index=share.index,
+                encrypted_fragment=share.value,
                 fragment_hash='hash',
                 storage_type='mesh_node',
                 node=node,
@@ -321,8 +321,11 @@ class CollectFragmentsFunctionalTest(TestCase):
             node__is_online=True
         )[:3]
         
-        shares = [(f.fragment_index, f.encrypted_fragment) for f in fragments]
-        reconstructed = self.shamir.reconstruct_secret(shares, k=3)
+        shares = [
+            Share(index=f.fragment_index, value=bytes(f.encrypted_fragment))
+            for f in fragments
+        ]
+        reconstructed = self.shamir.reconstruct_secret(shares)
         
         self.assertEqual(reconstructed.decode(), self.secret)
     
@@ -407,10 +410,10 @@ class PartialCollectionFunctionalTest(TestCase):
         )
         
         # Create fragments
-        shares = self.shamir.split_secret(self.secret.encode(), k=3, n=5)
+        result = self.shamir.split_secret(self.secret.encode(), k=3, n=5)
         self.fragments = []
         
-        for i, (index, share_data) in enumerate(shares):
+        for i, share in enumerate(result.shares):
             node = MeshNode.objects.create(
                 device_name=f'PartialNode-{i}',
                 device_type='phone_android',
@@ -421,8 +424,8 @@ class PartialCollectionFunctionalTest(TestCase):
             
             fragment = DeadDropFragment.objects.create(
                 dead_drop=self.dead_drop,
-                fragment_index=index,
-                encrypted_fragment=share_data,
+                fragment_index=share.index,
+                encrypted_fragment=share.value,
                 fragment_hash='hash',
                 storage_type='mesh_node',
                 node=node,
@@ -435,8 +438,11 @@ class PartialCollectionFunctionalTest(TestCase):
         # Get the 3 fragments from online nodes
         online_fragments = self.dead_drop.fragments.filter(node__is_online=True)[:3]
         
-        shares = [(f.fragment_index, f.encrypted_fragment) for f in online_fragments]
-        reconstructed = self.shamir.reconstruct_secret(shares, k=3)
+        shares = [
+            Share(index=f.fragment_index, value=bytes(f.encrypted_fragment))
+            for f in online_fragments
+        ]
+        reconstructed = self.shamir.reconstruct_secret(shares)
         
         self.assertEqual(reconstructed.decode(), self.secret)
     
@@ -444,11 +450,14 @@ class PartialCollectionFunctionalTest(TestCase):
         """Test reconstruction fails with fewer than k fragments."""
         # Get only 2 fragments (less than k=3)
         fragments = list(self.dead_drop.fragments.all()[:2])
-        shares = [(f.fragment_index, f.encrypted_fragment) for f in fragments]
+        shares = [
+            Share(index=f.fragment_index, value=bytes(f.encrypted_fragment))
+            for f in fragments
+        ]
         
         # Should raise an error or return garbage
         with self.assertRaises(Exception):
-            self.shamir.reconstruct_secret(shares, k=3)
+            self.shamir.reconstruct_secret(shares)
     
     def test_reconstruction_with_more_than_k_fragments(self):
         """Test reconstruction works with more than k fragments."""
@@ -457,9 +466,12 @@ class PartialCollectionFunctionalTest(TestCase):
         
         # Get all 5 fragments
         all_fragments = list(self.dead_drop.fragments.all())
-        shares = [(f.fragment_index, f.encrypted_fragment) for f in all_fragments]
-        
-        reconstructed = self.shamir.reconstruct_secret(shares, k=3)
+        shares = [
+            Share(index=f.fragment_index, value=bytes(f.encrypted_fragment))
+            for f in all_fragments
+        ]
+
+        reconstructed = self.shamir.reconstruct_secret(shares)
         
         self.assertEqual(reconstructed.decode(), self.secret)
 

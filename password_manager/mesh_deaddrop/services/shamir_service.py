@@ -220,11 +220,11 @@ class ShamirSecretSharingService:
         # Compute g^y mod p
         left_side = pow(self.generator, y, self.prime)
         
-        # Compute product of C_j^{x^j}
+        # Compute product of C_j^{x^j} for j = 0..k-1
         right_side = 1
-        x_power = 1
-        for j, commitment_bytes in enumerate(commitments[:k]):
-            C_j = int.from_bytes(commitment_bytes, 'big')
+        x_power = 1  # x^0 = 1 initially
+        for j in range(k):
+            C_j = int.from_bytes(commitments[j], 'big')
             right_side = (right_side * pow(C_j, x_power, self.prime)) % self.prime
             x_power = (x_power * x) % self.prime
         

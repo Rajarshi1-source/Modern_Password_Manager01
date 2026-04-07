@@ -65,8 +65,8 @@ class FragmentDistributionServiceTests(TestCase):
                 trust_score=Decimal('0.8') + Decimal(str(i * 0.02)),
                 max_fragments=10,
                 current_fragment_count=i,
-                last_known_lat=Decimal('40.7128') + Decimal(str(i * 0.001)),
-                last_known_lon=Decimal('-74.0060')
+                last_known_latitude=Decimal('40.7128') + Decimal(str(i * 0.001)),
+                last_known_longitude=Decimal('-74.0060')
             )
             self.nodes.append(node)
     
@@ -92,8 +92,8 @@ class FragmentDistributionServiceTests(TestCase):
             public_key='distant_key',
             is_online=True,
             trust_score=Decimal('0.9'),
-            last_known_lat=Decimal('51.5074'),  # London
-            last_known_lon=Decimal('-0.1278')
+            last_known_latitude=Decimal('51.5074'),  # London
+            last_known_longitude=Decimal('-0.1278')
         )
         
         selected = self.service.select_nodes_for_distribution(
@@ -283,8 +283,8 @@ class FragmentDistributionServiceTests(TestCase):
             public_key='high_trust_key',
             is_online=True,
             trust_score=Decimal('0.99'),
-            last_known_lat=Decimal('40.7128'),
-            last_known_lon=Decimal('-74.0060')
+            last_known_latitude=Decimal('40.7128'),
+            last_known_longitude=Decimal('-74.0060')
         )
         
         low_trust = MeshNode.objects.create(
@@ -294,8 +294,8 @@ class FragmentDistributionServiceTests(TestCase):
             public_key='low_trust_key',
             is_online=True,
             trust_score=Decimal('0.30'),
-            last_known_lat=Decimal('40.7128'),
-            last_known_lon=Decimal('-74.0060')
+            last_known_latitude=Decimal('40.7128'),
+            last_known_longitude=Decimal('-74.0060')
         )
         
         selected = self.service.select_nodes_for_distribution(

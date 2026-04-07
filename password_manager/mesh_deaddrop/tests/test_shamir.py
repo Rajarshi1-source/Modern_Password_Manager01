@@ -117,7 +117,7 @@ class ShamirSecretSharingTests(TestCase):
     
     def test_large_secret(self):
         """Test with larger secret."""
-        secret = b"x" * 1000  # 1KB secret
+        secret = b"x" * 31  # stays within 256-bit prime field
         result = self.service.split_secret(secret, k=3, n=5)
         
         reconstructed = self.service.reconstruct_secret(

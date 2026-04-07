@@ -342,6 +342,10 @@ class MeshProtocol:
         """Initialize protocol handler."""
         self.pending_challenges: Dict[bytes, LocationChallenge] = {}
         self.message_cache: Dict[bytes, datetime] = {}  # For dedup
+
+    def _compute_hash(self, data: bytes) -> bytes:
+        """Compute BLAKE2b hash of data."""
+        return hashlib.blake2b(data, digest_size=32).digest()
     
     # =========================================================================
     # Message Creation
@@ -375,7 +379,7 @@ class MeshProtocol:
         ttl_hours: int = 168
     ) -> MeshMessage:
         """Create a fragment storage request message."""
-        fragment_hash = hashlib.blake2b(encrypted_fragment, digest_size=32).digest()
+        fragment_hash = self._compute_hash(encrypted_fragment)
         
         request = FragmentStoreRequest(
             drop_id=drop_id,
@@ -523,7 +527,7 @@ class MeshProtocol:
         """
         try:
             # Verify fragment hash
-            computed_hash = hashlib.blake2b(request.encrypted_fragment, digest_size=32).digest()
+            computed_hash = self._compute_hash(request.encrypted_fragment)
             if computed_hash != request.fragment_hash:
                 return self.create_error(MeshErrorCode.ENCRYPTION_ERROR, "Hash mismatch")
             

@@ -62,8 +62,8 @@ class DeadDropAPIIntegrationTests(APITestCase):
                 is_online=True,
                 trust_score=Decimal('0.8'),
                 max_fragments=10,
-                last_known_lat=Decimal('40.7128'),
-                last_known_lon=Decimal('-74.0060')
+                last_known_latitude=Decimal('40.7128'),
+                last_known_longitude=Decimal('-74.0060')
             )
             self.nodes.append(node)
     
@@ -372,8 +372,8 @@ class MeshNodeAPITests(APITestCase):
             ble_address='AA:BB:CC:DD:EE:01',
             public_key='key1',
             is_online=True,
-            last_known_lat=Decimal('40.7128'),
-            last_known_lon=Decimal('-74.0060')
+            last_known_latitude=Decimal('40.7128'),
+            last_known_longitude=Decimal('-74.0060')
         )
         MeshNode.objects.create(
             device_name='Far Node',
@@ -381,8 +381,8 @@ class MeshNodeAPITests(APITestCase):
             ble_address='AA:BB:CC:DD:EE:02',
             public_key='key2',
             is_online=True,
-            last_known_lat=Decimal('51.5074'),  # London
-            last_known_lon=Decimal('-0.1278')
+            last_known_latitude=Decimal('51.5074'),  # London
+            last_known_longitude=Decimal('-0.1278')
         )
         
         response = self.client.get('/api/mesh/nodes/nearby/?lat=40.7128&lon=-74.0060&radius=10')
@@ -420,10 +420,8 @@ class NFCVerificationAPITests(APITestCase):
         
         self.beacon = NFCBeacon.objects.create(
             dead_drop=self.dead_drop,
-            beacon_uid='04:11:22:33:44:55:66',
-            public_key='beacon_public_key',
-            latitude=Decimal('40.7128'),
-            longitude=Decimal('-74.0060')
+            tag_id='04:11:22:33:44:55:66',
+            tag_signature='mock_signature_data',
         )
     
     def test_request_nfc_challenge(self):
@@ -494,8 +492,8 @@ class DeadDropWorkflowE2ETests(TransactionTestCase):
                 is_online=True,
                 trust_score=Decimal('0.85'),
                 max_fragments=10,
-                last_known_lat=Decimal('40.7128'),
-                last_known_lon=Decimal('-74.0060')
+                last_known_latitude=Decimal('40.7128'),
+                last_known_longitude=Decimal('-74.0060')
             )
     
     def test_complete_create_distribute_collect_workflow(self):

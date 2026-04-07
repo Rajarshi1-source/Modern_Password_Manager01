@@ -517,8 +517,10 @@ class MeshCryptoService:
     # Utility Functions
     # =========================================================================
     
-    def hash_secret(self, secret: bytes) -> str:
-        """Create BLAKE3 hash of secret for verification."""
+    def hash_secret(self, secret) -> str:
+        """Create BLAKE2b hash of secret for verification."""
+        if isinstance(secret, str):
+            secret = secret.encode('utf-8')
         return hashlib.blake2b(secret, digest_size=32).hexdigest()
     
     def generate_nonce(self) -> bytes:

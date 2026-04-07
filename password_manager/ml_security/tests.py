@@ -51,15 +51,23 @@ class PasswordStrengthPredictionModelTest(TestCase):
         prediction = PasswordStrengthPrediction.objects.create(
             user=self.user,
             password_hash=password_hash,
-            strength_score=0.85,
-            feedback="Strong password!",
-            prediction_model="LSTM_Password_Strength"
+            strength='strong',
+            confidence_score=0.85,
+            entropy=45.2,
+            character_diversity=0.8,
+            length=16,
+            has_numbers=True,
+            has_uppercase=True,
+            has_lowercase=True,
+            has_special=True,
+            contains_common_patterns=False,
+            guessability_score=15.0,
         )
         
         self.assertEqual(prediction.user, self.user)
-        self.assertEqual(prediction.strength_score, 0.85)
-        self.assertEqual(prediction.feedback, "Strong password!")
-        self.assertIsNotNone(prediction.timestamp)
+        self.assertEqual(prediction.strength, 'strong')
+        self.assertEqual(prediction.confidence_score, 0.85)
+        self.assertIsNotNone(prediction.created_at)
     
     def test_password_strength_str_representation(self):
         """Test string representation"""
@@ -68,8 +76,17 @@ class PasswordStrengthPredictionModelTest(TestCase):
         prediction = PasswordStrengthPrediction.objects.create(
             user=self.user,
             password_hash=password_hash,
-            strength_score=0.75,
-            feedback="Good"
+            strength='moderate',
+            confidence_score=0.75,
+            entropy=30.0,
+            character_diversity=0.6,
+            length=10,
+            has_numbers=True,
+            has_uppercase=False,
+            has_lowercase=True,
+            has_special=False,
+            contains_common_patterns=False,
+            guessability_score=40.0,
         )
         
         str_repr = str(prediction)
@@ -82,8 +99,17 @@ class PasswordStrengthPredictionModelTest(TestCase):
             PasswordStrengthPrediction.objects.create(
                 user=self.user,
                 password_hash=hashlib.sha256(f'password{i}'.encode()).hexdigest(),
-                strength_score=0.5 + (i * 0.1),
-                feedback=f"Feedback {i}"
+                strength='moderate',
+                confidence_score=0.5 + (i * 0.1),
+                entropy=28.0 + i,
+                character_diversity=0.5 + (i * 0.05),
+                length=8 + i,
+                has_numbers=True,
+                has_uppercase=bool(i % 2),
+                has_lowercase=True,
+                has_special=bool((i + 1) % 2),
+                contains_common_patterns=False,
+                guessability_score=50.0 - (i * 5),
             )
         
         predictions = PasswordStrengthPrediction.objects.filter(user=self.user)
@@ -95,13 +121,23 @@ class PasswordStrengthPredictionModelTest(TestCase):
             PasswordStrengthPrediction.objects.create(
                 user=self.user,
                 password_hash=hashlib.sha256(f'pass{i}'.encode()).hexdigest(),
-                strength_score=0.5
+                strength='weak',
+                confidence_score=0.5,
+                entropy=20.0 + i,
+                character_diversity=0.4,
+                length=8 + i,
+                has_numbers=True,
+                has_uppercase=False,
+                has_lowercase=True,
+                has_special=False,
+                contains_common_patterns=False,
+                guessability_score=70.0 - i,
             )
         
         predictions = PasswordStrengthPrediction.objects.filter(user=self.user)
         # Check ordering (should be newest first based on Meta.ordering)
         self.assertTrue(
-            predictions[0].timestamp >= predictions[1].timestamp >= predictions[2].timestamp
+            predictions[0].created_at >= predictions[1].created_at >= predictions[2].created_at
         )
 
 
@@ -117,67 +153,63 @@ class AnomalyDetectionModelTest(TestCase):
     
     def test_create_anomaly_detection_log(self):
         """Test creating an anomaly detection log"""
-        event_data = {
-            'ip': '192.168.1.1',
-            'location': 'Test Location',
-            'time': '12:00'
-        }
-        
         log = AnomalyDetection.objects.create(
             user=self.user,
-            event_type='login',
-            event_data=event_data,
-            is_anomaly=True,
+            session_id='test-session-001',
+            anomaly_type='behavior',
+            severity='high',
             anomaly_score=0.85,
-            # model_used field not available in AnomalyDetection model
+            confidence=0.90,
+            ip_address='192.168.1.1',
         )
         
         self.assertEqual(log.user, self.user)
-        self.assertEqual(log.event_type, 'login')
-        self.assertTrue(log.is_anomaly)
+        self.assertEqual(log.anomaly_type, 'behavior')
+        self.assertEqual(log.severity, 'high')
         self.assertEqual(log.anomaly_score, 0.85)
-        self.assertFalse(log.resolved)
+        self.assertIsNone(log.resolved_at)
     
     def test_anomaly_resolution(self):
         """Test marking an anomaly as resolved"""
         log = AnomalyDetection.objects.create(
             user=self.user,
-            event_type='login',
-            event_data={},
-            is_anomaly=True,
+            session_id='test-session-002',
+            anomaly_type='behavior',
+            severity='high',
             anomaly_score=0.9,
-            # model_used='IsolationForest'
+            confidence=0.95,
+            ip_address='192.168.1.2',
         )
         
-        self.assertFalse(log.resolved)
         self.assertIsNone(log.resolved_at)
         
         # Resolve the anomaly
-        log.resolved = True
         log.resolved_at = timezone.now()
         log.save()
         
         log.refresh_from_db()
-        self.assertTrue(log.resolved)
         self.assertIsNotNone(log.resolved_at)
     
     def test_filter_unresolved_anomalies(self):
         """Test filtering unresolved anomalies"""
         # Create 3 anomalies, resolve 1
         for i in range(3):
-            AnomalyDetection.objects.create(
+            log = AnomalyDetection.objects.create(
                 user=self.user,
-                event_type='login',
-                event_data={},
-                is_anomaly=True,
+                session_id=f'test-session-{i}',
+                anomaly_type='behavior',
+                severity='high',
                 anomaly_score=0.8,
-                # model_used='IsolationForest',
-                resolved=(i == 0)  # First one is resolved
+                confidence=0.90,
+                ip_address=f'192.168.1.{10 + i}',
             )
+            if i == 0:  # First one is resolved
+                log.resolved_at = timezone.now()
+                log.save(update_fields=['resolved_at'])
         
         unresolved = AnomalyDetection.objects.filter(
             user=self.user, 
-            resolved=False
+            resolved_at__isnull=True
         )
         self.assertEqual(unresolved.count(), 2)
 
@@ -293,19 +325,18 @@ class MLModelMetadataTest(TestCase):
     def test_create_model_metadata(self):
         """Test creating model metadata"""
         metadata = MLModelMetadata.objects.create(
-            model_name='PasswordStrengthLSTM',
+            model_type='password_strength',
             version='1.0.0',
-            description='LSTM model for password strength prediction',
-            last_trained=timezone.now(),
+            file_path='/models/password_strength.h5',
             accuracy=0.92,
             precision=0.89,
             recall=0.91,
             f1_score=0.90,
-            path='/models/password_strength.h5',
-            is_active=True
+            is_active=True,
+            notes='LSTM model for password strength prediction'
         )
         
-        self.assertEqual(metadata.model_name, 'PasswordStrengthLSTM')
+        self.assertEqual(metadata.model_type, 'password_strength')
         self.assertEqual(metadata.version, '1.0.0')
         self.assertTrue(metadata.is_active)
         self.assertEqual(metadata.accuracy, 0.92)
@@ -314,17 +345,17 @@ class MLModelMetadataTest(TestCase):
         """Test that multiple versions can exist"""
         # Create version 1.0
         v1 = MLModelMetadata.objects.create(
-            model_name='TestModel_v1',
+            model_type='password_strength',
             version='1.0.0',
-            path='/models/v1.h5',
+            file_path='/models/v1.h5',
             is_active=False
         )
         
         # Create version 2.0
         v2 = MLModelMetadata.objects.create(
-            model_name='TestModel_v2',
+            model_type='anomaly_detection',
             version='2.0.0',
-            path='/models/v2.h5',
+            file_path='/models/v2.h5',
             is_active=True
         )
         
@@ -335,21 +366,21 @@ class MLModelMetadataTest(TestCase):
         """Test retrieving active model"""
         # Create inactive and active models
         MLModelMetadata.objects.create(
-            model_name='OldModel',
+            model_type='password_strength',
             version='1.0',
             is_active=False,
-            path='/old.h5'
+            file_path='/old.h5'
         )
         
-        active = MLModelMetadata.objects.create(
-            model_name='CurrentModel',
+        MLModelMetadata.objects.create(
+            model_type='anomaly_detection',
             version='2.0',
             is_active=True,
-            path='/current.h5'
+            file_path='/current.h5'
         )
         
         active_model = MLModelMetadata.objects.get(is_active=True)
-        self.assertEqual(active_model.model_name, 'CurrentModel')
+        self.assertEqual(active_model.model_type, 'anomaly_detection')
 
 
 # ==============================================================================
@@ -629,7 +660,7 @@ class MLSecurityIntegrationTest(TestCase):
                 user=self.user
             ).first()
             self.assertIsNotNone(prediction)
-            self.assertEqual(prediction.strength_score, 0.85)
+            self.assertEqual(prediction.confidence_score, 0.85)
     
     def test_complete_anomaly_detection_flow(self):
         """Test complete flow: API call -> detection -> database storage -> alert"""
@@ -655,10 +686,10 @@ class MLSecurityIntegrationTest(TestCase):
             # Verify database record
             log = AnomalyDetectionLog.objects.filter(
                 user=self.user,
-                is_anomaly=True
+                anomaly_score__gte=0.9
             ).first()
             self.assertIsNotNone(log)
-            self.assertTrue(log.is_anomaly)
+            self.assertEqual(log.severity, 'critical')
             self.assertEqual(log.anomaly_score, 0.95)
 
 
@@ -683,33 +714,44 @@ class MLSecurityEdgeCaseTest(TestCase):
         prediction = PasswordStrengthPrediction.objects.create(
             user=self.user,
             password_hash=password_hash,
-            strength_score=0.0,
-            feedback="Empty password"
+            strength='very_weak',
+            confidence_score=0.0,
+            entropy=0.0,
+            character_diversity=0.0,
+            length=0,
+            has_numbers=False,
+            has_uppercase=False,
+            has_lowercase=False,
+            has_special=False,
+            contains_common_patterns=True,
+            guessability_score=100.0,
         )
         
-        self.assertEqual(prediction.strength_score, 0.0)
+        self.assertEqual(prediction.confidence_score, 0.0)
     
     def test_extreme_anomaly_scores(self):
         """Test handling of extreme anomaly scores"""
         # Test score of 0 (definitely not an anomaly)
         log_min = AnomalyDetection.objects.create(
             user=self.user,
-            event_type='test',
-            event_data={},
-            is_anomaly=False,
+            session_id='test-session-min',
+            anomaly_type='behavior',
+            severity='low',
             anomaly_score=0.0,
-            # model_used='Test'
+            confidence=0.95,
+            ip_address='10.0.0.10',
         )
         self.assertEqual(log_min.anomaly_score, 0.0)
         
         # Test score of 1 (definitely an anomaly)
         log_max = AnomalyDetection.objects.create(
             user=self.user,
-            event_type='test',
-            event_data={},
-            is_anomaly=True,
+            session_id='test-session-max',
+            anomaly_type='multiple',
+            severity='critical',
             anomaly_score=1.0,
-            # model_used='Test'
+            confidence=0.99,
+            ip_address='10.0.0.11',
         )
         self.assertEqual(log_max.anomaly_score, 1.0)
     
@@ -725,15 +767,27 @@ class MLSecurityEdgeCaseTest(TestCase):
         PasswordStrengthPrediction.objects.create(
             user=self.user,
             password_hash='test',
-            strength_score=0.5
+            strength='moderate',
+            confidence_score=0.5,
+            entropy=20.0,
+            character_diversity=0.5,
+            length=8,
+            has_numbers=False,
+            has_uppercase=False,
+            has_lowercase=True,
+            has_special=False,
+            contains_common_patterns=True,
+            guessability_score=60.0,
         )
         
         AnomalyDetection.objects.create(
             user=self.user,
-            event_type='test',
-            event_data={},
-            is_anomaly=False,
-            # model_used='Test'
+            session_id='delete-session',
+            anomaly_type='time',
+            severity='low',
+            anomaly_score=0.1,
+            confidence=0.9,
+            ip_address='10.0.0.20',
         )
         
         ThreatPrediction.objects.create(
@@ -796,8 +850,17 @@ class MLSecurityPerformanceTest(TestCase):
             PasswordStrengthPrediction(
                 user=self.user,
                 password_hash=hashlib.sha256(f'pass{i}'.encode()).hexdigest(),
-                strength_score=0.5 + (i % 50) / 100,
-                feedback=f"Feedback {i}"
+                strength='moderate',
+                confidence_score=0.5 + (i % 50) / 100,
+                entropy=20.0 + (i % 10),
+                character_diversity=0.5,
+                length=10 + (i % 8),
+                has_numbers=True,
+                has_uppercase=bool(i % 2),
+                has_lowercase=True,
+                has_special=bool((i + 1) % 2),
+                contains_common_patterns=False,
+                guessability_score=50.0,
             )
             for i in range(100)
         ]
@@ -820,7 +883,17 @@ class MLSecurityPerformanceTest(TestCase):
             PasswordStrengthPrediction.objects.create(
                 user=self.user,
                 password_hash=hashlib.sha256(f'pass{i}'.encode()).hexdigest(),
-                strength_score=0.5
+                strength='moderate',
+                confidence_score=0.5,
+                entropy=20.0,
+                character_diversity=0.5,
+                length=10,
+                has_numbers=True,
+                has_uppercase=False,
+                has_lowercase=True,
+                has_special=False,
+                contains_common_patterns=False,
+                guessability_score=50.0,
             )
         
         import time
@@ -832,7 +905,7 @@ class MLSecurityPerformanceTest(TestCase):
         
         recent = PasswordStrengthPrediction.objects.filter(
             user=self.user
-        ).order_by('-timestamp')[:10]
+        ).order_by('-created_at')[:10]
         
         list(recent)  # Force evaluation
         
@@ -864,8 +937,17 @@ class MLTestHelpers:
         return PasswordStrengthPrediction.objects.create(
             user=user,
             password_hash=hashlib.sha256(b'test').hexdigest(),
-            strength_score=score,
-            feedback="Test feedback"
+            strength='strong' if score >= 0.75 else 'moderate',
+            confidence_score=score,
+            entropy=35.0,
+            character_diversity=0.7,
+            length=12,
+            has_numbers=True,
+            has_uppercase=True,
+            has_lowercase=True,
+            has_special=True,
+            contains_common_patterns=False,
+            guessability_score=20.0,
         )
     
     @staticmethod
@@ -873,11 +955,12 @@ class MLTestHelpers:
         """Create a test anomaly detection log"""
         return AnomalyDetection.objects.create(
             user=user,
-            event_type='test',
-            event_data={},
-            # is_anomaly=is_anomaly,
+            session_id='helper-session',
+            anomaly_type='behavior' if is_anomaly else 'time',
+            severity='high' if is_anomaly else 'low',
             anomaly_score=0.8 if is_anomaly else 0.2,
-            # model_used='Test'
+            confidence=0.9,
+            ip_address='127.0.0.1',
         )
     
     @staticmethod
