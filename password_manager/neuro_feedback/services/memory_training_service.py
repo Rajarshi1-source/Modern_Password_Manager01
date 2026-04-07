@@ -426,6 +426,48 @@ class MemoryTrainingService:
     # Helper Methods
     # =========================================================================
     
+    def _calculate_next_interval(
+        self, easiness_factor: float, repetition_count: int, quality: int
+    ) -> float:
+        """
+        Calculate next SM-2 interval in days.
+        
+        Args:
+            easiness_factor: Current easiness factor (>= 1.3)
+            repetition_count: Number of successful repetitions so far
+            quality: Recall quality rating (0-5)
+            
+        Returns:
+            Interval in days until next review
+        """
+        if quality < 3:
+            return 1.0  # Reset to 1 day on failure
+        if repetition_count == 0:
+            return 1.0
+        if repetition_count == 1:
+            return 6.0
+        prev_interval = self._calculate_next_interval(
+            easiness_factor, repetition_count - 1, quality
+        )
+        return round(prev_interval * easiness_factor, 1)
+    
+    def _update_easiness_factor(self, current_ef: float, quality: int) -> float:
+        """
+        Update SM-2 easiness factor based on recall quality (0-5).
+        
+        The formula is from the SuperMemo SM-2 algorithm:
+        EF' = EF + (0.1 - (5 - q) * (0.08 + (5 - q) * 0.02))
+        
+        Args:
+            current_ef: Current easiness factor
+            quality: Recall quality (0-5)
+            
+        Returns:
+            Updated easiness factor (clamped to MIN_EASINESS minimum)
+        """
+        new_ef = current_ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+        return max(self.MIN_EASINESS, new_ef)
+    
     def _chunk_password(self, password: str, chunk_size: int) -> List[str]:
         """Split password into chunks of specified size."""
         return [

@@ -352,6 +352,10 @@ class SpacedRepetitionSchedule(models.Model):
         indexes = [
             models.Index(fields=['program', 'scheduled_at']),
         ]
+    
+    def is_due(self) -> bool:
+        """Return True if this review is past its scheduled time and not yet completed."""
+        return self.scheduled_at <= timezone.now() and not self.completed_at
 
 
 # =============================================================================

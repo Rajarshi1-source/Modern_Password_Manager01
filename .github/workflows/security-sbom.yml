@@ -42,9 +42,9 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: |
           cyclonedx-py requirements \
-            --requirements-file password_manager/requirements.txt \
-            --format json \
-            --output sbom.json
+            password_manager/requirements.txt \
+            --output-format JSON \
+            --outfile sbom.json
 
       - name: Verify SBOM exists
         run: |

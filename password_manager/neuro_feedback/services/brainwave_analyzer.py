@@ -303,6 +303,21 @@ class BrainwaveAnalyzer:
     # Signal Quality
     # =========================================================================
     
+    def detect_artifacts(self, eeg_data: np.ndarray) -> bool:
+        """
+        Public API for artifact detection.
+        
+        Detects motion artifacts, eye blinks, and muscle activity
+        in raw EEG data.
+        
+        Args:
+            eeg_data: Raw EEG samples
+            
+        Returns:
+            True if artifacts detected, False otherwise
+        """
+        return self._detect_artifacts(eeg_data)
+    
     def _detect_artifacts(self, eeg_data: np.ndarray) -> bool:
         """
         Detect motion artifacts, eye blinks, muscle activity.

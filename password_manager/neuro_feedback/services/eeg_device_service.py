@@ -234,6 +234,34 @@ class EEGDeviceService:
     # Calibration
     # =========================================================================
     
+    def start_calibration(self, device_id: str) -> dict:
+        """
+        Synchronous calibration start (used by tests and REST API).
+        
+        Sets the device into 'calibrating' status. Actual calibration
+        data collection happens asynchronously via WebSocket.
+        
+        Args:
+            device_id: UUID string of the device to calibrate
+            
+        Returns:
+            dict with success status and device info
+        """
+        from ..models import EEGDevice
+        try:
+            device = EEGDevice.objects.get(id=device_id, user=self.user)
+        except EEGDevice.DoesNotExist:
+            return {'success': False, 'error': 'Device not found'}
+        
+        device.status = 'calibrating'
+        device.save()
+        
+        return {
+            'success': True,
+            'device_id': str(device.id),
+            'message': 'Calibration started. Stream EEG data via WebSocket.',
+        }
+    
     async def calibrate(
         self,
         device: EEGDevice,

@@ -84,6 +84,11 @@ class NeurofeedbackSignal:
     message: str = ""
     encouragement: str = ""
     
+    @property
+    def is_reward(self) -> bool:
+        """True if this is a positive reward signal."""
+        return self.brain_state == 'reward' and self.memory_readiness >= 0.5
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for WebSocket transmission."""
         return {

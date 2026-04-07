@@ -503,6 +503,146 @@ class FragmentDistributionService:
                     pass
         
         return rebalanced
+    
+    # =========================================================================
+    # Public API Methods
+    # =========================================================================
+    
+    def select_nodes_for_distribution(
+        self, dead_drop, num_nodes=5, prefer_nearby=False, prefer_trusted=False
+    ) -> list:
+        """
+        Select optimal nodes for fragment distribution.
+        
+        Args:
+            dead_drop: DeadDrop with latitude/longitude for locality scoring
+            num_nodes: Maximum number of nodes to select
+            prefer_nearby: Prioritize geographically close nodes
+            prefer_trusted: Prioritize high-trust nodes
+            
+        Returns:
+            List of scored MeshNode instances (best first)
+        """
+        from django.db import models as django_models
+        
+        nodes = MeshNode.objects.filter(
+            is_online=True,
+            is_available_for_storage=True,
+        ).exclude(
+            current_fragment_count__gte=django_models.F('max_fragments')
+        )
+        
+        strategy = (
+            DistributionStrategy.RELIABILITY_FIRST if prefer_trusted
+            else DistributionStrategy.LOCALITY_FIRST if prefer_nearby
+            else DistributionStrategy.BALANCED
+        )
+        
+        scored = self._score_nodes(
+            list(nodes),
+            float(dead_drop.latitude),
+            float(dead_drop.longitude),
+            strategy
+        )
+        return scored[:num_nodes]
+    
+    def distribute_fragments(self, dead_drop, fragments) -> dict:
+        """
+        Distribute fragments to available mesh nodes.
+        
+        Args:
+            dead_drop: DeadDrop to distribute for
+            fragments: List of DeadDropFragment instances
+            
+        Returns:
+            Dict with success, distributed_count, and errors
+        """
+        result = self._distribute_to_nodes(
+            dead_drop, fragments,
+            float(dead_drop.latitude), float(dead_drop.longitude),
+            DistributionStrategy.BALANCED
+        )
+        
+        if result.fragments_distributed > 0:
+            dead_drop.status = 'active' if result.success else 'distributed'
+            dead_drop.save()
+        
+        return {
+            'success': result.success,
+            'distributed_count': result.fragments_distributed,
+            'errors': result.errors,
+        }
+    
+    def distribute_fragment_to_nodes(self, fragment, target_nodes) -> dict:
+        """
+        Distribute a single fragment to the first available target node.
+        
+        Args:
+            fragment: DeadDropFragment to distribute
+            target_nodes: List of candidate MeshNode instances
+            
+        Returns:
+            Dict with success status and assigned node_id
+        """
+        for node in target_nodes:
+            if node.current_fragment_count < node.max_fragments:
+                try:
+                    self._assign_fragment_to_node(fragment, node)
+                    return {'success': True, 'node_id': str(node.id)}
+                except Exception:
+                    continue
+        return {'success': False, 'error': 'No available nodes'}
+    
+    def calculate_distribution_health(self, dead_drop) -> dict:
+        """
+        Calculate health of fragment distribution for a dead drop.
+        
+        Args:
+            dead_drop: DeadDrop to check
+            
+        Returns:
+            Dict with total_fragments, distributed, available, and health status
+        """
+        fragments = dead_drop.fragments.all()
+        distributed = fragments.filter(is_distributed=True).count()
+        available = fragments.filter(
+            node__is_online=True, is_distributed=True, is_collected=False
+        ).count()
+        
+        total = dead_drop.total_fragments
+        required = dead_drop.required_fragments
+        
+        if available >= required:
+            health = 'good'
+        elif available > 0:
+            health = 'degraded'
+        else:
+            health = 'critical'
+        
+        return {
+            'total_fragments': total,
+            'distributed': distributed,
+            'available': available,
+            'health': health,
+        }
+    
+    def calculate_trust_score(self, node) -> float:
+        """
+        Calculate trust score for a mesh node based on transfer history.
+        
+        Args:
+            node: MeshNode to score
+            
+        Returns:
+            Trust score between 0.0 and 1.0
+        """
+        total = node.successful_transfers + node.failed_transfers
+        if total == 0:
+            return 0.5  # Default for new nodes
+        base_score = node.successful_transfers / total
+        # Boost for high activity volume
+        activity_bonus = min(0.1, total / 1000 * 0.1)
+        return min(1.0, base_score + activity_bonus)
 
 
 # Import models here to avoid circular imports
