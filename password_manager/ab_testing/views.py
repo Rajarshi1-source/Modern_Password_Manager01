@@ -45,16 +45,23 @@ def get_experiments_and_flags(request):
             is_enabled = flag.is_enabled_for_user(user)
             feature_flags[flag.name] = is_enabled
             
-            # Track usage
-            FeatureFlagUsage.objects.create(
-                feature_flag=flag,
-                user=user,
-                was_enabled=is_enabled,
-                context={
-                    'cohort': cohort,
-                    'url': request.META.get('HTTP_REFERER', '')
-                }
-            )
+            # Track usage — batch per user/flag/day to prevent write amplification.
+            # Without batching, this would create 1 row per flag per page load
+            # (e.g. 10 flags × 1000 users × 50 loads = 500k rows/day).
+            today = timezone.now().date()
+            if user:
+                FeatureFlagUsage.objects.update_or_create(
+                    feature_flag=flag,
+                    user=user,
+                    defaults={
+                        'was_enabled': is_enabled,
+                        'context': {
+                            'cohort': cohort,
+                            'url': request.META.get('HTTP_REFERER', ''),
+                            'date': str(today),
+                        }
+                    }
+                )
         
         # Get active experiments
         experiments = {}

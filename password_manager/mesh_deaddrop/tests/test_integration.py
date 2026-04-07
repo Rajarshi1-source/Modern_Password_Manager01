@@ -310,11 +310,17 @@ class MeshNodeAPITests(APITestCase):
     
     def test_register_node(self):
         """Test registering a new mesh node."""
+        import base64
+        import os
+        
+        # Generate a valid X25519 public key (32 bytes, base64 encoded)
+        public_key = base64.b64encode(os.urandom(32)).decode()
+        
         data = {
             'device_name': 'My Phone',
-            'device_type': 'phone',
+            'device_type': 'phone_android',
             'ble_address': 'AA:BB:CC:DD:EE:FF',
-            'public_key': 'my_public_key_data',
+            'public_key': public_key,
             'max_fragments': 10
         }
         

@@ -42,6 +42,10 @@ def process_audit_log(self, user_id: int, action: str, details: Dict = None):
     """
     Process and store audit log entries asynchronously.
     
+    Idempotent: uses a cache-based deduplication guard keyed on
+    (user_id, action, 10-second window) to prevent Celery retries
+    from creating duplicate entries.
+    
     Args:
         user_id: User performing the action
         action: Action type (create, update, delete, access, etc.)
@@ -49,6 +53,19 @@ def process_audit_log(self, user_id: int, action: str, details: Dict = None):
     """
     try:
         from vault.models import AuditLog
+        
+        # Deduplication guard: bucket the current time into 10-second
+        # windows so that retries of the same logical event within the
+        # retry window (60s) hit the same dedup key.
+        import time
+        time_bucket = int(time.time() // 10)
+        dedup_key = f"audit_dedup:{user_id}:{action}:{time_bucket}"
+        
+        if cache.get(dedup_key):
+            logger.info(
+                f"Audit log deduplicated (retry): user={user_id}, action={action}"
+            )
+            return {'status': 'deduplicated', 'user_id': user_id, 'action': action}
         
         AuditLog.objects.create(
             user_id=user_id,
@@ -58,6 +75,9 @@ def process_audit_log(self, user_id: int, action: str, details: Dict = None):
             ip_address=details.get('ip_address') if details else None,
             user_agent=details.get('user_agent') if details else None,
         )
+        
+        # Mark as processed — TTL of 120s covers max_retries × retry_delay
+        cache.set(dedup_key, True, 120)
         
         logger.info(f"Audit log created: user={user_id}, action={action}")
         return {'status': 'success', 'user_id': user_id, 'action': action}

@@ -10,6 +10,7 @@ import logging
 from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Count, Q, F
+from django.core.cache import cache
 
 from ai_assistant.models import AIQueryLog
 
@@ -310,7 +311,14 @@ class QueryAnalyzerService:
         Get an overall security posture summary for the user.
         
         Combines password health, risk assessment, and account statistics.
+        Results are cached for 2 minutes to avoid 5-8 DB queries per chat message.
         """
+        # Check cache first — avoids repeated DB queries during chat sessions
+        cache_key = f'ai_security_summary:{user.id}'
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
+        
         health = self.analyze_password_health(user, session)
         items = self._get_vault_items(user)
         
@@ -333,7 +341,7 @@ class QueryAnalyzerService:
             total_items
         )
         
-        return {
+        result = {
             'total_items': total_items,
             'item_type_breakdown': type_counts,
             'health_score': health['health_score'],
@@ -353,6 +361,11 @@ class QueryAnalyzerService:
                 f"{recent_activity} items updated in the last 30 days."
             )
         }
+        
+        # Cache for 2 minutes to avoid repeated queries during chat sessions
+        cache.set(cache_key, result, 120)
+        
+        return result
     
     def build_vault_context(self, user, session=None):
         """

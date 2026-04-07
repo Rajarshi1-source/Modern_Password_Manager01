@@ -3,6 +3,10 @@ Analytics API Views
 ==================
 
 API endpoints for analytics data collection and reporting.
+
+GDPR Note: IP addresses are anonymized before storage by truncating
+to /24 (IPv4) or /48 (IPv6) subnets. This prevents individual
+identification while preserving geo-level analytics utility.
 """
 
 from rest_framework import status
@@ -14,6 +18,33 @@ from django.db.models import Count, Avg, Sum, Q
 from django.contrib.auth.models import User
 from datetime import timedelta
 import json
+
+
+def _anonymize_ip(ip_address: str) -> str:
+    """
+    Anonymize an IP address for GDPR compliance.
+    - IPv4: truncate to /24 subnet (last octet zeroed)
+    - IPv6: truncate to /48 subnet (last 80 bits zeroed)
+    """
+    if not ip_address:
+        return None
+    
+    ip_address = ip_address.strip()
+    
+    if ':' in ip_address:
+        # IPv6 — truncate to /48
+        parts = ip_address.split(':')
+        # Keep first 3 groups, zero the rest
+        anonymized = ':'.join(parts[:3] + ['0'] * (len(parts) - 3))
+        return anonymized
+    else:
+        # IPv4 — truncate to /24
+        parts = ip_address.split('.')
+        if len(parts) == 4:
+            parts[3] = '0'
+            return '.'.join(parts)
+    
+    return ip_address
 
 from .models import (
     AnalyticsEvent,
@@ -110,7 +141,7 @@ def create_analytics_event(event_data, user, client_ip):
         path=properties.get('path', ''),
         referrer=event_data.get('referrer', ''),
         user_agent=metadata.get('userAgent', ''),
-        ip_address=client_ip,
+        ip_address=_anonymize_ip(client_ip),
         language=metadata.get('language', ''),
         platform=metadata.get('platform', ''),
         timestamp=timezone.now()
@@ -157,7 +188,7 @@ def update_user_session(session_data, user, client_ip, user_agent):
         defaults={
             'user': user,
             'user_agent': user_agent,
-            'ip_address': client_ip,
+            'ip_address': _anonymize_ip(client_ip),
             'start_time': timezone.now()
         }
     )

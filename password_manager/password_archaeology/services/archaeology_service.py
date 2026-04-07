@@ -81,15 +81,30 @@ class PasswordArchaeologyService:
             entry.commitment_hash = commitment_hash
             entry.save(update_fields=['commitment_hash'])
 
-            # Try to create a PendingCommitment via blockchain app
+            # Try to create a PendingCommitment via blockchain app.
+            # PendingCommitment requires a `commitment` FK to BehavioralCommitment.
+            # Only create if the user has an active behavioral commitment to anchor to.
             try:
                 from blockchain.models import PendingCommitment
-                commitment = PendingCommitment.objects.create(
-                    user=user,
-                    commitment_hash=commitment_hash,
-                )
-                entry.blockchain_commitment = commitment
-                entry.save(update_fields=['blockchain_commitment'])
+                from behavioral_recovery.models import BehavioralCommitment
+                
+                behavioral_commitment = BehavioralCommitment.objects.filter(
+                    user=user, is_active=True
+                ).order_by('-creation_timestamp').first()
+                
+                if behavioral_commitment:
+                    commitment = PendingCommitment.objects.create(
+                        user=user,
+                        commitment=behavioral_commitment,
+                        commitment_hash=commitment_hash,
+                    )
+                    entry.blockchain_commitment = commitment
+                    entry.save(update_fields=['blockchain_commitment'])
+                else:
+                    logger.debug(
+                        f"No active BehavioralCommitment for {user.username}; "
+                        "skipping blockchain anchoring for password change."
+                    )
             except Exception as bc_err:
                 logger.warning(f"Could not create blockchain commitment: {bc_err}")
         except Exception as e:

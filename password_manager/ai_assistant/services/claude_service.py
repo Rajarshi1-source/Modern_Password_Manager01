@@ -10,7 +10,7 @@ import logging
 import time
 import re
 from django.conf import settings
-from django.core.cache import cache
+from django.core.cache import caches
 
 logger = logging.getLogger(__name__)
 
@@ -74,21 +74,24 @@ class ClaudeService:
         """
         Check and enforce per-user rate limiting.
         
-        Uses Django cache with atomic operations to track request counts.
+        Uses the dedicated 'rate_limiting' cache alias. When Redis is
+        configured, counters survive Daphne/Celery restarts and are shared
+        across workers. Falls back to locmem in development.
         """
+        rate_cache = caches['rate_limiting']
         cache_key = f"ai_assistant_rate_{user_id}"
         
         # cache.add() is atomic: sets only if key doesn't exist
-        if cache.add(cache_key, 1, self.RATE_LIMIT_WINDOW):
+        if rate_cache.add(cache_key, 1, self.RATE_LIMIT_WINDOW):
             # Key was newly created with value 1 — first request in window
             return
         
         # Key already exists — atomically increment and check
         try:
-            current_count = cache.incr(cache_key)
+            current_count = rate_cache.incr(cache_key)
         except ValueError:
             # Key expired between add() and incr() — reset
-            cache.set(cache_key, 1, self.RATE_LIMIT_WINDOW)
+            rate_cache.set(cache_key, 1, self.RATE_LIMIT_WINDOW)
             return
         
         if current_count > self.rate_limit:

@@ -11,6 +11,7 @@ API endpoints for adversarial password analysis:
 
 import logging
 import hashlib
+import threading
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -31,7 +32,10 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# Initialize AI engines (singleton pattern)
+# Thread-safe singleton pattern for AI engines.
+# Under Daphne/async workers, concurrent requests could race on initialization
+# without a lock, creating duplicate engine instances.
+_engine_lock = threading.Lock()
 _game_engine = None
 _learning_system = None
 
@@ -39,18 +43,24 @@ _learning_system = None
 def get_game_engine():
     global _game_engine
     if _game_engine is None:
-        _game_engine = GameEngine()
+        with _engine_lock:
+            # Double-checked locking: re-check after acquiring lock
+            if _game_engine is None:
+                _game_engine = GameEngine()
     return _game_engine
 
 
 def get_learning_system():
     global _learning_system
     if _learning_system is None:
-        _learning_system = BreachLearningSystem()
+        with _engine_lock:
+            if _learning_system is None:
+                _learning_system = BreachLearningSystem()
     return _learning_system
 
 
 # Initialize ML Security predictor (for feature extraction)
+_predictor_lock = threading.Lock()
 _password_predictor = None
 
 
@@ -58,13 +68,15 @@ def get_password_predictor():
     """Get or create PasswordStrengthPredictor for adversarial feature extraction."""
     global _password_predictor
     if _password_predictor is None:
-        try:
-            from ml_security.ml_models.password_strength import PasswordStrengthPredictor
-            _password_predictor = PasswordStrengthPredictor()
-            logger.info("Integrated with ml_security.PasswordStrengthPredictor")
-        except ImportError:
-            logger.warning("ml_security module not available, using manual feature extraction")
-            _password_predictor = False  # Use False to indicate unavailable
+        with _predictor_lock:
+            if _password_predictor is None:
+                try:
+                    from ml_security.ml_models.password_strength import PasswordStrengthPredictor
+                    _password_predictor = PasswordStrengthPredictor()
+                    logger.info("Integrated with ml_security.PasswordStrengthPredictor")
+                except ImportError:
+                    logger.warning("ml_security module not available, using manual feature extraction")
+                    _password_predictor = False  # Use False to indicate unavailable
     return _password_predictor if _password_predictor else None
 
 

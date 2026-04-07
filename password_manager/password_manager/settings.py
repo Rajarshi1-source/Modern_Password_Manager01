@@ -261,6 +261,16 @@ CACHES = {
             'MAX_ENTRIES': 1000,
             'CULL_FREQUENCY': 3,
         }
+    },
+    # Dedicated cache for rate limiting.
+    # Uses locmem in development; override to Redis in production via
+    # USE_REDIS_CACHE=True so that rate counters survive restarts and
+    # are shared across workers.  Without Redis, a Daphne/Celery restart
+    # resets all counters, allowing users to bypass limits.
+    'rate_limiting': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'rate-limiting-cache',
+        'TIMEOUT': 3600,  # 1 hour default for rate windows
     }
 }
 
@@ -282,6 +292,19 @@ if os.environ.get('USE_REDIS_CACHE', 'False').lower() == 'true':
         },
         'KEY_PREFIX': 'kyber',
         'TIMEOUT': 3600,  # 1 hour default for Kyber keys
+    }
+    
+    # Rate limiting cache — Redis ensures counters survive restarts
+    CACHES['rate_limiting'] = {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,
+            'SOCKET_TIMEOUT': 5,
+        },
+        'KEY_PREFIX': 'ratelimit',
+        'TIMEOUT': 3600,
     }
     
     # Add dedicated Kyber cache
@@ -720,11 +743,53 @@ CSRF_COOKIE_HTTPONLY = True
 CSRF_COOKIE_SAMESITE = 'Lax' if DEBUG else 'Strict'  # Relaxed for dev
 CSRF_USE_SESSIONS = False  # Use cookie-based CSRF (default); sessions not needed for JWT API
 
-# Ensure logs directory exists
-LOGS_DIR = os.path.join(BASE_DIR, 'logs')
-os.makedirs(LOGS_DIR, exist_ok=True)
+# ==============================================================================
+# LOGGING CONFIGURATION (12-Factor XI compliant)
+# ==============================================================================
+# Production (DEBUG=False): stream ALL logs to stdout (console handler) + DB.
+#   Log collectors (Fluentd, Datadog, CloudWatch) consume stdout automatically.
+#   File handlers are removed — container filesystems are ephemeral.
+# Development (DEBUG=True): keep file handlers as a convenience for developers.
 
-# Enhanced Logging configuration (merged — includes DatabaseLogHandler)
+LOGS_DIR = os.path.join(BASE_DIR, 'logs')
+
+# Build handlers and loggers conditionally
+_logging_handlers = {
+    'db': {
+        'level': 'INFO',
+        'class': 'logging_manager.handlers.DatabaseLogHandler',
+        'formatter': 'verbose',
+    },
+    'console': {
+        'level': 'DEBUG' if DEBUG else 'INFO',
+        'class': 'logging.StreamHandler',
+        'formatter': 'verbose' if not DEBUG else 'simple',
+    },
+}
+
+if DEBUG:
+    # Local development: add file handlers for convenience
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    _logging_handlers['file'] = {
+        'level': 'INFO',
+        'class': 'logging.FileHandler',
+        'filename': os.path.join(LOGS_DIR, 'django.log'),
+        'formatter': 'verbose',
+    }
+    _logging_handlers['security_file'] = {
+        'level': 'WARNING',
+        'class': 'logging.FileHandler',
+        'filename': os.path.join(LOGS_DIR, 'security.log'),
+        'formatter': 'verbose',
+    }
+
+# In production, all loggers route to console + db (stdout streaming).
+# In development, loggers also write to file handlers.
+_dev_django_handlers = ['console', 'file', 'db'] if DEBUG else ['console', 'db']
+_dev_security_handlers = ['console', 'security_file', 'db'] if DEBUG else ['console', 'db']
+_dev_vault_handlers = ['console', 'file', 'db'] if DEBUG else ['console', 'db']
+_dev_auth_handlers = ['console', 'security_file'] if DEBUG else ['console']
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -738,52 +803,29 @@ LOGGING = {
             'style': '{',
         },
     },
-    'handlers': {
-        'db': {
-            'level': 'INFO',
-            'class': 'logging_manager.handlers.DatabaseLogHandler',
-            'formatter': 'verbose',
-        },
-        'file': {
-            'level': 'INFO',
-            'class': 'logging.FileHandler',
-            'filename': os.path.join(LOGS_DIR, 'django.log'),
-            'formatter': 'verbose',
-        },
-        'security_file': {
-            'level': 'WARNING',
-            'class': 'logging.FileHandler',
-            'filename': os.path.join(LOGS_DIR, 'security.log'),
-            'formatter': 'verbose',
-        },
-        'console': {
-            'level': 'DEBUG' if DEBUG else 'INFO',
-            'class': 'logging.StreamHandler',
-            'formatter': 'simple',
-        },
-    },
+    'handlers': _logging_handlers,
     'root': {
         'handlers': ['console'],
         'level': 'INFO',
     },
     'loggers': {
         'django': {
-            'handlers': ['file', 'db'],
+            'handlers': _dev_django_handlers,
             'level': 'INFO',
             'propagate': False,
         },
         'security': {
-            'handlers': ['security_file', 'console', 'db'],
+            'handlers': _dev_security_handlers,
             'level': 'WARNING',
             'propagate': False,
         },
         'vault': {
-            'handlers': ['file', 'db'],
+            'handlers': _dev_vault_handlers,
             'level': 'INFO',
             'propagate': False,
         },
         'auth_module': {
-            'handlers': ['security_file', 'console'],
+            'handlers': _dev_auth_handlers,
             'level': 'INFO',
             'propagate': False,
         },

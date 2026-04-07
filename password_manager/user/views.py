@@ -225,13 +225,14 @@ def preferences(request):
             'preferences': prefs.to_dict()
         })
 
-@api_view(['GET', 'POST', 'DELETE'])
+@api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def emergency_contacts(request):
     """
     Manage emergency contacts for a user
     GET: Retrieve all emergency contacts
     POST: Add a new emergency contact
+    DELETE: Use /emergency-contacts/<contact_id>/ instead (URL-based)
     """
     user = request.user
     
@@ -323,28 +324,20 @@ def emergency_contacts(request):
             # User not found, but we'll create a placeholder
             return error_response('User not found with this email', 
                            status_code=status.HTTP_404_NOT_FOUND)
-    
-    elif request.method == 'DELETE':
-        contact_id = request.data.get('contact_id')
-        
-        if not contact_id:
-            return error_response('Contact ID is required', 
-                           status_code=status.HTTP_400_BAD_REQUEST)
-                           
-        contact = get_object_or_404(EmergencyContact, id=contact_id, vault_owner=user)
-        contact.delete()
-        
-        return success_response({'message': 'Emergency contact removed'})
 
-@api_view(['PUT'])
+@api_view(['PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def emergency_contact_update(request, contact_id):
-    """Update emergency contact settings"""
+    """Update or delete an emergency contact by ID (URL parameter)"""
     user = request.user
     
     contact = get_object_or_404(EmergencyContact, id=contact_id, vault_owner=user)
     
-    # Fields that can be updated
+    if request.method == 'DELETE':
+        contact.delete()
+        return success_response({'message': 'Emergency contact removed'})
+    
+    # PUT: update fields
     if 'waiting_period_hours' in request.data:
         contact.waiting_period_hours = request.data['waiting_period_hours']
         

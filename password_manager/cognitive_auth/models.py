@@ -562,3 +562,18 @@ class CognitiveSettings(models.Model):
         if self.enable_partial:
             types.append('partial')
         return types
+
+
+class VerificationSession(CognitiveSession):
+    """
+    Proxy model alias for CognitiveSession.
+    
+    Provides the 'VerificationSession' name expected by tests and service
+    layer while reusing the CognitiveSession table and logic. Both names
+    refer to the same concept: a cognitive verification session.
+    """
+    
+    class Meta:
+        proxy = True
+        verbose_name = "Verification Session"
+        verbose_name_plural = "Verification Sessions"

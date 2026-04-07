@@ -104,7 +104,7 @@ class VaultItemModelTests(TestCase):
         self.assertEqual(items.count(), 5)
     
     def test_vault_item_ordering(self):
-        """Test vault items are ordered by creation date"""
+        """Test vault items are ordered by creation date (newest first)."""
         item1 = VaultItem.objects.create(
             user=self.user,
             item_id='item_1',
@@ -120,8 +120,12 @@ class VaultItemModelTests(TestCase):
         )
         
         items = VaultItem.objects.filter(user=self.user)
-        # Newest first if ordering is set
-        self.assertTrue(items.first().id >= items.last().id)
+        # Test actual ordering field, not ID (IDs don't guarantee order)
+        if items.count() >= 2:
+            self.assertGreaterEqual(
+                items.first().created_at,
+                items.last().created_at
+            )
 
 
 class VaultBackupModelTests(TestCase):

@@ -1,5 +1,6 @@
 from celery import shared_task
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from vault.models.vault_models import EncryptedVaultItem
 from vault.models import BreachAlert
 from .services.breach_monitor import HIBPService
@@ -320,17 +321,23 @@ def check_genetic_evolution(user_id: int):
             dna_connection.last_epigenetic_update = timezone.now()
             dna_connection.save()
             
-            # Log the evolution
-            GeneticEvolutionLog.objects.create(
-                user=user,
-                trigger_type='automatic',
-                old_evolution_gen=result.get('old_generation', 1),
-                new_evolution_gen=result.get('new_generation', 2),
-                biological_age_before=result.get('previous_age'),
-                biological_age_after=result.get('biological_age'),
-                success=True,
-                completed_at=timezone.now()
-            )
+            # Log the evolution (idempotent: dedup by user + generation + date)
+            today = timezone.now().date()
+            evo_dedup_key = f"evo_dedup:{user_id}:{result.get('new_generation')}:{today}"
+            if not cache.get(evo_dedup_key):
+                GeneticEvolutionLog.objects.create(
+                    user=user,
+                    trigger_type='automatic',
+                    old_evolution_gen=result.get('old_generation', 1),
+                    new_evolution_gen=result.get('new_generation', 2),
+                    biological_age_before=result.get('previous_age'),
+                    biological_age_after=result.get('biological_age'),
+                    success=True,
+                    completed_at=timezone.now()
+                )
+                cache.set(evo_dedup_key, True, 86400)  # 24h TTL
+            else:
+                logger.info(f"Evolution log deduplicated for user {user_id}")
             
             # Update subscription usage
             subscription.evolutions_triggered = (subscription.evolutions_triggered or 0) + 1
@@ -819,7 +826,17 @@ def process_forced_rotation(credential_id: str, user_id: int, reason: str):
         except PredictiveExpirationRule.DoesNotExist:
             return {'error': 'rule_not_found'}
         
-        # Create rotation event
+        # Create rotation event (idempotent: dedup by credential + user + date)
+        today = timezone.now().date()
+        rotation_dedup_key = f"rotation_dedup:{credential_id}:{user_id}:{today}"
+        
+        if cache.get(rotation_dedup_key):
+            logger.info(f"Rotation event deduplicated for credential {credential_id}")
+            return {
+                'credential_id': str(credential_id),
+                'status': 'deduplicated',
+            }
+        
         event = PasswordRotationEvent.objects.create(
             user=user,
             credential_id=rule.credential_id,
@@ -831,6 +848,7 @@ def process_forced_rotation(credential_id: str, user_id: int, reason: str):
             threat_factors_at_rotation=rule.threat_factors,
             risk_score_at_rotation=rule.risk_score,
         )
+        cache.set(rotation_dedup_key, True, 86400)  # 24h TTL
         
         # Mark rule as acknowledged
         rule.user_acknowledged = True

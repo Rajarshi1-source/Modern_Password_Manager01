@@ -323,11 +323,17 @@ class ClaudeServiceTests(TestCase):
         AI_ASSISTANT_ENABLED=True
     )
     @patch('ai_assistant.services.claude_service.ClaudeService.client', new_callable=PropertyMock)
-    @patch('ai_assistant.services.claude_service.cache')
-    def test_rate_limiting(self, mock_cache, mock_client_prop):
+    @patch('ai_assistant.services.claude_service.caches')
+    def test_rate_limiting(self, mock_caches, mock_client_prop):
         """Test rate limiting enforcement."""
-        # Simulate rate limit exceeded
-        mock_cache.get.return_value = 5  # Already at 5, limit is 2
+        # Mock the 'rate_limiting' cache alias
+        mock_rate_cache = MagicMock()
+        mock_caches.__getitem__ = MagicMock(return_value=mock_rate_cache)
+        
+        # Simulate rate limit exceeded:
+        # cache.add returns False (key already exists), then incr returns over-limit count
+        mock_rate_cache.add.return_value = False
+        mock_rate_cache.incr.return_value = 999  # Way over the limit of 2
         
         service = ClaudeService()
         with self.assertRaises(ClaudeServiceError) as ctx:
