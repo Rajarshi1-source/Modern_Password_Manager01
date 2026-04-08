@@ -12,6 +12,7 @@ API endpoints for adversarial password analysis:
 import logging
 import hashlib
 import threading
+from django.conf import settings
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -57,6 +58,32 @@ def get_learning_system():
             if _learning_system is None:
                 _learning_system = BreachLearningSystem()
     return _learning_system
+
+
+def _check_adversarial_enabled():
+    """Check if Adversarial AI feature is enabled and available."""
+    if not getattr(settings, 'ADVERSARIAL_AI_ENABLED', True):
+        return Response(
+            {'error': 'Adversarial AI defense is currently disabled.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+    return None
+
+
+def _get_engine_or_503():
+    """
+    Get the game engine with graceful degradation.
+    Returns (engine, None) on success or (None, Response) on failure.
+    """
+    try:
+        engine = get_game_engine()
+        return engine, None
+    except Exception as e:
+        logger.error(f"Failed to initialize GameEngine: {e}")
+        return None, Response(
+            {'error': 'Adversarial AI engine is temporarily unavailable.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
 
 
 # Initialize ML Security predictor (for feature extraction)
@@ -116,6 +143,10 @@ def analyze_password(request):
     }
     """
     try:
+        disabled = _check_adversarial_enabled()
+        if disabled:
+            return disabled
+        
         features = request.data.get('features', {})
         run_full_battle = request.data.get('run_full_battle', False)
         save_result = request.data.get('save_result', True)
@@ -123,7 +154,9 @@ def analyze_password(request):
         if not features:
             return error_response("Password features are required", status.HTTP_400_BAD_REQUEST)
         
-        engine = get_game_engine()
+        engine, err_response = _get_engine_or_503()
+        if err_response:
+            return err_response
         
         if run_full_battle:
             # Run full adversarial battle
@@ -203,6 +236,10 @@ def analyze_raw_password(request):
     }
     """
     try:
+        disabled = _check_adversarial_enabled()
+        if disabled:
+            return disabled
+        
         password = request.data.get('password', '')
         run_full_battle = request.data.get('run_full_battle', False)
         save_result = request.data.get('save_result', True)
@@ -222,7 +259,9 @@ def analyze_raw_password(request):
             features = _extract_features_manually(password)
             logger.debug("Using manual feature extraction (ml_security not available)")
         
-        engine = get_game_engine()
+        engine, err_response = _get_engine_or_503()
+        if err_response:
+            return err_response
         
         if run_full_battle:
             result = engine.run_battle(features, request.user.id)
@@ -387,6 +426,10 @@ def get_recommendations(request):
     }
     """
     try:
+        disabled = _check_adversarial_enabled()
+        if disabled:
+            return disabled
+        
         limit = int(request.query_params.get('limit', 10))
         status_filter = request.query_params.get('status', None)
         
@@ -489,6 +532,10 @@ def get_battle_history(request):
     }
     """
     try:
+        disabled = _check_adversarial_enabled()
+        if disabled:
+            return disabled
+        
         limit = int(request.query_params.get('limit', 20))
         outcome_filter = request.query_params.get('outcome', None)
         
@@ -553,6 +600,10 @@ def get_trending_attacks(request):
     }
     """
     try:
+        disabled = _check_adversarial_enabled()
+        if disabled:
+            return disabled
+        
         limit = int(request.query_params.get('limit', 5))
         
         learning = get_learning_system()
@@ -595,6 +646,10 @@ def get_defense_profile(request):
     }
     """
     try:
+        disabled = _check_adversarial_enabled()
+        if disabled:
+            return disabled
+        
         profile, created = UserDefenseProfile.objects.get_or_create(user=request.user)
         
         return success_response({

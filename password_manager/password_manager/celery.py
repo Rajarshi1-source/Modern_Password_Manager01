@@ -37,11 +37,21 @@ app.conf.update(
     enable_utc=True,
     
     # Task routing
+    # NOTE: @shared_task auto-generates names as '<app>.tasks.<func_name>'.
+    # fnmatch '*' does NOT match dots, so 'blockchain.*' would never match
+    # 'blockchain.tasks.anchor_pending_commitments'.  Use '<app>.tasks.*'.
     task_routes={
-        'blockchain.*': {'queue': 'blockchain'},
-        'ml_*': {'queue': 'ml'},
-        'fhe_service.*': {'queue': 'fhe'},
+        'blockchain.tasks.*': {'queue': 'blockchain'},
+        'ml_security.tasks.*': {'queue': 'ml'},
+        'ml_dark_web.tasks.*': {'queue': 'ml'},
+        'fhe_service.tasks.*': {'queue': 'fhe'},
+        'adversarial_ai.tasks.*': {'queue': 'adversarial'},
+        'analytics.tasks.*': {'queue': 'analytics'},
     },
+    
+    # Task priority support (RabbitMQ / Redis with sorted sets)
+    task_queue_max_priority=10,
+    task_default_priority=5,
     
     # Task time limits (prevent hanging tasks)
     task_soft_time_limit=300,  # 5 minutes soft limit
@@ -188,6 +198,16 @@ app.conf.update(
         'predictive-intent-analyze-patterns': {
             'task': 'ml_security.analyze_usage_patterns',
             'schedule': crontab(hour=4, minute=0),  # 4:00 AM daily
+        },
+        
+        # =================================================================
+        # FeatureFlagUsage Batch Flush
+        # =================================================================
+        
+        # Flush buffered feature flag usage records to DB (every 60 seconds)
+        'flush-feature-flag-usage': {
+            'task': 'ab_testing.tasks.flush_feature_flag_usage',
+            'schedule': 60.0,  # Every 60 seconds
         },
     },
 )

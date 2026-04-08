@@ -45,22 +45,21 @@ def get_experiments_and_flags(request):
             is_enabled = flag.is_enabled_for_user(user)
             feature_flags[flag.name] = is_enabled
             
-            # Track usage — batch per user/flag/day to prevent write amplification.
-            # Without batching, this would create 1 row per flag per page load
-            # (e.g. 10 flags × 1000 users × 50 loads = 500k rows/day).
+            # Track usage via batch writer — buffers writes in cache and
+            # flushes to DB every 60s via Celery beat task, reducing write
+            # amplification from 1 DB write per flag per page load to 1 batch.
             today = timezone.now().date()
             if user:
-                FeatureFlagUsage.objects.update_or_create(
-                    feature_flag=flag,
-                    user=user,
-                    defaults={
-                        'was_enabled': is_enabled,
-                        'context': {
-                            'cohort': cohort,
-                            'url': request.META.get('HTTP_REFERER', ''),
-                            'date': str(today),
-                        }
-                    }
+                from .batch_writer import FeatureFlagBatchWriter
+                FeatureFlagBatchWriter.record(
+                    flag_id=flag.id,
+                    user_id=user.id,
+                    was_enabled=is_enabled,
+                    context={
+                        'cohort': cohort,
+                        'url': request.META.get('HTTP_REFERER', ''),
+                        'date': str(today),
+                    },
                 )
         
         # Get active experiments

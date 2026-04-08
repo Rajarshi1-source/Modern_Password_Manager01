@@ -384,6 +384,7 @@ REST_FRAMEWORK = {
         'biometric_frame': '60/minute',   # Video frame submission
         'websocket_connect': '5/minute',  # WS connection rate
         'dark_web_scan': '1/hour',        # Manual scan trigger
+        'analytics_track': '30/minute',   # Anonymous analytics submission (Item #3)
     }
 }
 
@@ -579,6 +580,12 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
     'USER_ID_FIELD': 'id',
     'USER_ID_CLAIM': 'user_id',
+    
+    # Custom serializer for refresh token family enforcement (Item #1)
+    # Blacklists oldest outstanding tokens when concurrent device count
+    # exceeds REFRESH_TOKEN_FAMILY_MAX_SIZE. Oldest is determined by
+    # OutstandingToken.created_at timestamp.
+    'TOKEN_OBTAIN_SERIALIZER': 'auth_module.token_family.FamilyLimitedTokenObtainPairSerializer',
 }
 
 
@@ -590,6 +597,24 @@ FIREBASE_CLIENT_EMAIL = os.environ.get('FIREBASE_CLIENT_EMAIL', '')
 FIREBASE_CLIENT_ID = os.environ.get('FIREBASE_CLIENT_ID', '')
 FIREBASE_CLIENT_CERT_URL = os.environ.get('FIREBASE_CLIENT_CERT_URL', '')
 FIREBASE_DATABASE_URL = os.environ.get('FIREBASE_DATABASE_URL', '')
+
+# =============================================================================
+# Feature Flags — Module Enable/Disable
+# =============================================================================
+
+# AI Assistant module (Claude-powered)
+AI_ASSISTANT_ENABLED = os.environ.get('AI_ASSISTANT_ENABLED', 'True').lower() in ('true', '1', 'yes')
+
+# Adversarial AI module (password strength simulation)
+ADVERSARIAL_AI_ENABLED = os.environ.get('ADVERSARIAL_AI_ENABLED', 'True').lower() in ('true', '1', 'yes')
+
+# =============================================================================
+# PKCE Configuration (OAuth2 Proof Key for Code Exchange)
+# =============================================================================
+# Required for public clients (mobile apps, browser extensions) that cannot
+# securely store a client_secret. Enable when mobile/extension clients are built.
+OAUTH_PKCE_REQUIRED = os.environ.get('OAUTH_PKCE_REQUIRED', 'False').lower() in ('true', '1', 'yes')
+OAUTH_PKCE_CODE_CHALLENGE_METHOD = 'S256'  # SHA-256 challenge (recommended)
 
 # GeoIP Database Configuration
 # Download GeoLite2-City.mmdb and GeoLite2-Country.mmdb from MaxMind

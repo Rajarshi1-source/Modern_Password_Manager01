@@ -382,6 +382,18 @@ def check_breach_status(self, password_hash_prefix: str, user_id: int) -> Dict:
         user_id: User ID for logging
     """
     import requests
+    from shared.circuit_breaker import hibp_breaker, CircuitBreakerOpen
+    
+    # Circuit breaker: skip HIBP call if service is known-down
+    try:
+        hibp_breaker.before_call()
+    except CircuitBreakerOpen:
+        logger.warning("HIBP circuit breaker is OPEN — skipping breach check")
+        return {
+            'error': 'breach_check_unavailable',
+            'message': 'Breach check service is temporarily unavailable.',
+            'prefix': password_hash_prefix,
+        }
     
     try:
         # Call HIBP API
@@ -392,6 +404,9 @@ def check_breach_status(self, password_hash_prefix: str, user_id: int) -> Dict:
         )
         
         if response.status_code == 200:
+            # Record success with circuit breaker
+            hibp_breaker.on_success()
+            
             # Return hash suffixes and counts
             hashes = {}
             for line in response.text.splitlines():
@@ -404,13 +419,16 @@ def check_breach_status(self, password_hash_prefix: str, user_id: int) -> Dict:
                 'checked_at': timezone.now().isoformat()
             }
         else:
+            hibp_breaker.on_failure(Exception(f"HTTP {response.status_code}"))
             logger.warning(f"HIBP API returned {response.status_code}")
             return {'error': f'API returned {response.status_code}'}
             
     except requests.Timeout:
+        hibp_breaker.on_failure(Exception("API timeout"))
         logger.warning("HIBP API timeout")
         raise self.retry(exc=Exception("API timeout"))
     except Exception as exc:
+        hibp_breaker.on_failure(exc)
         logger.error(f"Breach check failed: {exc}")
         raise self.retry(exc=exc)
 

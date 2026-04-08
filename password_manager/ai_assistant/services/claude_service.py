@@ -11,6 +11,7 @@ import time
 import re
 from django.conf import settings
 from django.core.cache import caches
+from shared.circuit_breaker import claude_breaker, CircuitBreakerOpen
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +209,15 @@ Be friendly, professional, and reassuring. Security can be intimidating — make
         max_retries = 3
         retry_delay = 1  # seconds
         
+        # Circuit breaker: reject immediately if Claude API is known-down
+        try:
+            claude_breaker.before_call()
+        except CircuitBreakerOpen as e:
+            raise ClaudeServiceError(
+                "AI assistant is temporarily unavailable due to service issues. "
+                f"Please try again in {int(e.recovery_in)} seconds."
+            )
+
         for attempt in range(max_retries):
             try:
                 response = self.client.messages.create(
@@ -226,6 +236,9 @@ Be friendly, professional, and reassuring. Security can be intimidating — make
                 # Calculate tokens
                 tokens_used = (response.usage.input_tokens + response.usage.output_tokens)
                 
+                # Record success with circuit breaker
+                claude_breaker.on_success()
+                
                 return {
                     'content': sanitized_text,
                     'tokens_used': tokens_used,
@@ -243,6 +256,8 @@ Be friendly, professional, and reassuring. Security can be intimidating — make
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
                 else:
+                    # Record failure with circuit breaker
+                    claude_breaker.on_failure(e)
                     logger.error(f"Claude API failed after {max_retries} attempts: {e}")
                     raise ClaudeServiceError(
                         "Unable to get a response from the AI assistant. "

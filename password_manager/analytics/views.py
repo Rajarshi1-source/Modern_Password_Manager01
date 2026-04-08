@@ -62,7 +62,7 @@ from .models import (
 @permission_classes([AllowAny])  # Allow anonymous analytics
 def track_events(request):
     """
-    Track analytics events in batch
+    Track analytics events in batch (async via Celery).
     
     POST /api/analytics/events/
     Body: {
@@ -72,51 +72,58 @@ def track_events(request):
         "session": {...},
         "performance": {...}
     }
+    
+    Rate limited to 30 requests/minute for anonymous users to prevent
+    DB flooding attacks.  Actual DB writes are dispatched to a Celery
+    task and processed asynchronously.
     """
+    from rest_framework.throttling import AnonRateThrottle, ScopedRateThrottle
+
+    # --- Manual throttle enforcement ---
+    # We apply a scoped throttle ('analytics_track') here because the
+    # view uses @permission_classes([AllowAny]) which skips the default
+    # throttle class check for anonymous users in some DRF versions.
+    throttle = ScopedRateThrottle()
+    throttle.scope = 'analytics_track'
+    if not throttle.allow_request(request, None):
+        wait = throttle.wait()
+        return Response({
+            'status': 'error',
+            'message': f'Rate limit exceeded. Retry after {int(wait or 60)} seconds.',
+        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
     try:
         data = request.data
         
-        # Get or create user
-        user = request.user if request.user.is_authenticated else None
+        # Get user ID (or None for anonymous)
+        user_id = request.user.id if request.user.is_authenticated else None
         
-        # Get client IP
+        # Get and anonymize client IP
         client_ip = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0] or \
                     request.META.get('REMOTE_ADDR')
+        anonymized_ip = _anonymize_ip(client_ip)
         
-        # Process events
-        events = data.get('events', [])
-        for event_data in events:
-            create_analytics_event(event_data, user, client_ip)
+        # Augment data with user agent for session tracking
+        data_copy = dict(data)
+        data_copy['_user_agent'] = request.META.get('HTTP_USER_AGENT', '')
         
-        # Process engagements
-        engagements = data.get('engagements', [])
-        for engagement_data in engagements:
-            create_user_engagement(engagement_data, user)
-        
-        # Process conversions
-        conversions = data.get('conversions', [])
-        for conversion_data in conversions:
-            create_conversion(conversion_data, user)
-        
-        # Process session data
-        session_data = data.get('session', {})
-        if session_data:
-            update_user_session(session_data, user, client_ip, request.META.get('HTTP_USER_AGENT', ''))
-        
-        # Process performance metrics
-        performance_data = data.get('performance', {})
-        if performance_data:
-            create_performance_metrics(performance_data, user, session_data.get('sessionId'))
+        # Dispatch to Celery for async processing
+        from .tasks import process_analytics_batch
+        process_analytics_batch.delay(
+            data=data_copy,
+            user_id=user_id,
+            client_ip=anonymized_ip,
+        )
         
         return Response({
             'status': 'success',
-            'message': 'Analytics data recorded',
+            'message': 'Analytics data queued for processing',
             'counts': {
-                'events': len(events),
-                'engagements': len(engagements),
-                'conversions': len(conversions)
+                'events': len(data.get('events', [])),
+                'engagements': len(data.get('engagements', [])),
+                'conversions': len(data.get('conversions', [])),
             }
-        }, status=status.HTTP_201_CREATED)
+        }, status=status.HTTP_202_ACCEPTED)
         
     except Exception as e:
         return Response({
