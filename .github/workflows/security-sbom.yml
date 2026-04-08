@@ -31,7 +31,7 @@ jobs:
       - name: Install SBOM tools
         run: |
           pip install --upgrade pip
-          pip install cyclonedx-bom pip-audit
+          pip install "cyclonedx-bom==0.13.0" pip-audit
 
       - name: Install CycloneDX CLI
         run: |
@@ -41,7 +41,7 @@ jobs:
 
       - name: Generate CycloneDX SBOM
         run: |
-          cyclonedx-py -r password_manager/requirements.txt --format json -o sbom.json
+          cyclonedx-py requirements -r password_manager/requirements.txt --format json -o sbom.json
 
       - name: Verify SBOM exists
         run: |
