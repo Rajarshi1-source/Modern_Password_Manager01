@@ -343,7 +343,7 @@ class TrustScoreTests(TestCase):
             public_key='key',
             successful_transfers=100,
             failed_transfers=5,
-            total_uptime_hours=500
+            total_uptime_hours=500,
         )
         
         score = self.service.calculate_trust_score(node)

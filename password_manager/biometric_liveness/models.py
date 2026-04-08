@@ -65,6 +65,11 @@ class LivenessProfile(models.Model):
         help_text="Facial thermal distribution pattern (if available)"
     )
     
+    baseline_expression_timing = models.JSONField(
+        default=dict,
+        help_text="Per-user baseline: mean/std of onset duration, apex duration, offset duration, inter-expression interval in ms"
+    )
+    
     # Quality metrics
     profile_confidence = models.FloatField(
         default=0.0,
@@ -175,6 +180,25 @@ class LivenessSession(models.Model):
     total_frames_processed = models.IntegerField(default=0)
     face_detection_rate = models.FloatField(default=0.0)
     
+    # Verdict (persisted output of complete_session())
+    VERDICT_CHOICES = [
+        ('HIGH_CONFIDENCE_LIVE', 'High confidence live'),
+        ('VERIFIED_LIVE', 'Verified live'),
+        ('LOW_CONFIDENCE', 'Low confidence'),
+        ('SUSPECTED_FAKE', 'Suspected fake'),
+        ('INCONCLUSIVE', 'Inconclusive'),
+    ]
+    verdict = models.CharField(
+        max_length=30,
+        choices=VERDICT_CHOICES,
+        blank=True,
+        help_text="Final human-readable verdict from complete_session()"
+    )
+    verdict_reason = models.TextField(
+        blank=True,
+        help_text="Explanation of verdict: which signals drove the decision"
+    )
+    
     # Device info
     device_fingerprint = models.CharField(max_length=256, blank=True)
     user_agent = models.TextField(blank=True)
@@ -257,6 +281,26 @@ class LivenessChallenge(models.Model):
         default=dict,
         help_text="Expected response patterns (hashed for security)"
     )
+    instruction = models.CharField(
+        max_length=512,
+        blank=True,
+        help_text="Human-readable challenge prompt"
+    )
+    
+    # Status
+    CHALLENGE_STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('expired', 'Expired'),
+        ('skipped', 'Skipped'),
+    ]
+    challenge_status = models.CharField(
+        max_length=20,
+        choices=CHALLENGE_STATUS_CHOICES,
+        default='pending',
+        help_text="Current lifecycle status of this challenge"
+    )
     
     # Timing
     time_limit_ms = models.IntegerField(
@@ -323,6 +367,42 @@ class ChallengeResponse(models.Model):
     texture_liveness_score = models.FloatField(default=0.0)
     depth_liveness_score = models.FloatField(default=0.0)
     motion_liveness_score = models.FloatField(default=0.0)
+    
+    # Response classification and aggregated scores
+    RESPONSE_TYPE_CHOICES = [
+        ('gaze', 'Gaze'),
+        ('expression', 'Expression'),
+        ('pulse', 'Pulse'),
+        ('blink', 'Blink'),
+        ('cognitive', 'Cognitive'),
+    ]
+    response_type = models.CharField(
+        max_length=20,
+        choices=RESPONSE_TYPE_CHOICES,
+        blank=True,
+        help_text="Type of challenge this response answers"
+    )
+    gaze_accuracy = models.FloatField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+        help_text="Fraction of gaze targets hit within threshold"
+    )
+    expression_score = models.FloatField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+        help_text="Naturalness score for expression response"
+    )
+    is_valid = models.BooleanField(
+        null=True,
+        help_text="Whether this response passed validation"
+    )
+    score = models.FloatField(
+        default=0.0,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+        help_text="Overall response score aggregated from sub-scores"
+    )
     
     # Timestamps
     client_timestamp = models.BigIntegerField()
@@ -446,6 +526,10 @@ class ThermalReading(models.Model):
         default=True,
         help_text="Temperature in expected living tissue range"
     )
+    is_valid = models.BooleanField(
+        default=True,
+        help_text="Whether this thermal reading meets quality thresholds for use in scoring"
+    )
     
     class Meta:
         verbose_name = "Thermal Reading"
@@ -526,6 +610,14 @@ class GazeTrackingData(models.Model):
         on_delete=models.CASCADE,
         related_name='gaze_data'
     )
+    session = models.ForeignKey(
+        LivenessSession,
+        on_delete=models.CASCADE,
+        related_name='gaze_data',
+        null=True,
+        blank=True,
+        help_text="Direct session reference for session-level analytics"
+    )
     
     # Timing
     timestamp_ms = models.BigIntegerField(
@@ -553,6 +645,16 @@ class GazeTrackingData(models.Model):
     is_fixation = models.BooleanField(
         default=False,
         help_text="Whether this is a fixation point vs saccade"
+    )
+    accuracy = models.FloatField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+        help_text="Distance from gaze point to nearest target, normalised"
+    )
+    head_pose = models.JSONField(
+        default=dict,
+        help_text="Estimated head pose at this gaze point: {yaw, pitch, roll}"
     )
     
     class Meta:
@@ -624,6 +726,10 @@ class MicroExpressionEvent(models.Model):
     asymmetry_score = models.FloatField(
         default=0.0,
         help_text="Facial asymmetry (natural faces have some)"
+    )
+    is_genuine = models.BooleanField(
+        null=True,
+        help_text="Whether this expression is classified as genuine (involuntary) vs performed"
     )
     
     class Meta:

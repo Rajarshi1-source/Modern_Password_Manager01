@@ -628,7 +628,12 @@ class FragmentDistributionService:
     
     def calculate_trust_score(self, node) -> float:
         """
-        Calculate trust score for a mesh node based on transfer history.
+        Calculate trust score for a mesh node based on transfer history and uptime.
+        
+        Scoring factors:
+        - Transfer reliability (success ratio): primary signal
+        - Activity volume: bonus for high transfer count
+        - Uptime: bonus for long-running nodes (up to 0.05 at 500+ hours)
         
         Args:
             node: MeshNode to score
@@ -642,7 +647,10 @@ class FragmentDistributionService:
         base_score = node.successful_transfers / total
         # Boost for high activity volume
         activity_bonus = min(0.1, total / 1000 * 0.1)
-        return min(1.0, base_score + activity_bonus)
+        # Boost for long-running nodes (up to 0.05 at 500+ hours)
+        uptime_hours = getattr(node, 'total_uptime_hours', 0) or 0
+        uptime_bonus = min(0.05, (uptime_hours / 500) * 0.05)
+        return min(1.0, base_score + activity_bonus + uptime_bonus)
 
 
 # Import models here to avoid circular imports

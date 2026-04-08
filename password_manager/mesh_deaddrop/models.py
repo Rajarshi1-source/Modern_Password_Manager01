@@ -382,6 +382,11 @@ class MeshNode(models.Model):
     )
     successful_transfers = models.IntegerField(default=0)
     failed_transfers = models.IntegerField(default=0)
+    total_uptime_hours = models.FloatField(
+        default=0.0,
+        validators=[MinValueValidator(0.0)],
+        help_text="Cumulative hours this node has been online"
+    )
     
     # Timestamps
     registered_at = models.DateTimeField(auto_now_add=True)
@@ -423,12 +428,15 @@ class MeshNode(models.Model):
         self.save()
     
     def _update_trust_score(self):
-        """Recalculate trust score based on transfer history."""
+        """Recalculate trust score based on transfer history and uptime."""
         total = self.successful_transfers + self.failed_transfers
         if total > 0:
-            self.trust_score = self.successful_transfers / total
+            base_score = self.successful_transfers / total
         else:
-            self.trust_score = 0.5
+            base_score = 0.5
+        # Uptime bonus: up to 0.05 for nodes with 500+ cumulative hours
+        uptime_bonus = min(0.05, (self.total_uptime_hours / 500) * 0.05)
+        self.trust_score = min(1.0, base_score + uptime_bonus)
 
 
 # =============================================================================
