@@ -108,6 +108,24 @@ jobs:
           safety check -r requirements.txt || true
           bandit -r . -x tests,venv --severity-level medium || true
       
+      - name: Wait for Postgres and Redis
+        run: |
+          echo "Waiting for Postgres..."
+          for i in {1..30}; do
+            if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+              echo "Postgres is ready"; break
+            fi
+            sleep 1
+          done
+          echo "Waiting for Redis..."
+          for i in {1..30}; do
+            if redis-cli -h 127.0.0.1 ping >/dev/null 2>&1; then
+              echo "Redis is ready"; break
+            fi
+            sleep 1
+          done
+        shell: bash
+
       - name: Run migrations
         env:
           DEBUG: 'True'
@@ -115,9 +133,9 @@ jobs:
           DB_NAME: test_db
           DB_USER: test_user
           DB_PASSWORD: test_password
-          DB_HOST: localhost
+          DB_HOST: 127.0.0.1
           DB_PORT: '5432'
-          REDIS_URL: redis://localhost:6379/0
+          REDIS_URL: redis://127.0.0.1:6379/0
         run: |
           cd password_manager
           python manage.py migrate --noinput
@@ -129,10 +147,10 @@ jobs:
           DB_NAME: test_db
           DB_USER: test_user
           DB_PASSWORD: test_password
-          DB_HOST: localhost
+          DB_HOST: 127.0.0.1
           DB_PORT: '5432'
-          REDIS_URL: redis://localhost:6379/0
-          CELERY_BROKER_URL: redis://localhost:6379/1
+          REDIS_URL: redis://127.0.0.1:6379/0
+          CELERY_BROKER_URL: redis://127.0.0.1:6379/1
         run: |
           cd password_manager
           python manage.py test --verbosity=2 --parallel=1

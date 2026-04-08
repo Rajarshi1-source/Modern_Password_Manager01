@@ -57,7 +57,7 @@ jobs:
       - name: (Optional) Generate SBOM for python env (cyclonedx-py)
         run: |
           python -m pip install cyclonedx-bom
-          cyclonedx-py environment > sbom.python.cyclonedx.json || true
+          cyclonedx-py -r password_manager/requirements-prod.txt > sbom.python.cyclonedx.json || true
         continue-on-error: true
 
 
