@@ -55,10 +55,10 @@ jobs:
           POSTGRES_PASSWORD: test_password
           POSTGRES_DB: test_db
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U test_user"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
         ports:
           - 5432:5432
       
@@ -110,15 +110,22 @@ jobs:
       
       - name: Wait for Postgres and Redis
         run: |
+          echo "Export PG env vars and DATABASE_URL..."
+          export PGHOST=127.0.0.1
+          export PGPORT=5432
+          export PGUSER=test_user
+          export PGPASSWORD=test_password
+          export PGDATABASE=test_db
+          export DATABASE_URL="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
           echo "Waiting for Postgres..."
-          for i in {1..30}; do
-            if pg_isready -h 127.0.0.1 -p 5432 >/dev/null 2>&1; then
+          for i in {1..60}; do
+            if pg_isready -h "${PGHOST}" -p "${PGPORT}" -U "${PGUSER}" >/dev/null 2>&1; then
               echo "Postgres is ready"; break
             fi
             sleep 1
           done
           echo "Waiting for Redis..."
-          for i in {1..30}; do
+          for i in {1..60}; do
             if redis-cli -h 127.0.0.1 ping >/dev/null 2>&1; then
               echo "Redis is ready"; break
             fi
@@ -136,6 +143,12 @@ jobs:
           DB_HOST: 127.0.0.1
           DB_PORT: '5432'
           REDIS_URL: redis://127.0.0.1:6379/0
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: test_user
+          PGPASSWORD: test_password
+          PGDATABASE: test_db
+          DATABASE_URL: postgresql://test_user:test_password@127.0.0.1:5432/test_db
         run: |
           cd password_manager
           python manage.py migrate --noinput
@@ -151,6 +164,12 @@ jobs:
           DB_PORT: '5432'
           REDIS_URL: redis://127.0.0.1:6379/0
           CELERY_BROKER_URL: redis://127.0.0.1:6379/1
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: test_user
+          PGPASSWORD: test_password
+          PGDATABASE: test_db
+          DATABASE_URL: postgresql://test_user:test_password@127.0.0.1:5432/test_db
         run: |
           cd password_manager
           python manage.py test --verbosity=2 --parallel=1
