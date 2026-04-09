@@ -32,7 +32,7 @@ jobs:
       - name: Install tools
         run: |
           pip install --upgrade pip
-          pip install pip-audit "safety==2.3.5" "cyclonedx-bom==0.13.0"
+          pip install pip-audit "safety==2.3.5" "cyclonedx-bom>=1.4.3,<2"
 
       - name: Dependency install (prod)
         run: |

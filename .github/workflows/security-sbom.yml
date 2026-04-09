@@ -31,7 +31,7 @@ jobs:
       - name: Install SBOM tools
         run: |
           pip install --upgrade pip
-          pip install "cyclonedx-bom==0.13.0" pip-audit
+          pip install "cyclonedx-bom>=1.4.3,<2" pip-audit
 
       - name: Install CycloneDX CLI
         run: |
