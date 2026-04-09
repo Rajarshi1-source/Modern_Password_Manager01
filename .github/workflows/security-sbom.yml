@@ -39,9 +39,19 @@ jobs:
           chmod +x cyclonedx-cli
           sudo mv cyclonedx-cli /usr/local/bin/
 
+      - name: Check requirements file
+        run: |
+          ls -la password_manager || true
+          test -f password_manager/requirements.txt || (echo "requirements.txt not found" && exit 1)
+
+      - name: CycloneDX CLI version / help
+        run: |
+          cyclonedx-py --version || true
+          cyclonedx-py --help || true
+
       - name: Generate CycloneDX SBOM
         run: |
-          cyclonedx-py requirements -r password_manager/requirements.txt --format json -o sbom.json
+          cyclonedx-py -r password_manager/requirements.txt --format json -o sbom.json
 
       - name: Verify SBOM exists
         run: |

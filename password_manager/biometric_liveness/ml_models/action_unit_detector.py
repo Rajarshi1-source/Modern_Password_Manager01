@@ -67,7 +67,8 @@ class ActionUnitDetector:
             # Would load PyTorch/TensorFlow model here
             # For now, using MediaPipe as fallback
             import mediapipe as mp
-            self._face_mesh = mp.solutions.face_mesh.FaceMesh(
+            from mediapipe.python.solutions import face_mesh
+            self._face_mesh = face_mesh.FaceMesh(
                 static_image_mode=False,
                 max_num_faces=1,
                 refine_landmarks=True,

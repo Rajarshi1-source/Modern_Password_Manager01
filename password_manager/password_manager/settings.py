@@ -237,9 +237,13 @@ else:
 
 DATABASES = {
     'default': {
-        # Temporarily using SQLite for easier setup
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        # Temporarily using SQLite for easier setup, but use Postgres if DB_NAME is set (like in CI environment)
+        'ENGINE': 'django.db.backends.postgresql' if os.environ.get('DB_NAME') else 'django.db.backends.sqlite3',
+        'NAME': os.environ.get('DB_NAME') if os.environ.get('DB_NAME') else BASE_DIR / 'db.sqlite3',
+        'USER': os.environ.get('DB_USER', 'test_user'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'test_password'),
+        'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
     },
     'postgresql': {
         'ENGINE': 'django.db.backends.postgresql',

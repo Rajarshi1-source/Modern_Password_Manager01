@@ -144,7 +144,7 @@ class DistributeFragmentsFunctionalTest(TestCase):
                 device_name=f'MeshNode-{chr(65+i)}',
                 device_type='phone_android',
                 ble_address=f'AA:BB:CC:DD:EE:{i:02X}',
-                public_key=f'node_public_key_{i}',
+                public_key=(f'node_public_key_{i}').ljust(32, '0'),
                 is_online=True,
                 trust_score=0.8 + (i * 0.02),
                 max_fragments=10,
@@ -275,7 +275,7 @@ class CollectFragmentsFunctionalTest(TestCase):
                 device_name=f'CollectNode-{i}',
                 device_type='phone_android',
                 ble_address=f'CC:CC:CC:CC:CC:{i:02X}',
-                public_key=f'collect_key_{i}',
+                public_key=(f'collect_key_{i}').ljust(32, '0'),
                 is_online=True,
                 last_known_latitude=self.target_lat,
                 last_known_longitude=self.target_lon
@@ -418,7 +418,7 @@ class PartialCollectionFunctionalTest(TestCase):
                 device_name=f'PartialNode-{i}',
                 device_type='phone_android',
                 ble_address=f'DD:DD:DD:DD:DD:{i:02X}',
-                public_key=f'partial_key_{i}',
+                public_key=(f'partial_key_{i}').ljust(32, '0'),
                 is_online=(i < 3),  # Only first 3 are online
             )
             

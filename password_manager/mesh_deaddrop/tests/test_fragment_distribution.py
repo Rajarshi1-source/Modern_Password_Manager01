@@ -60,7 +60,7 @@ class FragmentDistributionServiceTests(TestCase):
                 device_name=f'Node-{i}',
                 device_type='phone',
                 ble_address=f'AA:BB:CC:DD:EE:{i:02X}',
-                public_key=f'public_key_{i}',
+                public_key=(f'public_key_{i}').ljust(32, '0'),
                 is_online=True,
                 trust_score=Decimal('0.8') + Decimal(str(i * 0.02)),
                 max_fragments=10,
@@ -89,7 +89,7 @@ class FragmentDistributionServiceTests(TestCase):
             device_name='Distant Node',
             device_type='phone',
             ble_address='FF:FF:FF:FF:FF:FF',
-            public_key='distant_key',
+            public_key='distant_key'.ljust(32, '0'),
             is_online=True,
             trust_score=Decimal('0.9'),
             last_known_latitude=Decimal('51.5074'),  # London
@@ -280,7 +280,7 @@ class FragmentDistributionServiceTests(TestCase):
             device_name='High Trust',
             device_type='phone',
             ble_address='HH:HH:HH:HH:HH:HH',
-            public_key='high_trust_key',
+            public_key='high_trust_key'.ljust(32, '0'),
             is_online=True,
             trust_score=Decimal('0.99'),
             last_known_latitude=Decimal('40.7128'),
@@ -291,7 +291,7 @@ class FragmentDistributionServiceTests(TestCase):
             device_name='Low Trust',
             device_type='phone',
             ble_address='LL:LL:LL:LL:LL:LL',
-            public_key='low_trust_key',
+            public_key='low_trust_key'.ljust(32, '0'),
             is_online=True,
             trust_score=Decimal('0.30'),
             last_known_latitude=Decimal('40.7128'),
@@ -325,7 +325,7 @@ class TrustScoreTests(TestCase):
             device_name='New Node',
             device_type='phone',
             ble_address='AA:BB:CC:DD:EE:FF',
-            public_key='key'
+            public_key='key'.ljust(32, '0')
         )
         
         score = self.service.calculate_trust_score(node)
@@ -340,7 +340,7 @@ class TrustScoreTests(TestCase):
             device_name='Active Node',
             device_type='phone',
             ble_address='AA:BB:CC:DD:EE:FF',
-            public_key='key',
+            public_key='key'.ljust(32, '0'),
             successful_transfers=100,
             failed_transfers=5,
             total_uptime_hours=500,
@@ -356,7 +356,7 @@ class TrustScoreTests(TestCase):
             device_name='Unreliable Node',
             device_type='phone',
             ble_address='AA:BB:CC:DD:EE:FF',
-            public_key='key',
+            public_key='key'.ljust(32, '0'),
             successful_transfers=10,
             failed_transfers=50  # High failure rate
         )
