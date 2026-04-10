@@ -19,7 +19,6 @@ services:
       POSTGRES_DB: ${DB_NAME:-password_manager}
       POSTGRES_USER: ${DB_USER:-pm_user}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
-      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
@@ -42,7 +41,8 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s

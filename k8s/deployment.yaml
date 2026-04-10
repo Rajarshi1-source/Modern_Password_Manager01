@@ -256,7 +256,7 @@ spec:
       serviceAccountName: password-manager-sa
       initContainers:
       - name: migrate
-        image: ghcr.io/yourusername/password-manager/backend:1.2.3
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
         command: ["python", "manage.py", "migrate", "--noinput"]
         envFrom:
         - configMapRef:
@@ -273,7 +273,7 @@ spec:
             drop:
             - ALL
       - name: collectstatic
-        image: ghcr.io/yourusername/password-manager/backend:1.2.3
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
         command:
         - python
         - manage.py
@@ -298,7 +298,7 @@ spec:
           capabilities: *id001
       containers:
       - name: backend
-        image: ghcr.io/yourusername/password-manager/backend:1.2.3
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
         imagePullPolicy: Always
         command:
         - daphne
@@ -430,7 +430,7 @@ spec:
       serviceAccountName: password-manager-sa
       containers:
       - name: websocket
-        image: ghcr.io/yourusername/password-manager/backend:1.2.3
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
         imagePullPolicy: Always
         command:
         - daphne
@@ -539,9 +539,16 @@ spec:
         component: celery-worker
     spec:
       serviceAccountName: password-manager-sa
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
       - name: celery-worker
-        image: ghcr.io/yourusername/password-manager/backend:1.2.3
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
         imagePullPolicy: Always
         command:
         - celery
@@ -582,10 +589,6 @@ spec:
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
-
-# =============================================================================
-# Celery Beat (Scheduler)
-# =============================================================================
           runAsGroup: 1000
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
@@ -597,18 +600,17 @@ spec:
           mountPath: /tmp
         - name: app-logs
           mountPath: /app/logs
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
       volumes:
       - name: tmp
         emptyDir: {}
       - name: app-logs
         emptyDir: {}
+
+# =============================================================================
+# Celery Beat (Scheduler)
+# =============================================================================
+
+
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -633,9 +635,16 @@ spec:
         component: celery-beat
     spec:
       serviceAccountName: password-manager-sa
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
       - name: celery-beat
-        image: ghcr.io/yourusername/password-manager/backend:1.2.3
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
         imagePullPolicy: Always
         command:
         - celery
@@ -665,10 +674,6 @@ spec:
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
-
-# =============================================================================
-# Frontend (React)
-# =============================================================================
           runAsGroup: 1000
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
@@ -680,18 +685,8 @@ spec:
           mountPath: /tmp
         - name: app-logs
           mountPath: /app/logs
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-      volumes:
-      - name: tmp
-        emptyDir: {}
-      - name: app-logs
-        emptyDir: {}
+
+
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -713,9 +708,17 @@ spec:
         app: password-manager
         component: frontend
     spec:
+      serviceAccountName: password-manager-sa
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
       - name: frontend
-        image: ghcr.io/yourusername/password-manager/frontend:1.2.3
+        image: ghcr.io/yourusername/password-manager/frontend:${GITHUB_SHA}
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -765,14 +768,7 @@ spec:
       - name: tmp
         emptyDir: {}
 
-      securityContext:
-        seccompProfile:
-          type: RuntimeDefault
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-      serviceAccountName: password-manager-sa
+
 ---
 apiVersion: v1
 kind: Service

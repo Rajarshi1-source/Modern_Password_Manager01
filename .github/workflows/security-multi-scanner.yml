@@ -21,6 +21,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   # ===========================================================================
@@ -88,7 +89,8 @@ jobs:
       - name: Install scanning tools
         run: |
           python -m pip install --upgrade pip
-          pip install "safety==2.3.5" pip-audit
+          # Install safety and pip-audit WITHOUT old cyclonedx-bom
+          pip install "safety==2.3.5" "pip-audit>=2.6.0"
       
       # FIX #4: Fail on vulnerabilities (no continue-on-error)
       - name: Run Safety check
@@ -239,18 +241,24 @@ jobs:
           path: scan-results
           pattern: 'dependency-scan-results' # Only downloading available artifacts
       
-      # FIX #1: Safe report generation (no user input interpolation)
+      # FIX #1: Safe report generation (no user input interpolation via sed)
       - name: Generate Consolidated Report
         env:
           COMMIT_SHA: ${{ github.sha }}
           ACTOR: ${{ github.actor }}
         run: |
-          cat > security-report.md << 'REPORT_EOF'
-          # Multi-Scanner Security Report
+          python3 -c "
+          import os
+          import datetime
+          sha = os.environ['COMMIT_SHA']
+          actor = os.environ['ACTOR']
+          date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
           
-          **Generated:** $(date -u)
-          **Commit:** $COMMIT_SHA
-          **Triggered by:** $ACTOR
+          report = f'''# Multi-Scanner Security Report
+          
+          **Generated:** {date}
+          **Commit:** {sha}
+          **Triggered by:** {actor}
           
           ## Scanners Used
           1. **Gitleaks** - Secret detection in git history
@@ -262,12 +270,11 @@ jobs:
           ## Scope
           - Codebase scan (Filesystem)
           
-          View detailed findings in GitHub Security tab.
-          REPORT_EOF
+          View detailed findings in GitHub Security tab.'''
           
-          # Substitute environment variables safely
-          sed -i "s/\$COMMIT_SHA/$COMMIT_SHA/" security-report.md
-          sed -i "s/\$ACTOR/$ACTOR/" security-report.md
+          with open('security-report.md', 'w') as f:
+              f.write(report)
+          "
       
       # FIX #2: Pinned to commit hash
       - name: Upload Consolidated Report

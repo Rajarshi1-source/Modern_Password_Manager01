@@ -25,7 +25,8 @@ RUN pip install --upgrade pip && \
 
 # Install ML dependencies (optional, comment out if not using ML features)
 COPY ml_dark_web/requirements_ml_darkweb.txt /app/ml_dark_web/
-RUN pip install --no-cache-dir -r ml_dark_web/requirements_ml_darkweb.txt || true
+RUN pip install --no-cache-dir -r ml_dark_web/requirements_ml_darkweb.txt \
+    || echo "WARNING: ML dependencies not installed, ML features disabled"
 
 # Install spaCy model (optional)
 RUN python -m spacy download en_core_web_sm --no-deps || true

@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Build and install liboqs (Open Quantum Safe library)
 WORKDIR /tmp
-RUN git clone --depth 1 --branch main https://github.com/open-quantum-safe/liboqs.git && \
+RUN git clone --depth 1 --branch 0.11.0 https://github.com/open-quantum-safe/liboqs.git && \
     mkdir -p liboqs/build
 WORKDIR /tmp/liboqs/build
 RUN cmake -GNinja .. \
