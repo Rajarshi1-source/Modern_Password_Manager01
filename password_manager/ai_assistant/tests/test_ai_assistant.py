@@ -383,6 +383,9 @@ class QueryAnalyzerServiceTests(TestCase):
     """Tests for QueryAnalyzerService with vault data."""
     
     def setUp(self):
+        from django.core.cache import cache
+        cache.clear()
+        
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',

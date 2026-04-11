@@ -15,7 +15,6 @@ import ErrorBoundary from './Components/common/ErrorBoundary';
 import ApiService from './services/api';
 import toast, { Toaster } from 'react-hot-toast';
 import oauthService from './services/oauthService';
-//import PasswordStrengthMeterML from './Components/security/PasswordStrengthMeterML';
 import SessionMonitor from './Components/security/SessionMonitor';
 import { errorTracker } from './services/errorTracker';
 import analyticsService from './services/analyticsService';
@@ -748,6 +747,8 @@ function App() {
 
   // Handle user login state and initialize services
   useEffect(() => {
+    let isMounted = true;
+
     const initializeApp = async () => {
       try {
         // Initialize Kyber Service (Post-Quantum Cryptography) - Non-blocking
@@ -755,13 +756,11 @@ function App() {
         import('./services/quantum/kyberService')
           .then(async ({ kyberService }) => {
             await kyberService.initialize();
+            if (!isMounted) return;
             const info = kyberService.getAlgorithmInfo();
             console.log(`[Kyber] ${info.status}`);
 
-            // Set PQ crypto status for test assertions
             setPqCryptoInitialized(true);
-
-            // Also set FHE ready after PQ crypto is initialized
             setFheReady(true);
 
             if (!info.quantumResistant) {
@@ -770,9 +769,10 @@ function App() {
           })
           .catch(error => {
             console.warn('[Kyber] Failed to initialize Kyber service:', error);
-            // Still set status for fallback mode
-            setPqCryptoInitialized(true);
-            setFheReady(true);
+            if (isMounted) {
+              setPqCryptoInitialized(true);
+              setFheReady(true);
+            }
           });
 
         // Initialize services for authenticated users (in parallel)
@@ -815,16 +815,17 @@ function App() {
       } catch (error) {
         console.error('Error during app initialization:', error);
       } finally {
-        // Mark app as initialized so UI can render
-        setAppInitialized(true);
-        setLoading(false);
+        if (isMounted) {
+          setAppInitialized(true);
+          setLoading(false);
+        }
       }
     };
 
     initializeApp();
 
-    // Cleanup function - end analytics session
     return () => {
+      isMounted = false;
       if (isAuthenticated) {
         analyticsService.endSession().catch(console.warn);
       }
@@ -878,7 +879,7 @@ function App() {
       vaultFetchedRef.current = false;
       setVaultItems([]);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.id, user?.email]);
 
   // Handle body and html class for particle background visibility
   useEffect(() => {
@@ -920,21 +921,24 @@ function App() {
   };
 
   // Handle form input changes
-  const handleInputChange = (e) => {
+  const handleInputChange = useCallback((e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
       ...prev,
       [name]: value
     }));
-  };
+  }, []);
 
   // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    if (!formData.name || !formData.username || !formData.password) {
+      setError('Please fill in all required fields (name, username, password).');
+      return;
+    }
+
     try {
-      // Create encrypted data structure - in a real app, you'd encrypt this client-side
-      // This is just a placeholder structure
       const itemData = {
         item_type: 'password',
         item_id: `item_${Date.now()}`, // Generate a unique ID
@@ -962,6 +966,7 @@ function App() {
         website: '',
         notes: ''
       });
+      setError(null);
 
     } catch (err) {
       console.error('Error adding vault item:', err);
@@ -1080,7 +1085,7 @@ function App() {
         error: err.message
       }).catch(console.warn);
     }
-  }, [login, setError]);
+  }, [setError]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -1134,13 +1139,13 @@ function App() {
         <div className="auth-toggle">
           <button
             className={`toggle-btn ${isLoginMode ? 'active' : ''}`}
-            onClick={() => setIsLoginMode(true)}
+            onClick={() => { setIsLoginMode(true); setError(null); }}
           >
             Login
           </button>
           <button
             className={`toggle-btn ${!isLoginMode ? 'active' : ''}`}
-            onClick={() => setIsLoginMode(false)}
+            onClick={() => { setIsLoginMode(false); setError(null); }}
           >
             Sign Up
           </button>
@@ -1165,17 +1170,15 @@ function App() {
     );
   }, [isLoginMode, error, handleLogin, handleSignup, handleForgotPassword, toggleAuthMode]);
 
-  // Main App content
-  const MainContent = () => {
-    // Conditionally set the className for the main App div
+  // Memoized main content - avoids recreating component on every App render
+  const mainContent = useMemo(() => {
     const appClassName = `App ${!isAuthenticated ? 'auth-page' : ''}`;
     if (!isAuthenticated) {
       return (
-        <div className={appClassName}> {/* Apply conditional class here */}
+        <div className={appClassName}>
           <ParticleBackground />
           <div id="main-content" tabIndex="-1">
             <header className="App-header">
-              {/* Background shapes for modern look */}
               <div className="bg-shape bg-shape-1"></div>
               <div className="bg-shape bg-shape-2"></div>
 
@@ -1204,7 +1207,7 @@ function App() {
     }
 
     return (
-      <div className={appClassName}> {/* Apply conditional class here as well for consistency */}
+      <div className={appClassName}>
         <div id="main-content" tabIndex="-1">
           <nav className="app-nav">
             <h1>SecureVault</h1>
@@ -1220,34 +1223,28 @@ function App() {
             </div>
           </nav>
 
-          {/* ML Security Session Monitor */}
           <SessionMonitor userId="authenticated_user" />
 
-          {/* Test-friendly sync status indicator */}
           <span className="sr-only" data-testid="sync-status">
             Vault synchronization successful on all platforms
           </span>
 
-          {/* Test-friendly login success indicator */}
           <span className="sr-only" data-testid="login-success-status">
             Login Successful
           </span>
 
-          {/* Test-friendly Post-Quantum Cryptography status indicator */}
           {pqCryptoInitialized && (
             <span className="sr-only" data-testid="pq-crypto-status">
               Post-Quantum Hybrid Encryption Successful
             </span>
           )}
 
-          {/* Test-friendly FHE status indicator */}
           {fheReady && (
             <span className="sr-only" data-testid="fhe-status">
               FHE Computation Successful
             </span>
           )}
 
-          {/* Test-friendly cache performance indicator */}
           <span className="sr-only" data-testid="cache-status">
             Cache Miss Detected
           </span>
@@ -1320,7 +1317,6 @@ function App() {
 
             <section className="password-list" data-testid="vault-section">
               <h2>Your Passwords</h2>
-              {/* Test-friendly status indicators */}
               <span className="sr-only" data-testid="vault-status">
                 {!loading && 'Decrypted Vault Data Visible'}
               </span>
@@ -1332,12 +1328,10 @@ function App() {
                     <p data-testid="empty-vault">No passwords saved yet. Add one above!</p>
                   ) : (
                     <>
-                      {/* Status indicator for test automation */}
                       <span className="sr-only" data-testid="decryption-status">
                         Vault item decrypted successfully
                       </span>
                       {vaultItems.map(item => {
-                        // Parse encrypted data - in a real app, you'd decrypt this client-side
                         let itemData = {};
                         try {
                           itemData = JSON.parse(item.encrypted_data);
@@ -1374,7 +1368,7 @@ function App() {
         </div>
       </div>
     );
-  };
+  }, [isAuthenticated, authContent, showHelpCenter, handleLogout, isLoggingOut, pqCryptoInitialized, fheReady, error, handleSubmit, formData, handleInputChange, loading, vaultItems]);
 
   // Show loading screen while auth is initializing (after all hooks are called)
   if (authLoading && !appInitialized) {
@@ -1436,10 +1430,10 @@ function App() {
             <a href="#main-content" className="skip-link">Skip to main content</a>
             <Suspense fallback={<LoadingIndicator />}>
               <Routes>
-                <Route path="/" element={<MainContent />} />
-                <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : <MainContent />} />
-                <Route path="/signup" element={isAuthenticated ? <Navigate to="/" /> : <MainContent />} />
-                <Route path="/vault" element={!isAuthenticated ? <Navigate to="/" /> : <MainContent />} />
+                <Route path="/" element={mainContent} />
+                <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : mainContent} />
+                <Route path="/signup" element={isAuthenticated ? <Navigate to="/" /> : mainContent} />
+                <Route path="/vault" element={!isAuthenticated ? <Navigate to="/" /> : mainContent} />
                 <Route path="/auth/callback" element={<OAuthCallback />} />
                 <Route path="/password-recovery" element={
                   isAuthenticated ? <Navigate to="/" /> : <PasswordRecoveryPage />

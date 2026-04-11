@@ -58,14 +58,15 @@ export default defineConfig({
       'lodash',
       'framer-motion',
       'long',
-      '@tensorflow/tfjs-core',
-      '@tensorflow/tfjs',
-      'pqc-kyber',
       'crystals-kyber-js',
       'mlkem',
-      'argon2-browser',
     ],
     exclude: [
+      // WASM-heavy packages: let Vite serve them as native ESM so .wasm
+      // files are fetched separately rather than inlined by esbuild (which
+      // cannot handle WASM imports during dep pre-bundling).
+      'pqc-kyber',
+      'argon2-browser',
       '@tensorflow/tfjs',
       '@tensorflow/tfjs-backend-webgl',
       '@tensorflow-models/universal-sentence-encoder',
@@ -83,7 +84,10 @@ export default defineConfig({
   build: {
     target: 'es2020',
     outDir: 'dist',
-    sourcemap: false,
+    // 'hidden' generates source maps without adding the //# sourceMappingURL
+    // comment to the bundles — users never see (or download) the maps, but
+    // they can be uploaded to Sentry / error-tracking for readable stack traces.
+    sourcemap: 'hidden',
     chunkSizeWarningLimit: 1500,
 
     // these two options MUST live inside `build`, not at the root level

@@ -130,12 +130,17 @@ def register_face(request):
         result = _get_biometric_auth().register_face(str(user.id), face_image)
         
         if result['success']:
-            # Create BiometricProfile
+            import hashlib as _hashlib
+            embedding_data = json.dumps(result.get('embedding', []))
+            embedding_hash = _hashlib.sha256(
+                embedding_data.encode()
+            ).hexdigest()
+
             profile = BiometricProfile.objects.create(
                 user=user,
                 biometric_type='face',
-                embedding_data=json.dumps(result.get('embedding', [])),
-                embedding_hash='',  # Will be set by signal
+                embedding_data=embedding_data,
+                embedding_hash=embedding_hash,
                 device_id=device_id,
                 is_active=True,
                 liveness_score=result.get('liveness_score'),
@@ -212,12 +217,17 @@ def register_voice(request):
         result = _get_biometric_auth().register_voice(str(user.id), voice_features)
         
         if result['success']:
-            # Create BiometricProfile
+            import hashlib as _hashlib
+            embedding_data = json.dumps(result.get('embedding', []))
+            embedding_hash = _hashlib.sha256(
+                embedding_data.encode()
+            ).hexdigest()
+
             profile = BiometricProfile.objects.create(
                 user=user,
                 biometric_type='voice',
-                embedding_data=json.dumps(result.get('embedding', [])),
-                embedding_hash='',  # Will be set by signal
+                embedding_data=embedding_data,
+                embedding_hash=embedding_hash,
                 device_id=device_id,
                 is_active=True,
                 requires_liveness=False

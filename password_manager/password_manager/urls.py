@@ -117,9 +117,6 @@ urlpatterns = [
     # FHE Homomorphic Password Sharing API routes
     path('api/fhe-sharing/', include('fhe_sharing.urls')),
     
-    # Adversarial AI Password Defense API routes
-    path('api/adversarial/', include('adversarial_ai.urls')),
-    
     # Mesh Dead Drop Password Sharing API routes
     path('api/mesh/', include('mesh_deaddrop.urls')),
     
@@ -135,12 +132,22 @@ urlpatterns = [
     # Password Archaeology & Time Travel API routes
     path('api/archaeology/', include('password_archaeology.urls')),
     
-    # AI-Powered Security Assistant API routes
-    path('api/ai-assistant/', include('ai_assistant.urls')),
-    
     # Smart Contract Automation API routes
     path('api/smart-contracts/', include('smart_contracts.urls')),
 ]
+
+# Feature-flagged modules: conditionally include URL patterns to avoid
+# importing heavy ML dependencies when the feature is disabled.  When
+# disabled, requests to these prefixes return 404 instead of 500.
+if getattr(settings, 'ADVERSARIAL_AI_ENABLED', False):
+    urlpatterns += [
+        path('api/adversarial/', include('adversarial_ai.urls')),
+    ]
+
+if getattr(settings, 'AI_ASSISTANT_ENABLED', False):
+    urlpatterns += [
+        path('api/ai-assistant/', include('ai_assistant.urls')),
+    ]
 
 # Add static file serving for development
 if settings.DEBUG:

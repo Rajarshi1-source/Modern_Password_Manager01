@@ -44,7 +44,7 @@ services:
       - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
     command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD:-redis123}\" ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -52,16 +52,39 @@ services:
       - password_manager_network
     restart: unless-stopped
 
+  # One-time init: run migrations and collectstatic before backend starts
+  backend-init:
+    build:
+      context: ./password_manager
+      dockerfile: Dockerfile
+    container_name: password_manager_backend_init
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput"
+    volumes:
+      - ./password_manager:/app
+      - static_volume:/app/staticfiles
+    environment:
+      - DEBUG=${DEBUG:-True}
+      - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
+      - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - password_manager_network
+    restart: "no"
+
   # Django Backend (HTTP Server)
   backend:
     build:
       context: ./password_manager
       dockerfile: Dockerfile
     container_name: password_manager_backend
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             daphne -b 0.0.0.0 -p 8000 password_manager.asgi:application"
+    command: daphne -b 0.0.0.0 -p 8000 password_manager.asgi:application
     volumes:
       - ./password_manager:/app
       - static_volume:/app/staticfiles
@@ -69,7 +92,6 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
-      # Set DEBUG=True for development (disables HTTPS redirect, enables lenient rate limiting)
       - DEBUG=${DEBUG:-True}
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
@@ -78,6 +100,11 @@ services:
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # Dev-prod parity: set these to 'true' to test Redis-backed channels
+      # and caching locally (matches production behaviour). When unset,
+      # Django falls back to InMemoryChannelLayer and locmem cache.
+      - USE_REDIS_CHANNELS=${USE_REDIS_CHANNELS:-false}
+      - USE_REDIS_CACHE=${USE_REDIS_CACHE:-false}
       # OpenID Connect (OIDC) Configuration
       - OIDC_RP_CLIENT_ID=${OIDC_RP_CLIENT_ID:-}
       - OIDC_RP_CLIENT_SECRET=${OIDC_RP_CLIENT_SECRET:-}
@@ -89,6 +116,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
     networks:
       - password_manager_network
     restart: unless-stopped
@@ -114,6 +143,8 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      - USE_REDIS_CHANNELS=${USE_REDIS_CHANNELS:-false}
+      - USE_REDIS_CACHE=${USE_REDIS_CACHE:-false}
       # OpenID Connect (OIDC) Configuration
       - OIDC_RP_CLIENT_ID=${OIDC_RP_CLIENT_ID:-}
       - OIDC_RP_CLIENT_SECRET=${OIDC_RP_CLIENT_SECRET:-}
@@ -142,6 +173,7 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - USE_REDIS_CACHE=${USE_REDIS_CACHE:-false}
     depends_on:
       - postgres
       - redis
@@ -165,6 +197,7 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - USE_REDIS_CACHE=${USE_REDIS_CACHE:-false}
     depends_on:
       - postgres
       - redis

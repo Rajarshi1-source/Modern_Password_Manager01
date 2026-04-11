@@ -569,9 +569,17 @@ SIMPLE_JWT = {
     'REFRESH_TOKEN_FAMILY_MAX_SIZE': 5,              # Limit concurrent devices to 5
     
     # Algorithm settings
-    'ALGORITHM': 'HS256',
-    'SIGNING_KEY': SECRET_KEY,
-    'VERIFYING_KEY': None,
+    # To upgrade to RS256 (recommended for multi-service architectures):
+    #   1. Generate an RSA keypair:
+    #      openssl genrsa -out jwt-private.pem 4096
+    #      openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem
+    #   2. Set env vars JWT_ALGORITHM=RS256, JWT_PRIVATE_KEY=<contents of jwt-private.pem>,
+    #      JWT_PUBLIC_KEY=<contents of jwt-public.pem>
+    #   3. Only the auth service needs the private key; all other services
+    #      verify tokens with the public key alone, eliminating shared-secret risk.
+    'ALGORITHM': os.environ.get('JWT_ALGORITHM', 'HS256'),
+    'SIGNING_KEY': os.environ.get('JWT_PRIVATE_KEY', SECRET_KEY),
+    'VERIFYING_KEY': os.environ.get('JWT_PUBLIC_KEY', None),
     
     # Audience and issuer claims for added security
     'AUDIENCE': None,
@@ -616,9 +624,15 @@ ADVERSARIAL_AI_ENABLED = os.environ.get('ADVERSARIAL_AI_ENABLED', 'True').lower(
 # PKCE Configuration (OAuth2 Proof Key for Code Exchange)
 # =============================================================================
 # Required for public clients (mobile apps, browser extensions) that cannot
-# securely store a client_secret. Enable when mobile/extension clients are built.
+# securely store a client_secret.
+# ACTION REQUIRED: Flip to 'True' (or set env var OAUTH_PKCE_REQUIRED=true)
+# before shipping mobile or browser-extension clients.  Without PKCE,
+# authorization-code flows for public clients are vulnerable to code
+# interception attacks.  See RFC 7636 for details.
 OAUTH_PKCE_REQUIRED = os.environ.get('OAUTH_PKCE_REQUIRED', 'False').lower() in ('true', '1', 'yes')
-OAUTH_PKCE_CODE_CHALLENGE_METHOD = 'S256'  # SHA-256 challenge (recommended)
+OAUTH_PKCE_CODE_CHALLENGE_METHOD = 'S256'
+OAUTH_PKCE_CODE_VERIFIER_MIN_LENGTH = 43
+OAUTH_PKCE_CODE_VERIFIER_MAX_LENGTH = 128
 
 # GeoIP Database Configuration
 # Download GeoLite2-City.mmdb and GeoLite2-Country.mmdb from MaxMind
@@ -1077,6 +1091,26 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# Queue separation: CPU-heavy ML/blockchain tasks run on dedicated queues
+# so they don't starve lightweight default tasks (audit logs, emails, etc.).
+# Workers are started per queue:
+#   celery -A password_manager worker -Q default -c 4
+#   celery -A password_manager worker -Q ml -c 2
+#   celery -A password_manager worker -Q blockchain -c 1
+CELERY_TASK_ROUTES = {
+    # ML inference tasks → dedicated ml queue
+    'ml_security.tasks.*': {'queue': 'ml'},
+    'ml_dark_web.tasks.*': {'queue': 'ml'},
+    'adversarial_ai.tasks.*': {'queue': 'ml'},
+    'ai_assistant.tasks.*': {'queue': 'ml'},
+    'biometric_liveness.tasks.*': {'queue': 'ml'},
+    'cognitive_auth.tasks.*': {'queue': 'ml'},
+    # Blockchain tasks → single-concurrency queue
+    'blockchain.tasks.*': {'queue': 'blockchain'},
+    'smart_contracts.tasks.*': {'queue': 'blockchain'},
+}
+CELERY_TASK_DEFAULT_QUEUE = 'default'
 
 # NOTE: Celery Beat Schedule is defined in celery.py — do NOT import celery here.
 # Settings should not import application code (breaks clean installs).

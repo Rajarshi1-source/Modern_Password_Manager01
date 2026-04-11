@@ -324,7 +324,7 @@ class QueryAnalyzerService:
         
         # Item type breakdown
         type_counts = dict(
-            items.values_list('item_type').annotate(count=Count('id')).values_list('item_type', 'count')
+            items.values('item_type').annotate(count=Count('id')).values_list('item_type', 'count')
         )
         
         # Activity metrics

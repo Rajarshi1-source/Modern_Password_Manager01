@@ -21,6 +21,7 @@ data:
   # Redis
   REDIS_HOST: "redis-service"
   USE_REDIS_CHANNELS: "true"
+  USE_REDIS_CACHE: "true"
   
   # Celery
   CELERY_BROKER_URL: "redis://redis-service:6379/1"

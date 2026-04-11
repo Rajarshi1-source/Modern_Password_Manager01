@@ -33,7 +33,6 @@ const CosmicRayEntropyDashboard = () => {
     const [includeSymbols, setIncludeSymbols] = useState(true);
 
     // Animation state
-    const [particles, setParticles] = useState([]);
     const canvasRef = useRef(null);
     const animationRef = useRef(null);
 
@@ -74,6 +73,8 @@ const CosmicRayEntropyDashboard = () => {
         if (!canvas) return;
 
         const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
         const width = canvas.width = canvas.offsetWidth;
         const height = canvas.height = canvas.offsetHeight;
 
@@ -145,25 +146,30 @@ const CosmicRayEntropyDashboard = () => {
         return () => {
             if (animationRef.current) {
                 cancelAnimationFrame(animationRef.current);
+                animationRef.current = null;
             }
         };
     }, []);
 
     // Generate password
     const handleGeneratePassword = async () => {
+        if (!includeUppercase && !includeLowercase && !includeDigits && !includeSymbols) {
+            setError('Please select at least one character type');
+            return;
+        }
+
         try {
             setIsGenerating(true);
             setError(null);
 
-            // Add burst of particles during generation
             const canvas = canvasRef.current;
             if (canvas) {
                 const ctx = canvas.getContext('2d');
-                const width = canvas.width;
-
-                // Flash effect
-                ctx.fillStyle = 'rgba(100, 200, 255, 0.2)';
-                ctx.fillRect(0, 0, width, canvas.height);
+                if (ctx) {
+                    const width = canvas.width;
+                    ctx.fillStyle = 'rgba(100, 200, 255, 0.2)';
+                    ctx.fillRect(0, 0, width, canvas.height);
+                }
             }
 
             const result = await cosmicRayService.generateCosmicPassword({
@@ -199,6 +205,7 @@ const CosmicRayEntropyDashboard = () => {
             setTimeout(() => setCopied(false), 2000);
         } catch (err) {
             console.error('Failed to copy:', err);
+            setError('Failed to copy password to clipboard. Please copy it manually.');
         }
     };
 
@@ -271,6 +278,7 @@ const CosmicRayEntropyDashboard = () => {
                         className="refresh-btn"
                         onClick={loadData}
                         title="Refresh status"
+                        aria-label="Refresh detector status"
                     >
                         🔄
                     </button>
@@ -430,6 +438,7 @@ const CosmicRayEntropyDashboard = () => {
                             <button
                                 className={`toggle-btn ${continuousEnabled ? 'enabled' : ''}`}
                                 onClick={handleToggleContinuous}
+                                aria-label={`Toggle continuous collection ${continuousEnabled ? 'off' : 'on'}`}
                             >
                                 {continuousEnabled ? '🟢 ON' : '⚫ OFF'}
                             </button>
@@ -466,7 +475,7 @@ const CosmicRayEntropyDashboard = () => {
                         {events.length > 0 ? (
                             events.slice(0, 5).map((event, index) => (
                                 <motion.div
-                                    key={index}
+                                    key={event.id || event.timestamp || index}
                                     className="event-item"
                                     initial={{ opacity: 0, x: -10 }}
                                     animate={{ opacity: 1, x: 0 }}

@@ -69,4 +69,4 @@ htmlcov/
 # Misc
 *.bak
 *.tmp
-
+.cursor/

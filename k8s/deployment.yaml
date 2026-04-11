@@ -685,6 +685,11 @@ spec:
           mountPath: /tmp
         - name: app-logs
           mountPath: /app/logs
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: app-logs
+        emptyDir: {}
 
 
 ---
@@ -721,7 +726,7 @@ spec:
         image: ghcr.io/yourusername/password-manager/frontend:${GITHUB_SHA}
         imagePullPolicy: Always
         ports:
-        - containerPort: 8080
+        - containerPort: 80
         env:
         - name: VITE_API_BASE_URL
           value: "https://api.yourapp.com"
@@ -744,13 +749,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 80
           initialDelaySeconds: 10
           periodSeconds: 30
         readinessProbe:
           httpGet:
             path: /health
-            port: 8080
+            port: 80
           initialDelaySeconds: 5
           periodSeconds: 10
         securityContext:
@@ -784,7 +789,7 @@ spec:
     component: frontend
   ports:
   - port: 80
-    targetPort: 8080
+    targetPort: 80
   type: ClusterIP
 
 # =============================================================================

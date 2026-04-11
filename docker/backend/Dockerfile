@@ -144,15 +144,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd --gid 1000 ${APP_GROUP} && \
     useradd --uid 1000 --gid ${APP_GROUP} --shell /bin/bash --create-home ${APP_USER}
 
-# Copy liboqs libraries from crypto-builder
-COPY --from=crypto-builder /usr/local/lib/liboqs* /usr/local/lib/
+# Copy liboqs shared libraries and headers from crypto-builder
+COPY --from=crypto-builder /usr/local/lib/liboqs.so* /usr/local/lib/
 COPY --from=crypto-builder /usr/local/include/oqs /usr/local/include/oqs
-
-# Update library cache
-RUN ldconfig
 
 # Copy virtual environment from deps-builder
 COPY --from=deps-builder /opt/venv /opt/venv
+
+# Update library cache after all native libs and venv are in place
+RUN ldconfig
 
 # Set working directory
 WORKDIR ${APP_HOME}

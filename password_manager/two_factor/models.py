@@ -140,6 +140,9 @@ class TOTPDevice(models.Model):
         Returns:
             bool: True if the token is valid.
         """
+        if not self.confirmed:
+            return False
+        
         if tolerance is None:
             tolerance = self.tolerance
         
@@ -156,10 +159,10 @@ class TOTPDevice(models.Model):
             if t <= self.last_t:
                 continue
             if self._generate_otp(t) == token_int:
-                # Update last used counter and timestamp
                 self.last_t = t
                 self.last_used_at = timezone.now()
-                self.save(update_fields=['last_t', 'last_used_at'])
+                if self.pk:
+                    self.save(update_fields=['last_t', 'last_used_at'])
                 return True
         
         return False

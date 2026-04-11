@@ -11,7 +11,9 @@ Handles:
 from celery import shared_task
 from django.utils import timezone
 from datetime import timedelta
+import hashlib
 import random
+import time as _time
 import logging
 
 from .quantum_recovery_models import (
@@ -123,7 +125,10 @@ def send_temporal_challenge(challenge_id):
             event_data={
                 'challenge_id': str(challenge_id),
                 'challenge_type': challenge.challenge_type
-            }
+            },
+            cryptographic_hash=hashlib.sha256(
+                f"{user.id}:{_time.time()}".encode()
+            ).hexdigest(),
         )
         
         logger.info(f"Sent temporal challenge {challenge_id} to {user.email}")
@@ -238,7 +243,10 @@ def send_guardian_approval_request(approval_id):
             event_data={
                 'guardian_id': str(guardian.id),
                 'approval_id': str(approval_id)
-            }
+            },
+            cryptographic_hash=hashlib.sha256(
+                f"{user.id}:{_time.time()}".encode()
+            ).hexdigest(),
         )
         
         logger.info(f"Sent guardian approval request {approval_id}")
@@ -304,7 +312,10 @@ def send_canary_alert(attempt_id):
             event_data={
                 'attempt_id': str(attempt_id),
                 'sent_at': timezone.now().isoformat()
-            }
+            },
+            cryptographic_hash=hashlib.sha256(
+                f"{user.id}:{_time.time()}".encode()
+            ).hexdigest(),
         )
         
         logger.info(f"Sent canary alert for attempt {attempt_id}")
@@ -337,7 +348,10 @@ def check_expired_recovery_attempts():
                 recovery_attempt_id=attempt.id,
                 event_data={
                     'reason': 'expired'
-                }
+                },
+                cryptographic_hash=hashlib.sha256(
+                    f"{attempt.recovery_setup.user.id}:{_time.time()}".encode()
+                ).hexdigest(),
             )
         
         logger.info(f"Expired {expired_attempts.count()} recovery attempts")
