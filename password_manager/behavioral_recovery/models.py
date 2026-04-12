@@ -201,6 +201,9 @@ class BehavioralRecoveryAttempt(models.Model):
     # Contact info (for email-based recovery initiation)
     contact_email = models.EmailField(blank=True)
     
+    # A/B test variants and recovery configuration
+    metadata = models.JSONField(default=dict, blank=True)
+    
     class Meta:
         ordering = ['-started_at']
         indexes = [

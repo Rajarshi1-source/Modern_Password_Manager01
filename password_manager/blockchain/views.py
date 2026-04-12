@@ -65,7 +65,7 @@ def verify_commitment(request, commitment_id):
             # Check if it's pending
             pending = PendingCommitment.objects.filter(
                 commitment_id=commitment.commitment_id,
-                anchored=False
+                is_anchored=False
             ).first()
             
             if pending:
@@ -183,7 +183,7 @@ def anchor_status(request):
             })
         
         # Get pending count
-        pending_count = PendingCommitment.objects.filter(anchored=False).count()
+        pending_count = PendingCommitment.objects.filter(is_anchored=False).count()
         
         # Get total anchored commitments (across all anchors)
         total_anchored = sum(
@@ -258,7 +258,7 @@ def trigger_anchor(request):
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         
         # Check if there are pending commitments
-        pending_count = PendingCommitment.objects.filter(anchored=False).count()
+        pending_count = PendingCommitment.objects.filter(is_anchored=False).count()
         
         if pending_count == 0:
             return Response({
@@ -372,7 +372,7 @@ def user_commitments(request):
         anchored_count = commitments_qs.filter(blockchain_anchored=True).count()
         pending_count = PendingCommitment.objects.filter(
             user=request.user,
-            anchored=False
+            is_anchored=False
         ).count()
         
         return Response({

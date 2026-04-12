@@ -203,7 +203,9 @@ def submit_challenge(request):
         # Get recovery attempt and challenge
         try:
             recovery_attempt = BehavioralRecoveryAttempt.objects.get(attempt_id=attempt_id)
-            challenge = BehavioralChallenge.objects.get(challenge_id=challenge_id)
+            challenge = BehavioralChallenge.objects.select_related(
+                'recovery_attempt__user'
+            ).get(challenge_id=challenge_id)
         except (BehavioralRecoveryAttempt.DoesNotExist, BehavioralChallenge.DoesNotExist):
             return error_response(
                 "Recovery attempt or challenge not found",

@@ -1,12 +1,17 @@
 import logging
+import threading
+
+_in_emit = threading.local()
+
 
 class DatabaseLogHandler(logging.Handler):
     def emit(self, record):
+        if getattr(_in_emit, 'active', False):
+            return
+        _in_emit.active = True
         try:
-            # Import model here instead of at the top of the file
             from .models import SystemLog
             
-            # Extract request details if available
             request = getattr(record, 'request', None)
             user = None
             ip_address = None
@@ -32,5 +37,6 @@ class DatabaseLogHandler(logging.Handler):
                 request_method=request_method
             )
         except Exception:
-            # Avoid infinite recursion if logging fails
             pass
+        finally:
+            _in_emit.active = False

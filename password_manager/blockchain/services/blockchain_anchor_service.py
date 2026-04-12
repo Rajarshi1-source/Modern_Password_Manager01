@@ -4,9 +4,11 @@ Blockchain Anchor Service for submitting commitment batches to Arbitrum
 
 import logging
 import os
+import threading
 from typing import Dict, List, Optional
 from web3 import Web3
 from eth_account import Account
+from eth_account.messages import encode_defunct
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
@@ -24,11 +26,13 @@ class BlockchainAnchorService:
     """
     
     _instance = None
+    _lock = threading.Lock()
     
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
         return cls._instance
     
     def __init__(self):
@@ -210,7 +214,8 @@ class BlockchainAnchorService:
                 ['bytes32', 'uint256'],
                 [bytes.fromhex(merkle_root[2:]), len(pending)]
             )
-            signature = self.account.sign_message_hash(message_hash)
+            msg = encode_defunct(primitive=message_hash)
+            signature = self.account.sign_message(msg)
             
             # Submit to blockchain
             contract = self.w3.eth.contract(
@@ -331,6 +336,68 @@ class BlockchainAnchorService:
             logger.error(f"Error verifying commitment on-chain: {e}")
             return False
     
+    def verify_proof_locally(self, merkle_root: str, leaf_hash: str, proof: list) -> bool:
+        """
+        Verify a Merkle proof locally without on-chain call.
+        
+        Recomputes the root from the leaf and proof path, then checks
+        whether it matches the stored merkle_root.
+        """
+        try:
+            computed = bytes.fromhex(leaf_hash.replace('0x', ''))
+            for sibling_hex in proof:
+                sibling = bytes.fromhex(sibling_hex.replace('0x', ''))
+                if computed < sibling:
+                    combined = computed + sibling
+                else:
+                    combined = sibling + computed
+                computed = Web3.solidity_keccak(['bytes'], [combined])
+
+            expected = bytes.fromhex(merkle_root.replace('0x', ''))
+            return computed == expected
+        except Exception as e:
+            logger.error(f"Error verifying proof locally: {e}")
+            return False
+
+    def verify_proof_on_chain(self, merkle_root: str, leaf_hash: str, proof: list) -> bool:
+        """
+        Verify a Merkle proof on-chain via the smart contract.
+        """
+        if not self.enabled or not self.w3:
+            return False
+        try:
+            contract = self.w3.eth.contract(
+                address=self.contract_address,
+                abi=self.contract_abi,
+            )
+            root_bytes = bytes.fromhex(merkle_root.replace('0x', ''))
+            leaf_bytes = bytes.fromhex(leaf_hash.replace('0x', ''))
+            proof_bytes = [bytes.fromhex(p.replace('0x', '')) for p in proof]
+            return contract.functions.verifyCommitment(
+                root_bytes, leaf_bytes, proof_bytes
+            ).call()
+        except Exception as e:
+            logger.error(f"Error verifying proof on-chain: {e}")
+            return False
+
+    def verify_anchor_on_chain(self, merkle_root: str, tx_hash: str = None) -> bool:
+        """
+        Verify that a given merkle_root was anchored on the blockchain.
+        """
+        if not self.enabled or not self.w3:
+            return False
+        try:
+            contract = self.w3.eth.contract(
+                address=self.contract_address,
+                abi=self.contract_abi,
+            )
+            root_bytes = bytes.fromhex(merkle_root.replace('0x', ''))
+            result = contract.functions.getCommitment(root_bytes).call()
+            return result[-1]  # 'exists' flag
+        except Exception as e:
+            logger.error(f"Error verifying anchor on-chain: {e}")
+            return False
+
     def get_pending_count(self) -> int:
         """Get count of pending (not yet anchored) commitments"""
         return PendingCommitment.objects.filter(is_anchored=False).count()

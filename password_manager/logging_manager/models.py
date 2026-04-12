@@ -91,8 +91,7 @@ class RecoveryAttemptLog(models.Model):
                 user_agent = parse(ua_string)
                 log_entry.browser_family = user_agent.browser.family
                 log_entry.os_family = user_agent.os.family
-            except:
-                # Fail silently if parsing fails
+            except Exception:
                 pass
             
         # Get country information if available
@@ -106,8 +105,7 @@ class RecoveryAttemptLog(models.Model):
                     if geo_data:
                         log_entry.country_code = geo_data.get('country_code')
                         log_entry.region = geo_data.get('region')
-            except:
-                # Fail silently if GeoIP lookup fails
+            except Exception:
                 pass
         
         log_entry.save()

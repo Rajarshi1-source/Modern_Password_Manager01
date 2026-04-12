@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Q
 from .models import EmergencyContact, EmergencyAccessRequest
 from vault.models.vault_models import EncryptedVaultItem
@@ -500,13 +501,14 @@ def check_access_requests(request):
         emergency_contact__vault_owner=user
     ).select_related('emergency_contact')
     
-    # Process auto-approval for pending requests
-    for req in others_requests.filter(status='pending'):
-        if req.auto_approve_at and timezone.now() >= req.auto_approve_at:
-            req.status = 'auto_approved'
-            req.access_granted_at = timezone.now()
-            req.expires_at = timezone.now() + timezone.timedelta(hours=24)
-            req.save()
+    # Process auto-approval for pending requests (atomic to prevent races)
+    with transaction.atomic():
+        for req in others_requests.select_for_update().filter(status='pending'):
+            if req.auto_approve_at and timezone.now() >= req.auto_approve_at:
+                req.status = 'auto_approved'
+                req.access_granted_at = timezone.now()
+                req.expires_at = timezone.now() + timezone.timedelta(hours=24)
+                req.save()
     
     # Format response data
     my_requests_data = [
@@ -552,6 +554,12 @@ def access_emergency_vault(request, request_id):
         emergency_contact__emergency_contact=user,
         status__in=['approved', 'auto_approved']
     )
+    
+    # Validate the one-time access key
+    access_key = request.GET.get('access_key') or request.headers.get('X-Access-Key')
+    if not access_key or access_key != access_request.access_key:
+        return error_response('Invalid or missing access key',
+                       status_code=status.HTTP_403_FORBIDDEN)
     
     # Check if expired
     if access_request.expires_at and timezone.now() > access_request.expires_at:

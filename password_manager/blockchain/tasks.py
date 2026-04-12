@@ -39,7 +39,7 @@ def anchor_pending_commitments(self):
         service = BlockchainAnchorService()
         
         # Check if we have pending commitments
-        pending_count = PendingCommitment.objects.filter(anchored=False).count()
+        pending_count = PendingCommitment.objects.filter(is_anchored=False).count()
         
         if pending_count == 0:
             logger.info("No pending commitments to anchor")
@@ -110,7 +110,7 @@ def verify_blockchain_anchors():
         
         for anchor in anchors:
             try:
-                is_valid = service.verify_anchor_on_chain(anchor.merkle_root, anchor.tx_hash)
+                is_valid = service.verify_commitment_on_chain(anchor.merkle_root)
                 
                 if is_valid:
                     verified_count += 1
@@ -147,7 +147,7 @@ def cleanup_old_pending_commitments():
         cutoff_date = timezone.now() - timedelta(days=7)
         deleted_count = PendingCommitment.objects.filter(
             created_at__lt=cutoff_date,
-            anchored=False
+            is_anchored=False
         ).delete()[0]
         
         if deleted_count > 0:

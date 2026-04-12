@@ -239,13 +239,15 @@ class CommitmentService:
         
         return commitment
     
-    def verify_behavioral_similarity(self, stored_embedding, current_embedding):
+    def verify_behavioral_similarity(self, stored_embedding, current_embedding, threshold=None):
         """
         Verify behavioral similarity using cosine similarity
         
         Args:
             stored_embedding: Encrypted stored behavioral embedding (128-dim)
             current_embedding: Current behavioral embedding (128-dim)
+            threshold: Optional override for the similarity threshold.
+                       Falls back to self.threshold when not provided.
         
         Returns:
             dict: {
@@ -255,6 +257,8 @@ class CommitmentService:
             }
         """
         try:
+            effective_threshold = threshold if threshold is not None else self.threshold
+
             # Decrypt stored embedding
             decrypted_stored = self._decrypt_embedding(stored_embedding)
             
@@ -266,15 +270,15 @@ class CommitmentService:
             similarity = cosine_similarity(stored_array, current_array)[0][0]
             
             # Check if similarity meets threshold
-            passed = similarity >= self.threshold
+            passed = similarity >= effective_threshold
             
             result = {
                 'similarity_score': float(similarity),
                 'passed': passed,
-                'threshold': self.threshold
+                'threshold': effective_threshold
             }
             
-            logger.info(f"Behavioral similarity: {similarity:.3f} (threshold: {self.threshold})")
+            logger.info(f"Behavioral similarity: {similarity:.3f} (threshold: {effective_threshold})")
             return result
             
         except Exception as e:

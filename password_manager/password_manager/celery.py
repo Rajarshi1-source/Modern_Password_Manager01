@@ -201,6 +201,22 @@ app.conf.update(
         },
         
         # =================================================================
+        # Smart Contract Automation Tasks
+        # =================================================================
+        
+        # Check dead man's switch vaults (hourly)
+        'check-dead-mans-switches': {
+            'task': 'smart_contracts.tasks.check_dead_mans_switches',
+            'schedule': crontab(minute=0),  # Every hour
+        },
+        
+        # Evaluate pending vault conditions (every 15 minutes)
+        'evaluate-pending-conditions': {
+            'task': 'smart_contracts.tasks.evaluate_pending_conditions',
+            'schedule': crontab(minute='*/15'),
+        },
+        
+        # =================================================================
         # FeatureFlagUsage Batch Flush
         # =================================================================
         
