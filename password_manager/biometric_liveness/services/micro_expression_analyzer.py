@@ -185,9 +185,11 @@ class MicroExpressionAnalyzer:
         Returns:
             Dict mapping AU number to intensity (0-1)
         """
+        if landmarks is None:
+            return {}
+        
         aus = {}
         
-        # Calculate AU intensities based on landmark geometry
         # AU1: Inner Brow Raiser - vertical distance of inner brow points
         aus[1] = self._calculate_au1_intensity(landmarks)
         

@@ -44,8 +44,8 @@ class ChallengeGeneratorTests(TestCase):
     
     def setUp(self):
         from cognitive_auth.services import ChallengeGenerator
-        self.generator = ChallengeGenerator()
         self.test_password = "TestP@ss123"
+        self.generator = ChallengeGenerator(password=self.test_password)
     
     def test_generate_scrambled_challenge(self):
         """Test scrambled password challenge generation."""
@@ -76,15 +76,19 @@ class ReactionTimeAnalyzerTests(TestCase):
         from cognitive_auth.services import ReactionTimeAnalyzer
         self.analyzer = ReactionTimeAnalyzer()
     
-    def test_analyze_response_times_basic(self):
+    def test_analyze_session_responses_basic(self):
         """Test basic response time analysis."""
-        times = [450, 480, 520, 490, 510]
+        responses = [
+            {'reaction_time_ms': t, 'challenge_type': 'scrambled', 'is_correct': True}
+            for t in [450, 480, 520, 490, 510]
+        ]
         
-        analysis = self.analyzer.analyze_response_times(times)
+        analysis = self.analyzer.analyze_session_responses(responses)
         
-        self.assertIn('mean', analysis)
-        self.assertIn('median', analysis)
-        self.assertIn('std_dev', analysis)
+        self.assertTrue(analysis['sufficient_data'])
+        self.assertIn('mean', analysis['overall_metrics'])
+        self.assertIn('median', analysis['overall_metrics'])
+        self.assertIn('std_dev', analysis['overall_metrics'])
 
 
 class CognitiveSessionModelTests(TestCase):

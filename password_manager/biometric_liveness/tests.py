@@ -37,7 +37,7 @@ def mock_celery_delay(*args, **kwargs):
     return MagicMock(id='mock-task-id')
 
 
-@patch('ml_dark_web.signals.monitor_user_credentials.delay', mock_celery_delay)
+@patch('ml_dark_web.tasks.monitor_user_credentials.delay', mock_celery_delay)
 class LivenessModelTests(TestCase):
     """Tests for liveness data models."""
     
@@ -85,7 +85,7 @@ class MicroExpressionAnalyzerTests(TestCase):
         result = self.analyzer.extract_action_units(None)
         self.assertEqual(result, {})
     
-    @patch('mediapipe.solutions.face_mesh.FaceMesh')
+    @patch('mediapipe.python.solutions.face_mesh.FaceMesh')
     def test_extract_landmarks(self, mock_face_mesh):
         """Test landmark extraction from image."""
         mock_instance = MagicMock()
@@ -278,7 +278,7 @@ class RPPGExtractorTests(TestCase):
         self.assertEqual(self.extractor.frame_count, 0)
 
 
-@patch('ml_dark_web.signals.monitor_user_credentials.delay', mock_celery_delay)
+@patch('ml_dark_web.tasks.monitor_user_credentials.delay', mock_celery_delay)
 class LivenessAPITests(APITestCase):
     """Tests for liveness REST API endpoints."""
     

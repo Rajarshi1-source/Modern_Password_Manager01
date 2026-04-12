@@ -29,7 +29,9 @@ from mesh_deaddrop.models import (
 )
 from mesh_deaddrop.services.shamir_service import ShamirSecretSharingService, Share
 from mesh_deaddrop.services.mesh_crypto_service import MeshCryptoService
-from mesh_deaddrop.services.location_verification_service import LocationVerificationService
+from mesh_deaddrop.services.location_verification_service import (
+    LocationVerificationService, LocationClaim, VerificationResult
+)
 from mesh_deaddrop.services.fragment_distribution_service import FragmentDistributionService
 
 User = get_user_model()
@@ -295,25 +297,22 @@ class CollectFragmentsFunctionalTest(TestCase):
     
     def test_collect_at_correct_location(self):
         """Test successful collection at the dead drop location."""
-        # User claims to be at the correct location
-        claimed_location = {
-            'latitude': float(self.target_lat),
-            'longitude': float(self.target_lon),
-            'accuracy_meters': 10
-        }
-        
-        target = {
-            'latitude': float(self.target_lat),
-            'longitude': float(self.target_lon),
-            'radius_meters': 50
-        }
-        
-        # Verify location
-        gps_result = self.location_service.verify_gps_location(
-            claimed_location, target
+        claimed = LocationClaim(
+            latitude=float(self.target_lat),
+            longitude=float(self.target_lon),
+            accuracy_meters=10,
+            ble_nodes=[],
         )
         
-        self.assertTrue(gps_result['is_within_radius'])
+        result = self.location_service.verify_location(
+            claimed=claimed,
+            target_lat=float(self.target_lat),
+            target_lon=float(self.target_lon),
+            radius_meters=50,
+            require_ble=False,
+        )
+        
+        self.assertTrue(result.gps_verified)
         
         # Collect fragments
         fragments = self.dead_drop.fragments.filter(
@@ -331,25 +330,23 @@ class CollectFragmentsFunctionalTest(TestCase):
     
     def test_collection_fails_at_wrong_location(self):
         """Test that collection fails at wrong location."""
-        # User claims to be in London (wrong location)
-        claimed_location = {
-            'latitude': 51.5074,
-            'longitude': -0.1278,
-            'accuracy_meters': 10
-        }
-        
-        target = {
-            'latitude': float(self.target_lat),
-            'longitude': float(self.target_lon),
-            'radius_meters': 50
-        }
-        
-        gps_result = self.location_service.verify_gps_location(
-            claimed_location, target
+        claimed = LocationClaim(
+            latitude=51.5074,
+            longitude=-0.1278,
+            accuracy_meters=10,
+            ble_nodes=[],
         )
         
-        self.assertFalse(gps_result['is_within_radius'])
-        self.assertGreater(gps_result['distance_meters'], 5000000)  # >5000km
+        result = self.location_service.verify_location(
+            claimed=claimed,
+            target_lat=float(self.target_lat),
+            target_lon=float(self.target_lon),
+            radius_meters=50,
+            require_ble=False,
+        )
+        
+        self.assertFalse(result.gps_verified)
+        self.assertGreater(result.distance_from_target_meters, 5000000)  # >5000km
     
     def test_collection_logs_access_attempt(self):
         """Test that collection attempts are logged."""
