@@ -455,9 +455,14 @@ class PartialCollectionFunctionalTest(TestCase):
             for f in fragments
         ]
         
-        # Should raise an error or return garbage
-        with self.assertRaises(Exception):
-            self.shamir.reconstruct_secret(shares)
+        # With fewer than k shares, Lagrange interpolation yields a wrong
+        # secret. Passing expected_hash makes reconstruct_secret detect the
+        # mismatch and raise ValueError.
+        with self.assertRaises(ValueError):
+            self.shamir.reconstruct_secret(
+                shares,
+                expected_hash=self.dead_drop.secret_hash
+            )
     
     def test_reconstruction_with_more_than_k_fragments(self):
         """Test reconstruction works with more than k fragments."""

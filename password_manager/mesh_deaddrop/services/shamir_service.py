@@ -128,12 +128,16 @@ class ShamirSecretSharingService:
                 commitments.append(commitment.to_bytes(32, 'big'))
         
         # Evaluate polynomial at points 1, 2, ..., n
+        # Use unreduced values so Feldman commitment verification works:
+        # g^y mod p must equal prod(C_j^{x^j}) mod p, which requires
+        # y = f(x) without mod-p reduction.
         shares = []
         for x in range(1, n + 1):
-            y = self._evaluate_polynomial(coefficients, x)
+            y = self._evaluate_polynomial_raw(coefficients, x)
+            byte_length = max(32, (y.bit_length() + 7) // 8)
             share = Share(
                 index=x,
-                value=y.to_bytes(32, 'big'),
+                value=y.to_bytes(byte_length, 'big'),
                 commitment=commitments[0] if commitments else None
             )
             shares.append(share)
@@ -232,7 +236,7 @@ class ShamirSecretSharingService:
     
     def _evaluate_polynomial(self, coefficients: List[int], x: int) -> int:
         """
-        Evaluate polynomial at point x using Horner's method.
+        Evaluate polynomial at point x using Horner's method (mod prime).
         
         f(x) = a_0 + a_1*x + a_2*x^2 + ... 
              = a_0 + x*(a_1 + x*(a_2 + ...))
@@ -240,6 +244,13 @@ class ShamirSecretSharingService:
         result = 0
         for coeff in reversed(coefficients):
             result = (result * x + coeff) % self.prime
+        return result
+
+    def _evaluate_polynomial_raw(self, coefficients: List[int], x: int) -> int:
+        """Evaluate polynomial WITHOUT modular reduction (for Feldman VSS)."""
+        result = 0
+        for coeff in reversed(coefficients):
+            result = result * x + coeff
         return result
     
     def _lagrange_interpolate(self, x: int, points: List[Tuple[int, int]]) -> int:

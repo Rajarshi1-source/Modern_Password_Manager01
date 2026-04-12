@@ -203,7 +203,8 @@ class UserSaltModelTests(TestCase):
         
         # Getting the salt for user
         user_salt = UserSalt.objects.get(user=self.user)
-        self.assertEqual(user_salt.salt, salt)
+        # PostgreSQL returns BinaryField as memoryview; convert to bytes
+        self.assertEqual(bytes(user_salt.salt), salt)
 
 
 class VaultCryptoTests(TestCase):

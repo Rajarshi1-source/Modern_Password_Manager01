@@ -614,7 +614,7 @@ class FragmentDistributionService:
         
         if available >= required:
             health = 'good'
-        elif available > 0:
+        elif available > 0 and available >= required - 1:
             health = 'degraded'
         else:
             health = 'critical'

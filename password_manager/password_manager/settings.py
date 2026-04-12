@@ -290,7 +290,6 @@ if os.environ.get('USE_REDIS_CACHE', 'False').lower() == 'true':
             'SOCKET_TIMEOUT': 5,
             'CONNECTION_POOL_KWARGS': {
                 'max_connections': 50,
-                'timeout': 20,
             },
             'COMPRESSOR': 'django_redis.compressors.zlib.ZlibCompressor',
         },
@@ -1628,3 +1627,27 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 AI_ASSISTANT_MODEL = os.environ.get('AI_ASSISTANT_MODEL', 'claude-sonnet-4-20250514')
 AI_ASSISTANT_MAX_TOKENS = int(os.environ.get('AI_ASSISTANT_MAX_TOKENS', '4096'))
 AI_ASSISTANT_RATE_LIMIT = os.environ.get('AI_ASSISTANT_RATE_LIMIT', '20/hour')
+
+# =============================================================================
+# Test-environment overrides
+# =============================================================================
+TESTING = 'test' in sys.argv or 'pytest' in sys.modules
+
+if TESTING:
+    REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = []
+    REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {}
+
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'test-default',
+        },
+        'rate_limiting': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'test-ratelimit',
+        },
+    }
+
+    CHANNEL_LAYERS = {
+        'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}
+    }

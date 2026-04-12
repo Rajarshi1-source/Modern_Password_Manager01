@@ -241,8 +241,12 @@ class PasswordArchaeologyServiceTests(TestCase):
             credential_domain='first.com',
         )
 
-        achievements = PasswordArchaeologyService.check_achievements(self.user)
-        types = [a.achievement_type for a in achievements]
+        # record_password_change calls check_achievements internally,
+        # so the achievement is already persisted. Verify via DB query.
+        types = list(
+            AchievementRecord.objects.filter(user=self.user)
+            .values_list('achievement_type', flat=True)
+        )
         self.assertIn('first_password_change', types)
 
     def test_check_achievements_no_duplicates(self):

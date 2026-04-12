@@ -36,9 +36,9 @@ class BrainwaveAnalyzerTests(TestCase):
         duration = 1.0  # seconds
         t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
         
-        # 10 Hz alpha wave + 6 Hz theta wave
-        alpha_wave = 0.5 * np.sin(2 * np.pi * 10 * t)
-        theta_wave = 0.3 * np.sin(2 * np.pi * 6 * t)
+        # 10 Hz alpha wave + 6 Hz theta wave (realistic EEG amplitudes)
+        alpha_wave = 20.0 * np.sin(2 * np.pi * 10 * t)
+        theta_wave = 15.0 * np.sin(2 * np.pi * 6 * t)
         eeg_signal = alpha_wave + theta_wave
         
         # Analyze
