@@ -170,12 +170,15 @@ class TestTrustScorerService(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=True,
+                response_correct=True,
                 actual_response_time_seconds=120 + i*10,
-                scheduled_for=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_start=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_end=timezone.now() - timedelta(hours=i) + timedelta(hours=6),
                 sent_at=timezone.now() - timedelta(hours=i),
-                responded_at=timezone.now() - timedelta(hours=i, minutes=-2),
+                response_received_at=timezone.now() - timedelta(hours=i, minutes=-2),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         
@@ -194,12 +197,15 @@ class TestTrustScorerService(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=True,
+                response_correct=True,
                 actual_response_time_seconds=120,
-                scheduled_for=timezone.now(),
+                expected_response_time_window_start=timezone.now(),
+                expected_response_time_window_end=timezone.now() + timedelta(hours=6),
                 sent_at=timezone.now(),
-                responded_at=timezone.now(),
+                response_received_at=timezone.now(),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         
@@ -218,12 +224,15 @@ class TestTrustScorerService(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=True,
+                response_correct=True,
                 actual_response_time_seconds=rt,
-                scheduled_for=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_start=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_end=timezone.now() - timedelta(hours=i) + timedelta(hours=6),
                 sent_at=timezone.now() - timedelta(hours=i),
-                responded_at=timezone.now() - timedelta(hours=i, minutes=-2),
+                response_received_at=timezone.now() - timedelta(hours=i, minutes=-2),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         
@@ -243,12 +252,15 @@ class TestTrustScorerService(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=True,
+                response_correct=True,
                 actual_response_time_seconds=rt,
-                scheduled_for=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_start=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_end=timezone.now() - timedelta(hours=i) + timedelta(hours=6),
                 sent_at=timezone.now() - timedelta(hours=i),
-                responded_at=timezone.now() - timedelta(hours=i, minutes=-2),
+                response_received_at=timezone.now() - timedelta(hours=i, minutes=-2),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         
@@ -272,12 +284,15 @@ class TestTrustScorerService(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=True,
+                response_correct=True,
                 actual_response_time_seconds=120,
-                scheduled_for=timezone.now(),
+                expected_response_time_window_start=timezone.now(),
+                expected_response_time_window_end=timezone.now() + timedelta(hours=6),
                 sent_at=timezone.now(),
-                responded_at=timezone.now(),
+                response_received_at=timezone.now(),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         
@@ -306,12 +321,15 @@ class TestTrustScorerService(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=True,
+                response_correct=True,
                 actual_response_time_seconds=120,
-                scheduled_for=timezone.now(),
+                expected_response_time_window_start=timezone.now(),
+                expected_response_time_window_end=timezone.now() + timedelta(hours=6),
                 sent_at=timezone.now(),
-                responded_at=timezone.now(),
+                response_received_at=timezone.now(),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         
@@ -484,12 +502,15 @@ class TestTrustScorerIntegration(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=True,
+                response_correct=True,
                 actual_response_time_seconds=120 + i,
-                scheduled_for=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_start=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_end=timezone.now() - timedelta(hours=i) + timedelta(hours=6),
                 sent_at=timezone.now() - timedelta(hours=i),
-                responded_at=timezone.now() - timedelta(hours=i, minutes=-2),
+                response_received_at=timezone.now() - timedelta(hours=i, minutes=-2),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         
@@ -531,12 +552,15 @@ class TestTrustScorerIntegration(TestCase):
                 challenge_type='historical',
                 encrypted_challenge_data=b'test',
                 encrypted_expected_response=b'test',
+                delivery_channel='email',
+                sent_to='test@example.com',
                 status='completed',
-                is_correct=i < 2,  # Only first 2 correct
+                response_correct=i < 2,  # Only first 2 correct
                 actual_response_time_seconds=rt,
-                scheduled_for=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_start=timezone.now() - timedelta(hours=i),
+                expected_response_time_window_end=timezone.now() - timedelta(hours=i) + timedelta(hours=6),
                 sent_at=timezone.now() - timedelta(hours=i),
-                responded_at=timezone.now() - timedelta(hours=i, minutes=-2),
+                response_received_at=timezone.now() - timedelta(hours=i, minutes=-2),
                 expires_at=timezone.now() + timedelta(hours=6)
             )
         

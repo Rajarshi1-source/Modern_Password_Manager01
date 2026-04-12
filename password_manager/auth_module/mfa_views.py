@@ -21,6 +21,7 @@ import json
 import base64
 import numpy as np
 
+from django.conf import settings as django_settings
 from .mfa_models import (
     BiometricProfile, MFAPolicy, MFAFactor,
     AuthenticationAttempt, ContinuousAuthSession,
@@ -28,6 +29,11 @@ from .mfa_models import (
 )
 
 logger = logging.getLogger(__name__)
+
+BIOMETRIC_PLACEHOLDER_ALLOWED = getattr(
+    django_settings, 'BIOMETRIC_PLACEHOLDER_ALLOWED',
+    getattr(django_settings, 'DEBUG', False),
+)
 
 # Lazy-loaded ML model instances (avoids startup crash if ML deps are missing)
 _biometric_auth = None
@@ -116,8 +122,12 @@ def register_face(request):
         # Decode base64 image
         try:
             image_data = base64.b64decode(face_image_b64)
-            # TODO: Replace placeholder with actual image decoding pipeline
-            # e.g., PIL/cv2 decode → resize → normalize
+            # TODO: Replace with actual image decoding pipeline (PIL/cv2 decode → resize → normalize)
+            if not BIOMETRIC_PLACEHOLDER_ALLOWED:
+                raise NotImplementedError(
+                    "Biometric face processing pipeline not implemented. "
+                    "Set BIOMETRIC_PLACEHOLDER_ALLOWED=True for development."
+                )
             logger.warning("Biometric face registration using placeholder data — real image processing not yet implemented")
             face_image = np.random.rand(160, 160, 3)
         except Exception as e:
@@ -203,8 +213,12 @@ def register_voice(request):
         # Decode base64 audio
         try:
             audio_data = base64.b64decode(voice_audio_b64)
-            # TODO: Replace placeholder with actual audio → MFCC pipeline
-            # e.g., librosa/soundfile decode → extract MFCC features
+            # TODO: Replace with actual audio → MFCC pipeline (librosa/soundfile decode → extract features)
+            if not BIOMETRIC_PLACEHOLDER_ALLOWED:
+                raise NotImplementedError(
+                    "Biometric voice processing pipeline not implemented. "
+                    "Set BIOMETRIC_PLACEHOLDER_ALLOWED=True for development."
+                )
             logger.warning("Biometric voice registration using placeholder data — real audio processing not yet implemented")
             voice_features = np.random.rand(40, 100, 1)
         except Exception as e:
@@ -300,12 +314,22 @@ def authenticate_biometric(request):
             data = base64.b64decode(biometric_data_b64)
             
             if biometric_type == 'face':
-                # TODO: Replace placeholder with actual image decoding pipeline
+                # TODO: Replace with actual image decoding pipeline
+                if not BIOMETRIC_PLACEHOLDER_ALLOWED:
+                    raise NotImplementedError(
+                        "Biometric face processing pipeline not implemented. "
+                        "Set BIOMETRIC_PLACEHOLDER_ALLOWED=True for development."
+                    )
                 logger.warning("Biometric face auth using placeholder data — real image processing not yet implemented")
                 biometric_features = np.random.rand(160, 160, 3)
                 result = _get_biometric_auth().authenticate_face(str(user.id), biometric_features)
             elif biometric_type == 'voice':
-                # TODO: Replace placeholder with actual audio → MFCC pipeline
+                # TODO: Replace with actual audio → MFCC pipeline
+                if not BIOMETRIC_PLACEHOLDER_ALLOWED:
+                    raise NotImplementedError(
+                        "Biometric voice processing pipeline not implemented. "
+                        "Set BIOMETRIC_PLACEHOLDER_ALLOWED=True for development."
+                    )
                 logger.warning("Biometric voice auth using placeholder data — real audio processing not yet implemented")
                 biometric_features = np.random.rand(40, 100, 1)
                 result = _get_biometric_auth().authenticate_voice(str(user.id), biometric_features)
@@ -461,13 +485,15 @@ def update_continuous_auth(request):
         behavior_features = None
         
         if request.data.get('face_image'):
-            # TODO: Replace placeholder with actual image decoding pipeline
+            if not BIOMETRIC_PLACEHOLDER_ALLOWED:
+                raise NotImplementedError("Biometric face processing pipeline not implemented.")
             logger.warning("Continuous auth face check using placeholder data")
             face_image = np.random.rand(160, 160, 3)
             session.face_checks_count += 1
         
         if request.data.get('voice_audio'):
-            # TODO: Replace placeholder with actual audio → MFCC pipeline
+            if not BIOMETRIC_PLACEHOLDER_ALLOWED:
+                raise NotImplementedError("Biometric voice processing pipeline not implemented.")
             logger.warning("Continuous auth voice check using placeholder data")
             voice_features = np.random.rand(40, 100, 1)
             session.voice_checks_count += 1

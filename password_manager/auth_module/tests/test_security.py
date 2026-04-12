@@ -525,8 +525,11 @@ class TestDataEncryptionSecurity(TestCase):
             challenge_type='historical',
             encrypted_challenge_data=b'encrypted_question',
             encrypted_expected_response=b'encrypted_answer',
+            delivery_channel='email',
+            sent_to='test@example.com',
             status='sent',
-            scheduled_for=timezone.now(),
+            expected_response_time_window_start=timezone.now(),
+            expected_response_time_window_end=timezone.now() + timedelta(hours=24),
             sent_at=timezone.now(),
             expires_at=timezone.now() + timedelta(hours=24)
         )

@@ -134,7 +134,6 @@ class TestChallengeResponse(TestCase):
             delivery_channel='email',
             sent_to=self.user.email,
             status='sent',
-            scheduled_for=timezone.now() - timedelta(hours=1),
             sent_at=timezone.now() - timedelta(hours=1),
             expected_response_time_window_start=timezone.now() - timedelta(hours=1),
             expected_response_time_window_end=timezone.now() + timedelta(hours=23),
