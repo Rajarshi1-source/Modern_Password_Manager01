@@ -123,9 +123,10 @@ class ShamirSecretSharingService:
         # Generate Feldman commitments: g^a_i mod p
         commitments = []
         if with_commitments:
+            commitment_byte_len = (self.prime.bit_length() + 7) // 8
             for coeff in coefficients:
                 commitment = pow(self.generator, coeff, self.prime)
-                commitments.append(commitment.to_bytes(32, 'big'))
+                commitments.append(commitment.to_bytes(commitment_byte_len, 'big'))
         
         # Evaluate polynomial at points 1, 2, ..., n
         # Use unreduced values so Feldman commitment verification works:

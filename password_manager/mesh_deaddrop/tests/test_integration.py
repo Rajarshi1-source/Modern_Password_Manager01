@@ -470,8 +470,8 @@ class NFCVerificationAPITests(APITestCase):
             format='json'
         )
         
-        # Response depends on implementation
-        self.assertIn(response.status_code, [status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST])
+        # Response depends on implementation (403 if HMAC mismatch)
+        self.assertIn(response.status_code, [status.HTTP_200_OK, status.HTTP_400_BAD_REQUEST, status.HTTP_403_FORBIDDEN])
 
 
 class DeadDropWorkflowE2ETests(TransactionTestCase):

@@ -11,8 +11,15 @@ from django.urls import reverse
 from rest_framework.test import APITestCase
 from rest_framework import status
 from unittest.mock import patch, MagicMock
+import unittest
 import numpy as np
 import uuid
+
+try:
+    from mediapipe.python.solutions import face_mesh as _mp_face_mesh
+    _HAS_MP_PYTHON = True
+except (ImportError, AttributeError):
+    _HAS_MP_PYTHON = False
 
 from .models import (
     LivenessProfile, LivenessSession, LivenessChallenge,
@@ -85,6 +92,7 @@ class MicroExpressionAnalyzerTests(TestCase):
         result = self.analyzer.extract_action_units(None)
         self.assertEqual(result, {})
     
+    @unittest.skipUnless(_HAS_MP_PYTHON, "mediapipe.python.solutions not available")
     @patch('mediapipe.python.solutions.face_mesh.FaceMesh')
     def test_extract_landmarks(self, mock_face_mesh):
         """Test landmark extraction from image."""
