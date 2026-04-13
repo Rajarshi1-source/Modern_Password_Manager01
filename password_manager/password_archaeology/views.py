@@ -6,13 +6,23 @@ REST API endpoints for the Password Archaeology & Time Travel feature.
 """
 
 from datetime import datetime
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_datetime as _parse_datetime
+from django.utils.timezone import is_naive, make_aware
 
+
+def parse_datetime_aware(value):
+    """Parse a datetime string and ensure it's timezone-aware."""
+    dt = _parse_datetime(value) if value else None
+    if dt and is_naive(dt):
+        dt = make_aware(dt)
+    return dt
+
+from password_manager.throttling import WhatIfSimulationThrottle
 from .services.archaeology_service import PasswordArchaeologyService
 from .serializers import (
     PasswordHistoryEntrySerializer,
@@ -55,8 +65,8 @@ def timeline_view(request):
         - limit: int (default: 100)
     """
     try:
-        date_from = parse_datetime(request.query_params.get('date_from', ''))
-        date_to = parse_datetime(request.query_params.get('date_to', ''))
+        date_from = parse_datetime_aware(request.query_params.get('date_from', ''))
+        date_to = parse_datetime_aware(request.query_params.get('date_to', ''))
         vault_item_id = request.query_params.get('vault_item_id')
         limit = int(request.query_params.get('limit', 100))
 
@@ -95,8 +105,8 @@ def strength_evolution_view(request, vault_item_id=None):
     Returns strength evolution data for charting.
     """
     try:
-        date_from = parse_datetime(request.query_params.get('date_from', ''))
-        date_to = parse_datetime(request.query_params.get('date_to', ''))
+        date_from = parse_datetime_aware(request.query_params.get('date_from', ''))
+        date_to = parse_datetime_aware(request.query_params.get('date_to', ''))
         credential_domain = request.query_params.get('credential_domain')
 
         data = PasswordArchaeologyService.get_strength_evolution(
@@ -168,6 +178,7 @@ def security_events_view(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([WhatIfSimulationThrottle])
 def what_if_run_view(request):
     """
     POST /api/archaeology/what-if/
@@ -250,7 +261,7 @@ def time_machine_view(request, timestamp):
     Reconstruct account state at a specific point in time.
     """
     try:
-        point_in_time = parse_datetime(timestamp)
+        point_in_time = parse_datetime_aware(timestamp)
         if not point_in_time:
             return Response(
                 {'error': 'Invalid timestamp format. Use ISO 8601.'},
@@ -336,8 +347,8 @@ def security_score_view(request):
     Get security score history for gamification charts.
     """
     try:
-        date_from = parse_datetime(request.query_params.get('date_from', ''))
-        date_to = parse_datetime(request.query_params.get('date_to', ''))
+        date_from = parse_datetime_aware(request.query_params.get('date_from', ''))
+        date_to = parse_datetime_aware(request.query_params.get('date_to', ''))
 
         data = PasswordArchaeologyService.calculate_security_score_over_time(
             user=request.user,

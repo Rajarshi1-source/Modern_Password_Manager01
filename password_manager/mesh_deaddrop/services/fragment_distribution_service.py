@@ -22,7 +22,7 @@ from typing import List, Dict, Optional, Set
 from dataclasses import dataclass
 from enum import Enum
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from ..models import DeadDrop, DeadDropFragment, MeshNode, FragmentTransfer
@@ -523,13 +523,11 @@ class FragmentDistributionService:
         Returns:
             List of scored MeshNode instances (best first)
         """
-        from django.db import models as django_models
-        
         nodes = MeshNode.objects.filter(
             is_online=True,
             is_available_for_storage=True,
         ).exclude(
-            current_fragment_count__gte=django_models.F('max_fragments')
+            current_fragment_count__gte=models.F('max_fragments')
         )
         
         strategy = (
@@ -652,9 +650,6 @@ class FragmentDistributionService:
         uptime_bonus = min(0.05, (uptime_hours / 500) * 0.05)
         return min(1.0, base_score + activity_bonus + uptime_bonus)
 
-
-# Import models here to avoid circular imports
-from django.db import models
 
 # Module-level instance
 fragment_distribution_service = FragmentDistributionService()

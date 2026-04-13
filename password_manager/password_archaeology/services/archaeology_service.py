@@ -745,15 +745,17 @@ class PasswordArchaeologyService:
             last_event.occurred_at if last_event else None
         )
 
-        # Strength stats from latest snapshots per domain
-        latest_snapshots = []
-        for domain in domains:
-            snap = StrengthSnapshot.objects.filter(
-                user=user,
-                credential_domain=domain,
-            ).order_by('-snapshot_at').first()
-            if snap:
-                latest_snapshots.append(snap)
+        # Strength stats from latest snapshots per domain (single query)
+        from django.db.models import OuterRef, Subquery
+        latest_snapshot_dates = StrengthSnapshot.objects.filter(
+            user=user,
+            credential_domain=OuterRef('credential_domain'),
+        ).order_by('-snapshot_at').values('snapshot_at')[:1]
+
+        latest_snapshots = list(StrengthSnapshot.objects.filter(
+            user=user,
+            snapshot_at=Subquery(latest_snapshot_dates),
+        ))
 
         if latest_snapshots:
             scores = [s.strength_score for s in latest_snapshots]
@@ -768,16 +770,14 @@ class PasswordArchaeologyService:
             timeline.strongest_credential_domain = strongest.credential_domain
             timeline.strongest_credential_score = strongest.strength_score
 
-        # Average password age
+        # Average password age (single query)
         if last_change:
+            from django.db.models import Max as DbMax
             now = timezone.now()
-            ages = []
-            for domain in domains:
-                latest = changes.filter(
-                    credential_domain=domain,
-                ).order_by('-changed_at').first()
-                if latest:
-                    ages.append((now - latest.changed_at).days)
+            latest_per_domain = changes.values('credential_domain').annotate(
+                last_changed=DbMax('changed_at')
+            )
+            ages = [(now - row['last_changed']).days for row in latest_per_domain]
             if ages:
                 timeline.average_password_age_days = sum(ages) / len(ages)
 

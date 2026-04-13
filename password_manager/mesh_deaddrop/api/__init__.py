@@ -10,6 +10,7 @@ __all__ = [
     'MeshNodeListView',
     'MeshNodeDetailView',
     'NearbyNodesView',
+    'NodePingView',
     'NFCChallengeView',
     'NFCVerifyView',
 ]

@@ -7,6 +7,7 @@ REST API endpoints for liveness verification.
 
 import logging
 import base64
+from functools import lru_cache
 import numpy as np
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -18,14 +19,10 @@ from .models import LivenessProfile, LivenessSession, LivenessSettings
 
 logger = logging.getLogger(__name__)
 
-# Service instance (would use DI in production)
-_session_service = None
 
+@lru_cache(maxsize=1)
 def get_session_service():
-    global _session_service
-    if _session_service is None:
-        _session_service = LivenessSessionService()
-    return _session_service
+    return LivenessSessionService()
 
 
 @api_view(['POST'])

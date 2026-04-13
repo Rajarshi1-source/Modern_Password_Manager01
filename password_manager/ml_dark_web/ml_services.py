@@ -442,23 +442,29 @@ class CredentialMatcherService:
             return np.zeros(self.config.SIAMESE_EMBEDDING_DIM)
 
 
-# Initialize global instances for reuse
+import threading
+
+_singleton_lock = threading.Lock()
 _breach_classifier = None
 _credential_matcher = None
 
 
 def get_breach_classifier() -> BreachClassifierService:
-    """Get singleton breach classifier instance"""
+    """Get singleton breach classifier instance (thread-safe)"""
     global _breach_classifier
     if _breach_classifier is None:
-        _breach_classifier = BreachClassifierService()
+        with _singleton_lock:
+            if _breach_classifier is None:
+                _breach_classifier = BreachClassifierService()
     return _breach_classifier
 
 
 def get_credential_matcher() -> CredentialMatcherService:
-    """Get singleton credential matcher instance"""
+    """Get singleton credential matcher instance (thread-safe)"""
     global _credential_matcher
     if _credential_matcher is None:
-        _credential_matcher = CredentialMatcherService()
+        with _singleton_lock:
+            if _credential_matcher is None:
+                _credential_matcher = CredentialMatcherService()
     return _credential_matcher
 

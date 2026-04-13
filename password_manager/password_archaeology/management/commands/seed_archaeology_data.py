@@ -21,6 +21,7 @@ from password_archaeology.models import (
     StrengthSnapshot,
     AchievementRecord,
     PasswordTimeline,
+    WhatIfScenario,
 )
 from password_archaeology.services.archaeology_service import PasswordArchaeologyService
 
@@ -104,9 +105,6 @@ class Command(BaseCommand):
             SecurityEvent.objects.filter(user=user).delete()
             StrengthSnapshot.objects.filter(user=user).delete()
             AchievementRecord.objects.filter(user=user).delete()
-            WhatIfScenario = __import__(
-                'password_archaeology.models', fromlist=['WhatIfScenario']
-            ).WhatIfScenario
             WhatIfScenario.objects.filter(user=user).delete()
             PasswordTimeline.objects.filter(user=user).delete()
 

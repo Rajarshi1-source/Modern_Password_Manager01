@@ -25,6 +25,7 @@ class SystemLog(models.Model):
         indexes = [
             models.Index(fields=['timestamp', 'level']),
             models.Index(fields=['user', 'timestamp']),
+            models.Index(fields=['request_path', 'timestamp']),
         ]
         
     def __str__(self):
@@ -57,8 +58,8 @@ class RecoveryAttemptLog(models.Model):
     region = models.CharField(max_length=2, blank=True, null=True)
     
     # Store only the browser family and OS family, not the specifics
-    browser_family = models.CharField(max_length=20, blank=True, null=True)
-    os_family = models.CharField(max_length=20, blank=True, null=True)
+    browser_family = models.CharField(max_length=64, blank=True, null=True)
+    os_family = models.CharField(max_length=64, blank=True, null=True)
     
     class Meta:
         indexes = [

@@ -155,7 +155,8 @@ class ShamirSecretSharingService:
     def reconstruct_secret(
         self, 
         shares: List[Share],
-        expected_hash: Optional[str] = None
+        expected_hash: Optional[str] = None,
+        k: Optional[int] = None
     ) -> bytes:
         """
         Reconstruct secret from k or more shares using Lagrange interpolation.
@@ -163,6 +164,7 @@ class ShamirSecretSharingService:
         Args:
             shares: List of shares (at least k)
             expected_hash: Optional BLAKE3 hash to verify result
+            k: Optional threshold — reject if fewer shares provided
             
         Returns:
             Reconstructed secret as bytes
@@ -170,6 +172,8 @@ class ShamirSecretSharingService:
         Raises:
             ValueError: If insufficient shares or verification fails
         """
+        if k and len(shares) < k:
+            raise ValueError(f"Need at least {k} shares, got {len(shares)}")
         if len(shares) < 2:
             raise ValueError("Need at least 2 shares to reconstruct")
         

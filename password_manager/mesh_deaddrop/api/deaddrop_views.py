@@ -27,6 +27,8 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.utils import timezone
 
+from password_manager.throttling import DeadDropCollectThrottle
+
 from ..models import (
     DeadDrop,
     DeadDropFragment,
@@ -177,6 +179,7 @@ class DeadDropCollectView(APIView):
     POST: Attempt to collect fragments at current location
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = [DeadDropCollectThrottle]
     
     def post(self, request, drop_id):
         """Collect fragments."""

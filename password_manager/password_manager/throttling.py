@@ -144,6 +144,31 @@ class StrictSecurityThrottle(BaseThrottle):
         return self.CACHE_TIMEOUT
 
 
+class WhatIfSimulationThrottle(ScopedRateThrottle):
+    """
+    Rate throttling for CPU-intensive what-if simulations.
+    """
+    scope = 'what_if_simulation'
+
+
+class DeadDropCollectThrottle(ScopedRateThrottle):
+    """
+    Rate throttling for dead drop fragment collection.
+    Limits per-IP to prevent brute-force attempts.
+    """
+    scope = 'deaddrop_collect'
+
+    def get_cache_key(self, request, view):
+        if request.user and request.user.is_authenticated:
+            ident = request.user.pk
+        else:
+            ident = self.get_ident(request)
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': ident
+        }
+
+
 # Throttle classes for different security levels
 SECURITY_THROTTLES = {
     'low': UserRateThrottle,

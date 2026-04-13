@@ -40,6 +40,8 @@ class BreachAlert(models.Model):
         default='medium'
     )
     detected_at = models.DateTimeField(default=timezone.now)
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
     resolved = models.BooleanField(default=False)
     resolved_at = models.DateTimeField(null=True, blank=True)
     notified = models.BooleanField(default=False)

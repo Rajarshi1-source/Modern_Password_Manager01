@@ -37,6 +37,6 @@ class DatabaseLogHandler(logging.Handler):
                 request_method=request_method
             )
         except Exception:
-            pass
+            self.handleError(record)
         finally:
             _in_emit.active = False

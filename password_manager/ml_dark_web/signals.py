@@ -14,18 +14,29 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
+import time as _time
+
+_celery_check_cache = {'available': False, 'last_check': 0}
+
+
 def _is_celery_available():
-    """Check if Celery/Redis is available before queueing tasks"""
-    # Skip Celery tasks in DEBUG mode if Redis is not configured
-    if settings.DEBUG:
-        try:
-            import redis
-            r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=1)
-            r.ping()
-            return True
-        except Exception:
-            return False
-    return True
+    """Check if Celery/Redis is available before queueing tasks (cached 60s)"""
+    if not settings.DEBUG:
+        return True
+
+    now = _time.monotonic()
+    if now - _celery_check_cache['last_check'] < 60:
+        return _celery_check_cache['available']
+
+    try:
+        import redis
+        r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=1)
+        r.ping()
+        _celery_check_cache['available'] = True
+    except Exception:
+        _celery_check_cache['available'] = False
+    _celery_check_cache['last_check'] = now
+    return _celery_check_cache['available']
 
 
 @receiver(post_save, sender=MLBreachMatch)

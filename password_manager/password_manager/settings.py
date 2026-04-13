@@ -398,6 +398,8 @@ REST_FRAMEWORK = {
         'websocket_connect': '5/minute',  # WS connection rate
         'dark_web_scan': '1/hour',        # Manual scan trigger
         'analytics_track': '30/minute',   # Anonymous analytics submission (Item #3)
+        'what_if_simulation': '10/hour',  # CPU-intensive what-if scenarios
+        'deaddrop_collect': '5/minute',   # Fragment collection per IP
     }
 }
 
