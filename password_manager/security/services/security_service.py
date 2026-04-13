@@ -15,7 +15,7 @@ from ..models import (
     UserNotificationSettings, SecurityAlert, AccountLockEvent,
     Notification
 )
-# Import duress code detection
+from shared.circuit_breaker import ipinfo_breaker, CircuitBreakerOpen
 from .duress_code_service import get_duress_code_service
 
 logger = logging.getLogger(__name__)
@@ -183,17 +183,22 @@ class SecurityService:
             except Exception as e:
                 logger.warning(f"GeoIP2 lookup failed: {e}")
         
-        # Fallback to external service
         try:
+            ipinfo_breaker.before_call()
             response = requests.get(f"https://ipinfo.io/{ip_address}/json", timeout=5)
             if response.status_code == 200:
                 data = response.json()
+                ipinfo_breaker.on_success()
                 return {
                     'city': data.get('city', ''),
                     'country': data.get('country', ''),
                     'country_code': data.get('country', '')
                 }
+            ipinfo_breaker.on_failure()
+        except CircuitBreakerOpen:
+            pass
         except Exception as e:
+            ipinfo_breaker.on_failure(e)
             logger.error(f"Error in IP geolocation: {e}")
         
         return {}

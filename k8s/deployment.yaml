@@ -1,3 +1,9 @@
+# =============================================================================
+# NOTE: Image tags use ${GITHUB_SHA} placeholders. Deploy via CI pipeline
+# (which calls `kubectl set image`) or pipe through envsubst:
+#   export GITHUB_SHA=$(git rev-parse HEAD)
+#   envsubst < k8s/deployment.yaml | kubectl apply -f -
+# =============================================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:

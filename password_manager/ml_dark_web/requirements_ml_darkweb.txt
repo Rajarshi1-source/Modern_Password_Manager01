@@ -36,8 +36,8 @@ channels>=4.0.0
 channels-redis>=4.2.0,<5.0
 daphne>=4.0.0
 
-# Database
-psycopg2-binary>=2.9.0  # PostgreSQL adapter
+# Database — psycopg3
+psycopg[binary]>=3.2.0  # PostgreSQL adapter (async-capable)
 # pgvector - install separately: pip install pgvector
 
 # API and HTTP

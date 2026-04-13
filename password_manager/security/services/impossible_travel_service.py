@@ -558,24 +558,31 @@ class ImpossibleTravelService:
             except Exception as e:
                 logger.warning(f"GeoIP2 lookup failed: {e}")
         
-        # Fallback to external service
         try:
+            from shared.circuit_breaker import ipinfo_breaker, CircuitBreakerOpen
             import requests
+
+            ipinfo_breaker.before_call()
             response = requests.get(
                 f"https://ipinfo.io/{ip_address}/json",
-                timeout=5
+                timeout=5,
             )
             if response.status_code == 200:
                 data = response.json()
                 loc = data.get('loc', '0,0').split(',')
+                ipinfo_breaker.on_success()
                 return {
                     'city': data.get('city', ''),
                     'country': data.get('country', ''),
                     'country_code': data.get('country', ''),
                     'latitude': float(loc[0]) if len(loc) > 0 else 0,
-                    'longitude': float(loc[1]) if len(loc) > 1 else 0
+                    'longitude': float(loc[1]) if len(loc) > 1 else 0,
                 }
+            ipinfo_breaker.on_failure()
+        except CircuitBreakerOpen:
+            pass
         except Exception as e:
+            ipinfo_breaker.on_failure(e)
             logger.error(f"IP geolocation failed: {e}")
         
         return {}

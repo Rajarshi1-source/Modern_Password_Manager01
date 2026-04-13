@@ -12,11 +12,17 @@ Real-time WebSocket communication for:
 @created 2026-02-07
 """
 
+import base64
+import hashlib
 import logging
 import json
+import os
+
 import numpy as np
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
+from cryptography.fernet import Fernet
+from django.conf import settings
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -32,7 +38,21 @@ class NeuroTrainingConsumer(AsyncJsonWebsocketConsumer):
     - Neurofeedback signal delivery
     - Training session coordination
     """
-    
+
+    def _derive_session_fernet(self) -> Fernet:
+        """Derive a per-session Fernet key so the password is never stored in plaintext."""
+        material = f"{settings.SECRET_KEY}:{self.user_id}:{self.session_id}".encode()
+        key = base64.urlsafe_b64encode(hashlib.sha256(material).digest())
+        return Fernet(key)
+
+    def _encrypt_password(self, plaintext: str) -> bytes:
+        return self._derive_session_fernet().encrypt(plaintext.encode('utf-8'))
+
+    def _decrypt_password(self) -> str:
+        if self._encrypted_password is None:
+            raise ValueError("No password stored for this session")
+        return self._derive_session_fernet().decrypt(self._encrypted_password).decode('utf-8')
+
     async def connect(self):
         """Handle WebSocket connection."""
         self.user = self.scope.get('user')
@@ -258,7 +278,7 @@ class NeuroTrainingConsumer(AsyncJsonWebsocketConsumer):
             return
         
         self.active_program = program
-        self._current_password = password  # Stored temporarily for session
+        self._encrypted_password = self._encrypt_password(password)
         
         # Get session
         session = await self._get_session()
@@ -301,7 +321,7 @@ class NeuroTrainingConsumer(AsyncJsonWebsocketConsumer):
         
         chunk, feedback_msg = self.training_service.get_next_chunk(
             self.active_program,
-            self._current_password,
+            self._decrypt_password(),
             metrics,
         )
         
@@ -334,7 +354,7 @@ class NeuroTrainingConsumer(AsyncJsonWebsocketConsumer):
             self.active_program,
             chunk_index,
             user_input,
-            self._current_password,
+            self._decrypt_password(),
             response_time,
         )
         
@@ -372,7 +392,7 @@ class NeuroTrainingConsumer(AsyncJsonWebsocketConsumer):
             await self._update_session_status('completed')
         
         self.active_program = None
-        self._current_password = None
+        self._encrypted_password = None
     
     # =========================================================================
     # Utilities

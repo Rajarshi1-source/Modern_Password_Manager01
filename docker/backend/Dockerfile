@@ -107,9 +107,12 @@ RUN pip install --upgrade pip setuptools wheel && \
     pip install -r requirements.txt && \
     pip install gunicorn daphne uvicorn[standard] psycopg2-binary redis django-redis
 
-# Copy only the OQS Python package from crypto-builder (avoid overwriting entire site-packages)
-COPY --from=crypto-builder /usr/local/lib/python3.11/site-packages/oqs \
-     /opt/venv/lib/python3.11/site-packages/oqs
+# Copy OQS Python package from crypto-builder using a version-agnostic glob via shell
+RUN mkdir -p /tmp/oqs-staging
+COPY --from=crypto-builder /usr/local/lib/python3.11/site-packages/oqs /tmp/oqs-staging/oqs
+RUN PY_SITELIB=$(python -c "import sysconfig; print(sysconfig.get_path('purelib'))") && \
+    cp -r /tmp/oqs-staging/oqs "$PY_SITELIB/oqs" && \
+    rm -rf /tmp/oqs-staging
 
 # -----------------------------------------------------------------------------
 # Stage 3: Production - Final optimized image

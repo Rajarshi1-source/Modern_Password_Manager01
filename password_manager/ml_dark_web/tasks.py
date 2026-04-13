@@ -372,152 +372,142 @@ def broadcast_alert_update(user_id: int, alert_id: int, update_type: str, additi
         return {'success': False, 'error': str(e)}
 
 
-@shared_task
-def scrape_dark_web_source(source_id: int):
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+def scrape_dark_web_source(self, source_id: int):
     """
-    Scrape a dark web source for breach data using Scrapy
-    
-    Args:
-        source_id: ID of the BreachSource
+    Scrape a dark web source for breach data using Scrapy.
+
+    Runs the spider in a subprocess so the Twisted reactor never blocks the
+    Celery worker thread.  The subprocess writes JSON to a temp file which
+    this task reads after completion.
     """
+    import glob
+    import os
+    import subprocess
+    import sys
+    import tempfile
+
+    SCRAPE_TIMEOUT = int(os.environ.get('SCRAPE_TIMEOUT_SECONDS', 3600))
+
+    spider_map = {
+        'forum': 'BreachForumSpider',
+        'pastebin': 'PastebinSpider',
+        'marketplace': 'GenericDarkWebSpider',
+        'telegram': 'GenericDarkWebSpider',
+        'other': 'GenericDarkWebSpider',
+    }
+
     try:
         source = BreachSource.objects.get(id=source_id, is_active=True)
-        
-        # Create scrape log
+
         scrape_log = DarkWebScrapeLog.objects.create(
             source=source,
-            status='running'
+            status='running',
         )
-        
+
         logger.info(f"Starting scrape of {source.name}")
-        
-        # Import Scrapy components
-        from scrapy.crawler import CrawlerProcess
-        from scrapy.utils.project import get_project_settings
-        from .scrapers.dark_web_spider import (
-            BreachForumSpider,
-            PastebinSpider,
-            GenericDarkWebSpider,
-            SCRAPY_SETTINGS
+
+        spider_name = spider_map.get(source.source_type, 'GenericDarkWebSpider')
+        output_file = tempfile.mktemp(
+            prefix=f'scrape_{source_id}_',
+            suffix='.json',
         )
-        
-        # Determine spider type based on source type
-        spider_map = {
-            'forum': BreachForumSpider,
-            'pastebin': PastebinSpider,
-            'marketplace': GenericDarkWebSpider,
-            'telegram': GenericDarkWebSpider,
-            'other': GenericDarkWebSpider
-        }
-        
-        spider_class = spider_map.get(source.source_type, GenericDarkWebSpider)
-        
-        # Configure Scrapy settings
-        settings = SCRAPY_SETTINGS.copy()
-        settings.update({
-            'FEEDS': {
-                f'/tmp/scrape_{source_id}_{timezone.now().strftime("%Y%m%d_%H%M%S")}.json': {
-                    'format': 'json',
-                    'overwrite': True,
-                }
-            }
-        })
-        
-        # Initialize crawler
-        process = CrawlerProcess(settings)
-        
-        # Add spider
-        process.crawl(
-            spider_class,
-            url=source.url,
-            use_tor=True,  # Always use Tor for dark web
-            source_id=source_id
+
+        cmd = [
+            sys.executable, '-m', 'scrapy', 'crawl', spider_name,
+            '-a', f'url={source.url}',
+            '-a', 'use_tor=True',
+            '-a', f'source_id={source_id}',
+            '-o', output_file,
+            '-t', 'json',
+        ]
+
+        scrapy_env = os.environ.copy()
+        scrapy_env.setdefault('SCRAPY_SETTINGS_MODULE', 'ml_dark_web.scrapers.dark_web_spider')
+
+        logger.info(f"Launching spider subprocess for {source.name}")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=scrapy_env,
         )
-        
-        # Run spider (blocking)
-        logger.info(f"Running spider for {source.name}")
-        
-        # Note: In production, use scrapyd or separate process for non-blocking execution
+
         try:
-            import glob
-            import json
-            import os
-            
-            # Start crawling
-            process.start()  # This will block until spider completes
-            
-            # Read scraped data from output file
-            output_files = glob.glob(f'/tmp/scrape_{source_id}_*.json')
-            
-            scraped_content = []
-            breaches_detected = 0
-            
-            if output_files:
-                with open(output_files[0], 'r') as f:
-                    scraped_items = json.load(f)
-                    scraped_content = scraped_items if isinstance(scraped_items, list) else [scraped_items]
-                    
-                    # Process each scraped item
-                    for item in scraped_content:
-                        # Send to ML processing
-                        result = process_scraped_content.delay(
-                            content=item.get('content', ''),
-                            source_id=source_id,
-                            content_metadata=item
-                        )
-                        
-                        # Check if it's a breach
-                        indicators = item.get('indicators', {})
-                        if indicators.get('has_breach_keyword') or indicators.get('has_password_keyword'):
-                            breaches_detected += 1
-                
-                # Clean up temp file
-                os.remove(output_files[0])
-                logger.info(f"Processed {len(scraped_content)} items from {source.name}")
-            else:
-                logger.warning(f"No output file found for scrape {source_id}")
-                
-        except Exception as e:
-            logger.error(f"Error processing spider results: {e}", exc_info=True)
-            scraped_content = []
-            breaches_detected = 0
-        
-        # Update scrape log
+            stdout, stderr = proc.communicate(timeout=SCRAPE_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise RuntimeError(
+                f"Spider for source {source_id} timed out after {SCRAPE_TIMEOUT}s"
+            )
+
+        if proc.returncode != 0:
+            err_msg = stderr.decode('utf-8', errors='replace')[-2000:]
+            logger.error(f"Spider exited {proc.returncode}: {err_msg}")
+            raise RuntimeError(f"Spider exited with code {proc.returncode}")
+
+        scraped_content = []
+        breaches_detected = 0
+
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
+            with open(output_file, 'r') as f:
+                scraped_items = json.load(f)
+                scraped_content = scraped_items if isinstance(scraped_items, list) else [scraped_items]
+
+                for item in scraped_content:
+                    process_scraped_content.delay(
+                        content=item.get('content', ''),
+                        source_id=source_id,
+                        content_metadata=item,
+                    )
+
+                    indicators = item.get('indicators', {})
+                    if indicators.get('has_breach_keyword') or indicators.get('has_password_keyword'):
+                        breaches_detected += 1
+
+            os.remove(output_file)
+            logger.info(f"Processed {len(scraped_content)} items from {source.name}")
+        else:
+            logger.warning(f"No output file found for scrape {source_id}")
+            if os.path.exists(output_file):
+                os.remove(output_file)
+
         scrape_log.items_found = len(scraped_content)
         scrape_log.breaches_detected = breaches_detected
         scrape_log.status = 'completed'
         scrape_log.completed_at = timezone.now()
-        scrape_log.processing_time_seconds = (scrape_log.completed_at - scrape_log.started_at).total_seconds()
+        scrape_log.processing_time_seconds = (
+            scrape_log.completed_at - scrape_log.started_at
+        ).total_seconds()
         scrape_log.save()
-        
-        # Update source
+
         source.last_scraped = timezone.now()
         source.save()
-        
+
         logger.info(f"Scrape completed: {source.name}. {breaches_detected} breaches detected.")
-        
+
         return {
             'success': True,
             'source_id': source_id,
             'items_found': len(scraped_content),
-            'breaches_detected': breaches_detected
+            'breaches_detected': breaches_detected,
         }
-    
+
     except BreachSource.DoesNotExist:
         logger.error(f"Source {source_id} not found or inactive")
         return {'success': False, 'error': 'Source not found'}
-    
+
     except Exception as e:
         logger.error(f"Error scraping source: {e}", exc_info=True)
-        
-        # Update scrape log
+
         if 'scrape_log' in locals():
             scrape_log.status = 'failed'
-            scrape_log.error_message = str(e)
+            scrape_log.error_message = str(e)[:500]
             scrape_log.completed_at = timezone.now()
             scrape_log.save()
-        
-        return {'success': False, 'error': str(e)}
+
+        raise self.retry(exc=e)
 
 
 @shared_task

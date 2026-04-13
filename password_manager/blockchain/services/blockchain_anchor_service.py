@@ -15,6 +15,7 @@ from django.db import transaction
 
 from ..models import BlockchainAnchor, MerkleProof, PendingCommitment
 from .merkle_tree_builder import MerkleTreeBuilder, create_commitment_hash
+from shared.circuit_breaker import blockchain_breaker, CircuitBreakerOpen
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,12 @@ class BlockchainAnchorService:
         if not self.enabled or not self.w3 or not self.account:
             logger.warning("Blockchain anchoring not properly configured")
             return None
+
+        try:
+            blockchain_breaker.before_call()
+        except CircuitBreakerOpen as e:
+            logger.warning(f"Blockchain circuit breaker OPEN: {e}")
+            return None
         
         # Get all pending commitments
         pending = list(PendingCommitment.objects.filter(
@@ -280,13 +287,16 @@ class BlockchainAnchorService:
                     pending_commitment.save()
                 
                 logger.info(f"Successfully anchored {len(pending)} commitments")
+                blockchain_breaker.on_success()
                 return tx_hash_hex
             
             else:
                 logger.error(f"Transaction failed: {receipt}")
+                blockchain_breaker.on_failure()
                 return None
         
         except Exception as e:
+            blockchain_breaker.on_failure(e)
             logger.error(f"Error anchoring batch: {e}", exc_info=True)
             return None
     

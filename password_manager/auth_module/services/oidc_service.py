@@ -28,6 +28,8 @@ from django.core.cache import cache
 import jwt
 from jwt.exceptions import InvalidTokenError as JWTError, ExpiredSignatureError, InvalidSignatureError
 
+from shared.circuit_breaker import oidc_breaker, CircuitBreakerOpen
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,14 +96,18 @@ class OIDCProvider:
             raise OIDCProviderError(f"No discovery URL configured for {self.name}")
         
         try:
+            oidc_breaker.before_call()
             response = requests.get(self.discovery_url, timeout=10)
             response.raise_for_status()
             self._config = response.json()
-            # Cache for 1 hour
             cache.set(cache_key, self._config, 3600)
             logger.info(f"Loaded OIDC discovery config for {self.name}")
+            oidc_breaker.on_success()
             return self._config
+        except CircuitBreakerOpen as e:
+            raise OIDCProviderError(f"OIDC discovery unavailable: {e}")
         except requests.RequestException as e:
+            oidc_breaker.on_failure(e)
             logger.error(f"Failed to load OIDC discovery for {self.name}: {e}")
             raise OIDCProviderError(f"Failed to load discovery config: {e}")
     

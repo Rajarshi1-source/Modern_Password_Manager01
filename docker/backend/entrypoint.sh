@@ -39,6 +39,12 @@ print_error() {
 # =============================================================================
 print_info "Waiting for PostgreSQL to be ready..."
 
+if [ -z "$DATABASE_HOST" ] && [ -n "$DATABASE_URL" ]; then
+    DATABASE_HOST=$(echo "$DATABASE_URL" | sed -E 's|.*@([^:/]+).*|\1|')
+    DATABASE_PORT=$(echo "$DATABASE_URL" | sed -E 's|.*:([0-9]+)/.*|\1|')
+    print_info "Parsed DATABASE_HOST=$DATABASE_HOST DATABASE_PORT=$DATABASE_PORT from DATABASE_URL"
+fi
+
 if [ -n "$DATABASE_HOST" ]; then
     host="$DATABASE_HOST"
     port="${DATABASE_PORT:-5432}"

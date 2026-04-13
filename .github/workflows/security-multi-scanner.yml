@@ -39,7 +39,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0  # Full history for gitleaks
       
@@ -76,7 +76,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       
       # FIX #2: Pinned to commit hash
       - name: Set up Python
@@ -130,7 +130,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       
       # =====================================================================
       # Scanner 1: Trivy (Filesystem Scan)
@@ -232,7 +232,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       
       # FIX #2: Pinned to commit hash
       - name: Download All Scan Results
@@ -286,7 +286,7 @@ jobs:
       
       # FIX #1: Safe PR comment (no script injection)
       - name: Comment on PR
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && needs.gitleaks.result == 'success'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           script: |

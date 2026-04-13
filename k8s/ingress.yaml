@@ -20,8 +20,11 @@ metadata:
     # Nginx specific settings
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    
+    # WebSocket upgrade support
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
     
     # Rate limiting
     nginx.ingress.kubernetes.io/limit-rps: "20"
@@ -34,6 +37,9 @@ metadata:
       add_header X-XSS-Protection "1; mode=block" always;
       add_header Referrer-Policy "strict-origin-when-cross-origin" always;
       add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
     
     # CORS for API
     nginx.ingress.kubernetes.io/enable-cors: "true"
@@ -104,48 +110,7 @@ spec:
                 port:
                   number: 8000
           
-          # WebSocket connections
-          - path: /ws
-            pathType: Prefix
-            backend:
-              service:
-                name: websocket-service
-                port:
-                  number: 8001
-
----
-# WebSocket specific Ingress (separate for sticky sessions)
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: password-manager-websocket-ingress
-  namespace: password-manager
-  labels:
-    app: password-manager
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    
-    # WebSocket specific settings
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
-    
-    # Enable WebSocket
-    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
-    nginx.ingress.kubernetes.io/configuration-snippet: |
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection "upgrade";
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts:
-        - api.yourapp.com
-      secretName: password-manager-tls
-  rules:
-    - host: api.yourapp.com
-      http:
-        paths:
+          # WebSocket connections (handled by websocket-service with upgrade)
           - path: /ws
             pathType: Prefix
             backend:

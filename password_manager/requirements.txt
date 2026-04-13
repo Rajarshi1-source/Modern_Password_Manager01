@@ -50,8 +50,8 @@ kombu==5.5.3
 vine==5.1.0
 redis==5.2.1
 
-# Database
-psycopg2-binary==2.9.10
+# Database — psycopg3 (async-capable successor to psycopg2)
+psycopg[binary]==3.2.4
 sqlparse==0.5.4
 
 # HTTP & Networking

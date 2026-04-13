@@ -5,6 +5,7 @@ from django.conf import settings
 from django.utils import timezone
 from vault.models.vault_models import EncryptedVaultItem
 from vault.models import BreachAlert
+from shared.circuit_breaker import hibp_breaker, CircuitBreakerOpen
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +27,10 @@ class HIBPService:
             dict: Dictionary of hash suffixes to breach counts
         """
         try:
-            # Make request to HIBP API
+            hibp_breaker.before_call()
+
             headers = {"User-Agent": "PasswordManager-SecurityMonitor"}
             
-            # Add API key if configured
             if hasattr(settings, 'HIBP_API_KEY') and settings.HIBP_API_KEY:
                 headers["hibp-api-key"] = settings.HIBP_API_KEY
             
@@ -39,27 +40,29 @@ class HIBPService:
                 timeout=10
             )
             
-            # Handle response
             if response.status_code == 200:
-                # Build dictionary of hash suffixes to breach counts
                 result = {}
                 lines = response.text.splitlines()
                 for line in lines:
                     suffix, count = line.split(":")
                     result[suffix.strip()] = int(count.strip())
+                hibp_breaker.on_success()
                 return result
             
-            # Handle errors
             if response.status_code == 404:
-                return {}  # No matches
+                hibp_breaker.on_success()
+                return {}
             if response.status_code == 429:
                 logger.warning("Rate limit exceeded when checking HIBP API")
                 raise Exception("Rate limit exceeded for breach API")
             
-            # Generic error
             response.raise_for_status()
-        
+
+        except CircuitBreakerOpen as e:
+            logger.warning(f"HIBP circuit breaker OPEN: {e}")
+            return {}
         except requests.RequestException as e:
+            hibp_breaker.on_failure(e)
             logger.error(f"Error checking HIBP API: {str(e)}")
             raise Exception(f"Error checking breach database: {str(e)}")
     

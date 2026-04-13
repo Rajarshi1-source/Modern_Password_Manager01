@@ -13,18 +13,16 @@ version: '3.8'
 
 services:
   # ===========================================================================
-  # PostgreSQL Database - HARDENED
+  # PostgreSQL Database - HARDENED + TUNED
   # ===========================================================================
   postgres:
     image: postgres:15-alpine
     container_name: password_manager_postgres
     restart: unless-stopped
 
-    # ✅ FIX #1: Database ports NOT exposed - only accessible via internal Docker network
-    # REMOVED: ports: - "5432:5432"
+    # Database ports NOT exposed - only accessible via internal Docker network
     # Other containers connect via hostname "postgres" on internal network
 
-    # ✅ FIX #2: Resource limits prevent DoS attacks
     deploy:
       resources:
         limits:
@@ -34,15 +32,30 @@ services:
           cpus: '0.5'
           memory: 512M
 
-    # ✅ FIX #3: Mandatory secrets - NO defaults, startup fails if missing
     environment:
       POSTGRES_DB: "${DB_NAME:?Error: DB_NAME not set in .env}"
       POSTGRES_USER: "${DB_USER:?Error: DB_USER not set in .env}"
       POSTGRES_PASSWORD: "${DB_PASSWORD:?Error: DB_PASSWORD not set in .env}"
       PGDATA: /var/lib/postgresql/data/pgdata
 
-    # ✅ FIX #4: Run as non-root user
-    user: "999:999" # postgres user in alpine image
+    # Production-tuned PostgreSQL settings (sized for 1GB memory limit)
+    command: >
+      postgres
+        -c shared_buffers=256MB
+        -c effective_cache_size=768MB
+        -c work_mem=16MB
+        -c maintenance_work_mem=128MB
+        -c max_connections=100
+        -c random_page_cost=1.1
+        -c effective_io_concurrency=200
+        -c checkpoint_completion_target=0.9
+        -c wal_level=replica
+        -c max_wal_size=1GB
+        -c log_min_duration_statement=1000
+        -c autovacuum_vacuum_scale_factor=0.01
+        -c autovacuum_analyze_scale_factor=0.005
+
+    user: "999:999"
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -56,17 +69,58 @@ services:
       start_period: 30s
 
     networks:
-      - backend_network # Isolated backend network
+      - backend_network
 
-    # Additional security hardening
     security_opt:
       - no-new-privileges:true
 
-    # Read-only root filesystem (except data volumes)
     read_only: true
     tmpfs:
       - /tmp
       - /var/run/postgresql
+
+  # ===========================================================================
+  # PgBouncer - Connection Pooling
+  # ===========================================================================
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.0
+    container_name: password_manager_pgbouncer
+    restart: unless-stopped
+
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+    environment:
+      DATABASE_URL: "postgresql://${DB_USER:?Error: DB_USER not set}:${DB_PASSWORD:?Error: DB_PASSWORD not set}@postgres:5432/${DB_NAME:?Error: DB_NAME not set}"
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "25"
+      MIN_POOL_SIZE: "5"
+      RESERVE_POOL_SIZE: "5"
+      SERVER_IDLE_TIMEOUT: "600"
+      AUTH_TYPE: scram-sha-256
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -h 127.0.0.1 -p 6432" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+    networks:
+      - backend_network
+
+    security_opt:
+      - no-new-privileges:true
 
   # ===========================================================================
   # Redis Cache & Message Broker - HARDENED
@@ -150,14 +204,15 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set in .env}"
-      - "DATABASE_URL=postgresql://${DB_USER:?Error: DB_USER not set}:${DB_PASSWORD:?Error: DB_PASSWORD not set}@postgres:5432/${DB_NAME:?Error: DB_NAME not set}"
+      - "DATABASE_URL=postgresql://${DB_USER:?Error: DB_USER not set}:${DB_PASSWORD:?Error: DB_PASSWORD not set}@pgbouncer:6432/${DB_NAME:?Error: DB_NAME not set}"
       - "REDIS_URL=redis://:${REDIS_PASSWORD:?Error: REDIS_PASSWORD not set}@redis:6379/0"
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
-      - DATABASE_HOST=postgres
-      - DATABASE_PORT=5432
+      - DATABASE_HOST=pgbouncer
+      - DATABASE_PORT=6432
+      - DB_PREPARE_THRESHOLD=0
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - USE_REDIS_CHANNELS=true
@@ -172,7 +227,7 @@ services:
       - OIDC_USE_NONCE=${OIDC_USE_NONCE:-True}
 
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -226,7 +281,8 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
-      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/${DB_NAME}
+      - DB_PREPARE_THRESHOLD=0
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1}
@@ -238,7 +294,7 @@ services:
       - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
 
     depends_on:
-      - postgres
+      - pgbouncer
       - redis
 
     networks:
@@ -281,14 +337,15 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
-      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/${DB_NAME}
+      - DB_PREPARE_THRESHOLD=0
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - USE_REDIS_CACHE=true
 
     depends_on:
-      - postgres
+      - pgbouncer
       - redis
 
     networks:
@@ -329,14 +386,15 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
-      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/${DB_NAME}
+      - DB_PREPARE_THRESHOLD=0
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
       - USE_REDIS_CACHE=true
 
     depends_on:
-      - postgres
+      - pgbouncer
       - redis
 
     networks:
@@ -392,8 +450,6 @@ services:
 
     security_opt:
       - no-new-privileges:true
-
-    command: npm run dev -- --host 0.0.0.0
 
   # ===========================================================================
   # Nginx Reverse Proxy - HARDENED
@@ -481,7 +537,8 @@ services:
       - DARK_PROTOCOL_REGION=${DARK_PROTOCOL_REGION:-local}
       - DARK_PROTOCOL_PUBLIC_ADDRESS=${DARK_PROTOCOL_PUBLIC_ADDRESS:-}
       - "SECRET_KEY=${SECRET_KEY:?Error: SECRET_KEY not set}"
-      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/${DB_NAME}
+      - DB_PREPARE_THRESHOLD=0
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       # Relay-specific settings
       - DARK_PROTOCOL_MAX_CIRCUITS=${DARK_PROTOCOL_MAX_CIRCUITS:-1000}
@@ -489,7 +546,7 @@ services:
       - DARK_PROTOCOL_ENABLE_BRIDGE=${DARK_PROTOCOL_ENABLE_BRIDGE:-false}
 
     depends_on:
-      - postgres
+      - pgbouncer
       - redis
 
     networks:

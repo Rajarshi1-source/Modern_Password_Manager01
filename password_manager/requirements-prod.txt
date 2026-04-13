@@ -18,8 +18,8 @@ redis==5.2.1
 django-celery-beat==2.8.0
 django_celery_results==2.6.0
 
-# Database
-psycopg2-binary==2.9.10
+# Database — psycopg3
+psycopg[binary]==3.2.4
 
 # Channels / WebSockets
 channels==4.2.2

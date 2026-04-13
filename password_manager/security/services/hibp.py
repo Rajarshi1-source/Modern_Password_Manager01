@@ -9,6 +9,8 @@ from urllib.parse import quote
 
 import requests
 
+from shared.circuit_breaker import hibp_breaker, CircuitBreakerOpen
+
 logger = logging.getLogger(__name__)
 
 # HIBP API endpoints
@@ -95,6 +97,8 @@ def check_password_prefix(prefix: str) -> Dict[str, int] | object:
         raise ValueError(f"Prefix must be exactly 5 hex characters, got: {prefix!r}")
 
     try:
+        hibp_breaker.before_call()
+
         response = requests.get(
             f"{HIBP_PASSWORD_API_URL}/{prefix.upper()}",
             headers=_PWNED_HEADERS,
@@ -111,12 +115,19 @@ def check_password_prefix(prefix: str) -> Dict[str, int] | object:
                 result[suffix.strip().upper()] = int(count_str.strip())
             except ValueError:
                 logger.warning("Unexpected HIBP line format: %r", line)
+
+        hibp_breaker.on_success()
         return result
 
+    except CircuitBreakerOpen:
+        logger.warning("HIBP circuit breaker is OPEN — skipping breach check")
+        return _BREACH_UNKNOWN
     except requests.exceptions.Timeout:
+        hibp_breaker.on_failure()
         logger.error("HIBP API timed out for prefix %s***", prefix[:2])
         return _BREACH_UNKNOWN
     except requests.exceptions.RequestException as e:
+        hibp_breaker.on_failure(e)
         logger.error("HIBP request failed: %s", e)
         return _BREACH_UNKNOWN
 

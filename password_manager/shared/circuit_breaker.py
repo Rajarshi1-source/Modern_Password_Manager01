@@ -267,6 +267,42 @@ blockchain_breaker = CircuitBreaker(
     recovery_timeout=60,
 )
 
+oidc_breaker = CircuitBreaker(
+    name='oidc_discovery',
+    failure_threshold=3,
+    recovery_timeout=60,
+)
+
+noaa_breaker = CircuitBreaker(
+    name='noaa_api',
+    failure_threshold=5,
+    recovery_timeout=120,
+)
+
+ipinfo_breaker = CircuitBreaker(
+    name='ipinfo_api',
+    failure_threshold=5,
+    recovery_timeout=60,
+)
+
+email_masking_breaker = CircuitBreaker(
+    name='email_masking_api',
+    failure_threshold=5,
+    recovery_timeout=60,
+)
+
+quantum_rng_breaker = CircuitBreaker(
+    name='quantum_rng_api',
+    failure_threshold=3,
+    recovery_timeout=120,
+)
+
+amadeus_breaker = CircuitBreaker(
+    name='amadeus_api',
+    failure_threshold=3,
+    recovery_timeout=120,
+)
+
 
 def circuit_breaker(
     name: str = None,

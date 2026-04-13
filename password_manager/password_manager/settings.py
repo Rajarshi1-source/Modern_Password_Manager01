@@ -235,20 +235,24 @@ else:
 # Database configuration
 # https://docs.djangoproject.com/en/5.1.15/ref/settings/#databases
 
+_USE_POSTGRES = bool(os.environ.get('DB_NAME'))
+
 DATABASES = {
     'default': {
-        # Temporarily using SQLite for easier setup, but use Postgres if DB_NAME is set (like in CI environment)
-        'ENGINE': 'django.db.backends.postgresql' if os.environ.get('DB_NAME') else 'django.db.backends.sqlite3',
-        'NAME': os.environ.get('DB_NAME') if os.environ.get('DB_NAME') else BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql' if _USE_POSTGRES else 'django.db.backends.sqlite3',
+        'NAME': os.environ.get('DB_NAME') if _USE_POSTGRES else BASE_DIR / 'db.sqlite3',
         'USER': os.environ.get('DB_USER', 'test_user'),
         'PASSWORD': os.environ.get('DB_PASSWORD', 'test_password'),
         'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
         'PORT': os.environ.get('DB_PORT', '5432'),
         'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
+        'CONN_HEALTH_CHECKS': _USE_POSTGRES,
         'OPTIONS': {
             'connect_timeout': 10,
             'options': '-c statement_timeout=30000',
-        } if os.environ.get('DB_NAME') else {},
+            # Disable server-side prepared statements for PgBouncer transaction-mode compat
+            'prepare_threshold': int(os.environ.get('DB_PREPARE_THRESHOLD', '0')) or None,
+        } if _USE_POSTGRES else {},
     },
     'postgresql': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -258,9 +262,11 @@ DATABASES = {
         'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '5432'),
         'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
+        'CONN_HEALTH_CHECKS': True,
         'OPTIONS': {
             'connect_timeout': 10,
             'options': '-c statement_timeout=30000',
+            'prepare_threshold': int(os.environ.get('DB_PREPARE_THRESHOLD', '0')) or None,
         },
     }    
 }
