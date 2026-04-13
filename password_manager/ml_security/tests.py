@@ -11,10 +11,11 @@ Test Categories:
 4. Service Tests - Testing business logic
 """
 
-from django.test import TestCase, RequestFactory, Client
+from django.test import TestCase, RequestFactory
 from django.contrib.auth.models import User
 from django.utils import timezone
 from django.urls import reverse
+from rest_framework.test import APIClient
 from unittest.mock import patch, Mock, MagicMock
 from datetime import timedelta
 import json
@@ -458,13 +459,13 @@ class PasswordStrengthAPITest(TestCase):
     """Test Password Strength API views"""
     
     def setUp(self):
-        self.client = Client()
+        self.client = APIClient()
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
             password='testpass123'
         )
-        self.client.force_login(self.user)
+        self.client.force_authenticate(user=self.user)
         self.url = reverse('ml_security:password-strength-check')
     
     @patch('ml_security.views.get_model')
@@ -542,13 +543,13 @@ class AnomalyDetectionAPITest(TestCase):
     """Test Anomaly Detection API views"""
     
     def setUp(self):
-        self.client = Client()
+        self.client = APIClient()
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
             password='testpass123'
         )
-        self.client.force_login(self.user)
+        self.client.force_authenticate(user=self.user)
         self.url = reverse('ml_security:anomaly-detection')
     
     @patch('ml_security.views.get_model')
@@ -595,13 +596,13 @@ class ThreatAnalysisAPITest(TestCase):
     """Test Threat Analysis API views"""
     
     def setUp(self):
-        self.client = Client()
+        self.client = APIClient()
         self.user = User.objects.create_user(
             username='testuser',
             email='test@example.com',
             password='testpass123'
         )
-        self.client.force_login(self.user)
+        self.client.force_authenticate(user=self.user)
         self.url = reverse('ml_security:threat-analysis')
     
     @patch('ml_security.views.get_model')
@@ -679,8 +680,8 @@ class MLSecurityIntegrationTest(TestCase):
     
     def test_complete_password_strength_flow(self):
         """Test complete flow: API call -> prediction -> database storage"""
-        client = Client()
-        client.force_login(self.user)
+        client = APIClient()
+        client.force_authenticate(user=self.user)
         
         with patch('ml_security.views.get_model') as mock_get_model:
             mock_model = MagicMock()
@@ -723,8 +724,8 @@ class MLSecurityIntegrationTest(TestCase):
     
     def test_complete_anomaly_detection_flow(self):
         """Test complete flow: API call -> detection -> database storage -> alert"""
-        client = Client()
-        client.force_login(self.user)
+        client = APIClient()
+        client.force_authenticate(user=self.user)
         
         with patch('ml_security.views.get_model') as mock_get_model:
             mock_detector = MagicMock()

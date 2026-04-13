@@ -1645,7 +1645,6 @@ TESTING = 'test' in sys.argv or 'pytest' in sys.modules
 
 if TESTING:
     REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = []
-    REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {}
 
     CACHES = {
         'default': {

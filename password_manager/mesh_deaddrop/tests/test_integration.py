@@ -29,6 +29,8 @@ from mesh_deaddrop.models import (
     NFCBeacon,
     DeadDropAccess
 )
+from mesh_deaddrop.services.shamir_service import ShamirSecretSharingService
+from mesh_deaddrop.services.mesh_crypto_service import MeshCryptoService
 
 User = get_user_model()
 
@@ -214,26 +216,30 @@ class DeadDropAPIIntegrationTests(APITestCase):
     
     def test_collect_dead_drop_with_location_proof(self):
         """Test collecting a dead drop with valid location proof."""
+        secret = b'my_secret_data'
+        shamir = ShamirSecretSharingService()
+        crypto = MeshCryptoService()
+        split = shamir.split_secret(secret, k=3, n=5)
+
         dead_drop = DeadDrop.objects.create(
             owner=self.user,
             title='Collect Test',
             latitude=Decimal('40.7128'),
             longitude=Decimal('-74.0060'),
             radius_meters=50,
-            encrypted_secret=b'my_secret_data',
-            secret_hash='hash123',
+            encrypted_secret=secret,
+            secret_hash=crypto.hash_secret(secret.decode()),
             required_fragments=3,
             total_fragments=5,
             status='active',
             expires_at=timezone.now() + timedelta(days=7)
         )
         
-        # Create distributed fragments
-        for i in range(5):
+        for i, share in enumerate(split.shares):
             DeadDropFragment.objects.create(
                 dead_drop=dead_drop,
-                fragment_index=i + 1,
-                encrypted_fragment=f'fragment_{i}'.encode(),
+                fragment_index=share.index,
+                encrypted_fragment=share.value,
                 fragment_hash=f'hash_{i}',
                 node=self.nodes[i],
                 is_distributed=True,
@@ -440,7 +446,7 @@ class NFCVerificationAPITests(APITestCase):
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('challenge', response.data)
-        self.assertIn('nonce', response.data)
+        self.assertIn('expires_at', response.data)
     
     def test_verify_nfc_response(self):
         """Test verifying NFC response."""

@@ -30,9 +30,9 @@ import hashlib
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 
-# Large prime for finite field operations (256-bit)
-# This prime p = 2^256 - 189 is suitable for secrets up to 256 bits
-DEFAULT_PRIME = 2**256 - 189
+# Large Mersenne prime for finite field operations (521-bit)
+# M521 = 2^521 - 1 supports secrets up to 65 bytes (520 bits)
+DEFAULT_PRIME = 2**521 - 1
 
 
 @dataclass

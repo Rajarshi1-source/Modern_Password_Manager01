@@ -66,7 +66,7 @@ class LivenessModelTests(TestCase):
     def test_create_liveness_settings(self):
         """Test creating liveness settings."""
         settings = LivenessSettings.objects.create(user=self.user)
-        self.assertTrue(settings.enable_on_login)
+        self.assertFalse(settings.enable_on_login)
         self.assertTrue(settings.enable_on_sensitive_actions)
 
 

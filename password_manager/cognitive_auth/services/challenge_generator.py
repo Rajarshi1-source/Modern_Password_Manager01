@@ -457,6 +457,36 @@ class ChallengeGenerator:
         type_durations = durations.get(challenge_type, {})
         return type_durations.get(difficulty, 0)
     
+    def generate_scrambled_challenge(
+        self, password: str = None, difficulty: str = 'medium'
+    ) -> Dict[str, Any]:
+        """Public API: generate a scrambled challenge."""
+        challenge = self._generate_scrambled_challenge(difficulty, sequence=1)
+        data = challenge['challenge_data']
+        correct_answer = ''
+        if 'chunk_position' in data and data['options']:
+            pos = data['chunk_position']
+            chunk_len = len(data['options'][0])
+            correct_answer = self.password[pos:pos + chunk_len]
+        return {
+            'scrambled_text': data['scrambled_text'],
+            'options': data['options'],
+            'correct_answer': correct_answer,
+            **data,
+        }
+
+    def generate_partial_challenge(
+        self, password: str = None, difficulty: str = 'medium'
+    ) -> Dict[str, Any]:
+        """Public API: generate a partial-reveal challenge."""
+        challenge = self._generate_partial_challenge(difficulty, sequence=1)
+        data = challenge['challenge_data']
+        return {
+            'masked_password': data['masked_password'],
+            'hidden_positions': data['hidden_positions'],
+            **data,
+        }
+
     def verify_response(
         self, 
         challenge: Dict[str, Any], 
