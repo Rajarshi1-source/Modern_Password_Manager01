@@ -7,7 +7,7 @@ Add composite partial index for the most common vault query pattern:
 This covers dashboard, vault listing, and search operations.
 """
 
-from django.db import migrations
+from django.db import models, migrations
 
 
 class Migration(migrations.Migration):
@@ -17,12 +17,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunSQL(
-            sql=(
-                "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_vault_user_active "
-                "ON vault_encryptedvaultitem (user_id, updated_at DESC) "
-                "WHERE deleted = false;"
+        migrations.AddIndex(
+            model_name='encryptedvaultitem',
+            index=models.Index(
+                fields=['user', '-updated_at'],
+                name='idx_vault_user_active',
+                condition=models.Q(deleted=False),
             ),
-            reverse_sql="DROP INDEX IF EXISTS idx_vault_user_active;",
         ),
     ]

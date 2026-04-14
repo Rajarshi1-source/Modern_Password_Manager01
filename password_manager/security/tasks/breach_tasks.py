@@ -3,9 +3,9 @@ from django.contrib.auth.models import User
 from django.core.cache import cache
 from vault.models.vault_models import EncryptedVaultItem
 from vault.models import BreachAlert
-from .services.breach_monitor import HIBPService
-from .services.crypto_service import CryptoService
-from .services.account_protection import account_protection_service
+from ..services.breach_monitor import HIBPService
+from ..services.crypto_service import CryptoService
+from ..services.account_protection import account_protection_service
 import json
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -283,8 +283,8 @@ def check_genetic_evolution(user_id: int):
     Returns:
         dict: Evolution status and results
     """
-    from .models import DNAConnection, GeneticEvolutionLog, GeneticSubscription
-    from .services.epigenetic_service import epigenetic_evolution_manager
+    from ..models import DNAConnection, GeneticEvolutionLog, GeneticSubscription
+    from ..services.epigenetic_service import epigenetic_evolution_manager
     
     try:
         user = User.objects.get(id=user_id)
@@ -377,7 +377,7 @@ def daily_genetic_evolution_check():
     - Epigenetic evolution enabled
     - Premium or trial subscription
     """
-    from .models import DNAConnection, GeneticSubscription
+    from ..models import DNAConnection, GeneticSubscription
     
     # Find users with active DNA connections and epigenetic features
     eligible_connections = DNAConnection.objects.filter(
@@ -412,8 +412,8 @@ def sync_epigenetic_data(user_id: int, provider: str = None):
     Returns:
         dict: Sync results including biological age data
     """
-    from .models import DNAConnection
-    from .services.epigenetic_service import HumanityHealthProvider, ManualEpigeneticProvider
+    from ..models import DNAConnection
+    from ..services.epigenetic_service import HumanityHealthProvider, ManualEpigeneticProvider
     
     try:
         user = User.objects.get(id=user_id)
@@ -463,7 +463,7 @@ def cleanup_expired_genetic_trials():
     - Disables epigenetic features for expired subscriptions
     - Sends notification to users about trial expiration
     """
-    from .models import GeneticSubscription
+    from ..models import GeneticSubscription
     
     now = timezone.now()
     
@@ -499,8 +499,8 @@ def refresh_dna_tokens():
     Refreshes tokens that are about to expire to maintain access
     to DNA provider APIs.
     """
-    from .models import DNAConnection
-    from .services.dna_provider_service import get_dna_provider
+    from ..models import DNAConnection
+    from ..services.dna_provider_service import get_dna_provider
     
     # Find connections with tokens that might need refresh
     # (tokens typically expire after a certain period)
@@ -555,9 +555,9 @@ def analyze_user_password_patterns(user_id: int):
     Returns:
         dict: Analysis results
     """
-    from .models import PasswordPatternProfile
-    from .services.predictive_expiration_service import get_predictive_expiration_service
-    from .services.pattern_analysis_engine import get_pattern_analysis_engine
+    from ..models import PasswordPatternProfile
+    from ..services.predictive_expiration_service import get_predictive_expiration_service
+    from ..services.pattern_analysis_engine import get_pattern_analysis_engine
     
     try:
         user = User.objects.get(id=user_id)
@@ -676,8 +676,8 @@ def update_threat_intelligence():
     Returns:
         dict: Update statistics
     """
-    from .models import ThreatIntelFeed, ThreatActorTTP, IndustryThreatLevel
-    from .services.threat_intelligence_service import get_threat_intelligence_service
+    from ..models import ThreatIntelFeed, ThreatActorTTP, IndustryThreatLevel
+    from ..services.threat_intelligence_service import get_threat_intelligence_service
     
     threat_service = get_threat_intelligence_service()
     
@@ -744,8 +744,8 @@ def evaluate_password_expiration_risk(credential_id: str, user_id: int):
     Returns:
         dict: Risk evaluation results
     """
-    from .models import PredictiveExpirationRule
-    from .services.predictive_expiration_service import get_predictive_expiration_service
+    from ..models import PredictiveExpirationRule
+    from ..services.predictive_expiration_service import get_predictive_expiration_service
     
     try:
         user = User.objects.get(id=user_id)
@@ -812,7 +812,7 @@ def process_forced_rotation(credential_id: str, user_id: int, reason: str):
     Returns:
         dict: Rotation results
     """
-    from .models import PredictiveExpirationRule, PasswordRotationEvent
+    from ..models import PredictiveExpirationRule, PasswordRotationEvent
     
     try:
         user = User.objects.get(id=user_id)
@@ -881,7 +881,7 @@ def daily_predictive_scan(self):
     evaluating each credential and sending notifications for
     high-risk items.
     """
-    from .models import PredictiveExpirationSettings, PredictiveExpirationRule
+    from ..models import PredictiveExpirationSettings, PredictiveExpirationRule
     
     # Get users with predictive expiration enabled
     settings = PredictiveExpirationSettings.objects.filter(is_enabled=True)
@@ -941,7 +941,7 @@ def send_expiration_notifications():
     Sends email/push notifications for credentials that require
     attention based on their risk scores.
     """
-    from .models import PredictiveExpirationRule, PredictiveExpirationSettings
+    from ..models import PredictiveExpirationRule, PredictiveExpirationSettings
     from django.core.mail import send_mail
     from django.conf import settings
     from django.db import models
