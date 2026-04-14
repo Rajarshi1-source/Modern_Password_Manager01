@@ -483,12 +483,18 @@ class OIDCService:
                 raise OIDCValidationError(f"Unable to find matching key for kid: {kid}")
             
             # Verify and decode token
+            from datetime import timedelta
+            from django.conf import settings as django_settings
+
             claims = jwt.decode(
                 id_token,
                 signing_key,
                 algorithms=['RS256', 'RS384', 'RS512'],
                 audience=provider.client_id,
                 issuer=provider.issuer,
+                leeway=timedelta(
+                    seconds=getattr(django_settings, 'OIDC_CLOCK_SKEW_SECONDS', 120)
+                ),
                 options={
                     'verify_signature': True,
                     'verify_exp': True,

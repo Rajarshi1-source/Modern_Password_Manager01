@@ -281,10 +281,12 @@ class DarkProtocolService:
                     is_verified=True,
                 )
                 
-                # Update node circuit counts
+                # Update node circuit counts atomically
+                from django.db.models import F
                 for node in nodes:
-                    node.current_circuits += 1
-                    node.save(update_fields=['current_circuits'])
+                    type(node).objects.filter(pk=node.pk).update(
+                        current_circuits=F('current_circuits') + 1
+                    )
             
             logger.info(
                 f"Established dark protocol session {session_id[:8]}... "

@@ -177,6 +177,7 @@ jobs:
       - name: Run tests
         working-directory: ./password_manager
         env:
+          DJANGO_SETTINGS_MODULE: password_manager.settings
           PYTHONPATH: ${{ github.workspace }}/password_manager
           SECRET_KEY: test-secret-key-for-ci-only
           DEBUG: 'False'

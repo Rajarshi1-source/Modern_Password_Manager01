@@ -17,6 +17,10 @@ metadata:
     # SSL/TLS with Let's Encrypt
     cert-manager.io/cluster-issuer: letsencrypt-prod
     
+    # TLS 1.3 only — credential manager must use strongest transport security
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.3"
+    nginx.ingress.kubernetes.io/ssl-ciphers: "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256"
+    
     # Nginx specific settings
     nginx.ingress.kubernetes.io/proxy-body-size: "50m"
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"

@@ -13,6 +13,8 @@ from django.conf import settings
 from django.utils.html import strip_tags
 import logging
 
+from shared.circuit_breaker import twilio_breaker, CircuitBreakerOpen
+
 logger = logging.getLogger(__name__)
 
 
@@ -144,22 +146,26 @@ class NotificationService:
         if not self.twilio_client:
             logger.warning("Twilio not configured, skipping SMS")
             return False
-        
+
         try:
             message = (
                 f"⚠️ URGENT: Someone initiated recovery for your SecureVault account. "
                 f"If this wasn't you, cancel immediately at: {settings.FRONTEND_URL}/recovery/cancel/{attempt.id}"
             )
-            
-            self.twilio_client.messages.create(
-                body=message,
-                from_=settings.TWILIO_PHONE_NUMBER,
-                to=user.phone_number
-            )
-            
+
+            with twilio_breaker:
+                self.twilio_client.messages.create(
+                    body=message,
+                    from_=settings.TWILIO_PHONE_NUMBER,
+                    to=user.phone_number
+                )
+
             logger.info(f"Sent canary alert SMS to {user.phone_number}")
             return True
-            
+
+        except CircuitBreakerOpen:
+            logger.warning("Twilio circuit breaker open — SMS delivery deferred")
+            return False
         except Exception as e:
             logger.error(f"Failed to send SMS: {str(e)}")
             return False

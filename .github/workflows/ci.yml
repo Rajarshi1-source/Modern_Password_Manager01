@@ -168,6 +168,7 @@ jobs:
       
       - name: Run tests
         env:
+          DJANGO_SETTINGS_MODULE: password_manager.settings
           DEBUG: 'True'
           SECRET_KEY: 'test-secret-key-for-ci'
           DB_NAME: test_db
@@ -334,7 +335,7 @@ jobs:
     needs: build-images
     if: github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/develop'
     environment:
-      name: staging
+      name: ${{ vars.STAGING_ENV_NAME || 'staging' }}
       url: https://staging.yourapp.com
     
     permissions:

@@ -155,7 +155,7 @@ class DeadDropDetailSerializer(DeadDropSerializer):
     
     def get_fragments(self, obj):
         """Get fragment overview (not actual data)."""
-        fragments = obj.fragments.all()
+        fragments = obj.fragments.select_related('node').all()
         return [{
             'index': f.fragment_index,
             'is_distributed': f.is_distributed,

@@ -240,7 +240,7 @@ def security_dashboard(request):
         recent_attempts = LoginAttempt.objects.filter(
             Q(user=user) | Q(username_attempted=user.username),
             timestamp__gte=timezone.now() - timedelta(days=7)
-        ).order_by('-timestamp')[:10]
+        ).select_related('user').order_by('-timestamp')[:10]
         
         # Get active security alerts
         active_alerts = SecurityAlert.objects.filter(

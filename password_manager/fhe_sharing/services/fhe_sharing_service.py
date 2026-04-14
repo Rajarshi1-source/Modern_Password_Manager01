@@ -16,7 +16,7 @@ import time
 from typing import Optional, Dict, Any, List
 
 from django.conf import settings as django_settings
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -655,9 +655,6 @@ class HomomorphicSharingService:
                 f"[FHE Sharing] Failed to log action {action}: {e}"
             )
 
-
-# Import models.F for list_shares_for_recipient query
-from django.db import models
 
 
 # Singleton instance

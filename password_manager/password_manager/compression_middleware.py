@@ -78,7 +78,9 @@ class VaultCompressionMiddleware:
         '/admin/',
     ]
     
-    # Statistics tracking
+    # Statistics tracking (guarded by lock for thread-safety)
+    import threading
+    _stats_lock = threading.Lock()
     _stats = {
         'compressed': 0,
         'skipped': 0,
@@ -116,7 +118,8 @@ class VaultCompressionMiddleware:
         
         # Check if we should compress this response
         if not self._should_compress(request, response):
-            self._stats['skipped'] += 1
+            with self._stats_lock:
+                self._stats['skipped'] += 1
             return response
         
         # Get content
@@ -225,9 +228,10 @@ class VaultCompressionMiddleware:
             response['Vary'] = f"{vary}, Accept-Encoding" if vary else 'Accept-Encoding'
         
         # Update statistics
-        self._stats['compressed'] += 1
-        self._stats['total_original'] += original_size
-        self._stats['total_compressed'] += len(compressed)
+        with self._stats_lock:
+            self._stats['compressed'] += 1
+            self._stats['total_original'] += original_size
+            self._stats['total_compressed'] += len(compressed)
         
         # Log compression ratio for debugging
         ratio = (1 - len(compressed) / original_size) * 100
@@ -243,13 +247,15 @@ class VaultCompressionMiddleware:
         """
         Get compression statistics.
         """
-        total_saved = cls._stats['total_original'] - cls._stats['total_compressed']
+        with cls._stats_lock:
+            snapshot = dict(cls._stats)
+        total_saved = snapshot['total_original'] - snapshot['total_compressed']
         avg_ratio = 0
-        if cls._stats['total_original'] > 0:
-            avg_ratio = (1 - cls._stats['total_compressed'] / cls._stats['total_original']) * 100
-        
+        if snapshot['total_original'] > 0:
+            avg_ratio = (1 - snapshot['total_compressed'] / snapshot['total_original']) * 100
+
         return {
-            **cls._stats,
+            **snapshot,
             'total_saved_bytes': total_saved,
             'average_compression_ratio': f'{avg_ratio:.1f}%',
             'brotli_available': BROTLI_AVAILABLE
@@ -258,10 +264,11 @@ class VaultCompressionMiddleware:
     @classmethod
     def reset_stats(cls):
         """Reset compression statistics."""
-        cls._stats = {
-            'compressed': 0,
-            'skipped': 0,
-            'total_original': 0,
+        with cls._stats_lock:
+            cls._stats = {
+                'compressed': 0,
+                'skipped': 0,
+                'total_original': 0,
             'total_compressed': 0
         }
 

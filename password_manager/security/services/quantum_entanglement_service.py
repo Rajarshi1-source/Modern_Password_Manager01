@@ -197,8 +197,18 @@ class QuantumEntanglementService:
         
         # In-memory pairing sessions (could be Redis in production)
         self._pairing_sessions: Dict[str, PairingSession] = {}
-        
+
         logger.info("QuantumEntanglementService initialized")
+
+    def _cleanup_expired_sessions(self) -> int:
+        """Remove expired pairing sessions to prevent memory leaks."""
+        expired = [
+            sid for sid, session in self._pairing_sessions.items()
+            if session.is_expired()
+        ]
+        for sid in expired:
+            del self._pairing_sessions[sid]
+        return len(expired)
     
     # =========================================================================
     # Pairing Operations
@@ -227,8 +237,9 @@ class QuantumEntanglementService:
             PairingSession with verification code
         """
         from security.models import UserDevice, EntangledDevicePair
-        
-        # Validate devices belong to user
+
+        self._cleanup_expired_sessions()
+
         device_a = UserDevice.objects.filter(device_id=device_a_id, user_id=user_id).first()
         device_b = UserDevice.objects.filter(device_id=device_b_id, user_id=user_id).first()
         

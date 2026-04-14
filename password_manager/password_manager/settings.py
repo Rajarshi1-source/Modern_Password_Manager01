@@ -68,8 +68,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1.15/howto/deployment/checklist/
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# Default to True for development - set DEBUG=False in production environment
-DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
+# Defaults to False — set DEBUG=True explicitly in development
+DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
 
 # Development mode flag (defaults to match DEBUG)
 DEVELOPMENT = os.environ.get('DEVELOPMENT', str(DEBUG)).lower() == 'true'
@@ -86,8 +86,8 @@ if not SECRET_KEY:
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured("The SECRET_KEY setting must not be empty in production.")
 
-# Parse ALLOWED_HOSTS from environment variable
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8000,[::1]').split(',')
+# Parse ALLOWED_HOSTS from environment variable (strip whitespace from each entry)
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8000,[::1]').split(',') if h.strip()]
 
 
 # Application definition
@@ -185,8 +185,10 @@ MIDDLEWARE = [
 # Response compression settings
 ENABLE_RESPONSE_COMPRESSION = True
 
-# Disable APPEND_SLASH - required for ASGI/Channels compatibility
-# Also recommended for API-first applications and SPAs
+# Disable APPEND_SLASH for this API-first SPA architecture.
+# DRF endpoints define explicit paths; trailing-slash redirects add an unnecessary
+# 301 round-trip for API clients. NOT an ASGI/Channels requirement — purely an
+# API design choice. Keep False unless adding server-rendered form views.
 APPEND_SLASH = False
 
 ROOT_URLCONF = 'password_manager.urls'
@@ -270,6 +272,27 @@ DATABASES = {
         },
     }    
 }
+
+# Read replica (optional — activated by setting DATABASE_REPLICA_URL or DB_REPLICA_HOST)
+_REPLICA_HOST = os.environ.get('DB_REPLICA_HOST', '')
+if _USE_POSTGRES and _REPLICA_HOST:
+    DATABASES['replica'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('DB_NAME'),
+        'USER': os.environ.get('DB_REPLICA_USER', os.environ.get('DB_USER', 'test_user')),
+        'PASSWORD': os.environ.get('DB_REPLICA_PASSWORD', os.environ.get('DB_PASSWORD', 'test_password')),
+        'HOST': _REPLICA_HOST,
+        'PORT': os.environ.get('DB_REPLICA_PORT', os.environ.get('DB_PORT', '5432')),
+        'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {
+            'connect_timeout': 10,
+            'options': '-c statement_timeout=30000 -c default_transaction_read_only=on',
+            'prepare_threshold': int(os.environ.get('DB_PREPARE_THRESHOLD', '0')) or None,
+        },
+    }
+
+DATABASE_ROUTERS = ['shared.db_router.PrimaryReplicaRouter']
 
 # Cache Configuration
 CACHES = {
@@ -1642,7 +1665,7 @@ COSMIC_RAY_ENTROPY = {
 
 AI_ASSISTANT_ENABLED = os.environ.get('AI_ASSISTANT_ENABLED', 'True').lower() == 'true'
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-AI_ASSISTANT_MODEL = os.environ.get('AI_ASSISTANT_MODEL', 'claude-sonnet-4-20250514')
+AI_ASSISTANT_MODEL = os.environ.get('AI_ASSISTANT_MODEL', 'claude-sonnet-4-6')
 AI_ASSISTANT_MAX_TOKENS = int(os.environ.get('AI_ASSISTANT_MAX_TOKENS', '4096'))
 AI_ASSISTANT_RATE_LIMIT = os.environ.get('AI_ASSISTANT_RATE_LIMIT', '20/hour')
 

@@ -238,31 +238,34 @@ class DuressCodeService:
             - ('duress', DuressCode) - input is a duress code
             - ('invalid', None) - input is neither
         """
-        # First check if it's a duress code
         duress_code = self._check_duress_codes(user, input_password)
         if duress_code:
             return ('duress', duress_code)
-        
-        # Then check master password (delegated to auth system)
-        # This would be called after standard auth check
-        return ('check_password', None)
+
+        # Not a duress code — caller should verify against master password
+        return ('password', None)
     
     def _check_duress_codes(
         self,
         user: User,
         input_code: str
     ) -> Optional[DuressCode]:
-        """Check if input matches any active duress codes"""
+        """Check if input matches any active duress codes.
+
+        Checks ALL codes before returning to avoid timing side-channels
+        that could reveal the number of active duress codes.
+        """
         active_codes = DuressCode.objects.filter(
             user=user,
             is_active=True
         )
-        
+
+        matched_code = None
         for code in active_codes:
             if self._verify_code(input_code, code.code_hash):
-                return code
-        
-        return None
+                matched_code = code
+
+        return matched_code
     
     # =========================================================================
     # Duress Activation

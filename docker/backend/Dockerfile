@@ -105,7 +105,7 @@ COPY password_manager/requirements.txt .
 # Install core dependencies first
 RUN pip install --upgrade pip setuptools wheel && \
     pip install -r requirements.txt && \
-    pip install gunicorn daphne uvicorn[standard] psycopg2-binary redis django-redis
+    pip install gunicorn daphne uvicorn[standard] redis django-redis
 
 # Copy OQS Python package from crypto-builder using a version-agnostic glob via shell
 RUN mkdir -p /tmp/oqs-staging

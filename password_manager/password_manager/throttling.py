@@ -68,17 +68,15 @@ class VaultOperationThrottle(UserRateThrottle):
     More lenient throttling for authenticated vault operations.
     """
     scope = 'vault'
-    
+
+    def get_rate(self):
+        if hasattr(self, '_request_is_anon') and self._request_is_anon:
+            return getattr(settings, 'ANON_VAULT_RATE', '10/hour')
+        return super().get_rate()
+
     def allow_request(self, request, view):
-        """
-        Override to allow higher rates for authenticated users.
-        """
-        if request.user and request.user.is_authenticated:
-            return super().allow_request(request, view)
-        else:
-            # Use more restrictive throttling for anonymous users
-            self.rate = getattr(settings, 'ANON_VAULT_RATE', '10/hour')
-            return super().allow_request(request, view)
+        self._request_is_anon = not (request.user and request.user.is_authenticated)
+        return super().allow_request(request, view)
 
 
 class StrictSecurityThrottle(BaseThrottle):

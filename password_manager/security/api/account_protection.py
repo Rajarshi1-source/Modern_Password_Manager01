@@ -122,21 +122,22 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             else:
                 return error_response("Must specify platform or account_ids")
             
-            locked_count = 0
-            for account in accounts:
-                # Record lock event
-                AccountLockEvent.objects.create(
-                    user=request.user,
-                    social_account=account,
-                    action='lock',
-                    reason=reason,
-                    auto_triggered=False,
-                    success=True
-                )
-                
-                account.status = 'locked'
-                account.save()
-                locked_count += 1
+            from django.db import transaction
+            with transaction.atomic():
+                account_list = list(accounts.select_for_update())
+                lock_events = [
+                    AccountLockEvent(
+                        user=request.user,
+                        social_account=account,
+                        action='lock',
+                        reason=reason,
+                        auto_triggered=False,
+                        success=True
+                    )
+                    for account in account_list
+                ]
+                AccountLockEvent.objects.bulk_create(lock_events)
+                locked_count = accounts.update(status='locked')
             
             return success_response({
                 'locked_count': locked_count,

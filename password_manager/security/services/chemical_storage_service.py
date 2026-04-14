@@ -414,7 +414,8 @@ class ChemicalStorageService:
             'user': cert.user_id,
         }, sort_keys=True)
         
-        signature = hashlib.hmac_new(
+        import hmac as hmac_module
+        signature = hmac_module.new(
             self.cert_secret.encode() if isinstance(self.cert_secret, str) else self.cert_secret,
             sign_data.encode(),
             hashlib.sha256

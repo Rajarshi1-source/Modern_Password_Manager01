@@ -150,7 +150,8 @@ class SimpleLoginProvider(EmailProviderBase):
             logger.warning("SimpleLogin webhook secret not configured")
             return False
         
-        expected = hashlib.hmac_new(
+        import hmac as hmac_module
+        expected = hmac_module.new(
             webhook_secret.encode(),
             payload,
             hashlib.sha256
@@ -267,7 +268,8 @@ class AnonAddyProvider(EmailProviderBase):
             logger.warning("AnonAddy webhook secret not configured")
             return False
         
-        expected = hashlib.hmac_new(
+        import hmac as hmac_module
+        expected = hmac_module.new(
             webhook_secret.encode(),
             payload,
             hashlib.sha256

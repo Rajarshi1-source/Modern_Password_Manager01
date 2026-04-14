@@ -303,6 +303,18 @@ amadeus_breaker = CircuitBreaker(
     recovery_timeout=120,
 )
 
+twilio_breaker = CircuitBreaker(
+    name='twilio_sms',
+    failure_threshold=5,
+    recovery_timeout=60,
+)
+
+firebase_breaker = CircuitBreaker(
+    name='firebase_messaging',
+    failure_threshold=5,
+    recovery_timeout=60,
+)
+
 
 def circuit_breaker(
     name: str = None,

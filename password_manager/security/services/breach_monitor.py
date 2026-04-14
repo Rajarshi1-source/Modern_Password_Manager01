@@ -4,7 +4,6 @@ import logging
 from django.conf import settings
 from django.utils import timezone
 from vault.models.vault_models import EncryptedVaultItem
-from vault.models import BreachAlert
 from shared.circuit_breaker import hibp_breaker, CircuitBreakerOpen
 
 logger = logging.getLogger(__name__)

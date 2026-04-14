@@ -30,6 +30,26 @@ class SecurityService:
         self.suspicious_threshold = getattr(settings, 'SUSPICIOUS_THRESHOLD', 3)
         self.geo_db_path = getattr(settings, 'GEOIP_PATH', None)
         self._duress_service = None
+
+    @staticmethod
+    def _get_user_notification_settings(user):
+        """Get or create user notification settings."""
+        settings_obj, _ = UserNotificationSettings.objects.get_or_create(
+            user=user,
+            defaults={
+                'email_alerts': True,
+                'sms_alerts': False,
+                'push_alerts': True,
+                'alert_on_new_device': True,
+                'alert_on_new_location': True,
+                'alert_on_suspicious_activity': True,
+                'auto_lock_accounts': True,
+                'suspicious_activity_threshold': 3,
+                'minimum_risk_score_for_alert': 0.7,
+                'alert_cooldown_minutes': 15,
+            }
+        )
+        return settings_obj
     
     @property
     def duress_service(self):
@@ -832,6 +852,3 @@ class NotificationService:
 # Create service instances
 security_service = SecurityService()
 notification_service = NotificationService()
-
-# Fix missing method reference
-SecurityService._get_user_notification_settings = NotificationService._get_user_notification_settings 
