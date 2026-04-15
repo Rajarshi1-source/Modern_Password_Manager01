@@ -46,7 +46,7 @@ jobs:
       # FIX: Use docker run to generate SARIF report directly
       - name: Run Gitleaks
         run: |
-          docker run --rm -v ${PWD}:/path zricethezav/gitleaks:latest detect \
+          docker run --rm -v ${PWD}:/path zricethezav/gitleaks:v8.30.1 detect \
             --source="/path" \
             --report-format=sarif \
             --report-path=/path/gitleaks-results.sarif \

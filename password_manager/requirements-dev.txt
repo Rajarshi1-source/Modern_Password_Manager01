@@ -24,3 +24,7 @@ scrapy>=2.15.0,<3.0
 beautifulsoup4>=4.13.0
 selenium>=4.39.0
 PySocks>=1.7.1
+
+# Pre-commit hooks & secret detection
+pre-commit>=4.0.0
+detect-secrets>=1.5.0

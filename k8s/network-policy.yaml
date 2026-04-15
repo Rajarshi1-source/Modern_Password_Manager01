@@ -1,0 +1,222 @@
+# =============================================================================
+# NetworkPolicy — deny-all default with explicit allow rules for known
+# traffic flows within the password-manager namespace.
+#
+# Requires a CNI plugin that supports NetworkPolicy (Calico, Cilium, etc.).
+# =============================================================================
+
+# Default deny all ingress and egress in the namespace
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: password-manager
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+
+# Allow DNS resolution for all pods (required for service discovery)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: password-manager
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+# Frontend: accept ingress from ingress controller, no egress needed
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: frontend
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 8080
+
+# Backend: accept ingress from frontend/ingress, allow egress to postgres + redis
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: backend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 8000
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          component: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          component: cache
+    ports:
+    - protocol: TCP
+      port: 6379
+
+# WebSocket: accept ingress, allow egress to redis (channel layer)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-websocket
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: websocket
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 8001
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          component: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          component: cache
+    ports:
+    - protocol: TCP
+      port: 6379
+
+# Celery worker + beat: egress to postgres + redis only
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-celery
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+    matchExpressions:
+    - key: component
+      operator: In
+      values: ["celery-worker", "celery-beat"]
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          component: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          component: cache
+    ports:
+    - protocol: TCP
+      port: 6379
+
+# Postgres: accept ingress from backend, websocket, celery only
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: database
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          component: backend
+    - podSelector:
+        matchLabels:
+          component: websocket
+    - podSelector:
+        matchExpressions:
+        - key: component
+          operator: In
+          values: ["celery-worker", "celery-beat"]
+    ports:
+    - protocol: TCP
+      port: 5432
+
+# Redis: accept ingress from backend, websocket, celery only
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: cache
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          component: backend
+    - podSelector:
+        matchLabels:
+          component: websocket
+    - podSelector:
+        matchExpressions:
+        - key: component
+          operator: In
+          values: ["celery-worker", "celery-beat"]
+    ports:
+    - protocol: TCP
+      port: 6379

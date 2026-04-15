@@ -230,7 +230,7 @@ services:
 
   # Nginx Reverse Proxy & Load Balancer
   nginx:
-    image: nginx:alpine
+    image: nginx:1.27-alpine
     container_name: password_manager_nginx
     ports:
       - "80:80"

@@ -193,10 +193,14 @@ class TestChallengeGeneratorService(TestCase):
         for i in range(8):
             VaultItem.objects.create(
                 user=self.user,
-                website_url=f'https://site{i}.com',
-                website_name=f'Site {i}',
-                username='user',
-                encrypted_password='pass'
+                item_id=str(uuid.uuid4()),
+                item_type='password',
+                encrypted_data=json.dumps({
+                    'website_url': f'https://site{i}.com',
+                    'website_name': f'Site {i}',
+                    'username': 'user',
+                    'password': 'pass',
+                }),
             )
         
         challenge_type, question, answer = challenge_generator.generate_vault_content_challenge(
@@ -225,10 +229,14 @@ class TestChallengeGeneratorService(TestCase):
                 for i in range(count):
                     VaultItem.objects.create(
                         user=self.user,
-                        website_url=f'https://test{i}.com',
-                        website_name=f'Test {i}',
-                        username='user',
-                        encrypted_password='pass'
+                        item_id=str(uuid.uuid4()),
+                        item_type='password',
+                        encrypted_data=json.dumps({
+                            'website_url': f'https://test{i}.com',
+                            'website_name': f'Test {i}',
+                            'username': 'user',
+                            'password': 'pass',
+                        }),
                     )
             
             # Generate challenge
@@ -308,10 +316,14 @@ class TestChallengeGeneratorIntegration(TestCase):
             for i in range(5):
                 VaultItem.objects.create(
                     user=self.user,
-                    website_url=f'https://example{i}.com',
-                    website_name=f'Example {i}',
-                    username='testuser',
-                    encrypted_password='encrypted'
+                    item_id=str(uuid.uuid4()),
+                    item_type='password',
+                    encrypted_data=json.dumps({
+                        'website_url': f'https://example{i}.com',
+                        'website_name': f'Example {i}',
+                        'username': 'testuser',
+                        'password': 'encrypted',
+                    }),
                 )
         
         # Set up devices if available

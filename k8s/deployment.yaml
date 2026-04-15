@@ -26,6 +26,13 @@ spec:
         app: password-manager
         component: database
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 70       # alpine postgres uid
+        runAsGroup: 70      # alpine postgres gid
+        fsGroup: 70
       containers:
       - name: postgres
         image: postgres:15-alpine
@@ -52,7 +59,13 @@ spec:
             memory: "2Gi"
             cpu: "1000m"
         securityContext:
+          runAsNonRoot: true
+          runAsUser: 70
+          runAsGroup: 70
           readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         livenessProbe:
           exec:
             command:
@@ -136,6 +149,13 @@ spec:
         app: password-manager
         component: cache
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 999      # alpine redis uid
+        runAsGroup: 999     # alpine redis gid
+        fsGroup: 999
       containers:
       - name: redis
         image: redis:7-alpine
@@ -170,7 +190,13 @@ spec:
             memory: "1Gi"
             cpu: "500m"
         securityContext:
+          runAsNonRoot: true
+          runAsUser: 999
+          runAsGroup: 999
           readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         livenessProbe:
           exec:
             command:
@@ -732,7 +758,7 @@ spec:
         image: ghcr.io/yourusername/password-manager/frontend:${GITHUB_SHA}
         imagePullPolicy: Always
         ports:
-        - containerPort: 80
+        - containerPort: 8080
         env:
         - name: VITE_API_BASE_URL
           value: "https://api.yourapp.com"
@@ -755,13 +781,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /health
-            port: 80
+            port: 8080
           initialDelaySeconds: 10
           periodSeconds: 30
         readinessProbe:
           httpGet:
             path: /health
-            port: 80
+            port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
         securityContext:
@@ -795,7 +821,7 @@ spec:
     component: frontend
   ports:
   - port: 80
-    targetPort: 80
+    targetPort: 8080
   type: ClusterIP
 
 # =============================================================================

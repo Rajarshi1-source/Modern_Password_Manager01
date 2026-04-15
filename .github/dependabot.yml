@@ -1,5 +1,6 @@
 version: 2
 updates:
+  # Smart contracts (npm)
   - package-ecosystem: "npm"
     directory: "/contracts"
     schedule:
@@ -9,3 +10,41 @@ updates:
       # constrains it to ^0.0.33. Remove this ignore when @chainlink/contracts upgrades patch-package.
       - dependency-name: "tmp"
         versions: ["< 0.2.4"]
+
+  # Frontend (npm)
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Backend Python dependencies (pip)
+  - package-ecosystem: "pip"
+    directory: "/password_manager"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Docker base images — backend
+  - package-ecosystem: "docker"
+    directory: "/docker/backend"
+    schedule:
+      interval: "weekly"
+
+  # Docker base images — frontend (production)
+  - package-ecosystem: "docker"
+    directory: "/docker/frontend"
+    schedule:
+      interval: "weekly"
+
+  # Docker base images — backend prod
+  - package-ecosystem: "docker"
+    directory: "/password_manager"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
