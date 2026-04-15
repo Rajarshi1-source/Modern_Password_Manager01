@@ -37,9 +37,9 @@ spec:
             seccompProfile:
               type: RuntimeDefault
             runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
-            fsGroup: 1000
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
           containers:
           - name: cleanup
             image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
@@ -93,9 +93,9 @@ spec:
             seccompProfile:
               type: RuntimeDefault
             runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
-            fsGroup: 1000
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
           containers:
           - name: backup
             image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}

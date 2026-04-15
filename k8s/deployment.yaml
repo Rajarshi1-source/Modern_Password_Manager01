@@ -295,10 +295,17 @@ spec:
             name: app-config
         - secretRef:
             name: app-secrets
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
+          runAsUser: 10001
+          runAsGroup: 10001
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities: &id001
@@ -321,10 +328,17 @@ spec:
           mountPath: /app/staticfiles
         - name: tmp
           mountPath: /tmp
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
+          runAsUser: 10001
+          runAsGroup: 10001
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities: *id001
@@ -386,10 +400,10 @@ spec:
           failureThreshold: 3
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1000
+          runAsUser: 10001
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
-          runAsGroup: 1000
+          runAsGroup: 10001
           capabilities: *id001
       volumes:
       - name: static-files
@@ -414,9 +428,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
 ---
 apiVersion: v1
 kind: Service
@@ -504,9 +518,9 @@ spec:
           periodSeconds: 5
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1000
+          runAsUser: 10001
           readOnlyRootFilesystem: true
-          runAsGroup: 1000
+          runAsGroup: 10001
           allowPrivilegeEscalation: false
           capabilities:
             drop:
@@ -520,9 +534,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       volumes:
       - name: tmp
         emptyDir: {}
@@ -575,9 +589,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
       - name: celery-worker
         image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
@@ -620,8 +634,8 @@ spec:
           timeoutSeconds: 30
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
+          runAsUser: 10001
+          runAsGroup: 10001
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
@@ -671,9 +685,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
       - name: celery-beat
         image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
@@ -705,8 +719,8 @@ spec:
             cpu: "250m"
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
+          runAsUser: 10001
+          runAsGroup: 10001
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
@@ -750,9 +764,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
       - name: frontend
         image: ghcr.io/yourusername/password-manager/frontend:${GITHUB_SHA}
@@ -792,9 +806,9 @@ spec:
           periodSeconds: 10
         securityContext:
           runAsNonRoot: true
-          runAsUser: 1000
+          runAsUser: 10001
           readOnlyRootFilesystem: true
-          runAsGroup: 1000
+          runAsGroup: 10001
           allowPrivilegeEscalation: false
           capabilities:
             drop:

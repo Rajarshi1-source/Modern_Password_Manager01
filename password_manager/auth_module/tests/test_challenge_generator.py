@@ -342,10 +342,11 @@ class TestChallengeGeneratorIntegration(TestCase):
             for i in range(3):
                 LoginAttempt.objects.create(
                     user=self.user,
-                    success=True,
+                    username_attempted=self.user.username,
+                    status='success',
                     ip_address=f'192.168.1.{i}',
-                    geolocation={'city': 'San Francisco', 'country': 'USA'},
-                    created_at=timezone.now() - timedelta(days=i)
+                    location='San Francisco, USA',
+                    user_agent='Mozilla/5.0',
                 )
     
     def test_generate_full_challenge_set(self):
