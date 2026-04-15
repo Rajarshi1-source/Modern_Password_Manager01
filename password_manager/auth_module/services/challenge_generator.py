@@ -97,19 +97,17 @@ class ChallengeGeneratorService:
         """
         login_attempts = LoginAttempt.objects.filter(
             user=user,
-            success=True,
-            created_at__gte=timezone.now() - timedelta(days=90)
+            status='success',
+            timestamp__gte=timezone.now() - timedelta(days=90)
         )
         
         if not login_attempts.exists():
             return 'geolocation_pattern', None, None
         
-        # Analyze most common city from IP geolocation
         location_counts = {}
         for attempt in login_attempts:
-            if attempt.geolocation and 'city' in attempt.geolocation:
-                city = attempt.geolocation['city']
-                location_counts[city] = location_counts.get(city, 0) + 1
+            if attempt.location:
+                location_counts[attempt.location] = location_counts.get(attempt.location, 0) + 1
         
         if not location_counts:
             return 'geolocation_pattern', None, None
