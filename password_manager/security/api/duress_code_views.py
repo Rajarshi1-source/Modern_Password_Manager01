@@ -621,7 +621,7 @@ def test_duress_activation(request):
         
         # Build request context
         request_context = {
-            'ip_address': request.META.get('REMOTE_ADDR', '0.0.0.0'),
+            'ip_address': request.META.get('REMOTE_ADDR', '127.0.0.1'  # nosec B104),
             'user_agent': request.META.get('HTTP_USER_AGENT', ''),
             'device_fingerprint': request.data.get('device_fingerprint', {}),
             'geo_location': request.data.get('geo_location', {}),

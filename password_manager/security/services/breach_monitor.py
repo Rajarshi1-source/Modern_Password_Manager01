@@ -76,5 +76,5 @@ class HIBPService:
         Returns:
             str: Uppercase SHA-1 hash
         """
-        sha1 = hashlib.sha1(password.encode('utf-8'))
+        sha1 = hashlib.sha1(password.encode('utf-8'), usedforsecurity=False)  # nosec B324 — HIBP API requires SHA-1 prefix lookup
         return sha1.hexdigest().upper()

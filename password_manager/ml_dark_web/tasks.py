@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.core.cache import cache
 import logging
 import json
+import os
 from typing import List, Dict
 
 from .models import (
@@ -408,10 +409,11 @@ def scrape_dark_web_source(self, source_id: int):
         logger.info(f"Starting scrape of {source.name}")
 
         spider_name = spider_map.get(source.source_type, 'GenericDarkWebSpider')
-        output_file = tempfile.mktemp(
+        fd, output_file = tempfile.mkstemp(
             prefix=f'scrape_{source_id}_',
             suffix='.json',
         )
+        os.close(fd)
 
         cmd = [
             sys.executable, '-m', 'scrapy', 'crawl', spider_name,

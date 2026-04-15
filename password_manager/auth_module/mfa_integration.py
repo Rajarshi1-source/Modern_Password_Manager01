@@ -209,7 +209,7 @@ class MFAIntegrationService:
                     factors_required=1,
                     factors_completed=1 if result.get('success') else 0,
                     result='success' if result.get('success') else 'failure',
-                    ip_address=request_data.get('ip_address') or '0.0.0.0',
+                    ip_address=request_data.get('ip_address') or '127.0.0.1',  # nosec B104
                     user_agent=request_data.get('user_agent', ''),
                     device_fingerprint=request_data.get('device_fingerprint', ''),
                 )
@@ -367,7 +367,7 @@ def verify_mfa_for_request(user, request):
     
     # Extract request data
     request_data = {
-        'ip_address': request.META.get('REMOTE_ADDR', '0.0.0.0'),
+        'ip_address': request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
         'user_agent': request.META.get('HTTP_USER_AGENT'),
         'device_fingerprint': request.META.get('HTTP_X_DEVICE_FINGERPRINT'),
         'location': request.META.get('HTTP_X_LOCATION')

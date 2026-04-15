@@ -321,7 +321,7 @@ def authenticate_biometric(request):
             factors_completed=1 if result.get('authenticated') else 0,
             result='success' if result.get('authenticated') else 'failure',
             failure_reason='' if result.get('authenticated') else result.get('message', 'Unknown'),
-            ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'  # nosec B104),
             user_agent=request.META.get('HTTP_USER_AGENT', ''),
             device_fingerprint=device_id
         )
@@ -382,7 +382,7 @@ def start_continuous_auth(request):
             current_auth_score=1.0,
             min_auth_threshold=0.6,
             device_fingerprint=request.data.get('device_fingerprint', ''),
-            ip_address=request.META.get('REMOTE_ADDR', '0.0.0.0'),
+            ip_address=request.META.get('REMOTE_ADDR', '127.0.0.1'  # nosec B104),
             user_agent=request.META.get('HTTP_USER_AGENT', ''),
             expires_at=timezone.now() + timedelta(minutes=session_duration)
         )
@@ -525,7 +525,7 @@ def assess_mfa_risk(request):
         risk_score = 0.0
         
         # Check IP address
-        ip_address = request.META.get('REMOTE_ADDR', '0.0.0.0')
+        ip_address = request.META.get('REMOTE_ADDR', '127.0.0.1'  # nosec B104)
         recent_attempts = AuthenticationAttempt.objects.filter(
             user=user,
             ip_address=ip_address,

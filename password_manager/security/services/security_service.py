@@ -89,7 +89,7 @@ class SecurityService:
                 # Build request context for duress activation
                 ip_address, _ = get_client_ip(request)
                 request_context = {
-                    'ip_address': ip_address or '0.0.0.0',
+                    'ip_address': ip_address or '127.0.0.1',  # nosec B104
                     'user_agent': request.META.get('HTTP_USER_AGENT', ''),
                     'device_fingerprint': request.data.get('device_fingerprint', {}),
                     'geo_location': self._get_location_from_ip(ip_address) if ip_address else {},

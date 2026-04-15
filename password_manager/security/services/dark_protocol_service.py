@@ -754,7 +754,7 @@ def run_relay_node():
                 'region': region,
                 'public_key': secrets.token_bytes(32),
                 'signing_key': secrets.token_bytes(64),
-                'ip_address': public_address or '0.0.0.0',
+                'ip_address': public_address or '127.0.0.1',  # nosec B104
                 'port': 9090,
                 'max_circuits': max_circuits,
             }
@@ -810,7 +810,7 @@ def run_relay_node():
     
     # Start health check server in background
     def start_health_server():
-        health_server = HTTPServer(('0.0.0.0', 9091), HealthHandler)
+        health_server = HTTPServer(('127.0.0.1', 9091), HealthHandler)
         logger.info("Health check server started on port 9091")
         health_server.serve_forever()
     

@@ -129,14 +129,16 @@ class TestChallengeGeneratorService(TestCase):
     @pytest.mark.skipif(LoginAttempt is None, reason="LoginAttempt model not available")
     def test_geolocation_challenge_with_data(self):
         """Test geolocation challenge generation"""
-        # Create login attempts
+        # Create login attempts — LoginAttempt uses `status`, `location`,
+        # `username_attempted`, `user_agent`, and auto-set `timestamp`.
         for i in range(5):
             LoginAttempt.objects.create(
                 user=self.user,
-                success=True,
+                username_attempted=self.user.username,
+                status='success',
                 ip_address=f'192.168.1.{i}',
-                geolocation={'city': 'San Francisco', 'country': 'USA'},
-                created_at=timezone.now() - timedelta(days=i)
+                user_agent='test-agent',
+                location='San Francisco',
             )
         
         challenge_type, question, answer = challenge_generator.generate_geolocation_challenge(

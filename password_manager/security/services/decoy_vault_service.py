@@ -345,8 +345,9 @@ class DecoyVaultService:
     ) -> str:
         """Inject a tracking token into fake credentials"""
         # Create a unique identifier that can track if these credentials are used
-        token = hashlib.md5(
-            f"{user.id}:{password}:{timezone.now().timestamp()}".encode()
+        token = hashlib.md5(  # nosec B324 — non-security use: decoy tracking identifier
+            f"{user.id}:{password}:{timezone.now().timestamp()}".encode(),
+            usedforsecurity=False,
         ).hexdigest()[:6]
         
         # Subtly embed token (not visible in normal display)

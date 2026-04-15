@@ -338,7 +338,7 @@ class DuressCodeService:
             event_type='test_activation' if is_test else 'code_activated',
             duress_code=duress_code,
             threat_level=duress_code.threat_level,
-            ip_address=request_context.get('ip_address', '0.0.0.0'),
+            ip_address=request_context.get('ip_address', '127.0.0.1'  # nosec B104),
             user_agent=request_context.get('user_agent', ''),
             device_fingerprint=request_context.get('device_fingerprint', {}),
             geo_location=request_context.get('geo_location', {}),

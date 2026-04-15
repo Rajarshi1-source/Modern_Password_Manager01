@@ -291,7 +291,7 @@ class CredentialMatcherService:
             try:
                 logger.info(f"Loading Siamese model from {model_path}")
                 self.model.load_state_dict(
-                    torch.load(model_path, map_location=self.device)
+                    torch.load(model_path, map_location=self.device, weights_only=True)  # nosec B614
                 )
                 logger.info("Siamese model loaded successfully")
             except Exception as e:

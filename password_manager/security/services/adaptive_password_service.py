@@ -802,7 +802,7 @@ class MemorabilityLSTM:
             # Load pre-trained weights if available
             if model_path:
                 try:
-                    self.model.load_state_dict(torch.load(model_path))
+                    self.model.load_state_dict(torch.load(model_path, weights_only=True))  # nosec B614
                     logger.info(f"Loaded LSTM model from {model_path}")
                 except Exception as e:
                     logger.warning(f"Could not load model from {model_path}: {e}")
