@@ -35,6 +35,7 @@ class TestChallengeGeneratorService(TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -273,6 +274,7 @@ class TestChallengeGeneratorIntegration(TestCase):
     def setUp(self):
         """Set up comprehensive test environment"""
         self.user = User.objects.create_user(
+            username='integrationuser',
             email='integration@example.com',
             password='TestPassword123!'
         )
