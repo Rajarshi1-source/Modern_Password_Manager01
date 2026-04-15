@@ -111,7 +111,8 @@ class TestChallengeGeneratorService(TestCase):
                 fingerprint=f'fp_{browser}',
                 browser=browser,
                 os='Windows',
-                is_trusted=True
+                is_trusted=True,
+                ip_address='127.0.0.1',
             )
         
         challenge_type, question, answer = challenge_generator.generate_device_fingerprint_challenge(
@@ -308,7 +309,8 @@ class TestChallengeGeneratorIntegration(TestCase):
                 fingerprint='fp_chrome',
                 browser='Chrome',
                 os='Windows',
-                is_trusted=True
+                is_trusted=True,
+                ip_address='127.0.0.1',
             )
         
         # Set up login attempts if available
