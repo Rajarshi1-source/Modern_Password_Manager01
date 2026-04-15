@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Dependencies - Install npm packages
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 
 # Set working directory
 WORKDIR /app
@@ -24,7 +24,7 @@ RUN npm ci && \
 # -----------------------------------------------------------------------------
 # Stage 2: Builder - Build the application
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:25-alpine AS builder
 
 # Set working directory
 WORKDIR /app
