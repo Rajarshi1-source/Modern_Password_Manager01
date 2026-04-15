@@ -5,8 +5,8 @@ from unittest.mock import patch, Mock, MagicMock
 from datetime import timedelta
 import json
 
-from .models import LoginAttempt, UserDevice, SocialMediaAccount, SecurityAlert
-from .services.security_service import SecurityService, NotificationService
+from ..models import LoginAttempt, UserDevice, SocialMediaAccount, SecurityAlert
+from ..services.security_service import SecurityService, NotificationService
 from auth_module.views import AuthViewSet
 
 
