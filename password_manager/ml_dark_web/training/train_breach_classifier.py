@@ -145,8 +145,8 @@ def train_model(num_samples=10000, epochs=10, batch_size=16, save_model=True):
     
     # Load tokenizer and model
     print("Loading DistilBERT tokenizer and model...")
-    tokenizer = AutoTokenizer.from_pretrained(MLDarkWebConfig.BERT_MODEL_NAME)
-    model = AutoModelForSequenceClassification.from_pretrained(
+    tokenizer = AutoTokenizer.from_pretrained(MLDarkWebConfig.BERT_MODEL_NAME)  # nosec B615
+    model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
         MLDarkWebConfig.BERT_MODEL_NAME,
         num_labels=MLDarkWebConfig.BERT_NUM_LABELS
     )

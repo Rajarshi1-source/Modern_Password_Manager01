@@ -16,6 +16,7 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from django.http import JsonResponse
+from health_check.views import MainView as HealthCheckMainView
 from django.views.decorators.http import require_http_methods
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
@@ -59,8 +60,8 @@ urlpatterns = [
     # Prometheus metrics export (scraped by K8s prometheus.io/scrape annotation)
     path('', include('django_prometheus.urls')),
 
-    # django-health-check: standardized endpoint for DB, cache, migrations, Celery
-    path('ht/', include('health_check.urls')),
+    # django-health-check v4: view-based endpoint (DB, cache, migrations, Celery)
+    path('ht/', HealthCheckMainView.as_view(), name='health-check-main'),
 
     # Health check endpoints (for monitoring)
     # Root-level health checks (for container orchestration)

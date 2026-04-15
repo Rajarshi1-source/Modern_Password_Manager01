@@ -158,11 +158,9 @@ INSTALLED_APPS = [
     'django_prometheus',
 
     # Health checks (standardized probes for K8s / Docker)
+    # django-health-check v4: only the base app in INSTALLED_APPS;
+    # deprecated sub-apps removed — checks configured via HealthCheckView in urls.py.
     'health_check',
-    'health_check.db',
-    'health_check.cache',
-    'health_check.contrib.migrations',
-    'health_check.contrib.celery_ping',
 ]
 
 MIDDLEWARE = [

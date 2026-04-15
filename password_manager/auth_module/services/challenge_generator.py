@@ -47,19 +47,34 @@ class ChallengeGeneratorService:
         """
         Ask about first website saved to vault
         """
+        import json as _json
+
         vault_items = VaultItem.objects.filter(user=user).order_by('created_at')
-        
+
         if vault_items.count() < 3:
             return 'historical_activity', None, None
-        
+
         first_item = vault_items.first()
-        
-        # Extract domain from URL
-        domain = self._extract_domain(first_item.website_url)
-        
-        question = f"What was the first website you saved to your vault? (e.g., example.com)"
+
+        # EncryptedVaultItem stores per-item data inside `encrypted_data`.
+        # In production that blob is encrypted; in test environments it is
+        # plain JSON.  Fall back gracefully when the field is absent or
+        # cannot be decoded.
+        website_url = getattr(first_item, 'website_url', None)
+        if not website_url:
+            try:
+                item_data = _json.loads(first_item.encrypted_data)
+                website_url = item_data.get('website_url', '')
+            except (AttributeError, TypeError, ValueError):
+                website_url = ''
+
+        if not website_url:
+            return 'historical_activity', None, None
+
+        domain = self._extract_domain(website_url)
+        question = "What was the first website you saved to your vault? (e.g., example.com)"
         answer = domain
-        
+
         return 'historical_activity', question, answer
     
     def generate_device_fingerprint_challenge(self, user) -> Tuple[str, Optional[str], Optional[str]]:

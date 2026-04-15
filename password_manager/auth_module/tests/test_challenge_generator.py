@@ -4,6 +4,9 @@ Unit Tests for Challenge Generator Service
 Tests personalized temporal challenge generation based on user behavior and data.
 """
 
+import json
+import uuid
+
 import pytest
 from django.test import TestCase
 from django.contrib.auth import get_user_model
@@ -71,15 +74,20 @@ class TestChallengeGeneratorService(TestCase):
     @pytest.mark.skipif(VaultItem is None, reason="VaultItem model not available")
     def test_historical_activity_challenge_with_data(self):
         """Test historical activity challenge generation with vault data"""
-        # Create vault items
+        # Create vault items using EncryptedVaultItem fields.
+        # encrypted_data stores a plain-JSON payload in tests (no real encryption).
         for i in range(3):
             VaultItem.objects.create(
                 user=self.user,
-                website_url=f'https://example{i}.com',
-                website_name=f'Example {i}',
-                username='testuser',
-                encrypted_password='encrypted',
-                created_at=timezone.now() - timedelta(days=30-i)
+                item_id=str(uuid.uuid4()),
+                item_type='password',
+                encrypted_data=json.dumps({
+                    'website_url': f'https://example{i}.com',
+                    'website_name': f'Example {i}',
+                    'username': 'testuser',
+                    'password': 'encrypted',
+                }),
+                created_at=timezone.now() - timedelta(days=30 - i),
             )
         
         challenge_type, question, answer = challenge_generator.generate_historical_activity_challenge(

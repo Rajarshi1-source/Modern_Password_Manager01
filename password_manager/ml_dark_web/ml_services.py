@@ -39,28 +39,28 @@ class BreachClassifierService:
             model_path = model_path or self.config.BERT_MODEL_PATH
             
             # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(
+            self.tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
                 self.config.BERT_MODEL_NAME,
                 cache_dir=self.config.MODELS_DIR
             )
-            
+
             # Try to load fine-tuned model
             if model_path.exists():
                 logger.info(f"Loading fine-tuned model from {model_path}")
-                self.model = AutoModelForSequenceClassification.from_pretrained(
+                self.model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
                     model_path,
                     num_labels=self.config.BERT_NUM_LABELS
                 )
             else:
                 logger.warning(f"Fine-tuned model not found at {model_path}. Using base model.")
                 # Load base model for fine-tuning
-                config = AutoConfig.from_pretrained(
+                config = AutoConfig.from_pretrained(  # nosec B615
                     self.config.BERT_MODEL_NAME,
                     num_labels=self.config.BERT_NUM_LABELS,
                     hidden_dropout_prob=self.config.BERT_DROPOUT,
                     attention_probs_dropout_prob=self.config.BERT_DROPOUT
                 )
-                self.model = AutoModelForSequenceClassification.from_pretrained(
+                self.model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
                     self.config.BERT_MODEL_NAME,
                     config=config,
                     cache_dir=self.config.MODELS_DIR

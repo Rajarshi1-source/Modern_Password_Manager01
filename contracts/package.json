@@ -22,10 +22,20 @@
   },
   "overrides": {
     "tmp": ">=0.2.4",
-    "@openzeppelin/contracts-upgradeable": "^4.9.6"
+    "@openzeppelin/contracts-upgradeable": "^4.9.6",
+    "@arbitrum/nitro-contracts": {
+      "@openzeppelin/contracts": "^4.8.3",
+      "@openzeppelin/contracts-upgradeable": "^4.8.3"
+    },
+    "@offchainlabs/upgrade-executor": {
+      "@openzeppelin/contracts": "^4.8.3",
+      "@openzeppelin/contracts-upgradeable": "^4.8.3"
+    }
   },
   "resolutions": {
     "tmp": ">=0.2.4",
-    "@openzeppelin/contracts-upgradeable": "^4.9.6"
+    "@openzeppelin/contracts-upgradeable": "^4.9.6",
+    "@arbitrum/nitro-contracts/@openzeppelin/contracts": "^4.8.3",
+    "@offchainlabs/upgrade-executor/@openzeppelin/contracts": "^4.8.3"
   }
 }
