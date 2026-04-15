@@ -56,6 +56,12 @@ def api_root(request):
     })
 
 urlpatterns = [
+    # Prometheus metrics export (scraped by K8s prometheus.io/scrape annotation)
+    path('', include('django_prometheus.urls')),
+
+    # django-health-check: standardized endpoint for DB, cache, migrations, Celery
+    path('ht/', include('health_check.urls')),
+
     # Health check endpoints (for monitoring)
     # Root-level health checks (for container orchestration)
     path('health/', health_check, name='health-check'),

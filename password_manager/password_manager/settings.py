@@ -153,9 +153,20 @@ INSTALLED_APPS = [
     'push_notifications',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',  # Token blacklisting for JWT rotation
+
+    # Prometheus metrics export
+    'django_prometheus',
+
+    # Health checks (standardized probes for K8s / Docker)
+    'health_check',
+    'health_check.db',
+    'health_check.cache',
+    'health_check.contrib.migrations',
+    'health_check.contrib.celery_ping',
 ]
 
 MIDDLEWARE = [
+    'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     # FIX: CSRF exemption for auth endpoints - MUST be before CsrfViewMiddleware
@@ -180,6 +191,7 @@ MIDDLEWARE = [
     'shared.performance_middleware.DatabaseQueryMonitoringMiddleware',
     'shared.performance_middleware.APIPerformanceMiddleware',
     'shared.performance_middleware.CachePerformanceMiddleware',
+    'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
 # Response compression settings
@@ -1668,6 +1680,40 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 AI_ASSISTANT_MODEL = os.environ.get('AI_ASSISTANT_MODEL', 'claude-sonnet-4-6')
 AI_ASSISTANT_MAX_TOKENS = int(os.environ.get('AI_ASSISTANT_MAX_TOKENS', '4096'))
 AI_ASSISTANT_RATE_LIMIT = os.environ.get('AI_ASSISTANT_RATE_LIMIT', '20/hour')
+
+# =============================================================================
+# SENTRY — Error Tracking & Performance Monitoring
+# =============================================================================
+# Activated by setting SENTRY_DSN env var. Does nothing when DSN is absent.
+
+SENTRY_DSN = os.environ.get('SENTRY_DSN', '')
+SENTRY_TRACES_SAMPLE_RATE = float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0.1'))
+SENTRY_PROFILES_SAMPLE_RATE = float(os.environ.get('SENTRY_PROFILES_SAMPLE_RATE', '0.1'))
+
+if SENTRY_DSN:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.celery import CeleryIntegration
+    from sentry_sdk.integrations.logging import LoggingIntegration
+    from sentry_sdk.integrations.redis import RedisIntegration
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[
+            DjangoIntegration(
+                transaction_style='url',
+                middleware_spans=True,
+            ),
+            CeleryIntegration(monitor_beat_tasks=True),
+            LoggingIntegration(level=None, event_level='ERROR'),
+            RedisIntegration(),
+        ],
+        traces_sample_rate=SENTRY_TRACES_SAMPLE_RATE,
+        profiles_sample_rate=SENTRY_PROFILES_SAMPLE_RATE,
+        send_default_pii=False,
+        environment=os.environ.get('SENTRY_ENVIRONMENT', 'development' if DEBUG else 'production'),
+        release=os.environ.get('SENTRY_RELEASE', os.environ.get('GIT_SHA', '')),
+    )
 
 # =============================================================================
 # Test-environment overrides

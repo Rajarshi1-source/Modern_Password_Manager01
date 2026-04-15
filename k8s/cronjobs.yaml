@@ -1,0 +1,125 @@
+# =============================================================================
+# K8s CronJobs — cluster-native scheduling for maintenance tasks that must
+# run even when Celery beat is unhealthy.
+#
+# Image tags use ${GITHUB_SHA} placeholders (same as deployment.yaml).
+# Deploy via:  envsubst < k8s/cronjobs.yaml | kubectl apply -f -
+# =============================================================================
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cleanup-old-logs
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: maintenance
+spec:
+  schedule: "0 4 * * 0"  # Sunday 04:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600
+      template:
+        metadata:
+          labels:
+            app: password-manager
+            component: maintenance
+            job: cleanup-old-logs
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: password-manager-sa
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+          - name: cleanup
+            image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+            command: ["python", "manage.py", "cleanup_old_logs"]
+            envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+            resources:
+              requests:
+                cpu: "50m"
+                memory: "128Mi"
+              limits:
+                cpu: "200m"
+                memory: "256Mi"
+            securityContext:
+              readOnlyRootFilesystem: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-backup
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: maintenance
+spec:
+  schedule: "30 3 * * *"  # Daily 03:30 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: password-manager
+            component: maintenance
+            job: db-backup
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: password-manager-sa
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+          containers:
+          - name: backup
+            image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+            command: ["python", "manage.py", "db_backup", "--output", "/backups"]
+            envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+            volumeMounts:
+            - name: backup-volume
+              mountPath: /backups
+            - name: tmp
+              mountPath: /tmp
+            resources:
+              requests:
+                cpu: "100m"
+                memory: "256Mi"
+              limits:
+                cpu: "500m"
+                memory: "512Mi"
+            securityContext:
+              readOnlyRootFilesystem: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+          volumes:
+          - name: backup-volume
+            emptyDir: {}
+          - name: tmp
+            emptyDir: {}

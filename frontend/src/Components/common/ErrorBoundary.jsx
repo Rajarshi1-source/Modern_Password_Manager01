@@ -1,6 +1,7 @@
 import React from 'react';
 import styled from 'styled-components';
 import { FaExclamationTriangle, FaSync } from 'react-icons/fa';
+import * as Sentry from '@sentry/react';
 
 const ErrorContainer = styled.div`
   display: flex;
@@ -156,19 +157,10 @@ class ErrorBoundary extends React.Component {
   }
 
   reportError = (error, errorInfo) => {
-    // Send error to monitoring service
-    // This is where you'd integrate with services like:
-    // - Sentry: Sentry.captureException(error)
-    // - LogRocket: LogRocket.captureException(error)
-    // - Custom analytics
-
-    console.error('Error reported to monitoring service:', {
-      error: error.toString(),
-      stack: error.stack,
-      componentStack: errorInfo.componentStack,
-      timestamp: new Date().toISOString(),
-      userAgent: navigator.userAgent,
-      url: window.location.href
+    Sentry.withScope((scope) => {
+      scope.setExtra('componentStack', errorInfo.componentStack);
+      scope.setExtra('url', window.location.href);
+      Sentry.captureException(error);
     });
   };
 

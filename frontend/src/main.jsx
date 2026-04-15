@@ -1,11 +1,27 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import * as Sentry from '@sentry/react'
 import './index.css'
 import App from './App.jsx'
 import reportWebVitals from './reportWebVitals'
 import { BrowserRouter } from 'react-router-dom'
 import { ThemeProvider } from 'styled-components'
 import { AuthProvider } from './hooks/useAuth.jsx' // JWT Authentication Provider
+
+if (import.meta.env.VITE_SENTRY_DSN) {
+  Sentry.init({
+    dsn: import.meta.env.VITE_SENTRY_DSN,
+    integrations: [
+      Sentry.browserTracingIntegration(),
+      Sentry.replayIntegration({ maskAllText: true, blockAllMedia: true }),
+    ],
+    tracesSampleRate: parseFloat(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.1'),
+    replaysSessionSampleRate: 0,
+    replaysOnErrorSampleRate: 1.0,
+    environment: import.meta.env.MODE,
+    release: import.meta.env.VITE_SENTRY_RELEASE || undefined,
+  })
+}
 
 // Default theme for the application
 const theme = {
