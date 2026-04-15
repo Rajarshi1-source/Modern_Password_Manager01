@@ -104,11 +104,13 @@ class TestChallengeGeneratorService(TestCase):
     @pytest.mark.skipif(UserDevice is None, reason="UserDevice model not available")
     def test_device_fingerprint_challenge_with_data(self):
         """Test device fingerprint challenge generation"""
-        # Create devices
-        for browser in ['Chrome', 'Firefox', 'Chrome']:
+        # Create devices — fingerprints must be unique; use an index suffix
+        # so two Chrome devices can coexist (Chrome appears twice to make it
+        # the most-used browser, which is what this test exercises).
+        for idx, browser in enumerate(['Chrome', 'Firefox', 'Chrome']):
             UserDevice.objects.create(
                 user=self.user,
-                fingerprint=f'fp_{browser}',
+                fingerprint=f'fp_{browser}_{idx}',
                 browser=browser,
                 os='Windows',
                 is_trusted=True,
