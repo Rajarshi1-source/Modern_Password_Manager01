@@ -55,7 +55,7 @@ class TestTrustScorerService(TestCase):
             status='challenge_phase',
             initiated_from_ip='192.168.1.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             initiated_from_location={'city': 'San Francisco', 'country': 'USA'},
             initiated_at=timezone.now(),
             expires_at=timezone.now() + timedelta(days=14)
@@ -470,7 +470,7 @@ class TestTrustScorerIntegration(TestCase):
             status='challenge_phase',
             initiated_from_ip='192.168.1.1',
             initiated_from_device_fingerprint='trusted_fp',
-            initiated_from_user_agent='test_ua',
+
             initiated_from_location={'city': 'San Francisco', 'country': 'USA'},
             challenges_sent=5,
             challenges_completed=5,
@@ -529,7 +529,7 @@ class TestTrustScorerIntegration(TestCase):
             status='challenge_phase',
             initiated_from_ip='1.2.3.4',  # Unknown IP
             initiated_from_device_fingerprint='unknown_fp',
-            initiated_from_user_agent='test_ua',
+
             initiated_from_location={'city': 'Unknown', 'country': 'Unknown'},
             challenges_sent=5,
             challenges_completed=2,

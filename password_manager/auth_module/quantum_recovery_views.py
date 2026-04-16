@@ -492,13 +492,14 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
             # Cancel attempt
             attempt.status = 'cancelled'
             attempt.user_cancelled = True
+            attempt.canary_alert_acknowledged = True
             attempt.failure_reason = 'Cancelled by legitimate user via canary alert'
             attempt.save()
             
             # Log audit event
             RecoveryAuditLog.objects.create(
                 user=request.user,
-                event_type='user_cancelled_recovery',
+                event_type='recovery_cancelled',
                 recovery_attempt_id=attempt.id,
                 event_data={
                     'attempt_id': str(attempt_id),

@@ -196,7 +196,7 @@ class TestUnauthorizedAccessControl(TestCase):
             status='challenge_phase',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             expires_at=timezone.now() + timedelta(days=14)
         )
     
@@ -353,7 +353,7 @@ class TestHoneypotSecurity(TestCase):
             status='shard_collection',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             expires_at=timezone.now() + timedelta(days=14)
         )
     
@@ -460,7 +460,7 @@ class TestRateLimitingSecurity(TestCase):
                 status='failed',
                 initiated_from_ip='127.0.0.1',
                 initiated_from_device_fingerprint=f'fp_{i}',
-                initiated_from_user_agent='test_ua',
+
                 expires_at=timezone.now() + timedelta(days=14),
                 initiated_at=timezone.now() - timedelta(minutes=i)
             )
@@ -524,7 +524,7 @@ class TestDataEncryptionSecurity(TestCase):
             status='challenge_phase',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             expires_at=timezone.now() + timedelta(days=14)
         )
         

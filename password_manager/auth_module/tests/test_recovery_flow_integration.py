@@ -121,7 +121,7 @@ class TestChallengeResponse(TestCase):
             status='challenge_phase',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             challenges_sent=5,
             challenges_completed=0,
             expires_at=timezone.now() + timedelta(days=14)
@@ -247,9 +247,7 @@ class TestCanaryAlerts(TestCase):
             status='initiated',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
             expires_at=timezone.now() + timedelta(days=14),
-            canary_alert_window_expires_at=timezone.now() + timedelta(hours=48)
         )
     
     def test_cancel_recovery_within_canary_window(self):
@@ -338,7 +336,7 @@ class TestRateLimiting(TestCase):
                 status='failed',
                 initiated_from_ip='127.0.0.1',
                 initiated_from_device_fingerprint=f'test_fp_{i}',
-                initiated_from_user_agent='test_ua',
+
                 expires_at=timezone.now() + timedelta(days=14),
                 initiated_at=timezone.now() - timedelta(hours=i)
             )
@@ -388,7 +386,7 @@ class TestGuardianApproval(TestCase):
             status='guardian_approval',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             expires_at=timezone.now() + timedelta(days=14),
             guardian_approvals_required=2
         )
@@ -519,7 +517,6 @@ class TestCompleteRecoveryFlow(TestCase):
         attempt.status = 'shard_collection'
         attempt.challenges_sent = 5
         attempt.challenges_completed = 5
-        attempt.challenge_success_rate = 1.0
         attempt.trust_score = 0.9
         attempt.save()
         

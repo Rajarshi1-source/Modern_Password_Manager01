@@ -349,7 +349,7 @@ class TestEndToEndRecoveryFlow(TestCase):
             status='shard_collection',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             trust_score=0.85,
             challenges_sent=5,
             challenges_completed=5,
@@ -404,7 +404,7 @@ class TestEndToEndRecoveryFlow(TestCase):
             status='shard_collection',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-            initiated_from_user_agent='test_ua',
+
             trust_score=0.50,
             expires_at=timezone.now() + timedelta(days=14)
         )
