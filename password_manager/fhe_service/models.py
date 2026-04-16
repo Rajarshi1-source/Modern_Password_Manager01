@@ -25,6 +25,7 @@ class FHEKeyStore(models.Model):
         ('seal_secret', 'SEAL Secret Key'),
         ('seal_relin', 'SEAL Relinearization Key'),
         ('seal_galois', 'SEAL Galois Key'),
+        ('umbral_pre', 'Umbral Proxy Re-Encryption'),
     )
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -47,6 +48,20 @@ class FHEKeyStore(models.Model):
     # CKKS-specific parameters
     scale = models.FloatField(null=True, blank=True)
     coefficient_modulus = models.JSONField(default=list, blank=True)
+
+    # ============================================================
+    # Umbral proxy re-encryption (PRE) keys
+    # ============================================================
+    # These fields are populated for `key_type='umbral_pre'` rows. They
+    # hold the *public* key material registered by the user at first
+    # enrollment. The secret keys stay client-side, encrypted under the
+    # user's master key via secureVaultCrypto.
+    #
+    # See fhe_sharing/SPEC.md section 3.1 for the cryptographic contract.
+    umbral_public_key = models.BinaryField(null=True, blank=True)
+    umbral_verifying_key = models.BinaryField(null=True, blank=True)
+    umbral_signer_public_key = models.BinaryField(null=True, blank=True)
+    pre_schema_version = models.PositiveSmallIntegerField(default=1)
     
     # Timestamps
     created_at = models.DateTimeField(default=timezone.now)

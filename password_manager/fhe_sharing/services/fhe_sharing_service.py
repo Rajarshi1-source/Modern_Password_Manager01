@@ -22,8 +22,20 @@ from django.utils import timezone
 
 from ..models import HomomorphicShare, ShareAccessLog, ShareGroup
 from .autofill_circuit_service import get_autofill_circuit_service
+from .pre_service import (
+    get_pre_service,
+    UmbralUnavailableError,
+    ReencryptionError,
+    is_available as pre_backend_available,
+)
+from .policy_fhe_service import get_policy_fhe_service
 
 logger = logging.getLogger(__name__)
+
+
+CIPHER_SUITE_SIMULATED = 'simulated-v1'
+CIPHER_SUITE_UMBRAL = 'umbral-v1'
+SUPPORTED_SUITES = {CIPHER_SUITE_SIMULATED, CIPHER_SUITE_UMBRAL}
 
 
 def _get_fhe_sharing_settings():
@@ -36,10 +48,19 @@ def _get_fhe_sharing_settings():
         'DOMAIN_BINDING_REQUIRED': True,
         'AUDIT_RETENTION_DAYS': 365,
         'CLEANUP_INTERVAL_HOURS': 6,
+        # Umbral PRE rollout controls. See fhe_sharing/SPEC.md §10.
+        'PRE_ENABLED': True,
+        'ROLLOUT_STAGE': 'opt_in',  # off | opt_in | default_on
     }
     configured = getattr(django_settings, 'FHE_SHARING_SETTINGS', {})
     defaults.update(configured)
     return defaults
+
+
+def pre_is_enabled() -> bool:
+    """Feature-flag gate for the real PRE (umbral-v1) share path."""
+    settings = _get_fhe_sharing_settings()
+    return bool(settings.get('PRE_ENABLED'))
 
 
 class HomomorphicSharingService:
@@ -55,6 +76,8 @@ class HomomorphicSharingService:
 
     def __init__(self):
         self._circuit_service = None
+        self._pre_service = None
+        self._policy_service = None
         self._settings = None
 
     @property
@@ -62,6 +85,18 @@ class HomomorphicSharingService:
         if self._circuit_service is None:
             self._circuit_service = get_autofill_circuit_service()
         return self._circuit_service
+
+    @property
+    def pre_service(self):
+        if self._pre_service is None:
+            self._pre_service = get_pre_service()
+        return self._pre_service
+
+    @property
+    def policy_service(self):
+        if self._policy_service is None:
+            self._policy_service = get_policy_fhe_service()
+        return self._policy_service
 
     @property
     def sharing_settings(self):
@@ -230,6 +265,164 @@ class HomomorphicSharingService:
         return share
 
     # ================================================================
+    # PRE-backed share creation (cipher_suite='umbral-v1')
+    # ================================================================
+
+    @transaction.atomic
+    def create_umbral_share(
+        self,
+        owner,
+        vault_item,
+        recipient,
+        capsule: bytes,
+        ciphertext: bytes,
+        kfrag: bytes,
+        delegating_pk: bytes,
+        verifying_pk: bytes,
+        receiving_pk: bytes,
+        domain_constraints: Optional[List[str]] = None,
+        expires_at=None,
+        max_uses: Optional[int] = None,
+        group: Optional[ShareGroup] = None,
+        request=None,
+    ) -> HomomorphicShare:
+        """Create a `cipher_suite='umbral-v1'` share.
+
+        The owner has already run client-side Umbral encryption and
+        kfrag generation — the server NEVER sees the plaintext password
+        or the owner's secret key. We only store the opaque payload
+        plus public-key fingerprints for integrity binding.
+
+        Raises:
+            ValueError: validation failure.
+            PermissionError: owner does not own the vault item.
+            RuntimeError: feature flag disabled.
+        """
+        start_time = time.time()
+
+        if not pre_is_enabled():
+            raise RuntimeError("PRE sharing is disabled by server policy")
+
+        if owner == recipient:
+            raise ValueError("Cannot share a password with yourself")
+        if vault_item.user_id != owner.id:
+            raise PermissionError("You can only share vault items you own")
+        if vault_item.item_type != 'password':
+            raise ValueError("Only password items can be shared via FHE")
+        if vault_item.deleted:
+            raise ValueError("Cannot share a deleted vault item")
+
+        for name, value in (
+            ('capsule', capsule),
+            ('ciphertext', ciphertext),
+            ('kfrag', kfrag),
+            ('delegating_pk', delegating_pk),
+            ('verifying_pk', verifying_pk),
+            ('receiving_pk', receiving_pk),
+        ):
+            if not isinstance(value, (bytes, bytearray)) or len(value) == 0:
+                raise ValueError(f"'{name}' must be non-empty bytes")
+
+        if domain_constraints is None:
+            domain_constraints = []
+
+        settings = self.sharing_settings
+        if settings['DOMAIN_BINDING_REQUIRED'] and not domain_constraints:
+            raise ValueError("Domain binding is required")
+
+        if max_uses is not None:
+            if max_uses < 1 or max_uses > settings['MAX_USES_LIMIT']:
+                raise ValueError(
+                    f"max_uses must be between 1 and {settings['MAX_USES_LIMIT']}"
+                )
+
+        if expires_at is not None:
+            max_expiry = timezone.now() + timezone.timedelta(
+                days=settings['MAX_EXPIRY_DAYS']
+            )
+            if expires_at > max_expiry:
+                raise ValueError(
+                    f"Expiration cannot be more than "
+                    f"{settings['MAX_EXPIRY_DAYS']} days from now"
+                )
+            if expires_at <= timezone.now():
+                raise ValueError("Expiration must be in the future")
+        elif settings['DEFAULT_EXPIRY_HOURS']:
+            expires_at = timezone.now() + timezone.timedelta(
+                hours=settings['DEFAULT_EXPIRY_HOURS']
+            )
+
+        existing = HomomorphicShare.objects.filter(
+            owner=owner,
+            recipient=recipient,
+            vault_item=vault_item,
+            is_active=True,
+        ).exclude(
+            expires_at__lt=timezone.now()
+        ).first()
+        if existing:
+            raise ValueError(
+                f"An active share of this item to {recipient.username} "
+                f"already exists. Revoke it first."
+            )
+
+        share = HomomorphicShare.objects.create(
+            owner=owner,
+            recipient=recipient,
+            vault_item=vault_item,
+            group=group,
+            cipher_suite=CIPHER_SUITE_UMBRAL,
+            encrypted_autofill_token=None,
+            capsule=bytes(capsule),
+            ciphertext=bytes(ciphertext),
+            kfrag=bytes(kfrag),
+            delegating_pk=bytes(delegating_pk),
+            verifying_pk=bytes(verifying_pk),
+            receiving_pk=bytes(receiving_pk),
+            encrypted_domain_binding=json.dumps(domain_constraints),
+            token_metadata={
+                'cipher_suite': CIPHER_SUITE_UMBRAL,
+                'schema_version': 2,
+                'capsule_size': len(capsule),
+                'ciphertext_size': len(ciphertext),
+                'kfrag_size': len(kfrag),
+                'server_pyumbral_available': pre_backend_available(),
+            },
+            permission_level='autofill_only',
+            can_autofill=True,
+            can_view_password=False,
+            can_copy_password=False,
+            max_uses=max_uses,
+            expires_at=expires_at,
+            is_active=True,
+        )
+
+        self._log_action(
+            share=share,
+            user=owner,
+            action='share_created',
+            request=request,
+            details={
+                'cipher_suite': CIPHER_SUITE_UMBRAL,
+                'recipient_username': recipient.username,
+                'domain_constraints': domain_constraints,
+                'max_uses': max_uses,
+                'expires_at': expires_at.isoformat() if expires_at else None,
+                'creation_time_ms': int((time.time() - start_time) * 1000),
+            },
+        )
+
+        logger.info(
+            "[FHE Sharing] umbral-v1 share created: %s -> %s (item %s, %dms)",
+            owner.username,
+            recipient.username,
+            str(vault_item.id)[:8],
+            int((time.time() - start_time) * 1000),
+        )
+
+        return share
+
+    # ================================================================
     # Share Usage (Autofill)
     # ================================================================
 
@@ -311,38 +504,43 @@ class HomomorphicSharingService:
                 f"Usage limit reached ({share.max_uses} uses)"
             )
 
-        # === Domain Binding Check ===
+        # === Domain Binding Check (both suites share this path) ===
         domain_constraints = share.get_bound_domains()
-        validation = self.circuit_service.validate_autofill_circuit(
-            token=bytes(share.encrypted_autofill_token),
-            domain=domain,
-            owner_id=str(share.owner_id),
-            recipient_id=str(share.recipient_id),
-            vault_item_id=str(share.vault_item_id),
-            domain_constraints=domain_constraints,
-        )
-
-        if not validation['valid']:
+        if not self._domain_matches(domain, domain_constraints):
             self._log_action(
                 share=share, user=recipient, action='domain_mismatch',
                 domain=domain, success=False,
-                failure_reason=validation['reason'],
+                failure_reason=(
+                    f"Domain '{domain}' not in allowed domains"
+                    if domain_constraints else 'Domain constraints missing'
+                ),
                 request=request,
             )
             raise ValueError(
-                f"Autofill denied: {validation['reason']}"
+                f"Autofill denied: domain '{domain}' not allowed"
             )
 
-        # === Generate Autofill Payload ===
-        payload = self.circuit_service.generate_form_fill_payload(
-            token=bytes(share.encrypted_autofill_token),
-            form_field_selector=form_field_selector,
-            domain=domain,
-        )
+        # Branch on cipher suite.
+        if share.is_umbral:
+            response = self._use_umbral_share(
+                share=share,
+                recipient=recipient,
+                domain=domain,
+                form_field_selector=form_field_selector,
+                request=request,
+            )
+        else:
+            response = self._use_simulated_share(
+                share=share,
+                recipient=recipient,
+                domain=domain,
+                form_field_selector=form_field_selector,
+                domain_constraints=domain_constraints,
+                request=request,
+            )
 
-        # === Record Usage ===
+        # === Record Usage (common to both suites) ===
         share.record_use()
-
         self._log_action(
             share=share, user=recipient, action='autofill_used',
             domain=domain, success=True,
@@ -350,21 +548,143 @@ class HomomorphicSharingService:
             details={
                 'use_count': share.use_count,
                 'remaining_uses': share.remaining_uses,
+                'cipher_suite': share.cipher_suite,
             },
         )
-
         logger.info(
-            f"[FHE Sharing] Autofill used: share {str(share.id)[:8]} "
-            f"on {domain} (use #{share.use_count})"
+            "[FHE Sharing] Autofill used (%s): share %s on %s (use #%d)",
+            share.cipher_suite,
+            str(share.id)[:8],
+            domain,
+            share.use_count,
         )
 
-        return {
-            'payload': payload,
+        response.update({
             'share_id': str(share.id),
             'use_count': share.use_count,
             'remaining_uses': share.remaining_uses,
-            'expires_at': share.expires_at.isoformat() if share.expires_at else None,
+            'expires_at': (
+                share.expires_at.isoformat() if share.expires_at else None
+            ),
+        })
+        return response
+
+    # ---------------------------------------------------------------
+    # Suite-specific autofill branches
+    # ---------------------------------------------------------------
+
+    def _use_simulated_share(
+        self,
+        share: HomomorphicShare,
+        recipient,
+        domain: str,
+        form_field_selector: str,
+        domain_constraints: List[str],
+        request=None,
+    ) -> Dict[str, Any]:
+        """Legacy simulated-v1 path (unchanged behaviour)."""
+        token_bytes = (
+            bytes(share.encrypted_autofill_token)
+            if share.encrypted_autofill_token is not None else b''
+        )
+        validation = self.circuit_service.validate_autofill_circuit(
+            token=token_bytes,
+            domain=domain,
+            owner_id=str(share.owner_id),
+            recipient_id=str(share.recipient_id),
+            vault_item_id=str(share.vault_item_id),
+            domain_constraints=domain_constraints,
+        )
+        if not validation['valid']:
+            self._log_action(
+                share=share, user=recipient, action='autofill_denied',
+                domain=domain, success=False,
+                failure_reason=validation['reason'],
+                request=request,
+            )
+            raise ValueError(f"Autofill denied: {validation['reason']}")
+
+        payload = self.circuit_service.generate_form_fill_payload(
+            token=token_bytes,
+            form_field_selector=form_field_selector,
+            domain=domain,
+        )
+        return {
+            'schema_version': 1,
+            'cipher_suite': CIPHER_SUITE_SIMULATED,
+            'payload': payload,
         }
+
+    def _use_umbral_share(
+        self,
+        share: HomomorphicShare,
+        recipient,
+        domain: str,
+        form_field_selector: str,
+        request=None,
+    ) -> Dict[str, Any]:
+        """Real PRE path — reencrypt capsule with stored kfrag."""
+        import base64
+        if not pre_is_enabled():
+            raise ValueError("PRE sharing is temporarily disabled")
+
+        if share.kfrag is None or share.capsule is None or share.ciphertext is None:
+            raise ValueError("This share is missing its PRE payload")
+
+        try:
+            cfrag_bytes = self.pre_service.reencrypt(
+                capsule_bytes=bytes(share.capsule),
+                kfrag_bytes=bytes(share.kfrag),
+            )
+        except UmbralUnavailableError:
+            # Server-side library missing: surface a retryable message.
+            raise ValueError(
+                "Server PRE backend unavailable — contact administrator"
+            )
+        except ReencryptionError as exc:
+            logger.error("[FHE Sharing] Reencryption failed: %s", exc)
+            raise ValueError("Re-encryption failed")
+
+        def _b64(b):
+            return base64.urlsafe_b64encode(bytes(b)).decode('ascii').rstrip('=')
+
+        sealed_envelope = {
+            'version': 2,
+            'cipher_suite': CIPHER_SUITE_UMBRAL,
+            'target_selector': form_field_selector,
+            'domain': domain,
+            'instructions': {
+                'method': 'sealed_inject',
+                'clear_after_ms': 0,
+                'prevent_copy': True,
+                'prevent_inspect': True,
+            },
+        }
+
+        return {
+            'schema_version': 2,
+            'cipher_suite': CIPHER_SUITE_UMBRAL,
+            'capsule': _b64(share.capsule),
+            'cfrag': _b64(cfrag_bytes),
+            'ciphertext': _b64(share.ciphertext),
+            'delegating_pk': _b64(share.delegating_pk) if share.delegating_pk else None,
+            'verifying_pk': _b64(share.verifying_pk) if share.verifying_pk else None,
+            'target_selector': form_field_selector,
+            'sealed_envelope': sealed_envelope,
+        }
+
+    def _domain_matches(
+        self, domain: str, allowed_domains: List[str],
+    ) -> bool:
+        """Shared domain-binding check for both suites."""
+        if not allowed_domains:
+            return False if self.sharing_settings['DOMAIN_BINDING_REQUIRED'] else True
+        normalized = domain.lower().strip().split('/')[0]
+        for allowed in allowed_domains:
+            a = allowed.lower().strip().split('/')[0]
+            if normalized == a or normalized.endswith('.' + a):
+                return True
+        return False
 
     # ================================================================
     # Share Revocation

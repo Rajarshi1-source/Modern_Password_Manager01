@@ -27,6 +27,10 @@ urlpatterns = [
     path('groups/', views.create_group, name='create-group'),
     path('groups/list/', views.list_groups, name='list-groups'),
 
+    # Umbral PRE public key registry
+    path('keys/register/', views.register_umbral_key, name='register-umbral-key'),
+    path('keys/<str:username>/', views.get_umbral_key, name='get-umbral-key'),
+
     # Service Status
     path('status/', views.sharing_status, name='status'),
 ]

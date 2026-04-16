@@ -5,6 +5,36 @@ import {
   CheckCircle, AlertTriangle, Zap, ExternalLink
 } from 'lucide-react';
 import fheSharingService from '../../services/fhe/fheSharingService';
+import preClient from '../../services/fhe/preClient';
+import { ensureUmbralIdentity } from '../../services/fhe/preKeyRegistration';
+import SealedAutofillFrame from './SealedAutofillFrame';
+
+const EXTENSION_AUTOFILL_EVENT = 'fhe_share:autofill_request_v2';
+
+function _tryExtensionBridge(payload, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const token = `fhe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const handler = (event) => {
+      if (event.source !== window) return;
+      const d = event.data;
+      if (!d || d.type !== 'fhe_share:autofill_ack' || d.token !== token) return;
+      settled = true;
+      window.removeEventListener('message', handler);
+      resolve({ ok: !!d.ok, reason: d.reason || null });
+    };
+    window.addEventListener('message', handler);
+    window.postMessage(
+      { type: EXTENSION_AUTOFILL_EVENT, token, payload },
+      window.location.origin,
+    );
+    setTimeout(() => {
+      if (settled) return;
+      window.removeEventListener('message', handler);
+      resolve({ ok: false, reason: 'timeout' });
+    }, timeoutMs);
+  });
+}
 
 const fadeIn = keyframes`
   from { opacity: 0; transform: translateY(8px); }
@@ -211,25 +241,83 @@ function AutofillTokenCard({ share, onUsed }) {
   const [autofilling, setAutofilling] = useState(false);
   const [autofillResult, setAutofillResult] = useState(null);
   const [error, setError] = useState(null);
+  const [sealedFramePayload, setSealedFramePayload] = useState(null);
 
   const domains = share.bound_domains || [];
   const isUsable = share.is_usable !== false;
+  const isUmbral = share.cipher_suite === 'umbral-v1';
 
   const handleAutofill = useCallback(async (domain) => {
     setAutofilling(true);
     setError(null);
     setAutofillResult(null);
+    setSealedFramePayload(null);
 
     try {
       const result = await fheSharingService.useAutofillToken(share.id, domain);
-      setAutofillResult({
-        domain,
-        useCount: result.use_count,
-        remaining: result.remaining_uses,
-      });
+
+      if (result?.cipher_suite === 'umbral-v1') {
+        const identity = await ensureUmbralIdentity({ autoEnroll: false });
+        if (!identity.ready) {
+          setError(
+            identity.reason === 'locked'
+              ? 'Unlock your vault to decrypt the shared password.'
+              : 'Your Umbral recipient key is not available on this device.'
+          );
+          return;
+        }
+
+        const bridge = await _tryExtensionBridge({
+          shareId: share.id,
+          domain,
+          cipherSuite: 'umbral-v1',
+          capsule: result.capsule,
+          cfrag: result.cfrag,
+          ciphertext: result.ciphertext,
+          delegatingPk: result.delegating_pk,
+          verifyingPk: result.verifying_pk,
+        });
+
+        if (bridge.ok) {
+          setAutofillResult({
+            domain,
+            useCount: result.use_count,
+            remaining: result.remaining_uses,
+            via: 'extension',
+          });
+        } else {
+          const plain = await preClient.decryptReencrypted({
+            recipientSkBytes: identity.rawSecrets.sk,
+            delegatingPkB64: result.delegating_pk,
+            verifyingPkB64: result.verifying_pk,
+            capsuleB64: result.capsule,
+            cfragB64: result.cfrag,
+            ciphertextB64: result.ciphertext,
+          });
+          const password = new TextDecoder().decode(plain);
+          setSealedFramePayload({
+            domain,
+            password,
+            tokenMetadata: result.token_metadata || {},
+          });
+          setAutofillResult({
+            domain,
+            useCount: result.use_count,
+            remaining: result.remaining_uses,
+            via: 'sealed_iframe',
+          });
+        }
+      } else {
+        setAutofillResult({
+          domain,
+          useCount: result.use_count,
+          remaining: result.remaining_uses,
+          via: 'simulated',
+        });
+      }
       if (onUsed) onUsed();
     } catch (err) {
-      setError(err.error || 'Autofill failed');
+      setError(err.error || err.message || 'Autofill failed');
     } finally {
       setAutofilling(false);
     }
@@ -262,7 +350,7 @@ function AutofillTokenCard({ share, onUsed }) {
         </SharedBy>
         <FHEBadge>
           <Shield size={11} />
-          FHE
+          {isUmbral ? 'PRE' : 'FHE'}
         </FHEBadge>
       </CardHeader>
 
@@ -308,7 +396,20 @@ function AutofillTokenCard({ share, onUsed }) {
           <SuccessMessage>
             <CheckCircle size={15} />
             Autofill data generated for <strong>{autofillResult.domain}</strong> (use #{autofillResult.useCount})
+            {autofillResult.via === 'extension' && ' — delivered to browser extension'}
+            {autofillResult.via === 'sealed_iframe' && ' — ready in sealed iframe below'}
           </SuccessMessage>
+        )}
+
+        {sealedFramePayload && (
+          <div style={{ marginTop: '1rem' }}>
+            <SealedAutofillFrame
+              domain={sealedFramePayload.domain}
+              password={sealedFramePayload.password}
+              tokenMetadata={sealedFramePayload.tokenMetadata}
+              onDismiss={() => setSealedFramePayload(null)}
+            />
+          </div>
         )}
 
         {error && (

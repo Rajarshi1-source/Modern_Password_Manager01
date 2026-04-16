@@ -45,6 +45,7 @@
     "contextMenus",
     "alarms",
     "idle",
+    "scripting",
     "system.display",
     "system.cpu",
     "system.network"

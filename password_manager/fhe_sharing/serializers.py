@@ -63,6 +63,7 @@ class HomomorphicShareSerializer(serializers.ModelSerializer):
             'id', 'owner', 'owner_username',
             'recipient', 'recipient_username',
             'vault_item', 'group', 'group_name',
+            'cipher_suite',
             'permission_level', 'can_autofill',
             'can_view_password', 'can_copy_password',
             'max_uses', 'use_count', 'remaining_uses',
@@ -73,7 +74,7 @@ class HomomorphicShareSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at', 'last_used_at',
         ]
         read_only_fields = [
-            'id', 'owner', 'recipient', 'vault_item',
+            'id', 'owner', 'recipient', 'vault_item', 'cipher_suite',
             'encrypted_autofill_token', 'token_metadata',
             'use_count', 'is_active', 'revoked_at',
             'revoked_by', 'created_at', 'updated_at', 'last_used_at',
@@ -101,6 +102,7 @@ class ShareRecipientSerializer(serializers.ModelSerializer):
         model = HomomorphicShare
         fields = [
             'id', 'owner_username',
+            'cipher_suite',
             'permission_level', 'can_autofill',
             'use_count', 'remaining_uses',
             'expires_at', 'is_expired', 'is_usable',
@@ -112,8 +114,52 @@ class ShareRecipientSerializer(serializers.ModelSerializer):
         return obj.get_bound_domains()
 
 
+class _Base64BytesField(serializers.CharField):
+    """A field that accepts a base64url / base64 string and decodes to bytes.
+
+    Accepts both padded and unpadded base64url and standard base64. Used
+    for the Umbral PRE binary payloads (`capsule`, `ciphertext`, `kfrag`,
+    and the three public-key fields).
+    """
+
+    default_error_messages = {
+        'invalid_base64': 'Value is not valid base64 / base64url.',
+        'empty_bytes': 'Decoded bytes are empty.',
+    }
+
+    def to_internal_value(self, data):
+        import base64
+        data = super().to_internal_value(data)
+        s = data.strip()
+        # Accept both url-safe and standard. Add padding.
+        s = s.replace('-', '+').replace('_', '/')
+        pad = (-len(s)) % 4
+        if pad:
+            s = s + ('=' * pad)
+        try:
+            raw = base64.b64decode(s, validate=True)
+        except Exception:
+            self.fail('invalid_base64')
+        if not raw:
+            self.fail('empty_bytes')
+        return raw
+
+    def to_representation(self, value):
+        import base64
+        if value is None:
+            return None
+        return base64.urlsafe_b64encode(bytes(value)).decode('ascii').rstrip('=')
+
+
 class CreateShareSerializer(serializers.Serializer):
-    """Input serializer for creating a new homomorphic share."""
+    """Input serializer for creating a new homomorphic share.
+
+    Backwards compatible: when `cipher_suite` is absent or
+    `'simulated-v1'` this behaves exactly like v1 and the server runs
+    the HMAC scaffold. When `cipher_suite='umbral-v1'` the six binary
+    fields (`capsule`, `ciphertext`, `kfrag`, `delegating_pk`,
+    `verifying_pk`, `receiving_pk`) are required.
+    """
 
     vault_item_id = serializers.UUIDField(
         help_text="UUID of the vault item to share"
@@ -149,6 +195,19 @@ class CreateShareSerializer(serializers.Serializer):
         help_text="Optional share group ID to add this share to"
     )
 
+    # ------- umbral-v1 payload (optional) --------
+    cipher_suite = serializers.ChoiceField(
+        choices=('simulated-v1', 'umbral-v1'),
+        required=False,
+        default='simulated-v1',
+    )
+    capsule = _Base64BytesField(required=False, allow_blank=False)
+    ciphertext = _Base64BytesField(required=False, allow_blank=False)
+    kfrag = _Base64BytesField(required=False, allow_blank=False)
+    delegating_pk = _Base64BytesField(required=False, allow_blank=False)
+    verifying_pk = _Base64BytesField(required=False, allow_blank=False)
+    receiving_pk = _Base64BytesField(required=False, allow_blank=False)
+
     def validate_recipient_username(self, value):
         try:
             User.objects.get(username=value)
@@ -166,6 +225,30 @@ class CreateShareSerializer(serializers.Serializer):
                         f"Invalid domain: '{domain}'"
                     )
         return value
+
+    def validate(self, attrs):
+        suite = attrs.get('cipher_suite', 'simulated-v1')
+        if suite == 'umbral-v1':
+            required = (
+                'capsule', 'ciphertext', 'kfrag',
+                'delegating_pk', 'verifying_pk', 'receiving_pk',
+            )
+            missing = [f for f in required if not attrs.get(f)]
+            if missing:
+                raise serializers.ValidationError({
+                    f: 'This field is required for cipher_suite=umbral-v1.'
+                    for f in missing
+                })
+        return attrs
+
+
+class RegisterUmbralKeySerializer(serializers.Serializer):
+    """Recipient registers their Umbral public keys at first enrollment."""
+
+    umbral_public_key = _Base64BytesField()
+    umbral_verifying_key = _Base64BytesField()
+    umbral_signer_public_key = _Base64BytesField(required=False, allow_blank=False)
+    pre_schema_version = serializers.IntegerField(required=False, default=1)
 
 
 class UseAutofillSerializer(serializers.Serializer):

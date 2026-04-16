@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="fhe_autofill_service_label">Password Manager (PRE autofill)</string>
+</resources>

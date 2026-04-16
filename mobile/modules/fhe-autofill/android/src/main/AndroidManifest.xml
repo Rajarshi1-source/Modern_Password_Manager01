@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+  <application tools:ignore="MissingApplicationIcon">
+
+    <!--
+      FheAutofillService — the Android AutofillService that the OS
+      calls when the user focuses a login field and this app is the
+      active autofill provider.
+
+      The service itself is stateless: it asks `PendingFillStore`
+      for any decrypted plaintext that was prepared by
+      `FheAutofillModule.storePendingFill` (after PRE re-encryption
+      server-side + cfrag verification + decryption native-side).
+
+      The plaintext lives only inside a short-TTL in-memory entry,
+      zeroed the moment it is handed to the AutofillService.
+    -->
+    <service
+        android:name="expo.modules.fheautofill.FheAutofillService"
+        android:label="@string/fhe_autofill_service_label"
+        android:permission="android.permission.BIND_AUTOFILL_SERVICE"
+        android:exported="true">
+      <intent-filter>
+        <action android:name="android.service.autofill.AutofillService" />
+      </intent-filter>
+      <meta-data
+          android:name="android.autofill"
+          android:resource="@xml/fhe_autofill_service" />
+    </service>
+
+  </application>
+</manifest>

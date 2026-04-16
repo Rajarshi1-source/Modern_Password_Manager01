@@ -1,4 +1,8 @@
 // Improved login form detection and autofill
+import { installSealedFillListener } from './fheShare/sealedAutofill.js';
+
+installSealedFillListener();
+
 (function() {
   // Initialize variables
   let formDetected = false;

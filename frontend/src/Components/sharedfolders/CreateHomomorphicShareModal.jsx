@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled, { keyframes } from 'styled-components';
 import {
   X, Shield, Lock, Globe, Clock, Users,
   Hash, AlertTriangle, CheckCircle, Loader, Zap
 } from 'lucide-react';
 import fheSharingService from '../../services/fhe/fheSharingService';
+import preClient, { isPreAvailable } from '../../services/fhe/preClient';
+import { ensureUmbralIdentity } from '../../services/fhe/preKeyRegistration';
 
 const fadeIn = keyframes`
   from { opacity: 0; }
@@ -266,9 +268,20 @@ function CreateHomomorphicShareModal({ onClose, onSuccess }) {
     domains: [],
     expiryPreset: '72h',
     maxUses: '',
+    passwordForUmbral: '',
+    useUmbral: false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [preSupported, setPreSupported] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    isPreAvailable().then((ok) => {
+      if (!cancelled) setPreSupported(ok);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -331,15 +344,81 @@ function CreateHomomorphicShareModal({ onClose, onSuccess }) {
     setError(null);
 
     try {
-      await fheSharingService.createShare(
-        formData.vaultItemId.trim(),
-        formData.recipientUsername.trim(),
-        {
+      if (formData.useUmbral) {
+        if (!preSupported) {
+          setError('Umbral PRE is not available in this browser. Missing @nucypher/umbral-pre WASM.');
+          setLoading(false);
+          return;
+        }
+        if (!formData.passwordForUmbral) {
+          setError('The plaintext password is required for the client-side PRE flow.');
+          setLoading(false);
+          return;
+        }
+
+        const identity = await ensureUmbralIdentity({ autoEnroll: true });
+        if (!identity.ready) {
+          setError(
+            identity.reason === 'locked'
+              ? 'Unlock your vault first so the PRE key can be used.'
+              : 'Umbral identity not available. Try reloading the page.'
+          );
+          setLoading(false);
+          return;
+        }
+
+        let recipientKeyResp;
+        try {
+          recipientKeyResp = await fheSharingService.fetchUmbralPublicKey(
+            formData.recipientUsername.trim()
+          );
+        } catch (err) {
+          if (err?.error === 'recipient_not_enrolled') {
+            setError(
+              `${formData.recipientUsername} has not enrolled an Umbral key yet. ` +
+              'Ask them to open the Homomorphic Sharing dashboard first.'
+            );
+          } else {
+            setError(err?.error || 'Failed to fetch recipient key');
+          }
+          setLoading(false);
+          return;
+        }
+
+        const { capsule, ciphertext } = await preClient.encryptFor(
+          identity.publicKeys.umbralPublicKey,
+          formData.passwordForUmbral,
+        );
+        const kfrag = await preClient.generateKfrag({
+          ownerSkBytes: identity.rawSecrets.sk,
+          signerSkBytes: identity.rawSecrets.signerSk,
+          recipientPkB64: recipientKeyResp.umbral_public_key,
+        });
+
+        await fheSharingService.createUmbralShare({
+          vaultItemId: formData.vaultItemId.trim(),
+          recipientUsername: formData.recipientUsername.trim(),
           domainConstraints: formData.domains,
           expiresAt: getExpiresAt(),
-          maxUses: formData.maxUses ? parseInt(formData.maxUses) : null,
-        }
-      );
+          maxUses: formData.maxUses ? parseInt(formData.maxUses, 10) : null,
+          capsule,
+          ciphertext,
+          kfrag,
+          delegatingPk: identity.publicKeys.umbralPublicKey,
+          verifyingPk: identity.publicKeys.umbralVerifyingKey,
+          receivingPk: recipientKeyResp.umbral_public_key,
+        });
+      } else {
+        await fheSharingService.createShare(
+          formData.vaultItemId.trim(),
+          formData.recipientUsername.trim(),
+          {
+            domainConstraints: formData.domains,
+            expiresAt: getExpiresAt(),
+            maxUses: formData.maxUses ? parseInt(formData.maxUses, 10) : null,
+          }
+        );
+      }
       onSuccess();
     } catch (err) {
       setError(err.error || err.details?.vault_item_id?.[0] || 'Failed to create share');
@@ -455,6 +534,46 @@ function CreateHomomorphicShareModal({ onClose, onSuccess }) {
             />
             <HelpText>Limit how many times the recipient can autofill. Empty = unlimited.</HelpText>
           </FormGroup>
+
+          <FormGroup>
+            <Label>
+              <Zap size={14} /> Cryptographic backbone
+            </Label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input
+                id="useUmbral"
+                type="checkbox"
+                checked={formData.useUmbral}
+                onChange={(e) => setFormData((p) => ({ ...p, useUmbral: e.target.checked }))}
+                disabled={!preSupported}
+              />
+              <label htmlFor="useUmbral" style={{ fontSize: '0.85rem' }}>
+                Use Umbral PRE (client-side, recipient cannot see plaintext)
+              </label>
+            </div>
+            <HelpText>
+              {preSupported
+                ? "Umbral produces a real re-encryption capsule; the server can only re-encrypt it, never decrypt."
+                : "Umbral WASM not available in this browser — falls back to simulated-v1."}
+            </HelpText>
+          </FormGroup>
+
+          {formData.useUmbral && (
+            <FormGroup>
+              <Label><Lock size={14} /> Password (PRE plaintext input)</Label>
+              <Input
+                name="passwordForUmbral"
+                type="password"
+                value={formData.passwordForUmbral}
+                onChange={handleChange}
+                placeholder="Plaintext to encrypt under your Umbral public key"
+                autoComplete="off"
+              />
+              <HelpText>
+                Never leaves this browser. Umbral encrypts it with your public key before it is uploaded.
+              </HelpText>
+            </FormGroup>
+          )}
         </ModalBody>
 
         <ModalFooter>

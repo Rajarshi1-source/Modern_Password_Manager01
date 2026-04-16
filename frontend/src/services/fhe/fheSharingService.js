@@ -43,6 +43,92 @@ export const createShare = async (vaultItemId, recipientUsername, options = {}) 
 };
 
 /**
+ * Create a new `cipher_suite='umbral-v1'` share.
+ * The owner has already run client-side Umbral encryption; this just
+ * uploads the opaque payload. See fhe_sharing/SPEC.md.
+ *
+ * @param {Object} payload - base64url-encoded PRE fields
+ * @param {string} payload.vaultItemId
+ * @param {string} payload.recipientUsername
+ * @param {string[]} payload.domainConstraints
+ * @param {string} payload.capsule       - b64url
+ * @param {string} payload.ciphertext    - b64url
+ * @param {string} payload.kfrag         - b64url
+ * @param {string} payload.delegatingPk  - b64url
+ * @param {string} payload.verifyingPk   - b64url
+ * @param {string} payload.receivingPk   - b64url
+ * @param {string|null} [payload.expiresAt]
+ * @param {number|null} [payload.maxUses]
+ * @param {string|null} [payload.groupId]
+ */
+export const createUmbralShare = async (payload) => {
+  try {
+    const response = await api.post(`${API_BASE}/shares/`, {
+      vault_item_id: payload.vaultItemId,
+      recipient_username: payload.recipientUsername,
+      domain_constraints: payload.domainConstraints || [],
+      expires_at: payload.expiresAt || null,
+      max_uses: payload.maxUses || null,
+      group_id: payload.groupId || null,
+      cipher_suite: 'umbral-v1',
+      capsule: payload.capsule,
+      ciphertext: payload.ciphertext,
+      kfrag: payload.kfrag,
+      delegating_pk: payload.delegatingPk,
+      verifying_pk: payload.verifyingPk,
+      receiving_pk: payload.receivingPk,
+    });
+    return response.data;
+  } catch (error) {
+    console.error('[FHE Sharing] Create umbral share error:', error);
+    throw error.response?.data || { error: 'Failed to create umbral share' };
+  }
+};
+
+/**
+ * Register the current user's Umbral public key with the server.
+ * Required before anyone can create an umbral-v1 share TO this user.
+ */
+export const registerUmbralPublicKey = async ({
+  umbralPublicKey,
+  umbralVerifyingKey,
+  umbralSignerPublicKey,
+  preSchemaVersion = 1,
+}) => {
+  try {
+    const response = await api.post(`${API_BASE}/keys/register/`, {
+      umbral_public_key: umbralPublicKey,
+      umbral_verifying_key: umbralVerifyingKey,
+      umbral_signer_public_key: umbralSignerPublicKey,
+      pre_schema_version: preSchemaVersion,
+    });
+    return response.data;
+  } catch (error) {
+    console.error('[FHE Sharing] Register umbral key error:', error);
+    throw error.response?.data || { error: 'Failed to register umbral key' };
+  }
+};
+
+/**
+ * Fetch another user's Umbral public key, needed before running
+ * `umbral.generate_kfrags` on the owner side.
+ */
+export const fetchUmbralPublicKey = async (username) => {
+  try {
+    const response = await api.get(
+      `${API_BASE}/keys/${encodeURIComponent(username)}/`
+    );
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 404) {
+      throw { error: 'recipient_not_enrolled', username };
+    }
+    console.error('[FHE Sharing] Fetch umbral key error:', error);
+    throw error.response?.data || { error: 'Failed to fetch umbral key' };
+  }
+};
+
+/**
  * List shares created by the current user.
  *
  * @param {boolean} includeInactive - Include revoked/expired shares
@@ -210,6 +296,9 @@ export const getShareStatus = async () => {
 // Default export for convenience
 const fheSharingService = {
   createShare,
+  createUmbralShare,
+  registerUmbralPublicKey,
+  fetchUmbralPublicKey,
   listMyShares,
   listReceivedShares,
   getShareDetail,

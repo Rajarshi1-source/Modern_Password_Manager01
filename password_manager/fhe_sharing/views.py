@@ -27,8 +27,13 @@ from .serializers import (
     ShareAccessLogSerializer,
     ShareGroupSerializer,
     CreateShareGroupSerializer,
+    RegisterUmbralKeySerializer,
 )
-from .services import get_sharing_service
+from .services import (
+    get_sharing_service,
+    pre_is_available,
+)
+from .services.fhe_sharing_service import pre_is_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -99,20 +104,45 @@ def create_share(request):
 
     try:
         service = get_sharing_service()
-        share = service.create_autofill_share(
-            owner=request.user,
-            vault_item=vault_item,
-            recipient=recipient,
-            domain_constraints=data.get('domain_constraints', []),
-            expires_at=data.get('expires_at'),
-            max_uses=data.get('max_uses'),
-            group=group,
-            request=request,
-        )
+        suite = data.get('cipher_suite', 'simulated-v1')
+        if suite == 'umbral-v1':
+            if not pre_is_enabled():
+                return Response(
+                    {'error': 'PRE sharing is disabled by server policy'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            share = service.create_umbral_share(
+                owner=request.user,
+                vault_item=vault_item,
+                recipient=recipient,
+                capsule=data['capsule'],
+                ciphertext=data['ciphertext'],
+                kfrag=data['kfrag'],
+                delegating_pk=data['delegating_pk'],
+                verifying_pk=data['verifying_pk'],
+                receiving_pk=data['receiving_pk'],
+                domain_constraints=data.get('domain_constraints', []),
+                expires_at=data.get('expires_at'),
+                max_uses=data.get('max_uses'),
+                group=group,
+                request=request,
+            )
+        else:
+            share = service.create_autofill_share(
+                owner=request.user,
+                vault_item=vault_item,
+                recipient=recipient,
+                domain_constraints=data.get('domain_constraints', []),
+                expires_at=data.get('expires_at'),
+                max_uses=data.get('max_uses'),
+                group=group,
+                request=request,
+            )
 
         return Response(
             {
                 'success': True,
+                'cipher_suite': share.cipher_suite,
                 'message': (
                     f"Password shared with {recipient.username} "
                     f"(autofill only — they cannot see the password)"
@@ -128,6 +158,11 @@ def create_share(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     except PermissionError as e:
+        return Response(
+            {'error': str(e)},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    except RuntimeError as e:
         return Response(
             {'error': str(e)},
             status=status.HTTP_403_FORBIDDEN,
@@ -461,6 +496,120 @@ def list_groups(request):
 
 
 # ================================================================
+# Umbral Public Key Registry
+# ================================================================
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def register_umbral_key(request):
+    """
+    Register the caller's Umbral public key (client-side generated).
+
+    POST /api/fhe-sharing/keys/register/
+    {
+        "umbral_public_key":        "<b64url>",
+        "umbral_verifying_key":     "<b64url>",
+        "umbral_signer_public_key": "<b64url>" (optional)
+    }
+    """
+    serializer = RegisterUmbralKeySerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(
+            {'error': 'Invalid input', 'details': serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    data = serializer.validated_data
+
+    try:
+        from fhe_service.models import FHEKeyStore
+    except Exception:
+        return Response(
+            {'error': 'Key registry unavailable'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    record, _ = FHEKeyStore.objects.update_or_create(
+        user=request.user,
+        key_type='umbral_pre',
+        defaults={
+            'umbral_public_key': data['umbral_public_key'],
+            'umbral_verifying_key': data['umbral_verifying_key'],
+            'umbral_signer_public_key': data.get('umbral_signer_public_key'),
+            'pre_schema_version': data.get('pre_schema_version', 1),
+            'encrypted_key_data': b'',
+            'is_active': True,
+            'key_size_bits': 256,
+            'security_level': 128,
+        },
+    )
+
+    return Response({
+        'success': True,
+        'message': 'Umbral public key registered',
+        'pre_schema_version': record.pre_schema_version,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_umbral_key(request, username):
+    """
+    Fetch another user's Umbral public key (needed before calling
+    `umbral.generate_kfrags` on the owner's side).
+
+    GET /api/fhe-sharing/keys/<username>/
+    """
+    import base64
+    try:
+        target = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return Response(
+            {'error': f"User '{username}' not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    try:
+        from fhe_service.models import FHEKeyStore
+        record = FHEKeyStore.objects.filter(
+            user=target,
+            key_type='umbral_pre',
+            is_active=True,
+        ).first()
+    except Exception:
+        record = None
+
+    if record is None or record.umbral_public_key is None:
+        return Response(
+            {
+                'error': (
+                    f"User '{username}' has not enrolled an Umbral "
+                    f"public key. Ask them to open the Homomorphic "
+                    f"Sharing dashboard first."
+                ),
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    def _b64(b):
+        return base64.urlsafe_b64encode(bytes(b)).decode('ascii').rstrip('=')
+
+    return Response({
+        'success': True,
+        'username': username,
+        'umbral_public_key': _b64(record.umbral_public_key),
+        'umbral_verifying_key': (
+            _b64(record.umbral_verifying_key)
+            if record.umbral_verifying_key else None
+        ),
+        'umbral_signer_public_key': (
+            _b64(record.umbral_signer_public_key)
+            if record.umbral_signer_public_key else None
+        ),
+        'pre_schema_version': record.pre_schema_version,
+    })
+
+
+# ================================================================
 # Service Status
 # ================================================================
 
@@ -479,7 +628,7 @@ def sharing_status(request):
         return Response({
             'success': True,
             'service': 'fhe_sharing',
-            'version': '1.0.0',
+            'version': '2.0.0',
             'status': 'operational',
             'features': {
                 'homomorphic_sharing': True,
@@ -487,11 +636,17 @@ def sharing_status(request):
                 'usage_limits': True,
                 'audit_logging': True,
                 'share_groups': True,
+                'pre_umbral_v1': pre_is_enabled(),
+                'pre_server_backend_available': pre_is_available(),
             },
             'circuit_service': {
                 'initialized': circuit_service._initialized,
                 'token_version': circuit_service.TOKEN_VERSION,
             },
+            'supported_cipher_suites': (
+                ['simulated-v1', 'umbral-v1']
+                if pre_is_enabled() else ['simulated-v1']
+            ),
         })
 
     except Exception as e:

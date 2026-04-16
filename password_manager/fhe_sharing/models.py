@@ -122,15 +122,45 @@ class HomomorphicShare(models.Model):
     )
 
     # ============================================================
-    # FHE Autofill Token — THE CORE OF THIS FEATURE
+    # Cipher suite marker — selects which ciphertext fields are valid
+    # ------------------------------------------------------------
+    # 'simulated-v1' : legacy HMAC scaffold (`encrypted_autofill_token`)
+    # 'umbral-v1'    : real PRE (capsule + ciphertext + kfrag + *_pk)
+    # ============================================================
+    cipher_suite = models.CharField(
+        max_length=24,
+        default='simulated-v1',
+        db_index=True,
+        help_text="Which ciphertext payload format this row uses.",
+    )
+
+    # ============================================================
+    # FHE Autofill Token — legacy simulated-v1 payload (HMAC scaffold)
     # ============================================================
     encrypted_autofill_token = models.BinaryField(
+        null=True,
+        blank=True,
         help_text=(
-            "FHE-encrypted autofill circuit token. This is the encrypted "
-            "payload that can fill form fields but CANNOT be decrypted to "
-            "reveal the password. Created using create_autofill_circuit()."
-        )
+            "Legacy (simulated-v1) autofill circuit token. NULL for "
+            "rows where `cipher_suite='umbral-v1'`."
+        ),
     )
+
+    # ============================================================
+    # umbral-v1 payload — real proxy re-encryption
+    # ------------------------------------------------------------
+    # `capsule`+`ciphertext` form the Umbral KEM+DEM pair produced by
+    # the owner client-side. `kfrag` is the re-encryption delegation
+    # key the server uses during `/use/`. `*_pk` fields let recipient
+    # clients verify integrity at decryption time.
+    # See fhe_sharing/SPEC.md section 3.2.
+    # ============================================================
+    capsule = models.BinaryField(null=True, blank=True)
+    ciphertext = models.BinaryField(null=True, blank=True)
+    kfrag = models.BinaryField(null=True, blank=True)
+    delegating_pk = models.BinaryField(null=True, blank=True)
+    verifying_pk = models.BinaryField(null=True, blank=True)
+    receiving_pk = models.BinaryField(null=True, blank=True)
 
     # Domain binding — restrict autofill to specific domains
     encrypted_domain_binding = models.TextField(
@@ -303,6 +333,16 @@ class HomomorphicShare(models.Model):
             return json.loads(self.encrypted_domain_binding)
         except (json.JSONDecodeError, TypeError):
             return []
+
+    @property
+    def is_umbral(self) -> bool:
+        """True when this share carries an Umbral PRE payload."""
+        return self.cipher_suite == 'umbral-v1'
+
+    @property
+    def is_simulated(self) -> bool:
+        """True when this share uses the legacy HMAC scaffold."""
+        return self.cipher_suite == 'simulated-v1'
 
 
 class ShareAccessLog(models.Model):

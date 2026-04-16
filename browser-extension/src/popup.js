@@ -1,4 +1,5 @@
 import { initStegoAction } from './stego/stegoAction';
+import { initFheSharePanel } from './fheShare/popupPanel';
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Get references to UI elements
@@ -25,6 +26,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       initStegoAction(stegoSlot);
     } catch (e) {
       console.warn('[stego] failed to init popup action', e);
+    }
+  }
+
+  // Mount the Homomorphic Share (PRE) panel.
+  const fheShareSlot = document.getElementById('fhe-share-slot');
+  if (fheShareSlot) {
+    try {
+      await initFheSharePanel(fheShareSlot);
+    } catch (e) {
+      console.warn('[fheShare] failed to init popup panel', e);
     }
   }
   

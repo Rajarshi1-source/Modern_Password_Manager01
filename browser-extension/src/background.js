@@ -1,4 +1,7 @@
 import { startAmbientEngine } from './ambient/ambientEngine.js';
+import { installBackgroundFheShareBridge } from './fheShare/backgroundBridge.js';
+
+installBackgroundFheShareBridge();
 
 class DarkWebMonitor {
     constructor() {

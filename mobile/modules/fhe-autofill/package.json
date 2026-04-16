@@ -1,0 +1,16 @@
+{
+  "name": "fhe-autofill",
+  "version": "0.1.0",
+  "description": "Homomorphic sharing autofill — PRE decryption + Android AutofillService + iOS ASCredentialProvider bridge.",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {},
+  "keywords": ["expo", "react-native", "umbral", "autofill"],
+  "author": "Password Manager",
+  "license": "MIT",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

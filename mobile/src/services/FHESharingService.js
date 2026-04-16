@@ -105,8 +105,69 @@ export const getShareStatus = async () => {
   return response.data;
 };
 
+/**
+ * Register this user's Umbral public key with the server.
+ */
+export const registerUmbralPublicKey = async ({
+  umbralPublicKey,
+  umbralVerifyingKey,
+  umbralSignerPublicKey,
+}) => {
+  const response = await axios.post(`${API_BASE}/keys/register/`, {
+    umbral_public_key: umbralPublicKey,
+    umbral_verifying_key: umbralVerifyingKey,
+    umbral_signer_public_key: umbralSignerPublicKey,
+  }, { headers: getHeaders() });
+  return response.data;
+};
+
+/**
+ * Fetch another user's Umbral public key from the server.
+ */
+export const fetchUmbralPublicKey = async (username) => {
+  const response = await axios.get(`${API_BASE}/keys/${encodeURIComponent(username)}/`, {
+    headers: getHeaders(),
+  });
+  return response.data;
+};
+
+/**
+ * Create a `cipher_suite='umbral-v1'` share. The caller is expected
+ * to have generated the PRE payload locally via `preClient`.
+ */
+export const createUmbralShare = async ({
+  vaultItemId,
+  recipientUsername,
+  domainConstraints = [],
+  expiresAt = null,
+  maxUses = null,
+  capsule,
+  ciphertext,
+  kfrag,
+  delegatingPk,
+  verifyingPk,
+  receivingPk,
+}) => {
+  const response = await axios.post(`${API_BASE}/shares/`, {
+    vault_item_id: vaultItemId,
+    recipient_username: recipientUsername,
+    domain_constraints: domainConstraints,
+    expires_at: expiresAt,
+    max_uses: maxUses,
+    cipher_suite: 'umbral-v1',
+    capsule,
+    ciphertext,
+    kfrag,
+    delegating_pk: delegatingPk,
+    verifying_pk: verifyingPk,
+    receiving_pk: receivingPk,
+  }, { headers: getHeaders() });
+  return response.data;
+};
+
 const FHESharingService = {
   createShare,
+  createUmbralShare,
   listMyShares,
   listReceivedShares,
   getShareDetail,
@@ -114,6 +175,8 @@ const FHESharingService = {
   revokeShare,
   getShareLogs,
   getShareStatus,
+  registerUmbralPublicKey,
+  fetchUmbralPublicKey,
 };
 
 export default FHESharingService;
