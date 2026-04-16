@@ -148,6 +148,7 @@ INSTALLED_APPS = [
     'smart_contracts',  # Smart Contract Automation (Blockchain Conditional Access)
     'zk_proofs',  # Zero-Knowledge Password Verification Protocol (Pedersen + Schnorr)
     'password_reputation',  # Decentralized Password Reputation Network (Phase 2a: NullAnchor; Phase 2b: ArbitrumAnchor)
+    'ambient_auth',  # Ambient Biometric Fusion (web + extension + mobile passive signals)
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1114,6 +1115,19 @@ BLOCKCHAIN_ANCHORING = {
     ),
     'BATCH_SIZE': int(os.environ.get('BLOCKCHAIN_BATCH_SIZE', '1000')),
     'BATCH_INTERVAL_HOURS': int(os.environ.get('BLOCKCHAIN_BATCH_INTERVAL_HOURS', '24')),
+}
+
+# Ambient Biometric Fusion Configuration
+# Keys are all optional; defaults live in ambient_auth.services.ambient_fusion_service.
+AMBIENT_AUTH = {
+    'ENABLED': os.environ.get('AMBIENT_AUTH_ENABLED', 'True').lower() == 'true',
+    'ENFORCEMENT_STAGE': os.environ.get('AMBIENT_AUTH_STAGE', 'advisory'),  # 'collect' | 'advisory' | 'enforce'
+    'EMBEDDING_DIM': int(os.environ.get('AMBIENT_AUTH_EMBEDDING_DIM', '64')),
+    'CONTEXT_MATCH_RADIUS': float(os.environ.get('AMBIENT_AUTH_MATCH_RADIUS', '0.35')),
+    'TRUST_HIGH': float(os.environ.get('AMBIENT_AUTH_TRUST_HIGH', '0.85')),
+    'NOVELTY_HIGH': float(os.environ.get('AMBIENT_AUTH_NOVELTY_HIGH', '0.70')),
+    'CENTROID_EMA_ALPHA': float(os.environ.get('AMBIENT_AUTH_EMA_ALPHA', '0.15')),
+    'MAX_CONTEXTS_PER_PROFILE': int(os.environ.get('AMBIENT_AUTH_MAX_CONTEXTS', '16')),
 }
 
 # Smart Contract Automation Configuration

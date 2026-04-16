@@ -100,6 +100,14 @@ app.conf.update(
             'task': 'password_reputation.tasks.flush_pending_reputation_batches',
             'schedule': crontab(minute='*/15'),
         },
+
+        # Ambient Biometric Fusion: nightly reliability-weight recompute
+        # per user (cheap heuristic, bounded 500 obs/user). Keeps per-signal
+        # weights in sync with what actually discriminates trusted contexts.
+        'recompute-ambient-signal-reliability': {
+            'task': 'ambient_auth.tasks.recompute_signal_reliability',
+            'schedule': crontab(hour=3, minute=30),  # 3:30 AM daily
+        },
         
         # Clean up expired sessions (daily)
         'cleanup-expired-sessions': {

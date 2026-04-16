@@ -1,3 +1,5 @@
+import { startAmbientEngine } from './ambient/ambientEngine.js';
+
 class DarkWebMonitor {
     constructor() {
       this.api = new ApiClient();
@@ -911,4 +913,10 @@ class CryptoService {
 
 // Initialize the extension
 const extension = new PasswordManagerExtension();
+
+try {
+  startAmbientEngine({ periodMinutes: 5 });
+} catch (err) {
+  console.warn('Ambient engine failed to start:', err);
+}
   

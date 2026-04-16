@@ -8,6 +8,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import styled from 'styled-components';
 import mlSecurityService from '../../services/mlSecurityService';
+import { ambientApi } from '../../services/ambient';
 import { FaShieldAlt, FaExclamationTriangle, FaCheckCircle, FaInfoCircle } from 'react-icons/fa';
 
 const MonitorContainer = styled.div`
@@ -195,8 +196,15 @@ const SessionMonitor = ({ enabled = true, interval = 60000 }) => {
     activityCount: 0,
     lastCheck: null
   });
-  
+  const [ambient, setAmbient] = useState({
+    trust: null,
+    novelty: null,
+    contextLabel: null,
+    trusted: false,
+  });
+
   const monitorIntervalRef = useRef(null);
+  const ambientIntervalRef = useRef(null);
   
   // Perform session analysis
   const analyzeSession = useCallback(async () => {
@@ -261,6 +269,35 @@ const SessionMonitor = ({ enabled = true, interval = 60000 }) => {
     };
   }, [monitoring, interval, analyzeSession]);
   
+  // Poll the latest ambient observation so the monitor badge shows the
+  // most recent trust score + matched context. Non-blocking, failures
+  // are ignored silently.
+  const refreshAmbient = useCallback(async () => {
+    try {
+      const obs = await ambientApi.listObservations(1);
+      if (Array.isArray(obs) && obs.length > 0) {
+        const latest = obs[0];
+        setAmbient({
+          trust: latest.trust_score ?? null,
+          novelty: latest.novelty_score ?? null,
+          contextLabel: latest.matched_context?.label || null,
+          trusted: Boolean(latest.matched_context?.is_trusted),
+        });
+      }
+    } catch {
+      // swallow — ambient is best-effort for the badge
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!monitoring) return undefined;
+    refreshAmbient();
+    ambientIntervalRef.current = setInterval(refreshAmbient, Math.max(60000, interval));
+    return () => {
+      if (ambientIntervalRef.current) clearInterval(ambientIntervalRef.current);
+    };
+  }, [monitoring, interval, refreshAmbient]);
+
   // Track user activity
   useEffect(() => {
     const updateActivity = () => {
@@ -329,6 +366,23 @@ const SessionMonitor = ({ enabled = true, interval = 60000 }) => {
         <Metric color="#007bff">
           <div className="label">Session Time</div>
           <div className="value">{sessionMetrics.sessionDuration}m</div>
+        </Metric>
+        <Metric color={
+          ambient.trust == null ? '#6c757d' :
+            ambient.trust >= 0.85 ? '#28a745' :
+              ambient.trust >= 0.6 ? '#007bff' :
+                ambient.trust >= 0.3 ? '#f59e0b' : '#dc3545'
+        }>
+          <div className="label">Ambient Trust</div>
+          <div className="value">
+            {ambient.trust == null ? '—' : `${Math.round(ambient.trust * 100)}%`}
+          </div>
+        </Metric>
+        <Metric color={ambient.trusted ? '#28a745' : '#6c757d'}>
+          <div className="label">Context</div>
+          <div className="value" style={{ fontSize: 14 }}>
+            {ambient.contextLabel || '—'}{ambient.trusted ? ' ✓' : ''}
+          </div>
         </Metric>
       </MetricsGrid>
       

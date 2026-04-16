@@ -147,6 +147,7 @@ urlpatterns = [
 
     # Decentralized Password Reputation Network API routes
     path('api/reputation/', include('password_reputation.urls')),
+    path('api/ambient/', include('ambient_auth.urls')),
 ]
 
 # Feature-flagged modules: conditionally include URL patterns to avoid

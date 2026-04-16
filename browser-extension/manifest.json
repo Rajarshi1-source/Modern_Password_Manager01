@@ -42,7 +42,12 @@
     "tabs",
     "notifications",
     "activeTab",
-    "contextMenus"
+    "contextMenus",
+    "alarms",
+    "idle",
+    "system.display",
+    "system.cpu",
+    "system.network"
   ],
   "host_permissions": [
     "http://localhost:8000/*",

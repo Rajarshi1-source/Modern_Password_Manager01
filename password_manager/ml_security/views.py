@@ -532,7 +532,34 @@ def batch_analyze_session(request):
                     str(request.user.id),
                     behavior_data
                 )
-        
+
+        # Ambient fusion: attach latest ambient trust + adjust composite threat.
+        try:
+            from ambient_auth.services import latest_signal as _ambient_latest
+
+            ambient = _ambient_latest(request.user, max_age_seconds=900)
+        except Exception:  # pragma: no cover
+            ambient = None
+
+        if ambient:
+            result['ambient'] = ambient
+            threat = result.get('threat_analysis') or {}
+            base_score = float(threat.get('risk_score') or threat.get('threat_score') or 0.0)
+            trust = float(ambient.get('trust_score') or 0.0)
+            novelty = float(ambient.get('novelty_score') or 0.0)
+            adjusted = base_score
+            if ambient.get('matched_context_trusted') and trust >= 0.75:
+                adjusted = max(0.0, adjusted - 0.2)
+            if novelty >= 0.75:
+                adjusted = min(1.0, adjusted + 0.2)
+            threat['ambient_adjusted_risk_score'] = round(adjusted, 4)
+            threat.setdefault('risk_factors', [])
+            if ambient.get('matched_context_trusted') and trust >= 0.75:
+                threat['risk_factors'].append('ambient_trusted_context')
+            if novelty >= 0.75:
+                threat['risk_factors'].append('ambient_new_context')
+            result['threat_analysis'] = threat
+
         return success_response(result)
     
     except Exception as e:

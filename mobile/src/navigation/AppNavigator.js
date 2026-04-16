@@ -48,6 +48,9 @@ import HomomorphicSharingScreen from '../screens/HomomorphicSharingScreen';
 // Import smart contract screen
 import SmartContractScreen from '../screens/SmartContractScreen';
 
+// Import ambient biometric fusion screen
+import AmbientSetupScreen from '../screens/AmbientSetupScreen';
+
 // Import auth service
 import { authService } from '../services/authService';
 
@@ -188,6 +191,11 @@ const SettingsNavigator = () => (
       name="SmartContracts" 
       component={SmartContractScreen}
       options={{ headerTitle: 'Smart Contracts', headerShown: false }}
+    />
+    <MainStack.Screen 
+      name="AmbientSetup" 
+      component={AmbientSetupScreen}
+      options={{ headerTitle: 'Ambient Trust', headerShown: false }}
     />
   </MainStack.Navigator>
 );

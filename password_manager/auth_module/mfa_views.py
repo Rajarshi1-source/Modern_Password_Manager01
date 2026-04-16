@@ -567,7 +567,31 @@ def assess_mfa_risk(request):
                 risk_factors.append('ml_threat_detected')
         except Exception as e:
             logger.warning(f"ML risk assessment failed: {e}")
-        
+
+        # Ambient biometric fusion (advisory unless stage=enforce).
+        ambient_signal = None
+        try:
+            from ambient_auth.services import latest_signal as _ambient_latest
+
+            ambient_signal = _ambient_latest(user, max_age_seconds=900)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"Ambient signal unavailable: {exc}")
+
+        if ambient_signal:
+            trust = float(ambient_signal.get('trust_score') or 0.0)
+            novelty = float(ambient_signal.get('novelty_score') or 0.0)
+            stage = ambient_signal.get('enforcement_stage', 'collect')
+            if ambient_signal.get('matched_context_trusted') and trust >= 0.75:
+                risk_factors.append('ambient_trusted_context')
+                if stage in ('advisory', 'enforce'):
+                    risk_score = max(0.0, risk_score - 0.25)
+            if novelty >= 0.75 or (not ambient_signal.get('matched_context_id') and trust < 0.3):
+                risk_factors.append('ambient_new_context')
+                if stage in ('advisory', 'enforce'):
+                    risk_score = min(1.0, risk_score + 0.2)
+            if stage == 'enforce' and novelty >= 0.9:
+                risk_factors.append('ambient_hard_block_eligible')
+
         # Determine risk level
         if risk_score < 0.3:
             risk_level = 'low'
@@ -604,7 +628,8 @@ def assess_mfa_risk(request):
             'required_factors_count': required_factors_count,
             'available_methods': available_methods,
             'recommendation': f'Use {required_factors_count} authentication factors',
-            'adaptive_mfa_enabled': policy.enable_adaptive_mfa
+            'adaptive_mfa_enabled': policy.enable_adaptive_mfa,
+            'ambient': ambient_signal,
         }, status=status.HTTP_200_OK)
     
     except Exception as e:

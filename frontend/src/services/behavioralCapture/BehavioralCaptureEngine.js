@@ -10,6 +10,14 @@ import { MouseBiometrics } from './MouseBiometrics';
 import { CognitivePatterns } from './CognitivePatterns';
 import { DeviceInteraction } from './DeviceInteraction';
 import { SemanticBehaviors } from './SemanticBehaviors';
+import { AmbientLightCapture } from './AmbientLightCapture';
+import { MotionCapture } from './MotionCapture';
+import { PointerPressureCapture } from './PointerPressureCapture';
+import { ScrollMomentumCapture } from './ScrollMomentumCapture';
+import { BatteryCurveCapture } from './BatteryCurveCapture';
+import { ConnectionCapture } from './ConnectionCapture';
+import { WebBluetoothCapture } from './WebBluetoothCapture';
+import ambient from '../ambient';
 
 export class BehavioralCaptureEngine {
   constructor(options = {}) {
@@ -19,7 +27,16 @@ export class BehavioralCaptureEngine {
     this.cognitivePatterns = new CognitivePatterns();
     this.deviceInteraction = new DeviceInteraction();
     this.semanticBehaviors = new SemanticBehaviors();
-    
+
+    // Ambient Biometric Fusion — passive environment signals.
+    this.ambientLight = new AmbientLightCapture();
+    this.motion = new MotionCapture();
+    this.pointerPressure = new PointerPressureCapture();
+    this.scrollMomentum = new ScrollMomentumCapture();
+    this.batteryCurve = new BatteryCurveCapture();
+    this.connection = new ConnectionCapture();
+    this.webBluetooth = new WebBluetoothCapture();
+
     // Configuration
     this.config = {
       autoStart: options.autoStart !== false,
@@ -27,8 +44,14 @@ export class BehavioralCaptureEngine {
       minSamplesForProfile: options.minSamplesForProfile || 100,
       enableLocalStorage: options.enableLocalStorage !== false,
       privacyMode: options.privacyMode || 'strict', // strict, balanced, permissive
+      // Ambient ingest opts: if false the engine never POSTs observations.
+      enableAmbientIngest: options.enableAmbientIngest !== false,
+      ambientIngestInterval: options.ambientIngestInterval || 300000, // 5 min
+      ambientDeviceFp: options.ambientDeviceFp || null, // caller may inject FingerprintJS visitorId
       ...options
     };
+    this._lastAmbientIngestAt = 0;
+    this.lastAmbientResult = null;
     
     // State
     this.isCapturing = false;
@@ -62,7 +85,14 @@ export class BehavioralCaptureEngine {
     this.cognitivePatterns.attach();
     this.deviceInteraction.attach();
     this.semanticBehaviors.attach();
-    
+    this.ambientLight.attach();
+    this.motion.attach();
+    this.pointerPressure.attach();
+    this.scrollMomentum.attach();
+    this.batteryCurve.attach();
+    this.connection.attach();
+    this.webBluetooth.attach();
+
     this.isCapturing = true;
     this.profileBuildStarted = Date.now();
     
@@ -94,6 +124,13 @@ export class BehavioralCaptureEngine {
     this.cognitivePatterns.detach();
     this.deviceInteraction.detach();
     this.semanticBehaviors.detach();
+    this.ambientLight.detach();
+    this.motion.detach();
+    this.pointerPressure.detach();
+    this.scrollMomentum.detach();
+    this.batteryCurve.detach();
+    this.connection.detach();
+    this.webBluetooth.detach();
     
     this.isCapturing = false;
     
@@ -189,9 +226,17 @@ export class BehavioralCaptureEngine {
   async createSnapshot() {
     try {
       const vector = await this.generateBehavioralVector();
-      
+
       this.lastSnapshot = vector;
       this.samples.push(vector);
+
+      // Opportunistically POST an ambient observation. Non-blocking;
+      // failures must never disrupt behavioral capture.
+      if (this.config.enableAmbientIngest) {
+        this.maybeIngestAmbient().catch((err) => {
+          console.warn('Ambient ingest skipped:', err?.message || err);
+        });
+      }
       
       // Limit stored samples to last 30 days (assuming 1 snapshot per 5 minutes)
       const maxSamples = (30 * 24 * 60) / 5; // ~8640 samples for 30 days
@@ -369,6 +414,14 @@ export class BehavioralCaptureEngine {
     this.cognitivePatterns.reset();
     this.deviceInteraction.reset();
     this.semanticBehaviors.reset();
+    this.ambientLight.reset();
+    this.motion.reset();
+    this.pointerPressure.reset();
+    this.scrollMomentum.reset();
+    this.batteryCurve.reset();
+    this.connection.reset();
+    this.webBluetooth.reset();
+    this.lastAmbientResult = null;
     
     // Clear storage
     if (this.config.enableLocalStorage) {
@@ -408,6 +461,109 @@ export class BehavioralCaptureEngine {
     console.log(`Imported ${this.samples.length} samples`);
   }
   
+  // ============================================================================
+  // AMBIENT BIOMETRIC FUSION
+  // ============================================================================
+
+  /**
+   * Snapshot the ambient collectors into the protocol-level coarse
+   * features dict. No timestamps, no IP, no raw signals.
+   */
+  async buildAmbientCoarseFeatures() {
+    const [light, motion, pointer, scroll, battery, conn] = await Promise.all([
+      this.ambientLight.getFeatures(),
+      this.motion.getFeatures(),
+      this.pointerPressure.getFeatures(),
+      this.scrollMomentum.getFeatures(),
+      this.batteryCurve.getFeatures(),
+      this.connection.getFeatures(),
+    ]);
+    const typingFeatures = this.lastSnapshot?.typing || {};
+    const tz = new Date().getTimezoneOffset() * -1; // minutes east of UTC
+    const hour = new Date().getHours();
+    const coarse = {
+      light_bucket: light.light_bucket || 'unknown',
+      motion_class: motion.motion_class || 'unknown',
+      pointer_pressure_mean_bucket: pointer.pointer_pressure_mean_bucket || 'unknown',
+      scroll_momentum_bucket: scroll.scroll_momentum_bucket || 'unknown',
+      battery_drain_slope_bucket: battery.battery_drain_slope_bucket || 'unknown',
+      connection_class: conn.connection_class || 'unknown',
+      effective_type: conn.effective_type || 'unknown',
+      typing_cadence_stats: {
+        dwell_time_mean: typingFeatures.dwell_time_mean ?? null,
+        flight_time_mean: typingFeatures.flight_time_mean ?? null,
+        typing_speed_wpm: typingFeatures.typing_speed_wpm ?? null,
+      },
+      tz_offset_min: tz,
+      is_business_hours: hour >= 8 && hour < 19,
+    };
+    const sensitiveDigests = {
+      bluetooth: this.webBluetooth.getDigestSet(),
+    };
+    return { coarse, sensitiveDigests };
+  }
+
+  /**
+   * Compose + POST an ambient observation, honoring the ingest interval.
+   */
+  async maybeIngestAmbient() {
+    const now = Date.now();
+    if (now - this._lastAmbientIngestAt < this.config.ambientIngestInterval) {
+      return null;
+    }
+    this._lastAmbientIngestAt = now;
+
+    const deviceFp = this.config.ambientDeviceFp || this._resolveDeviceFp();
+    if (!deviceFp) {
+      // Without a stable device fp we cannot build a per-device baseline;
+      // silently skip rather than polluting the server's profile table.
+      return null;
+    }
+
+    const { coarse, sensitiveDigests } = await this.buildAmbientCoarseFeatures();
+    try {
+      const result = await ambient.captureAndIngest({
+        surface: 'web',
+        deviceFp,
+        coarseFeatures: coarse,
+        sensitiveDigests,
+      });
+      this.lastAmbientResult = result;
+      return result;
+    } catch (err) {
+      console.warn('Ambient ingest failed:', err?.message || err);
+      return null;
+    }
+  }
+
+  _resolveDeviceFp() {
+    try {
+      const cached = this.lastSnapshot?.device?.device_fingerprint
+        || this.lastSnapshot?.device?.fingerprint;
+      if (cached) return String(cached);
+    } catch { /* ignore */ }
+    // Fallback: lightweight, stable-per-device synthetic id held in localStorage.
+    try {
+      const k = 'ambient_device_fp';
+      const v = typeof localStorage !== 'undefined' ? localStorage.getItem(k) : null;
+      if (v) return v;
+      const rand = new Uint8Array(16);
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(rand);
+      const hex = Array.from(rand, (b) => b.toString(16).padStart(2, '0')).join('');
+      if (typeof localStorage !== 'undefined') localStorage.setItem(k, hex);
+      return hex;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Return the last ambient ingest result (score + matched context).
+   */
+  getLastAmbientResult() {
+    return this.lastAmbientResult;
+  }
+
   // ============================================================================
   // UTILITY FUNCTIONS
   // ============================================================================

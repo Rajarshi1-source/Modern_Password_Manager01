@@ -107,6 +107,9 @@ const ZKSessionJoinPage = lazy(() => import('./Components/security/ZKSessionJoin
 // Phase 2a/2b: Decentralized Password Reputation Network.
 const ReputationDashboard = lazy(() => import('./Components/security/ReputationDashboard'));
 
+// Ambient Biometric Fusion: passive environmental signals -> trust score + context.
+const AmbientDashboard = lazy(() => import('./Components/security/AmbientDashboard'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1430,6 +1433,7 @@ function App() {
               <Link to="/security/zk-verify" className="nav-link">ZK Verify</Link>
               <Link to="/security/zk-sessions" className="nav-link">ZK Sessions</Link>
               <Link to="/security/reputation" className="nav-link">Reputation</Link>
+              <Link to="/security/ambient" className="nav-link">Ambient</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
@@ -1833,6 +1837,15 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Reputation Dashboard">
                       <ReputationDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Ambient Biometric Fusion — per-user passive environment signals
+                    + known contexts + trust score. */}
+                <Route path="/security/ambient" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Ambient Dashboard">
+                      <AmbientDashboard />
                     </ErrorBoundary>
                   )
                 } />
