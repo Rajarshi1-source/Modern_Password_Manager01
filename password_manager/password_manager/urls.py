@@ -141,6 +141,12 @@ urlpatterns = [
     
     # Smart Contract Automation API routes
     path('api/smart-contracts/', include('smart_contracts.urls')),
+
+    # Zero-Knowledge Password Verification Protocol API routes
+    path('api/zk/', include('zk_proofs.urls')),
+
+    # Decentralized Password Reputation Network API routes
+    path('api/reputation/', include('password_reputation.urls')),
 ]
 
 # Feature-flagged modules: conditionally include URL patterns to avoid

@@ -146,6 +146,8 @@ INSTALLED_APPS = [
     'password_archaeology',  # Password Archaeology & Time Travel
     'ai_assistant',  # AI-Powered Security Assistant (Claude API)
     'smart_contracts',  # Smart Contract Automation (Blockchain Conditional Access)
+    'zk_proofs',  # Zero-Knowledge Password Verification Protocol (Pedersen + Schnorr)
+    'password_reputation',  # Decentralized Password Reputation Network (Phase 2a: NullAnchor; Phase 2b: ArbitrumAnchor)
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',

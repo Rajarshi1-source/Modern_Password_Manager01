@@ -91,6 +91,15 @@ app.conf.update(
             'task': 'blockchain.tasks.anchor_pending_commitments',
             'schedule': crontab(minute=0),  # Every hour
         },
+
+        # Phase 2b: flush pending reputation events into Merkle-rooted anchor
+        # batches (every 15 minutes). If the adapter is "null" this is
+        # effectively a cheap bookkeeping sweep; with "arbitrum" it submits
+        # to the CommitmentRegistry contract.
+        'flush-reputation-anchor-batches': {
+            'task': 'password_reputation.tasks.flush_pending_reputation_batches',
+            'schedule': crontab(minute='*/15'),
+        },
         
         # Clean up expired sessions (daily)
         'cleanup-expired-sessions': {

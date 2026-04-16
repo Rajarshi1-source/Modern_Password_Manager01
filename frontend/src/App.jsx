@@ -23,6 +23,7 @@ import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
 import sessionVaultCrypto from './services/sessionVaultCrypto';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
+import zkProof from './services/zkProof';
 
 // Lazy load heavy components
 const PasswordStrengthMeterML = lazy(() => import('./Components/security/PasswordStrengthMeterML'));
@@ -94,6 +95,17 @@ const HomomorphicSharingDashboard = lazy(() => import('./Components/sharedfolder
 
 // Smart Contract Vault Automation
 const SmartContractVaultDashboard = lazy(() => import('./Components/security/SmartContractVaultDashboard'));
+
+// Zero-Knowledge Vault Verification — prove two vault entries hide the same
+// password without revealing it. Uses Pedersen + Schnorr on secp256k1.
+const ZKVerificationDashboard = lazy(() => import('./Components/security/ZKVerificationDashboard'));
+
+// Phase 1b: multi-party ZK verification ceremonies.
+const ZKSessionsDashboard = lazy(() => import('./Components/security/ZKSessionsDashboard'));
+const ZKSessionJoinPage = lazy(() => import('./Components/security/ZKSessionJoinPage'));
+
+// Phase 2a/2b: Decentralized Password Reputation Network.
+const ReputationDashboard = lazy(() => import('./Components/security/ReputationDashboard'));
 
 
 // Add global styles for accessibility
@@ -1048,6 +1060,21 @@ function App() {
       // Update vault items with new item
       setVaultItems(prev => [...prev, response.data]);
 
+      // Register a zero-knowledge commitment of the saved password under the
+      // vault_item scope. This lets the user later prove "backup matches
+      // primary" without revealing either plaintext. The call is best-effort
+      // — vault save is the primary write; ZK registration failure must not
+      // block the user. Any failure is logged for observability.
+      try {
+        await zkProof.commitAndRegister({
+          password: formData.password,
+          itemId: response.data?.item_id || itemData.item_id,
+          scopeType: 'vault_item',
+        });
+      } catch (zkErr) {
+        console.warn('ZK commitment registration failed (non-blocking):', zkErr);
+      }
+
       // Reset form
       setFormData({
         name: '',
@@ -1400,6 +1427,9 @@ function App() {
             <div className="nav-links">
               <Link to="/security/dashboard" className="nav-link">Security Dashboard</Link>
               <Link to="/security/honeypots" className="nav-link">🍯 Honeypots</Link>
+              <Link to="/security/zk-verify" className="nav-link">ZK Verify</Link>
+              <Link to="/security/zk-sessions" className="nav-link">ZK Sessions</Link>
+              <Link to="/security/reputation" className="nav-link">Reputation</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
@@ -1767,6 +1797,42 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Smart Contract Dashboard">
                       <SmartContractVaultDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Zero-Knowledge Vault Verification — prove two commitments
+                    hide the same password without revealing it. Guarded
+                    because it lists the caller's own commitments. */}
+                <Route path="/security/zk-verify" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load ZK Verification Dashboard">
+                      <ZKVerificationDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Multi-party ZK ceremonies — owner dashboard and invitee
+                    join page. Both require auth so commitment ownership and
+                    participant binding can be enforced. */}
+                <Route path="/security/zk-sessions" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load ZK Sessions Dashboard">
+                      <ZKSessionsDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/security/zk-sessions/join/:token" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load ZK Session Join page">
+                      <ZKSessionJoinPage />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Decentralized Password Reputation Network — score, tokens,
+                    events, anchor batches, leaderboard. */}
+                <Route path="/security/reputation" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Reputation Dashboard">
+                      <ReputationDashboard />
                     </ErrorBoundary>
                   )
                 } />
