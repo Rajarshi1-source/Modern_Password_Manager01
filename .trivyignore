@@ -1,0 +1,10 @@
+# Trivy ignore file
+# Format: <check-id> [exp:<YYYY-MM-DD>] [# comment]
+#
+# KSV-0125 — Restrict container images to trusted registries
+# Justification: all images in k8s/ come from explicitly trusted registries:
+#   - ghcr.io  (GitHub Container Registry) — our own application images
+#   - docker.io (Docker Hub official images) — postgres:15-alpine, redis:7-alpine
+# The trivy-policy-data/registries.json file configures these registries for the
+# OPA policy. This entry is a belt-and-suspenders fallback.
+KSV0125

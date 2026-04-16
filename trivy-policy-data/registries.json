@@ -1,0 +1,9 @@
+{
+  "allowed_registries": [
+    "ghcr.io",
+    "docker.io",
+    "index.docker.io",
+    "registry-1.docker.io",
+    "registry.k8s.io"
+  ]
+}

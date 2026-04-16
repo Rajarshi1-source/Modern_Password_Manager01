@@ -136,7 +136,6 @@ jobs:
       # Scanner 1: Trivy (Filesystem Scan)
       # =====================================================================
       
-      # FIX #2: Pinned to commit hash
       - name: Run Trivy Scan
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
         with:
@@ -149,6 +148,7 @@ jobs:
           ignore-unfixed: false
           vuln-type: 'os,library'
           scanners: 'vuln,secret,config'
+          trivy-config: trivy.yaml
         continue-on-error: true
       
       - name: Ensure Trivy SARIF File is Valid

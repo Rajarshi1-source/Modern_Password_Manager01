@@ -1,0 +1,20 @@
+# Trivy Scanner Configuration
+# https://aquasecurity.github.io/trivy/latest/docs/references/configuration/config-file/
+
+# Point to our ignore file (default path, explicit for clarity)
+ignorefile: ".trivyignore"
+
+scan:
+  scanners:
+    - vuln
+    - secret
+    - misconfig
+
+# Inject OPA policy data so KSV-0125 knows our allowed registries.
+# The built-in restrict_image_registries policy reads `data.allowed_registries`.
+rego:
+  data:
+    - trivy-policy-data/
+
+misconfiguration:
+  include-non-failures: false
