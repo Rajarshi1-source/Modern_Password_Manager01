@@ -139,6 +139,7 @@ urlpatterns = [
     path('quantum-recovery/initiate_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'initiate_recovery'}), name='quantum-recovery-initiate'),
     path('quantum-recovery/respond_to_challenge/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'respond_to_challenge'}), name='quantum-recovery-respond'),
     path('quantum-recovery/cancel_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'cancel_recovery'}), name='quantum-recovery-cancel'),
+    path('quantum-recovery/approve_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'approve_recovery'}), name='quantum-recovery-approve'),
     path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
     path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
 

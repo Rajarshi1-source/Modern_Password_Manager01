@@ -266,7 +266,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 'error': 'Failed to get recovery status'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def initiate_recovery(self, request):
         """
         Initiate passkey recovery process
@@ -369,7 +369,7 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 'error': 'Failed to initiate recovery'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def respond_to_challenge(self, request):
         """
         Submit response to temporal challenge
@@ -521,6 +521,66 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 'error': 'Failed to cancel recovery'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
+    def approve_recovery(self, request):
+        """
+        Guardian approval or denial of a recovery attempt
+
+        POST /api/auth/quantum-recovery/approve_recovery/
+
+        Request body:
+        {
+            "approval_token": "token_string",
+            "approved": true | false
+        }
+        """
+        try:
+            approval_token = request.data.get('approval_token')
+            approved = request.data.get('approved')
+
+            if approved is None or not approval_token:
+                return Response({
+                    'error': 'approval_token and approved are required'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                approval = GuardianApproval.objects.select_related(
+                    'recovery_attempt', 'guardian'
+                ).get(approval_token=approval_token, status='pending')
+            except GuardianApproval.DoesNotExist:
+                return Response({
+                    'error': 'Invalid or already processed approval token'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check approval window
+            if timezone.now() > approval.approval_window_end:
+                approval.status = 'expired'
+                approval.save(update_fields=['status'])
+                return Response({
+                    'error': 'Approval window has expired'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            with transaction.atomic():
+                if approved:
+                    approval.status = 'approved'
+                    approval.approved_at = timezone.now()
+                    approval.shard_released = True
+                else:
+                    approval.status = 'denied'
+                    approval.shard_released = False
+                approval.save()
+
+            return Response({
+                'success': True,
+                'status': approval.status
+            })
+
+        except Exception as e:
+            logger.error(f"Error processing guardian approval: {str(e)}")
+            return Response({
+                'error': 'Failed to process approval'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     @action(detail=False, methods=['post'])
     def enable_travel_lock(self, request):
         """
