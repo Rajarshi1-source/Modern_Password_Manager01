@@ -55,7 +55,7 @@ psycopg[binary]==3.2.4
 sqlparse==0.5.4
 
 # HTTP & Networking
-requests==2.32.4
+requests==2.33.0
 certifi>=2025.11.12
 charset-normalizer==3.4.1
 idna==3.10
