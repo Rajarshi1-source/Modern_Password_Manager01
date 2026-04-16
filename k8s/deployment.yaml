@@ -30,9 +30,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         runAsNonRoot: true
-        runAsUser: 70       # alpine postgres uid
-        runAsGroup: 70      # alpine postgres gid
-        fsGroup: 70
+        runAsUser: 10070    # alpine postgres uid (offset to satisfy KSV-0021 > 10000)
+        runAsGroup: 10070   # alpine postgres gid (offset to satisfy KSV-0021 > 10000)
+        fsGroup: 10070
       containers:
       - name: postgres
         image: postgres:15-alpine
@@ -60,8 +60,8 @@ spec:
             cpu: "1000m"
         securityContext:
           runAsNonRoot: true
-          runAsUser: 70
-          runAsGroup: 70
+          runAsUser: 10070
+          runAsGroup: 10070
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
@@ -153,9 +153,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
         runAsNonRoot: true
-        runAsUser: 999      # alpine redis uid
-        runAsGroup: 999     # alpine redis gid
-        fsGroup: 999
+        runAsUser: 10999    # alpine redis uid (offset to satisfy KSV-0021 > 10000)
+        runAsGroup: 10999   # alpine redis gid (offset to satisfy KSV-0021 > 10000)
+        fsGroup: 10999
       containers:
       - name: redis
         image: redis:7-alpine
@@ -191,8 +191,8 @@ spec:
             cpu: "500m"
         securityContext:
           runAsNonRoot: true
-          runAsUser: 999
-          runAsGroup: 999
+          runAsUser: 10999
+          runAsGroup: 10999
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
