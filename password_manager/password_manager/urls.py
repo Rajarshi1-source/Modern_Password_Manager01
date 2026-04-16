@@ -148,6 +148,9 @@ urlpatterns = [
     # Decentralized Password Reputation Network API routes
     path('api/reputation/', include('password_reputation.urls')),
     path('api/ambient/', include('ambient_auth.urls')),
+
+    # Steganographic hidden vault (PNG LSB + HiddenVaultBlob v1)
+    path('api/stego/', include('stegano_vault.urls')),
 ]
 
 # Feature-flagged modules: conditionally include URL patterns to avoid

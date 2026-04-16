@@ -1,3 +1,5 @@
+import { initStegoAction } from './stego/stegoAction';
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Get references to UI elements
   const unlockButton = document.getElementById('unlock-btn');
@@ -15,6 +17,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Check auth status
   const isAuthenticated = await checkAuthStatus();
   updateUI(isAuthenticated);
+
+  // Mount the "Unlock from stego image" action (steganographic vault).
+  const stegoSlot = document.getElementById('stego-action-slot');
+  if (stegoSlot) {
+    try {
+      initStegoAction(stegoSlot);
+    } catch (e) {
+      console.warn('[stego] failed to init popup action', e);
+    }
+  }
   
   // Setup event listeners
   unlockButton.addEventListener('click', showLoginForm);

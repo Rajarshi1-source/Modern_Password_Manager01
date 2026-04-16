@@ -149,6 +149,7 @@ INSTALLED_APPS = [
     'zk_proofs',  # Zero-Knowledge Password Verification Protocol (Pedersen + Schnorr)
     'password_reputation',  # Decentralized Password Reputation Network (Phase 2a: NullAnchor; Phase 2b: ArbitrumAnchor)
     'ambient_auth',  # Ambient Biometric Fusion (web + extension + mobile passive signals)
+    'stegano_vault',  # Steganographic hidden vault (PNG LSB + cryptographic plausible deniability)
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1128,6 +1129,25 @@ AMBIENT_AUTH = {
     'NOVELTY_HIGH': float(os.environ.get('AMBIENT_AUTH_NOVELTY_HIGH', '0.70')),
     'CENTROID_EMA_ALPHA': float(os.environ.get('AMBIENT_AUTH_EMA_ALPHA', '0.15')),
     'MAX_CONTEXTS_PER_PROFILE': int(os.environ.get('AMBIENT_AUTH_MAX_CONTEXTS', '16')),
+}
+
+# Steganographic Vault / Hidden Vault Configuration
+# ENABLED is the master feature flag. Tiers are the fixed container
+# sizes of the HiddenVaultBlob v1 primitive (see
+# password_manager/hidden_vault/SPEC.md) and must stay in sync with
+# hidden_vault.envelope._TIER_TOTAL_BYTES.
+STEGO_VAULT = {
+    'ENABLED': os.environ.get('STEGO_VAULT_ENABLED', 'True').lower() == 'true',
+    'MAX_IMAGE_MB': int(os.environ.get('STEGO_VAULT_MAX_IMAGE_MB', '8')),
+    'TIERS_BYTES': [32768, 131072, 1048576],
+    'ROLLOUT_STAGE': os.environ.get('STEGO_VAULT_STAGE', 'opt_in'),  # 'off' | 'opt_in' | 'default_on'
+}
+
+HIDDEN_VAULT = {
+    'ENABLED': os.environ.get('HIDDEN_VAULT_ENABLED', 'True').lower() == 'true',
+    'KDF_TIME_COST': int(os.environ.get('HIDDEN_VAULT_KDF_T', '3')),
+    'KDF_MEMORY_KIB': int(os.environ.get('HIDDEN_VAULT_KDF_M', '65536')),
+    'KDF_PARALLELISM': int(os.environ.get('HIDDEN_VAULT_KDF_P', '1')),
 }
 
 # Smart Contract Automation Configuration

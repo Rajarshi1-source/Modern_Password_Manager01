@@ -208,6 +208,28 @@ class PasswordManagerExtension {
           this.logout();
           sendResponse({ success: true });
           break;
+
+        case 'stego_hydrate_vault':
+          // Popup decrypted a stego container locally and handed us the
+          // vault JSON. Hydrate the in-memory vault so autofill works
+          // without the user having to re-enter the master password.
+          try {
+            if (message.vault && typeof message.vault === 'object') {
+              this.vault = message.vault;
+              this.isAuthenticated = true;
+              chrome.storage.local.set({
+                isAuthenticated: true,
+                stegoHydratedSlot: message.slotIndex,
+                stegoHydratedAt: Date.now(),
+              });
+              sendResponse({ success: true });
+            } else {
+              sendResponse({ success: false, error: 'invalid vault payload' });
+            }
+          } catch (e) {
+            sendResponse({ success: false, error: e.message });
+          }
+          break;
       }
     } catch (error) {
       console.error('Error handling message:', error);

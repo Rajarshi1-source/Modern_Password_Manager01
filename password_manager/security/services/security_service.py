@@ -97,12 +97,18 @@ class SecurityService:
                     'stress_score': request.data.get('stress_score', 0.0),
                 }
                 
-                # Activate duress mode
+                # Activate duress mode. We pass the entered code as
+                # ``unlock_password`` so that, if the code has been
+                # upgraded to cryptographic plausible deniability, the
+                # duress service can recover the decoy payload from
+                # the linked StegoVault's HiddenVaultBlob instead of
+                # the legacy DecoyVault table.
                 activation_result = self.duress_service.activate_duress_mode(
                     user=user,
                     duress_code=duress_code,
                     request_context=request_context,
-                    is_test=False
+                    is_test=False,
+                    unlock_password=password,
                 )
                 
                 logger.warning(

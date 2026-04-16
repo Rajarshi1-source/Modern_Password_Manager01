@@ -277,7 +277,8 @@ class DuressCodeService:
         user: User,
         duress_code: DuressCode,
         request_context: Dict[str, Any],
-        is_test: bool = False
+        is_test: bool = False,
+        unlock_password: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Activate duress response for a user.
@@ -317,9 +318,31 @@ class DuressCodeService:
             results['evidence_package_id'] = str(evidence_package.id)
             results['actions_taken'].append('evidence_preserved')
         
-        # Get or generate decoy vault
+        # Get or generate decoy vault. If this duress code has been
+        # upgraded to cryptographic plausible deniability via a
+        # StegoVault + HiddenVaultBlob, pull the decoy payload from
+        # the opaque blob instead of the server-stored DecoyVault.
+        # That way an adversary who only has DB access cannot prove
+        # that a "real" vault exists anywhere.
         if actions.get('show_decoy'):
-            decoy = self._get_or_create_decoy_vault(user, duress_code.threat_level)
+            decoy = None
+            if duress_code.delegate_to_hidden_vault and duress_code.stego_vault_id:
+                try:
+                    decoy = self._decoy_from_hidden_vault(
+                        user=user,
+                        duress_code=duress_code,
+                        unlock_password=unlock_password,
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.warning(
+                        "Hidden-vault decoy retrieval failed for user %s: %s; "
+                        "falling back to legacy decoy vault.",
+                        user.username,
+                        exc,
+                    )
+                    decoy = None
+            if decoy is None:
+                decoy = self._get_or_create_decoy_vault(user, duress_code.threat_level)
             results['decoy_vault'] = decoy
             results['actions_taken'].append('decoy_vault_prepared')
         
@@ -426,6 +449,102 @@ class DuressCodeService:
         logger.info(f"Refreshed decoy vault for user {decoy.user.username}")
         return self._format_decoy_vault(decoy)
     
+    def _decoy_from_hidden_vault(
+        self,
+        *,
+        user: User,
+        duress_code: DuressCode,
+        unlock_password: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve the decoy payload from the linked StegoVault's
+        HiddenVaultBlob.
+
+        Returns ``None`` if:
+
+        * the linked StegoVault cannot be loaded,
+        * the stegano_vault feature is disabled,
+        * no ``unlock_password`` was supplied (server-initiated path),
+        * decoding fails (wrong password or corrupted blob).
+
+        Any failure falls back to the legacy DecoyVault.
+        """
+        if not unlock_password:
+            return None
+
+        sv = duress_code.stego_vault
+        if sv is None:
+            return None
+
+        try:
+            from stegano_vault import services as stego_services
+            if not stego_services.enabled():
+                return None
+        except Exception:  # pragma: no cover - defensive
+            return None
+
+        try:
+            image_bytes = sv.image.read()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Unable to read StegoVault image %s: %s", sv.id, exc)
+            return None
+
+        try:
+            from stegano_vault.services import extract_blob_from_png
+            from hidden_vault import decode as hv_decode
+        except Exception:  # pragma: no cover - stegano_vault optional
+            return None
+
+        try:
+            blob = extract_blob_from_png(image_bytes)
+            result = hv_decode(blob, unlock_password)
+        except Exception as exc:
+            logger.info(
+                "HiddenVault decode failed for user %s (code %s): %s",
+                user.username,
+                duress_code.id,
+                exc,
+            )
+            return None
+
+        try:
+            import json as _json
+
+            payload = _json.loads(result.payload.decode("utf-8"))
+        except Exception:
+            payload = {"raw_b64": result.payload.hex()}
+
+        items = payload.get("items") if isinstance(payload, dict) else []
+        folders = payload.get("folders") if isinstance(payload, dict) else []
+
+        try:
+            from stegano_vault.models import StegoAccessEvent
+
+            stego_services.log_event(
+                user=user,
+                kind=StegoAccessEvent.Kind.EXTRACT,
+                stego_vault=sv,
+                surface="server-duress",
+                details={
+                    "threat_level": duress_code.threat_level,
+                    "slot": result.slot_index,
+                },
+            )
+        except Exception:  # pragma: no cover
+            pass
+
+        return {
+            "id": f"hidden-vault:{sv.id}:slot{result.slot_index}",
+            "threat_level": duress_code.threat_level,
+            "items": items if isinstance(items, list) else [],
+            "folders": folders if isinstance(folders, list) else [],
+            "item_count": len(items) if isinstance(items, list) else 0,
+            "realism_score": 1.0,  # user-curated decoy
+            "last_refreshed": timezone.now().isoformat(),
+            "source": "hidden_vault",
+            "slot_index": result.slot_index,
+        }
+
     def _format_decoy_vault(self, decoy: DecoyVault) -> Dict[str, Any]:
         """Format decoy vault for API response"""
         return {

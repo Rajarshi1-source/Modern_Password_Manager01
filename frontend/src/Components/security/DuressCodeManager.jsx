@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import * as duressService from '../../services/duressCodeService';
 import './DuressCodeManager.css';
@@ -188,6 +189,50 @@ const DuressCodeManager = ({ onSetupClick }) => {
                     <button onClick={() => setError(null)}>×</button>
                 </div>
             )}
+
+            {/* Stego Vault upgrade CTA — offers the cryptographic
+                hidden-volume container as a stronger backing store
+                for duress codes. */}
+            <div
+                className="stego-upgrade-banner"
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    padding: '0.85rem 1.1rem',
+                    margin: '0.75rem 0 1rem',
+                    background: 'linear-gradient(90deg,#eef2ff 0%,#f5f3ff 100%)',
+                    border: '1px solid #c7d2fe',
+                    borderRadius: 8,
+                    color: '#1e293b',
+                }}
+            >
+                <div style={{ lineHeight: 1.4 }}>
+                    <strong>🖼️ Upgrade your decoy vault to plausible deniability</strong>
+                    <div style={{ fontSize: 13, color: '#475569', marginTop: 2 }}>
+                        Hide the real vault and a realistic decoy inside an
+                        innocent PNG. Duress codes can then delegate to the
+                        stego container — silent alarms still fire, but the
+                        unlocked payload is cryptographically indistinguishable
+                        from a genuine one.
+                    </div>
+                </div>
+                <Link
+                    to="/security/stego"
+                    style={{
+                        background: '#7B68EE',
+                        color: '#fff',
+                        padding: '0.45rem 0.9rem',
+                        borderRadius: 6,
+                        textDecoration: 'none',
+                        fontWeight: 600,
+                        whiteSpace: 'nowrap',
+                    }}
+                >
+                    Open Stego Vault →
+                </Link>
+            </div>
 
             {/* Stats Grid */}
             <div className="stats-grid">

@@ -110,6 +110,9 @@ const ReputationDashboard = lazy(() => import('./Components/security/ReputationD
 // Ambient Biometric Fusion: passive environmental signals -> trust score + context.
 const AmbientDashboard = lazy(() => import('./Components/security/AmbientDashboard'));
 
+// Steganographic Hidden Vault: PNG LSB + HiddenVaultBlob v1 (plausible deniability).
+const StegoVaultDashboard = lazy(() => import('./Components/security/StegoVaultDashboard'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1846,6 +1849,15 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Ambient Dashboard">
                       <AmbientDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Steganographic Hidden Vault — PNG LSB + HiddenVaultBlob v1
+                    plausible-deniability container. */}
+                <Route path="/security/stego" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Stego Vault Dashboard">
+                      <StegoVaultDashboard />
                     </ErrorBoundary>
                   )
                 } />

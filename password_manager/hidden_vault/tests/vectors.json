@@ -1,0 +1,58 @@
+{
+  "spec": "HiddenVaultBlob v1",
+  "description": "Canonical test vectors. encode is non-deterministic (contains randomness); cross-language parity is therefore asserted on decoded plaintext, not raw bytes.",
+  "cases": [
+    {
+      "id": "case-basic-tier0",
+      "tier": 0,
+      "tier_bytes": 32768,
+      "slot_payload_len": 16000,
+      "real_password": "correct horse battery staple",
+      "decoy_password": "hunter2",
+      "real_payload_utf8": "{\"items\":[{\"name\":\"bank\",\"secret\":\"top-secret-real\"}]}",
+      "decoy_payload_utf8": "{\"items\":[{\"name\":\"email\",\"secret\":\"public-looking-fake\"}]}"
+    },
+    {
+      "id": "case-empty-real-slot-tier0",
+      "tier": 0,
+      "tier_bytes": 32768,
+      "slot_payload_len": 16000,
+      "real_password": "R34l!p@ss",
+      "decoy_password": null,
+      "real_payload_utf8": "{\"items\":[]}",
+      "decoy_payload_utf8": null
+    },
+    {
+      "id": "case-unicode-tier1",
+      "tier": 1,
+      "tier_bytes": 131072,
+      "slot_payload_len": 60000,
+      "real_password": "пароль-42",
+      "decoy_password": "私の秘密",
+      "real_payload_utf8": "{\"items\":[{\"name\":\"バンク\",\"secret\":\"本物\"}]}",
+      "decoy_payload_utf8": "{\"items\":[{\"name\":\"銀行\",\"secret\":\"偽物\"}]}"
+    }
+  ],
+  "fixed_params": {
+    "magic": "48564c4f424c7631",
+    "version": 1,
+    "slot_count": 2,
+    "kdf_id": 1,
+    "kdf_time_cost": 3,
+    "kdf_memory_kib": 65536,
+    "kdf_parallelism": 1,
+    "gcm_tag_len": 16,
+    "nonce_len": 12,
+    "outer_salt_len": 16,
+    "slot_frame_magic": "48565331",
+    "domain_tag_prefix": "48564c4f424c7631 2f 736c6f74"
+  },
+  "invariants": [
+    "encode(...) -> blob of exactly tier_bytes bytes",
+    "decode(blob, real_password).payload == real_payload",
+    "decode(blob, decoy_password).payload == decoy_payload",
+    "decode(blob, wrong_password) raises",
+    "decode(blob, real_password).slot_index != decode(blob, decoy_password).slot_index",
+    "changing only the real slot does not make the decoy slot decryptable by the real password"
+  ]
+}

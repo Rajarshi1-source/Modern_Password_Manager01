@@ -150,7 +150,40 @@ class DuressCode(models.Model):
         help_text="Number of times this code has been activated"
     )
     last_activated_at = models.DateTimeField(null=True, blank=True)
-    
+
+    # Cryptographic plausible-deniability delegation.
+    # When True, the decoy payload for this duress code is NOT the
+    # server-stored DecoyVault.decoy_items JSON but is instead the
+    # plaintext recovered from a slot of a HiddenVaultBlob embedded in
+    # a steganographic image (see stegano_vault / hidden_vault apps).
+    # This makes DB inspection unable to prove whether a real vault
+    # exists.
+    delegate_to_hidden_vault = models.BooleanField(
+        default=False,
+        help_text=(
+            "If True, the decoy payload returned on duress comes from the"
+            " linked StegoVault's hidden-vault blob instead of the legacy"
+            " DecoyVault table."
+        ),
+    )
+    hidden_vault_slot = models.PositiveSmallIntegerField(
+        default=0,
+        help_text=(
+            "Which HiddenVaultBlob slot (0 or 1) this duress code unlocks."
+        ),
+    )
+    stego_vault = models.ForeignKey(
+        'stegano_vault.StegoVault',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='duress_codes',
+        help_text=(
+            "Optional link to the steganographic container whose blob this"
+            " duress code decrypts."
+        ),
+    )
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

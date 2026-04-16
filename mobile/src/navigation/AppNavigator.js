@@ -50,6 +50,7 @@ import SmartContractScreen from '../screens/SmartContractScreen';
 
 // Import ambient biometric fusion screen
 import AmbientSetupScreen from '../screens/AmbientSetupScreen';
+import StegoVaultScreen from '../screens/StegoVaultScreen';
 
 // Import auth service
 import { authService } from '../services/authService';
@@ -196,6 +197,11 @@ const SettingsNavigator = () => (
       name="AmbientSetup" 
       component={AmbientSetupScreen}
       options={{ headerTitle: 'Ambient Trust', headerShown: false }}
+    />
+    <MainStack.Screen
+      name="StegoVault"
+      component={StegoVaultScreen}
+      options={{ headerTitle: 'Stego Vaults', headerShown: false }}
     />
   </MainStack.Navigator>
 );
