@@ -42,6 +42,7 @@ class TestRecoveryInitiation(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -103,6 +104,7 @@ class TestChallengeResponse(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -228,6 +230,7 @@ class TestCanaryAlerts(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -289,6 +292,7 @@ class TestCanaryAlerts(TestCase):
     def test_cannot_cancel_other_users_recovery(self):
         """Test that users cannot cancel other users' recovery"""
         other_user = User.objects.create_user(
+            username='otheruser',
             email='other@example.com',
             password='TestPassword123!'
         )
@@ -313,6 +317,7 @@ class TestRateLimiting(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -357,6 +362,7 @@ class TestGuardianApproval(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -458,6 +464,7 @@ class TestCompleteRecoveryFlow(TestCase):
         """Set up complete test environment"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )

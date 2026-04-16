@@ -38,6 +38,7 @@ class TestSQLInjectionPrevention(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -110,6 +111,7 @@ class TestXSSPrevention(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -170,10 +172,12 @@ class TestUnauthorizedAccessControl(TestCase):
         
         # Create two users
         self.user1 = User.objects.create_user(
+            username='user1',
             email='user1@example.com',
             password='TestPassword123!'
         )
         self.user2 = User.objects.create_user(
+            username='user2',
             email='user2@example.com',
             password='TestPassword123!'
         )
@@ -278,6 +282,7 @@ class TestTimingAttackResistance(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='existinguser',
             email='existing@example.com',
             password='TestPassword123!'
         )
@@ -331,6 +336,7 @@ class TestHoneypotSecurity(TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -433,6 +439,7 @@ class TestRateLimitingSecurity(TestCase):
         """Set up test fixtures"""
         self.client = Client()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -478,6 +485,7 @@ class TestDataEncryptionSecurity(TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )

@@ -229,11 +229,11 @@ class HomomorphicShare(models.Model):
         ]
         constraints = [
             models.CheckConstraint(
-                check=models.Q(can_view_password=False),
+                condition=models.Q(can_view_password=False),
                 name='fhe_share_no_view_password',
             ),
             models.CheckConstraint(
-                check=models.Q(can_copy_password=False),
+                condition=models.Q(can_copy_password=False),
                 name='fhe_share_no_copy_password',
             ),
         ]

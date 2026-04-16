@@ -32,6 +32,7 @@ class TestShamirSecretSharing(TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -209,6 +210,7 @@ class TestRecoveryShardModel(TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -303,6 +305,7 @@ class TestEndToEndRecoveryFlow(TestCase):
     def setUp(self):
         """Set up complete test environment"""
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )

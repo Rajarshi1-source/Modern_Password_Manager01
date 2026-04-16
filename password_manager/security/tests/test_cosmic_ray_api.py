@@ -26,6 +26,7 @@ class TestCosmicRayStatusEndpoint(APITestCase):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='testpass123'
         )
@@ -77,6 +78,7 @@ class TestCosmicRayPasswordEndpoint(APITestCase):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='testpass123'
         )
@@ -154,6 +156,7 @@ class TestCosmicRayEventsEndpoint(APITestCase):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='testpass123'
         )
@@ -204,6 +207,7 @@ class TestCosmicRaySettingsEndpoint(APITestCase):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='testpass123'
         )
@@ -249,6 +253,7 @@ class TestCosmicRayEntropyBatchEndpoint(APITestCase):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='testpass123'
         )
@@ -306,6 +311,7 @@ class TestCosmicRayIntegration(APITestCase):
         from django.contrib.auth import get_user_model
         User = get_user_model()
         self.user = User.objects.create_user(
+            username='integrationtestuser',
             email='integration_test@example.com',
             password='testpass123'
         )

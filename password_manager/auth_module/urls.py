@@ -21,6 +21,8 @@ from . import mfa_views
 from . import passkey_primary_recovery_views
 # Import Kyber (Post-Quantum) views
 from . import kyber_views
+# Import Quantum Recovery views
+from . import quantum_recovery_views
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -131,6 +133,15 @@ urlpatterns = [
     # Get overall recovery status
     path('passkey-recovery/status/', passkey_primary_recovery_views.get_recovery_status, name='get_passkey_recovery_status'),
     
+    # ==================== Quantum Recovery Endpoints ====================
+    path('quantum-recovery/setup_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'setup_recovery'}), name='quantum-recovery-setup'),
+    path('quantum-recovery/get_recovery_status/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'get': 'get_recovery_status'}), name='quantum-recovery-get-status'),
+    path('quantum-recovery/initiate_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'initiate_recovery'}), name='quantum-recovery-initiate'),
+    path('quantum-recovery/respond_to_challenge/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'respond_to_challenge'}), name='quantum-recovery-respond'),
+    path('quantum-recovery/cancel_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'cancel_recovery'}), name='quantum-recovery-cancel'),
+    path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
+    path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
+
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
     # Keypair generation
     path('kyber/keypair/', kyber_views.generate_keypair_view, name='kyber_generate_keypair'),

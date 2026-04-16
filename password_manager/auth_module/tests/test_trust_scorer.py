@@ -38,6 +38,7 @@ class TestTrustScorerService(TestCase):
     def setUp(self):
         """Set up test fixtures"""
         self.user = User.objects.create_user(
+            username='testuser',
             email='test@example.com',
             password='TestPassword123!'
         )
@@ -449,6 +450,7 @@ class TestTrustScorerIntegration(TestCase):
     def setUp(self):
         """Set up comprehensive test environment"""
         self.user = User.objects.create_user(
+            username='integrationtestuser',
             email='integration@example.com',
             password='TestPassword123!'
         )
