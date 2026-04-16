@@ -21,6 +21,8 @@ import analyticsService from './services/analyticsService';
 import abTestingService from './services/abTestingService';
 import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
+import sessionVaultCrypto from './services/sessionVaultCrypto';
+import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 
 // Lazy load heavy components
 const PasswordStrengthMeterML = lazy(() => import('./Components/security/PasswordStrengthMeterML'));
@@ -55,7 +57,8 @@ const DecoyVaultPreview = lazy(() => import('./Components/security/DecoyVaultPre
 const TrustedAuthorityManager = lazy(() => import('./Components/security/TrustedAuthorityManager'));
 const DuressEventLog = lazy(() => import('./Components/security/DuressEventLog'));
 
-// Honeypot Email Breach Detection
+// Honeypot Email Breach Detection — manages bait email addresses and alerts
+// when they receive traffic, indicating a credential/data leak upstream.
 const HoneypotDashboard = lazy(() => import('./Components/security/HoneypotDashboard'));
 
 // Dark Protocol Network for Anonymous Vault Access
@@ -261,16 +264,18 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
       if (result && result.tokens) {
         toast.success('Login successful!', { id: 'oauth-loading' });
 
-        // Store tokens
-        localStorage.setItem('token', result.tokens.access);
-        localStorage.setItem('refreshToken', result.tokens.refresh);
-        axios.defaults.headers.common['Authorization'] = `Bearer ${result.tokens.access}`;
-
         // Set OAuth success for test assertions
         setOauthSuccess(true);
 
-        // Trigger the login success callback
-        onLogin({ tokens: result.tokens, user: result.user });
+        // Hand off to the app-level handler. Do NOT persist tokens here —
+        // the handler owns storage so the payload shape stays consistent with
+        // the keys `useAuth` reads from (`accessToken`, `refreshToken`, `user`).
+        onLogin({
+          oauth: true,
+          provider,
+          oauthTokens: result.tokens,
+          oauthUser: result.user,
+        });
       }
     } catch (error) {
       console.error(`${provider} login error:`, error);
@@ -542,13 +547,13 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
       if (result && result.tokens) {
         toast.success('Sign-up successful!', { id: 'oauth-loading' });
 
-        // Store tokens
-        localStorage.setItem('token', result.tokens.access);
-        localStorage.setItem('refreshToken', result.tokens.refresh);
-        axios.defaults.headers.common['Authorization'] = `Bearer ${result.tokens.access}`;
-
-        // Trigger the signup success callback
-        onSignup({ tokens: result.tokens, user: result.user });
+        // Delegate persistence to the app-level handler (see LoginForm note).
+        onSignup({
+          oauth: true,
+          provider,
+          oauthTokens: result.tokens,
+          oauthUser: result.user,
+        });
       }
     } catch (error) {
       console.error(`${provider} signup error:`, error);
@@ -713,12 +718,29 @@ const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
   );
 });
 
+// Validate a string is safe to embed in an HTTP header value before we set it
+// as `axios.defaults.headers.common['Authorization']`. A malformed token
+// (newline, control char, non-ASCII, absurd length) would otherwise poison
+// the axios client for the rest of the session. We stay conservative: JWTs
+// and typical opaque OAuth access tokens are ASCII-printable, usually under
+// a few kilobytes. Anything that fails this check is rejected.
+const isSafeBearerToken = (token) => {
+  if (typeof token !== 'string') return false;
+  if (token.length === 0 || token.length > 8192) return false;
+  // Printable ASCII only (no CR, LF, tab, NUL, non-ASCII).
+  return /^[\x21-\x7E]+$/.test(token);
+};
+
 function App() {
   // JWT Authentication Hook
   const { user, isAuthenticated, isLoading: authLoading, login, logout: authLogout } = useAuth();
 
   // State for storing vault items and form data
   const [vaultItems, setVaultItems] = useState([]);
+  // Decrypted view of `vaultItems`. Keyed by `item_id` so updates stay stable
+  // across re-renders. The ciphertext stays in `vaultItems`; we never persist
+  // the decrypted map.
+  const [decryptedItems, setDecryptedItems] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [appInitialized, setAppInitialized] = useState(false);
@@ -730,6 +752,11 @@ function App() {
   // Login/Signup toggle state
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // Vault unlock modal: opens automatically for OAuth sessions that need a
+  // vault password (first-time setup) or an unlock prompt on subsequent
+  // logins. Also opens on demand when a save attempt finds the vault locked.
+  const [showVaultUnlock, setShowVaultUnlock] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -866,20 +893,75 @@ function App() {
     setError(null);
   }, [location, isAuthenticated]);
 
-  // Fetch vault items from API
-  const vaultFetchedRef = useRef(false);
+  // Memoized so effects that depend on it don't capture a stale closure.
+  // Declared BEFORE the effect that references it so the effect's dep array
+  // (evaluated during render) doesn't hit the TDZ.
+  const fetchVaultItems = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get('/api/vault/');
+      // Ensure vaultItems is always an array
+      const items = response.data?.results || response.data || [];
+      setVaultItems(Array.isArray(items) ? items : []);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching vault items:', err);
+      // Don't show error for 401s as useAuth handles redirect
+      if (err.response?.status !== 401) {
+        setError('Failed to load your password vault. Please try again.');
+      }
+      setVaultItems([]); // Reset to empty array on error
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Fetch vault items from API. The ref guard is keyed to the current user
+  // identity so that an identity change (token refresh returning a different
+  // user, or OAuth-over-existing-session) forces a clean refetch instead of
+  // showing the previous account's vault — a critical isolation requirement
+  // for a password manager.
+  const vaultFetchedRef = useRef({ fetched: false, identity: null });
 
   useEffect(() => {
+    const identity = user?.id ?? user?.email ?? null;
     if (isAuthenticated) {
-      if (!vaultFetchedRef.current) {
+      if (!vaultFetchedRef.current.fetched || vaultFetchedRef.current.identity !== identity) {
+        setVaultItems([]);
         fetchVaultItems();
-        vaultFetchedRef.current = true;
+        vaultFetchedRef.current = { fetched: true, identity };
       }
     } else {
-      vaultFetchedRef.current = false;
+      vaultFetchedRef.current = { fetched: false, identity: null };
       setVaultItems([]);
+      setDecryptedItems({});
     }
-  }, [isAuthenticated, user?.id, user?.email]);
+    // `fetchVaultItems` is memoized with a stable identity (useCallback with
+    // empty deps), but we still list it so the exhaustive-deps rule is happy
+    // and a future change to the callback won't silently leave this effect
+    // bound to a stale closure.
+  }, [isAuthenticated, user?.id, user?.email, fetchVaultItems]);
+
+  // Decrypt vault items asynchronously whenever the ciphertext list changes.
+  // Kept separate from fetch so re-renders don't re-run the KDF, and so we
+  // can gracefully show legacy plaintext rows with a warning flag.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next = {};
+      for (const item of vaultItems) {
+        if (!item || !item.item_id) continue;
+        try {
+          next[item.item_id] = await sessionVaultCrypto.decryptItem(item.encrypted_data);
+        } catch (err) {
+          console.error('Failed to decrypt vault item', item.item_id, err);
+          next[item.item_id] = { _decryptError: true };
+        }
+      }
+      if (!cancelled) setDecryptedItems(next);
+    })();
+    return () => { cancelled = true; };
+  }, [vaultItems]);
 
   // Handle body and html class for particle background visibility
   useEffect(() => {
@@ -900,25 +982,19 @@ function App() {
     };
   }, [isAuthenticated]);
 
-  const fetchVaultItems = async () => {
-    try {
-      setLoading(true);
-      const response = await axios.get('/api/vault/');
-      // Ensure vaultItems is always an array
-      const items = response.data?.results || response.data || [];
-      setVaultItems(Array.isArray(items) ? items : []);
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching vault items:', err);
-      // Don't show error for 401s as useAuth handles redirect
-      if (err.response?.status !== 401) {
-        setError('Failed to load your password vault. Please try again.');
-      }
-      setVaultItems([]); // Reset to empty array on error
-    } finally {
-      setLoading(false);
+  // After an OAuth login (or any auth state where we don't have a session
+  // vault key yet), prompt the user to set up or unlock a vault password.
+  // Password-based logins bootstrap the session key inside `handleLogin`, so
+  // this effect stays silent for them.
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setShowVaultUnlock(false);
+      return;
     }
-  };
+    if (!sessionVaultCrypto.hasSessionKey()) {
+      setShowVaultUnlock(true);
+    }
+  }, [isAuthenticated, user?.id, user?.email]);
 
   // Handle form input changes
   const handleInputChange = useCallback((e) => {
@@ -929,8 +1005,10 @@ function App() {
     }));
   }, []);
 
-  // Handle form submission
-  const handleSubmit = async (e) => {
+  // Handle form submission — memoized so the `mainContent` useMemo's dep
+  // array sees a stable identity and memoization actually takes effect
+  // across renders.
+  const handleSubmit = useCallback(async (e) => {
     e.preventDefault();
 
     if (!formData.name || !formData.username || !formData.password) {
@@ -938,17 +1016,29 @@ function App() {
       return;
     }
 
+    // Encrypt the secret client-side before it ever leaves the browser.
+    // The server only ever sees AES-GCM ciphertext. If the vault is locked
+    // (typical for fresh OAuth sessions), prompt the user to set up or
+    // unlock a vault password instead of silently persisting plaintext.
+    if (!sessionVaultCrypto.hasSessionKey()) {
+      setShowVaultUnlock(true);
+      setError('Your vault is locked. Please set up or unlock your vault password to save items.');
+      return;
+    }
+
     try {
+      const encryptedPayload = await sessionVaultCrypto.encryptItem({
+        name: formData.name,
+        username: formData.username,
+        password: formData.password,
+        website: formData.website,
+        notes: formData.notes,
+      });
+
       const itemData = {
         item_type: 'password',
         item_id: `item_${Date.now()}`, // Generate a unique ID
-        encrypted_data: JSON.stringify({
-          name: formData.name,
-          username: formData.username,
-          password: formData.password,
-          website: formData.website,
-          notes: formData.notes
-        }),
+        encrypted_data: encryptedPayload,
         favorite: false
       };
 
@@ -972,15 +1062,79 @@ function App() {
       console.error('Error adding vault item:', err);
       setError('Failed to add new password. Please try again.');
     }
-  };
+  }, [formData]);
 
   const handleLogin = useCallback(async (loginData) => {
     try {
-      // Use JWT authentication from useAuth hook
+      // OAuth path — social login has already produced tokens. Persist them
+      // under the keys `useAuth` expects (`accessToken`, `refreshToken`,
+      // `user`), wire the axios default header, and force a reload so
+      // `AuthProvider.initAuth` rehydrates the session cleanly.
+      if (loginData?.oauth && loginData?.oauthTokens) {
+        const { oauthTokens, oauthUser } = loginData;
+
+        // Validate the access token before it touches storage or axios
+        // defaults. A token with a newline, NUL, or non-ASCII byte would
+        // otherwise corrupt every subsequent request header.
+        if (!isSafeBearerToken(oauthTokens.access)) {
+          console.error('OAuth access token failed validation; aborting login.');
+          setError('Received an invalid token from the social provider. Please try again.');
+          return;
+        }
+
+        localStorage.setItem('accessToken', oauthTokens.access);
+        axios.defaults.headers.common['Authorization'] = `Bearer ${oauthTokens.access}`;
+
+        // Guard against `undefined` being coerced to the string "undefined",
+        // which would otherwise be sent to /api/auth/token/refresh/ and
+        // trigger cascading 401s. Also validate the refresh token with the
+        // same rule — a malformed refresh would be just as corrupting.
+        if (oauthTokens.refresh && isSafeBearerToken(oauthTokens.refresh)) {
+          localStorage.setItem('refreshToken', oauthTokens.refresh);
+        } else {
+          localStorage.removeItem('refreshToken');
+        }
+        if (oauthUser) {
+          localStorage.setItem('user', JSON.stringify(oauthUser));
+        }
+
+        errorTracker.setUserContext({
+          email: oauthUser?.email,
+          loginTime: new Date().toISOString(),
+          authMethod: `oauth:${loginData.provider || 'unknown'}`,
+        });
+
+        try {
+          analyticsService.trackEvent('login_success', 'authentication', {
+            rememberMe: false,
+            method: `oauth:${loginData.provider || 'unknown'}`,
+          });
+        } catch (error) {
+          console.warn('Failed to track login:', error);
+        }
+
+        setError(null);
+        window.location.assign('/');
+        return;
+      }
+
+      // Password path — use JWT authentication from useAuth hook.
       await login({
         email: loginData.email,
         password: loginData.password
       });
+
+      // Bootstrap an in-memory vault encryption key derived from the master
+      // password so the "Add Password" form can store ciphertext instead of
+      // plaintext JSON. The password is not persisted anywhere.
+      try {
+        await sessionVaultCrypto.initSessionKeyFromPassword(
+          loginData.password,
+          loginData.email
+        );
+      } catch (cryptoErr) {
+        console.warn('Failed to initialize session vault key:', cryptoErr);
+      }
 
       // Initialize error tracker user context
       errorTracker.setUserContext({
@@ -1012,7 +1166,15 @@ function App() {
   }, [login, setError]);
 
   const handleSignup = useCallback(async (signupData) => {
-    // Check if passwords match
+    // OAuth path — the social provider has already produced tokens. Reuse
+    // the OAuth branch of `handleLogin` so persistence and rehydration stay
+    // in one place.
+    if (signupData?.oauth && signupData?.oauthTokens) {
+      await handleLogin(signupData);
+      return;
+    }
+
+    // Check if passwords match (password path only)
     if (signupData.password !== signupData.confirmPassword) {
       setError('Passwords do not match. Please try again.');
       return;
@@ -1021,14 +1183,34 @@ function App() {
     try {
       // Note: Signup still uses the old endpoint (/auth/register/)
       // You may need to create a JWT signup endpoint or modify this
-      // **FIX: Generate auth_hash client-side**
+      //
+      // Derive a salted, stretched `auth_hash` with PBKDF2-SHA256 instead of
+      // a raw SHA-256(password). The raw variant offered no work factor and
+      // was trivially rainbow-table-able. The salt is bound to the account
+      // email so the backend can recompute the same hash deterministically.
       const encoder = new TextEncoder();
-      const data = encoder.encode(signupData.password);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+      const saltBytes = encoder.encode(`pwm-auth|${signupData.email.toLowerCase()}`);
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(signupData.password),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits']
+      );
+      const hashBuffer = await crypto.subtle.deriveBits(
+        {
+          name: 'PBKDF2',
+          salt: saltBytes,
+          iterations: 310000,
+          hash: 'SHA-256',
+        },
+        keyMaterial,
+        256
+      );
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       const auth_hash = btoa(String.fromCharCode(...hashArray));
 
-      const response = await axios.post('/auth/register/', {
+      await axios.post('/auth/register/', {
         username: signupData.email,
         email: signupData.email,
         password: signupData.password,
@@ -1085,7 +1267,7 @@ function App() {
         error: err.message
       }).catch(console.warn);
     }
-  }, [setError]);
+  }, [setError, handleLogin]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -1107,6 +1289,10 @@ function App() {
 
       // Use JWT logout from useAuth hook
       await authLogout();
+
+      // Drop the in-memory vault encryption key so it cannot be reused after
+      // logout and so a subsequent login for a different user starts clean.
+      sessionVaultCrypto.clearSessionKey();
 
       // Clear vault items
       setVaultItems([]);
@@ -1213,6 +1399,7 @@ function App() {
             <h1>SecureVault</h1>
             <div className="nav-links">
               <Link to="/security/dashboard" className="nav-link">Security Dashboard</Link>
+              <Link to="/security/honeypots" className="nav-link">🍯 Honeypots</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
@@ -1332,21 +1519,23 @@ function App() {
                         Vault item decrypted successfully
                       </span>
                       {vaultItems.map(item => {
-                        let itemData = {};
-                        try {
-                          itemData = JSON.parse(item.encrypted_data);
-                        } catch (e) {
-                          console.error('Error parsing item data:', e);
-                        }
+                        const itemData = decryptedItems[item.item_id] || {};
+                        const isDecrypting = !(item.item_id in decryptedItems);
+                        const decryptError = itemData._decryptError;
 
                         return (
                           <div key={item.item_id} className="password-card" data-testid="vault-item">
-                            <h3>{itemData.name || 'Untitled'}</h3>
+                            <h3>{itemData.name || (decryptError ? 'Decryption failed' : (isDecrypting ? 'Decrypting…' : 'Untitled'))}</h3>
+                            {itemData._legacyPlaintext && (
+                              <p className="website" style={{ color: 'var(--danger)' }}>
+                                ⚠ Legacy plaintext entry — re-save to encrypt
+                              </p>
+                            )}
                             {itemData.website && (
                               <p className="website">{itemData.website}</p>
                             )}
                             <p className="username">
-                              <strong>Username:</strong> {itemData.username}
+                              <strong>Username:</strong> {itemData.username || ''}
                             </p>
                             <p className="password">
                               <strong>Password:</strong> •••••••••••
@@ -1368,7 +1557,7 @@ function App() {
         </div>
       </div>
     );
-  }, [isAuthenticated, authContent, showHelpCenter, handleLogout, isLoggingOut, pqCryptoInitialized, fheReady, error, handleSubmit, formData, handleInputChange, loading, vaultItems]);
+  }, [isAuthenticated, authContent, showHelpCenter, handleLogout, isLoggingOut, pqCryptoInitialized, fheReady, error, handleSubmit, formData, handleInputChange, loading, vaultItems, decryptedItems]);
 
   // Show loading screen while auth is initializing (after all hooks are called)
   if (authLoading && !appInitialized) {
@@ -1428,6 +1617,18 @@ function App() {
               }}
             />
             <a href="#main-content" className="skip-link">Skip to main content</a>
+            {/* Vault unlock / setup prompt. Shown automatically whenever an
+                authenticated user has no in-memory session key — typical for
+                OAuth sessions that don't carry a master password. */}
+            <VaultUnlockModal
+              isOpen={isAuthenticated && showVaultUnlock}
+              userId={user?.id ?? user?.email ?? null}
+              onUnlocked={() => {
+                setShowVaultUnlock(false);
+                setError(null);
+              }}
+              onClose={() => setShowVaultUnlock(false)}
+            />
             <Suspense fallback={<LoadingIndicator />}>
               <Routes>
                 <Route path="/" element={mainContent} />
@@ -1461,6 +1662,17 @@ function App() {
                 } />
                 <Route path="/security/breach-alerts" element={
                   !isAuthenticated ? <Navigate to="/" /> : <BreachAlertsDashboard />
+                } />
+                {/* Honeypot Email Breach Detection — guarded because it
+                    exposes per-user bait addresses and breach events. Wrapped
+                    in ErrorBoundary so a failure in the dashboard doesn't
+                    take down the whole router. */}
+                <Route path="/security/honeypots" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Honeypot Dashboard">
+                      <HoneypotDashboard />
+                    </ErrorBoundary>
+                  )
                 } />
                 <Route path="/settings" element={
                   !isAuthenticated ? <Navigate to="/" /> : <SettingsPage />

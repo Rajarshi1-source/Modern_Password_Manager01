@@ -288,6 +288,12 @@ export const AuthProvider = ({ children }) => {
     } finally {
       // Clear local storage regardless of API call success
       storage.clearAll();
+      // Clear any default Authorization header that OAuth flows may have set;
+      // leaving it behind would cause the next request to carry a stale token
+      // that is no longer in storage.
+      if (axios.defaults?.headers?.common) {
+        delete axios.defaults.headers.common['Authorization'];
+      }
       setUser(null);
       setIsAuthenticated(false);
     }
