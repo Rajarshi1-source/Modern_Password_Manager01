@@ -44,7 +44,15 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
     ViewSet for Quantum-Resilient Recovery System
     """
     permission_classes = [IsAuthenticated]
-    
+
+    # These actions are called during recovery when the user has no session yet
+    PUBLIC_ACTIONS = {'initiate_recovery', 'respond_to_challenge', 'approve_recovery'}
+
+    def get_permissions(self):
+        if getattr(self, 'action', None) in self.PUBLIC_ACTIONS:
+            return [AllowAny()]
+        return super().get_permissions()
+
     @action(detail=False, methods=['post'])
     def setup_recovery(self, request):
         """
