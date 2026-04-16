@@ -121,9 +121,10 @@ class TestChallengeResponse(TestCase):
             status='challenge_phase',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-
             challenges_sent=5,
             challenges_completed=0,
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14)
         )
         
@@ -247,6 +248,8 @@ class TestCanaryAlerts(TestCase):
             status='initiated',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14),
         )
     
@@ -336,9 +339,9 @@ class TestRateLimiting(TestCase):
                 status='failed',
                 initiated_from_ip='127.0.0.1',
                 initiated_from_device_fingerprint=f'test_fp_{i}',
-
+                shards_required=3,
+                guardian_approvals_required=2,
                 expires_at=timezone.now() + timedelta(days=14),
-                initiated_at=timezone.now() - timedelta(hours=i)
             )
         
         # 4th attempt should be blocked (if rate limiting is implemented)
@@ -386,9 +389,9 @@ class TestGuardianApproval(TestCase):
             status='guardian_approval',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14),
-            guardian_approvals_required=2
         )
         
         self.approval = GuardianApproval.objects.create(

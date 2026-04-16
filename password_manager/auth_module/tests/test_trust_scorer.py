@@ -55,9 +55,9 @@ class TestTrustScorerService(TestCase):
             status='challenge_phase',
             initiated_from_ip='192.168.1.1',
             initiated_from_device_fingerprint='test_fp',
-
             initiated_from_location={'city': 'San Francisco', 'country': 'USA'},
-            initiated_at=timezone.now(),
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14)
         )
     
@@ -470,12 +470,12 @@ class TestTrustScorerIntegration(TestCase):
             status='challenge_phase',
             initiated_from_ip='192.168.1.1',
             initiated_from_device_fingerprint='trusted_fp',
-
             initiated_from_location={'city': 'San Francisco', 'country': 'USA'},
             challenges_sent=5,
             challenges_completed=5,
             challenges_failed=0,
-            initiated_at=timezone.now().replace(hour=14),
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14)
         )
         
@@ -529,12 +529,12 @@ class TestTrustScorerIntegration(TestCase):
             status='challenge_phase',
             initiated_from_ip='1.2.3.4',  # Unknown IP
             initiated_from_device_fingerprint='unknown_fp',
-
             initiated_from_location={'city': 'Unknown', 'country': 'Unknown'},
             challenges_sent=5,
             challenges_completed=2,
             challenges_failed=3,
-            initiated_at=timezone.now().replace(hour=3),  # Unusual time
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14)
         )
         

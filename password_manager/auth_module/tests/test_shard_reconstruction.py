@@ -349,11 +349,11 @@ class TestEndToEndRecoveryFlow(TestCase):
             status='shard_collection',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-
             trust_score=0.85,
             challenges_sent=5,
             challenges_completed=5,
-            challenge_success_rate=1.0,
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14)
         )
         
@@ -404,8 +404,9 @@ class TestEndToEndRecoveryFlow(TestCase):
             status='shard_collection',
             initiated_from_ip='127.0.0.1',
             initiated_from_device_fingerprint='test_fp',
-
             trust_score=0.50,
+            shards_required=3,
+            guardian_approvals_required=2,
             expires_at=timezone.now() + timedelta(days=14)
         )
         
