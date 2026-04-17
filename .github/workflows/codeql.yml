@@ -29,9 +29,33 @@ permissions:
   security-events: write
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Disable GitHub's default CodeQL setup so the advanced workflow below can
+  # upload SARIF results without being rejected.  The PATCH call is idempotent
+  # and silently succeeds when default setup is already disabled.
+  # ---------------------------------------------------------------------------
+  disable-default-setup:
+    name: Disable default CodeQL setup
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Disable default setup via GitHub API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            --method PATCH \
+            -H "Accept: application/vnd.github+json" \
+            /repos/${{ github.repository }}/code-scanning/default-setup \
+            -f state=not-configured \
+            && echo "Default setup disabled." \
+            || echo "Default setup already disabled or not applicable – continuing."
+
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    needs: disable-default-setup
 
     strategy:
       fail-fast: false
