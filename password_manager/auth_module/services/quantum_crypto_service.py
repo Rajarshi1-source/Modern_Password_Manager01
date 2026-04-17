@@ -203,16 +203,16 @@ class QuantumCryptoService:
         Returns:
             List of shard tuples (index, shard_bytes)
         """
-        from secretsharing import PlaintextToHexSecretSharer
-        
-        # Convert bytes to hex string for secretsharing library
+        from auth_module.services.shamir_py3 import ShamirSecretSharer
+
+        # Convert bytes to hex string for secret sharing
         secret_hex = secret.hex()
-        
-        # Split using proper Shamir's Secret Sharing with polynomial interpolation
-        shard_strings = PlaintextToHexSecretSharer.split_secret(
+
+        # Split using Shamir's Secret Sharing with polynomial interpolation
+        shard_strings = ShamirSecretSharer.split_secret(
             secret_hex,
             threshold,
-            total_shards
+            total_shards,
         )
         
         # Convert back to (index, bytes) tuples
@@ -240,19 +240,19 @@ class QuantumCryptoService:
         Returns:
             Reconstructed secret
         """
-        from secretsharing import PlaintextToHexSecretSharer
-        
+        from auth_module.services.shamir_py3 import ShamirSecretSharer
+
         if len(shards) < threshold:
             raise ValueError(f"Insufficient shards: need {threshold}, have {len(shards)}")
-        
+
         # Convert (index, bytes) tuples back to shard strings
         shard_strings = []
         for index, shard_bytes in shards[:threshold]:
             shard_string = shard_bytes.decode('utf-8')
             shard_strings.append(shard_string)
-        
-        # Reconstruct using proper Shamir's Secret Sharing with Lagrange interpolation
-        secret_hex = PlaintextToHexSecretSharer.recover_secret(shard_strings)
+
+        # Reconstruct using Shamir's Secret Sharing with Lagrange interpolation
+        secret_hex = ShamirSecretSharer.recover_secret(shard_strings)
         
         # Convert hex string back to bytes
         secret = bytes.fromhex(secret_hex)

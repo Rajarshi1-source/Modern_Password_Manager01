@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
-import QRCode from 'qrcode.react';
+import { QRCodeSVG as QRCode } from 'qrcode.react';
 import { FaQrcode, FaMobileAlt, FaKey, FaCheck, FaTimes, FaEnvelope, FaBell } from 'react-icons/fa';
 import api from '../../services/api';
 import { errorTracker } from '../../services/errorTracker';
