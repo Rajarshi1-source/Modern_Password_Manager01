@@ -200,6 +200,14 @@ jobs:
           HONEYPOT_DEFAULT_CHANNELS: 'email'
           SELF_DESTRUCT_PASSWORDS_ENABLED: 'True'
           SELF_DESTRUCT_SWEEP_INTERVAL_MINUTES: '5'
+          # Ultrasonic device pairing + Heartbeat/HRV authentication.
+          # Kept enabled so URL patterns and backend tests exercise
+          # the full code path. The audio/camera capture paths are
+          # exercised only in the frontend smoke suite.
+          ULTRASONIC_PAIRING_ENABLED: 'True'
+          PAIRING_SESSION_TTL_SECONDS: '120'
+          HEARTBEAT_AUTH_ENABLED: 'True'
+          HEARTBEAT_DURESS_ENABLED: 'True'
           DID_ISSUER_DID: 'did:web:test.securevault.local'
           IPFS_PROVIDER: 'pinata'
           VC_CHAIN_ANCHOR_ENABLED: 'False'

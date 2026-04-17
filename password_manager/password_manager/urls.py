@@ -148,6 +148,12 @@ urlpatterns = [
     # Self-destructing passwords (per-entry lifespan policies)
     path('api/self-destruct/', include('self_destruct.urls')),
 
+    # Ultrasonic device pairing (SAS over 18.5/19.5 kHz FSK)
+    path('api/ultrasonic/', include('ultrasonic_pairing.urls')),
+
+    # Heartbeat/HRV authentication (camera PPG + HRV matcher + duress)
+    path('api/heartbeat/', include('heartbeat_auth.urls')),
+
     # Zero-Knowledge Password Verification Protocol API routes
     path('api/zk/', include('zk_proofs.urls')),
 

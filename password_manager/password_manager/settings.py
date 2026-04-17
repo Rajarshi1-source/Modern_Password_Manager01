@@ -154,6 +154,8 @@ INSTALLED_APPS = [
     'decentralized_identity',  # W3C Verifiable Credentials + DID (did:key/did:web)
     'honeypot_credentials',  # Decoy credentials that trip silent alarms on access
     'self_destruct',  # Per-entry self-destruct policies (TTL, use limits, geofence)
+    'ultrasonic_pairing',  # Over-the-air device pairing via inaudible FSK audio
+    'heartbeat_auth',  # Camera-PPG heartbeat-variability authentication with duress
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1203,6 +1205,31 @@ HONEYPOT_DEFAULT_CHANNELS = [
 # beat schedule; actual schedule is defined in celery.py).
 SELF_DESTRUCT_SWEEP_INTERVAL_MINUTES = int(
     os.environ.get('SELF_DESTRUCT_SWEEP_INTERVAL_MINUTES', '5')
+)
+
+# --------------------------------------------------------------------
+# Ultrasonic device pairing + Heartbeat/HRV authentication flags.
+# Both default to enabled so self-hosted deploys get them automatically;
+# operators can flip either to 'false' without a redeploy.
+# --------------------------------------------------------------------
+ULTRASONIC_PAIRING_ENABLED = (
+    os.environ.get('ULTRASONIC_PAIRING_ENABLED', 'True').lower() == 'true'
+)
+# TTL for a pairing nonce / session. Kept deliberately short so replay
+# windows are tiny; nonces that never get claimed fall off automatically.
+PAIRING_SESSION_TTL_SECONDS = int(
+    os.environ.get('PAIRING_SESSION_TTL_SECONDS', '120')
+)
+
+HEARTBEAT_AUTH_ENABLED = (
+    os.environ.get('HEARTBEAT_AUTH_ENABLED', 'True').lower() == 'true'
+)
+# Heartbeat duress path is a subordinate flag: if the main feature is
+# disabled this one has no effect. Split out so ops can keep HRV
+# authentication on but disable the decoy-vault trigger if they want
+# to audit false-positive rate first.
+HEARTBEAT_DURESS_ENABLED = (
+    os.environ.get('HEARTBEAT_DURESS_ENABLED', 'True').lower() == 'true'
 )
 
 # ==============================================================================

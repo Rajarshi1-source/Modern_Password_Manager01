@@ -48,6 +48,8 @@ app.conf.update(
         'fhe_service.tasks.*': {'queue': 'fhe'},
         'adversarial_ai.tasks.*': {'queue': 'adversarial'},
         'analytics.tasks.*': {'queue': 'analytics'},
+        'heartbeat_auth.tasks.*': {'queue': 'ml'},
+        'ultrasonic_pairing.tasks.*': {'queue': 'default'},
     },
     
     # Task priority support (RabbitMQ / Redis with sorted sets)
@@ -251,6 +253,25 @@ app.conf.update(
         'self-destruct-purge-expired-ciphertext': {
             'task': 'self_destruct.tasks.purge_expired_ciphertext',
             'schedule': crontab(minute=0),
+        },
+
+        # Ultrasonic pairing: expire TTL-past sessions every 2 minutes
+        # so replay windows don't grow; hourly purge wipes ciphertext
+        # from delivered/expired sessions beyond grace.
+        'ultrasonic-pairing-expire-stale-sessions': {
+            'task': 'ultrasonic_pairing.tasks.expire_stale_sessions',
+            'schedule': crontab(minute='*/2'),
+        },
+        'ultrasonic-pairing-purge-delivered-payloads': {
+            'task': 'ultrasonic_pairing.tasks.purge_delivered_payloads',
+            'schedule': crontab(minute=15),  # every hour at :15
+        },
+
+        # Heartbeat/HRV baselines: nightly re-smoothing of per-user
+        # mean+covariance to absorb slow drift without replay.
+        'heartbeat-auth-recompute-baselines': {
+            'task': 'heartbeat_auth.tasks.recompute_baselines',
+            'schedule': crontab(hour=3, minute=0),  # 3:00 AM daily
         },
 
         

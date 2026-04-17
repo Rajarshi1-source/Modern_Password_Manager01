@@ -71,6 +71,13 @@ const HoneypotDashboard = lazy(() => import('./Components/security/HoneypotDashb
 const HoneypotSettings = lazy(() => import('./Components/honeypot/HoneypotSettings'));
 const HoneypotEventsTable = lazy(() => import('./Components/honeypot/HoneypotEventsTable'));
 
+// Ultrasonic device pairing — SAS over inaudible FSK audio.
+const UltrasonicPair = lazy(() => import('./Components/pairing/UltrasonicPair'));
+
+// Heartbeat/HRV authentication — camera PPG + server-side matcher.
+const HeartbeatEnroll = lazy(() => import('./Components/heartbeat/HeartbeatEnroll'));
+const HeartbeatVerify = lazy(() => import('./Components/heartbeat/HeartbeatVerify'));
+
 // Dark Protocol Network for Anonymous Vault Access
 const DarkProtocolDashboard = lazy(() => import('./Components/security/DarkProtocolDashboard'));
 
@@ -1749,6 +1756,29 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Honeypot Events">
                       <HoneypotEventsTable />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Ultrasonic pairing: SAS-verified device enrollment + item share. */}
+                <Route path="/pair/ultrasonic" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Ultrasonic Pairing">
+                      <UltrasonicPair />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Heartbeat/HRV authentication (camera PPG + duress fallback). */}
+                <Route path="/auth/heartbeat/enroll" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Heartbeat Enrollment">
+                      <HeartbeatEnroll />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/auth/heartbeat/verify" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Heartbeat Verification">
+                      <HeartbeatVerify />
                     </ErrorBoundary>
                   )
                 } />
