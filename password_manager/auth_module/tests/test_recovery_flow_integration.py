@@ -179,7 +179,7 @@ class TestChallengeResponse(TestCase):
         
         self.challenge.refresh_from_db()
         self.assertEqual(self.challenge.status, 'completed')
-        self.assertFalse(self.challenge.is_correct)
+        self.assertFalse(self.challenge.response_correct)
         
         self.attempt.refresh_from_db()
         self.assertEqual(self.attempt.challenges_failed, 1)

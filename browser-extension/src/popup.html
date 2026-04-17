@@ -166,6 +166,12 @@
       border-radius: 4px;
       font-size: 14px;
     }
+    #logout-btn {
+      display: none;
+    }
+    #fhe-share-slot {
+      margin-top: 10px;
+    }
   </style>
 </head>
 <body>
@@ -193,7 +199,7 @@
   <div id="form-section">
     <div class="section-title">Login form detected</div>
     <p>Would you like to autofill your credentials for this site?</p>
-    <button id="fill-password-btn" class="primary-btn">Fill Password</button>
+    <button type="button" id="fill-password-btn" class="primary-btn">Fill Password</button>
   </div>
 
   <!-- Vault Content Section -->
@@ -209,7 +215,7 @@
     <div class="section-title">Security Settings</div>
     <div class="setting-item">
       <div class="setting-label">Auto-lock timeout:</div>
-      <select id="auto-lock-timeout" class="setting-control">
+      <select id="auto-lock-timeout" class="setting-control" aria-label="Auto-lock timeout">
         <option value="1">1 minute</option>
         <option value="5">5 minutes</option>
         <option value="10">10 minutes</option>
@@ -222,16 +228,16 @@
 
   <!-- Action Buttons -->
   <div class="actions">
-    <button id="unlock-btn" class="primary-btn">Unlock Vault</button>
-    <button id="logout-btn" class="secondary-btn" style="display: none;">Lock Vault</button>
-    <button id="open-app-btn" class="secondary-btn">Open Password Manager</button>
+    <button type="button" id="unlock-btn" class="primary-btn">Unlock Vault</button>
+    <button type="button" id="logout-btn" class="secondary-btn">Lock Vault</button>
+    <button type="button" id="open-app-btn" class="secondary-btn">Open Password Manager</button>
   </div>
 
   <!-- Stego action slot: stegoAction.initStegoAction(..) mounts here. -->
   <div id="stego-action-slot"></div>
 
   <!-- Homomorphic share (PRE) slot -->
-  <div id="fhe-share-slot" style="margin-top: 10px;"></div>
+  <div id="fhe-share-slot" aria-live="polite"></div>
 
   <div class="footer">
     <p>Securely manage your passwords</p>

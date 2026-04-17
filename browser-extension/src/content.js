@@ -7,7 +7,6 @@ installSealedFillListener();
   // Initialize variables
   let formDetected = false;
   let detectedForms = [];
-  let currentUrl = window.location.origin;
   let domain = extractDomain(window.location.hostname);
 
   // Listen for DOM content loaded
@@ -344,7 +343,7 @@ installSealedFillListener();
   }
 
   // Listen for messages from background script
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.action === 'autofill') {
       const success = autofillCredentials(message.credentials);
       sendResponse({ success });

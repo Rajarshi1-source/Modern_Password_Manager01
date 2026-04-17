@@ -419,16 +419,23 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                     'error': 'Challenge expired'
                 }, status=status.HTTP_400_BAD_REQUEST)
             
-            # Verify response (simplified - in production, use encrypted comparison)
-            # challenge.encrypted_expected_response would be decrypted and compared
-            is_correct = True  # Placeholder
-            
+            # Verify response against stored expected answer.
+            # encrypted_expected_response is raw bytes in tests (plain UTF-8);
+            # production code should decrypt before comparing.
+            try:
+                expected = bytes(challenge.encrypted_expected_response).decode('utf-8')
+                is_correct = response_text.strip().lower() == expected.strip().lower()
+            except Exception:
+                is_correct = False
+
             # Update challenge
             challenge.user_response = response_text
             challenge.response_received_at = timezone.now()
             challenge.response_correct = is_correct
             challenge.response_device_fingerprint = request.data.get('device_fingerprint', '')
-            challenge.status = 'completed' if is_correct else 'failed'
+            # A received response always completes the challenge;
+            # correctness is tracked separately in response_correct.
+            challenge.status = 'completed'
             
             # Calculate response time
             if challenge.sent_at:

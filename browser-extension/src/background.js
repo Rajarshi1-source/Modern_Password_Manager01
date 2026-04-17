@@ -936,8 +936,8 @@ class CryptoService {
   }
 }
 
-// Initialize the extension
-const extension = new PasswordManagerExtension();
+// Initialize the extension (constructed for its side effects)
+new PasswordManagerExtension();
 
 try {
   startAmbientEngine({ periodMinutes: 5 });

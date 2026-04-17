@@ -214,7 +214,7 @@ export function installBackgroundFheShareBridge() {
   if (globalThis.__fheShareBridgeInstalled) return;
   globalThis.__fheShareBridgeInstalled = true;
   try {
-    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (!msg || typeof msg.type !== 'string') return undefined;
       if (msg.type === 'fhe_share/apply_share') {
         applyShareFromDashboard(msg.payload).then(sendResponse);

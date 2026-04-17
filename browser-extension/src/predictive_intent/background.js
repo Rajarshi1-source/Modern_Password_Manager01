@@ -188,7 +188,7 @@ async function sendContextBatch() {
 // Login Form Detection
 // ===========================================================================
 
-async function handleLoginFormDetected(data, tabId) {
+async function handleLoginFormDetected(data, _tabId) {
   if (!isEnabled || !authToken) {
     return { success: false };
   }
@@ -255,7 +255,7 @@ async function handleFillCredential(data) {
   }
 }
 
-async function handleAutofillReady(data, tabId) {
+async function handleAutofillReady(_data, tabId) {
   // Show notification that autofill is ready
   chrome.action.setBadgeText({ text: '1', tabId });
   chrome.action.setBadgeBackgroundColor({ color: '#00ff88', tabId });

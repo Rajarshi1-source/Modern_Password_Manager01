@@ -489,7 +489,7 @@
   // Background Message Handler
   // ===========================================================================
 
-  function handleBackgroundMessage(message, sender, sendResponse) {
+  function handleBackgroundMessage(message, _sender, sendResponse) {
     switch (message.type) {
       case 'PREDICTIONS_UPDATE':
         handlePredictionsReceived(message.predictions);
