@@ -90,7 +90,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # Install safety and pip-audit WITHOUT old cyclonedx-bom
-          pip install "safety==2.3.5" "pip-audit>=2.6.0"
+          pip install "safety==2.3.5" "pip-audit>=2.7.0"
       
       # FIX #4: Fail on vulnerabilities (no continue-on-error)
       - name: Run Safety check
