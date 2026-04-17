@@ -442,7 +442,9 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 attempt.challenges_completed += 1
             else:
                 attempt.challenges_failed += 1
-            
+
+            attempt.save(update_fields=['challenges_completed', 'challenges_failed'])
+
             # Recalculate trust score
             attempt.calculate_trust_score()
             

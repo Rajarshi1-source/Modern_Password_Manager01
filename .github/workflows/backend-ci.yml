@@ -180,7 +180,7 @@ jobs:
           DJANGO_SETTINGS_MODULE: password_manager.settings
           PYTHONPATH: ${{ github.workspace }}/password_manager
           SECRET_KEY: test-secret-key-for-ci-only
-          DEBUG: 'False'
+          DEBUG: 'True'
           DB_HOST: localhost
           DB_NAME: test_db
           DB_USER: postgres
