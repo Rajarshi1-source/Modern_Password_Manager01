@@ -81,7 +81,7 @@ def _permutation(num_pixels: int, stego_key: bytes) -> list[int]:
     out = list(range(num_pixels))
 
     def _rand_u32() -> int:
-        nonlocal state, counter
+        nonlocal counter
         block = hashlib.sha256(state + counter.to_bytes(8, "little")).digest()
         counter += 1
         return int.from_bytes(block[:4], "little")
