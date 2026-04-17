@@ -273,15 +273,15 @@ class TestCanaryAlerts(TestCase):
     def test_cancel_recovery_creates_audit_log(self):
         """Test that cancelling creates audit log entry"""
         self.client.force_login(self.user)
-        
+    
         initial_log_count = RecoveryAuditLog.objects.count()
-        
+    
         self.client.post(
             '/api/auth/quantum-recovery/cancel_recovery/',
             {'attempt_id': str(self.attempt.id)},
             content_type='application/json'
         )
-        
+    
         # Should create audit log
         self.assertGreater(RecoveryAuditLog.objects.count(), initial_log_count)
         
@@ -378,7 +378,7 @@ class TestGuardianApproval(TestCase):
         self.guardian = RecoveryGuardian.objects.create(
             recovery_setup=self.recovery_setup,
             encrypted_guardian_info='guardian@example.com'.encode('utf-8'),
-            kyber_public_key=b'test_public_key',
+            guardian_public_key=b'test_public_key',
             status='active',
             invitation_token='test_token_123',
             invitation_expires_at=timezone.now() + timedelta(days=7)
@@ -418,7 +418,7 @@ class TestGuardianApproval(TestCase):
         
         # Should be approved
         self.assertEqual(self.approval.status, 'approved')
-        self.assertIsNotNone(self.approval.approved_at)
+        self.assertIsNotNone(self.approval.responded_at)
         self.assertTrue(self.approval.shard_released)
     
     def test_guardian_denial(self):

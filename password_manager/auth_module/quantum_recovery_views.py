@@ -582,10 +582,11 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             with transaction.atomic():
+                approval.responded_at = timezone.now()
                 if approved:
                     approval.status = 'approved'
-                    approval.approved_at = timezone.now()
                     approval.shard_released = True
+                    approval.shard_released_at = timezone.now()
                 else:
                     approval.status = 'denied'
                     approval.shard_released = False
