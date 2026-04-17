@@ -2,6 +2,7 @@
 
 from .ambient_fusion_service import (
     FusionResult,
+    enabled,
     ingest,
     promote_context,
     rename_context,
@@ -19,6 +20,7 @@ from .ambient_fusion_service import (
 
 __all__ = [
     "FusionResult",
+    "enabled",
     "ingest",
     "promote_context",
     "rename_context",
