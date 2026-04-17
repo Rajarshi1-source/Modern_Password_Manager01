@@ -19,6 +19,10 @@ urlpatterns = [
     path('vaults/<uuid:vault_id>/conditions/', views.vault_conditions, name='smart-contract-vault-conditions'),
     path('vaults/<uuid:vault_id>/unlock/', views.vault_unlock, name='smart-contract-vault-unlock'),
 
+    # Hybrid reveal (evaluate + decrypt + on-chain anchor)
+    path('vaults/<uuid:vault_id>/reveal/', views.vault_reveal, name='smart-contract-vault-reveal'),
+    path('vaults/<uuid:vault_id>/receipt/', views.vault_receipt, name='smart-contract-vault-receipt'),
+
     # Dead man's switch
     path('vaults/<uuid:vault_id>/check-in/', views.vault_check_in, name='smart-contract-vault-checkin'),
 

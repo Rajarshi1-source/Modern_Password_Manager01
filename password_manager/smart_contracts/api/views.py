@@ -123,7 +123,7 @@ def vault_conditions(request, vault_id):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def vault_unlock(request, vault_id):
-    """Attempt to unlock a vault by evaluating its conditions."""
+    """Attempt to unlock a vault by evaluating its conditions (dry-run)."""
     vault = get_object_or_404(SmartContractVault, id=vault_id, user=request.user)
     service = VaultService()
 
@@ -135,6 +135,39 @@ def vault_unlock(request, vault_id):
             return Response(result, status=status.HTTP_403_FORBIDDEN)
     except ValueError as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def vault_reveal(request, vault_id):
+    """
+    Reveal a vault's encrypted password.
+
+    Evaluates conditions, flips DB state, enqueues the VaultAuditLog
+    anchor as a Celery task, and returns the ciphertext. The frontend
+    decrypts locally with the user's master key.
+    """
+    vault = get_object_or_404(SmartContractVault, id=vault_id, user=request.user)
+    service = VaultService()
+    try:
+        result = service.reveal_password(vault, request.user)
+    except ValueError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError as e:
+        return Response({'error': str(e)}, status=status.HTTP_403_FORBIDDEN)
+
+    if not result.get('unlocked'):
+        return Response(result, status=status.HTTP_403_FORBIDDEN)
+    return Response(result)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def vault_receipt(request, vault_id):
+    """Return the current on-chain receipt state for a revealed vault."""
+    vault = get_object_or_404(SmartContractVault, id=vault_id, user=request.user)
+    service = VaultService()
+    return Response(service.get_receipt(vault))
 
 
 # =============================================================================

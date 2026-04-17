@@ -1,5 +1,6 @@
 import axios from 'axios';
 import DeviceFingerprint from '../utils/deviceFingerprint';
+import { attachGeolocationInterceptor } from './geolocation';
 
 // Create API instance with enforced HTTPS
 const createSecureApiInstance = (baseURL) => {
@@ -35,6 +36,11 @@ const createSecureApiInstance = (baseURL) => {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 
   (import.meta.env.PROD ? 'https://api.securevault.com' : '');
 const api = createSecureApiInstance(API_BASE_URL);
+
+// Attach browser geolocation to vault requests so the server can
+// evaluate geofenced self-destruct policies. Safe no-op when the
+// browser denies the Geolocation API.
+attachGeolocationInterceptor(api);
 
 // Add auth token and device fingerprint to requests if available
 api.interceptors.request.use(async (config) => {

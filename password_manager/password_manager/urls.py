@@ -142,6 +142,12 @@ urlpatterns = [
     # Smart Contract Automation API routes
     path('api/smart-contracts/', include('smart_contracts.urls')),
 
+    # Honeypot credentials (decoy passwords that alert on access)
+    path('api/honeypot/', include('honeypot_credentials.urls')),
+
+    # Self-destructing passwords (per-entry lifespan policies)
+    path('api/self-destruct/', include('self_destruct.urls')),
+
     # Zero-Knowledge Password Verification Protocol API routes
     path('api/zk/', include('zk_proofs.urls')),
 

@@ -179,7 +179,13 @@ class VaultService:
         }
 
     def attempt_unlock(self, vault: SmartContractVault, user) -> Dict[str, Any]:
-        """Attempt to unlock a vault by evaluating conditions."""
+        """
+        Evaluate conditions WITHOUT revealing plaintext — dry-run endpoint.
+
+        This is the legacy behavior used by the conditions/unlock endpoints;
+        the new ``reveal`` path (see ``reveal_password``) is what decrypts
+        and anchors on-chain.
+        """
         if vault.status != VaultStatus.ACTIVE:
             raise ValueError(f"Vault is {vault.get_status_display()}, not active")
 
@@ -203,6 +209,98 @@ class VaultService:
                 'reason': result['reason'],
                 'details': result['details'],
             }
+
+    def reveal_password(self, vault: SmartContractVault, user) -> Dict[str, Any]:
+        """
+        Hybrid reveal: evaluate conditions, flip the DB state, enqueue the
+        on-chain audit anchor (best-effort), and return the encrypted
+        payload to the authenticated owner.
+
+        The plaintext itself stays on the server — this method does NOT
+        decrypt. The frontend holds the user's master key and decrypts
+        locally, matching the rest of the app's zero-knowledge posture.
+        """
+        if vault.user_id != user.id:
+            raise PermissionError("Only the vault creator may reveal this password")
+
+        if vault.status == VaultStatus.UNLOCKED:
+            # Already revealed — short-circuit but still report status.
+            return {
+                'unlocked': True,
+                'password_encrypted': vault.password_encrypted,
+                'reason': 'already_unlocked',
+                'details': {},
+                'tx_hash_pending': bool(
+                    vault.released_tx_hash and vault.released_at is None
+                ),
+                'released_tx_hash': vault.released_tx_hash or None,
+            }
+
+        if vault.status != VaultStatus.ACTIVE:
+            raise ValueError(f"Vault is {vault.get_status_display()}, not active")
+
+        result = self.condition_engine.evaluate(vault)
+        if not result['met']:
+            return {
+                'unlocked': False,
+                'reason': result['reason'],
+                'details': result['details'],
+            }
+
+        with transaction.atomic():
+            vault.status = VaultStatus.UNLOCKED
+            vault.unlocked_at = timezone.now()
+            vault.save(update_fields=['status', 'unlocked_at', 'updated_at'])
+
+        # Enqueue the on-chain audit anchor. Never block the response on
+        # RPC latency; if Celery is unavailable (sync test mode), we run
+        # the anchor inline to keep the behavior uniform.
+        tx_hash_pending = False
+        if getattr(settings, 'SMART_CONTRACT_UNLOCK_ONCHAIN_ENABLED', False):
+            try:
+                from smart_contracts.tasks import finalize_unlock
+                finalize_unlock.delay(str(vault.id))
+                tx_hash_pending = True
+            except Exception as e:
+                logger.warning(
+                    "finalize_unlock dispatch failed for vault %s: %s",
+                    vault.id, e,
+                )
+
+        logger.info(f"Vault {vault.id} revealed to user {user.username}")
+        return {
+            'unlocked': True,
+            'password_encrypted': vault.password_encrypted,
+            'reason': result['reason'],
+            'details': result['details'],
+            'tx_hash_pending': tx_hash_pending,
+            'released_tx_hash': vault.released_tx_hash or None,
+        }
+
+    def get_receipt(self, vault: SmartContractVault) -> Dict[str, Any]:
+        """
+        Return the current on-chain receipt state for a revealed vault.
+        """
+        from smart_contracts.services.onchain_unlock_service import OnchainUnlockService
+
+        service = OnchainUnlockService()
+        tx_hash = vault.released_tx_hash or ''
+        if not tx_hash:
+            return {
+                'status': 'none',
+                'tx_hash': '',
+                'explorer_url': '',
+                'confirmed': False,
+            }
+
+        confirmed = vault.released_at is not None
+        return {
+            'status': 'confirmed' if confirmed else 'pending',
+            'tx_hash': tx_hash,
+            'explorer_url': service.explorer_url(tx_hash),
+            'confirmed': confirmed,
+            'released_at': vault.released_at.isoformat() if vault.released_at else None,
+        }
 
     def approve_multi_sig(self, vault: SmartContractVault, user) -> Dict[str, Any]:
         """Record a multi-sig approval."""

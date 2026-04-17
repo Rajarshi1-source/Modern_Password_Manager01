@@ -152,6 +152,8 @@ INSTALLED_APPS = [
     'stegano_vault',  # Steganographic hidden vault (PNG LSB + cryptographic plausible deniability)
     'circadian_totp',  # Biological Clock-Based TOTP (wearable-derived phase)
     'decentralized_identity',  # W3C Verifiable Credentials + DID (did:key/did:web)
+    'honeypot_credentials',  # Decoy credentials that trip silent alarms on access
+    'self_destruct',  # Per-entry self-destruct policies (TTL, use limits, geofence)
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1156,6 +1158,10 @@ HIDDEN_VAULT = {
 SMART_CONTRACT_AUTOMATION = {
     'ENABLED': os.environ.get('SMART_CONTRACTS_ENABLED', 'False').lower() == 'true',
     'TIMELOCKED_VAULT_ADDRESS': os.environ.get('TIMELOCKED_VAULT_ADDRESS', ''),
+    # Append-only VaultAuditLog contract used by the hybrid unlock flow
+    # to anchor a reveal commitment on-chain. Falls back to the
+    # TimelockedVault address when unset so local / CI runs still work.
+    'VAULT_AUDIT_LOG_ADDRESS': os.environ.get('VAULT_AUDIT_LOG_ADDRESS', ''),
     'CHAINLINK_ETH_USD_ORACLE': os.environ.get(
         'CHAINLINK_ETH_USD_ORACLE',
         ''
@@ -1167,6 +1173,37 @@ SMART_CONTRACT_AUTOMATION = {
     'DAO_VOTING_PERIOD_DAYS': int(os.environ.get('SC_DAO_VOTING_DAYS', '7')),
     'ORACLE_CACHE_TTL_SECONDS': int(os.environ.get('SC_ORACLE_CACHE_TTL', '300')),
 }
+
+# --------------------------------------------------------------------
+# Feature flags for the three new security features.
+# Each defaults to enabled so self-hosted deploys get them automatically;
+# operators can set the env var to 'false' to roll back instantly
+# without redeploying.
+# --------------------------------------------------------------------
+SMART_CONTRACT_UNLOCK_ONCHAIN_ENABLED = (
+    os.environ.get('SMART_CONTRACT_UNLOCK_ONCHAIN_ENABLED', 'True').lower() == 'true'
+)
+HONEYPOT_CREDENTIALS_ENABLED = (
+    os.environ.get('HONEYPOT_CREDENTIALS_ENABLED', 'True').lower() == 'true'
+)
+SELF_DESTRUCT_PASSWORDS_ENABLED = (
+    os.environ.get('SELF_DESTRUCT_PASSWORDS_ENABLED', 'True').lower() == 'true'
+)
+
+# Honeypot default alert fan-out channels. Must be a subset of
+# {'email', 'sms', 'webhook', 'signal'}. Operators can set the env var
+# to a comma-separated list to broaden/narrow the default.
+HONEYPOT_DEFAULT_CHANNELS = [
+    ch.strip()
+    for ch in os.environ.get('HONEYPOT_DEFAULT_CHANNELS', 'email').split(',')
+    if ch.strip()
+]
+
+# Self-destruct Celery sweep interval (used by the docstring on the
+# beat schedule; actual schedule is defined in celery.py).
+SELF_DESTRUCT_SWEEP_INTERVAL_MINUTES = int(
+    os.environ.get('SELF_DESTRUCT_SWEEP_INTERVAL_MINUTES', '5')
+)
 
 # ==============================================================================
 # CELERY CONFIGURATION (Phase 2B.1)

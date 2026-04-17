@@ -227,6 +227,35 @@ TIMELOCKED_VAULT_ABI = [
 ]
 
 
+# VaultAuditLog ABI — minimal on-chain audit trail for reveal events.
+VAULT_AUDIT_LOG_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "submitter", "type": "address"},
+            {"indexed": True, "internalType": "bytes32", "name": "commitmentHash", "type": "bytes32"},
+            {"indexed": False, "internalType": "uint256", "name": "timestamp", "type": "uint256"},
+        ],
+        "name": "VaultUnlocked",
+        "type": "event",
+    },
+    {
+        "inputs": [{"internalType": "bytes32", "name": "commitmentHash", "type": "bytes32"}],
+        "name": "anchorUnlock",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "name": "unlockCount",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+
 class SmartContractWeb3Bridge:
     """
     Singleton service bridging Django to the TimeLockedVault smart contract.
@@ -301,12 +330,35 @@ class SmartContractWeb3Bridge:
             try:
                 from eth_account import Account
                 self.account = Account.from_key(private_key)
+                self._private_key = private_key
                 logger.info(f"Smart contract deployer: {self.account.address}")
             except Exception as e:
                 logger.error(f"Account load error: {e}")
                 self.account = None
+                self._private_key = None
         else:
             self.account = None
+            self._private_key = None
+
+        # Load VaultAuditLog contract for the on-chain reveal anchor.
+        # Falls back to the TimeLockedVault address so operators without a
+        # separate deployment still get the feature gated off cleanly.
+        audit_address = (
+            self.config.get('VAULT_AUDIT_LOG_ADDRESS', '')
+            or self.config.get('TIMELOCKED_VAULT_ADDRESS', '')
+        )
+        self.audit_contract = None
+        if self.w3 and audit_address:
+            try:
+                from web3 import Web3
+                self.audit_contract = self.w3.eth.contract(
+                    address=Web3.to_checksum_address(audit_address),
+                    abi=VAULT_AUDIT_LOG_ABI,
+                )
+                logger.info(f"VaultAuditLog contract loaded at {audit_address}")
+            except Exception as e:
+                logger.error(f"VaultAuditLog load error: {e}")
+                self.audit_contract = None
 
         self._initialized = True
 
@@ -405,3 +457,80 @@ class SmartContractWeb3Bridge:
         except Exception as e:
             logger.error(f"Vault count check failed: {e}")
             return None
+
+    # =========================================================================
+    # Write path (reveal anchor)
+    # =========================================================================
+
+    def _write_ready(self) -> bool:
+        """True iff we can submit transactions."""
+        return bool(self.enabled and self.w3 and self.account and self._private_key)
+
+    def build_and_send(
+        self,
+        contract,
+        function_name: str,
+        *args,
+        gas_limit: Optional[int] = None,
+    ) -> Optional[str]:
+        """
+        Build, sign and broadcast a transaction against the given contract.
+
+        Mirrors BlockchainAnchorService._sign_and_send pattern. Returns the
+        0x-prefixed tx hash, or None if the bridge is disabled or broadcast
+        fails (logged; never raises for the caller, which must treat a None
+        response as "on-chain audit skipped — DB unlock still succeeded").
+        """
+        if not self._write_ready() or contract is None:
+            logger.info("build_and_send skipped: bridge not write-ready")
+            return None
+
+        try:
+            fn = getattr(contract.functions, function_name)(*args)
+            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            tx = fn.build_transaction({
+                'from': self.account.address,
+                'nonce': nonce,
+                'gas': gas_limit or 150_000,
+                'gasPrice': self.w3.eth.gas_price,
+            })
+            signed = self.w3.eth.account.sign_transaction(tx, self._private_key)
+            raw = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
+            tx_hash = self.w3.eth.send_raw_transaction(raw)
+            tx_hash_hex = self.w3.to_hex(tx_hash)
+            logger.info(f"build_and_send {function_name}: {tx_hash_hex}")
+            return tx_hash_hex
+        except Exception as e:
+            logger.error(f"build_and_send({function_name}) failed: {e}")
+            return None
+
+    def wait_for_receipt(
+        self,
+        tx_hash: str,
+        timeout_s: int = 120,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Poll for a transaction receipt. Returns a dict with block_number,
+        gas_used, success (bool), or None on timeout / error.
+        """
+        if not self.w3 or not tx_hash:
+            return None
+        try:
+            receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout_s)
+            return {
+                'block_number': receipt.get('blockNumber'),
+                'gas_used': receipt.get('gasUsed'),
+                'success': receipt.get('status') == 1,
+                'tx_hash': tx_hash,
+            }
+        except Exception as e:
+            logger.warning(f"wait_for_receipt({tx_hash}) timeout/error: {e}")
+            return None
+
+    def explorer_url(self, tx_hash: str) -> str:
+        """Human-readable link for the given tx hash."""
+        if not tx_hash:
+            return ''
+        network = self.blockchain_config.get('NETWORK', 'testnet')
+        base = 'https://arbiscan.io/tx/' if network == 'mainnet' else 'https://sepolia.arbiscan.io/tx/'
+        return f"{base}{tx_hash}"

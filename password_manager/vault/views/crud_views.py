@@ -2,6 +2,7 @@ from rest_framework import viewsets, status, mixins
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from vault.models.vault_models import EncryptedVaultItem
@@ -11,6 +12,55 @@ import json
 
 # Import the standardized response helpers
 from .api_views import error_response, success_response
+
+
+def _list_honeypots_for_user(user):
+    """
+    Return honeypot entries shaped like regular vault items so an
+    attacker browsing the list sees no distinction. Safe to call even
+    when the feature flag is off — returns an empty list.
+    """
+    if not getattr(settings, 'HONEYPOT_CREDENTIALS_ENABLED', True):
+        return []
+    try:
+        from honeypot_credentials.services import HoneypotService
+        service = HoneypotService()
+        return [service.masked_list_entry(hp) for hp in service.list_for_user(user) if hp.is_active]
+    except Exception:
+        return []
+
+
+def _intercept_retrieve(request, pk):
+    """
+    Return the decoy payload if pk resolves to a honeypot, else None.
+    The caller continues with the real vault lookup on None.
+    """
+    if not getattr(settings, 'HONEYPOT_CREDENTIALS_ENABLED', True):
+        return None
+    try:
+        from honeypot_credentials.services import HoneypotAccessInterceptor
+        return HoneypotAccessInterceptor().intercept_retrieve(pk, request)
+    except Exception:
+        return None
+
+
+def _check_self_destruct(request, vault_item):
+    """
+    Evaluate self-destruct policy for a vault item. Returns None when
+    the read should proceed, or a (message, reason) tuple that must be
+    converted to HTTP 410 Gone.
+    """
+    if not getattr(settings, 'SELF_DESTRUCT_PASSWORDS_ENABLED', True):
+        return None
+    try:
+        from self_destruct.services.policy_service import evaluate_access, record_access
+        decision = evaluate_access(vault_item, request)
+        if decision == 'allow':
+            record_access(vault_item)
+            return None
+        return ('This credential is no longer available.', decision)
+    except Exception:
+        return None
 
 class VaultItemViewSet(viewsets.ModelViewSet):
     """
@@ -50,8 +100,15 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 return self.get_paginated_response(serializer.data)
             
             serializer = self.get_serializer(queryset, many=True)
+            items = serializer.data
+
+            # Intermix honeypots so an attacker sees no distinction.
+            honeypot_entries = _list_honeypots_for_user(request.user)
+            if honeypot_entries:
+                items = list(items) + honeypot_entries
+
             return success_response(
-                data={"items": serializer.data},
+                data={"items": items},
                 message="Items retrieved successfully"
             )
         except Exception as e:
@@ -61,6 +118,45 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    def retrieve(self, request, pk=None):
+        """
+        Retrieve a single vault item. Before hitting the real vault table
+        we consult the honeypot interceptor — if ``pk`` is a honeypot id
+        the attacker gets a decoy payload and the owner gets an alert.
+        We then evaluate any self-destruct policy and return 410 Gone on
+        deny.
+        """
+        decoy = _intercept_retrieve(request, pk)
+        if decoy is not None:
+            return success_response(
+                data=decoy,
+                message='Item retrieved successfully',
+            )
+
+        try:
+            instance = self.get_queryset().get(pk=pk)
+        except EncryptedVaultItem.DoesNotExist:
+            return error_response(
+                message='Item not found',
+                code='item_not_found',
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        denial = _check_self_destruct(request, instance)
+        if denial is not None:
+            message, reason = denial
+            return error_response(
+                message=message,
+                code=reason,
+                status_code=410,  # Gone
+            )
+
+        serializer = self.get_serializer(instance)
+        return success_response(
+            data=serializer.data,
+            message='Item retrieved successfully',
+        )
+
     def create(self, request):
         """Create a new encrypted vault item"""
         serializer = self.get_serializer(data=request.data)

@@ -40,6 +40,13 @@ const smartContractService = {
   
   unlockVault: (vaultId) => api.post(`${BASE_URL}/vaults/${vaultId}/unlock/`),
 
+  // Hybrid reveal — condition evaluation + on-chain audit anchor.
+  // Returns { unlocked, password_encrypted, tx_hash_pending, released_tx_hash, ... }
+  revealVault: (vaultId) => api.post(`${BASE_URL}/vaults/${vaultId}/reveal/`),
+
+  // Poll the current on-chain receipt state for a revealed vault.
+  getReceipt: (vaultId) => api.get(`${BASE_URL}/vaults/${vaultId}/receipt/`),
+
   // ============================
   // Dead Man's Switch
   // ============================

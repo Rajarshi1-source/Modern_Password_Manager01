@@ -2,12 +2,39 @@ from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
 from vault.models.vault_models import EncryptedVaultItem
 from vault.models import UserSalt
 from vault.serializer import EncryptedVaultItemSerializer
 from vault.crypto import derive_auth_key, generate_salt
 from password_manager.throttling import VaultOperationThrottle
 import base64
+
+
+def _honeypot_decoy(request, pk):
+    """Shared helper: returns decoy payload if pk is a honeypot, else None."""
+    if not getattr(settings, 'HONEYPOT_CREDENTIALS_ENABLED', True):
+        return None
+    try:
+        from honeypot_credentials.services import HoneypotAccessInterceptor
+        return HoneypotAccessInterceptor().intercept_retrieve(pk, request)
+    except Exception:
+        return None
+
+
+def _self_destruct_block(request, vault_item):
+    """Returns (message, reason) if access is denied, else None."""
+    if not getattr(settings, 'SELF_DESTRUCT_PASSWORDS_ENABLED', True):
+        return None
+    try:
+        from self_destruct.services.policy_service import evaluate_access, record_access
+        decision = evaluate_access(vault_item, request)
+        if decision == 'allow':
+            record_access(vault_item)
+            return None
+        return ('This credential is no longer available.', decision)
+    except Exception:
+        return None
 
 def error_response(message, status_code=status.HTTP_400_BAD_REQUEST, code="error", details=None):
     """Helper function to create standardized error responses"""
@@ -93,15 +120,41 @@ class VaultItemViewSet(viewsets.ModelViewSet):
         
         # Default: full serialization
         serializer = self.get_serializer(queryset, many=True)
+        items = list(serializer.data)
+
+        # Mix in masked honeypot entries so attackers cannot distinguish them.
+        if getattr(settings, 'HONEYPOT_CREDENTIALS_ENABLED', True):
+            try:
+                from honeypot_credentials.services import HoneypotService
+                hp_service = HoneypotService()
+                for hp in hp_service.list_for_user(request.user):
+                    if hp.is_active:
+                        items.append(hp_service.masked_list_entry(hp))
+            except Exception:
+                pass
+
         return success_response(
-            data={"items": serializer.data},
+            data={"items": items},
             message="Items retrieved successfully"
         )
         
     def retrieve(self, request, *args, **kwargs):
-        """Retrieve a single vault item"""
+        """Retrieve a single vault item. Honors honeypot + self-destruct hooks."""
+        pk = kwargs.get(self.lookup_field or 'pk') or kwargs.get('pk')
+        decoy = _honeypot_decoy(request, pk)
+        if decoy is not None:
+            return success_response(data=decoy, message='Item retrieved successfully')
+
         try:
             instance = self.get_object()
+            denial = _self_destruct_block(request, instance)
+            if denial is not None:
+                message, reason = denial
+                return error_response(
+                    message=message,
+                    code=reason,
+                    status_code=410,
+                )
             serializer = self.get_serializer(instance)
             return success_response(
                 data=serializer.data,

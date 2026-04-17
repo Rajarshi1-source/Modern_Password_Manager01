@@ -1,0 +1,1 @@
+"""Self-destruct policy tests."""

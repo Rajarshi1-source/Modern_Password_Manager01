@@ -68,6 +68,8 @@ const DuressEventLog = lazy(() => import('./Components/security/DuressEventLog')
 // Honeypot Email Breach Detection — manages bait email addresses and alerts
 // when they receive traffic, indicating a credential/data leak upstream.
 const HoneypotDashboard = lazy(() => import('./Components/security/HoneypotDashboard'));
+const HoneypotSettings = lazy(() => import('./Components/honeypot/HoneypotSettings'));
+const HoneypotEventsTable = lazy(() => import('./Components/honeypot/HoneypotEventsTable'));
 
 // Dark Protocol Network for Anonymous Vault Access
 const DarkProtocolDashboard = lazy(() => import('./Components/security/DarkProtocolDashboard'));
@@ -1732,6 +1734,21 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Honeypot Dashboard">
                       <HoneypotDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Honeypot credential settings (decoy passwords in the vault). */}
+                <Route path="/security/honeypot-credentials" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Honeypot Credentials">
+                      <HoneypotSettings />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/security/honeypot-credentials/events" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Honeypot Events">
+                      <HoneypotEventsTable />
                     </ErrorBoundary>
                   )
                 } />

@@ -42,6 +42,7 @@ app.conf.update(
     # 'blockchain.tasks.anchor_pending_commitments'.  Use '<app>.tasks.*'.
     task_routes={
         'blockchain.tasks.*': {'queue': 'blockchain'},
+        'smart_contracts.tasks.*': {'queue': 'blockchain'},
         'ml_security.tasks.*': {'queue': 'ml'},
         'ml_dark_web.tasks.*': {'queue': 'ml'},
         'fhe_service.tasks.*': {'queue': 'fhe'},
@@ -232,6 +233,26 @@ app.conf.update(
             'task': 'smart_contracts.tasks.evaluate_pending_conditions',
             'schedule': crontab(minute='*/15'),
         },
+
+        # Reconcile VaultAuditLog anchors + drift vs on-chain status
+        # (every 30 minutes). Picks up reveals whose broadcast landed but
+        # whose receipt we didn't see in the request cycle.
+        'smart-contracts-sync-onchain-state': {
+            'task': 'smart_contracts.tasks.sync_onchain_state',
+            'schedule': crontab(minute='*/30'),
+        },
+
+        # Self-destructing passwords: flip expired policies every 5 min
+        # and hard-purge ciphertext once an hour.
+        'self-destruct-expire-stale-policies': {
+            'task': 'self_destruct.tasks.expire_stale_policies',
+            'schedule': crontab(minute='*/5'),
+        },
+        'self-destruct-purge-expired-ciphertext': {
+            'task': 'self_destruct.tasks.purge_expired_ciphertext',
+            'schedule': crontab(minute=0),
+        },
+
         
         # =================================================================
         # FeatureFlagUsage Batch Flush

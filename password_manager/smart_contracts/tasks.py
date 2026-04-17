@@ -67,6 +67,24 @@ def evaluate_pending_conditions():
     return stats
 
 
+@shared_task(name='smart_contracts.tasks.finalize_unlock')
+def finalize_unlock(vault_id: str, poll_timeout_s: int = 180):
+    """
+    Chain-off task: submit the VaultAuditLog anchor for a vault that was
+    already unlocked in the DB, then wait for the receipt.
+
+    Runs in the ``blockchain`` queue so the HTTP request that triggered
+    the reveal returns immediately with the plaintext and a
+    ``tx_hash_pending=True`` hint.
+    """
+    from smart_contracts.services.onchain_unlock_service import OnchainUnlockService
+
+    service = OnchainUnlockService()
+    result = service.finalize_unlock(vault_id, poll_timeout_s=poll_timeout_s)
+    logger.info(f"finalize_unlock({vault_id}): {result}")
+    return result
+
+
 @shared_task(name='smart_contracts.tasks.sync_onchain_state')
 def sync_onchain_state():
     """
@@ -110,6 +128,24 @@ def sync_onchain_state():
         except Exception as e:
             stats['errors'] += 1
             logger.error(f"On-chain sync error for vault {vault.id}: {e}")
+
+    # Reconcile pending reveal anchors: poll receipts for vaults that have
+    # a released_tx_hash but no released_at yet.
+    try:
+        from django.utils import timezone
+        pending_reveals = SmartContractVault.objects.filter(
+            status=VaultStatus.UNLOCKED,
+            released_at__isnull=True,
+        ).exclude(released_tx_hash='')
+        for vault in pending_reveals:
+            receipt = bridge.wait_for_receipt(vault.released_tx_hash, timeout_s=5)
+            if receipt and receipt.get('success'):
+                vault.released_at = timezone.now()
+                vault.save(update_fields=['released_at', 'updated_at'])
+                stats['status_changes'] += 1
+    except Exception as e:
+        stats['errors'] += 1
+        logger.error(f"Pending reveal reconciliation error: {e}")
 
     logger.info(f"On-chain state sync: {stats}")
     return stats

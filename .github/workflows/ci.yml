@@ -189,6 +189,17 @@ jobs:
           # are exercised in CI.
           CIRCADIAN_TOTP_ENABLED: 'True'
           DECENTRALIZED_IDENTITY_ENABLED: 'True'
+          # Security feature flags introduced with the "Smart Contract
+          # Automation / Honeypot Passwords / Self-Destructing
+          # Passwords" rollout. Kept enabled so their URL patterns and
+          # tests run; the on-chain bridge is short-circuited by an
+          # empty VAULT_AUDIT_LOG_ADDRESS.
+          SMART_CONTRACT_UNLOCK_ONCHAIN_ENABLED: 'True'
+          VAULT_AUDIT_LOG_ADDRESS: ''
+          HONEYPOT_CREDENTIALS_ENABLED: 'True'
+          HONEYPOT_DEFAULT_CHANNELS: 'email'
+          SELF_DESTRUCT_PASSWORDS_ENABLED: 'True'
+          SELF_DESTRUCT_SWEEP_INTERVAL_MINUTES: '5'
           DID_ISSUER_DID: 'did:web:test.securevault.local'
           IPFS_PROVIDER: 'pinata'
           VC_CHAIN_ANCHOR_ENABLED: 'False'

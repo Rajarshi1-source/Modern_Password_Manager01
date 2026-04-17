@@ -170,6 +170,21 @@ class SmartContractVault(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     unlocked_at = models.DateTimeField(null=True, blank=True)
 
+    # On-chain reveal audit (hybrid unlock path).
+    # Populated by OnchainUnlockService after the DB unlock succeeds, so a
+    # failed broadcast never blocks the owner from seeing their password.
+    released_tx_hash = models.CharField(
+        max_length=66,
+        blank=True,
+        default='',
+        help_text='VaultAuditLog.anchorUnlock() transaction hash (0x-prefixed)'
+    )
+    released_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Wall-clock time the on-chain anchor was confirmed'
+    )
+
     class Meta:
         db_table = 'smart_contract_vaults'
         ordering = ['-created_at']
