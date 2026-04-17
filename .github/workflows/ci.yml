@@ -185,6 +185,25 @@ jobs:
           PGPASSWORD: test_password
           PGDATABASE: test_db
           DATABASE_URL: postgresql://test_user:test_password@127.0.0.1:5432/test_db
+          # Feature flags: keep enabled so the new apps' URL patterns + tests
+          # are exercised in CI.
+          CIRCADIAN_TOTP_ENABLED: 'True'
+          DECENTRALIZED_IDENTITY_ENABLED: 'True'
+          DID_ISSUER_DID: 'did:web:test.securevault.local'
+          IPFS_PROVIDER: 'pinata'
+          VC_CHAIN_ANCHOR_ENABLED: 'False'
+          # Placeholder provider credentials (empty in CI so real network
+          # calls are short-circuited by the adapters).
+          PINATA_JWT: ''
+          WEB3_STORAGE_TOKEN: ''
+          ARWEAVE_WALLET_JSON: ''
+          FITBIT_CLIENT_ID: ''
+          FITBIT_CLIENT_SECRET: ''
+          FITBIT_REDIRECT_URI: 'http://testserver/mfa/circadian/callback'
+          OURA_CLIENT_ID: ''
+          OURA_CLIENT_SECRET: ''
+          GOOGLE_FIT_CLIENT_ID: ''
+          GOOGLE_FIT_CLIENT_SECRET: ''
         run: |
           cd password_manager
           pytest --cov=. --cov-report=xml:coverage.xml --cov-report=html -x -v

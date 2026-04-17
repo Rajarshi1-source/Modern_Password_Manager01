@@ -150,6 +150,8 @@ INSTALLED_APPS = [
     'password_reputation',  # Decentralized Password Reputation Network (Phase 2a: NullAnchor; Phase 2b: ArbitrumAnchor)
     'ambient_auth',  # Ambient Biometric Fusion (web + extension + mobile passive signals)
     'stegano_vault',  # Steganographic hidden vault (PNG LSB + cryptographic plausible deniability)
+    'circadian_totp',  # Biological Clock-Based TOTP (wearable-derived phase)
+    'decentralized_identity',  # W3C Verifiable Credentials + DID (did:key/did:web)
     # OAuth providers
     'allauth.socialaccount.providers.google',
     'allauth.socialaccount.providers.apple',
@@ -1748,6 +1750,39 @@ if SENTRY_DSN:
         environment=os.environ.get('SENTRY_ENVIRONMENT', 'development' if DEBUG else 'production'),
         release=os.environ.get('SENTRY_RELEASE', os.environ.get('GIT_SHA', '')),
     )
+
+# =============================================================================
+# Feature flags: Circadian TOTP + Decentralized Identity
+# =============================================================================
+CIRCADIAN_TOTP_ENABLED = os.environ.get('CIRCADIAN_TOTP_ENABLED', 'True').lower() == 'true'
+DECENTRALIZED_IDENTITY_ENABLED = os.environ.get('DECENTRALIZED_IDENTITY_ENABLED', 'True').lower() == 'true'
+
+# Issuer DID for did:web discovery (served at /.well-known/did.json).
+DID_ISSUER_DID = os.environ.get('DID_ISSUER_DID', 'did:web:api.securevault.com')
+
+# IPFS / Arweave storage providers for VC publication (empty = disabled).
+IPFS_PROVIDER = os.environ.get('IPFS_PROVIDER', 'pinata')
+PINATA_JWT = os.environ.get('PINATA_JWT', '')
+WEB3_STORAGE_TOKEN = os.environ.get('WEB3_STORAGE_TOKEN', '')
+ARWEAVE_WALLET_JSON = os.environ.get('ARWEAVE_WALLET_JSON', '')
+
+# Anchor SHA-256(vc_jwt) on-chain via the existing blockchain app when True.
+VC_CHAIN_ANCHOR_ENABLED = os.environ.get('VC_CHAIN_ANCHOR_ENABLED', 'False').lower() == 'true'
+
+# Wearable OAuth credentials for circadian_totp (empty values short-circuit).
+FITBIT_CLIENT_ID = os.environ.get('FITBIT_CLIENT_ID', '')
+FITBIT_CLIENT_SECRET = os.environ.get('FITBIT_CLIENT_SECRET', '')
+FITBIT_REDIRECT_URI = os.environ.get(
+    'FITBIT_REDIRECT_URI', 'http://localhost:5173/mfa/circadian/callback'
+)
+OURA_CLIENT_ID = os.environ.get('OURA_CLIENT_ID', '')
+OURA_CLIENT_SECRET = os.environ.get('OURA_CLIENT_SECRET', '')
+OURA_REDIRECT_URI = os.environ.get('OURA_REDIRECT_URI', '')
+GOOGLE_FIT_CLIENT_ID = os.environ.get('GOOGLE_FIT_CLIENT_ID', '')
+GOOGLE_FIT_CLIENT_SECRET = os.environ.get('GOOGLE_FIT_CLIENT_SECRET', '')
+GOOGLE_FIT_REDIRECT_URI = os.environ.get('GOOGLE_FIT_REDIRECT_URI', '')
+
+TOTP_ISSUER = os.environ.get('TOTP_ISSUER', 'SecureVault Circadian')
 
 # =============================================================================
 # Test-environment overrides

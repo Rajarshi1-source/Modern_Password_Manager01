@@ -193,6 +193,8 @@ class MFAIntegrationService:
                     result = self._verify_email(credential)
                 elif factor_type in ['face', 'voice']:
                     result = self._verify_biometric(factor_type, credential)
+                elif factor_type == 'circadian':
+                    result = self._verify_circadian(credential)
                 else:
                     result = {'success': False, 'error': f'Unknown factor type: {factor_type}'}
                 
@@ -274,6 +276,27 @@ class MFAIntegrationService:
         """Verify email code using Authy service"""
         return self._verify_sms(code)  # Authy handles both SMS and email
     
+    def _verify_circadian(self, credential):
+        """Verify a biological-clock TOTP code via circadian_totp service.
+
+        ``credential`` may be either the 6-digit string or a dict with a
+        ``code`` key and optional ``device_id`` to restrict verification to a
+        specific CircadianTOTPDevice.
+        """
+        try:
+            from circadian_totp.services import verify_code_for_user
+        except Exception as exc:  # pragma: no cover - import guard
+            logger.error(f"circadian_totp import failed: {exc}")
+            return {'success': False, 'error': 'Circadian TOTP unavailable'}
+
+        code = credential
+        device_id = None
+        if isinstance(credential, dict):
+            code = credential.get('code', '')
+            device_id = credential.get('device_id')
+        ok = verify_code_for_user(self.user, code, device_id=device_id)
+        return {'success': bool(ok)}
+
     def _verify_biometric(self, factor_type, data):
         """Verify biometric factor using ML model"""
         try:

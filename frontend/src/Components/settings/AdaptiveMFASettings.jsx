@@ -632,7 +632,8 @@ const AdaptiveMFASettings = () => {
     { id: 'email', name: 'Email Code', description: 'Receive codes via email' },
     { id: 'face', name: 'Face Recognition', description: 'Use your face to authenticate' },
     { id: 'voice', name: 'Voice Recognition', description: 'Use your voice to authenticate' },
-    { id: 'passkey', name: 'Passkey/WebAuthn', description: 'Hardware or platform authenticator' }
+    { id: 'passkey', name: 'Passkey/WebAuthn', description: 'Hardware or platform authenticator' },
+    { id: 'circadian', name: 'Biological Clock TOTP', description: 'TOTP synchronised to your circadian rhythm (wearable-assisted)' }
   ];
   
   return (

@@ -29,6 +29,13 @@ import zkProof from './services/zkProof';
 const PasswordStrengthMeterML = lazy(() => import('./Components/security/PasswordStrengthMeterML'));
 const RecoveryKeySetupPage = lazy(() => import('./Components/auth/RecoveryKeySetup'));
 const PasskeyManagement = lazy(() => import('./Components/auth/PasskeyManagement'));
+const CircadianSettings = lazy(() => import('./Components/settings/CircadianSettings'));
+const CircadianTOTPSetup = lazy(() => import('./Components/auth/CircadianTOTPSetup'));
+const CircadianTOTPVerify = lazy(() => import('./Components/auth/CircadianTOTPVerify'));
+const DIDManager = lazy(() => import('./Components/identity/DIDManager'));
+const CredentialWallet = lazy(() => import('./Components/identity/CredentialWallet'));
+const SignInWithDID = lazy(() => import('./Components/identity/SignInWithDID'));
+const VerifierTool = lazy(() => import('./Components/identity/VerifierTool'));
 const AccountProtection = lazy(() => import('./Components/security/AccountProtection'));
 const SecurityDashboard = lazy(() => import('./Components/security/components/SecurityDashboard'));
 const SocialMediaLogin = lazy(() => import('./Components/auth/SocialMediaLogin'));
@@ -1682,6 +1689,23 @@ function App() {
                 <Route path="/settings/passkeys" element={
                   !isAuthenticated ? <Navigate to="/" /> : <PasskeyManagement />
                 } />
+                <Route path="/settings/circadian" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <CircadianSettings />
+                } />
+                <Route path="/mfa/circadian/setup" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <CircadianTOTPSetup />
+                } />
+                <Route path="/mfa/circadian/verify" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <CircadianTOTPVerify />
+                } />
+                <Route path="/settings/identity" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <DIDManager />
+                } />
+                <Route path="/identity/wallet" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <CredentialWallet />
+                } />
+                <Route path="/identity/verifier" element={<VerifierTool />} />
+                <Route path="/login/did" element={<SignInWithDID />} />
                 <Route path="/security/account-protection" element={
                   !isAuthenticated ? <Navigate to="/" /> : <AccountProtection />
                 } />

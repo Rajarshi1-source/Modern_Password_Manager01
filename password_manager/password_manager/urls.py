@@ -151,6 +151,19 @@ urlpatterns = [
 
     # Steganographic hidden vault (PNG LSB + HiddenVaultBlob v1)
     path('api/stego/', include('stegano_vault.urls')),
+
+    # Biological Clock-Based TOTP (wearable-derived phase)
+    path('api/circadian/', include('circadian_totp.urls')),
+
+    # Decentralized Identity (W3C Verifiable Credentials)
+    path('api/did/', include('decentralized_identity.urls')),
+
+    # did:web discovery at the well-known URL.
+    path(
+        '.well-known/did.json',
+        __import__('decentralized_identity.views', fromlist=['well_known_did_json']).well_known_did_json,
+        name='well-known-did-json',
+    ),
 ]
 
 # Feature-flagged modules: conditionally include URL patterns to avoid
