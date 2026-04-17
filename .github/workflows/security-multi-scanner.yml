@@ -89,8 +89,11 @@ jobs:
       - name: Install scanning tools
         run: |
           python -m pip install --upgrade pip
-          # Install safety and pip-audit WITHOUT old cyclonedx-bom
-          pip install "safety==2.3.5" "pip-audit>=2.7.0"
+          # safety==2.3.5 requires packaging<22; pip-audit>=2.7 requires packaging>=23.
+          # Installing both in the same environment is impossible, so use pipx to
+          # isolate each tool in its own virtual environment.
+          pipx install "safety==2.3.5"
+          pipx install pip-audit
       
       # FIX #4: Fail on vulnerabilities (no continue-on-error)
       - name: Run Safety check
