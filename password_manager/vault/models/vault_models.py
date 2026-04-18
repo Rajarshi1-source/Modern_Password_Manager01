@@ -7,6 +7,12 @@ from .folder_models import VaultFolder
 
 logger = logging.getLogger(__name__)
 
+
+def _generate_item_id() -> str:
+    """Return a random hex token used as the default ``item_id`` value."""
+    return uuid.uuid4().hex
+
+
 class EncryptedVaultItem(models.Model):
     """
     Unified model for storing encrypted vault items 
@@ -37,7 +43,12 @@ class EncryptedVaultItem(models.Model):
     )
     
     # Core fields
-    item_id = models.CharField(max_length=64, unique=True, help_text="Client-generated ID")
+    item_id = models.CharField(
+        max_length=64,
+        unique=True,
+        default=_generate_item_id,
+        help_text="Client-generated ID"
+    )
     item_type = models.CharField(max_length=20, choices=ITEM_TYPES)
     encrypted_data = models.TextField()
     
@@ -99,6 +110,20 @@ class EncryptedVaultItem(models.Model):
         help_text="Timestamp of last FHE cache update"
     )
     
+    # Searchable name hashes (used by FHE / PRE sharing flows).
+    name_hash = models.CharField(
+        max_length=128,
+        blank=True,
+        default='',
+        help_text="Hashed item name for equality lookups"
+    )
+    name_search = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Tokenized/normalized name for full-text style search"
+    )
+
     # Tags for categorization
     tags = models.JSONField(default=list, blank=True, help_text="List of tags for categorization")
     

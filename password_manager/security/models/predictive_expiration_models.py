@@ -340,10 +340,12 @@ class PredictiveExpirationRule(models.Model):
         related_name='expiration_rules'
     )
     
-    # Credential reference (vault entry ID)
-    credential_id = models.UUIDField(
+    # Credential reference (vault entry ID). Stored as CharField so that
+    # callers may use UUIDs, opaque strings, or external identifiers.
+    credential_id = models.CharField(
+        max_length=128,
         db_index=True,
-        help_text="UUID of the credential in vault"
+        help_text="Identifier of the credential in vault (UUID or external id)"
     )
     credential_domain = models.CharField(
         max_length=255,
@@ -471,10 +473,11 @@ class PasswordRotationEvent(models.Model):
         related_name='rotation_events'
     )
     
-    # Credential reference
-    credential_id = models.UUIDField(
+    # Credential reference (accepts UUIDs or external identifiers).
+    credential_id = models.CharField(
+        max_length=128,
         db_index=True,
-        help_text="UUID of the rotated credential"
+        help_text="Identifier of the rotated credential"
     )
     credential_domain = models.CharField(max_length=255, blank=True)
     

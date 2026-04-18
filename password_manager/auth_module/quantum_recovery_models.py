@@ -107,6 +107,18 @@ class RecoveryShard(models.Model):
     context_data = models.JSONField(default=dict, help_text="Type-specific context (guardian ID, device fingerprint, etc)")
     
     # Status
+    STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('revoked', 'Revoked'),
+        ('expired', 'Expired'),
+        ('honeypot_triggered', 'Honeypot Triggered'),
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=STATUS_CHOICES,
+        default='active',
+        db_index=True,
+    )
     is_active = models.BooleanField(default=True)
     is_honeypot = models.BooleanField(default=False, help_text="Decoy shard that triggers alerts")
     

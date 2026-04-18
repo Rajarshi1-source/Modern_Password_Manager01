@@ -45,11 +45,18 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class StormSeverity(Enum):
-    """Storm severity levels for entropy bonus calculation."""
+    """Storm severity levels for entropy bonus calculation.
+
+    ``CALM``/``MODERATE`` are modern aliases used by the Storm Chase tests and
+    API consumers. ``NONE``/``STORM`` are retained for backwards compatibility
+    with earlier code paths.
+    """
     NONE = "none"
-    STORM = "storm"           # Elevated conditions
-    SEVERE = "severe"         # Severe storm
-    EXTREME = "extreme"       # Hurricane/Typhoon conditions
+    CALM = "calm"
+    STORM = "storm"             # Elevated conditions
+    MODERATE = "moderate"       # Moderate storm (tropical storm level)
+    SEVERE = "severe"           # Severe storm
+    EXTREME = "extreme"         # Hurricane/Typhoon conditions
 
 
 @dataclass

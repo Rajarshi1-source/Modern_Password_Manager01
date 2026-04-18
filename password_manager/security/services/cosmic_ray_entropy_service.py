@@ -114,12 +114,27 @@ class CosmicRayEvent:
     Represents a muon passing through the detector, captured with
     high-precision timing and energy information.
     """
-    timestamp: datetime
-    microseconds: int  # Sub-millisecond precision
-    energy_adc: int    # ADC value from photomultiplier (0-1023)
-    detector_id: str   # Unique detector identifier
-    channel: int = 0   # Detection channel (for multi-channel detectors)
-    
+    timestamp: Any = None  # datetime or float (epoch seconds)
+    energy_adc: int = 0    # ADC value from photomultiplier (0-1023)
+    detector_id: str = ""  # Unique detector identifier
+    microseconds: int = 0  # Sub-millisecond precision (derived if missing)
+    channel: int = 0       # Detection channel (for multi-channel detectors)
+    temperature_c: Optional[float] = None   # Detector temperature (°C)
+    silicon_pm_count: int = 1               # SiPM detector count
+    coincidence: bool = False               # Multi-detector coincidence flag
+    deadtime_corrected: bool = False        # Whether deadtime was corrected
+    quality_score: Optional[float] = None   # Pre-computed quality score (0..1)
+
+    def __post_init__(self):
+        # Derive microseconds if not explicitly provided but a numeric
+        # timestamp was given.
+        if not self.microseconds and isinstance(self.timestamp, (int, float)):
+            self.microseconds = int((self.timestamp * 1_000_000) % 10**9)
+
+    def get_entropy_bytes(self) -> bytes:
+        """Alias for :py:meth:`to_entropy_bytes` (newer API)."""
+        return self.to_entropy_bytes()
+
     def to_entropy_bytes(self) -> bytes:
         """
         Convert cosmic ray event to entropy bytes.
@@ -152,6 +167,9 @@ class CosmicRayEvent:
         
         Higher energy events typically have better timing resolution.
         """
+        if self.quality_score is not None:
+            return float(self.quality_score)
+
         # Energy quality (mid-range ADC values are most reliable)
         if 100 <= self.energy_adc <= 900:
             energy_score = 1.0
@@ -167,13 +185,22 @@ class CosmicRayEvent:
     
     def to_dict(self) -> Dict:
         """Convert to dictionary for API response."""
+        ts = self.timestamp
+        if hasattr(ts, 'isoformat'):
+            ts_value = ts.isoformat()
+        else:
+            ts_value = ts
         return {
-            'timestamp': self.timestamp.isoformat(),
+            'timestamp': ts_value,
             'microseconds': self.microseconds,
             'energy_adc': self.energy_adc,
             'detector_id': self.detector_id,
             'channel': self.channel,
-            'quality_score': self.entropy_quality_score()
+            'temperature_c': self.temperature_c,
+            'silicon_pm_count': self.silicon_pm_count,
+            'coincidence': self.coincidence,
+            'deadtime_corrected': self.deadtime_corrected,
+            'quality_score': self.entropy_quality_score(),
         }
 
 
@@ -578,7 +605,33 @@ class CosmicEntropyExtractor:
     3. XOR combination of multiple events
     4. SHA-3 conditioning for uniformity
     """
-    
+
+    # ---------------------------------------------------------------------
+    # Instance-friendly API (used by newer callers/tests)
+    # ---------------------------------------------------------------------
+    def extract_raw_entropy(self, events: List['CosmicRayEvent']) -> bytes:
+        """Concatenate raw per-event entropy bytes for downstream conditioning."""
+        buf = bytearray()
+        for event in events or []:
+            buf.extend(event.to_entropy_bytes())
+        return bytes(buf)
+
+    def condition_entropy(self, raw: bytes, output_bytes: int = 32) -> bytes:
+        """Run a SHAKE-256 sponge over ``raw`` to produce uniform bytes."""
+        from hashlib import shake_256
+        if output_bytes <= 0:
+            return b''
+        return shake_256(bytes(raw or b'')).digest(int(output_bytes))
+
+    def extract_conditioned_entropy(
+        self,
+        events: List['CosmicRayEvent'],
+        output_bytes: int = 32,
+    ) -> bytes:
+        """Extract and condition in one step; deterministic for same input."""
+        raw = self.extract_raw_entropy(events)
+        return self.condition_entropy(raw, output_bytes=output_bytes)
+
     @staticmethod
     def extract_from_events(
         events: List[CosmicRayEvent],

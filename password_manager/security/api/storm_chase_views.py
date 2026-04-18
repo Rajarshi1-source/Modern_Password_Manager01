@@ -67,7 +67,7 @@ class StormListView(APIView):
     def get(self, request):
         try:
             service = get_storm_chase_service()
-            alerts = run_async(service.get_active_storms())
+            alerts = run_async(service.get_active_storms_async())
             
             response_data = {
                 'storms': [a.to_dict() for a in alerts],
@@ -109,7 +109,7 @@ class StormStatusView(APIView):
     def get(self, request):
         try:
             service = get_storm_chase_service()
-            status_data = run_async(service.get_storm_chase_status())
+            status_data = run_async(service.get_storm_chase_status_async())
             
             response = status_data.to_dict()
             
@@ -156,7 +156,7 @@ class StormBuoysView(APIView):
     def get(self, request):
         try:
             service = get_storm_chase_service()
-            alerts = run_async(service.get_active_storms())
+            alerts = run_async(service.get_active_storms_async())
             
             buoy_data = []
             for alert in alerts:
@@ -229,7 +229,7 @@ class GenerateStormEntropyView(APIView):
             # Generate storm entropy
             service = get_storm_chase_service()
             entropy_bytes, source_id, storm_buoy_ids = run_async(
-                service.generate_storm_entropy(count)
+                service.generate_storm_entropy_async(count)
             )
             
             # Format output
@@ -240,7 +240,7 @@ class GenerateStormEntropyView(APIView):
                 entropy_formatted = base64.b64encode(entropy_bytes).decode('ascii')
             
             # Get current status for bonus info
-            status_data = run_async(service.get_storm_chase_status())
+            status_data = run_async(service.get_storm_chase_status_async())
             
             response = {
                 'entropy': entropy_formatted,
@@ -286,7 +286,7 @@ class ScanStormsView(APIView):
     def post(self, request):
         try:
             service = get_storm_chase_service()
-            alerts = run_async(service.scan_for_storms())
+            alerts = run_async(service.scan_for_storms_async())
             
             return Response({
                 'scanned': True,

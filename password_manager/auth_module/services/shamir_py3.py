@@ -36,26 +36,19 @@ def _lagrange_interpolate(x, x_s, y_s, prime):
     k = len(x_s)
     assert k == len(y_s)
 
-    def _PI(vals):
-        return _reduce(lambda a, b: a * b % prime, vals, 1)
-
-    nums = []
-    dens = []
+    total = 0
     for i in range(k):
-        others = [x_s[j] for j in range(k) if j != i]
-        nums.append(_PI([(x - o) % prime for o in others]))
-        dens.append(_PI([(x_s[i] - o) % prime for o in others]))
-
-    den = _PI(dens)
-    # Combine via CRT / Fermat's little theorem (inverse mod prime)
-    num = sum(
-        _lagrange_basis(nums[i], dens[i], y_s[i], prime) for i in range(k)
-    ) % prime
-    return (num * pow(den, prime - 2, prime)) % prime
-
-
-def _lagrange_basis(num_i, den_i, y_i, prime):
-    return num_i * pow(den_i, prime - 2, prime) * y_i % prime
+        num = 1
+        den = 1
+        for j in range(k):
+            if j == i:
+                continue
+            num = (num * ((x - x_s[j]) % prime)) % prime
+            den = (den * ((x_s[i] - x_s[j]) % prime)) % prime
+        # Lagrange basis L_i(x) = num / den (mod prime)
+        basis = (num * pow(den, prime - 2, prime)) % prime
+        total = (total + y_s[i] * basis) % prime
+    return total
 
 
 def _split(secret_int, threshold, n, prime):
@@ -75,36 +68,109 @@ def _recover(points, prime):
     return _lagrange_interpolate(0, x_s, y_s, prime)
 
 
+# Each chunk fits safely in ``_PRIME`` (520 bits → 64 bytes → 128 hex chars).
+# We split large secrets into fixed-size chunks so they fit in the field.
+_CHUNK_HEX_LEN = 128
+
+
 class ShamirSecretSharer:
     """
     Drop-in replacement for ``secretsharing.PlaintextToHexSecretSharer``.
 
-    All secrets are hex strings; shares are ``"<int_index>-<hex_value>"``.
+    Shares encode the original hex length so arbitrarily-long secrets can be
+    faithfully reconstructed regardless of leading zeros.  The on-wire format
+    is ``"<index>-<total_hex_len>:<chunk_hex_1>.<chunk_hex_2>..."``.  Legacy
+    single-chunk shares (``"<index>-<hex>"``) remain parseable.
     """
+
+    @staticmethod
+    def _chunk_hex(secret_hex: str) -> list[str]:
+        """Pad and split the secret hex into ``_CHUNK_HEX_LEN``-sized blocks."""
+        if len(secret_hex) % 2:
+            secret_hex = '0' + secret_hex
+        if not secret_hex:
+            return ['']
+        chunks: list[str] = []
+        for i in range(0, len(secret_hex), _CHUNK_HEX_LEN):
+            chunks.append(secret_hex[i:i + _CHUNK_HEX_LEN])
+        return chunks
 
     @staticmethod
     def split_secret(secret_hex: str, threshold: int, n: int) -> list[str]:
         """Split *secret_hex* into *n* shares, *threshold* needed to recover."""
-        secret_int = int(secret_hex, 16)
         prime = _PRIME
-        if secret_int >= prime:
-            raise ValueError(
-                f"Secret {secret_int.bit_length()} bits >= prime {prime.bit_length()} bits; "
-                "use a larger prime or a shorter secret"
-            )
-        points = _split(secret_int, threshold, n, prime)
-        return [f"{x}-{y:x}" for x, y in points]
+        # Normalize to even length so round-tripping via bytes.fromhex works.
+        if len(secret_hex) % 2:
+            secret_hex = '0' + secret_hex
+        chunks = ShamirSecretSharer._chunk_hex(secret_hex)
+        total_hex_len = len(secret_hex)
+
+        per_chunk_points: list[list[tuple[int, int]]] = []
+        for chunk in chunks:
+            secret_int = int(chunk, 16) if chunk else 0
+            if secret_int >= prime:
+                raise ValueError(
+                    f"Chunk {secret_int.bit_length()} bits >= prime {prime.bit_length()} bits"
+                )
+            per_chunk_points.append(_split(secret_int, threshold, n, prime))
+
+        shares: list[str] = []
+        for i in range(n):
+            idx = i + 1
+            parts = []
+            for chunk_points in per_chunk_points:
+                _, y = chunk_points[i]
+                parts.append(f"{y:x}")
+            shares.append(f"{idx}-{total_hex_len:x}:" + '.'.join(parts))
+        return shares
 
     @staticmethod
     def recover_secret(shares: list[str]) -> str:
         """Recover the hex secret from *threshold* or more shares."""
-        points = []
+        parsed: list[tuple[int, int, list[int]]] = []
         for share in shares:
-            idx_s, val_s = share.split('-', 1)
-            points.append((int(idx_s), int(val_s, 16)))
-        value = _recover(points, _PRIME)
-        # Preserve even number of hex digits so bytes.fromhex works.
-        h = f"{value:x}"
-        if len(h) % 2:
-            h = '0' + h
-        return h
+            idx_s, payload = share.split('-', 1)
+            if ':' in payload:
+                length_hex, chunks_str = payload.split(':', 1)
+                total_hex_len = int(length_hex, 16)
+                chunk_strs = chunks_str.split('.') if '.' in chunks_str else [chunks_str]
+            else:
+                # Legacy single-chunk format; we will size output after recovery.
+                total_hex_len = -1
+                chunk_strs = [payload]
+            chunk_ints = [int(c, 16) for c in chunk_strs]
+            parsed.append((int(idx_s), total_hex_len, chunk_ints))
+
+        chunk_count = max(len(chunks) for _, _, chunks in parsed)
+        total_hex_len = max(length for _, length, _ in parsed)
+
+        out_hex_chunks: list[str] = []
+        for chunk_idx in range(chunk_count):
+            points = []
+            for idx, _, chunks in parsed:
+                if chunk_idx < len(chunks):
+                    points.append((idx, chunks[chunk_idx]))
+            value = _recover(points, _PRIME)
+            h = f"{value:x}"
+
+            # For a chunk before the last one, pad to full chunk width so byte
+            # alignment is preserved.  The last chunk consumes whatever hex
+            # length remains in ``total_hex_len``.
+            if total_hex_len > 0 and chunk_idx < chunk_count - 1:
+                target = _CHUNK_HEX_LEN
+            elif total_hex_len > 0:
+                remaining = total_hex_len - _CHUNK_HEX_LEN * (chunk_count - 1)
+                target = max(remaining, 0)
+            else:
+                target = len(h) + (len(h) % 2)
+
+            if len(h) < target:
+                h = '0' * (target - len(h)) + h
+            if len(h) % 2:
+                h = '0' + h
+            out_hex_chunks.append(h)
+
+        result = ''.join(out_hex_chunks)
+        if len(result) % 2:
+            result = '0' + result
+        return result

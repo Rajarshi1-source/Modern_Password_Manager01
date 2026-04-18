@@ -146,12 +146,18 @@ class ANUQuantumProvider(QuantumRNGProvider):
     
     def __init__(self):
         self._client = None
+        self._client_loop = None
     
     async def _get_client(self):
-        if self._client is None:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if self._client is None or self._client_loop is not current_loop:
             if not HTTPX_AVAILABLE:
                 raise RuntimeError("httpx not installed. Run: pip install httpx")
             self._client = httpx.AsyncClient(timeout=30.0)
+            self._client_loop = current_loop
         return self._client
     
     async def fetch_random_bytes(self, count: int) -> Tuple[bytes, Optional[str]]:
@@ -318,9 +324,14 @@ class IonQQuantumProvider(QuantumRNGProvider):
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.environ.get("IONQ_API_KEY")
         self._client = None
+        self._client_loop = None
     
     async def _get_client(self):
-        if self._client is None:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if self._client is None or self._client_loop is not current_loop:
             if not HTTPX_AVAILABLE:
                 raise RuntimeError("httpx not installed. Run: pip install httpx")
             self._client = httpx.AsyncClient(
@@ -330,6 +341,7 @@ class IonQQuantumProvider(QuantumRNGProvider):
                     "Content-Type": "application/json"
                 }
             )
+            self._client_loop = current_loop
         return self._client
     
     async def fetch_random_bytes(self, count: int) -> Tuple[bytes, Optional[str]]:
@@ -523,7 +535,11 @@ class QuantumEntropyPool:
         
         self._pool: List[QuantumEntropyBatch] = []
         self._total_available: int = 0
-        self._lock = asyncio.Lock()
+        # ``_lock`` is created lazily per event-loop so that the singleton pool
+        # can be shared across multiple ``asyncio.run`` calls (tests rebuild
+        # the loop each time).
+        self._lock: Optional[asyncio.Lock] = None
+        self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
         
         # Provider priority order (includes ocean wave and cosmic ray for entropy diversity)
         self._providers: List[QuantumRNGProvider] = [
@@ -534,6 +550,17 @@ class QuantumEntropyPool:
             self._get_cosmic_provider(),  # Cosmic Ray Muon
             FallbackCryptoProvider(),
         ]
+
+    def _get_lock(self) -> asyncio.Lock:
+        """Return a lock that is bound to the currently running event loop."""
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if self._lock is None or self._lock_loop is not current_loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = current_loop
+        return self._lock
     
     def _get_ocean_provider(self):
         """Lazy import of ocean provider to avoid circular imports."""
@@ -560,7 +587,7 @@ class QuantumEntropyPool:
         Returns:
             Tuple of (random_bytes, certificate)
         """
-        async with self._lock:
+        async with self._get_lock():
             # Refill if needed
             if self._total_available < count:
                 await self._refill_pool()
@@ -637,15 +664,19 @@ class QuantumEntropyPool:
                 self._pool.append(batch)
                 self._total_available += len(entropy_bytes)
                 
+                _name = provider.get_provider_name()
+                _name_str = _name.value if hasattr(_name, "value") else str(_name)
                 logger.info(
-                    f"Refilled pool with {len(entropy_bytes)} bytes from {provider.get_provider_name().value}"
+                    f"Refilled pool with {len(entropy_bytes)} bytes from {_name_str}"
                 )
                 
                 if self._total_available >= self.min_pool_size:
                     break
                     
             except Exception as e:
-                logger.warning(f"Provider {provider.get_provider_name().value} failed: {e}")
+                _name = provider.get_provider_name()
+                _name_str = _name.value if hasattr(_name, "value") else str(_name)
+                logger.warning(f"Provider {_name_str} failed: {e}")
                 continue
     
     def _create_certificate(
@@ -657,16 +688,22 @@ class QuantumEntropyPool:
         circuit_id: Optional[str]
     ) -> QuantumCertificate:
         """Create a signed quantum certificate."""
+        # Accept either the enum or a raw string identifier (defensive).
+        provider_value = (
+            provider.value if isinstance(provider, QuantumProvider) else str(provider)
+        )
+
         # Get quantum source description
         source = "unknown"
         for p in self._providers:
-            if p.get_provider_name() == provider:
+            name = p.get_provider_name()
+            if name == provider or getattr(name, "value", name) == provider_value:
                 source = p.get_quantum_source()
                 break
         
         # Create signature
         secret_key = os.environ.get("QUANTUM_CERT_SECRET", "quantum-dice-secret")
-        message = f"{certificate_id}:{password_hash[:16]}:{provider.value}:{entropy_bits}"
+        message = f"{certificate_id}:{password_hash[:16]}:{provider_value}:{entropy_bits}"
         signature = hmac.new(
             secret_key.encode(),
             message.encode(),
@@ -676,7 +713,7 @@ class QuantumEntropyPool:
         return QuantumCertificate(
             certificate_id=certificate_id,
             password_hash_prefix=f"sha256:{password_hash[:16]}...",
-            provider=provider.value,
+            provider=provider_value,
             generation_timestamp=datetime.now(),
             quantum_source=source,
             entropy_bits=entropy_bits,

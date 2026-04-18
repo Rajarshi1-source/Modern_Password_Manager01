@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 # Data Classes and Enums
 # =============================================================================
 
-class TravelMode(Enum):
-    """Inferred travel modes based on speed."""
+class TravelMode(str, Enum):
+    """Inferred travel modes based on speed. Compares equal to its str value."""
     WALKING = "walking"
     DRIVING = "driving"
     TRAIN = "train"
@@ -47,8 +47,8 @@ class TravelMode(Enum):
     UNKNOWN = "unknown"
 
 
-class TravelSeverity(Enum):
-    """Severity levels for travel anomalies."""
+class TravelSeverity(str, Enum):
+    """Severity levels for travel anomalies. Compares equal to its str value."""
     NONE = "none"
     LOW = "low"
     MEDIUM = "medium"
@@ -56,8 +56,8 @@ class TravelSeverity(Enum):
     CRITICAL = "critical"
 
 
-class TravelAction(Enum):
-    """Actions to take for travel anomalies."""
+class TravelAction(str, Enum):
+    """Actions to take for travel anomalies. Compares equal to its str value."""
     ALLOW = "allowed"
     CHALLENGE = "challenged"
     BLOCK = "blocked"

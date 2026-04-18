@@ -810,33 +810,49 @@ class NaturalEntropyMixer:
     def mix_entropy_blocks(blocks: List[bytes], output_length: int) -> bytes:
         """
         Mix multiple entropy blocks into a single output.
-        
+
         Args:
             blocks: List of entropy byte arrays
             output_length: Desired output length in bytes
-        
+
         Returns:
             Mixed entropy bytes
         """
         if not blocks:
             raise ValueError("At least one entropy block required")
-        
+
         if len(blocks) == 1:
             return hashlib.shake_256(blocks[0]).digest(output_length)
-        
+
         # XOR all blocks together (pad shorter blocks)
         max_len = max(len(b) for b in blocks)
         result = bytearray(max_len)
-        
+
         for block in blocks:
             for i, byte in enumerate(block):
                 result[i] ^= byte
-        
+
         # Condition with SHA3-512
         conditioned = hashlib.sha3_512(bytes(result)).digest()
-        
+
         # Expand to desired length with SHAKE256
         return hashlib.shake_256(conditioned).digest(output_length)
+
+    # ------------------------------------------------------------------
+    # Convenience ``mix`` method (used by tests)
+    # ------------------------------------------------------------------
+    def mix(self, *sources: bytes, output_length: Optional[int] = None) -> bytes:
+        """Mix an arbitrary number of entropy ``sources`` into a single block.
+
+        Delegates to :meth:`mix_entropy_blocks`. When ``output_length`` is
+        omitted the result matches the length of the longest input source
+        (defaulting to 32 bytes if no source is provided).
+        """
+        non_empty = [bytes(s) for s in sources if s]
+        if not non_empty:
+            return b""
+        length = output_length if output_length is not None else max(len(s) for s in non_empty)
+        return self.mix_entropy_blocks(non_empty, length)
     
     @staticmethod
     def generate_password_from_entropy(

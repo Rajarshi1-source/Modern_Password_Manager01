@@ -14,14 +14,31 @@ class UserDevice(models.Model):
     fingerprint = models.CharField(max_length=255, unique=True, blank=True)  # Device fingerprint
     browser = models.CharField(max_length=100, blank=True)
     os = models.CharField(max_length=100, blank=True)
-    ip_address = models.GenericIPAddressField()
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
     is_trusted = models.BooleanField(default=False)
     last_seen = models.DateTimeField(auto_now=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         unique_together = ['user', 'device_id']
-        
+
+    def __init__(self, *args, **kwargs):
+        # Backwards-compatible alias: some callers pass ``os_info=``.
+        if 'os_info' in kwargs and 'os' not in kwargs:
+            kwargs['os'] = kwargs.pop('os_info')
+        elif 'os_info' in kwargs:
+            kwargs.pop('os_info')
+        super().__init__(*args, **kwargs)
+
+    @property
+    def os_info(self) -> str:
+        """Alias for ``os`` for compatibility with newer code paths."""
+        return self.os
+
+    @os_info.setter
+    def os_info(self, value: str) -> None:
+        self.os = value
+
     def __str__(self):
         return f"{self.device_name} - {self.user.username}"
 
@@ -462,8 +479,11 @@ class DNAConnection(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField(User, on_delete=models.CASCADE, 
-                                 related_name='dna_connection')
+    # Use a plain ForeignKey so that a user can switch providers or hold a
+    # historical record of past connections; application logic is responsible
+    # for ensuring only one ``is_active=True`` row exists per user.
+    user = models.ForeignKey(User, on_delete=models.CASCADE,
+                             related_name='dna_connections')
     provider = models.CharField(max_length=50, choices=PROVIDER_CHOICES)
     status = models.CharField(max_length=20, choices=CONNECTION_STATUS, default='pending')
     

@@ -67,11 +67,12 @@ def get_or_create_subscription(user: User) -> GeneticSubscription:
 
 
 def get_dna_connection(user: User) -> DNAConnection:
-    """Get DNA connection for user or return None."""
-    try:
-        return user.dna_connection
-    except DNAConnection.DoesNotExist:
-        return None
+    """Get the currently active DNA connection for ``user`` or ``None``."""
+    return (
+        DNAConnection.objects.filter(user=user, is_active=True)
+        .order_by('-connected_at')
+        .first()
+    )
 
 
 def _get_fernet():
