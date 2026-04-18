@@ -28,7 +28,7 @@ def _patch_user_manager() -> None:
     """
     from django.contrib.auth.models import UserManager
 
-     if getattr(UserManager.create_user, _PATCH_SENTINEL, False):
+    if getattr(UserManager.create_user, _PATCH_SENTINEL, False):
         return
     
     original_create_user = UserManager.create_user
