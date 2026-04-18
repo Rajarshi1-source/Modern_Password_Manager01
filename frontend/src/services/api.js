@@ -187,6 +187,61 @@ const ApiService = {
     passwordHealth: () => api.get('/security/password_health/'),
     auditLog: () => api.get('/security/audit_log/'),
   },
+
+  // Social Proof-Based Recovery (Shamir circle + guardian attestations)
+  socialRecovery: {
+    listCircles: () => api.get('/api/social-recovery/circles/'),
+    createCircle: (data) => api.post('/api/social-recovery/circles/', data),
+    getCircle: (circleId) => api.get(`/api/social-recovery/circles/${circleId}/`),
+    acceptVoucher: (invitationToken, data) =>
+      api.post(`/api/social-recovery/vouchers/${invitationToken}/accept/`, data),
+    initiateRequest: (data) => api.post('/api/social-recovery/requests/', data),
+    getRequest: (requestId) => api.get(`/api/social-recovery/requests/${requestId}/`),
+    submitAttestation: (requestId, data) =>
+      api.post(`/api/social-recovery/requests/${requestId}/attest/`, data),
+    completeRequest: (requestId, data) =>
+      api.post(`/api/social-recovery/requests/${requestId}/complete/`, data),
+    cancelRequest: (requestId, data) =>
+      api.post(`/api/social-recovery/requests/${requestId}/cancel/`, data || {}),
+    auditLog: () => api.get('/api/social-recovery/audit/'),
+  },
+
+  // Dead Drop Mesh (BLE mesh + Shamir fragments + location verification)
+  mesh: {
+    listDeadDrops: () => api.get('/api/mesh/deaddrops/'),
+    createDeadDrop: (data) => api.post('/api/mesh/deaddrops/', data),
+    getDeadDrop: (dropId) => api.get(`/api/mesh/deaddrops/${dropId}/`),
+    distribute: (dropId, data) => api.post(`/api/mesh/deaddrops/${dropId}/distribute/`, data || {}),
+    collect: (dropId, data) => api.post(`/api/mesh/deaddrops/${dropId}/collect/`, data),
+    rebalance: (dropId) => api.post(`/api/mesh/deaddrops/${dropId}/rebalance/`),
+    health: (dropId) => api.get(`/api/mesh/deaddrops/${dropId}/health/`),
+    cancelDeadDrop: (dropId) => api.post(`/api/mesh/deaddrops/${dropId}/cancel/`),
+    listNodes: () => api.get('/api/mesh/nodes/'),
+    registerNode: (data) => api.post('/api/mesh/nodes/', data),
+    getNode: (nodeId) => api.get(`/api/mesh/nodes/${nodeId}/`),
+    updateNode: (nodeId, data) => api.patch(`/api/mesh/nodes/${nodeId}/`, data),
+    pingNode: (nodeId, data) => api.post(`/api/mesh/nodes/${nodeId}/ping/`, data || {}),
+    getNodeTrust: (nodeId) => api.get(`/api/mesh/nodes/${nodeId}/trust/`),
+    recomputeNodeTrust: (nodeId) => api.post(`/api/mesh/nodes/${nodeId}/trust/`),
+    nearbyNodes: (params) => api.get('/api/mesh/nodes/nearby/', { params }),
+    nfcChallenge: (data) => api.post('/api/mesh/nfc/challenge/', data),
+    nfcVerify: (data) => api.post('/api/mesh/nfc/verify/', data),
+  },
+
+  // Personality-Based Security Questions (adaptive profile + challenges)
+  personality: {
+    getProfile: () => api.get('/api/personality/profile/'),
+    optIn: (optedIn) => api.post('/api/personality/opt-in/', { opted_in: optedIn }),
+    inferProfile: (data) => api.post('/api/personality/infer/', data || {}),
+    generateQuestions: () => api.post('/api/personality/questions/generate/'),
+    startChallenge: (data) => api.post('/api/personality/challenges/start/', data || {}),
+    getChallenge: (challengeId) => api.get(`/api/personality/challenges/${challengeId}/`),
+    submitAnswer: (challengeId, data) =>
+      api.post(`/api/personality/challenges/${challengeId}/submit/`, data),
+    abandonChallenge: (challengeId) =>
+      api.post(`/api/personality/challenges/${challengeId}/abandon/`),
+    auditLog: () => api.get('/api/personality/audit/'),
+  },
   
   // Error handler helper
   handleError: (error) => {

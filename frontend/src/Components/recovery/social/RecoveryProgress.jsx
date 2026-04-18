@@ -1,44 +1,46 @@
-import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import ApiService from '../../../services/api';
 import './RecoveryProgress.css';
 
-export const RecoveryProgress = () => {
-  const { attemptId } = useParams();
-  const [attempt, setAttempt] = useState(null);
+const STATUS_STEPS = [
+  { key: 'initiated', label: 'Recovery Initiated', icon: '🚀' },
+  { key: 'pending', label: 'Awaiting Attestations', icon: '⏳' },
+  { key: 'approved', label: 'Threshold Reached', icon: '🛡️' },
+  { key: 'completed', label: 'Recovery Complete', icon: '✅' },
+];
+
+const normalizeStatus = (s) => {
+  if (!s) return 'pending';
+  if (s === 'initiated' || s === 'challenge_phase') return 'pending';
+  return s;
+};
+
+const RecoveryProgress = () => {
+  const { requestId } = useParams();
+  const [request, setRequest] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  
-  useEffect(() => {
-    fetchAttemptStatus();
-    
-    // Poll for updates every 5 seconds
-    const interval = setInterval(fetchAttemptStatus, 5000);
-    
-    return () => clearInterval(interval);
-  }, [attemptId]);
-  
-  const fetchAttemptStatus = async () => {
+
+  const fetchStatus = useCallback(async () => {
     try {
-      const response = await fetch(`/api/auth/quantum-recovery/attempt/${attemptId}/status/`, {
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch recovery status');
-      }
-      
-      const data = await response.json();
-      setAttempt(data);
+      const resp = await ApiService.socialRecovery.getRequest(requestId);
+      setRequest(resp.data);
       setError(null);
     } catch (err) {
-      setError(err.message);
+      const handled = ApiService.handleError(err);
+      setError(handled.error || 'Failed to load recovery status');
     } finally {
       setLoading(false);
     }
-  };
-  
+  }, [requestId]);
+
+  useEffect(() => {
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 5000);
+    return () => clearInterval(interval);
+  }, [fetchStatus]);
+
   if (loading) {
     return (
       <div className="progress-loading">
@@ -47,190 +49,176 @@ export const RecoveryProgress = () => {
       </div>
     );
   }
-  
-  if (error || !attempt) {
+
+  if (error || !request) {
     return (
       <div className="progress-error">
         <h2>❌ Error Loading Progress</h2>
-        <p>{error || 'Recovery attempt not found'}</p>
+        <p>{error || 'Recovery request not found'}</p>
       </div>
     );
   }
-  
-  const statusSteps = [
-    { key: 'initiated', label: 'Recovery Initiated', icon: '🚀' },
-    { key: 'challenge_phase', label: 'Identity Challenges', icon: '🔐' },
-    { key: 'guardian_approval', label: 'Guardian Approvals', icon: '🛡️' },
-    { key: 'shard_collection', label: 'Shard Collection', icon: '🧩' },
-    { key: 'completed', label: 'Recovery Complete', icon: '✅' }
-  ];
-  
-  const currentStepIndex = statusSteps.findIndex(step => step.key === attempt.status);
-  
+
+  const status = normalizeStatus(request.status);
+  const currentStepIndex = STATUS_STEPS.findIndex((s) => s.key === status);
+  const received = request.received_approvals || 0;
+  const required = request.required_approvals || 1;
+  const attestations = request.attestations || [];
+
   return (
     <div className="recovery-progress">
       <div className="progress-header">
         <h1>Recovery Progress</h1>
-        <p className="recovery-id">Attempt ID: {attempt.id}</p>
+        <p className="recovery-id">Request ID: <span className="mono">{request.request_id}</span></p>
       </div>
-      
-      {attempt.canary_alert_sent_at && !attempt.canary_alert_acknowledged && (
-        <div className="canary-alert">
-          <h3>⚠️ Canary Alert Sent</h3>
-          <p>A security alert was sent to your email. If you didn't initiate this recovery, 
-             please cancel it immediately using the link in the email.</p>
-          <p className="alert-time">Sent: {new Date(attempt.canary_alert_sent_at).toLocaleString()}</p>
-        </div>
-      )}
-      
+
       <div className="progress-card">
         <div className="status-timeline">
-          {statusSteps.map((step, index) => (
-            <div 
+          {STATUS_STEPS.map((step, index) => (
+            <div
               key={step.key}
               className={`timeline-step ${index <= currentStepIndex ? 'active' : ''} ${index === currentStepIndex ? 'current' : ''}`}
             >
               <div className="step-icon">{step.icon}</div>
               <div className="step-label">{step.label}</div>
-              {index < statusSteps.length - 1 && (
+              {index < STATUS_STEPS.length - 1 && (
                 <div className={`step-line ${index < currentStepIndex ? 'completed' : ''}`}></div>
               )}
             </div>
           ))}
         </div>
-        
+
         <div className="progress-details">
           <div className="detail-section">
-            <h3>📊 Progress Statistics</h3>
+            <h3>📊 Attestation Progress</h3>
             <div className="stats-grid">
               <div className="stat-card">
-                <div className="stat-label">Challenges</div>
-                <div className="stat-value">
-                  {attempt.challenges_completed} / {attempt.challenges_sent}
-                </div>
+                <div className="stat-label">Approvals</div>
+                <div className="stat-value">{received} / {required}</div>
                 <div className="stat-progress">
-                  <div 
+                  <div
                     className="stat-fill"
-                    style={{ width: `${(attempt.challenges_completed / attempt.challenges_sent) * 100}%` }}
-                  ></div>
+                    style={{ width: `${Math.min(100, (received / required) * 100)}%` }}
+                  />
                 </div>
               </div>
-              
               <div className="stat-card">
-                <div className="stat-label">Guardian Approvals</div>
-                <div className="stat-value">
-                  {attempt.guardian_approvals_received?.length || 0} / {attempt.guardian_approvals_required}
-                </div>
-                <div className="stat-progress">
-                  <div 
-                    className="stat-fill"
-                    style={{ 
-                      width: `${((attempt.guardian_approvals_received?.length || 0) / attempt.guardian_approvals_required) * 100}%` 
-                    }}
-                  ></div>
-                </div>
+                <div className="stat-label">Total Weight</div>
+                <div className="stat-value">{request.total_weight ?? 0}</div>
               </div>
-              
               <div className="stat-card">
-                <div className="stat-label">Shards Collected</div>
-                <div className="stat-value">
-                  {attempt.shards_collected?.length || 0} / {attempt.shards_required}
-                </div>
-                <div className="stat-progress">
-                  <div 
-                    className="stat-fill"
-                    style={{ 
-                      width: `${((attempt.shards_collected?.length || 0) / attempt.shards_required) * 100}%` 
-                    }}
-                  ></div>
-                </div>
+                <div className="stat-label">Stake Committed</div>
+                <div className="stat-value">{request.total_stake_committed ?? 0}</div>
               </div>
-              
               <div className="stat-card trust-score-card">
-                <div className="stat-label">Trust Score</div>
+                <div className="stat-label">Risk Score</div>
                 <div className="stat-value trust-score">
-                  {(attempt.trust_score * 100).toFixed(1)}%
-                </div>
-                <div className={`trust-indicator ${attempt.trust_score >= 0.8 ? 'high' : attempt.trust_score >= 0.5 ? 'medium' : 'low'}`}>
-                  {attempt.trust_score >= 0.8 ? '🟢 High' : attempt.trust_score >= 0.5 ? '🟡 Medium' : '🔴 Low'}
+                  {request.risk_score != null ? Number(request.risk_score).toFixed(2) : '—'}
                 </div>
               </div>
             </div>
           </div>
-          
+
           <div className="detail-section">
             <h3>📅 Timeline</h3>
             <div className="timeline-details">
               <div className="timeline-item">
                 <span className="timeline-label">Initiated:</span>
                 <span className="timeline-value">
-                  {new Date(attempt.initiated_at).toLocaleString()}
+                  {new Date(request.created_at).toLocaleString()}
                 </span>
               </div>
               <div className="timeline-item">
                 <span className="timeline-label">Expires:</span>
                 <span className="timeline-value">
-                  {new Date(attempt.expires_at).toLocaleString()}
+                  {request.expires_at ? new Date(request.expires_at).toLocaleString() : '—'}
                 </span>
               </div>
-              {attempt.completed_at && (
+              {request.completed_at && (
                 <div className="timeline-item">
                   <span className="timeline-label">Completed:</span>
                   <span className="timeline-value">
-                    {new Date(attempt.completed_at).toLocaleString()}
+                    {new Date(request.completed_at).toLocaleString()}
                   </span>
                 </div>
               )}
             </div>
           </div>
-          
-          {attempt.status === 'challenge_phase' && (
+
+          {attestations.length > 0 && (
+            <div className="detail-section">
+              <h3>🗳️ Attestations</h3>
+              <ul className="attestations-list">
+                {attestations.map((a) => (
+                  <li key={a.attestation_id}>
+                    <span className={`decision ${a.decision}`}>{a.decision}</span>
+                    <span className="mono">
+                      voucher {String(a.voucher).slice(0, 8)}…
+                    </span>
+                    <span className="time">
+                      {new Date(a.attested_at).toLocaleString()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {status === 'pending' && (
             <div className="action-section">
               <div className="info-box">
-                <h4>📧 Check Your Email</h4>
-                <p>Temporal challenges are being sent to your email over the next few days. 
-                   Answer them as they arrive to increase your trust score.</p>
+                <h4>⏳ Awaiting Guardian Attestations</h4>
+                <p>
+                  Each guardian must sign the challenge nonce and submit via the
+                  attestation page. Share this link with them:
+                </p>
+                <code>{`${window.location.origin}/recovery/social/attest/${request.request_id}`}</code>
               </div>
             </div>
           )}
-          
-          {attempt.status === 'guardian_approval' && (
+
+          {status === 'approved' && (
             <div className="action-section">
-              <div className="info-box">
-                <h4>⏳ Waiting for Guardians</h4>
-                <p>Your guardians have been notified and asked to approve this recovery. 
-                   This may take some time as they verify your identity.</p>
+              <div className="info-box success-tint">
+                <h4>🛡️ Threshold Reached</h4>
+                <p>
+                  Enough approvals have been collected. Submit the decrypted
+                  shares to complete reconstruction.
+                </p>
               </div>
             </div>
           )}
-          
-          {attempt.status === 'completed' && (
+
+          {status === 'completed' && (
             <div className="action-section success">
               <div className="success-box">
                 <div className="success-icon">🎉</div>
                 <h4>Recovery Completed!</h4>
-                <p>Your account has been successfully recovered. You can now log in with your restored passkey.</p>
-                <button className="btn-primary" onClick={() => window.location.href = '/login'}>
+                <p>Your secret has been reconstructed. Proceed to vault unlock.</p>
+                <Link className="btn-primary" to="/login">
                   Go to Login
-                </button>
+                </Link>
               </div>
             </div>
           )}
-          
-          {attempt.status === 'failed' && (
+
+          {(status === 'failed' || status === 'cancelled' || status === 'expired') && (
             <div className="action-section error">
               <div className="error-box">
-                <h4>❌ Recovery Failed</h4>
-                <p>{attempt.failure_reason || 'The recovery attempt was unsuccessful.'}</p>
-                <button className="btn-secondary" onClick={() => window.location.href = '/recovery'}>
+                <h4>❌ Recovery {status}</h4>
+                <p>
+                  This request is <strong>{status}</strong>. You&apos;ll need
+                  to initiate a new recovery if you still need access.
+                </p>
+                <Link className="btn-secondary" to="/recovery/social/initiate">
                   Start New Recovery
-                </button>
+                </Link>
               </div>
             </div>
           )}
         </div>
       </div>
-      
+
       <div className="refresh-notice">
         <p>🔄 Auto-refreshing every 5 seconds...</p>
       </div>
@@ -238,5 +226,5 @@ export const RecoveryProgress = () => {
   );
 };
 
+export { RecoveryProgress };
 export default RecoveryProgress;
-

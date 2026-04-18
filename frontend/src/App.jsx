@@ -129,6 +129,22 @@ const AmbientDashboard = lazy(() => import('./Components/security/AmbientDashboa
 // Steganographic Hidden Vault: PNG LSB + HiddenVaultBlob v1 (plausible deniability).
 const StegoVaultDashboard = lazy(() => import('./Components/security/StegoVaultDashboard'));
 
+// Social Proof-Based Recovery (guardian circles + attestations).
+const SocialRecoveryCircleSetup = lazy(() => import('./Components/recovery/social/CircleSetup'));
+const SocialRecoveryInitiation = lazy(() => import('./Components/recovery/social/RecoveryInitiation'));
+const SocialRecoveryProgress = lazy(() => import('./Components/recovery/social/RecoveryProgress'));
+const SocialRecoveryVoucherAccept = lazy(() => import('./Components/recovery/social/VoucherAccept'));
+const SocialRecoveryAttestationForm = lazy(() => import('./Components/recovery/social/AttestationForm'));
+
+// Dead Drop Mesh (BLE mesh + Shamir fragments + geofenced collection).
+const DeadDropManager = lazy(() => import('./Components/security/DeadDropManager'));
+const MeshNetworkMap = lazy(() => import('./Components/security/MeshNetworkMap'));
+const DeadDropCollectPage = lazy(() => import('./Components/security/DeadDropCollectPage'));
+
+// Personality-Based Security Questions.
+const PersonalityDashboard = lazy(() => import('./Components/personality/PersonalityDashboard'));
+const PersonalityChallenge = lazy(() => import('./Components/personality/PersonalityChallenge'));
+
 
 // Add global styles for accessibility
 const GlobalStyle = createGlobalStyle`
@@ -1929,6 +1945,74 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Stego Vault Dashboard">
                       <StegoVaultDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+
+                {/* Social Proof-Based Recovery: M-of-N guardian attestations. */}
+                <Route path="/recovery/social/circles" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Recovery Circles">
+                      <SocialRecoveryCircleSetup />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/recovery/social/initiate" element={
+                  <ErrorBoundary fallbackMessage="Failed to load Recovery Initiation">
+                    <SocialRecoveryInitiation />
+                  </ErrorBoundary>
+                } />
+                <Route path="/recovery/social/progress/:requestId" element={
+                  <ErrorBoundary fallbackMessage="Failed to load Recovery Progress">
+                    <SocialRecoveryProgress />
+                  </ErrorBoundary>
+                } />
+                <Route path="/recovery/social/attest/:requestId" element={
+                  <ErrorBoundary fallbackMessage="Failed to load Attestation Form">
+                    <SocialRecoveryAttestationForm />
+                  </ErrorBoundary>
+                } />
+                <Route path="/recovery/social/voucher/:invitationToken" element={
+                  <ErrorBoundary fallbackMessage="Failed to load Voucher Accept">
+                    <SocialRecoveryVoucherAccept />
+                  </ErrorBoundary>
+                } />
+
+                {/* Dead Drop Mesh: geofenced Shamir fragments distributed over a BLE mesh. */}
+                <Route path="/security/mesh" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Dead Drop Manager">
+                      <DeadDropManager />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/security/mesh/map" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Mesh Network Map">
+                      <MeshNetworkMap />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/security/mesh/collect/:dropId" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Dead Drop Collection">
+                      <DeadDropCollectPage />
+                    </ErrorBoundary>
+                  )
+                } />
+
+                {/* Personality-Based Security Questions. */}
+                <Route path="/personality" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Personality Dashboard">
+                      <PersonalityDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/personality/challenge/:challengeId" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Personality Challenge">
+                      <PersonalityChallenge />
                     </ErrorBoundary>
                   )
                 } />
