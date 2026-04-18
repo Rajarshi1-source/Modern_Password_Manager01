@@ -1,0 +1,189 @@
+.personality-challenge {
+  max-width: 680px;
+  margin: 2rem auto;
+  padding: 2rem;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .06);
+  color: #1f2937;
+}
+
+.personality-challenge.placeholder,
+.personality-challenge.error-state {
+  text-align: center;
+  color: #6b7280;
+  padding: 3rem 2rem;
+}
+
+.personality-challenge header h1 {
+  margin: 0 0 .25rem 0;
+  font-size: 1.6rem;
+}
+
+.personality-challenge .meta {
+  color: #4b5563;
+  margin: 0 0 1rem 0;
+  font-size: .9rem;
+}
+
+.progress-bar {
+  background: #f3f4f6;
+  height: .5rem;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: .35rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #60a5fa 0%, #2563eb 100%);
+  transition: width .3s ease;
+}
+
+.progress-text {
+  font-size: .85rem;
+  color: #6b7280;
+  margin: 0 0 1.25rem 0;
+}
+
+.banner {
+  padding: .7rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: .9rem;
+}
+.banner.info { background: #eff6ff; color: #1e40af; }
+.banner.error { background: #fee2e2; color: #991b1b; }
+.banner .rationale { color: #374151; }
+
+.question-card {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 1.25rem;
+}
+
+.question-head {
+  display: flex;
+  gap: .5rem;
+  margin-bottom: .75rem;
+}
+
+.pill {
+  background: #dbeafe;
+  color: #1e40af;
+  padding: .2rem .65rem;
+  border-radius: 999px;
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.pill.difficulty {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.prompt {
+  font-size: 1.15rem;
+  line-height: 1.5;
+  margin: 0 0 1rem 0;
+  color: #111827;
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  margin-bottom: 1rem;
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .6rem .85rem;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+
+.choice:hover { border-color: #9ca3af; }
+.choice.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.choice input[type="radio"] { accent-color: #2563eb; }
+
+.question-card textarea {
+  width: 100%;
+  padding: .6rem .8rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: .95rem;
+  font-family: inherit;
+  resize: vertical;
+  margin-bottom: 1rem;
+}
+
+.personality-challenge .actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 1rem;
+}
+
+.btn-primary,
+.btn-secondary {
+  padding: .6rem 1.2rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.btn-primary { background: #2563eb; color: #fff; }
+.btn-primary:disabled { background: #9ca3af; cursor: not-allowed; }
+.btn-secondary { background: #fff; border-color: #d1d5db; color: #1f2937; }
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: .9rem;
+}
+.btn-link.danger { color: #dc2626; }
+
+.personality-challenge.result {
+  text-align: center;
+  padding: 3rem 2rem;
+}
+
+.personality-challenge.result.passed h1 { color: #047857; }
+.personality-challenge.result.failed h1 { color: #b91c1c; }
+
+.score-line,
+.status-line {
+  font-size: 1.05rem;
+  margin: .5rem 0;
+  color: #374151;
+}
+
+.status-chip {
+  display: inline-block;
+  padding: .2rem .6rem;
+  border-radius: 999px;
+  color: #fff;
+  text-transform: uppercase;
+  font-size: .75rem;
+  background: #6b7280;
+}
+.status-chip.passed { background: #10b981; }
+.status-chip.failed,
+.status-chip.expired,
+.status-chip.abandoned { background: #dc2626; }
