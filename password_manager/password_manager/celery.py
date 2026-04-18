@@ -284,6 +284,48 @@ app.conf.update(
             'task': 'ab_testing.tasks.flush_feature_flag_usage',
             'schedule': 60.0,  # Every 60 seconds
         },
+
+        # =================================================================
+        # Mesh Dead Drop Password Sharing
+        # =================================================================
+
+        # Drain queued fragment deliveries to online mesh nodes every minute.
+        'flush-pending-sync': {
+            'task': 'mesh_deaddrop.flush_pending_sync',
+            'schedule': 60.0,
+        },
+
+        # =================================================================
+        # Social Proof-Based Recovery
+        # =================================================================
+
+        # Expire invitations and recovery requests on a cadence (every 10 min)
+        'social-recovery-expire-stale-requests': {
+            'task': 'social_recovery.expire_stale_requests',
+            'schedule': crontab(minute='*/10'),
+        },
+
+        # Settle voucher stakes after successful recoveries (hourly).
+        'social-recovery-settle-stakes': {
+            'task': 'social_recovery.settle_stakes',
+            'schedule': crontab(minute=30),
+        },
+
+        # =================================================================
+        # Personality-Based Security Questions
+        # =================================================================
+
+        # Nightly inference refresh for opted-in profiles (once a day).
+        'personality-nightly-inference': {
+            'task': 'personality_auth.nightly_inference_refresh',
+            'schedule': crontab(hour=2, minute=45),
+        },
+
+        # Hourly prune of expired questions and stale challenges.
+        'personality-prune-expired-questions': {
+            'task': 'personality_auth.prune_expired_questions',
+            'schedule': crontab(minute=10),
+        },
     },
 )
 

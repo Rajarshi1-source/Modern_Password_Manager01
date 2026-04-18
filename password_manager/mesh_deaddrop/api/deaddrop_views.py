@@ -27,7 +27,7 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.utils import timezone
 
-from password_manager.throttling import DeadDropCollectThrottle
+from password_manager.throttling import DeadDropCollectThrottle, MeshNodePingThrottle
 
 from ..models import (
     DeadDrop,
@@ -52,6 +52,8 @@ from ..services import (
     FragmentDistributionService,
     LocationVerificationService,
     MeshCryptoService,
+    TrustSummary,
+    relay_trust_service,
 )
 from ..services.location_verification_service import (
     LocationClaim,
@@ -470,18 +472,19 @@ class NearbyNodesView(APIView):
 class NodePingView(APIView):
     """
     Update node online status.
-    
+
     POST: Ping to indicate node is online
     """
     permission_classes = [IsAuthenticated]
-    
+    throttle_classes = [MeshNodePingThrottle]
+
     def post(self, request, node_id):
         """Ping node."""
         node = get_object_or_404(MeshNode, id=node_id, owner=request.user)
-        
+
         node.is_online = True
         node.last_seen = timezone.now()
-        
+
         # Update location if provided
         lat = request.data.get('latitude')
         lon = request.data.get('longitude')
@@ -489,8 +492,141 @@ class NodePingView(APIView):
             node.update_location(float(lat), float(lon))
         else:
             node.save()
-        
-        return Response({'status': 'ok'})
+
+        # Accrue a small uptime nudge to the trust EWMA.
+        uptime_delta = float(request.data.get('uptime_delta_hours', 0.0) or 0.0)
+        try:
+            summary = relay_trust_service.record_ping(node, uptime_delta_hours=uptime_delta)
+        except Exception:  # defensive — ping must never 500
+            summary = TrustSummary.from_node(node)
+
+        return Response({'status': 'ok', 'trust': summary.__dict__})
+
+
+class NodeTrustView(APIView):
+    """
+    Inspect or recompute a mesh node's relay trust score.
+
+    GET: Return the current trust summary (owner only).
+    POST: Recompute baseline from the stored success/failure counters. Useful
+         after rebalancing when heuristics need a clean slate.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, node_id):
+        node = get_object_or_404(MeshNode, id=node_id, owner=request.user)
+        return Response(TrustSummary.from_node(node).__dict__)
+
+    def post(self, request, node_id):
+        node = get_object_or_404(MeshNode, id=node_id, owner=request.user)
+        summary = relay_trust_service.recompute_baseline(node)
+        return Response({'status': 'recomputed', 'trust': summary.__dict__})
+
+
+class DeadDropRebalanceView(APIView):
+    """Force redistribution of a dead drop's fragments.
+
+    POST: Rebalance fragments across online nodes. Distinct from
+    :class:`DeadDropDistributeView` which predates this view but overlaps in
+    behaviour. The rebalance endpoint also emits a ``distribution_progress``
+    event on the dead-drop websocket channel so UI dashboards can follow the
+    operation live.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, drop_id):
+        dead_drop = get_object_or_404(DeadDrop, id=drop_id, owner=request.user)
+        if dead_drop.status in ('collected', 'cancelled', 'expired'):
+            return Response(
+                {'error': f'cannot rebalance {dead_drop.status} dead drop'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        service = FragmentDistributionService()
+        rebalanced = service.rebalance_fragments(dead_drop)
+        dist_status = service.get_distribution_status(dead_drop)
+
+        try:
+            from ..consumers import broadcast_distribution_progress
+
+            broadcast_distribution_progress(
+                dead_drop.id,
+                placed=dist_status.get('distributed', 0) if isinstance(dist_status, dict) else 0,
+                total=dead_drop.total_fragments,
+            )
+        except Exception:
+            pass
+
+        return Response({'rebalanced': rebalanced, 'status': dist_status})
+
+
+class DeadDropHealthView(APIView):
+    """Return an operational health summary for a dead drop.
+
+    Aggregates: total/distributed/online/available fragment counts, quorum
+    headroom (how many nodes we can lose before reconstruction fails), and
+    node-level trust distribution. Drives the owner UI's 'distribution
+    health' widget and the ``health_update`` websocket events.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, drop_id):
+        dead_drop = get_object_or_404(DeadDrop, id=drop_id, owner=request.user)
+        fragments = list(dead_drop.fragments.select_related('node'))
+
+        total = len(fragments)
+        distributed = sum(1 for f in fragments if f.is_distributed)
+        online = sum(1 for f in fragments if f.node and f.node.is_online)
+        available = sum(1 for f in fragments if f.is_available)
+        collected = sum(1 for f in fragments if f.is_collected)
+
+        required = dead_drop.required_fragments
+        quorum_headroom = max(0, online - required)
+
+        trust_scores = [f.node.trust_score for f in fragments if f.node]
+        avg_trust = sum(trust_scores) / len(trust_scores) if trust_scores else 0.0
+        min_trust = min(trust_scores) if trust_scores else 0.0
+
+        summary = {
+            'drop_id': str(dead_drop.id),
+            'status': dead_drop.status,
+            'threshold': {
+                'required': required,
+                'total': dead_drop.total_fragments,
+                'configured_total': total,
+            },
+            'fragments': {
+                'total': total,
+                'distributed': distributed,
+                'online': online,
+                'available': available,
+                'collected': collected,
+            },
+            'quorum': {
+                'online': online,
+                'required': required,
+                'headroom': quorum_headroom,
+                'reconstructable': online >= required,
+            },
+            'trust': {
+                'avg': round(avg_trust, 4),
+                'min': round(min_trust, 4),
+                'samples': len(trust_scores),
+            },
+            'expires_at': dead_drop.expires_at.isoformat() if dead_drop.expires_at else None,
+        }
+
+        try:
+            from ..consumers import broadcast_health_update
+
+            broadcast_health_update(dead_drop.id, summary)
+        except Exception:
+            pass
+
+        return Response(summary)
 
 
 # =============================================================================

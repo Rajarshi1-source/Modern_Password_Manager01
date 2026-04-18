@@ -137,7 +137,9 @@ class LocationVerificationService:
         require_nfc: bool = False,
         min_ble_nodes: int = 2,
         required_ble_node_ids: Optional[List[str]] = None,
-        nfc_expected_response: Optional[str] = None
+        nfc_expected_response: Optional[str] = None,
+        require_distinct_fingerprints: bool = True,
+        min_distinct_fingerprints: int = 2,
     ) -> VerificationResponse:
         """
         Verify that the claimed location is at the target location.
@@ -226,11 +228,48 @@ class LocationVerificationService:
             # Verify RSSI is reasonable (not fabricated)
             ble_confidence = self._calculate_ble_confidence(claimed.ble_nodes)
             response.ble_verified = ble_confidence > 0.5
-            
+
             if not response.ble_verified:
                 response.message = "BLE signal verification failed - possible spoofing"
                 return response
-            
+
+            # Distinct-fingerprint rule: prevent a single attacker device from
+            # "multiplying itself" via rebroadcast / reflection. We require
+            # ``min_distinct_fingerprints`` unique (device_fingerprint or
+            # ble_address) values among the claimed nodes, and we reject
+            # observations where any two RSSI values are suspiciously
+            # identical.
+            if require_distinct_fingerprints:
+                fingerprints = {
+                    (n.get('device_fingerprint') or n.get('fingerprint')
+                     or n.get('ble_address') or n.get('id'))
+                    for n in claimed.ble_nodes
+                }
+                fingerprints.discard(None)
+                distinct_count = len(fingerprints)
+                if distinct_count < min_distinct_fingerprints:
+                    response.result = VerificationResult.SPOOFING_DETECTED
+                    response.message = (
+                        f"Distinct-fingerprint check failed "
+                        f"({distinct_count}/{min_distinct_fingerprints} unique)"
+                    )
+                    response.confidence = 0.0
+                    return response
+
+                rssi_values = [n.get('rssi') for n in claimed.ble_nodes if n.get('rssi') is not None]
+                # If two or more nodes report the *exact* same RSSI we have a
+                # high prior on replay / rebroadcast. Allow one duplicate but
+                # not more.
+                duplicate_count = len(rssi_values) - len(set(rssi_values))
+                if duplicate_count > 1:
+                    response.result = VerificationResult.SPOOFING_DETECTED
+                    response.message = (
+                        f"Suspicious BLE RSSI pattern "
+                        f"({duplicate_count} duplicates) - possible replay"
+                    )
+                    response.confidence = 0.0
+                    return response
+
             confidence_factors.append(('ble', ble_confidence, 0.4))  # 40% weight
         
         # =================================================================

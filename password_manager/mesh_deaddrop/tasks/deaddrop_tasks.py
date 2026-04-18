@@ -149,6 +149,28 @@ def cleanup_old_access_logs():
     }
 
 
+@shared_task(name='mesh_deaddrop.flush_pending_sync')
+def flush_pending_sync(batch_size: int = 25):
+    """
+    Broadcast ``fragment_sync`` websocket events for online nodes with
+    pending fragment deliveries, and expire stale queue rows.
+
+    Runs every minute.
+    """
+    from ..services import pending_sync_service
+
+    result = pending_sync_service.flush_queue_for_online_nodes(batch_size=batch_size)
+    expired = pending_sync_service.expire_stale_syncs()
+    payload = {
+        'nodes_notified': result.nodes_notified,
+        'syncs_touched': result.syncs_touched,
+        'expired': expired,
+    }
+    if payload['nodes_notified'] or expired:
+        logger.info('flush_pending_sync: %s', payload)
+    return payload
+
+
 @shared_task(name='mesh_deaddrop.cleanup_location_cache')
 def cleanup_location_cache():
     """
@@ -342,5 +364,9 @@ CELERY_BEAT_SCHEDULE = {
     'cleanup-location-cache': {
         'task': 'mesh_deaddrop.cleanup_location_cache',
         'schedule': 21600.0,  # Every 6 hours
+    },
+    'flush-pending-sync': {
+        'task': 'mesh_deaddrop.flush_pending_sync',
+        'schedule': 60.0,  # Every minute — drains pending fragment deliveries to online nodes
     },
 }

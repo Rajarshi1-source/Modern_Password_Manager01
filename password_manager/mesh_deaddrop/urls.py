@@ -15,10 +15,13 @@ from .api.deaddrop_views import (
     DeadDropDistributeView,
     DeadDropCollectView,
     DeadDropCancelView,
+    DeadDropRebalanceView,
+    DeadDropHealthView,
     MeshNodeListView,
     MeshNodeDetailView,
     NearbyNodesView,
     NodePingView,
+    NodeTrustView,
     NFCChallengeView,
     NFCVerifyView,
 )
@@ -30,15 +33,18 @@ urlpatterns = [
     path('deaddrops/', DeadDropListView.as_view(), name='deaddrop-list'),
     path('deaddrops/<uuid:drop_id>/', DeadDropDetailView.as_view(), name='deaddrop-detail'),
     path('deaddrops/<uuid:drop_id>/distribute/', DeadDropDistributeView.as_view(), name='deaddrop-distribute'),
+    path('deaddrops/<uuid:drop_id>/rebalance/', DeadDropRebalanceView.as_view(), name='deaddrop-rebalance'),
+    path('deaddrops/<uuid:drop_id>/health/', DeadDropHealthView.as_view(), name='deaddrop-health'),
     path('deaddrops/<uuid:drop_id>/collect/', DeadDropCollectView.as_view(), name='deaddrop-collect'),
     path('deaddrops/<uuid:drop_id>/cancel/', DeadDropCancelView.as_view(), name='deaddrop-cancel'),
-    
+
     # Mesh Nodes
     path('nodes/', MeshNodeListView.as_view(), name='node-list'),
     path('nodes/<uuid:node_id>/', MeshNodeDetailView.as_view(), name='node-detail'),
     path('nodes/<uuid:node_id>/ping/', NodePingView.as_view(), name='node-ping'),
+    path('nodes/<uuid:node_id>/trust/', NodeTrustView.as_view(), name='node-trust'),
     path('nodes/nearby/', NearbyNodesView.as_view(), name='nearby-nodes'),
-    
+
     # NFC Verification
     path('nfc/challenge/', NFCChallengeView.as_view(), name='nfc-challenge'),
     path('nfc/verify/', NFCVerifyView.as_view(), name='nfc-verify'),

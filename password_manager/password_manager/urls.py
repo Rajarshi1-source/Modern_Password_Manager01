@@ -126,6 +126,12 @@ urlpatterns = [
     
     # Mesh Dead Drop Password Sharing API routes
     path('api/mesh/', include('mesh_deaddrop.urls')),
+
+    # Social Proof-Based Recovery API routes (web-of-trust + Shamir + Schnorr)
+    path('api/social-recovery/', include('social_recovery.urls')),
+
+    # Personality-Based Security Questions API routes
+    path('api/personality/', include('personality_auth.urls')),
     
     # Neuro-Feedback Password Training API routes
     path('api/neuro-feedback/', include('neuro_feedback.urls')),

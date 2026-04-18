@@ -715,3 +715,100 @@ class LocationVerificationCache(models.Model):
     
     def __str__(self):
         return f"Location for {self.user.username} at {self.recorded_at}"
+
+
+# =============================================================================
+# Pending Fragment Sync Queue
+# =============================================================================
+
+class PendingFragmentSync(models.Model):
+    """Pending fragment delivery to an offline mesh node.
+
+    Rows live in the DB until the target node reconnects, at which point the
+    flush task (``mesh_deaddrop.flush_pending_sync``) delivers the queued
+    fragments over websocket + records the outcome. Keeps offline-first
+    behaviour deterministic and auditable instead of relying on best-effort
+    BLE retries.
+    """
+
+    STATUS_CHOICES = [
+        ('queued', 'Queued'),
+        ('delivering', 'Delivering'),
+        ('delivered', 'Delivered'),
+        ('failed', 'Failed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    node = models.ForeignKey(
+        'MeshNode',
+        on_delete=models.CASCADE,
+        related_name='pending_syncs',
+    )
+    fragment = models.ForeignKey(
+        DeadDropFragment,
+        on_delete=models.CASCADE,
+        related_name='pending_syncs',
+    )
+    dead_drop = models.ForeignKey(
+        DeadDrop,
+        on_delete=models.CASCADE,
+        related_name='pending_syncs',
+    )
+
+    encrypted_payload = models.BinaryField(
+        null=True,
+        blank=True,
+        help_text="Optional pre-encrypted payload snapshot to deliver",
+    )
+    payload_hash = models.CharField(
+        max_length=128,
+        blank=True,
+        default='',
+        help_text="BLAKE3 hash of payload for integrity",
+    )
+
+    status = models.CharField(
+        max_length=16,
+        choices=STATUS_CHOICES,
+        default='queued',
+    )
+    retry_count = models.IntegerField(default=0)
+    max_retries = models.IntegerField(default=10)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    next_retry_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default='')
+
+    queued_at = models.DateTimeField(auto_now_add=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'mesh_pending_fragment_sync'
+        verbose_name = 'Pending Fragment Sync'
+        verbose_name_plural = 'Pending Fragment Syncs'
+        ordering = ['queued_at']
+        indexes = [
+            models.Index(fields=['node', 'status']),
+            models.Index(fields=['status', 'next_retry_at']),
+            models.Index(fields=['dead_drop', 'status']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['node', 'fragment'],
+                name='uniq_pending_sync_per_node_fragment',
+            )
+        ]
+
+    def __str__(self):
+        return f"PendingSync {self.fragment_id} -> {self.node_id} ({self.status})"
+
+    def mark_delivered(self):
+        self.status = 'delivered'
+        self.delivered_at = timezone.now()
+        self.save(update_fields=['status', 'delivered_at'])
+
+    def mark_failed(self, error: str = ''):
+        self.status = 'failed'
+        self.last_error = (error or '')[:2000]
+        self.save(update_fields=['status', 'last_error'])

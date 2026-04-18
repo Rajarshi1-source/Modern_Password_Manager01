@@ -167,6 +167,25 @@ class DeadDropCollectThrottle(ScopedRateThrottle):
         }
 
 
+class MeshNodePingThrottle(ScopedRateThrottle):
+    """Throttle mesh node pings so a compromised device cannot flood the API.
+
+    Keyed per ``(user, node_id)`` so a single compromised node can't bring the
+    whole fleet offline, and so legitimate heartbeats from multiple devices
+    are not throttled against each other.
+    """
+
+    scope = 'mesh_node_ping'
+
+    def get_cache_key(self, request, view):
+        user_pk = getattr(request.user, 'pk', None) or self.get_ident(request)
+        node_id = (
+            view.kwargs.get('node_id') if hasattr(view, 'kwargs') else None
+        )
+        ident = f"{user_pk}:{node_id}" if node_id else f"{user_pk}"
+        return self.cache_format % {'scope': self.scope, 'ident': ident}
+
+
 # Throttle classes for different security levels
 SECURITY_THROTTLES = {
     'low': UserRateThrottle,

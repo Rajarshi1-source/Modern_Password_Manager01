@@ -140,6 +140,8 @@ INSTALLED_APPS = [
     'fhe_sharing',  # Homomorphic Password Sharing (FHE autofill tokens)
     'adversarial_ai',  # Adversarial AI Password Defense
     'mesh_deaddrop',  # Dead Drop Password Sharing via Mesh Networks
+    'social_recovery',  # Social Proof-Based Recovery (web-of-trust + Shamir + Schnorr)
+    'personality_auth',  # AI-driven Personality-Based Security Questions
     'neuro_feedback',  # Neuro-Feedback Password Training
     'cognitive_auth',  # Cognitive Password Testing with Implicit Memory
     'biometric_liveness',  # Deepfake-Resistant Biometric Liveness
@@ -449,8 +451,28 @@ REST_FRAMEWORK = {
         'analytics_track': '30/minute',   # Anonymous analytics submission (Item #3)
         'what_if_simulation': '10/hour',  # CPU-intensive what-if scenarios
         'deaddrop_collect': '5/minute',   # Fragment collection per IP
+        'mesh_node_ping': '60/minute',    # Mesh node heartbeat ceiling per (user, node)
+        'personality_challenge': '20/hour',   # Challenge start / answer submissions
+        'personality_inference': '6/hour',    # On-demand profile inference
     }
 }
+
+# ---------------------------------------------------------------------------
+# Personality-Based Security Questions
+# ---------------------------------------------------------------------------
+PERSONALITY_AUTH_ENABLED = os.environ.get('PERSONALITY_AUTH_ENABLED', 'true').lower() == 'true'
+PERSONALITY_AUTH_DEFAULT_REQUIRED_SCORE = float(
+    os.environ.get('PERSONALITY_AUTH_DEFAULT_REQUIRED_SCORE', '0.65')
+)
+PERSONALITY_AUTH_CHALLENGE_TTL_MINUTES = int(
+    os.environ.get('PERSONALITY_AUTH_CHALLENGE_TTL_MINUTES', '10')
+)
+PERSONALITY_AUTH_QUESTION_POOL_TTL_HOURS = int(
+    os.environ.get('PERSONALITY_AUTH_QUESTION_POOL_TTL_HOURS', '72')
+)
+PERSONALITY_AUTH_MAX_MESSAGES_ANALYSED = int(
+    os.environ.get('PERSONALITY_AUTH_MAX_MESSAGES_ANALYSED', '120')
+)
 
 # Additional throttling settings
 ANON_VAULT_RATE = '10/hour'  # Rate limit for anonymous vault access
