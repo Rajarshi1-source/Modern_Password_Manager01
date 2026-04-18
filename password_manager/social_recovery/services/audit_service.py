@@ -55,4 +55,5 @@ def record_event(
         user_agent=user_agent,
         prev_hash=prev_hash,
         entry_hash=entry_hash,
+        created_at=now,
     )

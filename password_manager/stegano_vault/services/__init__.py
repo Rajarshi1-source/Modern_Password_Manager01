@@ -14,6 +14,7 @@ from .hidden_vault_service import (
     get_stego_vault_for_user,
     log_event,
     bytes_for_tier,
+    max_image_bytes,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "get_stego_vault_for_user",
     "log_event",
     "bytes_for_tier",
+    "max_image_bytes",
 ]

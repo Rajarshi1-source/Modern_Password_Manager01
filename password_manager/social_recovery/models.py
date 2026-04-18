@@ -421,7 +421,7 @@ class SocialRecoveryAuditLog(models.Model):
     prev_hash = models.BinaryField(default=bytes)
     entry_hash = models.BinaryField()
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = "social_recovery_audit_log"

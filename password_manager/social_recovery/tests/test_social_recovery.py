@@ -99,7 +99,10 @@ def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, by
     # DB. We only need r2 locally to produce the proof; verify_equality uses
     # public inputs.
     rc = (
-        RelationshipCommitment.objects.filter(voucher__ed25519_public_key=voucher_public_key)
+        RelationshipCommitment.objects.filter(
+            voucher__ed25519_public_key=voucher_public_key,
+            circle_id=circle_id,
+        )
         .select_related("circle")
         .get()
     )
@@ -150,7 +153,11 @@ class SocialRecoveryFullFlowTests(TestCase):
             )
             for i in range(3)
         ]
-        cls.voucher_keypairs = [_make_voucher_keypair() for _ in range(3)]
+
+    def setUp(self):
+        # Ed25519PrivateKey instances cannot be deepcopied, so they must be
+        # recreated per-test instead of shared via setUpTestData.
+        self.voucher_keypairs = [_make_voucher_keypair() for _ in range(3)]
 
     def _build_circle(self, threshold: int = 2):
         master_secret_hex = _secrets.token_hex(32)
