@@ -2324,7 +2324,15 @@ class TimeLockCapsule(models.Model):
     def is_ready_to_unlock(self):
         """Check if capsule can be unlocked (time has passed)."""
         return self.status == 'locked' and timezone.now() >= self.unlock_at
-    
+
+    @property
+    def is_unlockable(self):
+        """True once the unlock time has passed (regardless of status).
+
+        Alias used by tests / chemical_storage views.
+        """
+        return bool(self.unlock_at) and timezone.now() >= self.unlock_at
+
     @property
     def time_remaining_seconds(self):
         """Get remaining seconds until unlock."""

@@ -31,36 +31,38 @@ class PatternAnalysisEngineTests(TestCase):
     def test_analyze_password_structure(self):
         """Test password structure analysis."""
         from security.services.pattern_analysis_engine import PatternAnalysisEngine
-        
+        from dataclasses import is_dataclass
+
         engine = PatternAnalysisEngine()
-        
+
         # Test simple password
         result = engine.analyze_password('password123')
-        self.assertIsInstance(result, dict)
-        self.assertIn('structure', result)
-        self.assertIn('entropy', result)
-        self.assertIn('char_classes', result)
-        
+        self.assertTrue(is_dataclass(result))
+        self.assertTrue(hasattr(result, 'entropy_estimate'))
+        self.assertTrue(hasattr(result, 'char_class_sequence'))
+
     def test_detect_common_mutations(self):
         """Test detection of common character mutations."""
         from security.services.pattern_analysis_engine import PatternAnalysisEngine
-        
+
         engine = PatternAnalysisEngine()
-        
+
         # Test leet speak detection
         result = engine.analyze_password('p@ssw0rd')
-        self.assertIn('mutations', result)
-        
+        self.assertTrue(hasattr(result, 'mutations'))
+
     def test_detect_keyboard_patterns(self):
         """Test detection of keyboard patterns."""
         from security.services.pattern_analysis_engine import PatternAnalysisEngine
-        
+
         engine = PatternAnalysisEngine()
-        
+
         # Test keyboard sequence detection
         result = engine.analyze_password('qwerty123')
-        self.assertTrue(result.get('has_keyboard_pattern', False) or 
-                       'keyboard' in str(result.get('patterns', [])).lower())
+        self.assertTrue(
+            bool(getattr(result, 'keyboard_patterns', []))
+            or 'keyboard' in str(getattr(result, 'keyboard_patterns', [])).lower()
+        )
         
     def test_extract_structure_fingerprint(self):
         """Test structure fingerprint extraction."""
@@ -99,7 +101,10 @@ class PatternAnalysisEngineTests(TestCase):
         
         result = engine.analyze_password('summer2023!')
         # Should detect common base words or date patterns
-        self.assertIn('patterns', result)
+        self.assertTrue(
+            hasattr(result, 'detected_base_words')
+            or hasattr(result, 'date_patterns')
+        )
 
 
 class ThreatIntelligenceServiceTests(TestCase):
@@ -116,14 +121,14 @@ class ThreatIntelligenceServiceTests(TestCase):
     def test_get_real_time_threat_level(self):
         """Test real-time threat level assessment."""
         from security.services.threat_intelligence_service import ThreatIntelligenceService
-        
+
         service = ThreatIntelligenceService()
-        
+
         threat_level = service.get_real_time_threat_level(
             credential_domain='example.com'
         )
-        
-        self.assertIsInstance(threat_level, dict)
+
+        # ThreatLevel exposes dict-style access; accept dataclass or dict.
         self.assertIn('level', threat_level)
         self.assertIn(threat_level['level'], ['critical', 'high', 'medium', 'low', 'minimal'])
         

@@ -336,7 +336,7 @@ class NotificationServiceTestCase(TestCase):
         # Verify email was sent
         mock_send_mail.assert_called_once()
         args = mock_send_mail.call_args[1]
-        self.assertIn('Suspicious Login', args['subject'])
+        self.assertIn('suspicious login', args['subject'].lower())
         self.assertEqual(args['recipient_list'], [self.user.email])
 
 

@@ -17,6 +17,15 @@ from datetime import timedelta
 logger = logging.getLogger(__name__)
 
 
+# Re-export the honeypot service factory at module scope so tests can patch
+# ``security.tasks.honeypot_tasks.get_honeypot_service`` directly.
+try:
+    from ..services.honeypot_service import get_honeypot_service  # noqa: F401
+except ImportError:  # pragma: no cover
+    def get_honeypot_service():  # type: ignore
+        return None
+
+
 # =============================================================================
 # Honeypot Monitoring Tasks
 # =============================================================================

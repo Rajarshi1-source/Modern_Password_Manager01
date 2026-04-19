@@ -450,7 +450,9 @@ class OceanWaveEntropyProvider(QuantumRNGProvider):
                 status['healthy_count'] += 1
         
         status['available'] = status['healthy_count'] >= OceanEntropyConfig.MIN_BUOYS
-        
+        # Flat alias for tests / dashboards that expect a top-level key.
+        status['healthy_buoys'] = status['healthy_count']
+
         return status
 
 

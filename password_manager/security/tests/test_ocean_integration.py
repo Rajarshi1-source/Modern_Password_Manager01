@@ -196,11 +196,12 @@ class TestOceanWaveEntropyProviderIntegration(TestCase):
     
     def test_provider_status(self):
         """Test getting provider status."""
-        status = self.provider.get_status()
-        
+        import asyncio
+        status = asyncio.run(self.provider.get_status())
+
         self.assertIn('available', status)
         self.assertIn('healthy_buoys', status)
-        
+
         if status['available']:
             self.assertGreater(status['healthy_buoys'], 0)
 

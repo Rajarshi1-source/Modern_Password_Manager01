@@ -49,6 +49,28 @@ from .entropy_monitor import (
 logger = logging.getLogger(__name__)
 
 
+def _json_safe(obj):
+    """Coerce numpy scalars / arrays into JSON-serializable Python types."""
+    try:
+        import numpy as np
+    except ImportError:  # pragma: no cover
+        np = None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if np is not None:
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+    return obj
+
+
 # =============================================================================
 # Configuration
 # =============================================================================
@@ -664,7 +686,7 @@ class QuantumEntanglementService:
             pair=pair,
             event_type='entropy_check',
             success=not report.has_anomaly,
-            details=report.to_dict()
+            details=_json_safe(report.to_dict())
         )
         
         # Auto-revoke if configured and critical anomaly

@@ -99,10 +99,15 @@ def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, by
     # DB. We only need r2 locally to produce the proof; verify_equality uses
     # public inputs.
     rc = (
-        RelationshipCommitment.objects.filter(voucher__ed25519_public_key=voucher_public_key)
+        RelationshipCommitment.objects.filter(
+            voucher__ed25519_public_key=voucher_public_key,
+            circle_id=circle_id,
+        )
         .select_related("circle")
-        .get()
+        .order_by("-id")
+        .first()
     )
+    assert rc is not None, "no RelationshipCommitment found for voucher/circle"
     stored_commit_bytes = bytes(rc.pedersen_commitment)
 
     # Fresh blinding factor for the attestation-time commitment.

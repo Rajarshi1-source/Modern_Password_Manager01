@@ -121,6 +121,8 @@ class PredictiveExpirationDashboardView(APIView):
             'at_risk_count': at_risk.count(),
             'critical_count': critical_count,
             'high_count': high_count,
+            # Alias for clients / tests that expect `high_risk_count`.
+            'high_risk_count': high_count,
             'medium_count': medium_count,
             'pending_rotations': pending,
             'recent_rotations': recent_rotations,

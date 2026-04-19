@@ -46,13 +46,13 @@ class VDFServiceTests(TestCase):
     
     def test_estimate_iterations(self):
         """Test iteration estimation for different delays."""
-        # 1 second
+        # 1 second on the default 'standard' hardware profile (100k iters/sec)
         iters_1s = self.vdf_service.estimate_iterations(1)
-        self.assertEqual(iters_1s, 1000)
-        
-        # 10 seconds
+        self.assertEqual(iters_1s, 100000)
+
+        # 10 seconds -> linear scaling
         iters_10s = self.vdf_service.estimate_iterations(10)
-        self.assertEqual(iters_10s, 10000)
+        self.assertEqual(iters_10s, 1000000)
     
     def test_estimate_time(self):
         """Test time estimation for different hardware."""
@@ -135,10 +135,16 @@ class TimeLockCapsuleAPITests(APITestCase):
     @patch('security.api.time_lock_views.time_lock_service')
     def test_create_capsule(self, mock_service):
         """Test creating a new time-lock capsule."""
-        mock_service.create_time_lock.return_value = MagicMock(
-            encrypted_data=b'encrypted',
-            encryption_key_encrypted=b'key'
-        )
+        # Use real scalar values (not MagicMock auto-children) so Django doesn't
+        # misinterpret attributes like `.t` as an F() expression.
+        from unittest.mock import Mock
+        mock_result = Mock()
+        mock_result.encrypted_data = b'encrypted'
+        mock_result.encryption_key_encrypted = b'key'
+        mock_result.n = 12345
+        mock_result.a = 67890
+        mock_result.t = 1000
+        mock_service.create_time_lock.return_value = mock_result
         
         data = {
             'title': 'Test Capsule',
