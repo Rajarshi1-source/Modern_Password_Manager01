@@ -285,14 +285,24 @@ def create_time_lock(request):
         )
         
         # Save to database
+        unlock_at_value = time_lock.unlock_at
+        if unlock_at_value and timezone.is_naive(unlock_at_value):
+            unlock_at_value = timezone.make_aware(
+                unlock_at_value, timezone.get_current_timezone()
+            )
+        title = request.data.get('title') or f"Time lock ({delay_hours}h)"
+        description = ''
+        if beneficiary_email:
+            description = f"Beneficiary: {beneficiary_email}"
         capsule = TimeLockCapsule.objects.create(
-            user=request.user,
+            owner=request.user,
             encrypted_data=time_lock.encrypted_data,
             encryption_key_encrypted=time_lock.encryption_key_encrypted,
             mode=mode_str,
             delay_seconds=delay_hours * 3600,
-            unlock_at=time_lock.unlock_at,
-            beneficiary_email=beneficiary_email,
+            unlock_at=unlock_at_value,
+            title=title,
+            description=description,
         )
         
         return Response({

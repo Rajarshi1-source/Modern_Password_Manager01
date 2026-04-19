@@ -104,7 +104,7 @@ def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, by
             circle_id=circle_id,
         )
         .select_related("circle")
-        .order_by("-id")
+        .order_by("-commitment_id")
         .first()
     )
     assert rc is not None, "no RelationshipCommitment found for voucher/circle"

@@ -261,6 +261,8 @@ class DashboardSerializer(serializers.Serializer):
     at_risk_count = serializers.IntegerField()
     critical_count = serializers.IntegerField()
     high_count = serializers.IntegerField()
+    # Alias exposed for clients that expect `high_risk_count`.
+    high_risk_count = serializers.IntegerField()
     medium_count = serializers.IntegerField()
     pending_rotations = serializers.IntegerField()
     recent_rotations = serializers.IntegerField()

@@ -605,7 +605,12 @@ def assess_entropy_quality(data: bytes) -> Dict[str, Any]:
         'chi_squared': chi_squared,
         'runs': runs,
         'runs_z_score': runs_z_score,
-        'quality': 'good' if entropy_ratio > 0.95 else 'fair' if entropy_ratio > 0.8 else 'poor',
+        'quality': (
+            'excellent' if entropy_ratio > 0.97
+            else 'good' if entropy_ratio > 0.85
+            else 'fair' if entropy_ratio > 0.6
+            else 'poor'
+        ),
         'bytes_analyzed': length,
     }
 
