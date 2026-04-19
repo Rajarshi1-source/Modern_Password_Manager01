@@ -122,8 +122,11 @@ class AuthViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def login(self, request):
         """User login with username and password authentication"""
-        serializer = LoginSerializer(data=request.data)
-        username_attempted = request.data.get('username', '')
+        _data = getattr(request, 'data', None)
+        if _data is None:
+            _data = getattr(request, 'POST', None) or {}
+        serializer = LoginSerializer(data=_data)
+        username_attempted = _data.get('username', '') if hasattr(_data, 'get') else ''
         
         if serializer.is_valid():
             user = serializer.validated_data['user']

@@ -31,6 +31,29 @@ class PatternFingerprint:
     keyboard_patterns: List[str]
     date_patterns: List[str]
 
+    # Aliases so legacy callers / tests can treat this as a mapping.
+    _ALIASES = {
+        'entropy': 'entropy_estimate',
+        'char_classes': 'char_class_sequence',
+        'structure': 'char_class_sequence',
+        'patterns': 'keyboard_patterns',
+        'has_keyboard_pattern': 'keyboard_patterns',
+    }
+
+    def __getitem__(self, key):
+        real = self._ALIASES.get(key, key)
+        return getattr(self, real)
+
+    def __contains__(self, key):
+        real = self._ALIASES.get(key, key)
+        return hasattr(self, real)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except AttributeError:
+            return default
+
 
 @dataclass
 class MutationType:

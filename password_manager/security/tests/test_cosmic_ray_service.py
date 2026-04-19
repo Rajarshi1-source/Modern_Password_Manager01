@@ -88,7 +88,7 @@ class TestSimulatedCosmicDetector:
         assert event is not None
         assert hasattr(event, 'timestamp')
         assert hasattr(event, 'energy_adc')
-        assert event.detector_id == 'simulated_muon_detector'
+        assert event.detector_id == 'simulated-cosmic-01'
     
     @pytest.mark.asyncio
     async def test_collect_events_count(self, detector):

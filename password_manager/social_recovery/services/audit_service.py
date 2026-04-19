@@ -31,21 +31,13 @@ def record_event(
         .first()
     )
     prev_hash = bytes(prev.entry_hash) if prev else b""
-    now = timezone.now()
 
     circle_id = circle.circle_id if circle is not None else None
     user_id = getattr(user, "id", None)
 
-    entry_hash = SocialRecoveryAuditLog.compute_entry_hash(
-        prev_hash=prev_hash,
-        user_id=user_id,
-        circle_id=circle_id,
-        event_type=event_type,
-        event_data=event_data or {},
-        created_at_iso=now.isoformat(),
-    )
-
-    return SocialRecoveryAuditLog.objects.create(
+    # Create first so the auto_now_add timestamp is what downstream
+    # verifiers can reproduce, then compute and persist the hash.
+    entry = SocialRecoveryAuditLog.objects.create(
         entry_id=uuid.uuid4(),
         user=user,
         circle=circle,
@@ -54,5 +46,17 @@ def record_event(
         ip_address=ip_address,
         user_agent=user_agent,
         prev_hash=prev_hash,
-        entry_hash=entry_hash,
+        entry_hash=b"",
     )
+
+    entry_hash = SocialRecoveryAuditLog.compute_entry_hash(
+        prev_hash=prev_hash,
+        user_id=user_id,
+        circle_id=circle_id,
+        event_type=event_type,
+        event_data=event_data or {},
+        created_at_iso=entry.created_at.isoformat(),
+    )
+    entry.entry_hash = entry_hash
+    entry.save(update_fields=["entry_hash"])
+    return entry

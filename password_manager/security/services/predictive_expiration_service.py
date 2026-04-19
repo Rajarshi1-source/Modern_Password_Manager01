@@ -34,8 +34,32 @@ from .threat_intelligence_service import (
 logger = logging.getLogger(__name__)
 
 
+class _DictLikeMixin:
+    """Expose dataclass fields via subscript / membership so that legacy
+    tests which treat these results as plain dicts keep working."""
+
+    # Aliases for legacy keys
+    _ALIASES: Dict[str, str] = {}
+
+    def __getitem__(self, key):
+        if key in self._ALIASES:
+            key = self._ALIASES[key]
+        return getattr(self, key)
+
+    def __contains__(self, key):
+        if key in self._ALIASES:
+            key = self._ALIASES[key]
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except AttributeError:
+            return default
+
+
 @dataclass
-class RiskScore:
+class RiskScore(_DictLikeMixin):
     """Represents a comprehensive risk score for a credential."""
     overall_score: float  # 0-1
     pattern_risk: float
@@ -45,9 +69,24 @@ class RiskScore:
     factors: List[str]
     confidence: float
 
+    _ALIASES = {'risk_score': 'overall_score'}
+
+    @property
+    def risk_level(self):
+        s = self.overall_score
+        if s >= 0.8:
+            return 'critical'
+        if s >= 0.6:
+            return 'high'
+        if s >= 0.4:
+            return 'medium'
+        if s >= 0.2:
+            return 'low'
+        return 'minimal'
+
 
 @dataclass
-class PredictionResult:
+class PredictionResult(_DictLikeMixin):
     """Result of compromise timeline prediction."""
     predicted_date: Optional[datetime]
     confidence: float
@@ -57,13 +96,25 @@ class PredictionResult:
 
 
 @dataclass
-class RotationPlan:
+class RotationPlan(_DictLikeMixin):
     """Recommended rotation plan for a credential."""
     should_rotate: bool
     urgency: str  # 'none', 'low', 'medium', 'high', 'critical'
     recommended_date: Optional[datetime]
     reasons: List[str]
     new_password_requirements: Dict
+
+    @property
+    def action(self) -> str:
+        """Map urgency to the action vocabulary used by callers/tests."""
+        mapping = {
+            'critical': 'rotate_immediately',
+            'high': 'rotate_soon',
+            'medium': 'schedule_rotation',
+            'low': 'monitor',
+            'none': 'no_action',
+        }
+        return mapping.get(self.urgency, 'monitor')
 
 
 class PredictiveExpirationService:
@@ -108,10 +159,12 @@ class PredictiveExpirationService:
     def calculate_exposure_risk(
         self,
         password: str,
-        user_id: int,
-        credential_domain: str,
-        credential_age_days: int
-    ) -> RiskScore:
+        user_id: int = None,
+        credential_domain: str = '',
+        credential_age_days: int = 0,
+        domain: str = None,
+        age_days: int = None,
+    ):
         """
         Calculate comprehensive exposure risk for a credential.
         
@@ -127,6 +180,12 @@ class PredictiveExpirationService:
         Returns:
             RiskScore with detailed breakdown
         """
+        # Accept alias kwargs used by tests
+        if domain is not None and not credential_domain:
+            credential_domain = domain
+        if age_days is not None and not credential_age_days:
+            credential_age_days = age_days
+
         factors = []
         
         # 1. Pattern Risk
@@ -183,6 +242,23 @@ class PredictiveExpirationService:
         )
     
     def predict_compromise_timeline(
+        self,
+        password: str,
+        user_id: int = None,
+        credential_domain: str = '',
+        credential_age_days: int = 0,
+        domain: str = None,
+        age_days: int = None,
+    ) -> PredictionResult:
+        if domain is not None and not credential_domain:
+            credential_domain = domain
+        if age_days is not None and not credential_age_days:
+            credential_age_days = age_days
+        return self._predict_compromise_timeline_impl(
+            password, user_id, credential_domain, credential_age_days
+        )
+
+    def _predict_compromise_timeline_impl(
         self,
         password: str,
         user_id: int,
@@ -246,9 +322,11 @@ class PredictiveExpirationService:
     def should_force_rotation(
         self,
         password: str,
-        user_id: int,
-        credential_domain: str,
-        credential_age_days: int
+        user_id: int = None,
+        credential_domain: str = '',
+        credential_age_days: int = 0,
+        domain: str = None,
+        age_days: int = None,
     ) -> Tuple[bool, List[str]]:
         """
         Determine if a password should be forcibly rotated.
@@ -264,14 +342,21 @@ class PredictiveExpirationService:
         """
         from ..models import PredictiveExpirationSettings
         from django.contrib.auth.models import User
-        
+
+        if domain is not None and not credential_domain:
+            credential_domain = domain
+        if age_days is not None and not credential_age_days:
+            credential_age_days = age_days
+
         # Get user's rotation threshold
-        try:
-            user = User.objects.get(id=user_id)
-            settings = PredictiveExpirationSettings.objects.get(user=user)
-            threshold = settings.force_rotation_threshold
-        except (User.DoesNotExist, PredictiveExpirationSettings.DoesNotExist):
-            threshold = 0.8  # Default threshold
+        threshold = 0.8  # Default threshold
+        if user_id is not None:
+            try:
+                user = User.objects.get(id=user_id)
+                settings = PredictiveExpirationSettings.objects.get(user=user)
+                threshold = settings.force_rotation_threshold
+            except (User.DoesNotExist, PredictiveExpirationSettings.DoesNotExist):
+                pass
         
         # Calculate risk
         risk = self.calculate_exposure_risk(
@@ -305,9 +390,11 @@ class PredictiveExpirationService:
     def generate_rotation_recommendation(
         self,
         password: str,
-        user_id: int,
-        credential_domain: str,
-        credential_age_days: int
+        user_id: int = None,
+        credential_domain: str = '',
+        credential_age_days: int = 0,
+        domain: str = None,
+        age_days: int = None,
     ) -> RotationPlan:
         """
         Generate a comprehensive rotation recommendation.
@@ -324,6 +411,11 @@ class PredictiveExpirationService:
         Returns:
             RotationPlan with recommendations
         """
+        if domain is not None and not credential_domain:
+            credential_domain = domain
+        if age_days is not None and not credential_age_days:
+            credential_age_days = age_days
+
         # Check if rotation is needed
         should_rotate, reasons = self.should_force_rotation(
             password, user_id, credential_domain, credential_age_days

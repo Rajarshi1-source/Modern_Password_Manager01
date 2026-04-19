@@ -88,13 +88,17 @@ class SecurityService:
             if result_type == 'duress' and duress_code:
                 # Build request context for duress activation
                 ip_address, _ = get_client_ip(request)
+                _data = getattr(request, 'data', None)
+                if _data is None:
+                    _data = getattr(request, 'POST', None) or {}
+                _get = _data.get if hasattr(_data, 'get') else (lambda k, d=None: d)
                 request_context = {
                     'ip_address': ip_address or '127.0.0.1',  # nosec B104
                     'user_agent': request.META.get('HTTP_USER_AGENT', ''),
-                    'device_fingerprint': request.data.get('device_fingerprint', {}),
+                    'device_fingerprint': _get('device_fingerprint', {}),
                     'geo_location': self._get_location_from_ip(ip_address) if ip_address else {},
-                    'behavioral_data': request.data.get('behavioral_data', {}),
-                    'stress_score': request.data.get('stress_score', 0.0),
+                    'behavioral_data': _get('behavioral_data', {}),
+                    'stress_score': _get('stress_score', 0.0),
                 }
                 
                 # Activate duress mode. We pass the entered code as
@@ -136,16 +140,21 @@ class SecurityService:
         """
         try:
             ip_address, _ = get_client_ip(request)
-            device_fingerprint = request.data.get('device_fingerprint', '')
+            # Be resilient to non-DRF requests (plain WSGIRequest from RequestFactory)
+            _data = getattr(request, 'data', None)
+            if _data is None:
+                _data = getattr(request, 'POST', None) or {}
+            _get = _data.get if hasattr(_data, 'get') else (lambda k, d='': d)
+            device_fingerprint = _get('device_fingerprint', '')
             user_agent_string = request.META.get('HTTP_USER_AGENT', '')
-            
+
             # Parse user agent for device info
             user_agent = user_agents.parse(user_agent_string)
-            
+
             # Create login attempt record
             attempt = LoginAttempt(
                 user=user,
-                username_attempted=user.username if user else request.data.get('username', ''),
+                username_attempted=user.username if user else _get('username', ''),
                 ip_address=ip_address,
                 device_fingerprint=device_fingerprint,
                 user_agent=user_agent_string,
@@ -353,7 +362,10 @@ class SecurityService:
     def _handle_device_registration(self, user, request, user_agent, ip_address):
         """Register or update device information for successful logins"""
         try:
-            device_fingerprint = request.data.get('device_fingerprint', '')
+            _data = getattr(request, 'data', None)
+            if _data is None:
+                _data = getattr(request, 'POST', None) or {}
+            device_fingerprint = _data.get('device_fingerprint', '') if hasattr(_data, 'get') else ''
             if not device_fingerprint:
                 return
             

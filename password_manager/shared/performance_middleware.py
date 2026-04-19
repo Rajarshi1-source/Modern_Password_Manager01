@@ -12,11 +12,30 @@ import time
 import logging
 import traceback
 from django.db import connection
+from django.db.transaction import TransactionManagementError
 from django.conf import settings
 from django.utils import timezone
 from asgiref.sync import iscoroutinefunction, markcoroutinefunction, sync_to_async
 
 logger = logging.getLogger('performance')
+
+
+def _connection_is_usable():
+    """Return False if the current connection is inside a broken atomic block."""
+    try:
+        if connection.in_atomic_block:
+            get_rollback = getattr(connection, 'get_rollback', None)
+            if callable(get_rollback):
+                try:
+                    if get_rollback():
+                        return False
+                except Exception:
+                    return False
+        if getattr(connection, 'needs_rollback', False):
+            return False
+    except Exception:
+        return False
+    return True
 
 # Try to import psutil
 try:
@@ -122,10 +141,13 @@ class PerformanceMonitoringMiddleware:
             logger.info(f"Performance: {log_data}")
             
             # Store in database if enabled (run synchronously to avoid issues)
-            if getattr(settings, 'STORE_PERFORMANCE_METRICS', False):
+            if getattr(settings, 'STORE_PERFORMANCE_METRICS', False) and _connection_is_usable():
                 try:
                     from .models import PerformanceMetric
                     PerformanceMetric.objects.create(**log_data)
+                except TransactionManagementError:
+                    # Broken atomic block — skip silently to avoid cascade
+                    pass
                 except Exception as e:
                     logger.error(f"Failed to store performance metric: {e}")
             
@@ -269,10 +291,13 @@ class APIPerformanceMiddleware:
             logger.info(f"API Performance: {api_log}")
             
             # Store API metrics separately if enabled
-            if getattr(settings, 'STORE_API_METRICS', False):
+            if getattr(settings, 'STORE_API_METRICS', False) and _connection_is_usable():
                 try:
                     from .models import APIPerformanceMetric
                     APIPerformanceMetric.objects.create(**api_log)
+                except TransactionManagementError:
+                    # Broken atomic block — skip silently to avoid cascade
+                    pass
                 except Exception as e:
                     logger.error(f"Failed to store API metric: {e}")
         

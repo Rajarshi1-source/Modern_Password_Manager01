@@ -703,10 +703,10 @@ class HoneypotAPITests(APITestCase):
         response = self.client.put(url, {
             'auto_rotate_on_breach': True,
             'max_honeypots': 100
-        })
-        
+        }, format='json')
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        
+
         # Verify update
         config = HoneypotConfiguration.objects.get(user=self.user)
         self.assertTrue(config.auto_rotate_on_breach)

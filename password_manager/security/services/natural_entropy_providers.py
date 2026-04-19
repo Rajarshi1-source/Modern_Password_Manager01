@@ -91,6 +91,8 @@ class LightningStrike:
             'latitude': self.latitude,
             'longitude': self.longitude,
             'intensity_ka': self.intensity,
+            # Alias for tests / clients that expect a plain `intensity` key.
+            'intensity': self.intensity,
             'polarity': self.polarity,
             'sensor_count': self.sensor_count,
             'quality_score': self.entropy_quality_score,

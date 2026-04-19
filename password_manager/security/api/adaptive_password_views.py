@@ -550,11 +550,27 @@ def submit_feedback(request):
         )
     
     rating = data['rating']
-    if not isinstance(rating, int) or rating < 1 or rating > 5:
+    try:
+        rating = int(rating)
+    except (TypeError, ValueError):
         return Response(
             {'error': 'rating must be an integer between 1 and 5'},
             status=status.HTTP_400_BAD_REQUEST
         )
+    if rating < 1 or rating > 5:
+        return Response(
+            {'error': 'rating must be an integer between 1 and 5'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    def _to_bool(value):
+        if value is None or value == '':
+            return None
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ('true', '1', 'yes', 'on')
+        return bool(value)
     
     # Find the adaptation
     try:
@@ -586,9 +602,9 @@ def submit_feedback(request):
         adaptation=adaptation,
         user=user,
         rating=rating,
-        typing_accuracy_improved=data.get('typing_accuracy_improved'),
-        memorability_improved=data.get('memorability_improved'),
-        typing_speed_improved=data.get('typing_speed_improved'),
+        typing_accuracy_improved=_to_bool(data.get('typing_accuracy_improved')),
+        memorability_improved=_to_bool(data.get('memorability_improved')),
+        typing_speed_improved=_to_bool(data.get('typing_speed_improved')),
         additional_feedback=data.get('additional_feedback', ''),
         typing_sessions_since=sessions_since,
     )

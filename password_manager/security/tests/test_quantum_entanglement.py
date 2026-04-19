@@ -362,10 +362,12 @@ class EntropyMonitorUnitTests(TestCase):
     
     def test_is_tampered_with_valid_pool(self):
         """Test tamper check passes for valid pool."""
-        pool = secrets.token_bytes(4096)
-        
+        # Use a larger pool so the 50%-deviation uniformity check is
+        # statistically reliable on random data.
+        pool = secrets.token_bytes(65536)
+
         result = self.monitor.is_tampered(pool)
-        
+
         self.assertFalse(result.is_tampered)
         self.assertLess(result.confidence, 0.5)
         self.assertIn('entropy', result.checks_passed)
