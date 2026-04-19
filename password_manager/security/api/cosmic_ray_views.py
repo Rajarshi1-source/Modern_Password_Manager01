@@ -149,7 +149,7 @@ def generate_cosmic_password(request):
         data = request.data
         
         # Parse parameters
-        length = min(128, max(8, data.get('length', 16)))
+        length = min(128, max(8, int(data.get('length', 16))))
         
         # Build charset
         if 'custom_charset' in data and data['custom_charset']:
@@ -280,8 +280,9 @@ def update_collection_settings(request):
     try:
         data = request.data
         
-        enable_continuous = data.get('continuous_collection', False)
-        
+        raw_continuous = data.get('continuous_collection', False)
+        enable_continuous = bool(raw_continuous) if not isinstance(raw_continuous, str) else raw_continuous.lower() not in ('false', '0', '')
+
         if enable_continuous:
             buffer_size = getattr(settings, 'COSMIC_RAY_ENTROPY', {}).get('EVENT_BUFFER_SIZE', 100)
             provider.enable_continuous_collection(buffer_size)
@@ -337,7 +338,7 @@ def generate_entropy_batch(request):
     try:
         import base64
         
-        count = min(1024, max(1, request.data.get('count', 32)))
+        count = min(1024, max(1, int(request.data.get('count', 32))))
         
         entropy_bytes, source_id = run_async(provider.fetch_random_bytes(count))
         source_info = provider.get_last_source_info()

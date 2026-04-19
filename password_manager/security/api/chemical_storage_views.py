@@ -256,7 +256,7 @@ def create_time_lock(request):
     """
     try:
         password = request.data.get('password')
-        delay_hours = request.data.get('delay_hours', 72)
+        delay_hours = int(request.data.get('delay_hours', 72))
         mode_str = request.data.get('mode', 'server')
         beneficiary_email = request.data.get('beneficiary_email')
         
@@ -706,8 +706,9 @@ def store_password_chemically(request):
     """
     try:
         password = request.data.get('password')
-        enable_time_lock = request.data.get('enable_time_lock', False)
-        time_lock_hours = request.data.get('time_lock_hours', 72)
+        raw_etl = request.data.get('enable_time_lock', False)
+        enable_time_lock = bool(raw_etl) if not isinstance(raw_etl, str) else raw_etl.lower() not in ('false', '0', '')
+        time_lock_hours = int(request.data.get('time_lock_hours', 72))
         order_synthesis = request.data.get('order_synthesis', False)
         
         if not password:

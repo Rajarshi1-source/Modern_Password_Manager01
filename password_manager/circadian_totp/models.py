@@ -170,6 +170,7 @@ class CircadianTOTPDevice(models.Model):
     confirmed = models.BooleanField(default=False)
     last_verified_at = models.DateTimeField(null=True, blank=True)
     last_phase_used = models.IntegerField(null=True, blank=True)
+    last_code_generated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -350,9 +350,6 @@ class ClientTimeLockService:
         Returns:
             TimeLockPuzzle that must be solved to retrieve data
         """
-        if delay_seconds < MIN_DELAY_SECONDS:
-            raise ValueError(f"Delay must be at least {MIN_DELAY_SECONDS} seconds")
-        
         # Generate RSA modulus (n = p * q)
         p, q = self._generate_safe_primes()
         n = p * q

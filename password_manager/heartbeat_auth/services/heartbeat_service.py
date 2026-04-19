@@ -153,7 +153,7 @@ def verify_reading(user, features: Dict[str, Any], extras: Optional[Dict[str, An
 
     duress_enabled = bool(getattr(settings, 'HEARTBEAT_DURESS_ENABLED', True))
     duress_info = {'duress': False, 'probability': 0.0}
-    if duress_enabled and score >= profile.match_threshold:
+    if duress_enabled:
         duress_info = duress_detector.detect(profile, features)
 
     decoy_payload = None

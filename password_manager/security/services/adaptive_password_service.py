@@ -922,7 +922,7 @@ class MemorabilityLSTM:
         v_count = sum(1 for c in password if c in vowels)
         c_count = sum(1 for c in password if c in consonants)
         features.append(v_count / (v_count + c_count) if (v_count + c_count) > 0 else 0.5)
-        features.append(1.0 if 0.3 <= v_count / len(password) <= 0.5 else 0.5 if password else 0)
+        features.append(1.0 if (password and 0.3 <= v_count / len(password) <= 0.5) else (0.5 if password else 0))
         
         # Word-like substrings (heuristic)
         alpha_segments = ''.join(c if c.isalpha() else ' ' for c in password).split()
@@ -1158,7 +1158,7 @@ class AdaptivePasswordService:
         Returns:
             Session summary
         """
-        from .models import TypingSession, UserTypingProfile, AdaptivePasswordConfig
+        from ..models import TypingSession, UserTypingProfile, AdaptivePasswordConfig
         
         # Check if user has opted in
         try:
@@ -1261,7 +1261,7 @@ class AdaptivePasswordService:
         Returns:
             AdaptationSuggestion or None
         """
-        from .models import UserTypingProfile, AdaptivePasswordConfig
+        from ..models import UserTypingProfile, AdaptivePasswordConfig
         
         # Check configuration
         try:
@@ -1421,7 +1421,7 @@ class AdaptivePasswordService:
         Returns:
             Rollback result
         """
-        from .models import PasswordAdaptation, UserTypingProfile
+        from ..models import PasswordAdaptation, UserTypingProfile
         
         try:
             adaptation = PasswordAdaptation.objects.get(
@@ -1465,7 +1465,7 @@ class AdaptivePasswordService:
     
     def get_adaptation_history(self) -> List[Dict]:
         """Get user's adaptation history."""
-        from .models import PasswordAdaptation
+        from ..models import PasswordAdaptation
         
         adaptations = PasswordAdaptation.objects.filter(
             user=self.user
@@ -1492,8 +1492,8 @@ class AdaptivePasswordService:
         Returns:
             Count of deleted records
         """
-        from .models import (
-            TypingSession, PasswordAdaptation, 
+        from ..models import (
+            TypingSession, PasswordAdaptation,
             UserTypingProfile, AdaptivePasswordConfig
         )
         

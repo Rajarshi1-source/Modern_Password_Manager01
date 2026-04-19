@@ -242,12 +242,28 @@ class QuantumRecoveryViewSet(viewsets.ViewSet):
     def get_recovery_status(self, request):
         """
         Get user's recovery system status
-        
+
         GET /api/auth/quantum-recovery/get_recovery_status/
         """
         try:
             user = request.user
-            
+
+            # If caller passes attempt_id, verify ownership before exposing status
+            attempt_id = request.query_params.get('attempt_id')
+            if attempt_id:
+                try:
+                    attempt = RecoveryAttempt.objects.get(id=attempt_id)
+                    if attempt.recovery_setup.user != user:
+                        return Response(
+                            {'error': 'Not authorized to view this recovery attempt'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except RecoveryAttempt.DoesNotExist:
+                    return Response(
+                        {'error': 'Recovery attempt not found'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+
             if not hasattr(user, 'passkey_recovery_setup'):
                 return Response({
                     'recovery_configured': False

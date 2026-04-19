@@ -827,14 +827,13 @@ def disconnect_dna(request):
             }, status=status.HTTP_404_NOT_FOUND)
         
         # Log the disconnection
-        logger.info(f"DNA connection removed for {request.user.username}")
-        
-        # Delete connection
-        connection.delete()
-        
-        # Note: We keep certificates as they may be needed for audit
-        # But they no longer link to any stored DNA data
-        
+        logger.info(f"DNA connection deactivated for {request.user.username}")
+
+        # Soft-delete: mark inactive so certificates still link correctly
+        connection.is_active = False
+        connection.status = 'revoked'
+        connection.save(update_fields=['is_active', 'status'])
+
         return Response({
             'success': True,
             'message': 'DNA connection removed successfully'
