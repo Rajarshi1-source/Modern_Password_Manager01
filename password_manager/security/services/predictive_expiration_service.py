@@ -476,7 +476,7 @@ class PredictiveExpirationService:
         # Create or update rule
         rule, created = PredictiveExpirationRule.objects.update_or_create(
             user=user,
-            credential_id=uuid.UUID(credential_id),
+            credential_id=credential_id,
             defaults={
                 'credential_domain': credential_domain,
                 'risk_level': risk_level,

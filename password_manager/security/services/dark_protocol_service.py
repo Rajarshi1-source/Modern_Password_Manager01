@@ -258,12 +258,14 @@ class DarkProtocolService:
             )
             
             # Calculate estimated latency
-            estimated_latency = sum(
-                NetworkHealth.objects.filter(
-                    node=node, is_reachable=True
-                ).order_by('-checked_at').first().latency_ms or 50
-                for node in nodes
-            )
+            def _node_latency(node):
+                health = (
+                    NetworkHealth.objects.filter(node=node, is_reachable=True)
+                    .order_by('-checked_at')
+                    .first()
+                )
+                return (health.latency_ms if health else None) or 50
+            estimated_latency = sum(_node_latency(node) for node in nodes)
             
             # Create session record
             with transaction.atomic():

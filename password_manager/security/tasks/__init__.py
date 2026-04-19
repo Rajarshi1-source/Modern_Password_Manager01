@@ -69,6 +69,19 @@ except ImportError as e:
     TIME_LOCK_TASKS_AVAILABLE = False
 
 
+try:
+    from ..services.pattern_analysis_engine import PatternAnalysisEngine
+    from ..services.predictive_expiration_service import PredictiveExpirationService
+    from ..services.threat_intelligence_service import ThreatIntelligenceService
+    from ..models import PredictiveExpirationRule
+except ImportError as e:
+    logger.warning(f"Could not import predictive expiration symbols: {e}")
+    PatternAnalysisEngine = None
+    PredictiveExpirationService = None
+    ThreatIntelligenceService = None
+    PredictiveExpirationRule = None
+
+
 __all__ = [
     'check_for_breaches',
     'scan_user_vault',
@@ -78,6 +91,10 @@ __all__ = [
     'sync_epigenetic_data',
     'cleanup_expired_genetic_trials',
     'refresh_dna_tokens',
+    'PatternAnalysisEngine',
+    'PredictiveExpirationService',
+    'ThreatIntelligenceService',
+    'PredictiveExpirationRule',
 ]
 
 if ADAPTIVE_TASKS_AVAILABLE:

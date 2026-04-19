@@ -151,11 +151,7 @@ class CosmicRayEvent:
         
         # Energy ADC value (lower bits have noise)
         entropy_data.extend(struct.pack('<H', self.energy_adc & 0xFFFF))
-        
-        # Mix with current nanoseconds for additional jitter
-        ns = time.time_ns() % (10**9)
-        entropy_data.extend(struct.pack('<I', ns & 0xFFFFFFFF))
-        
+
         # Channel variation
         entropy_data.append(self.channel & 0xFF)
         
@@ -520,40 +516,42 @@ class SimulatedCosmicDetector:
         
         return max(0.001, min(wait_time, 60.0))  # Clamp to reasonable range (60s max)
     
-    def generate_event(self) -> CosmicRayEvent:
+    async def generate_event(self) -> CosmicRayEvent:
         """
         Generate a simulated cosmic ray event.
-        
+
         Uses current system state for entropy:
         - High-precision timing
         - os.urandom for ADC values
         - Process-level timing jitter
         """
         now = timezone.now()
-        
+
         # Use time.time_ns() for microsecond precision
         ns = time.time_ns()
         microseconds = ns // 1000
-        
+
         # Simulated energy (ADC 0-1023) based on typical muon energy distribution
         # Use cryptographic random for unpredictability
         rand_bytes = os.urandom(4)
         rand_val = struct.unpack('<I', rand_bytes)[0]
-        
+
         # Energy follows roughly log-normal distribution for muons
         # Simplified: mostly mid-range with some variation
         base_energy = 400 + (rand_val % 400)  # 400-800 typical range
         noise = (rand_val >> 16) % 100 - 50    # ±50 noise
         energy = max(50, min(1000, base_energy + noise))
-        
-        return CosmicRayEvent(
+
+        event = CosmicRayEvent(
             timestamp=now,
             microseconds=microseconds % (10**12),  # Keep reasonable size
             energy_adc=energy,
             detector_id=self.detector_id,
-            channel=0
+            channel=0,
         )
-    
+        event.quality_score = event.entropy_quality_score()
+        return event
+
     async def collect_events(
         self,
         count: int = 10,
@@ -561,22 +559,22 @@ class SimulatedCosmicDetector:
     ) -> List[CosmicRayEvent]:
         """
         Collect simulated cosmic ray events.
-        
+
         Args:
             count: Number of events to generate
             realistic_timing: If True, add Poisson-distributed delays
                             to simulate real detection timing
         """
         events = []
-        
+
         for _ in range(count):
             if realistic_timing:
                 # Add realistic wait time (compressed for usability)
                 wait = self._poisson_wait_time() * 0.1  # Speed up 10x
                 await asyncio.sleep(min(wait, 0.5))
-            
-            events.append(self.generate_event())
-        
+
+            events.append(await self.generate_event())
+
         return events
     
     def get_status(self) -> Dict:

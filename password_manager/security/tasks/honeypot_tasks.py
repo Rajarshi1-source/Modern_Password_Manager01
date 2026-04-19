@@ -28,8 +28,8 @@ def check_honeypot_activity(honeypot_id: str):
     
     This task is called periodically or triggered manually.
     """
-    from .services.honeypot_service import get_honeypot_service
-    from .models import HoneypotEmail
+    from ..services.honeypot_service import get_honeypot_service
+    from ..models import HoneypotEmail
     
     try:
         service = get_honeypot_service()
@@ -62,7 +62,7 @@ def check_all_user_honeypots(user_id: int):
     """
     Check all honeypots for a specific user.
     """
-    from .services.honeypot_service import get_honeypot_service
+    from ..services.honeypot_service import get_honeypot_service
     from django.contrib.auth import get_user_model
     
     User = get_user_model()
@@ -95,8 +95,8 @@ def scan_all_honeypots():
     
     Should be scheduled to run every 15-30 minutes via Celery Beat.
     """
-    from .models import HoneypotEmail, HoneypotConfiguration
-    from .services.honeypot_service import get_honeypot_service
+    from ..models import HoneypotEmail, HoneypotConfiguration
+    from ..services.honeypot_service import get_honeypot_service
     
     service = get_honeypot_service()
     
@@ -147,7 +147,7 @@ def analyze_breach_patterns():
     
     Runs periodically to identify patterns in breach data.
     """
-    from .models import HoneypotBreachEvent, HoneypotActivity
+    from ..models import HoneypotBreachEvent, HoneypotActivity
     from collections import Counter
     
     # Get recent breaches (last 24 hours)
@@ -215,8 +215,8 @@ def correlate_with_hibp(breach_id: str):
     
     Updates breach event with public disclosure date if found.
     """
-    from .models import HoneypotBreachEvent
-    from .services.breach_monitor import HIBPService
+    from ..models import HoneypotBreachEvent
+    from ..services.breach_monitor import HIBPService
     
     try:
         breach = HoneypotBreachEvent.objects.get(id=breach_id)
@@ -261,7 +261,7 @@ def process_pending_rotations():
     
     Sends reminders for unconfirmed rotations.
     """
-    from .models import CredentialRotationLog
+    from ..models import CredentialRotationLog
     from django.core.mail import send_mail
     from django.conf import settings
     
@@ -317,8 +317,8 @@ def cleanup_expired_honeypots():
     """
     Clean up honeypots that have passed their expiration date.
     """
-    from .models import HoneypotEmail
-    from .services.honeypot_service import get_honeypot_service
+    from ..models import HoneypotEmail
+    from ..services.honeypot_service import get_honeypot_service
     
     service = get_honeypot_service()
     
@@ -351,7 +351,7 @@ def send_breach_digest():
     """
     Send daily breach digest to users with detected breaches.
     """
-    from .models import HoneypotBreachEvent
+    from ..models import HoneypotBreachEvent
     from django.contrib.auth import get_user_model
     from django.core.mail import send_mail
     from django.conf import settings
@@ -420,7 +420,7 @@ def generate_honeypot_stats():
     """
     Generate aggregate statistics about honeypot effectiveness.
     """
-    from .models import HoneypotEmail, HoneypotBreachEvent, HoneypotActivity
+    from ..models import HoneypotEmail, HoneypotBreachEvent, HoneypotActivity
     
     stats = {
         'timestamp': timezone.now().isoformat(),

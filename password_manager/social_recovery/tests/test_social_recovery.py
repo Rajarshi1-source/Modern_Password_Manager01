@@ -138,19 +138,18 @@ def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, by
 class SocialRecoveryFullFlowTests(TestCase):
     """End-to-end test of a successful recovery."""
 
-    @classmethod
-    def setUpTestData(cls):
-        cls.owner = User.objects.create_user(
+    def setUp(self):
+        self.owner = User.objects.create_user(
             email="owner@example.com",
             password="owner-pass-1234",
         )
-        cls.voucher_users = [
+        self.voucher_users = [
             User.objects.create_user(
                 email=f"v{i}@example.com", password="pass-word-1234"
             )
             for i in range(3)
         ]
-        cls.voucher_keypairs = [_make_voucher_keypair() for _ in range(3)]
+        self.voucher_keypairs = [_make_voucher_keypair() for _ in range(3)]
 
     def _build_circle(self, threshold: int = 2):
         master_secret_hex = _secrets.token_hex(32)
