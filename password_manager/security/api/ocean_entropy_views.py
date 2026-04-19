@@ -70,6 +70,7 @@ class OceanEntropyStatusView(APIView):
             # Get async status
             provider_status = run_async(provider.get_status())
             
+            healthy_count = provider_status.get('healthy_count', 0)
             return Response({
                 'status': 'available' if provider_status.get('available') else 'degraded',
                 'provider': 'noaa_ocean_wave',
@@ -79,9 +80,11 @@ class OceanEntropyStatusView(APIView):
                 'icon': '🌊',
                 'color': '#0077B6',
                 'enabled': OceanEntropyConfig.ENABLED,
+                'healthy_buoys': healthy_count,
+                'total_buoys': len(ALL_BUOYS),
                 'buoys': {
                     'total': len(ALL_BUOYS),
-                    'healthy': provider_status.get('healthy_count', 0),
+                    'healthy': healthy_count,
                     'details': provider_status.get('buoys', {}),
                 },
                 'config': {

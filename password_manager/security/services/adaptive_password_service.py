@@ -1200,7 +1200,7 @@ class AdaptivePasswordService:
     
     def _update_typing_profile(self, pattern: TypingPattern):
         """Update user's aggregated typing profile."""
-        from .models import UserTypingProfile
+        from ..models import UserTypingProfile
         
         profile, created = UserTypingProfile.objects.get_or_create(
             user=self.user,
@@ -1353,7 +1353,7 @@ class AdaptivePasswordService:
         Returns:
             Adaptation record summary
         """
-        from .models import (
+        from ..models import (
             PasswordAdaptation, UserTypingProfile, AdaptivePasswordConfig
         )
         

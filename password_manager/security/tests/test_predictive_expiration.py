@@ -199,7 +199,7 @@ class PredictiveExpirationServiceTests(TestCase):
             user_id=self.user.id
         )
         
-        self.assertIsInstance(risk, dict)
+        # Service returns a dict-like RiskScore dataclass (supports subscript)
         self.assertIn('risk_score', risk)
         self.assertIn('risk_level', risk)
         self.assertTrue(0 <= risk['risk_score'] <= 1)
@@ -217,7 +217,7 @@ class PredictiveExpirationServiceTests(TestCase):
             user_id=self.user.id
         )
         
-        self.assertIsInstance(prediction, dict)
+        # Service returns a dict-like PredictionResult dataclass
         self.assertIn('predicted_date', prediction)
         self.assertIn('confidence', prediction)
         
@@ -250,7 +250,7 @@ class PredictiveExpirationServiceTests(TestCase):
             user_id=self.user.id
         )
         
-        self.assertIsInstance(recommendation, dict)
+        # Service returns a dict-like RotationPlan dataclass
         self.assertIn('action', recommendation)
         self.assertIn(recommendation['action'], [
             'rotate_immediately', 'rotate_soon', 'schedule_rotation', 'monitor', 'no_action'

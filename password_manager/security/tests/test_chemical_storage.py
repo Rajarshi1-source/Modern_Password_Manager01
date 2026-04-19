@@ -21,6 +21,7 @@ from unittest.mock import Mock, patch, MagicMock
 from decimal import Decimal
 
 from django.test import TestCase, override_settings
+from django.utils import timezone as django_timezone
 from django.contrib.auth.models import User
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
@@ -560,7 +561,8 @@ class ChemicalStorageModelTest(TestCase):
             encryption_key_encrypted=b'key',
             mode='server',
             delay_seconds=3600,
-            unlock_at=datetime.now() + timedelta(hours=1),
+            unlock_at=django_timezone.now() + timedelta(hours=1),
+            title='Test Time Lock Capsule',
         )
         
         self.assertFalse(capsule.is_unlockable())

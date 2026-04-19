@@ -233,7 +233,7 @@ class AirlineAPIService:
         departure_date: date
     ) -> List[Flight]:
         """Search flights using Amadeus API."""
-        if not self.amadeus_client:
+        if not self._amadeus_client:
             return []
         
         try:
@@ -339,7 +339,7 @@ class AirlineAPIService:
         last_name: str
     ) -> BookingVerification:
         """Verify booking using Amadeus API."""
-        if not self.amadeus_client:
+        if not self._amadeus_client:
             return BookingVerification(
                 is_valid=False,
                 booking_reference=booking_reference,

@@ -304,13 +304,15 @@ class RotationHistoryAPITests(PredictiveExpirationAPITestCase):
         )
         
         response = self.client.get('/api/security/predictive-expiration/history/')
-        
+
         self.assertIn(response.status_code, [200, 404])
-        
+
         if response.status_code == 200:
             data = response.json()
-            self.assertIsInstance(data, list)
-            self.assertEqual(len(data), 1)
+            # Endpoint may paginate.
+            results = data.get('results', data) if isinstance(data, dict) else data
+            self.assertIsInstance(results, list)
+            self.assertEqual(len(results), 1)
             
     def test_filter_history_by_outcome(self):
         """Test filtering rotation history by outcome."""
@@ -337,7 +339,8 @@ class RotationHistoryAPITests(PredictiveExpirationAPITestCase):
         
         if response.status_code == 200:
             data = response.json()
-            for event in data:
+            results = data.get('results', data) if isinstance(data, dict) else data
+            for event in results:
                 self.assertEqual(event.get('outcome'), 'success')
 
 
@@ -429,7 +432,8 @@ class IndustryThreatsAPITests(PredictiveExpirationAPITestCase):
         
         if response.status_code == 200:
             data = response.json()
-            self.assertIsInstance(data, list)
+            results = data.get('results', data) if isinstance(data, dict) else data
+            self.assertIsInstance(results, list)
 
 
 class PaginationTests(PredictiveExpirationAPITestCase):

@@ -37,7 +37,6 @@ def check_honeypot_activity(honeypot_id: str):
     
     This task is called periodically or triggered manually.
     """
-    from ..services.honeypot_service import get_honeypot_service
     from ..models import HoneypotEmail
     
     try:
@@ -71,9 +70,8 @@ def check_all_user_honeypots(user_id: int):
     """
     Check all honeypots for a specific user.
     """
-    from ..services.honeypot_service import get_honeypot_service
     from django.contrib.auth import get_user_model
-    
+
     User = get_user_model()
     
     try:
