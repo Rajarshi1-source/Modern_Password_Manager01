@@ -109,6 +109,7 @@ class RecordLocationView(APIView):
         
         # Prepare response
         response_data = {
+            'location_id': str(location.id),
             'location': LocationHistorySerializer(location).data,
             'analysis': {
                 'is_plausible': analysis.is_plausible,

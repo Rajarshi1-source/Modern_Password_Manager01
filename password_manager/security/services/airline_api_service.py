@@ -139,7 +139,7 @@ class AirlineAPIService:
     
     def __init__(self):
         """Initialize airline API clients."""
-        self.amadeus_client = self._init_amadeus()
+        self._amadeus_client = self._init_amadeus()
         self.sabre_client = self._init_sabre()
     
     def _init_amadeus(self):
@@ -203,7 +203,7 @@ class AirlineAPIService:
         """
         flights = []
         
-        if self.amadeus_client:
+        if self._amadeus_client:
             try:
                 flights = self._search_amadeus(
                     origin, destination, departure_date
@@ -234,7 +234,7 @@ class AirlineAPIService:
         try:
             from amadeus import ResponseError
             
-            response = self.amadeus_client.shopping.flight_offers_search.get(
+            response = self._amadeus_client.shopping.flight_offers_search.get(
                 originLocationCode=origin,
                 destinationLocationCode=destination,
                 departureDate=departure_date.isoformat(),
@@ -316,7 +316,7 @@ class AirlineAPIService:
             BookingVerification result
         """
         # Try Amadeus first
-        if self.amadeus_client:
+        if self._amadeus_client:
             result = self._verify_amadeus_booking(booking_reference, last_name)
             if result.is_valid:
                 return result
@@ -390,9 +390,9 @@ class AirlineAPIService:
         Returns:
             Flight object with status, or None if not found
         """
-        if self.amadeus_client:
+        if self._amadeus_client:
             try:
-                response = self.amadeus_client.schedule.flights.get(
+                response = self._amadeus_client.schedule.flights.get(
                     carrierCode=airline_code,
                     flightNumber=flight_number,
                     scheduledDepartureDate=flight_date.isoformat()

@@ -204,7 +204,7 @@ class MockLabProvider(LabProvider):
     
     @property
     def name(self) -> str:
-        return "Mock Lab Provider (Demo)"
+        return "Mock Lab Provider"
     
     @property
     def supports_synthesis(self) -> bool:
@@ -236,7 +236,7 @@ class MockLabProvider(LabProvider):
             sequence=sequence,
             sequence_name=f"password_storage_{secrets.token_hex(4)}",
             status=SynthesisStatus.PENDING,
-            provider='mock',
+            provider=self.name,
             cost_usd=round(cost, 2),
             estimated_completion=datetime.now() + timedelta(days=10),
             storage_location=f"MOCK-STORAGE-{secrets.token_hex(4).upper()}",
@@ -322,6 +322,11 @@ class MockLabProvider(LabProvider):
         
         return order
     
+    @property
+    def pricing(self) -> Dict:
+        """Property alias for get_pricing()."""
+        return self.get_pricing()
+
     def get_pricing(self) -> Dict:
         """Get mock pricing (reflects real pricing)."""
         return {

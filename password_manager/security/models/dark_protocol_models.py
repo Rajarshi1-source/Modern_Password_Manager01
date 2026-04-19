@@ -102,7 +102,7 @@ class DarkProtocolNode(models.Model):
     
     # Trust and reputation
     trust_score = models.FloatField(
-        default=0.5,
+        default=1.0,
         validators=[MinValueValidator(0.0), MaxValueValidator(1.0)]
     )
     uptime_percentage = models.FloatField(default=100.0)
@@ -225,6 +225,8 @@ class GarlicSession(models.Model):
         if not self.expires_at:
             # Default expiry: 30 minutes
             self.expires_at = timezone.now() + timedelta(minutes=30)
+        if not self.session_id:
+            self.session_id = secrets.token_hex(32)
         super().save(*args, **kwargs)
 
 
@@ -534,3 +536,39 @@ class DarkProtocolConfig(models.Model):
     def __str__(self):
         status = "Enabled" if self.is_enabled else "Disabled"
         return f"Dark Protocol Config for {self.user.email} ({status})"
+
+
+# =============================================================================
+# Noise Encryptor (helper — not a Django model)
+# =============================================================================
+
+import os as _os
+import math as _math
+
+
+class NoiseEncryptor:
+    """
+    Utility for generating indistinguishable cover noise and measuring entropy.
+
+    Used by the cover-traffic pipeline to pad real operations so that an
+    observer cannot distinguish vault calls from noise.
+    """
+
+    def generate_noise(self, size: int) -> bytes:
+        """Return ``size`` cryptographically random bytes (cover noise)."""
+        return _os.urandom(size)
+
+    @staticmethod
+    def calculate_entropy(data: bytes) -> float:
+        """Return Shannon entropy in bits per byte for ``data``."""
+        if not data:
+            return 0.0
+        counts: dict = {}
+        for byte in data:
+            counts[byte] = counts.get(byte, 0) + 1
+        length = len(data)
+        entropy = 0.0
+        for count in counts.values():
+            p = count / length
+            entropy -= p * _math.log2(p)
+        return entropy

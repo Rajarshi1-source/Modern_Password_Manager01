@@ -651,7 +651,6 @@ class HomomorphicSharingService:
         sealed_envelope = {
             'version': 2,
             'cipher_suite': CIPHER_SUITE_UMBRAL,
-            'target_selector': form_field_selector,
             'domain': domain,
             'instructions': {
                 'method': 'sealed_inject',
@@ -669,7 +668,6 @@ class HomomorphicSharingService:
             'ciphertext': _b64(share.ciphertext),
             'delegating_pk': _b64(share.delegating_pk) if share.delegating_pk else None,
             'verifying_pk': _b64(share.verifying_pk) if share.verifying_pk else None,
-            'target_selector': form_field_selector,
             'sealed_envelope': sealed_envelope,
         }
 

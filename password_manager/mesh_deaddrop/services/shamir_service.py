@@ -323,9 +323,10 @@ class ShamirSecretSharingService:
             refresh_y = self._evaluate_polynomial(refresh_coeffs, x)
             new_y = (old_y + refresh_y) % self.prime
             
+            byte_len = max(32, (new_y.bit_length() + 7) // 8)
             new_share = Share(
                 index=x,
-                value=new_y.to_bytes(32, 'big'),
+                value=new_y.to_bytes(byte_len, 'big'),
                 commitment=None  # Would need to recompute
             )
             new_shares.append(new_share)

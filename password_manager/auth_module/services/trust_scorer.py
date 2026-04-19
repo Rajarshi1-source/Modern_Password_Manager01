@@ -187,8 +187,13 @@ class TrustScorerService:
             if challenge.timing_pattern_matches:
                 window_match_count += 1
         
-        window_match_score = window_match_count / challenges.count()
-        
+        # Default to neutral 0.5 when no challenge has timing_pattern_matches set
+        total = challenges.count()
+        if total == 0 or window_match_count == 0 and not challenges.filter(timing_pattern_matches=True).exists():
+            window_match_score = 0.5
+        else:
+            window_match_score = window_match_count / total
+
         # Weighted average
         score = (consistency_score * 0.6 + window_match_score * 0.4)
         

@@ -16,6 +16,11 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
 from django.conf import settings
 
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
 logger = logging.getLogger(__name__)
 
 

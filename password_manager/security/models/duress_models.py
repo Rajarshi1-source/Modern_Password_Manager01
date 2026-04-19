@@ -67,6 +67,12 @@ class DuressCodeConfiguration(models.Model):
         help_text="Enterprise tier with full features"
     )
     
+    # Decoy vault toggle
+    decoy_vault_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable decoy vault for duress scenarios"
+    )
+
     # Decoy settings
     auto_refresh_decoy = models.BooleanField(
         default=True,
@@ -264,6 +270,10 @@ class DecoyVault(models.Model):
         default=list,
         help_text="List of fake credential entries"
     )
+    fake_credentials = models.JSONField(
+        default=dict,
+        help_text="Fake credential set for this decoy vault"
+    )
     decoy_folders = models.JSONField(
         default=list,
         help_text="Folder structure for realism"
@@ -460,6 +470,10 @@ class EvidencePackage(models.Model):
         default=dict,
         help_text="Behavioral biometrics at moment of duress"
     )
+    behavioral_data = models.JSONField(
+        default=dict,
+        help_text="Alias for behavioral_snapshot"
+    )
     device_info = models.JSONField(
         default=dict,
         help_text="Device fingerprint and hardware info"
@@ -468,6 +482,10 @@ class EvidencePackage(models.Model):
         default=dict,
         help_text="Network details (IP, ISP, etc)"
     )
+    network_data = models.JSONField(
+        default=dict,
+        help_text="Alias for network_info"
+    )
     geo_location = models.JSONField(
         default=dict,
         help_text="Geographic location data"
@@ -475,6 +493,14 @@ class EvidencePackage(models.Model):
     session_recording = models.JSONField(
         default=dict,
         help_text="Session activity since login"
+    )
+    session_data = models.JSONField(
+        default=dict,
+        help_text="Alias for session_recording"
+    )
+    access_pattern_data = models.JSONField(
+        default=dict,
+        help_text="Access pattern information"
     )
     
     # Encrypted evidence blob (for secure storage)
@@ -517,6 +543,10 @@ class EvidencePackage(models.Model):
     custody_log = models.JSONField(
         default=list,
         help_text="Log of evidence access/export"
+    )
+    chain_of_custody = models.JSONField(
+        default=list,
+        help_text="Alias for custody_log"
     )
     
     # Timestamps
@@ -578,6 +608,7 @@ class TrustedAuthority(models.Model):
         ('legal_counsel', 'Legal Counsel'),
         ('security_team', 'Corporate Security Team'),
         ('family', 'Family/Emergency Contact'),
+        ('emergency_contact', 'Emergency Contact'),
         ('custom', 'Custom Contact'),
     ]
     
@@ -610,7 +641,13 @@ class TrustedAuthority(models.Model):
         max_length=30,
         choices=AUTHORITY_TYPES
     )
-    
+    email = models.EmailField(blank=True)
+    phone_number = models.CharField(max_length=30, blank=True)
+    minimum_threat_level = models.CharField(
+        max_length=20, blank=True,
+        help_text="Minimum threat level that triggers this authority"
+    )
+
     # Contact configuration
     contact_method = models.CharField(
         max_length=20,
@@ -618,9 +655,10 @@ class TrustedAuthority(models.Model):
         default='email'
     )
     contact_details = models.JSONField(
+        default=dict,
         help_text="Encrypted contact info: {email/phone/webhook_url}"
     )
-    
+
     # Which threat levels trigger this authority
     trigger_threat_levels = models.JSONField(
         default=list,

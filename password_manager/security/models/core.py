@@ -571,7 +571,7 @@ class GeneticPasswordCertificate(models.Model):
         help_text="Reference to quantum certificate if combined")
     
     # Certificate metadata
-    password_length = models.IntegerField()
+    password_length = models.IntegerField(null=True, blank=True)
     charset_used = models.CharField(max_length=100, default='standard',
         help_text="Character types used: uppercase,lowercase,numbers,symbols")
     entropy_bits = models.IntegerField(default=0,
@@ -640,6 +640,8 @@ class GeneticEvolutionLog(models.Model):
     new_evolution_gen = models.IntegerField()
     old_biological_age = models.FloatField(null=True, blank=True)
     new_biological_age = models.FloatField(null=True, blank=True)
+    biological_age_before = models.FloatField(null=True, blank=True)
+    biological_age_after = models.FloatField(null=True, blank=True)
     
     # Affected passwords (count only for privacy)
     passwords_evolved = models.IntegerField(default=0)
@@ -979,6 +981,10 @@ class AdaptivePasswordConfig(models.Model):
         default=True,
         help_text="Automatically show adaptation suggestions"
     )
+    auto_apply_high_confidence = models.BooleanField(
+        default=False,
+        help_text="Automatically apply adaptations with high confidence score"
+    )
     typing_timing_enabled = models.BooleanField(
         default=True,
         help_text="Collect timing patterns (for rhythm analysis)"
@@ -1025,7 +1031,7 @@ class TypingSession(models.Model):
                              related_name='typing_sessions')
     
     # Password reference (hash prefix only, never actual password)
-    password_hash_prefix = models.CharField(max_length=16,
+    password_hash_prefix = models.CharField(max_length=32,
         help_text="First 16 chars of password hash for correlation")
     password_length = models.IntegerField(
         help_text="Length of password (for position normalization)")
@@ -1103,9 +1109,9 @@ class PasswordAdaptation(models.Model):
                              related_name='password_adaptations')
     
     # Password reference
-    password_hash_prefix = models.CharField(max_length=16,
+    password_hash_prefix = models.CharField(max_length=32,
         help_text="Hash prefix of ORIGINAL password")
-    adapted_hash_prefix = models.CharField(max_length=16,
+    adapted_hash_prefix = models.CharField(max_length=32,
         help_text="Hash prefix of ADAPTED password")
     
     # Linked list for rollback
@@ -2215,7 +2221,11 @@ class TimeLockCapsule(models.Model):
     def user(self):
         """Alias for owner to maintain consistency with other models."""
         return self.owner
-    
+
+    @user.setter
+    def user(self, value):
+        self.owner = value
+
     # Encrypted content
     encrypted_data = models.BinaryField(
         help_text="AES-encrypted secret data"

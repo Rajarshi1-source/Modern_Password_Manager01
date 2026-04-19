@@ -444,3 +444,7 @@ def get_epigenetic_provider(provider_type: str = "humanity") -> EpigeneticProvid
 def get_evolution_manager() -> EpigeneticEvolutionManager:
     """Get the evolution manager instance."""
     return EpigeneticEvolutionManager()
+
+
+# Module-level singleton used by breach_tasks and other callers.
+epigenetic_evolution_manager = EpigeneticEvolutionManager()

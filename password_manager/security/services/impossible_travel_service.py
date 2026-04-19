@@ -135,24 +135,24 @@ class SpeedThresholds:
     @classmethod
     def get_severity(cls, speed_kmh: float) -> TravelSeverity:
         """Determine severity based on required speed."""
-        if speed_kmh <= cls.DRIVING_MAX:
+        if speed_kmh <= cls.WALKING_MAX * 6.67:  # ≤ 40 km/h
             return TravelSeverity.NONE
-        elif speed_kmh <= cls.HIGH_SPEED_RAIL_MAX:
+        elif speed_kmh <= cls.DRIVING_MAX:  # ≤ 200 km/h
             return TravelSeverity.LOW
-        elif speed_kmh <= cls.COMMERCIAL_FLIGHT_MAX:
+        elif speed_kmh <= cls.HIGH_SPEED_RAIL_MAX:  # ≤ 400 km/h
             return TravelSeverity.MEDIUM
-        elif speed_kmh <= cls.SUPERSONIC_THRESHOLD:
+        elif speed_kmh <= cls.COMMERCIAL_FLIGHT_MAX:  # ≤ 920 km/h
             return TravelSeverity.HIGH
         else:
             return TravelSeverity.CRITICAL
-    
+
     @classmethod
     def get_action(cls, speed_kmh: float, has_itinerary: bool = False) -> TravelAction:
         """Determine action based on speed and context."""
         if speed_kmh <= cls.DRIVING_MAX:
             return TravelAction.ALLOW
         elif speed_kmh <= cls.COMMERCIAL_FLIGHT_MAX:
-            return TravelAction.CHALLENGE if not has_itinerary else TravelAction.VERIFY
+            return TravelAction.ALLOW if has_itinerary else TravelAction.CHALLENGE
         else:
             return TravelAction.BLOCK
 
@@ -481,10 +481,61 @@ class ImpossibleTravelService:
         
         return recommendations
     
+    def analyze_travel_between_coords(
+        self,
+        coords1: Coordinates,
+        coords2: Coordinates,
+        time_seconds: int,
+    ) -> TravelAnalysis:
+        """
+        Analyze travel plausibility between two explicit coordinate pairs.
+
+        Unlike :meth:`analyze_travel` (which looks up the DB), this method
+        accepts raw coordinates so callers can analyse hypothetical or
+        pre-loaded trips without touching the database.
+        """
+        distance_km = self.calculate_distance_from_coords(coords1, coords2)
+        required_speed = self.calculate_required_speed(distance_km, time_seconds)
+        travel_mode = SpeedThresholds.infer_mode(required_speed)
+        severity = SpeedThresholds.get_severity(required_speed)
+        action = SpeedThresholds.get_action(required_speed)
+        risk_score = self._calculate_risk_score(required_speed, distance_km, time_seconds, False)
+        recommendations = self._build_recommendations(travel_mode, severity, action, False)
+        return TravelAnalysis(
+            distance_km=distance_km,
+            time_seconds=time_seconds,
+            required_speed_kmh=required_speed,
+            max_allowed_speed_kmh=SpeedThresholds.COMMERCIAL_FLIGHT_MAX,
+            inferred_mode=travel_mode,
+            is_plausible=(travel_mode != TravelMode.SUPERSONIC),
+            severity=severity,
+            action=action,
+            risk_score=risk_score,
+            recommendations=recommendations,
+        )
+
+    def detect_cloned_session(
+        self,
+        user: User,
+        loc1: Coordinates,
+        loc2: Coordinates,
+        time_delta_seconds: int,
+    ) -> bool:
+        """
+        Public API: return True if the required speed between loc1 and loc2
+        is implausibly high (i.e. faster than commercial flight), which
+        strongly suggests a cloned / stolen session.
+        """
+        distance_km = self.calculate_distance_from_coords(loc1, loc2)
+        if time_delta_seconds <= 0:
+            return distance_km > 0
+        speed_kmh = self.calculate_required_speed(distance_km, time_delta_seconds)
+        return speed_kmh > SpeedThresholds.COMMERCIAL_FLIGHT_MAX
+
     # =========================================================================
     # Location Recording
     # =========================================================================
-    
+
     def record_location(
         self,
         user: User,

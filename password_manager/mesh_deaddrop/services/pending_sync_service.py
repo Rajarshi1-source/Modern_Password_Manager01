@@ -34,6 +34,11 @@ from ..models import DeadDrop, DeadDropFragment, MeshNode, PendingFragmentSync
 
 logger = logging.getLogger(__name__)
 
+try:
+    from ..consumers import broadcast_fragment_sync
+except ImportError:
+    broadcast_fragment_sync = None
+
 
 @dataclass
 class FlushResult:

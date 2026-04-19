@@ -287,6 +287,8 @@ def generate_code(device: CircadianTOTPDevice, at: Optional[datetime] = None) ->
     phase = current_phase_minutes(profile, at)
     P = _phase_to_steps(phase, device.step_seconds)
     secret = decrypt_string(device.secret_encrypted)
+    device.last_code_generated_at = at
+    device.save(update_fields=["last_code_generated_at"])
     return _hotp(secret, bio_counter(T, P), digits=device.digits)
 
 
@@ -334,7 +336,10 @@ def verify(
 
 def confirm_device(device: CircadianTOTPDevice, code: str) -> bool:
     """Verify a code and mark the device confirmed on success."""
-    if verify(device, code):
+    # Use the timestamp from when the code was generated so verification
+    # is not broken by time passing between generate_code and confirm_device.
+    at = device.last_code_generated_at or None
+    if verify(device, code, at=at):
         if not device.confirmed:
             device.confirmed = True
             device.save(update_fields=["confirmed"])

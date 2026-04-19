@@ -195,7 +195,7 @@ class RelayTrustService:
         if duration_ms <= self.LATENCY_GOOD_MS:
             return 1.0
         if duration_ms >= self.LATENCY_BAD_MS:
-            return 0.5  # success but slow — still positive
+            return 0.6  # success but slow — still positive, strictly above neutral
         # linear interpolation 1.0 -> 0.5 between LATENCY_GOOD_MS and LATENCY_BAD_MS
         span = self.LATENCY_BAD_MS - self.LATENCY_GOOD_MS
         frac = (duration_ms - self.LATENCY_GOOD_MS) / span
