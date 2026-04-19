@@ -29,6 +29,8 @@ class UserDevice(models.Model):
         elif 'os_info' in kwargs:
             kwargs.pop('os_info')
         super().__init__(*args, **kwargs)
+        if not self.fingerprint:
+            self.fingerprint = uuid.uuid4().hex
 
     @property
     def os_info(self) -> str:
