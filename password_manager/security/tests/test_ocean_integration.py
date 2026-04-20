@@ -64,7 +64,7 @@ class TestNOAABuoyClientIntegration(TestCase):
             # At least some data should be present
             has_data = any([
                 reading.wave_height_m is not None,
-                reading.water_temp_c is not None,
+                reading.sea_temp_c is not None,
                 reading.wind_speed_mps is not None,
             ])
             self.assertTrue(has_data, "Expected at least some data from buoy")

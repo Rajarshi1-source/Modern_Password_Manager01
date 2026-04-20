@@ -379,6 +379,7 @@ class QuorumAndStakeTests(TestCase):
                 invitation_token=v.invitation_token,
                 signature=_sign(private, v.invitation_token.encode("utf-8")),
             )
+            v.refresh_from_db()
         circle.refresh_from_db()
         request = initiate_request(circle=circle)
         # Approve with first two vouchers.

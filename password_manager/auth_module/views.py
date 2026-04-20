@@ -150,7 +150,8 @@ class AuthViewSet(viewsets.ViewSet):
                 analysis_result2 = security_service.analyze_login_attempt(
                     user=user,
                     request=request,
-                    is_successful=True
+                    is_successful=True,
+                    failure_reason=None,
                 )
                 # Combine or compare analysis results if needed
                 print(f"Security analysis - Threat score: {analysis_result2.threat_score}, Suspicious: {analysis_result2.is_suspicious}")
