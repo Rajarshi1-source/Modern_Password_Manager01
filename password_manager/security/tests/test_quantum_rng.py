@@ -853,7 +853,14 @@ class QuantumE2ETestCase(TransactionTestCase):
         self.assertEqual(len(hex_bytes), 128)  # 64 bytes * 2
         
         # Verify provider is valid
-        valid_providers = ['anu_qrng', 'ibm_quantum', 'ionq_quantum', 'cryptographic_fallback']
+        valid_providers = [
+            'anu_qrng',
+            'ibm_quantum',
+            'ionq_quantum',
+            'noaa_ocean_wave',
+            'cosmic_ray_muon',
+            'cryptographic_fallback',
+        ]
         self.assertIn(provider, valid_providers)
     
     def test_pool_status_reflects_usage(self):
