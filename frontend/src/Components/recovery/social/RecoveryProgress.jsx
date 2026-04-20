@@ -202,7 +202,7 @@ const RecoveryProgress = () => {
             </div>
           )}
 
-          {(status === 'failed' || status === 'cancelled' || status === 'expired') && (
+          {(status === 'failed' || status === 'cancelled' || status === 'expired' || status === 'denied') && (
             <div className="action-section error">
               <div className="error-box">
                 <h4>❌ Recovery {status}</h4>

@@ -35,10 +35,24 @@ const TraitBars = ({ features }) => {
 };
 
 const ThemeCloud = ({ weights }) => {
-  if (!weights || typeof weights !== 'object') return null;
-  const entries = Object.entries(weights)
-    .sort(([, a], [, b]) => Number(b) - Number(a))
-    .slice(0, 16);
+  if (!weights) return null;
+  let entries;
+  if (Array.isArray(weights)) {
+    entries = weights
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const label = item.label ?? item.name ?? item.theme;
+        const weight = item.weight ?? item.value ?? item.score;
+        if (label == null) return null;
+        return [String(label), Number(weight) || 0];
+      })
+      .filter(Boolean);
+  } else if (typeof weights === 'object') {
+    entries = Object.entries(weights).map(([k, v]) => [k, Number(v) || 0]);
+  } else {
+    return null;
+  }
+  entries = entries.sort(([, a], [, b]) => Number(b) - Number(a)).slice(0, 16);
   if (entries.length === 0) return null;
   return (
     <div className="theme-cloud">

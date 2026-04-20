@@ -167,12 +167,17 @@ class ThreatIntelligenceServiceTests(TestCase):
         
         # Common password should match
         result_common = service.check_pattern_in_dictionaries('password123')
-        self.assertIsInstance(result_common, dict)
-        self.assertIn('is_common', result_common)
-        
+        self.assertIsInstance(result_common, list)
+
         # Complex password should not match
         result_complex = service.check_pattern_in_dictionaries('X$k2!mNp9@Qz')
-        self.assertIsInstance(result_complex, dict)
+        self.assertIsInstance(result_complex, list)
+
+        # Summary API exposes metadata separately.
+        summary = service.get_pattern_dictionary_summary('password123')
+        self.assertIsInstance(summary, dict)
+        self.assertIn('is_common', summary)
+        self.assertIn('matches', summary)
 
 
 class PredictiveExpirationServiceTests(TestCase):
