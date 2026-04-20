@@ -255,9 +255,10 @@ class ChallengeOrchestrator:
         count: int,
         mood: str,
     ) -> List[PersonalityQuestion]:
-        qs = profile.questions.filter(
-            models_q_unused_or_reusable(),
-        ).order_by('?')
+        # Single source of truth: the DB filter enforces the unused-or-reusable
+        # invariant. The post-loop pass only handles predicates that can't be
+        # expressed in a single ORM call (expiry, dimension de-dup).
+        qs = profile.questions.filter(models_q_unused_or_reusable()).order_by('?')
         if mood == MoodContext.STRESSED:
             qs = qs.order_by('difficulty', '?')
         elif mood == MoodContext.FRUSTRATED:
@@ -267,8 +268,6 @@ class ChallengeOrchestrator:
         dimensions_seen: set = set()
         for q in qs[: count * 4]:
             if q.expires_at and q.expires_at < timezone.now():
-                continue
-            if q.single_use and q.used_count:
                 continue
             if q.dimension in dimensions_seen:
                 continue
@@ -288,8 +287,14 @@ class ChallengeOrchestrator:
         key = f"{RATE_LIMIT_CACHE_PREFIX}:{user.pk}"
         try:
             attempts = cache.get(key, 0)
-        except Exception:
-            attempts = 0
+        except Exception as exc:
+            # Fail closed: a broken cache backend must NOT silently bypass the
+            # rate limiter. Attackers could force cache failures (e.g. Redis
+            # OOM) to gain unlimited challenge attempts.
+            logger.error("personality rate-limit cache unavailable: %s", exc)
+            raise RateLimited(
+                "Rate limiter unavailable — please retry shortly."
+            ) from exc
         if attempts >= RATE_LIMIT_MAX_ATTEMPTS:
             try:
                 profile = PersonalityProfile.objects.get(user=user)
@@ -306,8 +311,13 @@ class ChallengeOrchestrator:
             )
         try:
             cache.set(key, attempts + 1, timeout=RATE_LIMIT_WINDOW_SECONDS)
-        except Exception:
-            pass
+        except Exception as exc:
+            # If we can't persist the increment, treat the request as
+            # unverifiable rather than quietly allowing it.
+            logger.error("personality rate-limit cache set failed: %s", exc)
+            raise RateLimited(
+                "Rate limiter unavailable — please retry shortly."
+            ) from exc
 
 
 def models_q_unused_or_reusable():
