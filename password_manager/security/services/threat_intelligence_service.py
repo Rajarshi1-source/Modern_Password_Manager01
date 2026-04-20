@@ -211,13 +211,27 @@ class ThreatIntelligenceService:
                     similarity_score=similarity * 0.8  # Partial match
                 ))
 
-        # Return a dict view (with list of matches) so callers that expect
-        # a mapping (tests) and a list (production) both work.
+        return matches
+
+    def get_pattern_dictionary_summary(
+        self,
+        pattern_fingerprint,
+        char_class_sequence: str = ''
+    ):
+        """
+        Return summary metadata about dictionary matches for a pattern.
+
+        Returns:
+            dict with keys 'is_common' and 'matches'.
+        """
+        matches = self.check_pattern_in_dictionaries(
+            pattern_fingerprint, char_class_sequence
+        )
         return {
             'is_common': any(m.similarity_score >= 0.5 for m in matches),
             'matches': matches,
         }
-    
+
     def get_real_time_threat_level(
         self,
         user_id: int = None,

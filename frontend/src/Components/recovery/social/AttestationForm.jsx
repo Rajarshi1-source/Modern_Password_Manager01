@@ -52,15 +52,30 @@ const AttestationForm = () => {
     setError(null);
     setSubmitting(true);
     try {
+      if (decision === 'approve') {
+        if (!freshCommitmentB64 || !proofTB64 || !proofSB64) {
+          setError(
+            'Approval requires a Schnorr equality proof: provide fresh_commitment, proof_T, and proof_s.'
+          );
+          setSubmitting(false);
+          return;
+        }
+      }
       const payload = {
         voucher_id: voucherId,
         decision,
         signature_b64: signatureB64,
         stake_amount: Number(stakeAmount) || 0,
       };
-      if (freshCommitmentB64) payload.fresh_commitment_b64 = freshCommitmentB64;
-      if (proofTB64) payload.proof_T_b64 = proofTB64;
-      if (proofSB64) payload.proof_s_b64 = proofSB64;
+      if (decision === 'approve') {
+        payload.fresh_commitment_b64 = freshCommitmentB64;
+        payload.proof_T_b64 = proofTB64;
+        payload.proof_s_b64 = proofSB64;
+      } else {
+        if (freshCommitmentB64) payload.fresh_commitment_b64 = freshCommitmentB64;
+        if (proofTB64) payload.proof_T_b64 = proofTB64;
+        if (proofSB64) payload.proof_s_b64 = proofSB64;
+      }
 
       const resp = await ApiService.socialRecovery.submitAttestation(
         requestId,
@@ -86,7 +101,7 @@ const AttestationForm = () => {
     );
   }
 
-  const isFinal = ['completed', 'cancelled', 'expired', 'rejected'].includes(request.status);
+  const isFinal = ['completed', 'cancelled', 'expired', 'denied', 'rejected'].includes(request.status);
 
   return (
     <div className="attestation-form">
@@ -165,33 +180,66 @@ const AttestationForm = () => {
             />
           </div>
 
-          <details>
-            <summary>Advanced: ZK Relationship Proof (optional)</summary>
-            <div className="form-group">
-              <label>Fresh Commitment (base64)</label>
-              <input
-                type="text"
-                value={freshCommitmentB64}
-                onChange={(e) => setFreshCommitmentB64(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Proof T (base64)</label>
-              <input
-                type="text"
-                value={proofTB64}
-                onChange={(e) => setProofTB64(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label>Proof s (base64)</label>
-              <input
-                type="text"
-                value={proofSB64}
-                onChange={(e) => setProofSB64(e.target.value)}
-              />
-            </div>
-          </details>
+          {decision === 'approve' ? (
+            <fieldset className="zk-proof-fields">
+              <legend>ZK Relationship Proof (required for approval)</legend>
+              <div className="form-group">
+                <label>Fresh Commitment (base64)</label>
+                <input
+                  type="text"
+                  value={freshCommitmentB64}
+                  onChange={(e) => setFreshCommitmentB64(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Proof T (base64)</label>
+                <input
+                  type="text"
+                  value={proofTB64}
+                  onChange={(e) => setProofTB64(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label>Proof s (base64)</label>
+                <input
+                  type="text"
+                  value={proofSB64}
+                  onChange={(e) => setProofSB64(e.target.value)}
+                  required
+                />
+              </div>
+            </fieldset>
+          ) : (
+            <details>
+              <summary>Advanced: ZK Relationship Proof (optional for denial)</summary>
+              <div className="form-group">
+                <label>Fresh Commitment (base64)</label>
+                <input
+                  type="text"
+                  value={freshCommitmentB64}
+                  onChange={(e) => setFreshCommitmentB64(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>Proof T (base64)</label>
+                <input
+                  type="text"
+                  value={proofTB64}
+                  onChange={(e) => setProofTB64(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label>Proof s (base64)</label>
+                <input
+                  type="text"
+                  value={proofSB64}
+                  onChange={(e) => setProofSB64(e.target.value)}
+                />
+              </div>
+            </details>
+          )}
 
           <div className="form-group">
             <label>Stake Amount (optional)</label>
