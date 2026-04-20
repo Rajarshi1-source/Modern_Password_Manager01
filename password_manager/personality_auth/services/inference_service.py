@@ -10,6 +10,7 @@ deliberately minimal — services that want to run inference on demand call
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -29,6 +30,49 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Privacy helpers
 # ---------------------------------------------------------------------------
+
+# High-signal PII patterns that should never leave the host in a prompt to an
+# external LLM. The redaction is intentionally conservative — any doubtful span
+# is replaced with a tag rather than letting raw text through. Personality
+# inference works fine on the remaining structural content (vocabulary,
+# sentence length, sentiment), so losing these spans costs nothing.
+_PII_PATTERNS = (
+    (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'), '[REDACTED_EMAIL]'),
+    # Phone numbers (loose international + NA formats)
+    (re.compile(r'\+?\d[\d\s().-]{7,}\d'), '[REDACTED_PHONE]'),
+    # Credit-card-ish 13–19 digit runs (allow separators)
+    (re.compile(r'\b(?:\d[ -]?){12,18}\d\b'), '[REDACTED_CARD]'),
+    # SSN-ish
+    (re.compile(r'\b\d{3}-\d{2}-\d{4}\b'), '[REDACTED_SSN]'),
+    # IPv4
+    (re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b'), '[REDACTED_IP]'),
+    # URLs (often carry tokens in query strings)
+    (re.compile(r'https?://\S+', re.IGNORECASE), '[REDACTED_URL]'),
+    # Explicit password / secret / token assignments
+    (re.compile(
+        r'(?i)\b(?:password|passwd|pwd|secret|api[_-]?key|token|bearer)\s*[:=]\s*\S+'
+    ), '[REDACTED_SECRET]'),
+    # Long base64/hex blobs that look like keys or tokens
+    (re.compile(r'\b[A-Za-z0-9+/=_-]{32,}\b'), '[REDACTED_TOKEN]'),
+)
+
+# Hard cap on how much of each message we forward, in case a user pastes an
+# entire document into chat. Personality features are saturated by the first
+# few hundred characters.
+_MAX_MESSAGE_CHARS = 400
+
+
+def _scrub_pii(text: str) -> str:
+    """Apply the PII redaction patterns and clamp the result in size."""
+    if not isinstance(text, str) or not text:
+        return ''
+    out = text
+    for pattern, replacement in _PII_PATTERNS:
+        out = pattern.sub(replacement, out)
+    if len(out) > _MAX_MESSAGE_CHARS:
+        out = out[:_MAX_MESSAGE_CHARS] + ' [...]'
+    return out
+
 
 def user_opted_in(user) -> bool:
     """Return True iff the user explicitly consents to personality inference.
@@ -192,7 +236,13 @@ class PersonalityInferenceService:
             return []
 
     def _build_prompt(self, messages: List[str]) -> str:
-        numbered = "\n".join(f"[{i+1}] {m}" for i, m in enumerate(messages[:80]))
+        # Scrub PII before the prompt ever leaves the process. The external
+        # LLM receives redacted tokens in place of emails, phones, credit
+        # cards, IPs, URLs, and high-entropy secrets. Messages are also
+        # length-clamped so a single paste doesn't dominate the window.
+        scrubbed = [_scrub_pii(m) for m in messages[:80]]
+        scrubbed = [m for m in scrubbed if m]
+        numbered = "\n".join(f"[{i+1}] {m}" for i, m in enumerate(scrubbed))
         return (
             "Analyse the following first-person messages from one user and infer their "
             "personality traits, recurring themes, and moral framework coefficients. "

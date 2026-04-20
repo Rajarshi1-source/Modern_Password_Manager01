@@ -215,7 +215,14 @@ class SubmitAnswerView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        question = get_object_or_404(PersonalityQuestion, id=data['question_id'])
+        # Scope the question to this challenge so we never load another user's
+        # question row into memory (which carries the expected answer
+        # signature). Using `challenge.questions` both confirms ownership and
+        # membership in one query.
+        question = get_object_or_404(
+            challenge.questions.all(),
+            id=data['question_id'],
+        )
 
         try:
             result = ChallengeOrchestrator().submit_response(

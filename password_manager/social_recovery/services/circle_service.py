@@ -13,6 +13,7 @@ import uuid
 from datetime import timedelta
 from typing import Iterable, List, Mapping, Optional
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from django.db import transaction
 from django.utils import timezone
 
@@ -43,26 +44,31 @@ def _scalar_from_bytes(blob: bytes) -> int:
     return int.from_bytes(hashlib.sha256(blob).digest(), "big") % ec.N or 1
 
 
-def _encrypt_share_placeholder(share: str, public_key_multibase: str) -> bytes:
-    """Serialize a Shamir share alongside its target public key.
+SHARE_ENCRYPTION_ALGORITHM = "aes-gcm-sha256kdf-v1"
 
-    For the MVP we store the share XOR-ed with a SHA-256-derived keystream of
-    the voucher's public key. This matches the existing
-    ``auth_module.quantum_recovery_models.RecoveryShard`` approach of
-    persisting the raw ciphertext + metadata and letting the client perform
-    end-to-end decryption (the server never needs to read the share). A real
-    deployment would plug this into the ``mesh_crypto_service`` X25519
-    wrapping primitive.
+
+def _encrypt_share_placeholder(share: str, public_key_multibase: str) -> bytes:
+    """Envelope a Shamir share with AES-256-GCM.
+
+    The key is derived from SHA-256 of a domain-separated label plus the
+    voucher's public key, matching the prior keying material so existing
+    callers keep the same trust root. Unlike the previous raw XOR cipher,
+    AES-GCM provides authenticated encryption — any tampering with the
+    ciphertext or metadata at rest is detected on decryption.
+
+    Output layout: ``nonce (12 bytes) || AES-GCM ciphertext (plaintext + tag)``.
+
+    A full deployment should still upgrade this to the ``mesh_crypto_service``
+    X25519 wrapping primitive; this function is the minimum-viable fix that
+    removes the malleability of the prior XOR construction.
     """
-    key = hashlib.sha256(("pwm-social-recovery-v1|" + public_key_multibase).encode()).digest()
-    share_bytes = share.encode("utf-8")
-    stream = b""
-    counter = 0
-    while len(stream) < len(share_bytes):
-        stream += hashlib.sha256(key + counter.to_bytes(4, "big")).digest()
-        counter += 1
-    ciphertext = bytes(a ^ b for a, b in zip(share_bytes, stream[: len(share_bytes)]))
-    return ciphertext
+    key = hashlib.sha256(
+        ("pwm-social-recovery-v1|" + public_key_multibase).encode()
+    ).digest()
+    nonce = _secrets.token_bytes(12)
+    aad = f"pwm-social-recovery|{public_key_multibase}".encode("utf-8")
+    ciphertext = AESGCM(key).encrypt(nonce, share.encode("utf-8"), aad)
+    return nonce + ciphertext
 
 
 def _relationship_commitment(voucher_public_key: str, circle_id: uuid.UUID):
@@ -159,9 +165,11 @@ def create_circle(
             share_index=idx,
             encrypted_shard_data=ciphertext,
             encryption_metadata={
-                "algorithm": "sha256-xor-placeholder",
+                "algorithm": SHARE_ENCRYPTION_ALGORITHM,
                 "target_public_key": ed_pub,
                 "share_format": "shamir-py3/v1",
+                "nonce_length": 12,
+                "aad": "pwm-social-recovery|<target_public_key>",
             },
             stake_amount=int(voucher_spec.get("stake_amount", 0)),
             status="pending",

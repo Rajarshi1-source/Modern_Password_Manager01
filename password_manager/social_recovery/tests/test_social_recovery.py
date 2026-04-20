@@ -410,20 +410,18 @@ class QuorumAndStakeTests(TestCase):
         # circle_service helper.
         from social_recovery.services.circle_service import _encrypt_share_placeholder
 
-        # Recover raw shares by reversing the placeholder XOR stream.
+        # Recover raw shares by reversing the AES-GCM envelope produced by
+        # ``_encrypt_share_placeholder``.
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
         def _decrypt(voucher):
             key = hashlib.sha256(
                 ("pwm-social-recovery-v1|" + voucher.ed25519_public_key).encode()
             ).digest()
-            ciphertext = bytes(voucher.encrypted_shard_data)
-            stream = b""
-            counter = 0
-            while len(stream) < len(ciphertext):
-                stream += hashlib.sha256(key + counter.to_bytes(4, "big")).digest()
-                counter += 1
-            return bytes(
-                a ^ b for a, b in zip(ciphertext, stream[: len(ciphertext)])
-            ).decode("utf-8")
+            blob = bytes(voucher.encrypted_shard_data)
+            nonce, ciphertext = blob[:12], blob[12:]
+            aad = f"pwm-social-recovery|{voucher.ed25519_public_key}".encode("utf-8")
+            return AESGCM(key).decrypt(nonce, ciphertext, aad).decode("utf-8")
 
         decrypted = [
             {"voucher_id": v.voucher_id, "share": _decrypt(v)}
