@@ -177,7 +177,7 @@ class SecurityService:
             risk_data = self._calculate_risk_score(user, attempt, user_agent)
             attempt.threat_score = risk_data['risk_score']
             attempt.suspicious_factors = risk_data['suspicious_factors']
-            attempt.is_suspicious = attempt.threat_score >= 70
+            attempt.is_suspicious = attempt.threat_score >= 80
             
             # Save the attempt
             attempt.save()

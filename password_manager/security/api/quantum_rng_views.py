@@ -133,8 +133,9 @@ def get_random_bytes(request):
     
     Query Parameters:
     - count: Number of bytes (1-256, default: 32)
-    - format: 'hex' or 'base64' (default: 'hex')
-    
+    - encoding: 'hex' or 'base64' (default: 'hex'). Legacy alias: 'fmt'.
+      (Not named 'format' — that collides with DRF's content-negotiation override.)
+
     Returns:
     {
         "success": true,
@@ -146,7 +147,11 @@ def get_random_bytes(request):
     """
     try:
         count = int(request.query_params.get('count', 32))
-        output_format = request.query_params.get('format', 'hex')
+        output_format = (
+            request.query_params.get('encoding')
+            or request.query_params.get('fmt')
+            or 'hex'
+        )
         
         # Validate count
         if not 1 <= count <= 256:

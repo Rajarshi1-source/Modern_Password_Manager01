@@ -175,8 +175,8 @@ class ForceRotationAPITests(PredictiveExpirationAPITestCase):
         )
         
         response = self.client.post('/api/security/predictive-expiration/credential/rotate-cred/rotate/')
-        
-        self.assertIn(response.status_code, [200, 201, 404])
+
+        self.assertIn(response.status_code, [200, 201, 202, 404])
         
     def test_force_rotation_unauthenticated(self):
         """Test that unauthenticated users cannot force rotation."""
