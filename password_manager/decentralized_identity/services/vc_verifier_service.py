@@ -49,9 +49,18 @@ def _resolve_issuer_public_key(header: Dict, issuer: str) -> Optional[bytes]:
             return None
     # did:web issuer - pull from active IssuerKey rows.
     if issuer.startswith("did:web:"):
-        qs = IssuerKey.objects.filter(is_active=True)
+        web_identifier = issuer[len("did:web:"):]
+        qs = IssuerKey.objects.filter(is_active=True, did_web_identifier=web_identifier)
         if "#" in kid:
             qs = qs.filter(kid=kid.split("#", 1)[1])
+        elif kid:
+            qs = qs.filter(kid=kid)
+        else:
+            # Without an explicit ``kid`` we cannot disambiguate during key
+            # rotation. If more than one active key exists for this issuer,
+            # refuse to verify rather than silently picking one.
+            if qs.count() > 1:
+                return None
         key = qs.first()
         if key is None:
             return None
@@ -146,11 +155,46 @@ def verify_presentation(
     if exp is not None and now >= int(exp):
         errors.append("Presentation expired")
 
-    # Verify nested credentials if any.
+    # Verify nested credentials if any. Each nested VC must be (a) itself valid
+    # (signature, expiry, revocation) AND (b) issued to the holder presenting
+    # it -- otherwise a holder could replay an arbitrary VC that was issued to
+    # a different subject and a downstream verifier that gates on a specific
+    # credential would be trivially bypassable.
     vp_block = payload.get("vp", {})
     for vc_jwt in vp_block.get("verifiableCredential", []) or []:
-        ok, _, verr = verify_vc_jwt(vc_jwt)
+        ok, vc_payload, verr = verify_vc_jwt(vc_jwt)
         if not ok:
             errors.extend(f"Nested VC failed: {e}" for e in verr)
+            continue
+        subject_id = _extract_vc_subject(vc_payload)
+        if subject_id and subject_id != holder:
+            errors.append(
+                "Nested VC failed: credentialSubject.id does not match holder"
+            )
 
     return not errors, payload, errors
+
+
+def _extract_vc_subject(vc_payload: Dict) -> Optional[str]:
+    """Return the ``credentialSubject.id`` for a decoded VC payload, if any.
+
+    Standard VC-JWTs place this either under the top-level ``sub`` claim or
+    under ``vc.credentialSubject.id``. We accept either, preferring the JWT
+    ``sub`` when present.
+    """
+    sub = vc_payload.get("sub")
+    if isinstance(sub, str) and sub:
+        return sub
+    vc = vc_payload.get("vc") or {}
+    cs = vc.get("credentialSubject")
+    if isinstance(cs, dict):
+        sid = cs.get("id")
+        if isinstance(sid, str) and sid:
+            return sid
+    elif isinstance(cs, list):
+        for item in cs:
+            if isinstance(item, dict):
+                sid = item.get("id")
+                if isinstance(sid, str) and sid:
+                    return sid
+    return None

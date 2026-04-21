@@ -39,23 +39,42 @@ class FolderSerializer(serializers.ModelSerializer):
         validated_data['user'] = self.context['request'].user
         return super().create(validated_data)
 
+class _UserScopedFolderPrimaryKeyRelatedField(serializers.PrimaryKeyRelatedField):
+    """PrimaryKeyRelatedField for folders, scoped to ``request.user``.
+
+    Scoping the queryset at field-resolution time prevents two leaks:
+
+    1. ``update`` path: a user could PATCH ``folder_id`` to move their item
+       into another user's folder (the previous ``create``-only check was
+       bypassed on update).
+    2. Enumeration: an unfiltered queryset produces a "does not exist"
+       validation error for IDs outside the user's scope, letting an attacker
+       probe existence of other users' folder IDs via error messages.
+    """
+
+    def get_queryset(self):
+        request = self.context.get('request')
+        if request is None or not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return VaultFolder.objects.none()
+        return VaultFolder.objects.filter(user=request.user)
+
+
 class VaultItemSerializer(serializers.ModelSerializer):
     """Serializer for vault items with client-side encryption"""
-    folder_id = serializers.PrimaryKeyRelatedField(
+    folder_id = _UserScopedFolderPrimaryKeyRelatedField(
         source='folder',
-        queryset=VaultFolder.objects.all(),
         required=False,
-        allow_null=True
+        allow_null=True,
     )
-    
+
     class Meta:
         model = EncryptedVaultItem
         fields = [
-            'id', 
-            'item_id', 
-            'encrypted_data', 
-            'item_type', 
-            'created_at', 
+            'id',
+            'item_id',
+            'encrypted_data',
+            'item_type',
+            'created_at',
             'updated_at',
             'last_used_at',
             'favorite',
@@ -63,16 +82,12 @@ class VaultItemSerializer(serializers.ModelSerializer):
             'tags'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
-    
+
     def create(self, validated_data):
-        # Associate with current user
+        # Associate with current user. The queryset on ``folder_id`` already
+        # guarantees the folder (if supplied) belongs to ``request.user``, so
+        # no extra cross-user check is required here.
         validated_data['user'] = self.context['request'].user
-        
-        # Validate folder belongs to user if provided
-        folder = validated_data.get('folder')
-        if folder and folder.user.id != self.context['request'].user.id:
-            raise serializers.ValidationError("Folder does not belong to this user")
-            
         return super().create(validated_data)
 
 class SyncSerializer(serializers.Serializer):

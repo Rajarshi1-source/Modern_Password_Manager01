@@ -217,11 +217,41 @@ def load_issuer_private_key(key: IssuerKey) -> Ed25519PrivateKey:
 def register_user_did(
     user, did_string: str, public_key_multibase: str, make_primary: bool = True
 ) -> UserDID:
-    # Validate that the declared multibase matches the DID.
+    # Validate that the declared multibase matches the DID. ``did:key`` binds
+    # the key into the identifier itself, so the two must agree exactly.
     if did_string.startswith("did:key:"):
         expected = "did:key:" + public_key_multibase
         if expected != did_string:
             raise ValueError("did_string does not match publicKeyMultibase")
+    elif did_string.startswith("did:web:"):
+        # ``did:web`` resolves its verification method over HTTPS; a user
+        # cannot assert a key for an arbitrary domain without controlling it.
+        # Require the domain to be on an allow-list so a user cannot register,
+        # say, ``did:web:example.com`` with a self-chosen public key and have
+        # the rest of the app treat them as that issuer.
+        web_identifier = did_string[len("did:web:"):]
+        allowed = set(
+            getattr(settings, "DID_WEB_REGISTRATION_ALLOWLIST", []) or []
+        )
+        if not allowed or web_identifier not in allowed:
+            raise ValueError(
+                "did:web domain is not in DID_WEB_REGISTRATION_ALLOWLIST; "
+                "resolve the DID document over HTTPS and register the bound "
+                "key server-side instead."
+            )
+        # When the host *is* allow-listed, require the declared key to match
+        # an active ``IssuerKey`` row for that identifier.
+        if not IssuerKey.objects.filter(
+            is_active=True,
+            did_web_identifier=web_identifier,
+            public_key_multibase=public_key_multibase,
+        ).exists():
+            raise ValueError(
+                "publicKeyMultibase does not match any active IssuerKey for "
+                "this did:web identifier"
+            )
+    else:
+        raise ValueError(f"Unsupported DID method in: {did_string}")
 
     with transaction.atomic():
         if make_primary:

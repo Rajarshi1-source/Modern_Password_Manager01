@@ -19,12 +19,24 @@ owner's password is never revealed.
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import uuid
 
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
+
+
+def _commitment_fingerprint(blob: bytes) -> str:
+    """Return a hex SHA-256 of a commitment payload for uniqueness indexing.
+
+    ``BinaryField`` can't be part of a portable ``UniqueConstraint`` (MySQL
+    BLOB columns require an index length; SQLite comparison semantics also
+    differ). Indexing a short hex digest of the bytes gives us the same
+    per-(user, commitment) uniqueness guarantee without vendor-specific DDL.
+    """
+    return hashlib.sha256(bytes(blob or b"")).hexdigest()
 
 
 class ZKCommitment(models.Model):
@@ -60,6 +72,17 @@ class ZKCommitment(models.Model):
     commitment = models.BinaryField(
         help_text="Provider-specific commitment payload (SEC1 33-byte point for commitment-schnorr-v1).",
     )
+    commitment_fingerprint = models.CharField(
+        max_length=64,
+        default="",
+        db_index=True,
+        help_text=(
+            "SHA-256 hex of ``commitment``. Used to enforce per-user "
+            "uniqueness of commitment bytes, which blocks the D=0 equality-"
+            "proof abuse where the same commitment is registered twice and "
+            "then 'proven' equal to itself."
+        ),
+    )
     scheme = models.CharField(
         max_length=32,
         choices=SCHEME_CHOICES,
@@ -74,6 +97,16 @@ class ZKCommitment(models.Model):
                 fields=["user", "scope_type", "scope_id", "scheme"],
                 name="zk_proofs_zkcommitment_unique_scope",
             ),
+            # Defence-in-depth against the Schnorr equality-proof degenerate
+            # case: if a user could register the same commitment bytes in two
+            # scope rows, a forged proof over D = C - C = 0 (point at
+            # infinity) could previously verify. ``verify_equality`` now
+            # rejects the infinity case explicitly; this constraint also
+            # closes the door at write time.
+            models.UniqueConstraint(
+                fields=["user", "commitment_fingerprint"],
+                name="zk_proofs_zkcommitment_unique_bytes",
+            ),
         ]
         indexes = [
             models.Index(
@@ -87,6 +120,14 @@ class ZKCommitment(models.Model):
         ]
         verbose_name = "ZK commitment"
         verbose_name_plural = "ZK commitments"
+
+    def save(self, *args, **kwargs):
+        # Keep ``commitment_fingerprint`` in lock-step with ``commitment``.
+        # Deriving the digest inside ``save`` (rather than trusting callers)
+        # guarantees the uniqueness constraint can't be bypassed by code
+        # that forgets to set the field.
+        self.commitment_fingerprint = _commitment_fingerprint(self.commitment)
+        return super().save(*args, **kwargs)
 
     def __str__(self) -> str:  # pragma: no cover - admin helper only
         return f"ZKCommitment({self.scope_type}:{self.scope_id} user={self.user_id})"

@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.fernet import Fernet
 from argon2 import PasswordHasher, Type
+from argon2.low_level import Type as LLType, hash_secret_raw
 import argon2
 
 logger = logging.getLogger(__name__)
@@ -36,21 +37,23 @@ def derive_key_from_password(password, salt, time_cost=4, memory_cost=131072, pa
         memory_cost = 65536  # 64 MB
         parallelism = 1
     
+    # ``PasswordHasher.hash()`` generates a fresh random salt on every call,
+    # so the previous implementation returned a different ``key`` each time
+    # for the same inputs — breaking any round-trip that relies on
+    # deterministic key derivation. ``hash_secret_raw`` uses the caller-
+    # supplied salt and produces reproducible output, which is what we need
+    # for a key-derivation function.
     try:
-        ph = PasswordHasher(
+        raw = hash_secret_raw(
+            secret=password.encode('utf-8') if isinstance(password, str) else password,
+            salt=salt,
             time_cost=time_cost,
             memory_cost=memory_cost,
             parallelism=parallelism,
             hash_len=32,  # 32 bytes for AES-256
-            salt_len=16,
-            type=argon2.Type.ID  # Argon2id for balanced security
+            type=LLType.ID,  # Argon2id for balanced security
         )
-        
-        # Hash password with salt
-        key = ph.hash(password + salt.hex())
-        
-        # Derive final key using SHA-256 for consistent output
-        return base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
+        return base64.urlsafe_b64encode(raw)
     except Exception as e:
         logger.error(f'Argon2 key derivation failed: {e}')
         raise ValueError('Key derivation failed')

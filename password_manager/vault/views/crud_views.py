@@ -1,8 +1,11 @@
+import logging
+
 from rest_framework import viewsets, status, mixins
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 from vault.models.vault_models import EncryptedVaultItem
@@ -12,6 +15,13 @@ import json
 
 # Import the standardized response helpers
 from .api_views import error_response, success_response
+
+
+logger = logging.getLogger(__name__)
+
+
+class _HookFailed(Exception):
+    """Security hook (honeypot / self-destruct) errored; fail closed."""
 
 
 def _list_honeypots_for_user(user):
@@ -27,21 +37,27 @@ def _list_honeypots_for_user(user):
         service = HoneypotService()
         return [service.masked_list_entry(hp) for hp in service.list_for_user(user) if hp.is_active]
     except Exception:
+        logger.exception("failed to list honeypots")
         return []
 
 
 def _intercept_retrieve(request, pk):
     """
     Return the decoy payload if pk resolves to a honeypot, else None.
-    The caller continues with the real vault lookup on None.
+
+    Fails closed: on any exception we raise ``_HookFailed`` so the caller
+    returns a 5xx. Swallowing the exception and falling through would hand an
+    attacker the real credential whenever the interceptor could be made to
+    throw (crafted pk, DB blip, etc.).
     """
     if not getattr(settings, 'HONEYPOT_CREDENTIALS_ENABLED', True):
         return None
     try:
         from honeypot_credentials.services import HoneypotAccessInterceptor
         return HoneypotAccessInterceptor().intercept_retrieve(pk, request)
-    except Exception:
-        return None
+    except Exception as exc:
+        logger.exception("honeypot interceptor failed; denying read: %s", exc)
+        raise _HookFailed("honeypot interceptor error") from exc
 
 
 def _check_self_destruct(request, vault_item):
@@ -49,6 +65,9 @@ def _check_self_destruct(request, vault_item):
     Evaluate self-destruct policy for a vault item. Returns None when
     the read should proceed, or a (message, reason) tuple that must be
     converted to HTTP 410 Gone.
+
+    Fails closed: any error in the policy chain raises ``_HookFailed`` so the
+    view returns 5xx rather than silently disclosing the credential.
     """
     if not getattr(settings, 'SELF_DESTRUCT_PASSWORDS_ENABLED', True):
         return None
@@ -59,8 +78,9 @@ def _check_self_destruct(request, vault_item):
             record_access(vault_item)
             return None
         return ('This credential is no longer available.', decision)
-    except Exception:
-        return None
+    except Exception as exc:
+        logger.exception("self-destruct policy failed; denying read: %s", exc)
+        raise _HookFailed("self-destruct policy error") from exc
 
 class VaultItemViewSet(viewsets.ModelViewSet):
     """
@@ -126,7 +146,14 @@ class VaultItemViewSet(viewsets.ModelViewSet):
         We then evaluate any self-destruct policy and return 410 Gone on
         deny.
         """
-        decoy = _intercept_retrieve(request, pk)
+        try:
+            decoy = _intercept_retrieve(request, pk)
+        except _HookFailed:
+            return error_response(
+                message='Access policy unavailable; please retry.',
+                code='policy_unavailable',
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         if decoy is not None:
             return success_response(
                 data=decoy,
@@ -141,8 +168,23 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 code='item_not_found',
                 status_code=status.HTTP_404_NOT_FOUND,
             )
+        except (ValueError, ValidationError):
+            # A malformed ``pk`` (e.g. not a valid UUID on Postgres) is a 404 for
+            # the caller, not a 500 — the item simply does not exist.
+            return error_response(
+                message='Item not found',
+                code='item_not_found',
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
-        denial = _check_self_destruct(request, instance)
+        try:
+            denial = _check_self_destruct(request, instance)
+        except _HookFailed:
+            return error_response(
+                message='Access policy unavailable; please retry.',
+                code='policy_unavailable',
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         if denial is not None:
             message, reason = denial
             return error_response(

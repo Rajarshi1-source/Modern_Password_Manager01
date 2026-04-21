@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
+import uuid
 from typing import Iterable, List, Mapping
 
 from django.db import transaction
@@ -45,7 +47,7 @@ def _verify_secret_commitment(circle, recovered_secret_hex: str) -> bool:
         return False
     r_scalar = _scalar_from_bytes(salt) or 1
     recomputed = ec.encode_point(schnorr.commit(m_scalar, r_scalar))
-    return hashlib.compare_digest(stored, recomputed)
+    return hmac.compare_digest(stored, recomputed)
 
 
 @transaction.atomic
@@ -70,11 +72,21 @@ def complete_request(
         ).values_list("voucher_id", flat=True)
     )
 
+    # ``approved_voucher_ids`` is a set of ``uuid.UUID`` (Django returns
+    # native UUID objects from ``values_list`` on a UUIDField). Callers
+    # may submit ``voucher_id`` as a string, so normalise both sides to
+    # ``uuid.UUID`` before the membership check — otherwise the ``in``
+    # check would spuriously fail and the service would wrongly reject
+    # legitimate approvers.
     supplied: List[str] = []
-    used_voucher_ids = []
+    used_voucher_ids: List[uuid.UUID] = []
     for entry in decrypted_shares:
-        vid = entry["voucher_id"]
+        raw_vid = entry["voucher_id"]
         share = entry["share"]
+        try:
+            vid = raw_vid if isinstance(raw_vid, uuid.UUID) else uuid.UUID(str(raw_vid))
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError(f"voucher_id {raw_vid!r} is not a valid UUID")
         if vid not in approved_voucher_ids:
             raise ValueError(f"voucher {vid} did not approve this request")
         if vid in used_voucher_ids:
