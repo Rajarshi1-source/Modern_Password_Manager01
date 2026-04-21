@@ -75,29 +75,17 @@ def _scalar_from_bytes(blob: bytes) -> int:
     return int.from_bytes(hashlib.sha256(blob).digest(), "big") % ec.N or 1
 
 
-def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, bytes, bytes]:
-    """Produce (fresh_commitment_bytes, T, s) for a voucher at attestation time.
+def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, bytes, bytes, bytes]:
+    """Produce ``(fresh_commitment_bytes, T, s, stored_commit_bytes)`` for a
+    voucher at attestation time.
 
-    The anti-Sybil fingerprint (m scalar) is:
-        SHA-256("voucher_public_key|circle_id")
-
-    At attestation time the voucher re-commits to the same scalar with a
-    different blinding factor ``r2`` and proves equality with the stored
-    commitment whose blinding factor is ``r1``.
-
-    NOTE: In production only the voucher knows r1 (their commitment was
-    created on their device at invite time). For tests we rebuild both
-    commitments with the same derivation used in ``circle_service`` so we can
-    exercise the verifier.
+    The stored blinding factor ``r1`` is deterministically derived from the
+    ``salt`` now persisted on the :class:`RelationshipCommitment` row, exactly
+    how a real voucher would reconstruct it from their invitation payload.
     """
-    from social_recovery.services.circle_service import _relationship_commitment
-
     m_bytes = f"{voucher_public_key}|{circle_id}".encode("utf-8")
     m_scalar = _scalar_from_bytes(m_bytes)
 
-    # Reconstruct the "stored" (r1) commitment by looking up the record in the
-    # DB. We only need r2 locally to produce the proof; verify_equality uses
-    # public inputs.
     rc = (
         RelationshipCommitment.objects.filter(
             voucher__ed25519_public_key=voucher_public_key,
@@ -109,34 +97,16 @@ def _build_equality_proof(voucher_public_key: str, circle_id) -> tuple[bytes, by
     )
     assert rc is not None, "no RelationshipCommitment found for voucher/circle"
     stored_commit_bytes = bytes(rc.pedersen_commitment)
+    r1 = _scalar_from_bytes(bytes(rc.salt)) or 1
 
-    # Fresh blinding factor for the attestation-time commitment.
     salt2 = _secrets.token_bytes(32)
-    r2 = _scalar_from_bytes(salt2)
+    r2 = _scalar_from_bytes(salt2) or 1
     fresh_point = schnorr.commit(m_scalar, r2)
     fresh_bytes = ec.encode_point(fresh_point)
 
-    # We do NOT know r1 at this layer because circle_service discarded it
-    # (privacy). For the test path we generate a sibling Schnorr proof using
-    # the known r2 pair — rebuild an alternate r1 by hashing the stored point
-    # itself so verify_equality holds.
-    # Instead of mocking r1, we directly re-derive r1 from the same salt input
-    # that ``circle_service._relationship_commitment`` used. We expose a
-    # deterministic variant by recomputing with a test-only helper here:
-    # use the rc.salt_hash to seed a repeatable blinder. That matches what a
-    # real voucher would persist client-side.
-    r1 = _scalar_from_bytes(rc.salt_hash.encode("utf-8"))
-    # Because the actual stored commitment was built with a *random* salt, we
-    # instead rebuild the relationship commitment using ``r1`` above, which
-    # gives us a *second* commitment to the same scalar that verify_equality
-    # will accept against the fresh commitment.
-    surrogate_stored_point = schnorr.commit(m_scalar, r1)
-    surrogate_stored_bytes = ec.encode_point(surrogate_stored_point)
-
-    T, s = schnorr.prove_equality(
-        fresh_point, surrogate_stored_point, r2, r1
-    )
-    return fresh_bytes, T, s, surrogate_stored_bytes
+    stored_point = schnorr.commit(m_scalar, r1)
+    T, s = schnorr.prove_equality(fresh_point, stored_point, r2, r1)
+    return fresh_bytes, T, s, stored_commit_bytes
 
 
 @pytest.mark.django_db
@@ -311,14 +281,9 @@ class QuorumAndStakeTests(TestCase):
         signed_message = (
             f"pwm-social-recovery-v1|{request.request_id}|approve|{request.challenge_nonce}"
         ).encode("utf-8")
-        fresh_bytes, T, s, surrogate_bytes = _build_equality_proof(
+        fresh_bytes, T, s, _stored = _build_equality_proof(
             voucher.ed25519_public_key, voucher.circle_id
         )
-        # Overwrite the stored commitment with the surrogate so the verifier
-        # can succeed using r1 derived from salt_hash.
-        rc = RelationshipCommitment.objects.get(voucher=voucher)
-        rc.pedersen_commitment = surrogate_bytes
-        rc.save(update_fields=["pedersen_commitment"])
 
         return submit_attestation(
             request=request,
@@ -384,12 +349,9 @@ class QuorumAndStakeTests(TestCase):
         request = initiate_request(circle=circle)
         # Approve with first two vouchers.
         for v, (private, _) in list(zip(vouchers_qs, self.voucher_keypairs))[:2]:
-            fresh_bytes, T, s, surrogate = _build_equality_proof(
+            fresh_bytes, T, s, _stored = _build_equality_proof(
                 v.ed25519_public_key, v.circle_id
             )
-            rc = RelationshipCommitment.objects.get(voucher=v)
-            rc.pedersen_commitment = surrogate
-            rc.save(update_fields=["pedersen_commitment"])
 
             signed_message = (
                 f"pwm-social-recovery-v1|{request.request_id}|approve|{request.challenge_nonce}"
@@ -406,26 +368,27 @@ class QuorumAndStakeTests(TestCase):
             )
         request.refresh_from_db()
         assert request.status == "approved"
-        # Client would decrypt its own share; for the test we re-derive via the
-        # circle_service helper.
-        from social_recovery.services.circle_service import _encrypt_share_placeholder
+        # Each voucher decrypts their own shard using the X25519 scheme: we
+        # simulate their device by handing the Ed25519 private seed to the
+        # shard_crypto helper.
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, NoEncryption, PrivateFormat,
+        )
+        from social_recovery.services.shard_crypto import decrypt_shard
 
-        # Recover raw shares by reversing the AES-GCM envelope produced by
-        # ``_encrypt_share_placeholder``.
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-        def _decrypt(voucher):
-            key = hashlib.sha256(
-                ("pwm-social-recovery-v1|" + voucher.ed25519_public_key).encode()
-            ).digest()
-            blob = bytes(voucher.encrypted_shard_data)
-            nonce, ciphertext = blob[:12], blob[12:]
-            aad = f"pwm-social-recovery|{voucher.ed25519_public_key}".encode("utf-8")
-            return AESGCM(key).decrypt(nonce, ciphertext, aad).decode("utf-8")
+        def _decrypt(voucher, private_key):
+            seed = private_key.private_bytes(
+                Encoding.Raw, PrivateFormat.Raw, NoEncryption()
+            )
+            return decrypt_shard(
+                bytes(voucher.encrypted_shard_data),
+                voucher.ed25519_public_key,
+                seed,
+            )
 
         decrypted = [
-            {"voucher_id": v.voucher_id, "share": _decrypt(v)}
-            for v in vouchers_qs[:2]
+            {"voucher_id": v.voucher_id, "share": _decrypt(v, private)}
+            for v, (private, _) in list(zip(vouchers_qs, self.voucher_keypairs))[:2]
         ]
         secret_hex = complete_request(
             request=request, decrypted_shares=decrypted

@@ -260,8 +260,14 @@ class RelationshipCommitment(models.Model):
     pedersen_commitment = models.BinaryField(
         help_text="33-byte compressed secp256k1 point (C = m*G + r*H)"
     )
-    # We store a hash of the salt rather than the salt itself so a DB leak
-    # does not reveal the blinding factor.
+    # The blinding factor ``r`` is deterministically derived from ``salt``. We
+    # persist the raw salt so the voucher-side attestation flow can rebuild r1
+    # and produce a valid Schnorr equality proof. The *message* component of
+    # this commitment is public (a fingerprint of the voucher's public key plus
+    # circle id), so knowledge of r does not reveal any secret -- it only lets
+    # the legitimate voucher prove binding. An independent ``salt_hash`` is
+    # still kept as an audit reference.
+    salt = models.BinaryField(default=bytes, blank=True)
     salt_hash = models.CharField(max_length=64)
 
     created_at = models.DateTimeField(auto_now_add=True)

@@ -43,16 +43,17 @@ def verify_sign_in_presentation(
     if payload.get("iss") != did_string:
         return False, None, ["Holder DID does not match payload iss"]
 
-    # Consume the nonce atomically.
-    challenge = SignInChallenge.objects.filter(
-        did_string=did_string, nonce=expected_nonce, consumed=False
-    ).first()
-    if challenge is None:
-        return False, None, ["Challenge not found or already consumed"]
-    if djtz.now() >= challenge.expires_at:
-        return False, None, ["Challenge expired"]
-    challenge.consumed = True
-    challenge.save(update_fields=["consumed"])
+    # Consume the nonce atomically: a conditional UPDATE returns the number of
+    # rows it touched, so two concurrent verifies can never both see
+    # ``consumed=False`` and both succeed.
+    updated = SignInChallenge.objects.filter(
+        did_string=did_string,
+        nonce=expected_nonce,
+        consumed=False,
+        expires_at__gt=djtz.now(),
+    ).update(consumed=True)
+    if not updated:
+        return False, None, ["Challenge not found, expired, or already consumed"]
 
     user_did = UserDID.objects.filter(did_string=did_string).first()
     if user_did is None:

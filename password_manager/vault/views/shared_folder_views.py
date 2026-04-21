@@ -296,26 +296,33 @@ def invite_member(request, folder_id):
                 'error': 'You do not have permission to invite members'
             }, status=status.HTTP_403_FORBIDDEN)
         
-        # Get invitee
+        # Get invitee. IMPORTANT: we must not leak whether ``email`` maps to
+        # an existing user (distinct 404) or whether that user is already a
+        # member (distinct 400) — either response lets an attacker with
+        # invite permission on *any* folder probe the user directory.
+        # Collapse the three outcomes (no user / already member / new
+        # invitation) into the same generic success response. The real work
+        # (creating the membership) only happens in the "new invitation"
+        # branch, but the response shape is identical in every case.
         from django.contrib.auth.models import User
         email = request.data.get('email')
+        generic_response = Response({
+            'message': 'If the email is registered, an invitation has been sent.'
+        }, status=status.HTTP_202_ACCEPTED)
+
         try:
             invitee = User.objects.get(email=email)
         except User.DoesNotExist:
-            return Response({
-                'error': f'User with email {email} not found'
-            }, status=status.HTTP_404_NOT_FOUND)
-        
-        # Check if already a member
+            return generic_response
+
+        # Already a member / pending invitation → same generic response.
         if SharedFolderMember.objects.filter(folder=folder, user=invitee).exists():
-            return Response({
-                'error': 'User is already a member or has a pending invitation'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
+            return generic_response
+
         # Generate invitation token
         invitation_token = secrets.token_urlsafe(32)
         invitation_expires_at = timezone.now() + timezone.timedelta(days=7)
-        
+
         with transaction.atomic():
             # Create membership
             membership = SharedFolderMember.objects.create(
@@ -350,11 +357,11 @@ def invite_member(request, folder_id):
                 ip_address=request.META.get('REMOTE_ADDR')
             )
         
-        return Response({
-            'message': 'Invitation sent successfully',
-            'invitation_token': invitation_token,
-            'expires_at': invitation_expires_at
-        }, status=status.HTTP_201_CREATED)
+        # Return the same generic response so an observer cannot distinguish
+        # "user exists + new membership created" from "user does not exist" or
+        # "already a member". The actual invitation token is delivered to the
+        # invitee out-of-band (e.g. email), not in this response.
+        return generic_response
         
     except SharedFolder.DoesNotExist:
         return Response({
