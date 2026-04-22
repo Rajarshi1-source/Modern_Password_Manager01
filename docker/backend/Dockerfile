@@ -70,7 +70,9 @@ FROM python:3.11-slim AS deps-builder
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RESOLVER_BACKTRACK_LIMIT=200000
 
 # Install build dependencies for Python packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -102,10 +104,31 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 COPY password_manager/requirements.txt .
 
-# Install core dependencies first
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements.txt && \
-    pip install gunicorn daphne uvicorn[standard] redis django-redis
+# Install core dependencies.
+#
+# Notes:
+# * We pin pip to a version known to handle large graphs without running
+#   into the "resolution-too-deep" error that newer resolvers raise on the
+#   unbounded version specifiers in this project's requirements.txt (this
+#   is especially painful when the arm64 leg runs under QEMU emulation).
+# * `--use-deprecated=legacy-resolver` bypasses the recursive backtracking
+#   resolver entirely, matching the behaviour the project was authored
+#   against and keeping ARM64 builds from timing out.
+# * `--prefer-binary` forces pip to pick a wheel whenever one exists
+#   (avoids multi-hour source builds under qemu for scipy, torch, etc.).
+# * `--retries` cushions transient PyPI timeouts that appeared repeatedly
+#   in the arm64 build logs.
+RUN pip install --upgrade "pip==24.3.1" "setuptools>=70,<81" wheel && \
+    pip install \
+        --use-deprecated=legacy-resolver \
+        --prefer-binary \
+        --retries 5 \
+        -r requirements.txt && \
+    pip install \
+        --use-deprecated=legacy-resolver \
+        --prefer-binary \
+        --retries 5 \
+        gunicorn daphne "uvicorn[standard]" redis django-redis
 
 # Copy OQS Python package from crypto-builder using a version-agnostic glob via shell
 RUN mkdir -p /tmp/oqs-staging
