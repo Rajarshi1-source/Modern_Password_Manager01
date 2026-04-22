@@ -272,8 +272,12 @@ export const encryptItem = async (obj) => {
 
 /**
  * Decrypt an `encrypted_data` string back into the original object.
- * Supports legacy plaintext JSON payloads for backward compatibility
- * (returns them as-is and flags `_legacyPlaintext: true`).
+ *
+ * Strict: anything whose envelope is not a `{v: PAYLOAD_VERSION, iv, ct}`
+ * ciphertext object is treated as legacy / untrusted and surfaces a
+ * `_legacyPlaintext` marker *without* copying any of its fields into the
+ * decrypted view. Plaintext secrets stored server-side must never be
+ * silently rendered as if they had been end-to-end encrypted.
  */
 export const decryptItem = async (payloadStr) => {
   if (typeof payloadStr !== 'string' || payloadStr.length === 0) {
@@ -288,8 +292,14 @@ export const decryptItem = async (payloadStr) => {
 
   if (!parsed || typeof parsed !== 'object') return {};
 
-  if (parsed.v !== PAYLOAD_VERSION) {
-    return { ...parsed, _legacyPlaintext: true };
+  if (
+    parsed.v !== PAYLOAD_VERSION ||
+    typeof parsed.iv !== 'string' ||
+    typeof parsed.ct !== 'string'
+  ) {
+    // Legacy plaintext or otherwise untrusted payload: do NOT leak fields
+    // through. The UI should render a migration/warning state instead.
+    return { _legacyPlaintext: true };
   }
 
   if (!sessionKey) {

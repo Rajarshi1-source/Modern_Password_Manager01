@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
@@ -77,13 +77,23 @@ class ZKCommitmentViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        commitment, created = ZKCommitment.objects.update_or_create(
-            user=request.user,
-            scope_type=payload["scope_type"],
-            scope_id=payload["scope_id"],
-            scheme=payload["scheme"],
-            defaults={"commitment": payload["commitment"]},
-        )
+        try:
+            commitment, created = ZKCommitment.objects.update_or_create(
+                user=request.user,
+                scope_type=payload["scope_type"],
+                scope_id=payload["scope_id"],
+                scheme=payload["scheme"],
+                defaults={"commitment": payload["commitment"]},
+            )
+        except IntegrityError:
+            # The ``(user, commitment_fingerprint)`` unique constraint fires
+            # when the caller tries to store the same commitment bytes under
+            # a different scope — a strong signal of either a misconfigured
+            # client or an attempt to set up the D=0 equality-proof trick.
+            return Response(
+                {"detail": "Commitment bytes are already registered for this user."},
+                status=status.HTTP_409_CONFLICT,
+            )
         out = ZKCommitmentSerializer(commitment).data
         return Response(
             out,

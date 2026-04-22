@@ -96,8 +96,10 @@ def verify_equality(
         rhs = ec.point_add(T, ec.point_mul(c, D))
         if lhs.is_infinity() or rhs.is_infinity():
             # A valid proof never produces infinity: lhs = sH with s ∈ [1, n-1]
-            # and H of full order, rhs = T + cD likewise. Treat as malformed.
-            return lhs.is_infinity() and rhs.is_infinity()
+            # and H of full order, rhs = T + cD likewise. Accepting the
+            # "both infinity" branch would let a forged proof over D=0
+            # (identical commitments or C with C) verify trivially.
+            return False
         return lhs.x == rhs.x and lhs.y == rhs.y
     except (ValueError, TypeError, OverflowError):
         return False

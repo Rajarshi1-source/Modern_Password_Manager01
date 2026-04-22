@@ -1,17 +1,53 @@
 """Complete an approved recovery request by reconstructing the secret."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import uuid
 from typing import Iterable, List, Mapping
 
 from django.db import transaction
 from django.utils import timezone
 
 from auth_module.services.shamir_py3 import ShamirSecretSharer
+from zk_proofs.crypto import secp256k1 as ec
+from zk_proofs.crypto import schnorr
 
 from ..models import SocialRecoveryRequest, VouchAttestation, Voucher
 from .audit_service import record_event
 from .stake_service import release_stake, slash_stake
 from .web_of_trust_service import evaluate_quorum
+
+
+def _scalar_from_bytes(blob: bytes) -> int:
+    """Mirror the scalar derivation used when the commitment was built."""
+    if not blob:
+        return 1
+    return int.from_bytes(hashlib.sha256(blob).digest(), "big") % ec.N or 1
+
+
+def _verify_secret_commitment(circle, recovered_secret_hex: str) -> bool:
+    """Recompute the Pedersen commitment from the recovered secret + circle salt
+    and compare against the stored one.
+
+    Returns True if, and only if, the Pedersen commitment opens to the
+    reconstructed secret. A mismatch indicates at least one corrupted or
+    forged share in the recovery set and the result MUST be rejected.
+    """
+    stored = bytes(circle.secret_commitment or b"")
+    salt = bytes(circle.salt or b"")
+    if not stored or not salt:
+        # If we have no commitment to check against (legacy rows) we cannot
+        # prove correctness — treat as a verification failure rather than a
+        # silent pass.
+        return False
+    try:
+        m_scalar = _scalar_from_bytes(bytes.fromhex(recovered_secret_hex))
+    except ValueError:
+        return False
+    r_scalar = _scalar_from_bytes(salt) or 1
+    recomputed = ec.encode_point(schnorr.commit(m_scalar, r_scalar))
+    return hmac.compare_digest(stored, recomputed)
 
 
 @transaction.atomic
@@ -36,11 +72,21 @@ def complete_request(
         ).values_list("voucher_id", flat=True)
     )
 
+    # ``approved_voucher_ids`` is a set of ``uuid.UUID`` (Django returns
+    # native UUID objects from ``values_list`` on a UUIDField). Callers
+    # may submit ``voucher_id`` as a string, so normalise both sides to
+    # ``uuid.UUID`` before the membership check — otherwise the ``in``
+    # check would spuriously fail and the service would wrongly reject
+    # legitimate approvers.
     supplied: List[str] = []
-    used_voucher_ids = []
+    used_voucher_ids: List[uuid.UUID] = []
     for entry in decrypted_shares:
-        vid = entry["voucher_id"]
+        raw_vid = entry["voucher_id"]
         share = entry["share"]
+        try:
+            vid = raw_vid if isinstance(raw_vid, uuid.UUID) else uuid.UUID(str(raw_vid))
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError(f"voucher_id {raw_vid!r} is not a valid UUID")
         if vid not in approved_voucher_ids:
             raise ValueError(f"voucher {vid} did not approve this request")
         if vid in used_voucher_ids:
@@ -54,6 +100,20 @@ def complete_request(
         )
 
     secret_hex = ShamirSecretSharer.recover_secret(supplied[: request.circle.threshold])
+
+    # Verify the recovered secret against the Pedersen commitment published at
+    # circle-creation time. A mismatch means at least one share was corrupted
+    # or forged — we must not return a wrong secret to the caller.
+    if not _verify_secret_commitment(request.circle, secret_hex):
+        record_event(
+            event_type="request_commitment_mismatch",
+            user=request.circle.user,
+            circle=request.circle,
+            event_data={"request_id": str(request.request_id)},
+        )
+        raise ValueError(
+            "reconstructed secret failed Pedersen commitment verification"
+        )
 
     request.status = "completed"
     request.completed_at = timezone.now()

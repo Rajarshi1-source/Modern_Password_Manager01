@@ -641,7 +641,7 @@ class QuantumAPITestCase(APITestCase):
     
     def test_random_bytes_endpoint_hex(self):
         """Test random bytes endpoint with hex format."""
-        response = self.client.get('/api/security/quantum/random-bytes/?count=32&format=hex')
+        response = self.client.get('/api/security/quantum/random-bytes/?count=32&encoding=hex')
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['success'])
@@ -651,7 +651,7 @@ class QuantumAPITestCase(APITestCase):
     
     def test_random_bytes_endpoint_base64(self):
         """Test random bytes endpoint with base64 format."""
-        response = self.client.get('/api/security/quantum/random-bytes/?count=32&format=base64')
+        response = self.client.get('/api/security/quantum/random-bytes/?count=32&encoding=base64')
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['format'], 'base64')
@@ -842,7 +842,7 @@ class QuantumE2ETestCase(TransactionTestCase):
     def test_raw_bytes_to_password_flow(self):
         """Test getting raw bytes and verifying entropy."""
         # Get raw bytes
-        bytes_response = self.client.get('/api/security/quantum/random-bytes/?count=64&format=hex')
+        bytes_response = self.client.get('/api/security/quantum/random-bytes/?count=64&encoding=hex')
         
         self.assertEqual(bytes_response.status_code, status.HTTP_200_OK)
         
@@ -853,7 +853,14 @@ class QuantumE2ETestCase(TransactionTestCase):
         self.assertEqual(len(hex_bytes), 128)  # 64 bytes * 2
         
         # Verify provider is valid
-        valid_providers = ['anu_qrng', 'ibm_quantum', 'ionq_quantum', 'cryptographic_fallback']
+        valid_providers = [
+            'anu_qrng',
+            'ibm_quantum',
+            'ionq_quantum',
+            'noaa_ocean_wave',
+            'cosmic_ray_muon',
+            'cryptographic_fallback',
+        ]
         self.assertIn(provider, valid_providers)
     
     def test_pool_status_reflects_usage(self):

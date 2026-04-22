@@ -68,23 +68,27 @@ def release_stake(*, user, amount: int, request_id: str) -> ReputationEvent:
 def slash_stake(
     *, user, amount: int, request_id: str, reason: str = "fraudulent_vouch"
 ) -> ReputationEvent:
-    """Slash a voucher's reputation for a fraudulent attestation."""
+    """Slash a voucher's reputation for a fraudulent attestation.
+
+    Let errors from ``password_reputation.services.slash`` propagate. The
+    previous implementation swallowed them and wrote a bogus ``EVENT_SLASH``
+    row with ``leaf_hash = 0`` and ``anchor_status = PENDING``. That row
+    never made it into the Merkle anchor, so a caller would see a
+    return value indicating success while the voucher's reputation was
+    not actually penalised — silently turning a failing slash into a
+    no-op. Failing loudly forces the caller (a transaction in
+    ``recovery_completion_service`` or an admin action) to retry or
+    escalate instead of continuing on a false-positive result.
+    """
     # Delegate the actual score hit to password_reputation.services.slash so
     # the existing merkle/anchor flushing is invoked.
     from password_reputation.services import slash
 
-    try:
-        return slash(user=user, score_penalty=max(1, int(amount)), reason=f"{SCHEME_ID}|{reason}|{request_id}")
-    except Exception:  # pragma: no cover - defensive
-        return ReputationEvent.objects.create(
-            user=user,
-            event_type=ReputationEvent.EVENT_SLASH,
-            score_delta=-max(1, int(amount)),
-            tokens_delta=0,
-            note=f"{SCHEME_ID}|slash-fallback|{request_id}|{reason}"[:256],
-            leaf_hash=b"\x00" * 32,
-            anchor_status=ReputationEvent.ANCHOR_STATUS_PENDING,
-        )
+    return slash(
+        user=user,
+        score_penalty=max(1, int(amount)),
+        reason=f"{SCHEME_ID}|{reason}|{request_id}",
+    )
 
 
 def get_current_score(user) -> int:

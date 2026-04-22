@@ -11,19 +11,45 @@ from password_manager.throttling import VaultOperationThrottle
 import base64
 
 
+import logging as _hp_logging
+
+_hp_logger = _hp_logging.getLogger(__name__)
+
+
+class _HookFailed(Exception):
+    """Raised when a security-relevant hook (honeypot/self-destruct) errors.
+
+    Views translate this into a 5xx so the feature fails *closed* instead of
+    silently returning the real vault item when its policy chain throws.
+    """
+
+
 def _honeypot_decoy(request, pk):
-    """Shared helper: returns decoy payload if pk is a honeypot, else None."""
+    """Return the decoy payload if ``pk`` is a honeypot, else ``None``.
+
+    Fails closed: if the honeypot subsystem raises, we propagate ``_HookFailed``
+    rather than letting the view fall through to the real credential — the
+    whole point of the honeypot is that attackers must never see a behavioural
+    difference between decoy and real access, so policy errors must deny.
+    """
     if not getattr(settings, 'HONEYPOT_CREDENTIALS_ENABLED', True):
         return None
     try:
         from honeypot_credentials.services import HoneypotAccessInterceptor
         return HoneypotAccessInterceptor().intercept_retrieve(pk, request)
-    except Exception:
-        return None
+    except Exception as exc:
+        _hp_logger.exception("honeypot interceptor failed; denying read: %s", exc)
+        raise _HookFailed("honeypot interceptor error") from exc
 
 
 def _self_destruct_block(request, vault_item):
-    """Returns (message, reason) if access is denied, else None."""
+    """Return ``(message, reason)`` if access is denied, else ``None``.
+
+    Fails closed: if the self-destruct policy chain raises, an attacker who
+    can induce exceptions (malformed state, import failure, etc.) would
+    otherwise bypass the policy entirely. Propagate ``_HookFailed`` so the
+    view returns a 5xx and the credential is NOT disclosed.
+    """
     if not getattr(settings, 'SELF_DESTRUCT_PASSWORDS_ENABLED', True):
         return None
     try:
@@ -33,8 +59,9 @@ def _self_destruct_block(request, vault_item):
             record_access(vault_item)
             return None
         return ('This credential is no longer available.', decision)
-    except Exception:
-        return None
+    except Exception as exc:
+        _hp_logger.exception("self-destruct policy failed; denying read: %s", exc)
+        raise _HookFailed("self-destruct policy error") from exc
 
 def error_response(message, status_code=status.HTTP_400_BAD_REQUEST, code="error", details=None):
     """Helper function to create standardized error responses"""
@@ -141,13 +168,27 @@ class VaultItemViewSet(viewsets.ModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         """Retrieve a single vault item. Honors honeypot + self-destruct hooks."""
         pk = kwargs.get(self.lookup_field or 'pk') or kwargs.get('pk')
-        decoy = _honeypot_decoy(request, pk)
+        try:
+            decoy = _honeypot_decoy(request, pk)
+        except _HookFailed:
+            return error_response(
+                message="Access policy unavailable; please retry.",
+                code="policy_unavailable",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         if decoy is not None:
             return success_response(data=decoy, message='Item retrieved successfully')
 
         try:
             instance = self.get_object()
-            denial = _self_destruct_block(request, instance)
+            try:
+                denial = _self_destruct_block(request, instance)
+            except _HookFailed:
+                return error_response(
+                    message="Access policy unavailable; please retry.",
+                    code="policy_unavailable",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
             if denial is not None:
                 message, reason = denial
                 return error_response(
@@ -231,42 +272,22 @@ class VaultItemViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def verify_master_password(self, request):
-        """Verify master password using auth hash"""
-        password = request.data.get('master_password')
-        if not password:
-            return error_response(
-                message="Password is required",
-                code="missing_password"
-            )
-            
-        try:
-            salt_obj = UserSalt.objects.get(user=request.user)
-            auth_key = derive_auth_key(password, salt_obj.salt)
-            
-            if not salt_obj.auth_hash:  # First time setup
-                salt_obj.auth_hash = auth_key
-                salt_obj.save()
-                return success_response({
-                    'status': 'setup_complete'
-                })
-            
-            # Compare derived key with stored auth hash
-            is_valid = auth_key == salt_obj.auth_hash
-            return success_response({
-                'is_valid': is_valid
-            })
-            
-        except UserSalt.DoesNotExist:
-            return error_response(
-                message="User not initialized with a salt",
-                code="user_not_initialized"
-            )
-        except Exception as e:
-            return error_response(
-                message=f"Verification failed: {str(e)}",
-                code="verification_error", 
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        """Deprecated: plaintext master-password verification is disallowed.
+
+        Accepting the plaintext master password on the server violates the
+        zero-knowledge contract the rest of the codebase enforces. Clients
+        must derive an auth hash locally (Argon2id) and submit it to
+        :meth:`verify_auth`, which compares with constant-time semantics and
+        never sees the password itself.
+        """
+        return error_response(
+            message=(
+                "Endpoint disabled. Derive the auth hash client-side and call "
+                "/vault/items/verify_auth/ instead."
+            ),
+            code="endpoint_disabled",
+            status_code=status.HTTP_410_GONE,
+        )
     
     @action(detail=False, methods=['post'])
     def verify_auth(self, request):

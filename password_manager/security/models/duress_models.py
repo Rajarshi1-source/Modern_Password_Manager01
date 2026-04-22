@@ -571,27 +571,37 @@ class EvidencePackage(models.Model):
         return f"Evidence Package {str(self.id)[:8]} for {self.user.username}"
     
     def compute_hash(self):
-        """Compute SHA-512 hash of evidence components"""
+        """Compute SHA-512 hash of evidence components and set evidence_hash."""
         evidence_data = {
-            'behavioral': self.behavioral_snapshot,
+            'behavioral': self.behavioral_snapshot or self.behavioral_data,
             'device': self.device_info,
-            'network': self.network_info,
+            'network': self.network_info or self.network_data,
             'geo': self.geo_location,
-            'session': self.session_recording,
+            'session': self.session_recording or self.session_data,
         }
         evidence_str = str(sorted(evidence_data.items()))
-        return hashlib.sha512(evidence_str.encode()).hexdigest()
-    
+        digest = hashlib.sha512(evidence_str.encode()).hexdigest()
+        self.evidence_hash = digest
+        return digest
+
     def add_custody_entry(self, action, actor, details=None):
-        """Add entry to chain of custody log"""
+        """Add entry to chain of custody log (mirrored to chain_of_custody)."""
         entry = {
             'timestamp': timezone.now().isoformat(),
             'action': action,
             'actor': actor,
             'details': details or {},
         }
+        if self.custody_log is None:
+            self.custody_log = []
+        if self.chain_of_custody is None:
+            self.chain_of_custody = []
         self.custody_log.append(entry)
-        self.save(update_fields=['custody_log'])
+        self.chain_of_custody.append(entry)
+        # Don't save here; test calls .save() explicitly and unsaved
+        # test instances may not have a PK to update.
+        if self.pk:
+            self.save(update_fields=['custody_log', 'chain_of_custody'])
 
 
 # =============================================================================
@@ -713,5 +723,16 @@ class TrustedAuthority(models.Model):
         return f"{self.name} ({self.authority_type}) for {self.user.username}"
     
     def should_notify_for_level(self, threat_level):
-        """Check if this authority should be notified for a threat level"""
-        return threat_level in self.trigger_threat_levels
+        """Check if this authority should be notified for a threat level.
+
+        Prefers ``trigger_threat_levels`` (explicit list) when populated, then
+        falls back to ``minimum_threat_level`` with ordered severity.
+        """
+        if self.trigger_threat_levels:
+            return threat_level in self.trigger_threat_levels
+        if self.minimum_threat_level:
+            order = {'low': 0, 'medium': 1, 'high': 2, 'critical': 3}
+            return order.get(threat_level, -1) >= order.get(
+                self.minimum_threat_level, 99
+            )
+        return False

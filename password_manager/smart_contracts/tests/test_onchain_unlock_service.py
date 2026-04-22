@@ -43,8 +43,8 @@ class CommitmentHashTest(TestCase):
         )
         self.vault = SmartContractVault.objects.create(
             user=self.user,
-            name='Test vault',
-            encrypted_password=b'ciphertext',
+            title='Test vault',
+            password_encrypted='ciphertext',
             status=VaultStatus.UNLOCKED,
         )
 

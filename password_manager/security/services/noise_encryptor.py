@@ -306,28 +306,35 @@ class NoiseEncryptor:
     def _calculate_entropy(self, data: bytes) -> float:
         """
         Calculate Shannon entropy of data.
-        
+
         Returns bits of entropy per byte (max 8.0 for truly random).
         """
         if not data:
             return 0.0
-        
+
         # Count byte frequencies
         freq = [0] * 256
         for byte in data:
             freq[byte] += 1
-        
+
         # Calculate entropy
         import math
         entropy = 0.0
         length = len(data)
-        
+
         for count in freq:
             if count > 0:
                 probability = count / length
                 entropy -= probability * math.log2(probability)
-        
+
         return entropy
+
+    calculate_entropy = _calculate_entropy
+
+    def generate_noise(self, size: int) -> bytes:
+        """Generate cryptographically secure random noise of the requested size."""
+        import secrets as _secrets
+        return _secrets.token_bytes(size)
     
     def verify_randomness(self, data: bytes) -> dict:
         """

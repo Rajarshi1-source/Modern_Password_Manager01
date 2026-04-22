@@ -48,105 +48,111 @@ class TestNOAABuoyClientIntegration(TestCase):
     def setUpClass(cls):
         super().setUpClass()
         from security.services.noaa_api_client import NOAABuoyClient
-        cls.client = NOAABuoyClient()
-    
+        # NOTE: don't name this `client` — Django TestCase injects an
+        # http client under that attribute during setUp.
+        cls.buoy_client = NOAABuoyClient()
+
     def test_fetch_real_buoy_data_44013(self):
         """Test fetching real data from Boston buoy (44013)."""
-        reading = self.client.fetch_latest_reading('44013')
-        
+        reading = asyncio.run(self.buoy_client.fetch_latest_reading('44013'))
+
         # May be None if buoy is temporarily offline
         if reading is not None:
             self.assertEqual(reading.buoy_id, '44013')
             self.assertIsInstance(reading.timestamp, datetime)
-            
+
             # At least some data should be present
             has_data = any([
                 reading.wave_height_m is not None,
-                reading.water_temp_c is not None,
+                reading.sea_temp_c is not None,
                 reading.wind_speed_mps is not None,
             ])
             self.assertTrue(has_data, "Expected at least some data from buoy")
-            
+
             # Data should be recent (within 48 hours for most buoys)
             age = datetime.now() - reading.timestamp
             self.assertLess(age.total_seconds(), 48 * 3600,
                 "Buoy data should be less than 48 hours old")
-    
+
     def test_fetch_real_buoy_data_41010(self):
         """Test fetching real data from Florida buoy (41010)."""
-        reading = self.client.fetch_latest_reading('41010')
-        
+        reading = asyncio.run(self.buoy_client.fetch_latest_reading('41010'))
+
         if reading is not None:
             self.assertEqual(reading.buoy_id, '41010')
             self.assertIsInstance(reading.timestamp, datetime)
-    
+
     def test_entropy_bytes_from_real_reading(self):
         """Test entropy extraction from real buoy data."""
-        reading = self.client.fetch_latest_reading('44013')
-        
+        reading = asyncio.run(self.buoy_client.fetch_latest_reading('44013'))
+
         if reading is not None:
             entropy = reading.to_entropy_bytes()
-            
+
             # Should return SHA3-512 hash (64 bytes)
             self.assertEqual(len(entropy), 64)
-            
+
             # Entropy should be non-zero
             self.assertFalse(all(b == 0 for b in entropy))
-    
+
     def test_quality_score_from_real_reading(self):
         """Test quality score calculation from real data."""
-        reading = self.client.fetch_latest_reading('44013')
-        
+        reading = asyncio.run(self.buoy_client.fetch_latest_reading('44013'))
+
         if reading is not None:
             score = reading.entropy_quality_score
-            
+
             # Score should be between 0 and 1
             self.assertGreaterEqual(score, 0.0)
             self.assertLessEqual(score, 1.0)
-            
+
             # Real readings should have some quality
             self.assertGreater(score, 0.1, "Real reading should have quality > 0.1")
-    
+
     def test_fetch_multiple_buoys(self):
         """Test fetching from multiple buoys concurrently."""
         buoy_ids = ['44013', '41010', '46042']
-        readings = self.client.fetch_multiple_buoys(buoy_ids, max_concurrent=3)
-        
+        readings = asyncio.run(
+            self.buoy_client.fetch_multiple_buoys(buoy_ids, max_concurrent=3)
+        )
+
         # Should get at least one reading back
-        self.assertGreater(len(readings), 0, 
+        self.assertGreater(len(readings), 0,
             "Should get at least one successful reading")
-        
+
         # Each reading should be properly formatted
         for buoy_id, reading in readings.items():
             self.assertIn(buoy_id, buoy_ids)
             self.assertIsInstance(reading.timestamp, datetime)
-    
+
     def test_buoy_status_check(self):
         """Test buoy health status checking."""
-        status = self.client.get_buoy_status('44013')
-        
+        status = asyncio.run(self.buoy_client.get_buoy_status('44013'))
+
         self.assertEqual(status.buoy_id, '44013')
         # Status should indicate whether buoy is online
         self.assertIsInstance(status.is_online, bool)
-    
+
     def test_invalid_buoy_id_returns_none(self):
         """Test that invalid buoy ID returns None gracefully."""
-        reading = self.client.fetch_latest_reading('INVALID_BUOY_99999')
+        reading = asyncio.run(
+            self.buoy_client.fetch_latest_reading('INVALID_BUOY_99999')
+        )
         self.assertIsNone(reading)
-    
+
     def test_rate_limiting_respected(self):
         """Test that rate limiting prevents too-frequent requests."""
         # First request should succeed
-        reading1 = self.client.fetch_latest_reading('44013')
-        
+        reading1 = asyncio.run(self.buoy_client.fetch_latest_reading('44013'))
+
         # Immediate second request should return cached data
         start = time.time()
-        reading2 = self.client.fetch_latest_reading('44013')
+        reading2 = asyncio.run(self.buoy_client.fetch_latest_reading('44013'))
         elapsed = time.time() - start
-        
+
         # Should return quickly (from cache, not network)
         self.assertLess(elapsed, 1.0, "Second request should return from cache")
-        
+
         # Both readings should be equal if cached
         if reading1 and reading2:
             self.assertEqual(reading1.timestamp, reading2.timestamp)
@@ -196,11 +202,12 @@ class TestOceanWaveEntropyProviderIntegration(TestCase):
     
     def test_provider_status(self):
         """Test getting provider status."""
-        status = self.provider.get_status()
-        
+        import asyncio
+        status = asyncio.run(self.provider.get_status())
+
         self.assertIn('available', status)
         self.assertIn('healthy_buoys', status)
-        
+
         if status['available']:
             self.assertGreater(status['healthy_buoys'], 0)
 

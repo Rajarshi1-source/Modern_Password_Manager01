@@ -171,12 +171,23 @@ class CompleteRequestSerializer(serializers.Serializer):
     )
 
     def validate_decrypted_shares(self, value):
+        # Coerce ``voucher_id`` to a ``uuid.UUID`` here so the service layer
+        # receives a type-consistent value. The service compares against the
+        # set of approving voucher UUIDs returned by ``values_list`` (which
+        # are ``uuid.UUID`` objects); if we left ``voucher_id`` as a raw
+        # string, legitimate approvers would be rejected.
+        voucher_id_field = serializers.UUIDField()
+        share_field = serializers.CharField(allow_blank=False)
+        normalised = []
         for entry in value:
             if "voucher_id" not in entry or "share" not in entry:
                 raise serializers.ValidationError(
                     "each entry must contain 'voucher_id' and 'share'"
                 )
-        return value
+            vid = voucher_id_field.run_validation(entry["voucher_id"])
+            share = share_field.run_validation(entry["share"])
+            normalised.append({"voucher_id": vid, "share": share})
+        return normalised
 
 
 class AttestationDetailSerializer(serializers.ModelSerializer):

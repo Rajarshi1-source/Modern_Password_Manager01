@@ -834,8 +834,10 @@ class MemorabilityLSTMTests(TestCase):
         features = self.lstm.extract_features("TestPassword123!", profile)
         
         self.assertEqual(len(features), 50)
-        # Profile features should be included (not all zeros)
-        self.assertTrue(any(f > 0 for f in features[35:45]))  # Profile features
+        # Profile features should be included (not all zeros).
+        # Profile block lives at indices 25:35 after the 10 structure + 5
+        # entropy + 10 pattern features.
+        self.assertTrue(any(f > 0 for f in features[25:35]))
     
     def test_predict_returns_valid_score(self):
         """Test prediction returns score in valid range."""

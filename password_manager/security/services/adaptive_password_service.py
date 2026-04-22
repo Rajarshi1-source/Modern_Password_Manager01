@@ -197,13 +197,22 @@ class PrivacyGuard:
             )
             noisy_mean = dp_mean.quick_result(timings)
             logger.debug(f"pydp: Applied DP noise to {len(timings)} samples -> {noisy_mean}ms")
-            return float(noisy_mean)
+            return float(max(lower_bound, min(upper_bound, noisy_mean)))
         else:
-            # Fallback to numpy Laplace mechanism
-            mean_timing = sum(timings) / len(timings)
-            sensitivity = (upper_bound - lower_bound) / len(timings)
-            noise = np.random.laplace(0, sensitivity / self.epsilon)
-            return float(mean_timing + noise)
+            # Fallback to numpy Laplace mechanism with rejection sampling to
+            # stay strictly inside (lower_bound, upper_bound) since timings are
+            # physically non-negative and bounded.
+            clipped = [max(lower_bound, min(upper_bound, t)) for t in timings]
+            mean_timing = sum(clipped) / len(clipped)
+            sensitivity = (upper_bound - lower_bound) / len(clipped)
+            scale = sensitivity / self.epsilon
+            for _ in range(20):
+                noisy = mean_timing + float(np.random.laplace(0, scale))
+                if lower_bound < noisy < upper_bound:
+                    return float(noisy)
+            # Give up: clamp strictly inside the interval.
+            margin = max((upper_bound - lower_bound) * 1e-6, 1e-9)
+            return float(max(lower_bound + margin, min(upper_bound - margin, mean_timing)))
     
     def add_noise_to_error_histogram(
         self,
@@ -1200,7 +1209,7 @@ class AdaptivePasswordService:
     
     def _update_typing_profile(self, pattern: TypingPattern):
         """Update user's aggregated typing profile."""
-        from .models import UserTypingProfile
+        from ..models import UserTypingProfile
         
         profile, created = UserTypingProfile.objects.get_or_create(
             user=self.user,
@@ -1353,7 +1362,7 @@ class AdaptivePasswordService:
         Returns:
             Adaptation record summary
         """
-        from .models import (
+        from ..models import (
             PasswordAdaptation, UserTypingProfile, AdaptivePasswordConfig
         )
         

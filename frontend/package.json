@@ -70,6 +70,7 @@
     "eslint": "^9.21.0",
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-security": "^3.0.1",
     "globals": "^15.14.0",
     "jsdom": "^24.0.0",
     "typescript": "^5.4.0",

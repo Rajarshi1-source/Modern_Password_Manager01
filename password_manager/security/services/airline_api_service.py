@@ -136,7 +136,12 @@ class AirlineAPIService:
     """
     
     SUPPORTED_PROVIDERS = ['amadeus', 'sabre', 'travelport', 'manual']
-    
+
+    # Class-level default so tests can patch
+    # ``AirlineAPIService._amadeus_client`` via ``@patch`` without requiring
+    # a live Amadeus client instance.
+    _amadeus_client = None
+
     def __init__(self):
         """Initialize airline API clients."""
         self._amadeus_client = self._init_amadeus()
@@ -228,7 +233,7 @@ class AirlineAPIService:
         departure_date: date
     ) -> List[Flight]:
         """Search flights using Amadeus API."""
-        if not self.amadeus_client:
+        if not self._amadeus_client:
             return []
         
         try:
@@ -334,7 +339,7 @@ class AirlineAPIService:
         last_name: str
     ) -> BookingVerification:
         """Verify booking using Amadeus API."""
-        if not self.amadeus_client:
+        if not self._amadeus_client:
             return BookingVerification(
                 is_valid=False,
                 booking_reference=booking_reference,

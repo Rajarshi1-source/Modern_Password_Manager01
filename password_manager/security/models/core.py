@@ -29,6 +29,8 @@ class UserDevice(models.Model):
         elif 'os_info' in kwargs:
             kwargs.pop('os_info')
         super().__init__(*args, **kwargs)
+        if not self.fingerprint:
+            self.fingerprint = uuid.uuid4().hex
 
     @property
     def os_info(self) -> str:
@@ -2321,15 +2323,39 @@ class TimeLockCapsule(models.Model):
     @property
     def is_ready_to_unlock(self):
         """Check if capsule can be unlocked (time has passed)."""
-        return self.status == 'locked' and timezone.now() >= self.unlock_at
-    
+        if self.status != 'locked' or not self.unlock_at:
+            return False
+        unlock_at = self.unlock_at
+        if timezone.is_naive(unlock_at):
+            unlock_at = timezone.make_aware(unlock_at, timezone.get_current_timezone())
+        return timezone.now() >= unlock_at
+
+    def is_unlockable(self):
+        """True once the unlock time has passed (regardless of status).
+
+        Method form used by tests / chemical_storage views.
+        """
+        if not self.unlock_at:
+            return False
+        unlock_at = self.unlock_at
+        if timezone.is_naive(unlock_at):
+            unlock_at = timezone.make_aware(unlock_at, timezone.get_current_timezone())
+        return timezone.now() >= unlock_at
+
     @property
     def time_remaining_seconds(self):
         """Get remaining seconds until unlock."""
         if self.status != 'locked':
             return 0
-        remaining = (self.unlock_at - timezone.now()).total_seconds()
+        unlock_at = self.unlock_at
+        if timezone.is_naive(unlock_at):
+            unlock_at = timezone.make_aware(unlock_at, timezone.get_current_timezone())
+        remaining = (unlock_at - timezone.now()).total_seconds()
         return max(0, int(remaining))
+
+    def time_remaining(self):
+        """Method alias returning remaining seconds until unlock."""
+        return self.time_remaining_seconds
     
     def cancel(self):
         """Cancel the capsule."""

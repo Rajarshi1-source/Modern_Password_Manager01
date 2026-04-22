@@ -8,6 +8,7 @@ exclusively through this service rather than touching model rows directly.
 from __future__ import annotations
 
 import logging
+import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Iterable, List, Optional
@@ -255,20 +256,47 @@ class ChallengeOrchestrator:
         count: int,
         mood: str,
     ) -> List[PersonalityQuestion]:
-        qs = profile.questions.filter(
-            models_q_unused_or_reusable(),
-        ).order_by('?')
-        if mood == MoodContext.STRESSED:
-            qs = qs.order_by('difficulty', '?')
-        elif mood == MoodContext.FRUSTRATED:
-            qs = qs.filter(difficulty__lte=PersonalityQuestion.DIFFICULTY_MEDIUM).order_by('difficulty', '?')
+        # ``ORDER BY RANDOM()`` forces the database to materialise every
+        # matching row and sort by a random key. On a large question pool
+        # this is an O(N log N) sort on every challenge, which is a
+        # denial-of-service lever — an attacker who can trigger challenges
+        # for a user with many questions can pin CPU + memory on the DB.
+        #
+        # Replace with: fetch primary keys only (a cheap indexed read) and
+        # sample ``count * 4`` of them in-process with a CSPRNG. For the
+        # STRESSED / FRUSTRATED modes we want difficulty ordering, so fall
+        # back to ``ORDER BY difficulty`` + random tie-break via Python
+        # sampling within the easiest-first slice.
+        base = profile.questions.filter(models_q_unused_or_reusable())
+        if mood == MoodContext.FRUSTRATED:
+            base = base.filter(difficulty__lte=PersonalityQuestion.DIFFICULTY_MEDIUM)
+
+        # Sample from a bounded window rather than sorting the full table.
+        sample_window = max(count * 8, 32)
+
+        if mood in (MoodContext.STRESSED, MoodContext.FRUSTRATED):
+            # Prefer easier questions but still randomise within that slice.
+            id_pool = list(
+                base.order_by('difficulty').values_list('pk', flat=True)[:sample_window]
+            )
+        else:
+            id_pool = list(base.values_list('pk', flat=True)[:sample_window])
+
+        if not id_pool:
+            return []
+
+        rng = secrets.SystemRandom()
+        target = min(count * 4, len(id_pool))
+        sampled_ids = rng.sample(id_pool, target)
+
+        by_pk = {q.pk: q for q in profile.questions.filter(pk__in=sampled_ids)}
+        ordered = [by_pk[pk] for pk in sampled_ids if pk in by_pk]
 
         picks: List[PersonalityQuestion] = []
         dimensions_seen: set = set()
-        for q in qs[: count * 4]:
-            if q.expires_at and q.expires_at < timezone.now():
-                continue
-            if q.single_use and q.used_count:
+        now = timezone.now()
+        for q in ordered:
+            if q.expires_at and q.expires_at < now:
                 continue
             if q.dimension in dimensions_seen:
                 continue
@@ -288,8 +316,14 @@ class ChallengeOrchestrator:
         key = f"{RATE_LIMIT_CACHE_PREFIX}:{user.pk}"
         try:
             attempts = cache.get(key, 0)
-        except Exception:
-            attempts = 0
+        except Exception as exc:
+            # Fail closed: a broken cache backend must NOT silently bypass the
+            # rate limiter. Attackers could force cache failures (e.g. Redis
+            # OOM) to gain unlimited challenge attempts.
+            logger.error("personality rate-limit cache unavailable: %s", exc)
+            raise RateLimited(
+                "Rate limiter unavailable — please retry shortly."
+            ) from exc
         if attempts >= RATE_LIMIT_MAX_ATTEMPTS:
             try:
                 profile = PersonalityProfile.objects.get(user=user)
@@ -306,8 +340,13 @@ class ChallengeOrchestrator:
             )
         try:
             cache.set(key, attempts + 1, timeout=RATE_LIMIT_WINDOW_SECONDS)
-        except Exception:
-            pass
+        except Exception as exc:
+            # If we can't persist the increment, treat the request as
+            # unverifiable rather than quietly allowing it.
+            logger.error("personality rate-limit cache set failed: %s", exc)
+            raise RateLimited(
+                "Rate limiter unavailable — please retry shortly."
+            ) from exc
 
 
 def models_q_unused_or_reusable():

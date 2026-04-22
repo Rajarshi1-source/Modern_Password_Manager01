@@ -34,17 +34,21 @@ from .geofence import GeofenceEvaluator, extract_coords
 logger = logging.getLogger(__name__)
 
 
-def _policy_for(vault_item) -> Optional[SelfDestructPolicy]:
+def _policy_for(vault_item, include_inactive: bool = False) -> Optional[SelfDestructPolicy]:
     """
     Resolve the active policy (if any) for a given vault item.
     ``vault_item`` may be a model instance with ``.id`` or a UUID string.
+
+    If ``include_inactive`` is True, returns the most recent policy of any
+    status. Callers use this to preserve a "burned" / "expired" denial
+    reason rather than silently falling through to ``allow``.
     """
     vault_id = getattr(vault_item, 'id', None) or vault_item
     try:
-        return SelfDestructPolicy.objects.filter(
-            vault_item_id=vault_id,
-            status=PolicyStatus.ACTIVE,
-        ).first()
+        qs = SelfDestructPolicy.objects.filter(vault_item_id=vault_id)
+        if not include_inactive:
+            qs = qs.filter(status=PolicyStatus.ACTIVE)
+        return qs.order_by('-updated_at').first()
     except (ValueError, TypeError):
         return None
 
@@ -56,6 +60,14 @@ def evaluate_access(vault_item, request=None) -> str:
     """
     policy = _policy_for(vault_item)
     if policy is None:
+        # No active policy. Check for an inactive one whose denial reason
+        # should still be enforced (e.g. burn-after-read already fired).
+        inactive = _policy_for(vault_item, include_inactive=True)
+        if inactive is not None and inactive.status == PolicyStatus.EXPIRED:
+            reason = inactive.last_denied_reason or 'burned'
+            return reason
+        if inactive is not None and inactive.status == PolicyStatus.REVOKED:
+            return 'revoked'
         return 'allow'  # no policy attached, normal credential.
 
     if policy.status == PolicyStatus.REVOKED:
