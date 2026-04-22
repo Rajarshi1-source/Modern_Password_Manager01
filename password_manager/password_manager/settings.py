@@ -129,6 +129,7 @@ INSTALLED_APPS = [
     'user',
     'logging_manager',
     'security',
+    'gdpr_compliance',  # GDPR DSAR tracking (Articles 15/16/17/18/20/21)
     'ml_security',  # Machine Learning Security
     'ml_dark_web',  # ML Dark Web Monitoring with WebSocket alerts
     'analytics',  # Analytics & Metrics

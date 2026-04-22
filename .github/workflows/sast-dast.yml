@@ -1,0 +1,100 @@
+# =============================================================================
+# Supplemental SAST/DAST Scanners
+# =============================================================================
+# Complements the existing scanner fleet (Trivy, Grype, Gitleaks, CodeQL,
+# Bandit, Safety, pip-audit, Syft, Cosign, Codacy, Snyk) with:
+#   * Semgrep         - higher-signal SAST across Python/JS/TS/Dockerfiles
+#   * Nuclei          - template-based DAST against a locally-booted stack
+#
+# Heavy commercial tools (Burp, Nessus, Acunetix, Detectify, Intruder, etc.)
+# are out of scope for this free-tier workflow and are documented in
+# docs/security-tooling.md instead.
+# =============================================================================
+
+name: SAST / DAST Supplemental
+
+on:
+  push:
+    branches: [main, develop, staging]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    # Nightly re-scan so newly published templates catch regressions.
+    - cron: '17 3 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Semgrep - multi-language SAST
+  # ---------------------------------------------------------------------------
+  semgrep:
+    name: Semgrep SAST
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep:latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run Semgrep (p/ci + p/security-audit + p/owasp-top-ten)
+        run: |
+          semgrep ci \
+            --config p/ci \
+            --config p/security-audit \
+            --config p/owasp-top-ten \
+            --config p/django \
+            --config p/react \
+            --config p/typescript \
+            --config p/dockerfile \
+            --sarif --output=semgrep.sarif || true
+        env:
+          # Optional: set SEMGREP_APP_TOKEN in repo secrets to get Pro rules
+          # and dashboards. Workflow falls back to OSS rules if unset.
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload Semgrep SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  # ---------------------------------------------------------------------------
+  # Nuclei - template-based DAST
+  # ---------------------------------------------------------------------------
+  nuclei:
+    name: Nuclei DAST
+    runs-on: ubuntu-latest
+    # Only run on scheduled and main-branch pushes — Nuclei is noisy on PRs.
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Boot ephemeral backend for scanning
+        run: |
+          docker compose -f docker-compose.yml up -d backend frontend || \
+            echo "docker compose up failed — continuing so Nuclei can hit the hosted target"
+
+      - name: Install Nuclei
+        uses: projectdiscovery/nuclei-action@cc153d0541e1adf8a42bbe31c0a4fb2376147538 # v3.1.1
+        with:
+          target: ${{ vars.NUCLEI_TARGET || 'http://localhost:8000' }}
+          flags: "-severity critical,high,medium -timeout 10 -retries 1 -silent"
+
+      - name: Upload Nuclei results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nuclei-results
+          path: nuclei-output.json
+          if-no-files-found: ignore
+          retention-days: 14
