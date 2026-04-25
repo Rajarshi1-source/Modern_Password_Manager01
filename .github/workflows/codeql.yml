@@ -30,52 +30,20 @@ permissions:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Disable GitHub's default CodeQL setup so the advanced workflow below can
-  # upload SARIF results without being rejected.
+  # Note: GitHub's default CodeQL setup must be disabled once at the repo
+  # level so this advanced workflow can upload SARIF results without being
+  # rejected. This is a one-time manual action — the GITHUB_TOKEN does not
+  # carry permission to flip the toggle via the REST API on org-owned repos:
   #
-  # If this job fails with HTTP 403 the GITHUB_TOKEN lacks the required
-  # permission.  In that case disable default setup manually once:
   #   Repository → Settings → Code security → Code scanning
   #   → "Switch to advanced" (or disable the default setup toggle).
-  # After that one-time action this job becomes a no-op.
+  #
+  # The previous "disable-default-setup" job that attempted this via
+  # `gh api` was removed because it failed with HTTP 403 on every run.
   # ---------------------------------------------------------------------------
-  disable-default-setup:
-    name: Disable default CodeQL setup
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-    steps:
-      - name: Disable and verify default setup is off
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          echo "Disabling default CodeQL setup..."
-          gh api \
-            --method PATCH \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/code-scanning/default-setup \
-            -f state=not-configured
-
-          echo "Verifying the change took effect..."
-          state=$(gh api \
-            -H "Accept: application/vnd.github+json" \
-            /repos/${{ github.repository }}/code-scanning/default-setup \
-            --jq '.state')
-          echo "Current default-setup state: $state"
-
-          if [ "$state" = "configured" ]; then
-            echo "::error title=Action Required::Default setup is still enabled after the API call."
-            echo "::error::Disable it manually at: https://github.com/${{ github.repository }}/settings/security_analysis"
-            echo "::error::Under 'Code scanning' click 'Switch to advanced setup' then re-run this workflow."
-            exit 1
-          fi
-
-          echo "Default setup is $state – advanced analysis can proceed."
-
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    needs: disable-default-setup
 
     strategy:
       fail-fast: false

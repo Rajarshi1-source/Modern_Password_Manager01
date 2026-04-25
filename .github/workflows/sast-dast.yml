@@ -75,6 +75,8 @@ jobs:
     runs-on: ubuntu-latest
     # Only run on scheduled and main-branch pushes — Nuclei is noisy on PRs.
     if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -84,17 +86,33 @@ jobs:
           docker compose -f docker-compose.yml up -d backend frontend || \
             echo "docker compose up failed — continuing so Nuclei can hit the hosted target"
 
-      - name: Install Nuclei
+      - name: Run Nuclei
         uses: projectdiscovery/nuclei-action@cc153d0541e1adf8a42bbe31c0a4fb2376147538 # v3.1.1
         with:
-          target: ${{ vars.NUCLEI_TARGET || 'http://localhost:8000' }}
-          flags: "-severity critical,high,medium -timeout 10 -retries 1 -silent"
+          cache: false
+          args: >-
+            -target ${{ vars.NUCLEI_TARGET || 'http://localhost:8000' }}
+            -severity critical,high,medium
+            -timeout 10
+            -retries 1
+            -silent
+            -sarif-export nuclei.sarif
+            -jsonl-export nuclei-output.json
+
+      - name: Upload Nuclei SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
+        with:
+          sarif_file: nuclei.sarif
+          category: nuclei-dast
 
       - name: Upload Nuclei results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: nuclei-results
-          path: nuclei-output.json
+          path: |
+            nuclei-output.json
+            nuclei.sarif
           if-no-files-found: ignore
           retention-days: 14

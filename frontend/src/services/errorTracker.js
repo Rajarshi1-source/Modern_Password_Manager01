@@ -53,7 +53,12 @@ class ErrorTracker {
    * Generate unique session ID
    */
   generateSessionId() {
-    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // Use crypto.getRandomValues so the session id is unpredictable.
+    // Math.random() is not cryptographically secure and should never be
+    // used for any value that gates security decisions.
+    const bytes = new Uint8Array(16);
+    (globalThis.crypto || crypto).getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
   }
 
   /**
@@ -192,7 +197,10 @@ class ErrorTracker {
    * Generate unique error ID
    */
   generateErrorId() {
-    return `err_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const bytes = new Uint8Array(8);
+    (globalThis.crypto || crypto).getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `err_${Date.now()}_${hex}`;
   }
 
   /**

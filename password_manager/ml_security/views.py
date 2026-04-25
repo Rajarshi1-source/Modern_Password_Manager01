@@ -18,7 +18,10 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 import logging
 import hashlib
+import hmac
 import json
+
+from django.conf import settings
 
 from .ml_models import get_model
 from .models import (
@@ -84,8 +87,16 @@ def predict_password_strength(request):
         
         # Save prediction if requested and user is authenticated
         if save_prediction and request.user.is_authenticated:
-            # Create hash of password (for deduplication, not storage)
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            # Keyed deduplication hash. A bare hashlib.sha256(password)
+            # is trivially attackable: a database breach exposes a
+            # rainbow-table-friendly fingerprint that reveals when two
+            # users share a password. HMAC with the server-side
+            # SECRET_KEY makes the digest useless without the key.
+            password_hash = hmac.new(
+                settings.SECRET_KEY.encode(),
+                password.encode(),
+                hashlib.sha256,
+            ).hexdigest()
             
             PasswordStrengthPrediction.objects.create(
                 user=request.user,

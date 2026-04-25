@@ -59,7 +59,11 @@ RUN rm -rf liboqs-python
 # Install pqcrypto (pure Python post-quantum crypto)
 RUN pip install --no-cache-dir pqcrypto || echo "pqcrypto installation optional"
 
-# Install concrete-python (FHE library) - may fail on some platforms
+# Install concrete-python (FHE library) - may fail on some platforms.
+# This is the single authoritative install point for concrete-python; do NOT
+# duplicate it in the deps-builder stage to avoid pulling the same multi-GB
+# package twice (which previously caused "No space left on device" on GHA
+# runners).
 RUN pip install --no-cache-dir concrete-python==2.5.0 || echo "concrete-python installation optional (Linux x86_64 only)"
 
 # -----------------------------------------------------------------------------
@@ -100,35 +104,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements and install Python dependencies
-WORKDIR /app
-COPY password_manager/requirements.txt .
-
-# Install core dependencies.
+# Copy requirements (split into layers) and install Python dependencies.
 #
-# Notes:
-# * We pin pip to a version known to handle large graphs without running
-#   into the "resolution-too-deep" error that newer resolvers raise on the
-#   unbounded version specifiers in this project's requirements.txt (this
-#   is especially painful when the arm64 leg runs under QEMU emulation).
-# * `--use-deprecated=legacy-resolver` bypasses the recursive backtracking
-#   resolver entirely, matching the behaviour the project was authored
-#   against and keeping ARM64 builds from timing out.
+# Notes on the staged install:
+# * Layer 1 (core) is the Django/web stack and is REQUIRED for the image to
+#   boot. Failure here aborts the build.
+# * Layer 2 (ml) is large (multi-GB) and OPTIONAL on space-constrained
+#   runners. If installation fails (typically due to disk exhaustion on
+#   GHA hosted runners) the build continues — the app has fallback paths.
+# * Layer 3 (servers) is small and ensures gunicorn/daphne/uvicorn are
+#   present even if the ml layer was skipped.
+#
+# General pip flags:
+# * pip is pinned to a version known to handle large dependency graphs
+#   without "resolution-too-deep" errors against unbounded specifiers.
 # * `--prefer-binary` forces pip to pick a wheel whenever one exists
 #   (avoids multi-hour source builds under qemu for scipy, torch, etc.).
-# * `--retries` cushions transient PyPI timeouts that appeared repeatedly
-#   in the arm64 build logs.
+# * `--retries` cushions transient PyPI timeouts.
+WORKDIR /app
+COPY password_manager/requirements-core.txt .
+COPY password_manager/requirements-ml.txt .
+
 RUN pip install --upgrade "pip==24.3.1" "setuptools>=70,<81" wheel && \
-    pip install \
-        --use-deprecated=legacy-resolver \
-        --prefer-binary \
-        --retries 5 \
-        -r requirements.txt && \
-    pip install \
-        --use-deprecated=legacy-resolver \
-        --prefer-binary \
-        --retries 5 \
-        gunicorn daphne "uvicorn[standard]" redis django-redis
+    pip install --prefer-binary --retries 5 -r requirements-core.txt
+
+RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
+    echo "ML deps skipped (insufficient disk space or unsupported platform)"
+
+RUN pip install --prefer-binary --retries 5 \
+    gunicorn daphne "uvicorn[standard]" redis django-redis
 
 # Copy OQS Python package from crypto-builder using a version-agnostic glob via shell
 RUN mkdir -p /tmp/oqs-staging

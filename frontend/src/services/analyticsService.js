@@ -130,7 +130,13 @@ class AnalyticsService {
    * Generate unique session ID
    */
   generateSessionId() {
-    return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    // Math.random() is not cryptographically secure. Session IDs in a
+    // password manager analytics flow must be unpredictable so they
+    // cannot be guessed and replayed to correlate or hijack sessions.
+    const bytes = new Uint8Array(16);
+    (globalThis.crypto || crypto).getRandomValues(bytes);
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `session_${hex}`;
   }
   
   /**
