@@ -22,7 +22,7 @@ scikit-learn>=1.4.2
 # Web Scraping
 scrapy>=2.15.0,<3.0
 beautifulsoup4>=4.13.3
-lxml>=4.9.0
+lxml>=6.1.0
 selenium>=4.11.0,<5.0  # For JavaScript-heavy sites
 PySocks>=1.7.1  # For SOCKS proxy (Tor)
 
