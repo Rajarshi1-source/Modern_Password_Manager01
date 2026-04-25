@@ -65,7 +65,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error adding credentials: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -87,7 +87,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error fetching monitored credentials: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -176,7 +176,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error fetching breach matches: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -234,7 +234,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error initiating scan: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -282,7 +282,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error fetching statistics: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -374,7 +374,7 @@ class MLDarkWebAdminViewSet(viewsets.ViewSet):
         
         except Exception as e:
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -458,7 +458,7 @@ class MLDarkWebAdminViewSet(viewsets.ViewSet):
         
         except Exception as e:
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -480,7 +480,7 @@ class MLDarkWebAdminViewSet(viewsets.ViewSet):
         
         except Exception as e:
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -513,7 +513,7 @@ def classify_text(request):
     except Exception as e:
         logger.error(f"Error classifying text: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -561,7 +561,7 @@ def mark_alert_read(request, alert_id):
     except Exception as e:
         logger.error(f"Error marking alert as read: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -617,6 +617,6 @@ def get_breach_alerts(request):
     except Exception as e:
         logger.error(f"Error fetching breach alerts: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

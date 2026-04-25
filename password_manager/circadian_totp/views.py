@@ -58,10 +58,18 @@ def wearable_connect(request, provider: str):
     """Initiate OAuth linking for a wearable provider."""
     try:
         url, state = services.wearable_authorize_url(request.user, provider)
-    except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-    except NotImplementedError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_501_NOT_IMPLEMENTED)
+    except ValueError:
+        logger.exception("wearable_authorize_url rejected provider=%s", provider)
+        return Response(
+            {"error": "invalid_request"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except NotImplementedError:
+        logger.exception("wearable_authorize_url unsupported provider=%s", provider)
+        return Response(
+            {"error": "not_implemented"},
+            status=status.HTTP_501_NOT_IMPLEMENTED,
+        )
     return Response({"authorize_url": url, "state": state})
 
 
@@ -82,8 +90,12 @@ def wearable_callback(request, provider: str):
         )
     try:
         link = services.wearable_exchange_code(request.user, provider, code, state)
-    except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except ValueError:
+        logger.exception("wearable_exchange_code rejected provider=%s", provider)
+        return Response(
+            {"error": "invalid_request"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     return Response(WearableLinkSerializer(link).data)
 
 
@@ -102,8 +114,12 @@ def wearable_ingest(request, provider: str):
         created = services.ingest_sleep_observations(
             request.user, provider, serializer.validated_data["observations"]
         )
-    except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except ValueError:
+        logger.exception("ingest_sleep_observations rejected provider=%s", provider)
+        return Response(
+            {"error": "invalid_request"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     prof = services.recompute_profile(request.user)
     return Response(
         {

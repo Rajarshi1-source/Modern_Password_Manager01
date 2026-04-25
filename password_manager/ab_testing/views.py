@@ -5,6 +5,8 @@ A/B Testing API Views
 API endpoints for A/B testing and feature flags.
 """
 
+import logging
+
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -12,6 +14,8 @@ from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Count, Q
 from datetime import timedelta
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     FeatureFlag,
@@ -107,10 +111,11 @@ def get_experiments_and_flags(request):
             'experiments': experiments
         })
         
-    except Exception as e:
+    except Exception:
+        logger.exception("A/B testing view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -190,10 +195,11 @@ def track_experiment_metric(request):
             'status': 'error',
             'message': 'Experiment not found'
         }, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
+    except Exception:
+        logger.exception("A/B testing view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -244,10 +250,11 @@ def get_experiment_results(request, experiment_name):
             'status': 'error',
             'message': 'Experiment not found'
         }, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
+    except Exception:
+        logger.exception("A/B testing view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -274,10 +281,11 @@ def get_user_experiments(request):
             } for a in assignments]
         })
         
-    except Exception as e:
+    except Exception:
+        logger.exception("A/B testing view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -304,9 +312,10 @@ def get_user_feature_flags(request):
             'flags': flags
         })
         
-    except Exception as e:
+    except Exception:
+        logger.exception("A/B testing view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 

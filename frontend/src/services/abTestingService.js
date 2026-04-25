@@ -413,12 +413,17 @@ class ABTestingService {
    */
   getAnonymousId() {
     let anonId = localStorage.getItem('anonymous_id');
-    
+
     if (!anonId) {
-      anonId = `anon_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      // Use a CSPRNG instead of Math.random() so a server cannot
+      // pre-compute the bucket assignment for new anonymous users.
+      const bytes = new Uint8Array(16);
+      (globalThis.crypto || crypto).getRandomValues(bytes);
+      const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      anonId = `anon_${hex}`;
       localStorage.setItem('anonymous_id', anonId);
     }
-    
+
     return anonId;
   }
   
