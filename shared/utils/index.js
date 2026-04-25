@@ -57,11 +57,20 @@ export const isValidEmail = (email) => {
  */
 export const sanitizeString = (str) => {
   if (typeof str !== 'string') return '';
-  
-  return str
-    .replace(/[<>]/g, '') // Remove potential HTML tags
-    .replace(/javascript:/gi, '') // Remove javascript: URLs
-    .trim();
+
+  // Strip every dangerous URL scheme, not just javascript:. data: URLs
+  // can carry text/html payloads that execute scripts, and vbscript:
+  // is still honoured by some legacy engines. Stripping each scheme
+  // until the string is stable defeats nested encodings like
+  // "javajavascript:script:alert(1)" that split a single-pass replace.
+  const schemeRegex = /(?:javascript|data|vbscript|file)\s*:/gi;
+  let cleaned = str.replace(/[<>]/g, '');
+  let prev;
+  do {
+    prev = cleaned;
+    cleaned = cleaned.replace(schemeRegex, '');
+  } while (cleaned !== prev);
+  return cleaned.trim();
 };
 
 /**

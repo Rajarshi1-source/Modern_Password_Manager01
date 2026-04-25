@@ -9,8 +9,25 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import DOMPurify from 'dompurify';
 import aiAssistantService from '../../services/aiAssistantService';
 import './SecurityAssistant.css';
+
+// HTML-escape user content before it ever flows into a string-built
+// markup template. The renderMarkdown function below intentionally
+// produces a fixed, narrow set of tags (h1/h2/h3, p, ul, ol, li,
+// strong, code) — escaping the message first plus a final DOMPurify
+// pass closes the XSS sink that CodeQL flagged at this component
+// (renderMarkdown previously interpolated raw `msg.content` into
+// HTML strings, so a manipulated AI response could execute JS).
+const escapeHtml = (str) => String(str).replace(/[&<>"'`]/g, (c) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+    '`': '&#96;',
+}[c]));
 
 // Starter prompt suggestions shown in the welcome state
 const STARTER_PROMPTS = [
@@ -66,10 +83,16 @@ const formatTime = (timestamp) => {
 const renderMarkdown = (text) => {
     if (!text) return '';
 
-    // Process each line
-    const lines = text.split('\n');
+    // Escape the entire message first so any HTML/JS in the AI
+    // response is treated as literal text, then re-introduce the
+    // narrow set of inline markdown tags we actually support.
+    const lines = escapeHtml(text).split('\n');
     let html = '';
     let inList = false;
+
+    const inline = (s) => s
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/`(.*?)`/g, '<code>$1</code>');
 
     for (let line of lines) {
         // Headers
@@ -93,10 +116,7 @@ const renderMarkdown = (text) => {
         if (line.match(/^[-*•]\s/)) {
             if (!inList) { html += '<ul>'; inList = true; }
             line = line.replace(/^[-*•]\s/, '');
-            // Inline formatting
-            line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            line = line.replace(/`(.*?)`/g, '<code>$1</code>');
-            html += `<li>${line}</li>`;
+            html += `<li>${inline(line)}</li>`;
             continue;
         }
 
@@ -104,9 +124,7 @@ const renderMarkdown = (text) => {
         if (line.match(/^\d+\.\s/)) {
             if (!inList) { html += '<ol>'; inList = true; }
             line = line.replace(/^\d+\.\s/, '');
-            line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            line = line.replace(/`(.*?)`/g, '<code>$1</code>');
-            html += `<li>${line}</li>`;
+            html += `<li>${inline(line)}</li>`;
             continue;
         }
 
@@ -124,15 +142,19 @@ const renderMarkdown = (text) => {
 
         // Regular paragraph
         if (line.trim()) {
-            line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            line = line.replace(/`(.*?)`/g, '<code>$1</code>');
-            html += `<p>${line}</p>`;
+            html += `<p>${inline(line)}</p>`;
         }
     }
 
     if (inList) html += '</ul>';
 
-    return html;
+    // Final defence-in-depth: sanitize the assembled markup so any
+    // unexpected tag/attribute combination is stripped before React
+    // injects it via dangerouslySetInnerHTML.
+    return DOMPurify.sanitize(html, {
+        ALLOWED_TAGS: ['h1', 'h2', 'h3', 'p', 'ul', 'ol', 'li', 'strong', 'code'],
+        ALLOWED_ATTR: [],
+    });
 };
 
 const SecurityAssistant = () => {

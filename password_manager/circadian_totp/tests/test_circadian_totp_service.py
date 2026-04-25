@@ -122,8 +122,11 @@ class TestRecomputeProfile:
     def test_recompute_converges_on_observed_midpoint(self, user):
         now = datetime(2026, 4, 17, 12, 0, tzinfo=_tz.utc)
         for day in range(1, 11):
-            start = now - timedelta(days=day, hours=8)
-            end = now - timedelta(days=day, hours=0)
+            # Per-row microsecond offsets so the (user, provider, sleep_start)
+            # UniqueConstraint never silently collapses two rows when the
+            # underlying clock representation loses sub-second precision.
+            start = now - timedelta(days=day, hours=8, microseconds=day)
+            end = now - timedelta(days=day, microseconds=day)
             SleepObservation.objects.create(
                 user=user,
                 provider="manual",

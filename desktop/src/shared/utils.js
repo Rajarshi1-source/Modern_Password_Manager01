@@ -95,27 +95,33 @@ const SecurityUtils = {
    * Generate a cryptographically secure random string
    */
   generateSecureId: (length = 32) => {
+    // Rejection sampling avoids modulo bias: with chars.length == 62
+    // and a uniform byte (0..255), 256 % 62 == 8 — so a naive
+    // `byte % 62` would make the first 8 characters ~1.6% more
+    // likely. We sample bytes and discard any that fall in the
+    // upper "bias band" before mapping to the alphabet.
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    
-    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      const randomBytes = new Uint8Array(length);
-      crypto.getRandomValues(randomBytes);
-      
-      for (let i = 0; i < length; i++) {
-        result += chars[randomBytes[i] % chars.length];
+    const max = 256 - (256 % chars.length);
+    const result = [];
+
+    const randomByte = (() => {
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+        const buf = new Uint8Array(1);
+        return () => {
+          crypto.getRandomValues(buf);
+          return buf[0];
+        };
       }
-    } else {
-      // Fallback using Node.js crypto
-      const crypto = require('crypto');
-      const randomBytes = crypto.randomBytes(length);
-      
-      for (let i = 0; i < length; i++) {
-        result += chars[randomBytes[i] % chars.length];
-      }
+      const nodeCrypto = require('crypto');
+      return () => nodeCrypto.randomBytes(1)[0];
+    })();
+
+    while (result.length < length) {
+      const b = randomByte();
+      if (b < max) result.push(chars[b % chars.length]);
     }
-    
-    return result;
+
+    return result.join('');
   },
   
   /**

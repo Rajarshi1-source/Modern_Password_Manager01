@@ -256,15 +256,41 @@ class TestStormChaseService(TestCase):
         
         self.assertIsInstance(buoys, list)
     
+    @patch('security.services.ocean_wave_entropy_service.get_noaa_client')
     @patch('security.services.storm_chase.get_noaa_client')
-    def test_generate_storm_entropy(self, mock_client):
-        """Test generating entropy from storm buoys."""
+    def test_generate_storm_entropy(self, mock_storm_client, mock_ocean_client):
+        """Test generating entropy from storm buoys.
+
+        Both the storm-chase code path and the ocean-wave fallback path
+        must be mocked so the test never touches the real NOAA API
+        (offline buoys like 41010/41040 return 404 in CI).
+        """
+        mock_readings = {}
+        for buoy_id in ['44013', '41049', '46026', '46001', '42039']:
+            reading = MagicMock()
+            reading.buoy_id = buoy_id
+            reading.timestamp = datetime.utcnow()
+            reading.wave_height_m = 1.5
+            reading.wind_speed_mps = 5.0
+            reading.pressure_hpa = 1013.0
+            reading.sea_temp_c = 18.0
+            reading.air_temp_c = 20.0
+            storm_status = MagicMock()
+            storm_status.is_storm = False
+            reading.detect_storm_conditions.return_value = storm_status
+            mock_readings[buoy_id] = reading
+
         mock_noaa = MagicMock()
-        mock_noaa.get_all_readings_async = AsyncMock(return_value=[])
-        mock_client.return_value = mock_noaa
-        
+        mock_noaa.fetch_multiple_buoys = AsyncMock(return_value=mock_readings)
+        mock_noaa.get_all_readings_async = AsyncMock(return_value=list(mock_readings.values()))
+        mock_noaa.buoy_info = {
+            bid: {'name': f'Buoy {bid}', 'region': 'atlantic'} for bid in mock_readings
+        }
+        mock_storm_client.return_value = mock_noaa
+        mock_ocean_client.return_value = mock_noaa
+
         result = self.service.generate_storm_entropy(count=32)
-        
+
         self.assertIsInstance(result, tuple)
         self.assertEqual(len(result), 3)  # (entropy_bytes, source_id, storm_buoy_ids)
     
@@ -469,27 +495,51 @@ class TestStormEntropyQuality(TestCase):
 class TestStormChaseIntegration(TestCase):
     """Integration tests for Storm Chase Mode."""
     
+    @patch('security.services.ocean_wave_entropy_service.get_noaa_client')
     @patch('security.services.storm_chase.get_noaa_client')
-    def test_full_storm_detection_flow(self, mock_client):
-        """Test complete storm detection and entropy generation flow."""
+    def test_full_storm_detection_flow(self, mock_storm_client, mock_ocean_client):
+        """Test complete storm detection and entropy generation flow.
+
+        Both the storm-chase and ocean-wave fallback NOAA clients are
+        mocked so the test does not race against live buoy availability.
+        """
         from security.services.storm_chase import get_storm_chase_service
-        
-        # Setup mock
+
+        mock_readings = {}
+        for buoy_id in ['44013', '41049', '46026', '46001', '42039']:
+            reading = MagicMock()
+            reading.buoy_id = buoy_id
+            reading.timestamp = datetime.utcnow()
+            reading.wave_height_m = 1.5
+            reading.wind_speed_mps = 5.0
+            reading.pressure_hpa = 1013.0
+            reading.sea_temp_c = 18.0
+            reading.air_temp_c = 20.0
+            storm_status = MagicMock()
+            storm_status.is_storm = False
+            reading.detect_storm_conditions.return_value = storm_status
+            mock_readings[buoy_id] = reading
+
         mock_noaa = MagicMock()
-        mock_noaa.get_all_readings_async = AsyncMock(return_value=[])
-        mock_client.return_value = mock_noaa
-        
+        mock_noaa.fetch_multiple_buoys = AsyncMock(return_value=mock_readings)
+        mock_noaa.get_all_readings_async = AsyncMock(return_value=list(mock_readings.values()))
+        mock_noaa.buoy_info = {
+            bid: {'name': f'Buoy {bid}', 'region': 'atlantic'} for bid in mock_readings
+        }
+        mock_storm_client.return_value = mock_noaa
+        mock_ocean_client.return_value = mock_noaa
+
         service = get_storm_chase_service()
-        
+
         # Scan for storms
         alerts = service.scan_for_storms()
-        
+
         # Get status
         status = service.get_storm_chase_status()
-        
+
         # Generate entropy
         entropy, source_id, storm_ids = service.generate_storm_entropy(32)
-        
+
         # Verify results
         self.assertIsInstance(alerts, list)
         self.assertIsNotNone(status)
