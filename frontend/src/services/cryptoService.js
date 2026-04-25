@@ -197,14 +197,22 @@ export class CryptoService {
     }
   }
   
-  // Encrypt data with AES-256
+  // Encrypt data with AES-256.
+  //
+  // NOTE: `key` here is the *already-derived* key from deriveKey()
+  // (Argon2id, see above) — not a master password. Passing it as a
+  // raw string to CryptoJS.AES.encrypt would trigger CryptoJS's
+  // legacy EVP_BytesToKey password-derivation pipeline, which is the
+  // exact pattern CodeQL's js/insufficient-password-hash query flags.
+  // We coerce to a WordArray first so CryptoJS uses it as a real key
+  // and skips the weak internal KDF.
   async legacyEncrypt(data, key) {
     // SECURITY NOTE: Encryption occurs client-side - plaintext data never sent to server
-    
+
     // Compress data before encryption for large items
     let dataToEncrypt = data;
     let compressed = false;
-    
+
     // Only compress if data is large enough
     const jsonData = JSON.stringify(data);
     if (jsonData.length > 1024) {
@@ -220,16 +228,20 @@ export class CryptoService {
         // Continue with uncompressed data
       }
     }
-    
+
     // Generate random IV (Initialization Vector)
     const iv = CryptoJS.lib.WordArray.random(16);
-    
+
     // Encrypt data
-    const dataToProcess = compressed 
+    const dataToProcess = compressed
       ? CryptoJS.lib.WordArray.create(dataToEncrypt)
       : JSON.stringify(dataToEncrypt);
-    
-    const encrypted = CryptoJS.AES.encrypt(dataToProcess, key, {
+
+    const keyWordArray = typeof key === 'string'
+      ? CryptoJS.enc.Base64.parse(key)
+      : key;
+
+    const encrypted = CryptoJS.AES.encrypt(dataToProcess, keyWordArray, {
       iv: iv,
       mode: CryptoJS.mode.CBC,
       padding: CryptoJS.pad.Pkcs7
@@ -257,9 +269,16 @@ export class CryptoService {
       
       // Get IV from payload
       const iv = CryptoJS.enc.Base64.parse(payload.iv);
-      
+
+      // Mirror legacyEncrypt: coerce a string key into a WordArray so
+      // CryptoJS uses it directly as the AES key rather than running
+      // its weak internal password-derivation routine.
+      const keyWordArray = typeof key === 'string'
+        ? CryptoJS.enc.Base64.parse(key)
+        : key;
+
       // Decrypt data
-      const decrypted = CryptoJS.AES.decrypt(payload.data, key, {
+      const decrypted = CryptoJS.AES.decrypt(payload.data, keyWordArray, {
         iv: iv,
         mode: CryptoJS.mode.CBC,
         padding: CryptoJS.pad.Pkcs7

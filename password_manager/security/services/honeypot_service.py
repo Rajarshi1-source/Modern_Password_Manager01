@@ -687,13 +687,27 @@ SecureVault Security Team
     def _redact_subject(self, subject: str) -> str:
         """Redact potentially sensitive information from subject."""
         import re
-        
-        # Redact email addresses
-        subject = re.sub(r'[\w\.-]+@[\w\.-]+', '[EMAIL]', subject)
-        
+
+        # Cap input length so a hostile sender cannot weaponise the
+        # ambiguous repetitions in the patterns below into a ReDoS.
+        if subject and len(subject) > 1000:
+            subject = subject[:1000]
+
+        # Redact email addresses. The previous pattern `[\w\.-]+@[\w\.-]+`
+        # has overlapping `\w`/`.`/`-` character classes on both sides
+        # of the `@`, which CodeQL's py/polynomial-redos query flags as
+        # quadratic on inputs full of `-`. The character classes below
+        # are disjoint enough — and anchored by `@` — that backtracking
+        # cannot blow up.
+        subject = re.sub(
+            r'[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*@[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*',
+            '[EMAIL]',
+            subject,
+        )
+
         # Redact potential codes/tokens
         subject = re.sub(r'\b[A-Z0-9]{6,}\b', '[CODE]', subject)
-        
+
         return subject
     
     def _encrypt_headers(self, headers: Dict) -> str:
