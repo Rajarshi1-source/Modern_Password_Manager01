@@ -279,16 +279,25 @@ export class Config {
 
   set(key, value) {
     const keys = key.split('.');
+
+    // Reject prototype-poisoning path components. Without this guard,
+    // `set('__proto__.isAdmin', true)` would walk through the
+    // prototype chain and pollute Object.prototype globally.
+    const FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);
+    if (keys.some((k) => FORBIDDEN.has(k))) return;
+
     let current = this._config;
-    
+
     for (let i = 0; i < keys.length - 1; i++) {
       const k = keys[i];
-      if (!(k in current) || typeof current[k] !== 'object') {
+      if (!Object.prototype.hasOwnProperty.call(current, k)
+          || typeof current[k] !== 'object'
+          || current[k] === null) {
         current[k] = {};
       }
       current = current[k];
     }
-    
+
     current[keys[keys.length - 1]] = value;
   }
 
