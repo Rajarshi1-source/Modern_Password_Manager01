@@ -70,3 +70,4 @@ htmlcov/
 *.bak
 *.tmp
 .cursor/
+.claude/
