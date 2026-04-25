@@ -70,3 +70,6 @@ htmlcov/
 *.bak
 *.tmp
 .cursor/
+.claude
+.claude/
+.claude/worktrees
