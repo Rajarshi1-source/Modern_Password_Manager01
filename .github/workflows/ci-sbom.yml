@@ -91,8 +91,12 @@ jobs:
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
+          # Newer cosign defaults to the new bundle format and requires
+          # ``--bundle`` (the legacy ``--output-signature`` is ignored and
+          # leaves the bundle path empty, which fails with "create bundle
+          # file: open : no such file or directory").
           cosign sign-blob --yes \
-            --output-signature sbom.sig \
+            --bundle sbom.image.cyclonedx.bundle.json \
             sbom.image.cyclonedx.json
 
       - name: Upload artifacts
@@ -103,3 +107,4 @@ jobs:
             sbom.image.cyclonedx.json
             sbom.image.spdx.json
             sbom.python.cyclonedx.json
+            sbom.image.cyclonedx.bundle.json

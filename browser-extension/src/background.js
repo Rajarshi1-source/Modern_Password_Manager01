@@ -906,13 +906,23 @@ class CryptoService {
    * @returns {string} Random string
    */
   generateRandomString(length = 32, charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789') {
-    const randomBytes = this.generateRandomBytes(length);
+    // Use rejection sampling against the largest multiple of charset.length
+    // that fits in a byte, so the modulo doesn't bias the distribution
+    // toward the lower indices of ``charset``.
+    const charsetLen = charset.length;
+    const limit = 256 - (256 % charsetLen);
     let result = '';
-    
-    for (let i = 0; i < length; i++) {
-      result += charset[randomBytes[i] % charset.length];
+
+    while (result.length < length) {
+      const batch = this.generateRandomBytes(length);
+      for (let i = 0; i < batch.length && result.length < length; i++) {
+        const b = batch[i];
+        if (b < limit) {
+          result += charset[b % charsetLen];
+        }
+      }
     }
-    
+
     return result;
   }
 
