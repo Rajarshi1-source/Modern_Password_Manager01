@@ -11,7 +11,7 @@ const STORAGE_KEY = 'ab_test_assignments';
 
 class ABTestService {
   constructor() {
-    this.appointments = this._loadAssignments();
+    this.assignments = this._loadAssignments();
   }
 
   _loadAssignments() {
@@ -25,7 +25,7 @@ class ABTestService {
 
   _saveAssignments() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.appointments));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.assignments));
     } catch (e) {
       // Ignore storage errors
     }
@@ -38,8 +38,8 @@ class ABTestService {
    * @param {Array<number>} weights - Optional weights (must sum to 1)
    */
   getVariant(experimentId, variants = ['control', 'variant'], weights = [0.5, 0.5]) {
-    if (this.appointments[experimentId]) {
-      return this.appointments[experimentId];
+    if (this.assignments[experimentId]) {
+      return this.assignments[experimentId];
     }
 
     // Assign new variant
@@ -55,7 +55,7 @@ class ABTestService {
       }
     }
 
-    this.appointments[experimentId] = selectedVariant;
+    this.assignments[experimentId] = selectedVariant;
     this._saveAssignments();
     
     // Log exposure (placeholder for analytics)
@@ -68,7 +68,7 @@ class ABTestService {
    * Force a variant (useful for testing/qa)
    */
   setVariant(experimentId, variant) {
-    this.appointments[experimentId] = variant;
+    this.assignments[experimentId] = variant;
     this._saveAssignments();
   }
 
@@ -76,7 +76,7 @@ class ABTestService {
    * Clear all assignments
    */
   reset() {
-    this.appointments = {};
+    this.assignments = {};
     localStorage.removeItem(STORAGE_KEY);
   }
 }

@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone as _tz
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils import timezone as djtz
 
 from circadian_totp import services
 from circadian_totp.models import (
@@ -120,7 +121,10 @@ class TestGenerateAndVerify:
 @pytest.mark.django_db
 class TestRecomputeProfile:
     def test_recompute_converges_on_observed_midpoint(self, user):
-        now = datetime(2026, 4, 17, 12, 0, tzinfo=_tz.utc)
+        # Anchor relative to ``djtz.now()`` so the rows always fall inside
+        # ``recompute_profile``'s rolling 14-day window, regardless of when
+        # the test runs.
+        now = djtz.now().replace(hour=12, minute=0, second=0, microsecond=0)
         for day in range(1, 11):
             # Per-row microsecond offsets so the (user, provider, sleep_start)
             # UniqueConstraint never silently collapses two rows when the
