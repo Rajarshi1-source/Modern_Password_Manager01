@@ -218,7 +218,7 @@ pywebpush==2.1.2
 pywin32==311
 PyYAML==6.0.2
 queuelib==1.8.0
-redis==5.2.1
+redis==7.0.1
 regex==2025.11.3
 requests==2.33.0
 requests-file==3.0.1
