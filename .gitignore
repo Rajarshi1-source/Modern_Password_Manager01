@@ -70,4 +70,8 @@ htmlcov/
 *.bak
 *.tmp
 .cursor/
-.claude/
+
+# Claude Code - Keep memory shared, but secrets local
+.claude/settings.local.json
+.claude/worktrees/
+.claude/auth_token
