@@ -31,11 +31,29 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  BACKEND_IMAGE_NAME: ${{ github.repository }}/backend
-  FRONTEND_IMAGE_NAME: ${{ github.repository }}/frontend
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # ===========================================================================
+  # Compute lowercase image names
+  # ===========================================================================
+  # OCI image references must be lowercase. ${{ github.repository }} preserves
+  # the GitHub-stored casing (which can include uppercase letters and `_`),
+  # producing references that fail to parse in strict clients like Trivy.
+  # This job emits lowercase image names that all downstream jobs consume.
+  setup:
+    name: Compute image names
+    runs-on: ubuntu-latest
+    outputs:
+      backend_image: ${{ steps.names.outputs.backend }}
+      frontend_image: ${{ steps.names.outputs.frontend }}
+    steps:
+      - id: names
+        run: |
+          repo_lc="${GITHUB_REPOSITORY,,}"
+          echo "backend=ghcr.io/${repo_lc}/backend" >> "$GITHUB_OUTPUT"
+          echo "frontend=ghcr.io/${repo_lc}/frontend" >> "$GITHUB_OUTPUT"
+
   # ===========================================================================
   # Backend Tests
   # ===========================================================================
@@ -243,7 +261,7 @@ jobs:
   build-images:
     name: Build Docker Images
     runs-on: ubuntu-latest
-    needs: [backend-test]
+    needs: [setup, backend-test]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/develop')
     
     permissions:
@@ -276,7 +294,7 @@ jobs:
         id: meta-backend
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}
+          images: ${{ needs.setup.outputs.backend_image }}
           tags: |
             type=ref,event=branch
             type=sha,prefix=
@@ -299,7 +317,7 @@ jobs:
         id: meta-frontend
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
         with:
-          images: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}
+          images: ${{ needs.setup.outputs.frontend_image }}
           tags: |
             type=ref,event=branch
             type=sha,prefix=
@@ -327,42 +345,51 @@ jobs:
   security-scan:
     name: Security Scanning
     runs-on: ubuntu-latest
-    needs: build-images
+    needs: [setup, build-images]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+
     permissions:
+      contents: read
+      packages: read
       security-events: write
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run Trivy vulnerability scanner (Backend)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:latest
+          image-ref: ${{ needs.setup.outputs.backend_image }}:latest
           format: 'sarif'
           output: 'trivy-backend.sarif'
           severity: 'CRITICAL,HIGH'
-      
+
       - name: Upload Trivy scan results (Backend)
         uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
-        if: always()
+        if: always() && hashFiles('trivy-backend.sarif') != ''
         with:
           sarif_file: 'trivy-backend.sarif'
           category: 'trivy-backend'
-      
+
       - name: Run Trivy vulnerability scanner (Frontend)
         uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:latest
+          image-ref: ${{ needs.setup.outputs.frontend_image }}:latest
           format: 'sarif'
           output: 'trivy-frontend.sarif'
           severity: 'CRITICAL,HIGH'
-      
+
       - name: Upload Trivy scan results (Frontend)
         uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
-        if: always()
+        if: always() && hashFiles('trivy-frontend.sarif') != ''
         with:
           sarif_file: 'trivy-frontend.sarif'
           category: 'trivy-frontend'
@@ -373,7 +400,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: build-images
+    needs: [setup, build-images]
     if: github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/develop'
     environment:
       name: ${{ vars.STAGING_ENV_NAME || 'staging' }}
@@ -403,11 +430,11 @@ jobs:
           
           # Update image tags
           kubectl set image deployment/backend \
-            backend=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} \
+            backend=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} \
             -n password-manager-staging
-          
+
           kubectl set image deployment/frontend \
-            frontend=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }} \
+            frontend=${{ needs.setup.outputs.frontend_image }}:${{ github.sha }} \
             -n password-manager-staging
           
           # Wait for rollout
@@ -432,7 +459,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [build-images, security-scan]
+    needs: [setup, build-images, security-scan]
     if: github.ref == 'refs/heads/main'
     environment:
       name: 'production'
@@ -485,23 +512,23 @@ jobs:
           
           # Update image tags with blue-green deployment
           kubectl set image deployment/backend \
-            backend=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} \
+            backend=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} \
             -n password-manager
-          
+
           kubectl set image deployment/websocket \
-            websocket=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} \
+            websocket=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} \
             -n password-manager
-          
+
           kubectl set image deployment/celery-worker \
-            celery-worker=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} \
+            celery-worker=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} \
             -n password-manager
-          
+
           kubectl set image deployment/celery-beat \
-            celery-beat=${{ env.REGISTRY }}/${{ env.BACKEND_IMAGE_NAME }}:${{ github.sha }} \
+            celery-beat=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} \
             -n password-manager
-          
+
           kubectl set image deployment/frontend \
-            frontend=${{ env.REGISTRY }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ github.sha }} \
+            frontend=${{ needs.setup.outputs.frontend_image }}:${{ github.sha }} \
             -n password-manager
           
           # Wait for rollout
