@@ -246,7 +246,7 @@ jobs:
           pytest --cov=. --cov-report=xml:coverage.xml --cov-report=html -v --tb=short
       
       - name: Upload coverage report
-        uses: codecov/codecov-action@54bcd8715eee62d40e33596ef5e8f0f48dbbccab # v4.1.0
+        uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673 # v6.0.0
         if: success()
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -419,15 +419,23 @@ jobs:
           version: 'v1.29.0'
       
       - name: Configure kubectl
+        env:
+          KUBE_CONFIG_STAGING: ${{ secrets.KUBE_CONFIG_STAGING }}
         run: |
-          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > kubeconfig
-          chmod 600 kubeconfig
-          export KUBECONFIG=kubeconfig
-      
+          if [ -z "${KUBE_CONFIG_STAGING}" ]; then
+            echo "::error::Secret KUBE_CONFIG_STAGING is not set. Cannot deploy."
+            exit 1
+          fi
+          printf '%s' "${KUBE_CONFIG_STAGING}" | base64 -d > "${RUNNER_TEMP}/kubeconfig"
+          chmod 600 "${RUNNER_TEMP}/kubeconfig"
+          if ! grep -q '^[[:space:]]*server:' "${RUNNER_TEMP}/kubeconfig"; then
+            echo "::error::Decoded kubeconfig is invalid (no 'server:' entry found)."
+            exit 1
+          fi
+          echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "$GITHUB_ENV"
+
       - name: Deploy to Kubernetes (Staging)
         run: |
-          export KUBECONFIG=kubeconfig
-          
           # Update image tags
           kubectl set image deployment/backend \
             backend=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} \
@@ -436,22 +444,20 @@ jobs:
           kubectl set image deployment/frontend \
             frontend=${{ needs.setup.outputs.frontend_image }}:${{ github.sha }} \
             -n password-manager-staging
-          
+
           # Wait for rollout
           kubectl rollout status deployment/backend -n password-manager-staging --timeout=300s
           kubectl rollout status deployment/frontend -n password-manager-staging --timeout=300s
-      
+
       - name: Verify deployment
         run: |
-          export KUBECONFIG=kubeconfig
           kubectl get pods -n password-manager-staging
-          
           # Health check
           curl -f https://staging.yourapp.com/api/health/ || exit 1
-      
+
       - name: Cleanup
         if: always()
-        run: rm -f kubeconfig
+        run: rm -f "${RUNNER_TEMP}/kubeconfig"
 
   # ===========================================================================
   # Deploy to Production
@@ -464,7 +470,12 @@ jobs:
     environment:
       name: 'production'
       url: https://yourapp.com
-    
+
+    env:
+      # Surfaced at job level so `if: env.SLACK_WEBHOOK_URL != ''` can short-circuit
+      # the notify steps in forks/repos where the secret isn't configured.
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
     permissions:
       contents: read
     
@@ -478,15 +489,25 @@ jobs:
           version: 'v1.29.0'
       
       - name: Configure kubectl
+        env:
+          KUBE_CONFIG_PRODUCTION: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
         run: |
-          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
-          chmod 600 kubeconfig
-          export KUBECONFIG=kubeconfig
-      
+          if [ -z "${KUBE_CONFIG_PRODUCTION}" ]; then
+            echo "::error::Secret KUBE_CONFIG_PRODUCTION is not set. Cannot deploy."
+            exit 1
+          fi
+          printf '%s' "${KUBE_CONFIG_PRODUCTION}" | base64 -d > "${RUNNER_TEMP}/kubeconfig"
+          chmod 600 "${RUNNER_TEMP}/kubeconfig"
+          # Sanity check: kubeconfig must contain a server entry
+          if ! grep -q '^[[:space:]]*server:' "${RUNNER_TEMP}/kubeconfig"; then
+            echo "::error::Decoded kubeconfig is invalid (no 'server:' entry found)."
+            exit 1
+          fi
+          # Persist KUBECONFIG for subsequent steps
+          echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "$GITHUB_ENV"
+
       - name: Create backup before deployment
         run: |
-          export KUBECONFIG=kubeconfig
-          
           # Wait for at least one backend pod to be ready before backup
           kubectl wait pod \
             -l app=password-manager,component=backend \
@@ -503,13 +524,22 @@ jobs:
             --natural-foreign --natural-primary \
             -o /app/backup_$(date +%Y%m%d_%H%M%S).json || echo "Backup failed, continuing"
       
+      - name: Run database migrations (one-shot Job)
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          # Replaces the old per-pod `migrate` initContainer (which raced
+          # across replicas: 3 backend pods on rollout).
+          kubectl delete job backend-migrate -n password-manager --ignore-not-found
+          envsubst < k8s/migrate-job.yaml | kubectl apply -n password-manager -f -
+          kubectl wait --for=condition=complete job/backend-migrate \
+            -n password-manager --timeout=600s
+
       - name: Deploy to Kubernetes (Production)
         run: |
-          export KUBECONFIG=kubeconfig
-          
           # Apply latest manifests
           kubectl apply -f k8s/production/ -n password-manager
-          
+
           # Update image tags with blue-green deployment
           kubectl set image deployment/backend \
             backend=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} \
@@ -547,50 +577,49 @@ jobs:
           echo " Smoke tests passed!"
       
       - name: Notify deployment success
-        if: success()
-        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1 # v3.0.1
+        # Skip if no webhook is configured (e.g., forks without secrets).
+        if: success() && env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
-              "text": " Production deployment successful!",
+              "text": "Production deployment successful!",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Password Manager Production Deployment*\n Deployment completed successfully\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*URL:* https://yourapp.com"
+                    "text": "*Password Manager Production Deployment*\nDeployment completed successfully\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*URL:* https://yourapp.com"
                   }
                 }
               ]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-      
+
       - name: Notify deployment failure
-        if: failure()
-        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1 # v3.0.1
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
         with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
           payload: |
             {
-              "text": " Production deployment failed!",
+              "text": "Production deployment failed!",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Password Manager Production Deployment FAILED*\n Please check the workflow logs\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    "text": "*Password Manager Production Deployment FAILED*\nPlease check the workflow logs\n\n*Commit:* `${{ github.sha }}`\n*Author:* ${{ github.actor }}\n*Logs:* ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
                   }
                 }
               ]
             }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-      
+
       - name: Cleanup
         if: always()
-        run: rm -f kubeconfig
+        run: rm -f "${RUNNER_TEMP}/kubeconfig"
 
   # ===========================================================================
   # Rollback (Manual Trigger)
@@ -606,29 +635,42 @@ jobs:
       contents: read
     
     steps:
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5.1.0
+        with:
+          version: 'v1.29.0'
+
       - name: Configure kubectl
+        env:
+          KUBE_CONFIG_PRODUCTION: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
         run: |
-          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > kubeconfig
-          chmod 600 kubeconfig
-          export KUBECONFIG=kubeconfig
-      
+          if [ -z "${KUBE_CONFIG_PRODUCTION}" ]; then
+            echo "::error::Secret KUBE_CONFIG_PRODUCTION is not set. Cannot rollback."
+            exit 1
+          fi
+          printf '%s' "${KUBE_CONFIG_PRODUCTION}" | base64 -d > "${RUNNER_TEMP}/kubeconfig"
+          chmod 600 "${RUNNER_TEMP}/kubeconfig"
+          if ! grep -q '^[[:space:]]*server:' "${RUNNER_TEMP}/kubeconfig"; then
+            echo "::error::Decoded kubeconfig is invalid (no 'server:' entry found)."
+            exit 1
+          fi
+          echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "$GITHUB_ENV"
+
       - name: Rollback deployments
         run: |
-          export KUBECONFIG=kubeconfig
-          
           kubectl rollout undo deployment/backend -n password-manager
           kubectl rollout undo deployment/websocket -n password-manager
           kubectl rollout undo deployment/celery-worker -n password-manager
           kubectl rollout undo deployment/celery-beat -n password-manager
           kubectl rollout undo deployment/frontend -n password-manager
-          
+
           # Wait for rollback
           kubectl rollout status deployment/backend -n password-manager --timeout=300s
           kubectl rollout status deployment/frontend -n password-manager --timeout=300s
-          
-          echo " Rollback completed!"
-      
+
+          echo "Rollback completed!"
+
       - name: Cleanup
         if: always()
-        run: rm -f kubeconfig
+        run: rm -f "${RUNNER_TEMP}/kubeconfig"
 

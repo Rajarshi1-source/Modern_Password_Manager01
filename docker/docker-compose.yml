@@ -9,8 +9,6 @@
 # 5. Additional hardening: read-only rootfs, security opts, isolated networks
 # =============================================================================
 
-version: '3.8'
-
 services:
   # ===========================================================================
   # PostgreSQL Database - HARDENED + TUNED
@@ -174,8 +172,8 @@ services:
   # ===========================================================================
   backend:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_backend
     restart: unless-stopped
 
@@ -254,8 +252,8 @@ services:
   # ===========================================================================
   websocket:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_websocket
     restart: unless-stopped
 
@@ -312,8 +310,8 @@ services:
   # ===========================================================================
   celery_worker:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_celery_worker
     restart: unless-stopped
 
@@ -362,8 +360,8 @@ services:
   # ===========================================================================
   celery_beat:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_celery_beat
     restart: unless-stopped
 
@@ -501,8 +499,8 @@ services:
   # Enable by setting DARK_PROTOCOL_RELAY_ENABLED=true
   dark_protocol_relay:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_dark_protocol_relay
     restart: unless-stopped
     profiles:
