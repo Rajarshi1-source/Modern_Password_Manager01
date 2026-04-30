@@ -1,0 +1,74 @@
+# =============================================================================
+# Django migrations Job (replaces the per-pod `migrate` initContainer).
+# =============================================================================
+# A backend Deployment with replicas > 1 would race three concurrent
+# `manage.py migrate` processes during a rolling update. This Job runs
+# migrations exactly once before the rollout proceeds.
+#
+# CI deploy flow:
+#   1) envsubst < k8s/migrate-job.yaml | kubectl apply -f -
+#      (recreate the Job; ttlSecondsAfterFinished cleans up the previous run)
+#   2) kubectl wait --for=condition=complete job/backend-migrate \
+#        -n password-manager --timeout=300s
+#   3) kubectl set image deployment/backend ... (rolling update)
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backend-migrate
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: migrate
+spec:
+  # Auto-clean the Job 10 minutes after completion so the next deploy can
+  # recreate it cleanly without a manual `kubectl delete job`.
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: migrate
+    spec:
+      serviceAccountName: password-manager-sa
+      restartPolicy: OnFailure
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+      - name: migrate
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+        imagePullPolicy: Always
+        command: ["python", "manage.py", "migrate", "--noinput"]
+        envFrom:
+        - configMapRef:
+            name: app-config
+        - secretRef:
+            name: app-secrets
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}

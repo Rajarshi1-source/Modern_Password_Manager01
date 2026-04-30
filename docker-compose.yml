@@ -8,8 +8,6 @@
 #   - Detailed error messages
 # =============================================================================
 
-version: '3.8'
-
 services:
   # PostgreSQL Database
   postgres:
@@ -55,8 +53,8 @@ services:
   # One-time init: run migrations and collectstatic before backend starts
   backend-init:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_backend_init
     command: >
       sh -c "python manage.py migrate --noinput &&
@@ -81,8 +79,8 @@ services:
   # Django Backend (HTTP Server)
   backend:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_backend
     command: daphne -b 0.0.0.0 -p 8000 password_manager.asgi:application
     volumes:
@@ -128,8 +126,8 @@ services:
   # For development without WebSockets, you can comment out this service
   websocket:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_websocket
     command: daphne -b 0.0.0.0 -p 8001 password_manager.asgi:application
     volumes:
@@ -159,8 +157,8 @@ services:
   # Celery Worker (Background Tasks)
   celery_worker:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_celery_worker
     command: celery -A password_manager worker -l info --concurrency=4
     volumes:
@@ -184,8 +182,8 @@ services:
   # Celery Beat (Periodic Task Scheduler)
   celery_beat:
     build:
-      context: ./password_manager
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/backend/Dockerfile
     container_name: password_manager_celery_beat
     command: celery -A password_manager beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
     volumes:

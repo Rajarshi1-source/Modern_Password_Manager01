@@ -85,15 +85,16 @@ RUN chown -R nginx-app:nginx-app /usr/share/nginx/html && \
 COPY docker/frontend/entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-# Expose port
-EXPOSE 80
+# Expose port (nginx listens on 8080 because the non-root nginx-app user
+# cannot bind to privileged ports < 1024).
+EXPOSE 8080
 
 # Switch to non-root user
 USER nginx-app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost/health || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Use custom entrypoint
 ENTRYPOINT ["/docker-entrypoint.sh"]

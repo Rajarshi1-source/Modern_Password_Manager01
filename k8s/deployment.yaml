@@ -286,31 +286,13 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: password-manager-sa
+      # NOTE: `migrate` was previously an initContainer here, but with replicas: 3
+      # all three pods would race to run migrations on rollout. It is now a
+      # one-shot Job (see k8s/migrate-job.yaml) that the CI pipeline runs to
+      # completion before triggering the rolling update on this Deployment.
+      # `collectstatic` remains per-pod because it writes to a shared PVC and is
+      # idempotent — multiple writers are safe.
       initContainers:
-      - name: migrate
-        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
-        command: ["python", "manage.py", "migrate", "--noinput"]
-        envFrom:
-        - configMapRef:
-            name: app-config
-        - secretRef:
-            name: app-secrets
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "300m"
-            memory: "256Mi"
-        securityContext:
-          runAsNonRoot: true
-          runAsUser: 10001
-          runAsGroup: 10001
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          capabilities: &id001
-            drop:
-            - ALL
       - name: collectstatic
         image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
         command:
@@ -341,7 +323,9 @@ spec:
           runAsGroup: 10001
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
-          capabilities: *id001
+          capabilities: &id001
+            drop:
+            - ALL
       containers:
       - name: backend
         image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}

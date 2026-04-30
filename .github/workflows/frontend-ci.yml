@@ -127,12 +127,14 @@ jobs:
         continue-on-error: true
       
       - name: Upload coverage reports
-        uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457 # v3
+        uses: codecov/codecov-action@e28ff129e5465c2c0dcc6f003fc735cb6ae0c673 # v6.0.0
         if: success()
         with:
-          file: ./frontend/coverage/coverage-final.json
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./frontend/coverage/coverage-final.json
           flags: frontend
           name: frontend-coverage
+          fail_ci_if_error: false
 
   # ===========================================================================
   # BUILD
