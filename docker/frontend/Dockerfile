@@ -63,8 +63,8 @@ RUN npm run build
 # -----------------------------------------------------------------------------
 FROM nginx:1.27-alpine AS production
 
-# Install curl for health checks
-RUN apk add --no-cache curl
+# Refresh indexes and upgrade OS packages (libssl3, libxml2, etc.) then curl for health checks
+RUN apk update && apk upgrade --no-cache && apk add --no-cache curl
 
 # Create non-root user
 RUN addgroup -g 1000 -S nginx-app && \
