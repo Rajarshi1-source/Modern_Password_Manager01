@@ -146,6 +146,9 @@ spec:
               value: /etc/grafana/provisioning
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: "false"
+            # Writable paths are volumes so the container root fs can stay read-only (KSV-0014).
+            - name: GF_PATHS_DATA
+              value: /var/lib/grafana
           volumeMounts:
             - name: datasources
               mountPath: /etc/grafana/provisioning/datasources
@@ -155,6 +158,10 @@ spec:
               mountPath: /etc/grafana/dashboards-json
             - name: data
               mountPath: /var/lib/grafana
+            - name: tmp
+              mountPath: /tmp
+            - name: run
+              mountPath: /run/grafana
           resources:
             requests:
               cpu: 50m
@@ -166,7 +173,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
       volumes:
         - name: datasources
           configMap:
@@ -178,4 +185,8 @@ spec:
           configMap:
             name: grafana-dashboard-django
         - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: run
           emptyDir: {}

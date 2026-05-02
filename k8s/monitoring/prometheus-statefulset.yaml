@@ -59,6 +59,8 @@ spec:
               mountPath: /etc/prometheus
             - name: data
               mountPath: /prometheus
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 100m
@@ -70,9 +72,10 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-            # Prometheus writes TSDB and may use temp files
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: config
           projected:
             sources:
