@@ -1,0 +1,181 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: grafana
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provider
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: grafana
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: ""
+        type: file
+        options:
+          path: /etc/grafana/dashboards-json
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-django
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: grafana
+data:
+  django-red.json: |
+    {
+      "uid": "pm-django-red",
+      "title": "Password Manager / Django (RED)",
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "HTTP request rate (django_http_requests_total)",
+          "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+          "targets": [
+            {
+              "expr": "sum(rate(django_http_requests_total[5m]))",
+              "legendFormat": "req/s",
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "reqps"}}
+        },
+        {
+          "type": "timeseries",
+          "title": "Scrape health (up)",
+          "gridPos": {"x": 0, "y": 8, "w": 24, "h": 6},
+          "targets": [
+            {
+              "expr": "up{job=\"kubernetes-pods\"}",
+              "legendFormat": "{{kubernetes_pod_name}}",
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"}
+            }
+          ],
+          "datasource": {"type": "prometheus", "uid": "prometheus"}
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: grafana
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+  selector:
+    app: password-manager
+    component: grafana
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: password-manager
+      component: grafana
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: grafana
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.2.0
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: admin
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: changeme
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "false"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboard-json
+              mountPath: /etc/grafana/dashboards-json
+            - name: data
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: false
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards-provider
+        - name: dashboard-json
+          configMap:
+            name: grafana-dashboard-django
+        - name: data
+          emptyDir: {}

@@ -1,0 +1,26 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pm-disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Disallow privileged containers (password-manager)
+    policies.kyverno.io/category: Pod Security Standards
+spec:
+  validationFailureAction: audit
+  background: true
+  rules:
+    - name: no-privileged
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - password-manager
+      validate:
+        message: Privileged containers are not allowed in password-manager.
+        pattern:
+          spec:
+            containers:
+              - =(securityContext):
+                  =(privileged): false

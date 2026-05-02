@@ -71,6 +71,8 @@ urlpatterns = [
     
     # API-level health check (for Docker/K8s health probes expecting /api/health/)
     path('api/health/', health_check, name='api-health-check'),
+    path('api/ready/', readiness_check, name='api-readiness-check'),
+    path('api/live/', liveness_check, name='api-liveness-check'),
     
     # Django admin
     path('admin/', admin.site.urls),

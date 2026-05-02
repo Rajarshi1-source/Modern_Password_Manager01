@@ -367,7 +367,7 @@ spec:
             cpu: "1000m"
         livenessProbe:
           httpGet:
-            path: /api/health/
+            path: /live/
             port: 8000
           initialDelaySeconds: 60
           periodSeconds: 30
@@ -375,7 +375,7 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /api/health/
+            path: /ready/
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 10
@@ -429,7 +429,8 @@ spec:
     app: password-manager
     component: backend
   ports:
-  - port: 8000
+  - name: http
+    port: 8000
     targetPort: 8000
   type: ClusterIP
 

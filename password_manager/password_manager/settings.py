@@ -528,6 +528,8 @@ AWS_DEFAULT_ACL = 'private'
 # Google Cloud Storage Configuration (for vault backups)
 CLOUD_STORAGE_BUCKET = os.environ.get('CLOUD_STORAGE_BUCKET', '')
 GOOGLE_CLOUD_CREDENTIALS = os.environ.get('GOOGLE_CLOUD_CREDENTIALS', '')
+# Short-lived presigned URLs for direct client ↔ object storage (valet-key uploads/downloads).
+PRESIGNED_URL_TTL_SECONDS = int(os.environ.get('PRESIGNED_URL_TTL_SECONDS', '900'))
 
 # Site ID for django-allauth
 SITE_ID = 1
