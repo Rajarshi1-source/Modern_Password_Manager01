@@ -23,6 +23,13 @@ from . import passkey_primary_recovery_views
 from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
+# Import Layered Recovery Mesh views (Unit 6)
+from .views.time_locked_view import (
+    TimeLockedEnrollView,
+    TimeLockedInitiateView,
+    TimeLockedReleaseView,
+    TimeLockedCanaryAckView,
+)
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -142,6 +149,14 @@ urlpatterns = [
     path('quantum-recovery/approve_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'approve_recovery'}), name='quantum-recovery-approve'),
     path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
     path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
+
+    # ==================== Layered Recovery Mesh — Tier 3 (Time-Locked) ====================
+    # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
+    # share; release gated by configurable delay + canary-cancellation.
+    path('vault/time-locked/enroll/', TimeLockedEnrollView.as_view(), name='vault-time-locked-enroll'),
+    path('vault/time-locked/initiate/', TimeLockedInitiateView.as_view(), name='vault-time-locked-initiate'),
+    path('vault/time-locked/release/', TimeLockedReleaseView.as_view(), name='vault-time-locked-release'),
+    path('vault/time-locked/canary-ack/', TimeLockedCanaryAckView.as_view(), name='vault-time-locked-canary-ack'),
 
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
     # Keypair generation
