@@ -23,6 +23,8 @@ from . import passkey_primary_recovery_views
 from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
+# Import Layered Recovery Mesh views (Unit 5)
+from .views.recovery_factor_view import RecoveryFactorListCreateView
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -142,6 +144,11 @@ urlpatterns = [
     path('quantum-recovery/approve_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'approve_recovery'}), name='quantum-recovery-approve'),
     path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
     path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
+
+    # ==================== Layered Recovery Mesh Endpoints ====================
+    # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
+    # social mesh, time-locked, passkey). Server stores ciphertext only.
+    path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
 
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
     # Keypair generation
