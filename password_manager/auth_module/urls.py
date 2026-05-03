@@ -24,7 +24,7 @@ from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
 # Import Layered Recovery Mesh views (Unit 5)
-from .views.recovery_factor_view import RecoveryFactorListCreateView
+from .recovery_factor_view import RecoveryFactorListCreateView
 
 @api_view(['GET'])
 def auth_root(request, format=None):

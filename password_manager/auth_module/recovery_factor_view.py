@@ -15,6 +15,7 @@ Server stores the resulting `blob` as opaque ciphertext. It never sees
 the unwrapping secret (recovery key, seed, etc.) — only the wrapped
 DEK that the client built locally.
 """
+from django.db import IntegrityError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -89,7 +90,11 @@ class RecoveryFactorListCreateView(APIView):
 
         # Partial unique constraint
         # (factor_type='recovery_key', status='active') is enforced at
-        # the DB layer; we let the constraint surface violations as 400.
+        # the DB layer. We translate ONLY that specific IntegrityError
+        # to 409; any other exception (DB outage, programming error)
+        # bubbles to DRF's default 500 handler so real faults aren't
+        # masked as a business conflict, and we never echo str(exc)
+        # back to the client (information-exposure rule).
         try:
             factor = RecoveryWrappedDEK.objects.create(
                 user=request.user,
@@ -98,9 +103,9 @@ class RecoveryFactorListCreateView(APIView):
                 blob=blob,
                 factor_meta=meta,
             )
-        except Exception as exc:  # IntegrityError on the partial unique
+        except IntegrityError:
             return Response(
-                {'error': 'factor of this type already active', 'detail': str(exc)[:200]},
+                {'error': 'factor of this type already active'},
                 status=409,
             )
 
