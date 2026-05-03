@@ -70,9 +70,14 @@ class TimeLockedRecovery(models.Model):
 
     class Meta:
         db_table = 'time_locked_recovery'
+        # Explicit index names so model state matches the migration —
+        # `makemigrations --check` would otherwise see Django's
+        # auto-generated names diverge from the names we wrote into
+        # 0012_time_locked_recovery.py and produce phantom
+        # RemoveIndex/AddIndex diffs.
         indexes = [
-            models.Index(fields=['user', 'is_active']),
-            models.Index(fields=['canary_state', 'last_canary_sent']),
+            models.Index(fields=['user', 'is_active'], name='tlr_user_active_idx'),
+            models.Index(fields=['canary_state', 'last_canary_sent'], name='tlr_canary_idx'),
         ]
 
     def __str__(self):
@@ -96,7 +101,12 @@ class ServerHalfReleaseLog(models.Model):
 
     class Meta:
         db_table = 'server_half_release_log'
-        indexes = [models.Index(fields=['recovery', 'attempted_at'])]
+        indexes = [
+            models.Index(
+                fields=['recovery', 'attempted_at'],
+                name='shrl_recovery_attempted_idx',
+            ),
+        ]
 
     def __str__(self):
         outcome = 'OK' if self.succeeded else (self.refusal_reason or 'refused')

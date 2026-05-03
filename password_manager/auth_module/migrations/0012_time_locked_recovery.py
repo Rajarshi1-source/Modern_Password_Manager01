@@ -21,7 +21,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='TimeLockedRecovery',
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('server_half', models.BinaryField()),
                 ('half_metadata', models.JSONField(blank=True, default=dict)),
                 ('release_after', models.DateTimeField(blank=True, null=True)),
@@ -62,7 +62,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='ServerHalfReleaseLog',
             fields=[
-                ('id', models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('attempted_at', models.DateTimeField(auto_now_add=True)),
                 ('succeeded', models.BooleanField(default=False)),
                 ('refusal_reason', models.CharField(blank=True, default='', max_length=64)),
