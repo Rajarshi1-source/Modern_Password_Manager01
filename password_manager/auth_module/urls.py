@@ -25,6 +25,8 @@ from . import kyber_views
 from . import quantum_recovery_views
 # Import Layered Recovery Mesh views (Unit 4)
 from .wrapped_dek_view import VaultWrappedDEKView
+# Import Layered Recovery Mesh views (Unit 5)
+from .recovery_factor_view import RecoveryFactorListCreateView
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -149,6 +151,9 @@ urlpatterns = [
     # Unit 4 — wrapped DEK (master-password KEK over the user's vault DEK).
     # Server stores ciphertext only; never decrypts the blob.
     path('vault/wrapped-dek/', VaultWrappedDEKView.as_view(), name='vault-wrapped-dek'),
+    # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
+    # social mesh, time-locked, passkey). Server stores ciphertext only.
+    path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
 
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
     # Keypair generation
