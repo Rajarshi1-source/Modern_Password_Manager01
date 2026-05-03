@@ -250,9 +250,13 @@ class TestZeroKnowledgeAssertion:
     ]
 
     VIEW_PATHS = [
-        'auth_module/views/wrapped_dek_view.py',
-        'auth_module/views/recovery_factor_view.py',
-        'auth_module/views/time_locked_view.py',
+        # Each view sits at the auth_module top level (NOT in a
+        # views/ subpackage — that would shadow auth_module/views.py
+        # and break the existing AuthViewSet routes; see Codex P0
+        # comments on PRs #213/#214/#215 for the full rationale).
+        'auth_module/wrapped_dek_view.py',
+        'auth_module/recovery_factor_view.py',
+        'auth_module/time_locked_view.py',
     ]
 
     @pytest.mark.parametrize('rel_path', VIEW_PATHS)
