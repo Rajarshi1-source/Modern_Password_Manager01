@@ -20,7 +20,13 @@ HIGH_TRUST_THRESHOLD = 0.8
 LOW_TRUST_THRESHOLD = 0.2
 ELEVATED_TRUST_THRESHOLD = 0.5
 
-MIN_THRESHOLD = 2
+# Absolute floor for any social-mesh threshold. Single-guardian
+# configurations (threshold=1, total=1) are valid in the existing
+# recovery flow (see quantum_recovery_views: it can set
+# guardian_approvals_required = min(2, len(active_guardians)) which
+# falls to 1 when only one active guardian exists), so the modulator
+# must accept and pass them through untouched.
+MIN_THRESHOLD = 1
 
 
 def _coerce_score(behavioral_match_score):
@@ -46,16 +52,25 @@ def compute_time_lock_delay_days(behavioral_match_score):
     if s is None:
         return DEFAULT_DELAY_DAYS
     delay = MAX_DELAY_DAYS - s * (MAX_DELAY_DAYS - MIN_DELAY_DAYS)
-    return max(MIN_DELAY_DAYS, min(MAX_DELAY_DAYS, int(round(delay))))
+    # round() returns int when called without ndigits in Python 3;
+    # the explicit int() cast is redundant (Ruff RUF046).
+    return max(MIN_DELAY_DAYS, min(MAX_DELAY_DAYS, round(delay)))
 
 
 def compute_social_mesh_threshold(base_threshold, total_guardians, behavioral_match_score):
     """Adjust the social-mesh approval threshold by +/- 1 based on score.
 
     Clamped to [MIN_THRESHOLD, total_guardians]. Raises ValueError on invalid args.
+
+    Single-guardian configurations (base_threshold == total_guardians == 1)
+    are valid and are returned unchanged: with only one guardian there is
+    no headroom to modulate, and the recovery flow already allows this
+    case via ``min(2, len(active_guardians))``.
     """
     if base_threshold < MIN_THRESHOLD or total_guardians < MIN_THRESHOLD:
-        raise ValueError('threshold and total_guardians must each be >= 2')
+        raise ValueError(
+            f'threshold and total_guardians must each be >= {MIN_THRESHOLD}'
+        )
     if base_threshold > total_guardians:
         raise ValueError('base_threshold cannot exceed total_guardians')
 
