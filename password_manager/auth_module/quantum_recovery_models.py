@@ -98,7 +98,19 @@ class RecoveryShard(models.Model):
     
     shard_type = models.CharField(max_length=20, choices=RecoveryShardType.choices)
     shard_index = models.IntegerField()  # Position in Shamir's secret sharing
-    
+
+    class SecretType(models.TextChoices):
+        PASSKEY_PRIVATE_KEY = 'passkey_private_key', 'Passkey Private Key'
+        VAULT_DEK_SEED      = 'vault_dek_seed',      'Vault DEK Recovery Seed'
+
+    secret_type = models.CharField(
+        max_length=32,
+        choices=SecretType.choices,
+        default=SecretType.PASSKEY_PRIVATE_KEY,
+        db_index=True,
+        help_text='What kind of secret this shard reconstructs. Existing shards default to passkey_private_key.',
+    )
+
     # Encrypted shard data (post-quantum encrypted)
     encrypted_shard_data = models.BinaryField()
     encryption_metadata = models.JSONField(default=dict)
