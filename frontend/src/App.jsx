@@ -28,6 +28,9 @@ import zkProof from './services/zkProof';
 // Lazy load heavy components
 const PasswordStrengthMeterML = lazy(() => import('./Components/security/PasswordStrengthMeterML'));
 const RecoveryKeySetupPage = lazy(() => import('./Components/auth/RecoveryKeySetup'));
+// Layered Recovery Mesh (Unit 12) — tier-2 social mesh
+const SocialMeshDEKEnroll = lazy(() => import('./Components/recovery/layered/SocialMeshDEKEnroll'));
+const SocialMeshDEKRecover = lazy(() => import('./Components/recovery/layered/SocialMeshDEKRecover'));
 const PasskeyManagement = lazy(() => import('./Components/auth/PasskeyManagement'));
 const CircadianSettings = lazy(() => import('./Components/settings/CircadianSettings'));
 const CircadianTOTPSetup = lazy(() => import('./Components/auth/CircadianTOTPSetup'));
@@ -1710,6 +1713,13 @@ function App() {
                 } />
                 <Route path="/recovery-key-setup" element={
                   isAuthenticated ? <Navigate to="/" /> : <RecoveryKeySetupPage />
+                } />
+                {/* Layered Recovery Mesh (Unit 12) — tier-2 social mesh */}
+                <Route path="/recovery/social-mesh/enroll-v2" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <SocialMeshDEKEnroll />
+                } />
+                <Route path="/recovery/social-mesh/recover-v2" element={
+                  isAuthenticated ? <Navigate to="/" /> : <SocialMeshDEKRecover />
                 } />
                 <Route path="/settings/passkeys" element={
                   !isAuthenticated ? <Navigate to="/" /> : <PasskeyManagement />
