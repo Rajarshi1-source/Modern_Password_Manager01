@@ -1,7 +1,9 @@
 """Migration for Tier 3 (Self-Time-Locked) recovery models.
 
-Chains off 0007_recoveryshard_status. Independent of 0008 (wrapped-DEK)
-and 0010 (recoveryshard secret_type) — additive table creation only.
+Chains off 0011_merge_layered_recovery (the single leaf left after
+0008_wrapped_dek and 0010_recoveryshard_secret_type were collapsed).
+Additive table creation — no dependency on the schema added by 0008
+or 0010 beyond the implicit merge ordering.
 """
 import django.db.models.deletion
 from django.conf import settings
@@ -11,7 +13,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('auth_module', '0007_recoveryshard_status'),
+        ('auth_module', '0011_merge_layered_recovery'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
