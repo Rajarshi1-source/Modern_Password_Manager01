@@ -22,6 +22,7 @@ import abTestingService from './services/abTestingService';
 import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
 import sessionVaultCrypto from './services/sessionVaultCrypto';
+import sessionVaultCryptoV3 from './services/sessionVaultCryptoV3';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
 
@@ -1201,6 +1202,34 @@ function App() {
         console.warn('Failed to initialize session vault key:', cryptoErr);
       }
 
+      // Layered Recovery Mesh (Unit 15) — additionally bootstrap the v3
+      // wrapped-DEK session. If the user has never been enrolled in v3
+      // before, run the one-shot legacy-to-v3 migration. The legacy v2
+      // session key above stays live so any items still encrypted under
+      // svc-gcm-1 keep decrypting; new items go through v3.
+      try {
+        await sessionVaultCryptoV3.unlockWithMasterPassword(loginData.password);
+      } catch (v3Err) {
+        if (v3Err?.message === 'NOT_ENROLLED') {
+          try {
+            const { migrateLegacyUserToWrappedDEK } = await import(
+              './services/legacyVaultMigration'
+            );
+            await migrateLegacyUserToWrappedDEK(
+              loginData.password,
+              loginData.email
+            );
+          } catch (migErr) {
+            console.warn('Legacy-to-v3 vault migration failed:', migErr);
+          }
+        } else {
+          // Unexpected error from v3 unlock — log and continue. The
+          // legacy v2 session key is still live, so the vault remains
+          // usable; recovery factors just won't work this session.
+          console.warn('v3 wrapped-DEK unlock failed:', v3Err);
+        }
+      }
+
       // Initialize error tracker user context
       errorTracker.setUserContext({
         email: loginData.email,
@@ -1358,6 +1387,8 @@ function App() {
       // Drop the in-memory vault encryption key so it cannot be reused after
       // logout and so a subsequent login for a different user starts clean.
       sessionVaultCrypto.clearSessionKey();
+      // Same for the v3 wrapped-DEK session (Unit 15).
+      try { sessionVaultCryptoV3.clearSessionKey(); } catch {}
 
       // Clear vault items
       setVaultItems([]);
