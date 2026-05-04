@@ -23,6 +23,10 @@ from . import passkey_primary_recovery_views
 from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
+# Import Layered Recovery Mesh views (Unit 4)
+from .wrapped_dek_view import VaultWrappedDEKView
+# Import Layered Recovery Mesh views (Unit 5)
+from .recovery_factor_view import RecoveryFactorListCreateView
 # Import Layered Recovery Mesh views (Unit 6)
 from .time_locked_view import (
     TimeLockedEnrollView,
@@ -150,7 +154,13 @@ urlpatterns = [
     path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
     path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
 
-    # ==================== Layered Recovery Mesh — Tier 3 (Time-Locked) ====================
+    # ==================== Layered Recovery Mesh Endpoints ====================
+    # Unit 4 — wrapped DEK (master-password KEK over the user's vault DEK).
+    # Server stores ciphertext only; never decrypts the blob.
+    path('vault/wrapped-dek/', VaultWrappedDEKView.as_view(), name='vault-wrapped-dek'),
+    # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
+    # social mesh, time-locked, passkey). Server stores ciphertext only.
+    path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
     # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
     # share; release gated by configurable delay + canary-cancellation.
     path('vault/time-locked/enroll/', TimeLockedEnrollView.as_view(), name='vault-time-locked-enroll'),

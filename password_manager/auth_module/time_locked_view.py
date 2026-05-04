@@ -78,11 +78,15 @@ def _send_canary(user, recovery):
     The plan is to wire this through the existing notification subsystem
     (email + SMS) once the canary message templates are agreed. For now
     we log a structured warning so operations sees recovery initiations
-    in the application log, and flag this with a TODO for follow-up.
+    in the application log; the ``canary_ack_token`` is intentionally
+    NOT logged because it is a bearer credential — anyone who reads it
+    from a log line can cancel a legitimate recovery. The token is
+    delivered only via the (future) email/SMS channel rendered from
+    the DB row directly.
     """
     log.warning(
-        'TIME_LOCKED_CANARY user_id=%s recovery_id=%s ack_token=%s release_after=%s',
-        user.pk, recovery.pk, recovery.canary_ack_token, recovery.release_after,
+        'TIME_LOCKED_CANARY user_id=%s recovery_id=%s release_after=%s',
+        user.pk, recovery.pk, recovery.release_after,
     )
 
 
@@ -137,11 +141,23 @@ class TimeLockedInitiateView(APIView):
         if not isinstance(username, str) or not username:
             return Response({'error': 'username required'}, status=400)
 
-        # Constant-time-ish: don't leak account existence or enrollment.
+        # We must NOT leak whether `username` exists or is enrolled.
+        # That means every code path returns the same response shape:
+        # {'success': True, 'release_after': <ISO timestamp>}. For the
+        # legitimate case the timestamp is the real release_after.
+        # For "no such user" or "user but no enrollment" we fabricate
+        # a plausible-looking release_after using the same default
+        # delay so an attacker probing usernames cannot distinguish.
+        delay_days = compute_time_lock_delay_days(None)
+        decoy_release_after = timezone.now() + timedelta(days=delay_days)
+
         try:
             user = User.objects.get(username=username)
         except User.DoesNotExist:
-            return Response({'success': True})
+            return Response({
+                'success': True,
+                'release_after': decoy_release_after.isoformat(),
+            })
 
         rec = (
             TimeLockedRecovery.objects
@@ -150,11 +166,13 @@ class TimeLockedInitiateView(APIView):
             .first()
         )
         if not rec:
-            return Response({'success': True})
+            return Response({
+                'success': True,
+                'release_after': decoy_release_after.isoformat(),
+            })
 
         # Trust-score modulation defaults to 7d; Unit 7 wires the
         # behavioral score through.
-        delay_days = compute_time_lock_delay_days(None)
         rec.release_after = timezone.now() + timedelta(days=delay_days)
         rec.canary_state = TimeLockedRecovery.CanaryState.ALERTING
         rec.canary_ack_token = secrets.token_urlsafe(32)
