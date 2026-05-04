@@ -23,13 +23,18 @@ from rest_framework.test import APIClient
 
 # Sibling-unit imports — wrapped in try/except so the test file always
 # loads cleanly. Each test class checks the relevant flag.
+# Narrow exception class on purpose: only ModuleNotFoundError /
+# ImportError indicate "the sibling unit hasn't merged yet". A
+# SyntaxError, NameError, or any other failure inside an already-
+# landed module means a real regression and MUST fail CI rather than
+# being silently downgraded to "skip the whole test class".
 try:
     from auth_module.recovery_models_v2 import (
         VaultWrappedDEK,
         RecoveryWrappedDEK,
     )
     HAS_WRAPPED_DEK = True
-except Exception:
+except (ImportError, ModuleNotFoundError):
     HAS_WRAPPED_DEK = False
 
 try:
@@ -38,7 +43,7 @@ try:
         ServerHalfReleaseLog,
     )
     HAS_TIME_LOCKED = True
-except Exception:
+except (ImportError, ModuleNotFoundError):
     HAS_TIME_LOCKED = False
 
 
@@ -158,8 +163,14 @@ class TestRecoveryFactorView:
         r1 = auth_client.post(self.URL, body, format='json')
         assert r1.status_code == 201
         r2 = auth_client.post(self.URL, body, format='json')
-        # Partial unique constraint enforced at DB layer
-        assert r2.status_code in (400, 409, 500)
+        # Partial unique constraint enforced at DB layer. The view (#214)
+        # catches IntegrityError and translates it to 409. We intentionally
+        # do NOT accept 5xx here — a 500 means the view failed to handle
+        # the constraint and is a real regression we want CI to fail on.
+        assert r2.status_code in (400, 409), (
+            f'duplicate enrollment must be a client/conflict error, '
+            f'got {r2.status_code}: {r2.content[:200]!r}'
+        )
 
 
 # ----------------------------------------------------------------------
@@ -233,9 +244,16 @@ class TestZeroKnowledgeAssertion:
     If any view ever calls AES.new(), Fernet(), unwrap_key(),
     argon2.hash(), etc., this fails the build.
 
-    Skipping a file is permitted only when that file does not exist
-    yet (sibling unit unlanded). It is NEVER permitted to weaken or
-    remove these patterns once the corresponding view has landed.
+    Path resolution and presence are HARD requirements: a missing file
+    is treated as a CI failure, not a skip. The previous "skip when
+    file doesn't exist" behavior created a blind spot — a rename or
+    reorganisation would silently disable the ZK guard while keeping
+    CI green. Any future move of these view modules must update
+    VIEW_PATHS in lockstep so the guard keeps firing on the new
+    location.
+
+    PRs #213/#214/#215 — which created the views — are all merged on
+    main, so the files MUST exist whenever this test runs.
     """
 
     FORBIDDEN_PATTERNS = [
@@ -261,13 +279,20 @@ class TestZeroKnowledgeAssertion:
 
     @pytest.mark.parametrize('rel_path', VIEW_PATHS)
     def test_view_does_not_decrypt(self, rel_path):
-        # Resolve the view file relative to the password_manager package.
-        # Tests are invoked from password_manager/, so views live one
-        # directory up from auth_module/tests.
-        candidate = os.path.join(os.path.dirname(__file__), '..', '..', rel_path)
-        candidate = os.path.normpath(candidate)
-        if not os.path.exists(candidate):
-            pytest.skip(f'{rel_path} not yet landed in this branch')
+        # Resolve the view file relative to the password_manager
+        # package. Tests are invoked from password_manager/, so views
+        # live one directory up from auth_module/tests.
+        candidate = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), '..', '..', rel_path)
+        )
+        # HARD assertion: missing target = ZK guard is broken, fail CI.
+        # Do NOT downgrade this to pytest.skip — that would let a
+        # rename or refactor silently disable the security check.
+        assert os.path.exists(candidate), (
+            f'ZK guard target missing: {rel_path!r} (looked at {candidate!r}). '
+            f'If the file was renamed, update VIEW_PATHS in this test in '
+            f'the same commit; never let the guard go quiet.'
+        )
         with open(candidate, encoding='utf-8') as f:
             source = f.read()
         violations = [p for p in self.FORBIDDEN_PATTERNS if p in source]
