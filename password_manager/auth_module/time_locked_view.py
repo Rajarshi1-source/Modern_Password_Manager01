@@ -192,27 +192,41 @@ class TimeLockedEnrollView(APIView):
         if not isinstance(meta, dict):
             return Response({'error': 'half_metadata must be object'}, status=400)
 
-        # One active enrollment per user — deactivate any prior row.
-        TimeLockedRecovery.objects.filter(
-            user=request.user, is_active=True,
-        ).update(is_active=False)
-        rec = TimeLockedRecovery.objects.create(
-            user=request.user,
-            server_half=server_half,
-            half_metadata=meta,
-            is_active=True,
-        )
-        RecoveryAuditLog.objects.create(
-            user=request.user,
-            event_type='setup_created',
-            event_data={
-                'subsystem': 'time_locked',
-                'recovery_id': rec.pk,
-                'half_bytes': len(server_half),
-            },
-            ip_address=_client_ip(request),
-            user_agent=_user_agent(request),
-        )
+        # One active enrollment per user. The deactivate+create pair
+        # MUST be serialized with a row-level lock; without it, two
+        # concurrent enroll requests can both observe zero active rows
+        # (or both deactivate and both create) and end up writing two
+        # is_active=True rows for the same user.
+        with transaction.atomic():
+            # Lock all of the user's recovery rows (active or not) so
+            # any concurrent enroll for the same user blocks until we
+            # commit. We materialize via list() so the SELECT...FOR
+            # UPDATE actually executes inside the txn.
+            list(
+                TimeLockedRecovery.objects
+                .select_for_update()
+                .filter(user=request.user)
+            )
+            TimeLockedRecovery.objects.filter(
+                user=request.user, is_active=True,
+            ).update(is_active=False)
+            rec = TimeLockedRecovery.objects.create(
+                user=request.user,
+                server_half=server_half,
+                half_metadata=meta,
+                is_active=True,
+            )
+            RecoveryAuditLog.objects.create(
+                user=request.user,
+                event_type='setup_created',
+                event_data={
+                    'subsystem': 'time_locked',
+                    'recovery_id': rec.pk,
+                    'half_bytes': len(server_half),
+                },
+                ip_address=_client_ip(request),
+                user_agent=_user_agent(request),
+            )
         return Response({'success': True, 'recovery_id': rec.pk}, status=201)
 
 
@@ -316,70 +330,71 @@ class TimeLockedReleaseView(APIView):
         ip = _client_ip(request)
         ua = _user_agent(request)
 
-        # Single transaction: row-lock the candidate active recovery so
-        # concurrent release / canary-ack calls cannot race the read,
-        # then make all state changes (including the audit log writes
-        # that depend on the outcome) before releasing the lock.
-        try:
-            with transaction.atomic():
-                rec = (
-                    TimeLockedRecovery.objects
-                    .select_for_update()
-                    .filter(user=user, is_active=True)
-                    .order_by('-enrolled_at')
-                    .first()
-                )
-                if not rec or not rec.release_after:
-                    return Response({'error': 'no recovery in progress'}, status=404)
+        # Single transaction: row-lock the candidate active recovery
+        # so concurrent release / canary-ack calls cannot race the
+        # read. CRITICAL: every write that depends on consuming the
+        # row (the ServerHalfReleaseLog row, the row state mutation,
+        # AND the RecoveryAuditLog write) must live inside the same
+        # txn. If audit-log creation is moved outside and fails, the
+        # share is already consumed (is_active=False, canary_state=
+        # EXPIRED) but the client gets 500 and never sees server_half
+        # — the legitimate user permanently loses Tier-3 recovery for
+        # this enrollment. Keeping audit inside means an audit
+        # failure rolls back the consumption too, so the client can
+        # retry safely.
+        with transaction.atomic():
+            rec = (
+                TimeLockedRecovery.objects
+                .select_for_update()
+                .filter(user=user, is_active=True)
+                .order_by('-enrolled_at')
+                .first()
+            )
+            if not rec or not rec.release_after:
+                return Response({'error': 'no recovery in progress'}, status=404)
 
-                if rec.canary_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
-                    ServerHalfReleaseLog.objects.create(
-                        recovery=rec, succeeded=False,
-                        refusal_reason='cancelled_by_canary',
-                        ip_address=ip, user_agent=ua,
-                    )
-                    return Response(
-                        {'error': 'cancelled by canary acknowledgement'},
-                        status=403,
-                    )
-
-                if timezone.now() < rec.release_after:
-                    ServerHalfReleaseLog.objects.create(
-                        recovery=rec, succeeded=False, refusal_reason='too_early',
-                        ip_address=ip, user_agent=ua,
-                    )
-                    return Response({
-                        'error': 'delay not elapsed',
-                        'release_after': rec.release_after.isoformat(),
-                    }, status=403)
-
+            if rec.canary_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
                 ServerHalfReleaseLog.objects.create(
-                    recovery=rec, succeeded=True,
+                    recovery=rec, succeeded=False,
+                    refusal_reason='cancelled_by_canary',
                     ip_address=ip, user_agent=ua,
                 )
-                rec.completed_at = timezone.now()
-                rec.canary_state = TimeLockedRecovery.CanaryState.EXPIRED
-                rec.is_active = False
-                rec.save(update_fields=['completed_at', 'canary_state', 'is_active'])
+                return Response(
+                    {'error': 'cancelled by canary acknowledgement'},
+                    status=403,
+                )
 
-                # Capture data needed for the response BEFORE the
-                # transaction commits — the row is "consumed" once we
-                # exit the lock; reading server_half outside the txn
-                # would still work but is harder to reason about.
-                server_half_b64 = base64.b64encode(bytes(rec.server_half)).decode('ascii')
-                half_metadata = rec.half_metadata
-                rec_pk = rec.pk
-        finally:
-            # Audit log written outside the transaction so it survives
-            # even if the txn rolls back due to a programming error.
-            pass
+            if timezone.now() < rec.release_after:
+                ServerHalfReleaseLog.objects.create(
+                    recovery=rec, succeeded=False, refusal_reason='too_early',
+                    ip_address=ip, user_agent=ua,
+                )
+                return Response({
+                    'error': 'delay not elapsed',
+                    'release_after': rec.release_after.isoformat(),
+                }, status=403)
 
-        RecoveryAuditLog.objects.create(
-            user=user,
-            event_type='recovery_completed',
-            event_data={'subsystem': 'time_locked', 'recovery_id': rec_pk},
-            ip_address=ip, user_agent=ua,
-        )
+            ServerHalfReleaseLog.objects.create(
+                recovery=rec, succeeded=True,
+                ip_address=ip, user_agent=ua,
+            )
+            rec.completed_at = timezone.now()
+            rec.canary_state = TimeLockedRecovery.CanaryState.EXPIRED
+            rec.is_active = False
+            rec.save(update_fields=['completed_at', 'canary_state', 'is_active'])
+
+            # Audit INSIDE the txn so that an audit failure rolls back
+            # the consumption together with itself.
+            RecoveryAuditLog.objects.create(
+                user=user,
+                event_type='recovery_completed',
+                event_data={'subsystem': 'time_locked', 'recovery_id': rec.pk},
+                ip_address=ip, user_agent=ua,
+            )
+
+            server_half_b64 = base64.b64encode(bytes(rec.server_half)).decode('ascii')
+            half_metadata = rec.half_metadata
+
         return Response({
             'server_half': server_half_b64,
             'half_metadata': half_metadata,
@@ -404,8 +419,16 @@ class TimeLockedCanaryAckView(APIView):
         if not isinstance(token, str) or not token:
             return Response({'error': 'token required'}, status=400)
 
-        cancelled_user = None
-        cancelled_pk = None
+        # We mark canary_state=ACKNOWLEDGED but deliberately leave
+        # is_active=True. That keeps the row visible to a subsequent
+        # ``release`` call so it can log the refusal as
+        # 'cancelled_by_canary' and surface a 403 to the requestor —
+        # if we set is_active=False here, ``release`` would query for
+        # is_active=True only, miss this row, and instead 404 with
+        # 'no recovery in progress', erasing the cancel signal from
+        # the forensics trail and confusing the recovering client.
+        # The next enroll for this user (or future cleanup pass) will
+        # deactivate the row when appropriate.
         with transaction.atomic():
             rec = (
                 TimeLockedRecovery.objects
@@ -415,19 +438,21 @@ class TimeLockedCanaryAckView(APIView):
             )
             if rec is not None:
                 rec.canary_state = TimeLockedRecovery.CanaryState.ACKNOWLEDGED
-                rec.is_active = False  # legitimate user said "no" — kill it
-                rec.save(update_fields=['canary_state', 'is_active'])
-                cancelled_user = rec.user
-                cancelled_pk = rec.pk
-
-        if cancelled_user is not None:
-            RecoveryAuditLog.objects.create(
-                user=cancelled_user,
-                event_type='user_cancelled_recovery',
-                event_data={'subsystem': 'time_locked', 'recovery_id': cancelled_pk},
-                ip_address=_client_ip(request),
-                user_agent=_user_agent(request),
-            )
+                rec.save(update_fields=['canary_state'])
+                # Audit inside the txn — if the audit write fails the
+                # canary state change rolls back together with it, so
+                # we never end up with a "silently cancelled" row that
+                # has no log entry.
+                RecoveryAuditLog.objects.create(
+                    user=rec.user,
+                    event_type='user_cancelled_recovery',
+                    event_data={
+                        'subsystem': 'time_locked',
+                        'recovery_id': rec.pk,
+                    },
+                    ip_address=_client_ip(request),
+                    user_agent=_user_agent(request),
+                )
 
         # Always opaque success — never leak token validity.
         return Response({'success': True})
