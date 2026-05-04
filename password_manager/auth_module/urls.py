@@ -27,6 +27,13 @@ from . import quantum_recovery_views
 from .wrapped_dek_view import VaultWrappedDEKView
 # Import Layered Recovery Mesh views (Unit 5)
 from .recovery_factor_view import RecoveryFactorListCreateView
+# Import Layered Recovery Mesh views (Unit 6)
+from .time_locked_view import (
+    TimeLockedEnrollView,
+    TimeLockedInitiateView,
+    TimeLockedReleaseView,
+    TimeLockedCanaryAckView,
+)
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -154,6 +161,12 @@ urlpatterns = [
     # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
     # social mesh, time-locked, passkey). Server stores ciphertext only.
     path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
+    # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
+    # share; release gated by configurable delay + canary-cancellation.
+    path('vault/time-locked/enroll/', TimeLockedEnrollView.as_view(), name='vault-time-locked-enroll'),
+    path('vault/time-locked/initiate/', TimeLockedInitiateView.as_view(), name='vault-time-locked-initiate'),
+    path('vault/time-locked/release/', TimeLockedReleaseView.as_view(), name='vault-time-locked-release'),
+    path('vault/time-locked/canary-ack/', TimeLockedCanaryAckView.as_view(), name='vault-time-locked-canary-ack'),
 
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
     # Keypair generation
