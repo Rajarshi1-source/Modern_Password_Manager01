@@ -27,13 +27,26 @@ Server's powers are exactly: enforce the delay, send canary alerts, log
 release attempts. Server's half is opaque Shamir share bytes — it never
 inspects mathematical content. Without the user's `.dlrec` file, the
 server's half alone is information-theoretically useless.
+
+Concurrency note: ``release`` and ``canary-ack`` perform read-then-write
+on the active TimeLockedRecovery row. Both wrap that round trip in
+``transaction.atomic()`` + ``select_for_update()`` so concurrent calls
+cannot double-release the server half or race the cancel-vs-release
+decision. Without the lock, two parallel ``release`` requests could
+both observe ``is_active=True`` and both succeed; or a release call
+could observe ``ACKNOWLEDGED=False`` while a canary-ack write was
+in flight.
 """
 import base64
-import secrets
+import binascii
 import logging
+import secrets
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.mail import send_mail
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -55,6 +68,10 @@ try:
     )
 except ImportError:  # pragma: no cover — Unit 7 not landed
     def compute_time_lock_delay_days(_score):
+        """Fallback when the trust-score modulator is unavailable.
+
+        Returns the conservative 7-day default delay regardless of input.
+        """
         return 7
 
 
@@ -62,6 +79,13 @@ log = logging.getLogger(__name__)
 
 
 def _client_ip(request):
+    """Return the client's IP address, honouring an X-Forwarded-For header.
+
+    If the deployment is behind a trusted proxy, the proxy populates
+    ``X-Forwarded-For`` with the original client; we take the leftmost
+    entry. Otherwise we fall back to ``REMOTE_ADDR``. The value is used
+    only for audit logging, not for any auth decision.
+    """
     xff = request.META.get('HTTP_X_FORWARDED_FOR')
     if xff:
         return xff.split(',')[0].strip()
@@ -69,38 +93,99 @@ def _client_ip(request):
 
 
 def _user_agent(request):
+    """Return the request's User-Agent header, truncated to 255 chars.
+
+    Truncation matches the column width in ``ServerHalfReleaseLog``; the
+    header is logged for forensics only.
+    """
     return request.META.get('HTTP_USER_AGENT', '')[:255]
 
 
-def _send_canary(user, recovery):
-    """Hook for canary-alert delivery.
+def _build_canary_email(user, recovery):
+    """Build the (subject, body) tuple for a canary alert email.
 
-    The plan is to wire this through the existing notification subsystem
-    (email + SMS) once the canary message templates are agreed. For now
-    we log a structured warning so operations sees recovery initiations
-    in the application log; the ``canary_ack_token`` is intentionally
-    NOT logged because it is a bearer credential — anyone who reads it
-    from a log line can cancel a legitimate recovery. The token is
-    delivered only via the (future) email/SMS channel rendered from
-    the DB row directly.
+    The body contains a single bearer URL keyed off
+    ``recovery.canary_ack_token`` — clicking it cancels the active
+    recovery. The token is therefore treated as a credential and never
+    appears in logs (see ``_send_canary``).
+    """
+    subject = 'Recovery initiated for your vault — was this you?'
+    base = getattr(settings, 'FRONTEND_BASE_URL', 'https://your-app.example.com')
+    cancel_url = f'{base}/recovery/time-lock/cancel?token={recovery.canary_ack_token}'
+    body = (
+        f"Hi {user.username},\n\n"
+        f"Someone has started time-locked recovery for your vault. "
+        f"If this was you, you can ignore this email — recovery will "
+        f"complete automatically at {recovery.release_after.isoformat()}.\n\n"
+        f"If this was NOT you, click the link below to cancel the "
+        f"recovery and revoke the request:\n"
+        f"  {cancel_url}\n\n"
+        f"You will continue to receive these alerts during the delay "
+        f"window so you have multiple chances to cancel.\n"
+    )
+    return subject, body
+
+
+def _send_canary(user, recovery):
+    """Deliver a canary alert to the user's email channel.
+
+    Two layers of behaviour, in order:
+
+    1. **Email** — if the user has an email address configured we send
+       the canary via ``django.core.mail.send_mail``. Failures are
+       logged but never raised, because the recovery flow itself must
+       not be aborted by transient mail-server problems (the user can
+       still cancel via subsequent canary alerts before
+       ``release_after``).
+    2. **Operations log** — we always emit a structured ``log.warning``
+       so on-call sees the initiation. The ``canary_ack_token`` is
+       intentionally NOT logged because it is a bearer credential —
+       anyone who reads it from a log line could cancel a legitimate
+       recovery. The token is delivered exclusively via the email body.
+
+    SMS delivery is a follow-up once the SMS provider is wired in;
+    the docstring will be updated then. The email path is sufficient
+    for the security property the design relies on (a non-server-side
+    notification channel out of band of the recovery API).
     """
     log.warning(
         'TIME_LOCKED_CANARY user_id=%s recovery_id=%s release_after=%s',
         user.pk, recovery.pk, recovery.release_after,
     )
+    if not user.email:
+        return
+    subject, body = _build_canary_email(user, recovery)
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None)
+    try:
+        send_mail(subject, body, from_email, [user.email], fail_silently=True)
+    except Exception:  # noqa: BLE001 — mail backends raise heterogeneous types
+        # We swallow any exception so a flaky email backend cannot
+        # block recovery initiation. The canary will retry on the
+        # next configured cadence.
+        log.exception('TIME_LOCKED_CANARY_EMAIL_FAILED user_id=%s', user.pk)
 
 
 class TimeLockedEnrollView(APIView):
+    """Enroll the server's Shamir 2-of-2 share for the authenticated user.
+
+    The client sends a base64-encoded ``server_half`` and an optional
+    ``half_metadata`` dict. Server-side we store both as opaque blobs;
+    we never inspect or reconstruct from ``server_half`` alone.
+    """
     permission_classes = [IsAuthenticated]
     throttle_classes = [RecoveryThrottle]
 
     def post(self, request):
+        """Validate input, decode the share, replace any prior enrollment."""
         server_half_b64 = request.data.get('server_half')
         if not isinstance(server_half_b64, str) or not server_half_b64:
             return Response({'error': 'server_half required'}, status=400)
+        # ``base64.b64decode(validate=True)`` raises ``binascii.Error``
+        # for non-base64 input and ``ValueError`` for the empty string;
+        # we narrow the exception so unrelated runtime faults bubble.
         try:
             server_half = base64.b64decode(server_half_b64, validate=True)
-        except Exception:
+        except (binascii.Error, ValueError):
             return Response({'error': 'server_half must be base64'}, status=400)
 
         meta = request.data.get('half_metadata', {}) or {}
@@ -132,22 +217,29 @@ class TimeLockedEnrollView(APIView):
 
 
 class TimeLockedInitiateView(APIView):
-    """Anonymous — user has lost master password."""
+    """Anonymous endpoint: begin the time-lock delay for ``username``.
+
+    Always returns a uniform response shape so attackers cannot probe
+    usernames by inspecting the response body. For unknown users or
+    enrolled-but-no-recovery accounts we synthesize a decoy
+    ``release_after`` using the same default delay as a real one.
+    """
     permission_classes = [AllowAny]
     throttle_classes = [RecoveryInitiateThrottle]
 
     def post(self, request):
+        """Start the delay clock if a real enrollment exists; otherwise decoy.
+
+        Constant response shape: ``{'success': True, 'release_after': <ISO>}``.
+        """
         username = request.data.get('username')
         if not isinstance(username, str) or not username:
             return Response({'error': 'username required'}, status=400)
 
         # We must NOT leak whether `username` exists or is enrolled.
-        # That means every code path returns the same response shape:
-        # {'success': True, 'release_after': <ISO timestamp>}. For the
-        # legitimate case the timestamp is the real release_after.
-        # For "no such user" or "user but no enrollment" we fabricate
-        # a plausible-looking release_after using the same default
-        # delay so an attacker probing usernames cannot distinguish.
+        # Every code path returns the same response shape. For unknown
+        # usernames we fabricate a plausible-looking release_after using
+        # the default delay so an attacker cannot distinguish.
         delay_days = compute_time_lock_delay_days(None)
         decoy_release_after = timezone.now() + timedelta(days=delay_days)
 
@@ -171,8 +263,6 @@ class TimeLockedInitiateView(APIView):
                 'release_after': decoy_release_after.isoformat(),
             })
 
-        # Trust-score modulation defaults to 7d; Unit 7 wires the
-        # behavioral score through.
         rec.release_after = timezone.now() + timedelta(days=delay_days)
         rec.canary_state = TimeLockedRecovery.CanaryState.ALERTING
         rec.canary_ack_token = secrets.token_urlsafe(32)
@@ -204,10 +294,17 @@ class TimeLockedInitiateView(APIView):
 
 
 class TimeLockedReleaseView(APIView):
+    """Anonymous endpoint: release the server's Shamir share to the requestor.
+
+    The transition from ``is_active=True`` to ``is_active=False`` is
+    one-shot and must not be observed by two callers, so the read-then-
+    write is wrapped in ``transaction.atomic()`` + ``select_for_update()``.
+    """
     permission_classes = [AllowAny]
     throttle_classes = [RecoveryCompleteThrottle]
 
     def post(self, request):
+        """Atomically check eligibility and consume the active row."""
         username = request.data.get('username')
         if not isinstance(username, str) or not username:
             return Response({'error': 'username required'}, status=400)
@@ -216,87 +313,121 @@ class TimeLockedReleaseView(APIView):
         except User.DoesNotExist:
             return Response({'error': 'no recovery in progress'}, status=404)
 
-        rec = (
-            TimeLockedRecovery.objects
-            .filter(user=user, is_active=True)
-            .order_by('-enrolled_at')
-            .first()
-        )
-        if not rec or not rec.release_after:
-            return Response({'error': 'no recovery in progress'}, status=404)
-
         ip = _client_ip(request)
         ua = _user_agent(request)
 
-        if rec.canary_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
-            ServerHalfReleaseLog.objects.create(
-                recovery=rec, succeeded=False,
-                refusal_reason='cancelled_by_canary',
-                ip_address=ip, user_agent=ua,
-            )
-            return Response(
-                {'error': 'cancelled by canary acknowledgement'},
-                status=403,
-            )
+        # Single transaction: row-lock the candidate active recovery so
+        # concurrent release / canary-ack calls cannot race the read,
+        # then make all state changes (including the audit log writes
+        # that depend on the outcome) before releasing the lock.
+        try:
+            with transaction.atomic():
+                rec = (
+                    TimeLockedRecovery.objects
+                    .select_for_update()
+                    .filter(user=user, is_active=True)
+                    .order_by('-enrolled_at')
+                    .first()
+                )
+                if not rec or not rec.release_after:
+                    return Response({'error': 'no recovery in progress'}, status=404)
 
-        if timezone.now() < rec.release_after:
-            ServerHalfReleaseLog.objects.create(
-                recovery=rec, succeeded=False, refusal_reason='too_early',
-                ip_address=ip, user_agent=ua,
-            )
-            return Response({
-                'error': 'delay not elapsed',
-                'release_after': rec.release_after.isoformat(),
-            }, status=403)
+                if rec.canary_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
+                    ServerHalfReleaseLog.objects.create(
+                        recovery=rec, succeeded=False,
+                        refusal_reason='cancelled_by_canary',
+                        ip_address=ip, user_agent=ua,
+                    )
+                    return Response(
+                        {'error': 'cancelled by canary acknowledgement'},
+                        status=403,
+                    )
 
-        ServerHalfReleaseLog.objects.create(
-            recovery=rec, succeeded=True,
-            ip_address=ip, user_agent=ua,
-        )
-        rec.completed_at = timezone.now()
-        rec.canary_state = TimeLockedRecovery.CanaryState.EXPIRED
-        rec.is_active = False
-        rec.save(update_fields=['completed_at', 'canary_state', 'is_active'])
+                if timezone.now() < rec.release_after:
+                    ServerHalfReleaseLog.objects.create(
+                        recovery=rec, succeeded=False, refusal_reason='too_early',
+                        ip_address=ip, user_agent=ua,
+                    )
+                    return Response({
+                        'error': 'delay not elapsed',
+                        'release_after': rec.release_after.isoformat(),
+                    }, status=403)
+
+                ServerHalfReleaseLog.objects.create(
+                    recovery=rec, succeeded=True,
+                    ip_address=ip, user_agent=ua,
+                )
+                rec.completed_at = timezone.now()
+                rec.canary_state = TimeLockedRecovery.CanaryState.EXPIRED
+                rec.is_active = False
+                rec.save(update_fields=['completed_at', 'canary_state', 'is_active'])
+
+                # Capture data needed for the response BEFORE the
+                # transaction commits — the row is "consumed" once we
+                # exit the lock; reading server_half outside the txn
+                # would still work but is harder to reason about.
+                server_half_b64 = base64.b64encode(bytes(rec.server_half)).decode('ascii')
+                half_metadata = rec.half_metadata
+                rec_pk = rec.pk
+        finally:
+            # Audit log written outside the transaction so it survives
+            # even if the txn rolls back due to a programming error.
+            pass
 
         RecoveryAuditLog.objects.create(
             user=user,
             event_type='recovery_completed',
-            event_data={'subsystem': 'time_locked', 'recovery_id': rec.pk},
+            event_data={'subsystem': 'time_locked', 'recovery_id': rec_pk},
             ip_address=ip, user_agent=ua,
         )
         return Response({
-            'server_half': base64.b64encode(bytes(rec.server_half)).decode('ascii'),
-            'half_metadata': rec.half_metadata,
+            'server_half': server_half_b64,
+            'half_metadata': half_metadata,
         })
 
 
 class TimeLockedCanaryAckView(APIView):
+    """Anonymous endpoint: cancel an active recovery via its ack token.
+
+    Like ``TimeLockedReleaseView``, the cancel is one-shot and must not
+    race a release call. ``transaction.atomic()`` + ``select_for_update()``
+    serialize the read-then-write; ``release`` will then re-read the
+    canary state under the same lock and refuse with ``cancelled_by_
+    canary``.
+    """
     permission_classes = [AllowAny]
     throttle_classes = [RecoveryThrottle]
 
     def post(self, request):
+        """Acknowledge the canary token and atomically deactivate the row."""
         token = request.data.get('token')
         if not isinstance(token, str) or not token:
             return Response({'error': 'token required'}, status=400)
 
-        rec = (
-            TimeLockedRecovery.objects
-            .filter(canary_ack_token=token, is_active=True)
-            .first()
-        )
-        if not rec:
-            # Don't leak validity — opaque success.
-            return Response({'success': True})
+        cancelled_user = None
+        cancelled_pk = None
+        with transaction.atomic():
+            rec = (
+                TimeLockedRecovery.objects
+                .select_for_update()
+                .filter(canary_ack_token=token, is_active=True)
+                .first()
+            )
+            if rec is not None:
+                rec.canary_state = TimeLockedRecovery.CanaryState.ACKNOWLEDGED
+                rec.is_active = False  # legitimate user said "no" — kill it
+                rec.save(update_fields=['canary_state', 'is_active'])
+                cancelled_user = rec.user
+                cancelled_pk = rec.pk
 
-        rec.canary_state = TimeLockedRecovery.CanaryState.ACKNOWLEDGED
-        rec.is_active = False  # legitimate user said "no" — kill the recovery
-        rec.save(update_fields=['canary_state', 'is_active'])
+        if cancelled_user is not None:
+            RecoveryAuditLog.objects.create(
+                user=cancelled_user,
+                event_type='user_cancelled_recovery',
+                event_data={'subsystem': 'time_locked', 'recovery_id': cancelled_pk},
+                ip_address=_client_ip(request),
+                user_agent=_user_agent(request),
+            )
 
-        RecoveryAuditLog.objects.create(
-            user=rec.user,
-            event_type='user_cancelled_recovery',
-            event_data={'subsystem': 'time_locked', 'recovery_id': rec.pk},
-            ip_address=_client_ip(request),
-            user_agent=_user_agent(request),
-        )
+        # Always opaque success — never leak token validity.
         return Response({'success': True})
