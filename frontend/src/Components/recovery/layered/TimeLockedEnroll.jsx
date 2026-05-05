@@ -22,10 +22,27 @@ import { split2of2, _b64 } from '../../../services/shamir2of2';
 
 const DLREC_VERSION = 'dlrec-1';
 
+/**
+ * Render a `Uint8Array` as a lowercase hex string. Used to format the
+ * recovery seed before passing it to the Argon2id KDF, which expects
+ * a string secret rather than raw bytes.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
 function bytesToHex(bytes) {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Trigger a browser download of the user-facing `.dlrec` recovery
+ * file containing the user's Shamir half. Generated entirely in the
+ * browser; never uploaded.
+ *
+ * @param {object} args
+ * @param {string} args.username  - Account the file is bound to.
+ * @param {Uint8Array} args.halfA - The user's share of the recovery seed.
+ */
 function downloadDlrecFile({ username, halfA }) {
   const payload = {
     v: DLREC_VERSION,
@@ -48,12 +65,36 @@ function downloadDlrecFile({ username, halfA }) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Tier-3 recovery enrollment page. The component is a small state
+ * machine across three phases:
+ *
+ *   await-password → user re-prompts for the master password (we need
+ *                    it to extract the DEK from the master-wrapped row
+ *                    before we can re-wrap it under the new seed).
+ *   downloaded     → server half stored, factor row created, `.dlrec`
+ *                    file downloaded — user must confirm they moved
+ *                    the file offline before we consider enrollment
+ *                    done.
+ *   done           → terminal success state.
+ *
+ * @param {object} props
+ * @param {string} props.username         - Authenticated user's username.
+ * @param {() => void} [props.onSuccess]  - Optional callback for navigation.
+ */
 export default function TimeLockedEnroll({ username, onSuccess }) {
   const [masterPassword, setMasterPassword] = useState('');
   const [phase, setPhase] = useState('await-password'); // -> 'downloaded' -> 'done'
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  /**
+   * Run the full enroll sequence: split a fresh seed, persist the
+   * server half, wrap the DEK under a KEK from the seed, download
+   * the `.dlrec` file. See the inline numbered comments for the
+   * order-of-operations rationale (orphan-row avoidance on partial
+   * failure).
+   */
   async function handleEnroll() {
     if (!masterPassword) {
       setError('Master password required.');
@@ -69,22 +110,33 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
       const timeSeed = window.crypto.getRandomValues(new Uint8Array(32));
       const seedHex = bytesToHex(timeSeed);
 
-      // (a) Wrap the DEK under a KEK derived from the seed.
+      // (a) Split the seed locally before any server call so we
+      //     fail closed if either step fails.
+      const { halfA, halfB } = split2of2(timeSeed);
+
+      // (b) Persist the SERVER half FIRST. The order matters: if
+      //     this call fails, we have not yet created any
+      //     RecoveryWrappedDEK row, so there is nothing to clean up.
+      //     If we did this in the opposite order and step (c) failed,
+      //     we'd leave behind an orphan wdek row pointing at a seed
+      //     that never had a server-stored half. The user would
+      //     retry, get a NEW row, and the orphan would linger as
+      //     accidental factor-list noise.
+      await recoveryFactorService.enrollTimeLock({
+        serverHalf: _b64.encode(halfB),
+        halfMetadata: { v: DLREC_VERSION },
+      });
+
+      // (c) Wrap the DEK under a KEK derived from the seed and POST
+      //     it as the time_locked recovery factor. If THIS fails the
+      //     user has a server half but no factor row; the next retry
+      //     overwrites the server half (TimeLockedEnrollView's
+      //     deactivate-then-create logic) and adds a fresh factor row
+      //     for the new seed. The retry path is clean.
       await sessionVaultCryptoV3.enrollRecoveryFactor({
         factorType: 'time_locked',
         secret: seedHex,
         masterPassword,
-      });
-
-      // (b) Split the seed; user keeps halfA offline, server keeps halfB.
-      const { halfA, halfB } = split2of2(timeSeed);
-
-      // (c) POST halfB BEFORE downloading halfA — if the server call
-      //     fails we don't want the user to think they have a working
-      //     `.dlrec` when no row exists server-side yet.
-      await recoveryFactorService.enrollTimeLock({
-        serverHalf: _b64.encode(halfB),
-        halfMetadata: { v: DLREC_VERSION },
       });
 
       // (d) Download halfA. (No way to know in-script whether the

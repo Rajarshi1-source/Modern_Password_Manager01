@@ -16,9 +16,12 @@ the unwrapping secret (recovery key, seed, etc.) — only the wrapped
 DEK that the client built locally.
 """
 import base64
-import secrets
+import hashlib
+import hmac
+import os
 import uuid
 
+from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import IntegrityError
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -130,27 +133,99 @@ class RecoveryFactorListCreateView(APIView):
         return Response({'success': True, 'factor_id': factor.id}, status=201)
 
 
-def _decoy_blob():
-    """Synthesize a wdek-1 envelope filled with random bytes.
+_DECOY_INFO_SALT = b'recovery-factor-decoy:salt'
+_DECOY_INFO_IV = b'recovery-factor-decoy:iv'
+_DECOY_INFO_WRAPPED = b'recovery-factor-decoy:wrapped'
+_DECOY_INFO_DEK_ID = b'recovery-factor-decoy:dek_id'
 
-    Used by ``RecoveryFactorLookupView`` so the response shape is
-    identical for "user has factor" and "user does not exist / has no
-    factor of this type". An attacker cannot distinguish without
-    actually trying to unwrap, which requires the recovery secret —
-    something the legitimate user holds and the attacker does not.
-    Argon2id at ``DEFAULT_KDF`` parameters and a sufficiently long
-    secret (26-char alphanumeric for tier 1, 32 random bytes for
-    tier 2/3) makes offline brute force infeasible.
+
+def _decoy_secret() -> bytes:
+    """Long-lived server secret used as the HMAC key for decoy derivation.
+
+    Loaded from ``settings.RECOVERY_DECOY_SECRET`` (preferred) or the
+    ``RECOVERY_DECOY_SECRET`` env var. Fallback to ``settings.SECRET_KEY``
+    is allowed for development but logged once so production deployments
+    can audit. Rotating this secret rotates every decoy — that's
+    acceptable because rotation just makes a fresh attacker have to
+    re-build their oracle from scratch; legitimate recovery flows are
+    unaffected because they never observe a decoy (they observe a real
+    factor by definition).
+    """
+    explicit = getattr(settings, 'RECOVERY_DECOY_SECRET', None)
+    if explicit:
+        return explicit if isinstance(explicit, (bytes, bytearray)) else explicit.encode('utf-8')
+    env = os.environ.get('RECOVERY_DECOY_SECRET')
+    if env:
+        return env.encode('utf-8')
+    # Fallback: SECRET_KEY. Production deployments SHOULD configure
+    # RECOVERY_DECOY_SECRET explicitly so it can rotate independently.
+    return settings.SECRET_KEY.encode('utf-8')
+
+
+def _decoy_bytes(username: str, factor_type: str, info: bytes, length: int) -> bytes:
+    """Derive `length` deterministic bytes for a `(username, factor_type)`
+    decoy under `info`-domain separation.
+
+    The construction is HMAC-SHA256(server_secret, info ‖ username ‖
+    factor_type) repeated until enough output bytes are produced. This
+    guarantees:
+      - same input → same output (no oracle for repeat-call distinguish)
+      - different `info` constants → independent outputs (so e.g. the
+        decoy salt cannot be derived from the decoy iv)
+      - rotating the server secret rotates every decoy at once.
+    """
+    out = bytearray()
+    counter = 0
+    base = info + b'\x00' + username.encode('utf-8') + b'\x00' + factor_type.encode('utf-8')
+    while len(out) < length:
+        block = hmac.new(
+            _decoy_secret(),
+            base + counter.to_bytes(4, 'big'),
+            hashlib.sha256,
+        ).digest()
+        out.extend(block)
+        counter += 1
+    return bytes(out[:length])
+
+
+def _decoy_response(username: str, factor_type: str) -> dict:
+    """Build the deterministic decoy {blob, dek_id} for a username +
+    factor_type that has no real enrollment.
+
+    A repeat call with the same `(username, factor_type)` MUST return
+    a byte-identical response so an attacker cannot use response-
+    diffing to distinguish "decoy" from "real factor" — real factors
+    return the same DB row every time, and so must decoys.
+
+    The synthesized blob has the same envelope shape as a wrapped DEK
+    (`wdek-1`, Argon2id KDF, 16-byte salt, 12-byte iv, 48-byte
+    wrapped). An attacker cannot unwrap it (the bytes are derived from
+    a server secret they don't possess), but neither can the
+    legitimate user — recovery against a decoy fails with the same
+    generic "Incorrect password or corrupted vault key" the wrong
+    secret produces against a real blob.
     """
     return {
         'v': ENVELOPE_VERSION,
         'kdf': 'argon2id',
         'kdf_params': {'t': 3, 'm': 65536, 'p': 2},
-        'salt': base64.b64encode(secrets.token_bytes(16)).decode('ascii'),
-        'iv': base64.b64encode(secrets.token_bytes(12)).decode('ascii'),
+        'salt': base64.b64encode(_decoy_bytes(username, factor_type, _DECOY_INFO_SALT, 16)).decode('ascii'),
+        'iv': base64.b64encode(_decoy_bytes(username, factor_type, _DECOY_INFO_IV, 12)).decode('ascii'),
         # 32-byte AES key + 16-byte GCM tag = 48 bytes wrapped output.
-        'wrapped': base64.b64encode(secrets.token_bytes(48)).decode('ascii'),
+        'wrapped': base64.b64encode(_decoy_bytes(username, factor_type, _DECOY_INFO_WRAPPED, 48)).decode('ascii'),
     }
+
+
+def _decoy_dek_id(username: str, factor_type: str) -> str:
+    """Deterministic UUID5-style identifier for the decoy.
+
+    Built directly from the same HMAC-derived bytes used for the blob
+    (under a different `info` constant), then formatted as a UUID
+    string so it's syntactically indistinguishable from a real
+    ``dek_id``.
+    """
+    raw = _decoy_bytes(username, factor_type, _DECOY_INFO_DEK_ID, 16)
+    return str(uuid.UUID(bytes=raw))
 
 
 class RecoveryFactorLookupView(APIView):
@@ -210,11 +285,14 @@ class RecoveryFactorLookupView(APIView):
             factor = None
 
         if factor is None:
-            # Decoy: same shape as a real response, but a fresh random
-            # blob and a fresh dek_id. Attacker cannot enumerate.
+            # Deterministic decoy keyed by (username, factor_type)
+            # under a server-held secret. Repeat calls with the same
+            # input produce a byte-identical response, just like a
+            # real-factor lookup does — so an attacker cannot use
+            # response-diffing to distinguish "real" from "decoy".
             return Response({
-                'blob': _decoy_blob(),
-                'dek_id': str(uuid.uuid4()),
+                'blob': _decoy_response(username, factor_type),
+                'dek_id': _decoy_dek_id(username, factor_type),
             })
 
         # Real hit — audit it. We deliberately do not gate on

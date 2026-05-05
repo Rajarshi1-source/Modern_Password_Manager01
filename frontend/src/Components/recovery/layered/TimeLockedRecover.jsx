@@ -17,15 +17,45 @@ import { combine2of2, _b64 } from '../../../services/shamir2of2';
 
 const DLREC_VERSION = 'dlrec-1';
 
+/**
+ * Render a `Uint8Array` as a lowercase hex string. Used to format
+ * the reconstructed recovery seed before passing it to the Argon2id
+ * KDF (which expects a string secret, not raw bytes).
+ *
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
 function bytesToHex(bytes) {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Read a `File` (from an `<input type="file">`) as JSON.
+ *
+ * @param {File} file
+ * @returns {Promise<object>}
+ */
 async function readJsonFile(file) {
   const text = await file.text();
   return JSON.parse(text);
 }
 
+/**
+ * Tier-3 recovery page (anonymous). Five-phase state machine:
+ *
+ *   await-input     → user enters username and uploads `.dlrec`.
+ *   waiting         → server has accepted `initiate`; user must wait
+ *                     out the time-lock delay (canary alerts may also
+ *                     be in flight to their email/SMS).
+ *   change-password → server released its half; we recombined the
+ *                     seed, unwrapped the factor blob, and now must
+ *                     rotate the master-wrapped row before letting
+ *                     the user out of the flow.
+ *   done            → terminal success state.
+ *
+ * @param {object} [props]
+ * @param {() => void} [props.onSuccess] - Optional callback for navigation.
+ */
 export default function TimeLockedRecover({ onSuccess }) {
   const [username, setUsername] = useState('');
   const [dlrec, setDlrec] = useState(null);
@@ -42,6 +72,11 @@ export default function TimeLockedRecover({ onSuccess }) {
   const [recoveredSeedHex, setRecoveredSeedHex] = useState(null);
   const [recoveredFactor, setRecoveredFactor] = useState(null);
 
+  /**
+   * Validate and stash the uploaded `.dlrec` file. We accept only the
+   * `dlrec-1` envelope shape; anything else gets rejected with a
+   * generic error so a malformed file doesn't half-populate state.
+   */
   async function handleFileChange(e) {
     setError('');
     const file = e.target.files?.[0];
@@ -61,6 +96,12 @@ export default function TimeLockedRecover({ onSuccess }) {
     }
   }
 
+  /**
+   * Kick off the time-lock delay clock by hitting the anonymous
+   * `initiate` endpoint. The endpoint returns a uniform shape
+   * (real or decoy `release_after`) so we surface whatever the
+   * server returned without trying to verify it.
+   */
   async function handleBegin() {
     if (!username || !dlrec) {
       setError('Username and recovery file required.');
@@ -79,6 +120,18 @@ export default function TimeLockedRecover({ onSuccess }) {
     }
   }
 
+  /**
+   * Poll the release endpoint for the server's Shamir half. Three
+   * branches:
+   *   - `ready: false` (still waiting): update countdown, surface a
+   *     "come back later" notice.
+   *   - server returned the half: recombine with the user's local
+   *     half, unwrap the factor blob with the seed, stash the
+   *     unwrap inputs for the rotation step.
+   *   - any other error (cancelled-by-canary 403, real authz, 5xx)
+   *     bubbles from `pollTimeLockRelease` and is surfaced as the
+   *     error message.
+   */
   async function handlePoll() {
     setBusy(true);
     setError('');
@@ -125,6 +178,14 @@ export default function TimeLockedRecover({ onSuccess }) {
     }
   }
 
+  /**
+   * Force the master-password rotation that recovery requires. Calls
+   * `rewrapMasterPasswordFromRecovery` with the seed + factor stashed
+   * during `handlePoll`. On success the master-wrapped row is
+   * re-pinned to the new password and the live session DEK is
+   * re-installed (non-extractable), so the user can use the vault
+   * immediately.
+   */
   async function handleChangePassword() {
     if (newPassword.length < 8) {
       setError('New password must be at least 8 characters.');
