@@ -22,6 +22,13 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
   const [phase, setPhase] = useState('await-key'); // -> 'change-password' -> 'done'
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  // Stashed during handleRecover so handleChangePassword can drive the
+  // master-wrapped row rotation. Without these, we'd need to re-list
+  // the factors on every password attempt — and `recoveryKey` itself
+  // would still be in component state (we can't free it until the
+  // user clears the input), so persistence is no worse.
+  const [unlockedFactor, setUnlockedFactor] = useState(null);
+  const [normalizedKey, setNormalizedKey] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -59,6 +66,11 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
         normalized,
         factor.dek_id,
       );
+      // Stash unwrap inputs so handleChangePassword can re-derive an
+      // extractable DEK from the same factor blob and rotate the
+      // master-wrapped row under the new password.
+      setUnlockedFactor(factor);
+      setNormalizedKey(normalized);
       setPhase('change-password');
     } catch (err) {
       setError(err?.message || 'Recovery failed.');
@@ -76,23 +88,35 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
       setError('New password and confirmation do not match.');
       return;
     }
+    if (!unlockedFactor || !normalizedKey) {
+      setError('Recovery state lost — please restart from the beginning.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      // unlockWithRecoveryFactor produced the session DEK already;
-      // we can't reuse changeMasterPassword (which expects the OLD
-      // master password). Instead: re-wrap the session DEK under the
-      // new password by calling enrollWithMasterPassword? No — that
-      // would mint a NEW dek_id and orphan factors. Correct path:
-      // PUT /vault/wrapped-dek/ ourselves with the existing dek_id.
+      // The merged version of this file called changeMasterPassword
+      // here. That doesn't actually work: changeMasterPassword fetches
+      // the master-wrapped DEK row and tries to unwrap it with its
+      // first argument, but the master-wrapped row was wrapped under
+      // the FORGOTTEN password's KEK, not under the recovery-key KEK,
+      // so unwrap raised "Incorrect password or corrupted vault key."
+      // every time. Users would land on the error and never finish
+      // recovery — and even worse, on next login the master-wrapped
+      // row was still pinned to the forgotten password.
       //
-      // sessionVaultCryptoV3 does not yet expose this rotation-with-
-      // session-DEK helper, so we rely on the v3 module's internal
-      // changeMasterPassword via the recovery-key as the "old" secret.
-      await sessionVaultCryptoV3.changeMasterPassword(
-        normalizeRecoveryKey(recoveryKey),
+      // The correct primitive is `rewrapMasterPasswordFromRecovery`,
+      // which unwraps the DEK from the RECOVERY FACTOR'S blob (the
+      // one we just used to unlockWithRecoveryFactor — guaranteed to
+      // unwrap with the recovery key) and re-wraps it under the new
+      // master password's KEK while keeping `dek_id` stable so other
+      // recovery factors are not orphaned.
+      await sessionVaultCryptoV3.rewrapMasterPasswordFromRecovery({
+        factorBlob: unlockedFactor.blob,
+        recoverySecret: normalizedKey,
         newPassword,
-      );
+        dekId: unlockedFactor.dek_id,
+      });
       setPhase('done');
       if (onSuccess) onSuccess();
     } catch (err) {

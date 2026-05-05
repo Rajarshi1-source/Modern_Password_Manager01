@@ -189,14 +189,67 @@ export async function enrollRecoveryFactor({ factorType, secret, meta = {}, mast
 /**
  * Recovery: install the DEK in the session by unwrapping a recovery
  * factor's blob with its corresponding secret. The recovery UI MUST
- * drive the user through `changeMasterPassword` immediately after —
- * recovery without setting a new master password leaves the account
- * in a bad state.
+ * drive the user through `rewrapMasterPasswordFromRecovery` (or
+ * `changeMasterPassword` in the rare case the user remembered the old
+ * password) immediately after — recovery without setting a new master
+ * password leaves the master-wrapped row pinned to the FORGOTTEN
+ * password, which means the user is locked out again on next login.
  */
 export async function unlockWithRecoveryFactor(blob, secret, dekId) {
   sessionDEK = await unwrapDEK(blob, secret, { extractable: false });
   sessionDEKId = dekId;
   return sessionDEK;
+}
+
+/**
+ * Post-recovery master-password rotation.
+ *
+ * Used immediately after `unlockWithRecoveryFactor` when the user has
+ * forgotten the old master password. We unwrap the DEK from the
+ * recovery factor's blob (NOT the master-wrapped row, which is pinned
+ * to the forgotten password — `changeMasterPassword` cannot handle
+ * this case because it tries to unwrap the master row with the
+ * recovery secret, which always fails), then wrap that same DEK under
+ * a fresh KEK derived from the new master password and PUT it back as
+ * the master-wrapped row — keeping `dek_id` stable so the user's
+ * other recovery factors are not orphaned.
+ *
+ * The session DEK is also re-installed (non-extractable) so the user
+ * can use the vault immediately without a separate unlock step.
+ *
+ * @param {object} args
+ * @param {object} args.factorBlob   - Recovery-factor envelope ({v:'wdek-1', ...}).
+ * @param {string} args.recoverySecret - The secret that unwraps factorBlob
+ *   (recovery key, hex-encoded recovery seed, hex-encoded time seed, etc.).
+ * @param {string} args.newPassword  - The new master password to set.
+ * @param {string} args.dekId        - Stable DEK identity (from listRecoveryFactors).
+ * @returns {Promise<{dekId: string}>}
+ */
+export async function rewrapMasterPasswordFromRecovery({
+  factorBlob,
+  recoverySecret,
+  newPassword,
+  dekId,
+}) {
+  if (!factorBlob || !recoverySecret || !newPassword || !dekId) {
+    throw new Error('factorBlob, recoverySecret, newPassword, and dekId are required.');
+  }
+  // Unwrap the DEK from the recovery factor as EXTRACTABLE so we can
+  // re-wrap it under the new KEK. The extractable handle goes out of
+  // scope at function exit; the only persistent reference is the
+  // non-extractable session key we re-import below.
+  const dekX = await unwrapDEK(factorBlob, recoverySecret, { extractable: true });
+
+  const saltBytes = randomBytes(16);
+  const kek = await deriveKEK(newPassword, saltBytes);
+  const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
+
+  await axios.put(WRAPPED_DEK_URL, { blob, dek_id: dekId });
+
+  // Install the same DEK as the live session key, non-extractable.
+  sessionDEK = await reimportNonExtractable(dekX);
+  sessionDEKId = dekId;
+  return { dekId };
 }
 
 // ─── Public API: item encryption ───────────────────────────────────
@@ -259,6 +312,7 @@ export default {
   changeMasterPassword,
   enrollRecoveryFactor,
   unlockWithRecoveryFactor,
+  rewrapMasterPasswordFromRecovery,
   hasSessionKey,
   clearSessionKey,
   encryptItem,
