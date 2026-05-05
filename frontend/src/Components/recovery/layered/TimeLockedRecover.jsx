@@ -35,6 +35,12 @@ export default function TimeLockedRecover({ onSuccess }) {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // The recovery seed (hex) and the time_locked factor row are produced
+  // in `handlePoll` and consumed in `handleChangePassword` to drive the
+  // master-password rotation. We hold them in state rather than module
+  // scope so a remount cleanly resets recovery progress.
+  const [recoveredSeedHex, setRecoveredSeedHex] = useState(null);
+  const [recoveredFactor, setRecoveredFactor] = useState(null);
 
   async function handleFileChange(e) {
     setError('');
@@ -98,6 +104,11 @@ export default function TimeLockedRecover({ onSuccess }) {
         seedHex,
         factor.dek_id,
       );
+      // Stash the unwrap inputs so handleChangePassword can re-derive
+      // them for the master-wrapped row rotation. (The session DEK
+      // itself is non-extractable and can't be re-wrapped directly.)
+      setRecoveredSeedHex(seedHex);
+      setRecoveredFactor(factor);
       setPhase('change-password');
     } catch (err) {
       setError(err?.message || 'Recovery failed.');
@@ -115,34 +126,25 @@ export default function TimeLockedRecover({ onSuccess }) {
       setError('Passwords do not match.');
       return;
     }
+    if (!recoveredSeedHex || !recoveredFactor) {
+      setError('Recovery state lost — please restart from the beginning.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      // We rotate by treating the recombined seed as the "old" KEK secret.
-      const halfA = _b64.decode(dlrec.halfA);
-      // halfB unavailable now (one-shot consumed) — but the session DEK
-      // is already loaded; we just need to push a new wrapped blob under
-      // the new master password's KEK. v3.changeMasterPassword handles
-      // that flow given the current secret.
-      // The current secret of the wrapped-DEK row is the master
-      // password (the row server-side is wrapped under master KEK; the
-      // recovery happened against the recovery factor's separate row).
-      // We therefore instruct the user that a fresh enrollment under
-      // the new master password is appropriate here.
-      // Implementation note: simplest path is to generate a new wrapped
-      // DEK envelope under the new master password using the existing
-      // session DEK. v3 doesn't expose that primitive yet, so we use
-      // enrollWithMasterPassword which is destructive of the current
-      // dek_id and would orphan factors.
-      //
-      // Until v3 grows a `rewrapMasterUnderNewPassword(newPassword)`
-      // helper, we reuse changeMasterPassword by passing the previous
-      // secret as the recombined seed. That requires the wrapped-DEK
-      // row to currently be wrapped under the seed, which is NOT
-      // generally true. So we explicitly fail loudly here and ask the
-      // user to set a new master password from settings after they are
-      // logged in — the session DEK is already valid.
-      void halfA; // silence unused
+      // Use the recovery seed (the secret that just unwrapped the
+      // time_locked factor blob) to unwrap the same DEK again as
+      // EXTRACTABLE inside v3, re-wrap it under a fresh KEK derived
+      // from the new master password, and PUT it back as the master-
+      // wrapped row. dek_id stays stable so other recovery factors
+      // (e.g. social mesh, recovery key) are not orphaned.
+      await sessionVaultCryptoV3.rewrapMasterPasswordFromRecovery({
+        factorBlob: recoveredFactor.blob,
+        recoverySecret: recoveredSeedHex,
+        newPassword,
+        dekId: recoveredFactor.dek_id,
+      });
       setPhase('done');
       if (onSuccess) onSuccess();
     } catch (err) {

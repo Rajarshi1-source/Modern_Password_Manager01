@@ -8,8 +8,11 @@ from unittest import TestCase
 from ..services.trust_score_modulator import (
     DEFAULT_CANARY_HOURS,
     DEFAULT_DELAY_DAYS,
+    ELEVATED_CANARY_HOURS,
     MAX_DELAY_DAYS,
     MIN_DELAY_DAYS,
+    MIN_THRESHOLD,
+    SUSPICIOUS_CANARY_HOURS,
     canary_alert_frequency_hours,
     compute_social_mesh_threshold,
     compute_time_lock_delay_days,
@@ -63,19 +66,31 @@ class TestComputeSocialMeshThreshold(TestCase):
         self.assertEqual(compute_social_mesh_threshold(3, 5, 'bad'), 3)
         self.assertEqual(compute_social_mesh_threshold(3, 5, 1.5), 3)
 
-    def test_floor_at_two_with_high_score(self):
-        self.assertEqual(compute_social_mesh_threshold(2, 5, 1.0), 2)
+    def test_floor_at_min_threshold_with_high_score(self):
+        self.assertEqual(
+            compute_social_mesh_threshold(MIN_THRESHOLD, 5, 1.0), MIN_THRESHOLD,
+        )
 
     def test_ceiling_at_total_guardians_with_low_score(self):
         self.assertEqual(compute_social_mesh_threshold(5, 5, 0.0), 5)
 
-    def test_invalid_base_threshold_raises(self):
-        with self.assertRaises(ValueError):
-            compute_social_mesh_threshold(1, 5, 0.5)
+    def test_single_guardian_unchanged(self):
+        # Existing recovery flow can produce (threshold=1, total=1)
+        # via min(2, len(active_guardians)) when only one guardian is
+        # active. The modulator must accept it and pass it through
+        # untouched — there's no headroom to raise or lower.
+        self.assertEqual(compute_social_mesh_threshold(1, 1, 0.5), 1)
+        self.assertEqual(compute_social_mesh_threshold(1, 1, 0.0), 1)
+        self.assertEqual(compute_social_mesh_threshold(1, 1, 1.0), 1)
+        self.assertEqual(compute_social_mesh_threshold(1, 1, None), 1)
 
-    def test_invalid_total_guardians_raises(self):
+    def test_zero_threshold_raises(self):
         with self.assertRaises(ValueError):
-            compute_social_mesh_threshold(3, 1, 0.5)
+            compute_social_mesh_threshold(0, 5, 0.5)
+
+    def test_zero_guardians_raises(self):
+        with self.assertRaises(ValueError):
+            compute_social_mesh_threshold(3, 0, 0.5)
 
     def test_base_exceeds_total_raises(self):
         with self.assertRaises(ValueError):
@@ -100,16 +115,16 @@ class TestCanaryAlertFrequencyHours(TestCase):
         self.assertEqual(canary_alert_frequency_hours(-1.0), DEFAULT_CANARY_HOURS)
 
     def test_low_score_high_frequency(self):
-        self.assertEqual(canary_alert_frequency_hours(0.1), 6)
+        self.assertEqual(canary_alert_frequency_hours(0.1), SUSPICIOUS_CANARY_HOURS)
 
     def test_mid_score_elevated_frequency(self):
-        self.assertEqual(canary_alert_frequency_hours(0.4), 12)
+        self.assertEqual(canary_alert_frequency_hours(0.4), ELEVATED_CANARY_HOURS)
 
     def test_high_score_default_frequency(self):
-        self.assertEqual(canary_alert_frequency_hours(0.9), 24)
+        self.assertEqual(canary_alert_frequency_hours(0.9), DEFAULT_CANARY_HOURS)
 
     def test_boundary_low(self):
-        self.assertEqual(canary_alert_frequency_hours(0.2), 6)
+        self.assertEqual(canary_alert_frequency_hours(0.2), SUSPICIOUS_CANARY_HOURS)
 
     def test_boundary_mid(self):
-        self.assertEqual(canary_alert_frequency_hours(0.5), 12)
+        self.assertEqual(canary_alert_frequency_hours(0.5), ELEVATED_CANARY_HOURS)

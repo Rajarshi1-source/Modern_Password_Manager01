@@ -28,6 +28,9 @@ import zkProof from './services/zkProof';
 // Lazy load heavy components
 const PasswordStrengthMeterML = lazy(() => import('./Components/security/PasswordStrengthMeterML'));
 const RecoveryKeySetupPage = lazy(() => import('./Components/auth/RecoveryKeySetup'));
+// Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key
+const RecoveryKeyEnrollV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyEnrollV2'));
+const RecoveryKeyUseV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyUseV2'));
 // Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked
 const TimeLockedEnroll = lazy(() => import('./Components/recovery/layered/TimeLockedEnroll'));
 const TimeLockedRecover = lazy(() => import('./Components/recovery/layered/TimeLockedRecover'));
@@ -1714,9 +1717,21 @@ function App() {
                 <Route path="/recovery-key-setup" element={
                   isAuthenticated ? <Navigate to="/" /> : <RecoveryKeySetupPage />
                 } />
-                {/* Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked */}
+                {/* Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key */}
+                <Route path="/recovery/key/enroll-v2" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <RecoveryKeyEnrollV2 />
+                } />
+                <Route path="/recovery/key/use-v2" element={
+                  isAuthenticated ? <Navigate to="/" /> : <RecoveryKeyUseV2 />
+                } />
+                {/* Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked.
+                    The enroll page needs the authenticated user's username so
+                    we pass it explicitly; without it the page hard-fails on
+                    submit (TimeLockedEnroll's handleEnroll requires it). */}
                 <Route path="/recovery/time-lock/enroll" element={
-                  !isAuthenticated ? <Navigate to="/" /> : <TimeLockedEnroll />
+                  !isAuthenticated
+                    ? <Navigate to="/" />
+                    : <TimeLockedEnroll username={user?.username || user?.email} />
                 } />
                 <Route path="/recovery/time-lock/recover" element={
                   isAuthenticated ? <Navigate to="/" /> : <TimeLockedRecover />
