@@ -26,7 +26,10 @@ from . import quantum_recovery_views
 # Import Layered Recovery Mesh views (Unit 4)
 from .wrapped_dek_view import VaultWrappedDEKView
 # Import Layered Recovery Mesh views (Unit 5)
-from .recovery_factor_view import RecoveryFactorListCreateView
+from .recovery_factor_view import (
+    RecoveryFactorListCreateView,
+    RecoveryFactorLookupView,
+)
 # Import Layered Recovery Mesh views (Unit 6)
 from .time_locked_view import (
     TimeLockedEnrollView,
@@ -161,6 +164,11 @@ urlpatterns = [
     # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
     # social mesh, time-locked, passkey). Server stores ciphertext only.
     path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
+    # Anonymous lookup of a wrapped factor by (username, factor_type).
+    # Used by the unauthenticated recovery pages to fetch the blob they
+    # need to unwrap with the user's recovery secret. Returns a decoy
+    # blob for unknown usernames so account existence is not leaked.
+    path('vault/recovery-factors/lookup/', RecoveryFactorLookupView.as_view(), name='vault-recovery-factor-lookup'),
     # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
     # share; release gated by configurable delay + canary-cancellation.
     path('vault/time-locked/enroll/', TimeLockedEnrollView.as_view(), name='vault-time-locked-enroll'),

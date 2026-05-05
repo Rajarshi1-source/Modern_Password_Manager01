@@ -207,10 +207,12 @@ export async function unlockWithRecoveryFactor(blob, secret, dekId) {
  * Used immediately after `unlockWithRecoveryFactor` when the user has
  * forgotten the old master password. We unwrap the DEK from the
  * recovery factor's blob (NOT the master-wrapped row, which is pinned
- * to the forgotten password), then wrap that same DEK under a fresh
- * KEK derived from the new master password and PUT it back as the
- * master-wrapped row — keeping `dek_id` stable so the user's other
- * recovery factors are not orphaned.
+ * to the forgotten password — `changeMasterPassword` cannot handle
+ * this case because it tries to unwrap the master row with the
+ * recovery secret, which always fails), then wrap that same DEK under
+ * a fresh KEK derived from the new master password and PUT it back as
+ * the master-wrapped row — keeping `dek_id` stable so the user's
+ * other recovery factors are not orphaned.
  *
  * The session DEK is also re-installed (non-extractable) so the user
  * can use the vault immediately without a separate unlock step.

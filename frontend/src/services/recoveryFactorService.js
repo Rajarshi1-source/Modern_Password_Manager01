@@ -104,6 +104,29 @@ export async function enrollTimeLock({ serverHalf, halfMetadata = {} }) {
 }
 
 /**
+ * Anonymous lookup of a wrapped recovery factor by username + factor type.
+ *
+ * Used by the unauthenticated recovery pages: the user has forgotten
+ * the master password and so cannot call the authenticated GET
+ * `/recovery-factors/`, but the recovery flow still needs the wrapped
+ * factor blob to feed the recovery secret into
+ * `unlockWithRecoveryFactor`. The backend returns the same shape for
+ * unknown usernames (a decoy `blob` + fresh `dek_id`), so an attacker
+ * cannot use this endpoint to enumerate accounts.
+ *
+ * @param {string} username
+ * @param {('recovery_key'|'social_mesh'|'time_locked'|'passkey')} factorType
+ * @returns {Promise<{blob: object, dek_id: string}>}
+ */
+export async function lookupRecoveryFactor(username, factorType) {
+  const { data } = await axios.post(`${BASE}/recovery-factors/lookup/`, {
+    username,
+    factor_type: factorType,
+  });
+  return data;
+}
+
+/**
  * Begin the tier-3 time-lock delay clock for a username.
  *
  * The endpoint returns the same uniform shape regardless of whether
@@ -186,6 +209,7 @@ export default {
   putWrappedDEK,
   listRecoveryFactors,
   createRecoveryFactor,
+  lookupRecoveryFactor,
   enrollTimeLock,
   initiateTimeLock,
   pollTimeLockRelease,

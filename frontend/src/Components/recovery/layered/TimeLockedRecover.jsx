@@ -94,10 +94,18 @@ export default function TimeLockedRecover({ onSuccess }) {
       const seed = combine2of2(halfA, halfB);
       const seedHex = bytesToHex(seed);
 
-      const factors = await recoveryFactorService.listRecoveryFactors();
-      const factor = (factors || []).find((f) => f.factor_type === 'time_locked');
+      // The list endpoint requires authentication AND does not return
+      // `blob`. We use the anonymous lookup endpoint instead, which
+      // returns the wrapped factor blob (or a decoy for unknown
+      // usernames — the unwrap below will simply fail in that case
+      // with the same generic error a wrong key produces, so
+      // attackers cannot distinguish via this endpoint).
+      const factor = await recoveryFactorService.lookupRecoveryFactor(
+        username,
+        'time_locked',
+      );
       if (!factor || !factor.blob) {
-        throw new Error('No time-locked factor on file (or server omitted blob).');
+        throw new Error('Recovery factor unavailable.');
       }
       await sessionVaultCryptoV3.unlockWithRecoveryFactor(
         factor.blob,
