@@ -58,18 +58,43 @@ export async function initiateTimeLock(username) {
 }
 
 /**
- * Polls for the server's Shamir half. Translates the 403 'too early'
- * branch into `{ ready: false, releaseAfter }` so the UI loop can
- * count down without try/catch noise. Other errors bubble.
+ * Polls for the server's Shamir half.
+ *
+ * The release endpoint can return 403 for two semantically distinct
+ * reasons (see `TimeLockedReleaseView` in
+ * `password_manager/auth_module/time_locked_view.py`):
+ *
+ *   1. Delay not elapsed — body is `{error, release_after}`. The
+ *      caller should keep polling; we translate to
+ *      `{ ready: false, releaseAfter }` so the countdown UI doesn't
+ *      have to wrap every poll in try/catch.
+ *
+ *   2. Cancelled by canary acknowledgement — body is `{error}` (no
+ *      `release_after`). The caller should STOP polling and surface
+ *      the cancellation. We re-throw so the UI's catch block sees it.
+ *
+ * Any other 403 (auth/permission errors, throttling, CSRF, etc.) is
+ * also re-thrown — it would be wrong to silently treat them as "still
+ * waiting" and keep the user polling forever.
+ *
+ * Other status codes (5xx, network errors) bubble unchanged.
  */
 export async function pollTimeLockRelease(username) {
   try {
     const { data } = await axios.post(`${BASE}/time-locked/release/`, { username });
     return { ready: true, ...data };
   } catch (err) {
-    if (err.response?.status === 403) {
-      return { ready: false, releaseAfter: err.response.data?.release_after };
+    const body = err.response?.data;
+    if (
+      err.response?.status === 403 &&
+      body &&
+      typeof body.release_after === 'string'
+    ) {
+      // Specifically the "delay not elapsed" shape — keep polling.
+      return { ready: false, releaseAfter: body.release_after };
     }
+    // Anything else (cancelled-by-canary 403, real authz errors,
+    // 5xx, etc.) bubbles to the caller.
     throw err;
   }
 }

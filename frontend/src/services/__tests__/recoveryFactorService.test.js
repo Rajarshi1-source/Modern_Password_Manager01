@@ -85,8 +85,13 @@ describe('recoveryFactorService — time-locked endpoints', () => {
     });
   });
 
-  it('pollTimeLockRelease translates 403 → { ready: false, releaseAfter }', async () => {
-    axios.post.mockRejectedValueOnce({ response: { status: 403, data: { release_after: '2026-05-10T00:00:00Z' } } });
+  it('pollTimeLockRelease translates "delay not elapsed" 403 → { ready: false, releaseAfter }', async () => {
+    axios.post.mockRejectedValueOnce({
+      response: {
+        status: 403,
+        data: { error: 'delay not elapsed', release_after: '2026-05-10T00:00:00Z' },
+      },
+    });
     const r = await pollTimeLockRelease('alice');
     expect(r).toEqual({ ready: false, releaseAfter: '2026-05-10T00:00:00Z' });
   });
@@ -100,6 +105,42 @@ describe('recoveryFactorService — time-locked endpoints', () => {
   it('pollTimeLockRelease bubbles non-403 errors', async () => {
     axios.post.mockRejectedValueOnce({ response: { status: 500, data: {} } });
     await expect(pollTimeLockRelease('alice')).rejects.toBeTruthy();
+  });
+
+  it('pollTimeLockRelease bubbles cancelled-by-canary 403 (no release_after)', async () => {
+    // Backend returns this shape when the canary-ack token has been
+    // hit; the client must STOP polling, not keep waiting.
+    axios.post.mockRejectedValueOnce({
+      response: {
+        status: 403,
+        data: { error: 'cancelled by canary acknowledgement' },
+      },
+    });
+    await expect(pollTimeLockRelease('alice')).rejects.toMatchObject({
+      response: { status: 403 },
+    });
+  });
+
+  it('pollTimeLockRelease bubbles unrelated 403s (auth/permission)', async () => {
+    // Real authz failures (expired session, missing CSRF, etc.) must
+    // surface — not be misreported as "still waiting".
+    axios.post.mockRejectedValueOnce({
+      response: { status: 403, data: { detail: 'Authentication required.' } },
+    });
+    await expect(pollTimeLockRelease('alice')).rejects.toMatchObject({
+      response: { status: 403 },
+    });
+  });
+
+  it('pollTimeLockRelease bubbles 403 with non-string release_after', async () => {
+    // Defense in depth: if the server payload is malformed, do NOT
+    // silently swallow it as "keep polling".
+    axios.post.mockRejectedValueOnce({
+      response: { status: 403, data: { release_after: 12345 } },
+    });
+    await expect(pollTimeLockRelease('alice')).rejects.toMatchObject({
+      response: { status: 403 },
+    });
   });
 
   it('acknowledgeCanary posts token', async () => {
