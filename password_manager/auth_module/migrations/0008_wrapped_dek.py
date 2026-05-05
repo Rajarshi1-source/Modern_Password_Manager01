@@ -3,6 +3,7 @@
 import uuid
 
 import django.db.models.deletion
+from django.conf import settings
 from django.db import migrations, models
 
 
@@ -10,7 +11,9 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('auth_module', '0007_recoveryshard_status'),
-        ('auth', '0012_alter_user_first_name_max_length'),
+        # Use the swappable user reference so deployments with a custom
+        # AUTH_USER_MODEL wire these FKs to the correct table.
+        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
@@ -23,7 +26,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
                 ('rotated_at', models.DateTimeField(blank=True, null=True)),
-                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='vault_dek', to='auth.user')),
+                ('user', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='vault_dek', to=settings.AUTH_USER_MODEL)),
             ],
             options={
                 'verbose_name': 'Vault Wrapped DEK',
@@ -43,7 +46,7 @@ class Migration(migrations.Migration):
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('last_used_at', models.DateTimeField(blank=True, null=True)),
                 ('revoked_at', models.DateTimeField(blank=True, null=True)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='recovery_factors', to='auth.user')),
+                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='recovery_factors', to=settings.AUTH_USER_MODEL)),
             ],
             options={
                 'verbose_name': 'Recovery Wrapped DEK',
