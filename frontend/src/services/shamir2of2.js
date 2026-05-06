@@ -66,12 +66,26 @@ export function combine2of2(halfA, halfB) {
  * Base64 encode a `Uint8Array` (or array-buffer-like) to a string
  * suitable for transport in JSON. Sibling of `_b64Decode`.
  *
- * @param {Uint8Array | ArrayBufferLike} a
+ * Accepts:
+ *   - `Uint8Array` (and any other typed-array view; we read it through
+ *     a fresh `Uint8Array` view to be safe regardless of element size)
+ *   - raw `ArrayBuffer` / `SharedArrayBuffer` — wrapped into a
+ *     `Uint8Array` because `ArrayBuffer` itself does NOT support
+ *     indexed access (`buffer[0]` is `undefined`), so the previous
+ *     implementation silently encoded an all-zeros byte string for
+ *     callers passing a raw buffer. Normalising to a Uint8Array view
+ *     first makes the previous JSDoc claim of `ArrayBufferLike`
+ *     support actually true.
+ *
+ * @param {Uint8Array | ArrayBufferView | ArrayBufferLike} a
  * @returns {string}
  */
 const _b64Encode = (a) => {
+  const u8 = ArrayBuffer.isView(a)
+    ? new Uint8Array(a.buffer, a.byteOffset, a.byteLength)
+    : new Uint8Array(a);
   let s = '';
-  for (let i = 0; i < a.byteLength; i++) s += String.fromCharCode(a[i]);
+  for (let i = 0; i < u8.byteLength; i++) s += String.fromCharCode(u8[i]);
   return btoa(s);
 };
 

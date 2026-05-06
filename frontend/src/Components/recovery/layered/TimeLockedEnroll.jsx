@@ -15,7 +15,7 @@
  * Argon2 secret, and split before we send anything. The server never
  * sees `time_seed` itself, only the wrapped DEK and an opaque half.
  */
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import recoveryFactorService from '../../../services/recoveryFactorService';
 import { split2of2, _b64 } from '../../../services/shamir2of2';
@@ -87,6 +87,16 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
   const [phase, setPhase] = useState('await-password'); // -> 'downloaded' -> 'done'
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Persist the user's local Shamir half across renders so the
+  // 'downloaded' screen can offer a "Download again" affordance.
+  // Browsers commonly block programmatic downloads triggered without
+  // an explicit user gesture; if the first download was suppressed,
+  // without a re-download path the user would have to re-run the full
+  // enrollment (which produces a NEW factor row and orphans the
+  // first). Held in a ref because there is nothing render-dependent
+  // here — and refs avoid the React-warning about storing
+  // non-serialisable objects in state.
+  const halfARef = useRef(null);
 
   /**
    * Run the full enroll sequence: split a fresh seed, persist the
@@ -141,7 +151,11 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
 
       // (d) Download halfA. (No way to know in-script whether the
       //     download dialog actually saved — we ask the user to
-      //     confirm before considering enrollment complete.)
+      //     confirm before considering enrollment complete, and we
+      //     stash halfA in a ref so the "Download again" button on
+      //     the next phase can re-trigger the download without
+      //     reissuing the enroll calls in (b)/(c).)
+      halfARef.current = halfA;
       downloadDlrecFile({ username, halfA });
 
       setPhase('downloaded');
@@ -195,16 +209,34 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
           location only you can reach (USB drive, encrypted backup, etc.) — not your
           regular synced documents folder.
         </p>
-        <button
-          type="button"
-          onClick={() => {
-            setPhase('done');
-            if (onSuccess) onSuccess();
-          }}
-          data-testid="tl-enroll-confirm"
-        >
-          I have moved the file offline
-        </button>
+        <p>
+          If your browser blocked the download, use <em>Download again</em> below — this
+          re-triggers the same file (no new enrollment, no new factor row).
+        </p>
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              if (halfARef.current) {
+                downloadDlrecFile({ username, halfA: halfARef.current });
+              }
+            }}
+            data-testid="tl-enroll-redownload"
+            disabled={!halfARef.current}
+          >
+            Download again
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setPhase('done');
+              if (onSuccess) onSuccess();
+            }}
+            data-testid="tl-enroll-confirm"
+          >
+            I have moved the file offline
+          </button>
+        </div>
       </section>
     );
   }

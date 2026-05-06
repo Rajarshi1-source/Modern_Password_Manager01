@@ -217,15 +217,28 @@ def _decoy_response(username: str, factor_type: str) -> dict:
 
 
 def _decoy_dek_id(username: str, factor_type: str) -> str:
-    """Deterministic UUID5-style identifier for the decoy.
+    """Deterministic, UUIDv4-shaped identifier for the decoy.
 
     Built directly from the same HMAC-derived bytes used for the blob
-    (under a different `info` constant), then formatted as a UUID
-    string so it's syntactically indistinguishable from a real
-    ``dek_id``.
+    (under a different `info` constant). We then force the RFC 4122
+    version (byte 6 high nibble = 0x4) and variant bits (byte 8 high
+    bits = 0b10) so the resulting string is byte-shaped identical to a
+    real ``uuid.uuid4()`` value. Without this, an attacker could
+    distinguish decoys from real ``dek_id`` values purely by inspecting
+    the version nibble and variant bits — a side-channel oracle that
+    defeats the deterministic-decoy defense and reintroduces
+    account/factor enumeration through ``dek_id`` alone.
+
+    Real ``dek_id`` is set by ``VaultWrappedDEK.dek_id = uuid.uuid4()``
+    and reused as ``RecoveryWrappedDEK.dek_id``.
     """
-    raw = _decoy_bytes(username, factor_type, _DECOY_INFO_DEK_ID, 16)
-    return str(uuid.UUID(bytes=raw))
+    raw = bytearray(_decoy_bytes(username, factor_type, _DECOY_INFO_DEK_ID, 16))
+    # Force RFC 4122 / UUIDv4 shape:
+    #   byte 6: top nibble must be 0x4 (version)
+    #   byte 8: top two bits must be 0b10 (variant)
+    raw[6] = (raw[6] & 0x0F) | 0x40
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(raw)))
 
 
 class RecoveryFactorLookupView(APIView):
