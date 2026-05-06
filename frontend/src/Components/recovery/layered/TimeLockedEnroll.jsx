@@ -62,7 +62,15 @@ function downloadDlrecFile({ username, halfA }) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  URL.revokeObjectURL(url);
+  // Defer revocation to the next macrotask. Synchronous
+  // URL.revokeObjectURL() right after a.click() is documented to
+  // suppress the download in Firefox (Mozilla bug 1282407): the
+  // browser hasn't fetched the blob yet, the URL is invalidated,
+  // and the download silently fails. setTimeout(..., 0) lets the
+  // browser pick up the blob first. The .dlrec file is the user's
+  // ONLY offline share of the recovery seed for this enrollment —
+  // we cannot afford a silent download failure here.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 /**
@@ -158,6 +166,15 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
       halfARef.current = halfA;
       downloadDlrecFile({ username, halfA });
 
+      // Zero the master password out of React state now that we're
+      // past the point where we needed it. React still keeps a
+      // reference to the previous value in its update history during
+      // the same render — that's unavoidable — but at least the
+      // controlled input no longer holds it on the next render and a
+      // user who walks away from the screen at the 'downloaded' or
+      // 'done' phase isn't leaving the master password in a DOM
+      // input value attribute.
+      setMasterPassword('');
       setPhase('downloaded');
     } catch (err) {
       setError(err?.message || 'Enrollment failed.');

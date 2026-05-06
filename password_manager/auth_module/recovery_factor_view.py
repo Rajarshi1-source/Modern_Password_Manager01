@@ -23,7 +23,8 @@ import uuid
 
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -96,21 +97,51 @@ class RecoveryFactorListCreateView(APIView):
         if not isinstance(meta, dict):
             return Response({'error': 'meta must be an object'}, status=400)
 
-        # Partial unique constraint
-        # (factor_type='recovery_key', status='active') is enforced at
-        # the DB layer. We translate ONLY that specific IntegrityError
-        # to 409; any other exception (DB outage, programming error)
-        # bubbles to DRF's default 500 handler so real faults aren't
-        # masked as a business conflict, and we never echo str(exc)
-        # back to the client (information-exposure rule).
+        # Single-ACTIVE-row invariant per (user, factor_type):
+        #
+        #   - For recovery_key, this is enforced at the DB layer by
+        #     a partial unique index. A duplicate raises IntegrityError
+        #     and we translate to 409 — the user must explicitly revoke
+        #     the old key first (printing two recovery keys at once is
+        #     a UX footgun: which one is "the" recovery key?).
+        #
+        #   - For social_mesh / time_locked / passkey, no DB-level
+        #     uniqueness existed historically. CodeRabbit flagged this
+        #     because, without it, repeated enrollments stack ACTIVE
+        #     rows and the anonymous lookup view's `order_by('-created
+        #     _at').first()` would silently switch which blob is
+        #     "live" while older blobs remain ACTIVE in the DB. To
+        #     fix: revoke any prior ACTIVE row of the same factor_type
+        #     atomically with the create, so at most one ACTIVE row
+        #     of any given factor_type exists per user. We also lock
+        #     those rows via `select_for_update()` so concurrent
+        #     enrollments serialize.
+        #
+        # Other exceptions (DB outage, programming error) bubble to
+        # DRF's default 500 handler — we never echo str(exc) back.
         try:
-            factor = RecoveryWrappedDEK.objects.create(
-                user=request.user,
-                factor_type=ftype,
-                dek_id=current.dek_id,
-                blob=blob,
-                factor_meta=meta,
-            )
+            with transaction.atomic():
+                if ftype != RecoveryWrappedDEK.FactorType.RECOVERY_KEY:
+                    revoke_qs = (
+                        RecoveryWrappedDEK.objects
+                        .select_for_update()
+                        .filter(
+                            user=request.user,
+                            factor_type=ftype,
+                            status=RecoveryWrappedDEK.Status.ACTIVE,
+                        )
+                    )
+                    revoke_qs.update(
+                        status=RecoveryWrappedDEK.Status.REVOKED,
+                        revoked_at=timezone.now(),
+                    )
+                factor = RecoveryWrappedDEK.objects.create(
+                    user=request.user,
+                    factor_type=ftype,
+                    dek_id=current.dek_id,
+                    blob=blob,
+                    factor_meta=meta,
+                )
         except IntegrityError:
             return Response(
                 {'error': 'factor of this type already active'},
