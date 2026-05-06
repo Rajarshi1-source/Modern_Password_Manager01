@@ -24,7 +24,7 @@ from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
 # Import Layered Recovery Mesh views (Unit 4)
-from .wrapped_dek_view import VaultWrappedDEKView
+from .wrapped_dek_view import VaultWrappedDEKView, WrappedDEKRecoveryRotateView
 # Import Layered Recovery Mesh views (Unit 5)
 from .recovery_factor_view import (
     RecoveryFactorListCreateView,
@@ -33,6 +33,7 @@ from .recovery_factor_view import (
 # Import Layered Recovery Mesh views (Unit 6)
 from .time_locked_view import (
     TimeLockedEnrollView,
+    TimeLockedEnrollBundleView,
     TimeLockedInitiateView,
     TimeLockedReleaseView,
     TimeLockedCanaryAckView,
@@ -161,6 +162,11 @@ urlpatterns = [
     # Unit 4 — wrapped DEK (master-password KEK over the user's vault DEK).
     # Server stores ciphertext only; never decrypts the blob.
     path('vault/wrapped-dek/', VaultWrappedDEKView.as_view(), name='vault-wrapped-dek'),
+    # Anonymous post-recovery rotation. Used by the recovery pages
+    # which run while the user is not yet authenticated; ties the
+    # rotation to (username, factor_type, dek_id) so only a caller
+    # who has hit lookup with a real combination can rotate.
+    path('vault/wrapped-dek/recover-rotate/', WrappedDEKRecoveryRotateView.as_view(), name='vault-wrapped-dek-recover-rotate'),
     # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
     # social mesh, time-locked, passkey). Server stores ciphertext only.
     path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
@@ -172,6 +178,11 @@ urlpatterns = [
     # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
     # share; release gated by configurable delay + canary-cancellation.
     path('vault/time-locked/enroll/', TimeLockedEnrollView.as_view(), name='vault-time-locked-enroll'),
+    # Atomic single-call enrollment: server half + matching wdek row
+    # in one transaction. Replaces the two-step (enroll/ then
+    # recovery-factors/) flow that left users worse off than they
+    # started in failure cases.
+    path('vault/time-locked/enroll-bundle/', TimeLockedEnrollBundleView.as_view(), name='vault-time-locked-enroll-bundle'),
     path('vault/time-locked/initiate/', TimeLockedInitiateView.as_view(), name='vault-time-locked-initiate'),
     path('vault/time-locked/release/', TimeLockedReleaseView.as_view(), name='vault-time-locked-release'),
     path('vault/time-locked/canary-ack/', TimeLockedCanaryAckView.as_view(), name='vault-time-locked-canary-ack'),

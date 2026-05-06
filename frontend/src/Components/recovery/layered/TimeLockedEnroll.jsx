@@ -128,41 +128,44 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
       const timeSeed = window.crypto.getRandomValues(new Uint8Array(32));
       const seedHex = bytesToHex(timeSeed);
 
-      // (a) Split the seed locally before any server call so we
-      //     fail closed if either step fails.
+      // (a) Split the seed locally before any server call. Both shares
+      //     come into existence in this scope; halfA never leaves the
+      //     browser other than via the downloaded `.dlrec` file.
       const { halfA, halfB } = split2of2(timeSeed);
 
-      // (b) Persist the SERVER half FIRST. The order matters: if
-      //     this call fails, we have not yet created any
-      //     RecoveryWrappedDEK row, so there is nothing to clean up.
-      //     If we did this in the opposite order and step (c) failed,
-      //     we'd leave behind an orphan wdek row pointing at a seed
-      //     that never had a server-stored half. The user would
-      //     retry, get a NEW row, and the orphan would linger as
-      //     accidental factor-list noise.
-      await recoveryFactorService.enrollTimeLock({
-        serverHalf: _b64.encode(halfB),
-        halfMetadata: { v: DLREC_VERSION },
-      });
-
-      // (c) Wrap the DEK under a KEK derived from the seed and POST
-      //     it as the time_locked recovery factor. If THIS fails the
-      //     user has a server half but no factor row; the next retry
-      //     overwrites the server half (TimeLockedEnrollView's
-      //     deactivate-then-create logic) and adds a fresh factor row
-      //     for the new seed. The retry path is clean.
-      await sessionVaultCryptoV3.enrollRecoveryFactor({
-        factorType: 'time_locked',
+      // (b) Build the wdek envelope LOCALLY. This requires the master
+      //     password (to unwrap the master-wrapped DEK and re-wrap
+      //     under the seed-derived KEK) but does not write anything
+      //     server-side yet — `buildRecoveryFactorEnvelope` returns
+      //     the envelope and the user's current dek_id without
+      //     POSTing. If the master password is wrong, we fail HERE,
+      //     before any destructive server-side write, so a user with
+      //     a previously-enrolled time-lock keeps it intact.
+      const { blob, dekId } = await sessionVaultCryptoV3.buildRecoveryFactorEnvelope({
         secret: seedHex,
         masterPassword,
       });
 
-      // (d) Download halfA. (No way to know in-script whether the
-      //     download dialog actually saved — we ask the user to
-      //     confirm before considering enrollment complete, and we
-      //     stash halfA in a ref so the "Download again" button on
-      //     the next phase can re-trigger the download without
-      //     reissuing the enroll calls in (b)/(c).)
+      // (c) Atomic single call — server writes both the new server
+      //     half AND the new wdek factor row in one transaction, and
+      //     atomically revokes any prior ACTIVE time-locked rows.
+      //     Either both writes commit (user has a fresh, complete
+      //     enrollment) or neither does (user keeps their prior
+      //     state untouched). Replaces the previous two-call flow
+      //     (enrollTimeLock → enrollRecoveryFactor) which left users
+      //     worse off than they started in the failure cases.
+      await recoveryFactorService.enrollTimeLockBundle({
+        serverHalf: _b64.encode(halfB),
+        halfMetadata: { v: DLREC_VERSION },
+        dekId,
+        blob,
+        factorMeta: { v: DLREC_VERSION },
+      });
+
+      // (d) Download halfA. We stash it in a ref so the "Download
+      //     again" button on the next phase can re-trigger the
+      //     download without reissuing the bundle call (which would
+      //     be destructive of the just-written rows).
       halfARef.current = halfA;
       downloadDlrecFile({ username, halfA });
 
@@ -170,10 +173,7 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
       // past the point where we needed it. React still keeps a
       // reference to the previous value in its update history during
       // the same render — that's unavoidable — but at least the
-      // controlled input no longer holds it on the next render and a
-      // user who walks away from the screen at the 'downloaded' or
-      // 'done' phase isn't leaving the master password in a DOM
-      // input value attribute.
+      // controlled input no longer holds it on the next render.
       setMasterPassword('');
       setPhase('downloaded');
     } catch (err) {

@@ -213,6 +213,11 @@ export default function TimeLockedRecover({ onSuccess }) {
         recoverySecret: recoveredSeedHex,
         newPassword,
         dekId: recoveredFactor.dek_id,
+        // Required by the anonymous rotation endpoint to address the
+        // right user/factor server-side; this page is not yet
+        // authenticated.
+        username,
+        factorType: 'time_locked',
       });
       setPhase('done');
       if (onSuccess) onSuccess();

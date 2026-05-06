@@ -104,6 +104,45 @@ export async function enrollTimeLock({ serverHalf, halfMetadata = {} }) {
 }
 
 /**
+ * Atomic single-call enrollment for tier-3 time-locked recovery.
+ *
+ * Combines what used to be two separate calls — `enrollTimeLock`
+ * (server half) and `createRecoveryFactor({factorType:'time_locked'})`
+ * (wdek row) — into one server-side transaction. Either both writes
+ * commit or neither does, so a partial failure cannot leave the user
+ * worse off than they started (the previous two-call flow was
+ * destructive in either ordering for users who already had an
+ * enrolled time-lock).
+ *
+ * The seed is still generated and Shamir-split locally; only the
+ * server-side write coordination moves to one endpoint.
+ *
+ * @param {object} args
+ * @param {string} args.serverHalf      - base64 of halfB
+ * @param {object} [args.halfMetadata]  - public metadata (e.g. dlrec v)
+ * @param {string} args.dekId           - current dek_id (proof-of-DEK)
+ * @param {object} args.blob            - wdek-1 envelope wrapping the DEK
+ * @param {object} [args.factorMeta]    - public metadata for the factor row
+ * @returns {Promise<{success: true, recovery_id: number, factor_id: number}>}
+ */
+export async function enrollTimeLockBundle({
+  serverHalf,
+  halfMetadata = {},
+  dekId,
+  blob,
+  factorMeta = {},
+}) {
+  const { data } = await axios.post(`${BASE}/time-locked/enroll-bundle/`, {
+    server_half: serverHalf,
+    half_metadata: halfMetadata,
+    dek_id: dekId,
+    blob,
+    factor_meta: factorMeta,
+  });
+  return data;
+}
+
+/**
  * Anonymous lookup of a wrapped recovery factor by username + factor type.
  *
  * Used by the unauthenticated recovery pages: the user has forgotten
@@ -211,6 +250,7 @@ export default {
   createRecoveryFactor,
   lookupRecoveryFactor,
   enrollTimeLock,
+  enrollTimeLockBundle,
   initiateTimeLock,
   pollTimeLockRelease,
   acknowledgeCanary,

@@ -161,6 +161,21 @@ class RecoveryWrappedDEK(models.Model):
                 condition=models.Q(factor_type='recovery_key', status='active'),
                 name='unique_active_recovery_key_per_user',
             ),
+            # General invariant: at most one ACTIVE row per
+            # (user, factor_type). Without this, two concurrent
+            # first-time enrolls of the same factor_type both find
+            # zero existing rows under their per-row locks and both
+            # succeed in inserting ACTIVE rows. The application-side
+            # ``select_for_update()`` cannot lock a row that does not
+            # exist; only a DB-level constraint can prevent the race.
+            # The lookup view's ``order_by('-created_at').first()``
+            # then becomes a tie-breaker rather than an enumeration
+            # of accidental duplicates.
+            models.UniqueConstraint(
+                fields=['user', 'factor_type'],
+                condition=models.Q(status='active'),
+                name='unique_active_factor_per_user_per_type',
+            ),
         ]
 
     def __str__(self):

@@ -58,7 +58,19 @@ from auth_module.recovery_throttling import (
     RecoveryCompleteThrottle,
 )
 from auth_module.time_locked_models import TimeLockedRecovery, ServerHalfReleaseLog
+from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
+
+
+_WDEK_ENVELOPE_VERSION = 'wdek-1'
+_WDEK_REQUIRED_FIELDS = ('kdf', 'kdf_params', 'salt', 'iv', 'wrapped')
+
+
+def _valid_wdek_envelope(blob):
+    """Validate the wdek-1 envelope shape WITHOUT decrypting it."""
+    if not isinstance(blob, dict) or blob.get('v') != _WDEK_ENVELOPE_VERSION:
+        return False
+    return all(k in blob for k in _WDEK_REQUIRED_FIELDS)
 
 # Optional integration with the trust-score modulator (Unit 7). If the
 # module is not yet present in this branch, fall back to a 7-day default.
@@ -228,6 +240,148 @@ class TimeLockedEnrollView(APIView):
                 user_agent=_user_agent(request),
             )
         return Response({'success': True, 'recovery_id': rec.pk}, status=201)
+
+
+class TimeLockedEnrollBundleView(APIView):
+    """Atomic enrollment of the tier-3 server half + the matching wdek row.
+
+    The previous flow had the client call two endpoints in sequence —
+    first ``time-locked/enroll/`` to write the server half, then
+    ``recovery-factors/`` (POST) to write the wdek factor row. Either
+    ordering left the user worse off than they started in failure
+    cases:
+
+      * server-half-first: if the wdek POST fails (e.g. master
+        password mistyped during the unwrap), the user's previously
+        ACTIVE server half has already been deactivated but the OLD
+        wdek row is still ACTIVE — recovery via the user's existing
+        ``.dlrec`` no longer recombines correctly because the seed
+        baked into the still-active wdek row no longer has its
+        matching server half.
+
+      * wdek-first: if the server-half POST fails, the wdek row is
+        already committed but no server half exists for that seed.
+        Re-enrolling stacks another wdek row.
+
+    The fix is server-side atomicity: this endpoint takes BOTH the
+    server-half material and the wdek factor blob, validates them,
+    and either both writes commit or neither does. The client still
+    generates the seed locally and Shamir-splits it locally; we just
+    avoid the client-driven multi-step write.
+
+    Body: ``{server_half, half_metadata, dek_id, blob, factor_meta?}``
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [RecoveryThrottle]
+
+    def post(self, request):
+        """Validate inputs, atomically replace prior ACTIVE rows + create new."""
+        server_half_b64 = request.data.get('server_half')
+        if not isinstance(server_half_b64, str) or not server_half_b64:
+            return Response({'error': 'server_half required'}, status=400)
+        try:
+            server_half = base64.b64decode(server_half_b64, validate=True)
+        except (binascii.Error, ValueError):
+            return Response({'error': 'server_half must be base64'}, status=400)
+
+        half_metadata = request.data.get('half_metadata', {}) or {}
+        if not isinstance(half_metadata, dict):
+            return Response({'error': 'half_metadata must be object'}, status=400)
+
+        dek_id_in = request.data.get('dek_id')
+        if not isinstance(dek_id_in, str) or not dek_id_in:
+            return Response({'error': 'dek_id required'}, status=400)
+
+        blob = request.data.get('blob')
+        if not _valid_wdek_envelope(blob):
+            return Response({'error': 'invalid envelope'}, status=400)
+
+        factor_meta = request.data.get('factor_meta', {}) or {}
+        if not isinstance(factor_meta, dict):
+            return Response({'error': 'factor_meta must be object'}, status=400)
+
+        with transaction.atomic():
+            # The dek_id supplied must match the user's current
+            # wrapped-DEK (proof-of-DEK-possession). Locking the row
+            # here prevents a concurrent master-password rotation from
+            # changing dek_id under us.
+            try:
+                wrapped = (
+                    VaultWrappedDEK.objects
+                    .select_for_update()
+                    .get(user=request.user)
+                )
+            except VaultWrappedDEK.DoesNotExist:
+                return Response({'error': 'no DEK enrolled'}, status=400)
+            if str(wrapped.dek_id) != dek_id_in:
+                return Response({'error': 'dek_id mismatch'}, status=409)
+
+            # Lock + deactivate any prior ACTIVE time-locked row for
+            # this user. We materialize via list() so the SELECT...FOR
+            # UPDATE fires inside the txn. A concurrent enroll-bundle
+            # for the same user blocks here.
+            list(
+                TimeLockedRecovery.objects
+                .select_for_update()
+                .filter(user=request.user)
+            )
+            TimeLockedRecovery.objects.filter(
+                user=request.user, is_active=True,
+            ).update(is_active=False)
+
+            # Lock + revoke any prior ACTIVE time_locked wdek row.
+            list(
+                RecoveryWrappedDEK.objects
+                .select_for_update()
+                .filter(
+                    user=request.user,
+                    factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
+                )
+            )
+            RecoveryWrappedDEK.objects.filter(
+                user=request.user,
+                factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
+                status=RecoveryWrappedDEK.Status.ACTIVE,
+            ).update(
+                status=RecoveryWrappedDEK.Status.REVOKED,
+                revoked_at=timezone.now(),
+            )
+
+            # Both creates succeed together or neither does.
+            rec = TimeLockedRecovery.objects.create(
+                user=request.user,
+                server_half=server_half,
+                half_metadata=half_metadata,
+                is_active=True,
+            )
+            factor = RecoveryWrappedDEK.objects.create(
+                user=request.user,
+                factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
+                dek_id=wrapped.dek_id,
+                blob=blob,
+                factor_meta=factor_meta,
+            )
+
+            RecoveryAuditLog.objects.create(
+                user=request.user,
+                event_type='setup_created',
+                event_data={
+                    'subsystem': 'time_locked_bundle',
+                    'recovery_id': rec.pk,
+                    'factor_id': factor.pk,
+                    'dek_id': str(wrapped.dek_id),
+                    'half_bytes': len(server_half),
+                },
+                ip_address=_client_ip(request),
+                user_agent=_user_agent(request),
+            )
+
+        return Response({
+            'success': True,
+            'recovery_id': rec.pk,
+            'factor_id': factor.pk,
+        }, status=201)
 
 
 class TimeLockedInitiateView(APIView):
