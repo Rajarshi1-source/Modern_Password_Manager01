@@ -36,7 +36,18 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
   const [busy, setBusy] = useState(false);
 
   async function handleRecover() {
-    if (!username) {
+    // Trim leading/trailing whitespace before any submission. Common
+    // copy-paste source for usernames is an email line in another
+    // app, which often pulls a trailing space along; the backend
+    // does an exact `User.objects.get(username=...)` so without this
+    // trim a harmless stray space would cause lookup to silently
+    // return a decoy (and the unwrap to fail with the same 'wrong
+    // key' message a real bad recovery would). Persist the trimmed
+    // value so the controlled input also reflects it and
+    // handleChangePassword sees the same string.
+    const trimmedUsername = username.trim();
+    if (trimmedUsername !== username) setUsername(trimmedUsername);
+    if (!trimmedUsername) {
       setError('Username is required.');
       return;
     }
@@ -57,7 +68,7 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
       //       on this page — they forgot the master password),
       //   (b) didn't include `blob` in its response anyway.
       const factor = await recoveryFactorService.lookupRecoveryFactor(
-        username,
+        trimmedUsername,
         'recovery_key',
       );
       if (!factor || !factor.blob) {
@@ -90,7 +101,13 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
       setError('New password and confirmation do not match.');
       return;
     }
-    if (!unlockedFactor || !normalizedKey || !username) {
+    // Trim defensively — handleRecover already persists a trimmed
+    // username, but a future code path (e.g. resuming from saved
+    // state) could land here with whitespace. Same backend exact-
+    // match concern applies to the rotate endpoint as it does to
+    // the lookup.
+    const trimmedUsername = username.trim();
+    if (!unlockedFactor || !normalizedKey || !trimmedUsername) {
       setError('Recovery state lost — please restart from the beginning.');
       return;
     }
@@ -112,7 +129,7 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
         recoverySecret: normalizedKey,
         newPassword,
         dekId: unlockedFactor.dek_id,
-        username,
+        username: trimmedUsername,
         factorType: 'recovery_key',
       });
       setPhase('done');
