@@ -19,6 +19,20 @@ import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import recoveryFactorService from '../../../services/recoveryFactorService';
 import { normalizeRecoveryKey } from './generateRecoveryKey';
 
+/**
+ * Tier-1 recovery page — anonymous recovery via a printable
+ * recovery key. The user provides their username + recovery key,
+ * the client unwraps the matching factor blob locally, then forces
+ * a master-password rotation via the anonymous /recover-rotate/
+ * endpoint. The page is reached only when the user is signed out
+ * (the route is gated by `!isAuthenticated` in App.jsx).
+ *
+ * @param {object} props
+ * @param {() => void} [props.onSuccess]
+ *   Optional callback fired once the master password has been
+ *   rotated and the session DEK is installed. Parents typically
+ *   navigate to /vault here.
+ */
 export default function RecoveryKeyUseV2({ onSuccess }) {
   const [username, setUsername] = useState('');
   const [recoveryKey, setRecoveryKey] = useState('');
@@ -35,6 +49,23 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  /**
+   * Submit handler for the username + recovery-key form.
+   *
+   * Validates input, looks up the wrapped factor blob via the
+   * anonymous /recovery-factors/lookup/ endpoint, and unwraps it
+   * locally with the recovery key. On success, transitions to the
+   * change-password phase with the unwrap inputs stashed in state.
+   * On failure (decoy / bad key / network), surfaces a generic
+   * error — the lookup is intentionally indistinguishable between
+   * "user does not exist" and "wrong recovery key".
+   *
+   * Trim semantics: the username is trimmed at submission and the
+   * trimmed value is persisted back to component state so the
+   * input visibly self-corrects. The backend matches with exact
+   * `User.objects.get(username=...)`, so a stray space would
+   * silently yield a decoy; trimming closes that footgun.
+   */
   async function handleRecover() {
     // Trim leading/trailing whitespace before any submission. Common
     // copy-paste source for usernames is an email line in another
@@ -100,6 +131,24 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
     }
   }
 
+  /**
+   * Submit handler for the new-master-password form.
+   *
+   * Validates the new password (length + confirmation match), then
+   * delegates to ``sessionVaultCryptoV3.rewrapMasterPasswordFromRecovery``
+   * which:
+   *   1. unwraps the DEK from the recovery factor's blob
+   *      (extractable, in-browser),
+   *   2. wraps it under a fresh KEK derived from the new master
+   *      password,
+   *   3. POSTs the new envelope to the anonymous
+   *      /api/auth/vault/wrapped-dek/recover-rotate/ endpoint,
+   *      which gates the rotation on a server-stored auth_hash
+   *      proof of recovery-secret possession.
+   *
+   * On success, secret material is dropped from component state
+   * and the page transitions to its terminal 'done' phase.
+   */
   async function handleChangePassword() {
     if (newPassword.length < 8) {
       setError('New master password must be at least 8 characters.');
