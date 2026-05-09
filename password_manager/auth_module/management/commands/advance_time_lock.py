@@ -60,13 +60,24 @@ class Command(BaseCommand):
             )
 
         # Set release_after into the past so the next /release/ call
-        # passes the gate. We don't just zero it — we move it back by
-        # `hours` so the audit log reflects the simulated wait.
-        rec.release_after = timezone.now() - timedelta(hours=1)
+        # passes the gate. We honour --hours so callers can simulate
+        # arbitrary waits (e.g. 1h to test "still too early", 168h to
+        # simulate the full 7-day default delay). The CommandError on
+        # negative or zero values keeps the semantics obvious — this
+        # command is for ADVANCING the clock, not nudging it forward.
+        hours = opts['hours']
+        if hours <= 0:
+            raise CommandError(
+                f'--hours must be a positive integer (got {hours}); '
+                f'this command moves release_after into the past'
+            )
+        prior_release_after = rec.release_after
+        rec.release_after = timezone.now() - timedelta(hours=hours)
         rec.save(update_fields=['release_after'])
         self.stdout.write(
             self.style.SUCCESS(
                 f'release_after advanced for {user.username} '
-                f'(was {opts["hours"]} hours from now)'
+                f'by {hours}h (was {prior_release_after.isoformat()}, '
+                f'now {rec.release_after.isoformat()})'
             )
         )
