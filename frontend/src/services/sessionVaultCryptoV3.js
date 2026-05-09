@@ -30,6 +30,13 @@ const PAYLOAD_VERSION = 'svc-gcm-2';
 const DEFAULT_KDF = { t: 3, m: 65536, p: 2 };
 
 const WRAPPED_DEK_URL = '/api/auth/vault/wrapped-dek/';
+// Anonymous post-recovery rotation endpoint. The recovery pages run
+// while the user is NOT yet authenticated (they forgot the master
+// password), so they cannot PUT to the IsAuthenticated WRAPPED_DEK_URL.
+// This endpoint accepts (username, factor_type, dek_id, blob) and
+// authorizes the rotation through possession of dek_id obtained via
+// the `recovery-factors/lookup/` endpoint.
+const WRAPPED_DEK_RECOVER_ROTATE_URL = '/api/auth/vault/wrapped-dek/recover-rotate/';
 const RECOVERY_FACTORS_URL = '/api/auth/vault/recovery-factors/';
 
 let sessionDEK = null; // CryptoKey, non-extractable
@@ -113,6 +120,27 @@ async function unwrapDEK(blob, secret, { extractable = false } = {}) {
   }
 }
 
+/**
+ * Compute the proof-of-secret-knowledge that gates the anonymous
+ * recovery rotation endpoint.
+ *
+ *   auth_hash = SHA-256("rotation-auth-v1:" + recoverySecret)
+ *
+ * Stored on the factor row at enrollment, recomputed at rotation.
+ * The server never disclosed via ``recovery-factors/lookup/``, so
+ * an attacker who only hit lookup has the wrapped blob and dek_id
+ * but cannot produce a matching auth_hash and is therefore unable
+ * to rotate the user's master-wrapped row.
+ *
+ * @param {string} recoverySecret
+ * @returns {Promise<string>} 64-char lowercase hex.
+ */
+async function computeAuthHash(recoverySecret) {
+  const enc = new TextEncoder().encode(`rotation-auth-v1:${recoverySecret}`);
+  const buf = await window.crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function reimportNonExtractable(extractableKey) {
   const raw = await window.crypto.subtle.exportKey('raw', extractableKey);
   return window.crypto.subtle.importKey(
@@ -178,12 +206,41 @@ export async function enrollRecoveryFactor({ factorType, secret, meta = {}, mast
   const saltBytes = randomBytes(16);
   const kek = await deriveKEK(secret, saltBytes);
   const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
+  const authHash = await computeAuthHash(secret);
   await axios.post(RECOVERY_FACTORS_URL, {
     factor_type: factorType,
     dek_id: sessionDEKId,
     blob,
     meta,
+    auth_hash: authHash,
   });
+}
+
+/**
+ * Build (but do NOT POST) a recovery-factor envelope wrapping the
+ * current DEK under a KEK derived from `secret`. Returns the envelope
+ * plus the current `dekId` so the caller can include both in a
+ * higher-level bundle write (e.g. the atomic time-locked
+ * enroll-bundle endpoint, which writes the wdek row and the Shamir
+ * server half in one transaction).
+ *
+ * Same crypto as `enrollRecoveryFactor`; the only difference is the
+ * server-side POST is the caller's responsibility.
+ *
+ * @param {object} args
+ * @param {string} args.secret         - The recovery secret (key/seed).
+ * @param {string} args.masterPassword - Needed to derive an extractable DEK.
+ * @returns {Promise<{blob: object, dekId: string}>}
+ */
+export async function buildRecoveryFactorEnvelope({ secret, masterPassword }) {
+  if (!sessionDEKId) throw new Error('Vault is locked.');
+  const { data } = await axios.get(WRAPPED_DEK_URL);
+  const dekX = await unwrapDEK(data.blob, masterPassword, { extractable: true });
+  const saltBytes = randomBytes(16);
+  const kek = await deriveKEK(secret, saltBytes);
+  const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
+  const authHash = await computeAuthHash(secret);
+  return { blob, dekId: sessionDEKId, authHash };
 }
 
 /**
@@ -210,9 +267,17 @@ export async function unlockWithRecoveryFactor(blob, secret, dekId) {
  * to the forgotten password — `changeMasterPassword` cannot handle
  * this case because it tries to unwrap the master row with the
  * recovery secret, which always fails), then wrap that same DEK under
- * a fresh KEK derived from the new master password and PUT it back as
- * the master-wrapped row — keeping `dek_id` stable so the user's
- * other recovery factors are not orphaned.
+ * a fresh KEK derived from the new master password and POST it to the
+ * anonymous recover-rotate endpoint — keeping `dek_id` stable so the
+ * user's other recovery factors are not orphaned.
+ *
+ * Why this can't use the standard WRAPPED_DEK_URL PUT: that endpoint
+ * is `IsAuthenticated`, but the recovery pages run BEFORE the user is
+ * authenticated (they're recovering precisely because they can't log
+ * in). The anonymous WRAPPED_DEK_RECOVER_ROTATE_URL accepts
+ * (username, factor_type, dek_id, blob) and authorizes the rotation
+ * through possession of `dek_id`, which is only obtainable via a
+ * successful `recovery-factors/lookup/` call.
  *
  * The session DEK is also re-installed (non-extractable) so the user
  * can use the vault immediately without a separate unlock step.
@@ -223,6 +288,11 @@ export async function unlockWithRecoveryFactor(blob, secret, dekId) {
  *   (recovery key, hex-encoded recovery seed, hex-encoded time seed, etc.).
  * @param {string} args.newPassword  - The new master password to set.
  * @param {string} args.dekId        - Stable DEK identity (from listRecoveryFactors).
+ * @param {string} args.username     - Account being recovered (used to address
+ *   the rotation server-side; recovery pages are anonymous).
+ * @param {('recovery_key'|'social_mesh'|'time_locked'|'passkey')} args.factorType
+ *   The factor used to unwrap (lets the server confirm a real factor
+ *   of this type exists and audit the rotation against it).
  * @returns {Promise<{dekId: string}>}
  */
 export async function rewrapMasterPasswordFromRecovery({
@@ -230,9 +300,13 @@ export async function rewrapMasterPasswordFromRecovery({
   recoverySecret,
   newPassword,
   dekId,
+  username,
+  factorType,
 }) {
-  if (!factorBlob || !recoverySecret || !newPassword || !dekId) {
-    throw new Error('factorBlob, recoverySecret, newPassword, and dekId are required.');
+  if (!factorBlob || !recoverySecret || !newPassword || !dekId || !username || !factorType) {
+    throw new Error(
+      'factorBlob, recoverySecret, newPassword, dekId, username, and factorType are required.',
+    );
   }
   // Unwrap the DEK from the recovery factor as EXTRACTABLE so we can
   // re-wrap it under the new KEK. The extractable handle goes out of
@@ -244,7 +318,39 @@ export async function rewrapMasterPasswordFromRecovery({
   const kek = await deriveKEK(newPassword, saltBytes);
   const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
 
-  await axios.put(WRAPPED_DEK_URL, { blob, dek_id: dekId });
+  // Recompute the auth_hash from the same recovery secret. The
+  // server will compare against the value stored at enrollment;
+  // matching proves the caller actually knew the recovery secret
+  // (not just the dek_id, which is publicly leaked by lookup).
+  const authHash = await computeAuthHash(recoverySecret);
+
+  try {
+    await axios.post(WRAPPED_DEK_RECOVER_ROTATE_URL, {
+      username,
+      factor_type: factorType,
+      dek_id: dekId,
+      blob,
+      auth_hash: authHash,
+    });
+  } catch (err) {
+    // The server returns 409 with `re_enroll_required: true` for
+    // recovery factors that pre-date the auth_hash field. The user
+    // can still unwrap their factor blob locally (the unwrap above
+    // succeeded), but the master row cannot be rotated anonymously.
+    // Surface a recognisable error so the UI can show an actionable
+    // message instead of a generic "Recovery failed".
+    if (err?.response?.status === 409 && err.response.data?.re_enroll_required) {
+      const detail = err.response.data?.detail || '';
+      const ex = new Error(
+        'This recovery factor pre-dates the rotation auth_hash and cannot be '
+        + 'used to set a new master password through the anonymous flow. '
+        + (detail ? detail : 'Re-enroll the factor while signed in, then retry recovery.'),
+      );
+      ex.code = 'RECOVERY_REENROLL_REQUIRED';
+      throw ex;
+    }
+    throw err;
+  }
 
   // Install the same DEK as the live session key, non-extractable.
   sessionDEK = await reimportNonExtractable(dekX);
@@ -311,6 +417,7 @@ export default {
   unlockWithMasterPassword,
   changeMasterPassword,
   enrollRecoveryFactor,
+  buildRecoveryFactorEnvelope,
   unlockWithRecoveryFactor,
   rewrapMasterPasswordFromRecovery,
   hasSessionKey,

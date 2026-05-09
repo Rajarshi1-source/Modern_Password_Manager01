@@ -31,6 +31,9 @@ const RecoveryKeySetupPage = lazy(() => import('./Components/auth/RecoveryKeySet
 // Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key
 const RecoveryKeyEnrollV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyEnrollV2'));
 const RecoveryKeyUseV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyUseV2'));
+// Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked
+const TimeLockedEnroll = lazy(() => import('./Components/recovery/layered/TimeLockedEnroll'));
+const TimeLockedRecover = lazy(() => import('./Components/recovery/layered/TimeLockedRecover'));
 const PasskeyManagement = lazy(() => import('./Components/auth/PasskeyManagement'));
 const CircadianSettings = lazy(() => import('./Components/settings/CircadianSettings'));
 const CircadianTOTPSetup = lazy(() => import('./Components/auth/CircadianTOTPSetup'));
@@ -1720,6 +1723,18 @@ function App() {
                 } />
                 <Route path="/recovery/key/use-v2" element={
                   isAuthenticated ? <Navigate to="/" /> : <RecoveryKeyUseV2 />
+                } />
+                {/* Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked.
+                    The enroll page needs the authenticated user's username so
+                    we pass it explicitly; without it the page hard-fails on
+                    submit (TimeLockedEnroll's handleEnroll requires it). */}
+                <Route path="/recovery/time-lock/enroll" element={
+                  !isAuthenticated
+                    ? <Navigate to="/" />
+                    : <TimeLockedEnroll username={user?.username || user?.email} />
+                } />
+                <Route path="/recovery/time-lock/recover" element={
+                  isAuthenticated ? <Navigate to="/" /> : <TimeLockedRecover />
                 } />
                 <Route path="/settings/passkeys" element={
                   !isAuthenticated ? <Navigate to="/" /> : <PasskeyManagement />

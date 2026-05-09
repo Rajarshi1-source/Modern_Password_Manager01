@@ -104,6 +104,70 @@ export async function enrollTimeLock({ serverHalf, halfMetadata = {} }) {
 }
 
 /**
+ * Atomic single-call enrollment for tier-3 time-locked recovery.
+ *
+ * Combines what used to be two separate calls — `enrollTimeLock`
+ * (server half) and `createRecoveryFactor({factorType:'time_locked'})`
+ * (wdek row) — into one server-side transaction. Either both writes
+ * commit or neither does, so a partial failure cannot leave the user
+ * worse off than they started (the previous two-call flow was
+ * destructive in either ordering for users who already had an
+ * enrolled time-lock).
+ *
+ * The seed is still generated and Shamir-split locally; only the
+ * server-side write coordination moves to one endpoint.
+ *
+ * @param {object} args
+ * @param {string} args.serverHalf      - base64 of halfB
+ * @param {object} [args.halfMetadata]  - public metadata (e.g. dlrec v)
+ * @param {string} args.dekId           - current dek_id (proof-of-DEK)
+ * @param {object} args.blob            - wdek-1 envelope wrapping the DEK
+ * @param {object} [args.factorMeta]    - public metadata for the factor row
+ * @returns {Promise<{success: true, recovery_id: number, factor_id: number}>}
+ */
+export async function enrollTimeLockBundle({
+  serverHalf,
+  halfMetadata = {},
+  dekId,
+  blob,
+  factorMeta = {},
+  authHash,
+}) {
+  const { data } = await axios.post(`${BASE}/time-locked/enroll-bundle/`, {
+    server_half: serverHalf,
+    half_metadata: halfMetadata,
+    dek_id: dekId,
+    blob,
+    factor_meta: factorMeta,
+    auth_hash: authHash,
+  });
+  return data;
+}
+
+/**
+ * Anonymous lookup of a wrapped recovery factor by username + factor type.
+ *
+ * Used by the unauthenticated recovery pages: the user has forgotten
+ * the master password and so cannot call the authenticated GET
+ * `/recovery-factors/`, but the recovery flow still needs the wrapped
+ * factor blob to feed the recovery secret into
+ * `unlockWithRecoveryFactor`. The backend returns the same shape for
+ * unknown usernames (a decoy `blob` + fresh `dek_id`), so an attacker
+ * cannot use this endpoint to enumerate accounts.
+ *
+ * @param {string} username
+ * @param {('recovery_key'|'social_mesh'|'time_locked'|'passkey')} factorType
+ * @returns {Promise<{blob: object, dek_id: string}>}
+ */
+export async function lookupRecoveryFactor(username, factorType) {
+  const { data } = await axios.post(`${BASE}/recovery-factors/lookup/`, {
+    username,
+    factor_type: factorType,
+  });
+  return data;
+}
+
+/**
  * Begin the tier-3 time-lock delay clock for a username.
  *
  * The endpoint returns the same uniform shape regardless of whether
@@ -130,7 +194,14 @@ export async function initiateTimeLock(username) {
  *   1. Delay not elapsed — body is `{error, release_after}`. The
  *      caller should keep polling; we translate to
  *      `{ ready: false, releaseAfter }` so the countdown UI doesn't
- *      have to wrap every poll in try/catch.
+ *      have to wrap every poll in try/catch. The same shape is also
+ *      returned for unknown / un-enrolled accounts (this is
+ *      intentional: it closes the existence-oracle that would
+ *      otherwise pair with `initiate`'s uniform decoy response).
+ *      The legitimate user with a valid .dlrec / wrapped factor
+ *      will eventually find the delay actually elapsed; an
+ *      unknown-user attacker will see a perpetual "still waiting"
+ *      and learn nothing.
  *
  *   2. Cancelled by canary acknowledgement — body is `{error}` (no
  *      `release_after`). The caller should STOP polling and surface
@@ -186,7 +257,9 @@ export default {
   putWrappedDEK,
   listRecoveryFactors,
   createRecoveryFactor,
+  lookupRecoveryFactor,
   enrollTimeLock,
+  enrollTimeLockBundle,
   initiateTimeLock,
   pollTimeLockRelease,
   acknowledgeCanary,

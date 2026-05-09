@@ -58,7 +58,19 @@ from auth_module.recovery_throttling import (
     RecoveryCompleteThrottle,
 )
 from auth_module.time_locked_models import TimeLockedRecovery, ServerHalfReleaseLog
+from auth_module.recovery_models_v2 import VaultWrappedDEK, RecoveryWrappedDEK
 from auth_module.quantum_recovery_models import RecoveryAuditLog
+
+
+_WDEK_ENVELOPE_VERSION = 'wdek-1'
+_WDEK_REQUIRED_FIELDS = ('kdf', 'kdf_params', 'salt', 'iv', 'wrapped')
+
+
+def _valid_wdek_envelope(blob):
+    """Validate the wdek-1 envelope shape WITHOUT decrypting it."""
+    if not isinstance(blob, dict) or blob.get('v') != _WDEK_ENVELOPE_VERSION:
+        return False
+    return all(k in blob for k in _WDEK_REQUIRED_FIELDS)
 
 # Optional integration with the trust-score modulator (Unit 7). If the
 # module is not yet present in this branch, fall back to a 7-day default.
@@ -230,6 +242,157 @@ class TimeLockedEnrollView(APIView):
         return Response({'success': True, 'recovery_id': rec.pk}, status=201)
 
 
+class TimeLockedEnrollBundleView(APIView):
+    """Atomic enrollment of the tier-3 server half + the matching wdek row.
+
+    The previous flow had the client call two endpoints in sequence —
+    first ``time-locked/enroll/`` to write the server half, then
+    ``recovery-factors/`` (POST) to write the wdek factor row. Either
+    ordering left the user worse off than they started in failure
+    cases:
+
+      * server-half-first: if the wdek POST fails (e.g. master
+        password mistyped during the unwrap), the user's previously
+        ACTIVE server half has already been deactivated but the OLD
+        wdek row is still ACTIVE — recovery via the user's existing
+        ``.dlrec`` no longer recombines correctly because the seed
+        baked into the still-active wdek row no longer has its
+        matching server half.
+
+      * wdek-first: if the server-half POST fails, the wdek row is
+        already committed but no server half exists for that seed.
+        Re-enrolling stacks another wdek row.
+
+    The fix is server-side atomicity: this endpoint takes BOTH the
+    server-half material and the wdek factor blob, validates them,
+    and either both writes commit or neither does. The client still
+    generates the seed locally and Shamir-splits it locally; we just
+    avoid the client-driven multi-step write.
+
+    Body: ``{server_half, half_metadata, dek_id, blob, factor_meta?}``
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [RecoveryThrottle]
+
+    def post(self, request):
+        """Validate inputs, atomically replace prior ACTIVE rows + create new."""
+        server_half_b64 = request.data.get('server_half')
+        if not isinstance(server_half_b64, str) or not server_half_b64:
+            return Response({'error': 'server_half required'}, status=400)
+        try:
+            server_half = base64.b64decode(server_half_b64, validate=True)
+        except (binascii.Error, ValueError):
+            return Response({'error': 'server_half must be base64'}, status=400)
+
+        half_metadata = request.data.get('half_metadata', {}) or {}
+        if not isinstance(half_metadata, dict):
+            return Response({'error': 'half_metadata must be object'}, status=400)
+
+        dek_id_in = request.data.get('dek_id')
+        if not isinstance(dek_id_in, str) or not dek_id_in:
+            return Response({'error': 'dek_id required'}, status=400)
+
+        blob = request.data.get('blob')
+        if not _valid_wdek_envelope(blob):
+            return Response({'error': 'invalid envelope'}, status=400)
+
+        # auth_hash gates the rotation endpoint (see
+        # WrappedDEKRecoveryRotateView). Stored here at enrollment.
+        auth_hash = request.data.get('auth_hash')
+        if not isinstance(auth_hash, str) or len(auth_hash) != 64 or not all(
+            c in '0123456789abcdef' for c in auth_hash
+        ):
+            return Response({'error': 'invalid auth_hash'}, status=400)
+
+        factor_meta = request.data.get('factor_meta', {}) or {}
+        if not isinstance(factor_meta, dict):
+            return Response({'error': 'factor_meta must be object'}, status=400)
+
+        with transaction.atomic():
+            # The dek_id supplied must match the user's current
+            # wrapped-DEK (proof-of-DEK-possession). Locking the row
+            # here prevents a concurrent master-password rotation from
+            # changing dek_id under us.
+            try:
+                wrapped = (
+                    VaultWrappedDEK.objects
+                    .select_for_update()
+                    .get(user=request.user)
+                )
+            except VaultWrappedDEK.DoesNotExist:
+                return Response({'error': 'no DEK enrolled'}, status=400)
+            if str(wrapped.dek_id) != dek_id_in:
+                return Response({'error': 'dek_id mismatch'}, status=409)
+
+            # Lock + deactivate any prior ACTIVE time-locked row for
+            # this user. We materialize via list() so the SELECT...FOR
+            # UPDATE fires inside the txn. A concurrent enroll-bundle
+            # for the same user blocks here.
+            list(
+                TimeLockedRecovery.objects
+                .select_for_update()
+                .filter(user=request.user)
+            )
+            TimeLockedRecovery.objects.filter(
+                user=request.user, is_active=True,
+            ).update(is_active=False)
+
+            # Lock + revoke any prior ACTIVE time_locked wdek row.
+            list(
+                RecoveryWrappedDEK.objects
+                .select_for_update()
+                .filter(
+                    user=request.user,
+                    factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
+                )
+            )
+            RecoveryWrappedDEK.objects.filter(
+                user=request.user,
+                factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
+                status=RecoveryWrappedDEK.Status.ACTIVE,
+            ).update(
+                status=RecoveryWrappedDEK.Status.REVOKED,
+                revoked_at=timezone.now(),
+            )
+
+            # Both creates succeed together or neither does.
+            rec = TimeLockedRecovery.objects.create(
+                user=request.user,
+                server_half=server_half,
+                half_metadata=half_metadata,
+                is_active=True,
+            )
+            factor = RecoveryWrappedDEK.objects.create(
+                user=request.user,
+                factor_type=RecoveryWrappedDEK.FactorType.TIME_LOCKED,
+                dek_id=wrapped.dek_id,
+                blob=blob,
+                factor_meta=factor_meta,
+                auth_hash=auth_hash,
+            )
+
+            RecoveryAuditLog.objects.create(
+                user=request.user,
+                event_type='setup_created',
+                event_data={
+                    'subsystem': 'time_locked_bundle',
+                    'recovery_id': rec.pk,
+                    'factor_id': factor.pk,
+                    'dek_id': str(wrapped.dek_id),
+                    'half_bytes': len(server_half),
+                },
+                ip_address=_client_ip(request),
+                user_agent=_user_agent(request),
+            )
+
+        return Response({
+            'success': True,
+            'recovery_id': rec.pk,
+            'factor_id': factor.pk,
+        }, status=201)
+
+
 class TimeLockedInitiateView(APIView):
     """Anonymous endpoint: begin the time-lock delay for ``username``.
 
@@ -265,46 +428,89 @@ class TimeLockedInitiateView(APIView):
                 'release_after': decoy_release_after.isoformat(),
             })
 
-        rec = (
-            TimeLockedRecovery.objects
-            .filter(user=user, is_active=True)
-            .order_by('-enrolled_at')
-            .first()
-        )
-        if not rec:
+        # Lock the row so two concurrent initiates serialize and we
+        # can read+decide+write atomically.
+        with transaction.atomic():
+            rec = (
+                TimeLockedRecovery.objects
+                .select_for_update()
+                .filter(user=user, is_active=True)
+                .order_by('-enrolled_at')
+                .first()
+            )
+            if not rec:
+                return Response({
+                    'success': True,
+                    'release_after': decoy_release_after.isoformat(),
+                })
+
+            # If a recovery is already in flight (ALERTING) we MUST
+            # NOT overwrite release_after / canary_state / ack token.
+            # An attacker who knows the username could otherwise call
+            # initiate repeatedly to:
+            #   (a) push the deadline forward indefinitely so the
+            #       legitimate user's recovery never elapses, or
+            #   (b) reset canary_state from ACKNOWLEDGED back to
+            #       ALERTING, undoing a prior cancel-by-canary.
+            # Idempotent behavior: return the existing release_after
+            # for ALERTING; treat ACKNOWLEDGED / EXPIRED / unset as
+            # the right time to start a fresh cycle.
+            now = timezone.now()
+            existing_state = rec.canary_state
+            if existing_state == TimeLockedRecovery.CanaryState.ALERTING and rec.release_after:
+                # Idempotent — caller probably retried. Don't audit
+                # spam, don't re-send canary, don't extend the clock.
+                return Response({
+                    'success': True,
+                    'release_after': rec.release_after.isoformat(),
+                })
+            if existing_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
+                # Legitimate user already cancelled this recovery
+                # via the canary link. Re-initiating from this state
+                # would overwrite their cancel. The user must
+                # re-enroll (which deactivates the row) to start a
+                # fresh time-lock cycle. Surface the same uniform
+                # decoy shape — we still don't want to leak that
+                # there's an enrollment in this special state.
+                return Response({
+                    'success': True,
+                    'release_after': decoy_release_after.isoformat(),
+                })
+
+            # Fresh cycle: QUIET -> ALERTING, or EXPIRED -> ALERTING
+            # (the prior recovery completed; this is the user
+            # starting another one against a still-active row, which
+            # is unusual but valid if the bundle endpoint hasn't
+            # rotated yet).
+            rec.release_after = now + timedelta(days=delay_days)
+            rec.canary_state = TimeLockedRecovery.CanaryState.ALERTING
+            rec.canary_ack_token = secrets.token_urlsafe(32)
+            rec.initiated_at = now
+            rec.last_canary_sent = now
+            rec.save(update_fields=[
+                'release_after', 'canary_state', 'canary_ack_token',
+                'initiated_at', 'last_canary_sent',
+            ])
+
+            _send_canary(user, rec)
+
+            RecoveryAuditLog.objects.create(
+                user=user,
+                event_type='recovery_initiated',
+                event_data={
+                    'subsystem': 'time_locked',
+                    'recovery_id': rec.pk,
+                    'release_after': rec.release_after.isoformat(),
+                    'delay_days': delay_days,
+                    'previous_state': existing_state,
+                },
+                ip_address=_client_ip(request),
+                user_agent=_user_agent(request),
+            )
             return Response({
                 'success': True,
-                'release_after': decoy_release_after.isoformat(),
-            })
-
-        rec.release_after = timezone.now() + timedelta(days=delay_days)
-        rec.canary_state = TimeLockedRecovery.CanaryState.ALERTING
-        rec.canary_ack_token = secrets.token_urlsafe(32)
-        rec.initiated_at = timezone.now()
-        rec.last_canary_sent = timezone.now()
-        rec.save(update_fields=[
-            'release_after', 'canary_state', 'canary_ack_token',
-            'initiated_at', 'last_canary_sent',
-        ])
-
-        _send_canary(user, rec)
-
-        RecoveryAuditLog.objects.create(
-            user=user,
-            event_type='recovery_initiated',
-            event_data={
-                'subsystem': 'time_locked',
-                'recovery_id': rec.pk,
                 'release_after': rec.release_after.isoformat(),
-                'delay_days': delay_days,
-            },
-            ip_address=_client_ip(request),
-            user_agent=_user_agent(request),
-        )
-        return Response({
-            'success': True,
-            'release_after': rec.release_after.isoformat(),
-        })
+            })
 
 
 class TimeLockedReleaseView(APIView):
@@ -318,14 +524,36 @@ class TimeLockedReleaseView(APIView):
     throttle_classes = [RecoveryCompleteThrottle]
 
     def post(self, request):
-        """Atomically check eligibility and consume the active row."""
+        """Atomically check eligibility and consume the active row.
+
+        The response shape is uniform with ``initiate`` to close the
+        enumeration oracle: an attacker who calls initiate (which
+        already returns the same shape for unknown vs real users)
+        and then immediately calls release MUST NOT be able to
+        distinguish ``user has active enrollment`` from ``user does
+        not exist`` from the response. We therefore synthesize a
+        decoy 403+release_after for unknown / un-enrolled accounts
+        instead of leaking 404.
+        """
         username = request.data.get('username')
         if not isinstance(username, str) or not username:
             return Response({'error': 'username required'}, status=400)
+
+        # Decoy shape used for both 'user does not exist' and 'user
+        # exists but has no active time-locked recovery'. Same
+        # formula as TimeLockedInitiateView's decoy so a probe of
+        # initiate-then-release returns a stable picture for an
+        # unknown username.
+        delay_days = compute_time_lock_delay_days(None)
+        decoy_release_after = timezone.now() + timedelta(days=delay_days)
+
         try:
             user = User.objects.get(username=username)
         except User.DoesNotExist:
-            return Response({'error': 'no recovery in progress'}, status=404)
+            return Response({
+                'error': 'delay not elapsed',
+                'release_after': decoy_release_after.isoformat(),
+            }, status=403)
 
         ip = _client_ip(request)
         ua = _user_agent(request)
@@ -351,7 +579,11 @@ class TimeLockedReleaseView(APIView):
                 .first()
             )
             if not rec or not rec.release_after:
-                return Response({'error': 'no recovery in progress'}, status=404)
+                # Same decoy as the no-such-user branch above.
+                return Response({
+                    'error': 'delay not elapsed',
+                    'release_after': decoy_release_after.isoformat(),
+                }, status=403)
 
             if rec.canary_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
                 ServerHalfReleaseLog.objects.create(
