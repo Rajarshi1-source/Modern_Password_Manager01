@@ -88,10 +88,39 @@ class RecoveryFactorListCreateView(APIView):
         ftype = request.data.get('factor_type')
         if ftype not in RecoveryWrappedDEK.FactorType.values:
             return Response({'error': 'invalid factor_type'}, status=400)
+        # Time-locked enrollments MUST go through the dedicated bundle
+        # endpoint that writes the wdek row and the Shamir server half
+        # in one transaction. Allowing this generic path to write a
+        # ``time_locked`` wdek row would let a caller create the row
+        # without a matching TimeLockedRecovery row — exactly the
+        # orphan state the bundle endpoint exists to prevent.
+        if ftype == RecoveryWrappedDEK.FactorType.TIME_LOCKED:
+            return Response(
+                {
+                    'error': 'use /api/auth/vault/time-locked/enroll-bundle/',
+                    'detail': (
+                        'time-locked factors must be enrolled atomically with '
+                        'their server-side Shamir half'
+                    ),
+                },
+                status=400,
+            )
 
         blob = request.data.get('blob')
         if not _valid_envelope(blob):
             return Response({'error': 'invalid envelope'}, status=400)
+
+        # auth_hash is the proof-of-secret-knowledge the rotation
+        # endpoint will require later. Computed client-side as
+        # SHA-256("rotation-auth-v1:" + recovery_secret). 64-char
+        # lowercase hex; we don't validate it cryptographically here
+        # (the server only stores opaque ciphertext / opaque hashes),
+        # we just verify the shape so a rotation can compare bytes.
+        auth_hash = request.data.get('auth_hash')
+        if not isinstance(auth_hash, str) or len(auth_hash) != 64 or not all(
+            c in '0123456789abcdef' for c in auth_hash
+        ):
+            return Response({'error': 'invalid auth_hash'}, status=400)
 
         meta = request.data.get('meta', {}) or {}
         if not isinstance(meta, dict):
@@ -141,6 +170,7 @@ class RecoveryFactorListCreateView(APIView):
                     dek_id=current.dek_id,
                     blob=blob,
                     factor_meta=meta,
+                    auth_hash=auth_hash,
                 )
         except IntegrityError:
             return Response(

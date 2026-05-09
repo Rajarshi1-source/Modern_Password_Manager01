@@ -138,6 +138,27 @@ class RecoveryWrappedDEK(models.Model):
         help_text="Factor-specific public metadata (e.g. share index, unlock-after "
                   "timestamp, passkey credential id). Never contains secrets.",
     )
+    # Proof-of-secret-knowledge for rotation. The client computes
+    #   auth_hash = SHA-256("rotation-auth-v1:" + recovery_secret)
+    # at enrollment and supplies the same value at rotation time.
+    # The wrapped-DEK rotate endpoint compares against this stored
+    # value; without it, the rotation endpoint trusts only `dek_id`,
+    # which is freely obtainable from the anonymous lookup endpoint
+    # and would let any caller who knows a username DoS the user's
+    # vault by submitting a garbage envelope. Stored as a 64-char
+    # lowercase hex string. blank='' for back-compat with rows
+    # enrolled before the field existed; rotation rejects empty.
+    # Recovery secrets have ≥130 bits of entropy (26-char alphanumeric
+    # for tier 1; 32 random bytes for tier 2/3) so the stored hash is
+    # not crackable offline even on full DB exfiltration.
+    auth_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        db_index=True,
+        help_text='SHA-256 of "rotation-auth-v1:" + recovery_secret. Required at '
+                  'rotation; missing only on legacy rows from before this field.',
+    )
     status = models.CharField(
         max_length=16,
         choices=Status.choices,

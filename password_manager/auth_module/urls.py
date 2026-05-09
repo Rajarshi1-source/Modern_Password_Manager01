@@ -32,7 +32,6 @@ from .recovery_factor_view import (
 )
 # Import Layered Recovery Mesh views (Unit 6)
 from .time_locked_view import (
-    TimeLockedEnrollView,
     TimeLockedEnrollBundleView,
     TimeLockedInitiateView,
     TimeLockedReleaseView,
@@ -177,11 +176,15 @@ urlpatterns = [
     path('vault/recovery-factors/lookup/', RecoveryFactorLookupView.as_view(), name='vault-recovery-factor-lookup'),
     # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
     # share; release gated by configurable delay + canary-cancellation.
-    path('vault/time-locked/enroll/', TimeLockedEnrollView.as_view(), name='vault-time-locked-enroll'),
-    # Atomic single-call enrollment: server half + matching wdek row
-    # in one transaction. Replaces the two-step (enroll/ then
-    # recovery-factors/) flow that left users worse off than they
-    # started in failure cases.
+    #
+    # NOTE: the standalone ``vault/time-locked/enroll/`` route has been
+    # retired. Stale clients calling that endpoint could replace
+    # ``TimeLockedRecovery.server_half`` without rotating the matching
+    # ``RecoveryWrappedDEK`` row, which would silently break any
+    # previously-issued ``.dlrec`` file. All time-locked enrollments
+    # MUST go through the atomic bundle endpoint below. The view class
+    # is kept in ``time_locked_view.py`` for tests and is no longer
+    # routable from any URL.
     path('vault/time-locked/enroll-bundle/', TimeLockedEnrollBundleView.as_view(), name='vault-time-locked-enroll-bundle'),
     path('vault/time-locked/initiate/', TimeLockedInitiateView.as_view(), name='vault-time-locked-initiate'),
     path('vault/time-locked/release/', TimeLockedReleaseView.as_view(), name='vault-time-locked-release'),

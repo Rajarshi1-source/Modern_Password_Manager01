@@ -297,6 +297,14 @@ class TimeLockedEnrollBundleView(APIView):
         if not _valid_wdek_envelope(blob):
             return Response({'error': 'invalid envelope'}, status=400)
 
+        # auth_hash gates the rotation endpoint (see
+        # WrappedDEKRecoveryRotateView). Stored here at enrollment.
+        auth_hash = request.data.get('auth_hash')
+        if not isinstance(auth_hash, str) or len(auth_hash) != 64 or not all(
+            c in '0123456789abcdef' for c in auth_hash
+        ):
+            return Response({'error': 'invalid auth_hash'}, status=400)
+
         factor_meta = request.data.get('factor_meta', {}) or {}
         if not isinstance(factor_meta, dict):
             return Response({'error': 'factor_meta must be object'}, status=400)
@@ -361,6 +369,7 @@ class TimeLockedEnrollBundleView(APIView):
                 dek_id=wrapped.dek_id,
                 blob=blob,
                 factor_meta=factor_meta,
+                auth_hash=auth_hash,
             )
 
             RecoveryAuditLog.objects.create(

@@ -152,10 +152,18 @@ class WrappedDEKRecoveryRotateView(APIView):
     throttle_classes = [RecoveryCompleteThrottle]
 
     def post(self, request):
+        import hmac as _hmac
+
         username = request.data.get('username')
         factor_type = request.data.get('factor_type')
         dek_id_in = request.data.get('dek_id')
         blob = request.data.get('blob')
+        # auth_hash is the proof-of-secret-knowledge: SHA-256 of
+        # "rotation-auth-v1:" || recovery_secret, set at enrollment
+        # and stored on the factor row. The lookup endpoint does NOT
+        # disclose this value, so an attacker who only hit lookup has
+        # everything *except* this hash and cannot rotate.
+        auth_hash_in = request.data.get('auth_hash')
 
         if (
             not isinstance(username, str)
@@ -163,9 +171,11 @@ class WrappedDEKRecoveryRotateView(APIView):
             or factor_type not in RecoveryWrappedDEK.FactorType.values
             or not isinstance(dek_id_in, str)
             or not dek_id_in
+            or not isinstance(auth_hash_in, str)
+            or len(auth_hash_in) != 64
         ):
             return Response(
-                {'error': 'username, factor_type, and dek_id required'},
+                {'error': 'username, factor_type, dek_id, and auth_hash required'},
                 status=400,
             )
         if not _valid_envelope(blob):
@@ -207,14 +217,39 @@ class WrappedDEKRecoveryRotateView(APIView):
                 )
 
             # Caller must reference a factor_type that the user
-            # actually has enrolled — otherwise the rotation would be
-            # un-tied to any recovery channel.
-            has_factor = RecoveryWrappedDEK.objects.filter(
-                user=user,
-                factor_type=factor_type,
-                status=RecoveryWrappedDEK.Status.ACTIVE,
-            ).exists()
-            if not has_factor:
+            # actually has enrolled AND must demonstrate possession
+            # of the recovery secret via auth_hash. Without the
+            # auth_hash check, the rotation endpoint trusts only
+            # dek_id, which is freely obtainable from the anonymous
+            # lookup endpoint — an attacker could then DoS any
+            # vault by submitting a garbage envelope. The auth_hash
+            # is computed client-side from the recovery secret, has
+            # ≥130 bits of preimage resistance for tier-1 secrets
+            # (32^26 alphabet) and ≥256 for tier 2/3, so it cannot
+            # be brute-forced offline even on full DB exfiltration.
+            factor = (
+                RecoveryWrappedDEK.objects
+                .filter(
+                    user=user,
+                    factor_type=factor_type,
+                    status=RecoveryWrappedDEK.Status.ACTIVE,
+                )
+                .order_by('-created_at')
+                .first()
+            )
+            if factor is None:
+                return Response(
+                    {'error': 'recovery target not found'},
+                    status=404,
+                )
+            # Constant-time comparison so a partial match doesn't
+            # leak timing information. Empty stored hash means the
+            # factor was enrolled before auth_hash existed; reject
+            # the rotation and force a re-enrollment via the
+            # authenticated path before recovery can succeed.
+            if not factor.auth_hash or not _hmac.compare_digest(
+                factor.auth_hash.lower(), auth_hash_in.lower(),
+            ):
                 return Response(
                     {'error': 'recovery target not found'},
                     status=404,

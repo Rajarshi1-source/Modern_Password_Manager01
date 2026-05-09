@@ -141,7 +141,7 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
       //     POSTing. If the master password is wrong, we fail HERE,
       //     before any destructive server-side write, so a user with
       //     a previously-enrolled time-lock keeps it intact.
-      const { blob, dekId } = await sessionVaultCryptoV3.buildRecoveryFactorEnvelope({
+      const { blob, dekId, authHash } = await sessionVaultCryptoV3.buildRecoveryFactorEnvelope({
         secret: seedHex,
         masterPassword,
       });
@@ -154,33 +154,55 @@ export default function TimeLockedEnroll({ username, onSuccess }) {
       //     state untouched). Replaces the previous two-call flow
       //     (enrollTimeLock → enrollRecoveryFactor) which left users
       //     worse off than they started in the failure cases.
+      //     authHash is the proof-of-secret-knowledge the rotation
+      //     endpoint will require later.
       await recoveryFactorService.enrollTimeLockBundle({
         serverHalf: _b64.encode(halfB),
         halfMetadata: { v: DLREC_VERSION },
         dekId,
         blob,
         factorMeta: { v: DLREC_VERSION },
+        authHash,
       });
-
-      // (d) Download halfA. We stash it in a ref so the "Download
-      //     again" button on the next phase can re-trigger the
-      //     download without reissuing the bundle call (which would
-      //     be destructive of the just-written rows).
-      halfARef.current = halfA;
-      downloadDlrecFile({ username, halfA });
-
-      // Zero the master password out of React state now that we're
-      // past the point where we needed it. React still keeps a
-      // reference to the previous value in its update history during
-      // the same render — that's unavoidable — but at least the
-      // controlled input no longer holds it on the next render.
-      setMasterPassword('');
-      setPhase('downloaded');
     } catch (err) {
       setError(err?.message || 'Enrollment failed.');
-    } finally {
       setBusy(false);
+      return;
     }
+
+    // (d) Download halfA. We stash it in a ref so the "Download
+    //     again" button on the next phase can re-trigger the
+    //     download without reissuing the bundle call (which would
+    //     be destructive of the just-written rows).
+    //
+    //     CRITICAL: at this point the bundle has already committed
+    //     server-side. If the download itself throws (Blob/anchor
+    //     manipulation, browser policy, etc.), we MUST still
+    //     transition to the 'downloaded' phase so the "Download
+    //     again" button is reachable; otherwise the user lands
+    //     back at await-password with no way to retrieve the share
+    //     they just generated, even though the server has already
+    //     enrolled the matching wdek + server-half pair. Wrap the
+    //     download in its own try/catch and surface the failure on
+    //     the next phase rather than the previous one.
+    halfARef.current = halfA;
+    let downloadError = null;
+    try {
+      downloadDlrecFile({ username, halfA });
+    } catch (err) {
+      downloadError = err?.message
+        || 'Download did not start automatically. Use "Download again".';
+    }
+
+    // Zero the master password out of React state now that we're
+    // past the point where we needed it. React still keeps a
+    // reference to the previous value in its update history during
+    // the same render — that's unavoidable — but at least the
+    // controlled input no longer holds it on the next render.
+    setMasterPassword('');
+    setError(downloadError || '');
+    setPhase('downloaded');
+    setBusy(false);
   }
 
   if (phase === 'await-password') {

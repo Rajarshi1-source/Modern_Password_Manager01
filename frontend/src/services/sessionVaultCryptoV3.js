@@ -120,6 +120,27 @@ async function unwrapDEK(blob, secret, { extractable = false } = {}) {
   }
 }
 
+/**
+ * Compute the proof-of-secret-knowledge that gates the anonymous
+ * recovery rotation endpoint.
+ *
+ *   auth_hash = SHA-256("rotation-auth-v1:" + recoverySecret)
+ *
+ * Stored on the factor row at enrollment, recomputed at rotation.
+ * The server never disclosed via ``recovery-factors/lookup/``, so
+ * an attacker who only hit lookup has the wrapped blob and dek_id
+ * but cannot produce a matching auth_hash and is therefore unable
+ * to rotate the user's master-wrapped row.
+ *
+ * @param {string} recoverySecret
+ * @returns {Promise<string>} 64-char lowercase hex.
+ */
+async function computeAuthHash(recoverySecret) {
+  const enc = new TextEncoder().encode(`rotation-auth-v1:${recoverySecret}`);
+  const buf = await window.crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function reimportNonExtractable(extractableKey) {
   const raw = await window.crypto.subtle.exportKey('raw', extractableKey);
   return window.crypto.subtle.importKey(
@@ -185,11 +206,13 @@ export async function enrollRecoveryFactor({ factorType, secret, meta = {}, mast
   const saltBytes = randomBytes(16);
   const kek = await deriveKEK(secret, saltBytes);
   const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
+  const authHash = await computeAuthHash(secret);
   await axios.post(RECOVERY_FACTORS_URL, {
     factor_type: factorType,
     dek_id: sessionDEKId,
     blob,
     meta,
+    auth_hash: authHash,
   });
 }
 
@@ -216,7 +239,8 @@ export async function buildRecoveryFactorEnvelope({ secret, masterPassword }) {
   const saltBytes = randomBytes(16);
   const kek = await deriveKEK(secret, saltBytes);
   const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
-  return { blob, dekId: sessionDEKId };
+  const authHash = await computeAuthHash(secret);
+  return { blob, dekId: sessionDEKId, authHash };
 }
 
 /**
@@ -294,11 +318,18 @@ export async function rewrapMasterPasswordFromRecovery({
   const kek = await deriveKEK(newPassword, saltBytes);
   const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
 
+  // Recompute the auth_hash from the same recovery secret. The
+  // server will compare against the value stored at enrollment;
+  // matching proves the caller actually knew the recovery secret
+  // (not just the dek_id, which is publicly leaked by lookup).
+  const authHash = await computeAuthHash(recoverySecret);
+
   await axios.post(WRAPPED_DEK_RECOVER_ROTATE_URL, {
     username,
     factor_type: factorType,
     dek_id: dekId,
     blob,
+    auth_hash: authHash,
   });
 
   // Install the same DEK as the live session key, non-extractable.

@@ -107,6 +107,23 @@ export default function TimeLockedRecover({ onSuccess }) {
       setError('Username and recovery file required.');
       return;
     }
+    // The .dlrec file embeds the username it was generated for. We
+    // reject mismatches up front so a typo here doesn't kick off a
+    // 7-day delay against the wrong account that would only fail
+    // (silently, in a wrong-key generic-error sense) days later
+    // when handlePoll tries to combine the wrong server half.
+    // Compare case-insensitively because the username could have
+    // been entered with mixed case at signup.
+    if (
+      typeof dlrec.username === 'string'
+      && dlrec.username.toLowerCase() !== username.toLowerCase()
+    ) {
+      setError(
+        `This recovery file was generated for "${dlrec.username}" but you typed `
+        + `"${username}". Re-check your username before starting the delay.`,
+      );
+      return;
+    }
     setBusy(true);
     setError('');
     try {

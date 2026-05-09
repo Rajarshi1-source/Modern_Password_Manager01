@@ -131,6 +131,7 @@ export async function enrollTimeLockBundle({
   dekId,
   blob,
   factorMeta = {},
+  authHash,
 }) {
   const { data } = await axios.post(`${BASE}/time-locked/enroll-bundle/`, {
     server_half: serverHalf,
@@ -138,6 +139,7 @@ export async function enrollTimeLockBundle({
     dek_id: dekId,
     blob,
     factor_meta: factorMeta,
+    auth_hash: authHash,
   });
   return data;
 }
