@@ -31,6 +31,9 @@ const RecoveryKeySetupPage = lazy(() => import('./Components/auth/RecoveryKeySet
 // Layered Recovery Mesh (Unit 11) — tier-1 printable recovery key
 const RecoveryKeyEnrollV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyEnrollV2'));
 const RecoveryKeyUseV2 = lazy(() => import('./Components/recovery/layered/RecoveryKeyUseV2'));
+// Layered Recovery Mesh (Unit 12) — tier-2 social mesh
+const SocialMeshDEKEnroll = lazy(() => import('./Components/recovery/layered/SocialMeshDEKEnroll'));
+const SocialMeshDEKRecover = lazy(() => import('./Components/recovery/layered/SocialMeshDEKRecover'));
 // Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked
 const TimeLockedEnroll = lazy(() => import('./Components/recovery/layered/TimeLockedEnroll'));
 const TimeLockedRecover = lazy(() => import('./Components/recovery/layered/TimeLockedRecover'));
@@ -1723,6 +1726,26 @@ function App() {
                 } />
                 <Route path="/recovery/key/use-v2" element={
                   isAuthenticated ? <Navigate to="/" /> : <RecoveryKeyUseV2 />
+                } />
+                {/* Layered Recovery Mesh (Unit 12) — tier-2 social mesh.
+                    Wrapped in ErrorBoundary like the adjacent recovery
+                    routes; an unhandled render error in the lazy-loaded
+                    Suspense'd children (CircleSetup, RecoveryInitiation,
+                    RecoveryProgress) would otherwise bubble to the
+                    root boundary and take down the whole app. */}
+                <Route path="/recovery/social-mesh/enroll-v2" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Social-Mesh Enrollment">
+                      <SocialMeshDEKEnroll />
+                    </ErrorBoundary>
+                  )
+                } />
+                <Route path="/recovery/social-mesh/recover-v2" element={
+                  isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Social-Mesh Recovery">
+                      <SocialMeshDEKRecover />
+                    </ErrorBoundary>
+                  )
                 } />
                 {/* Layered Recovery Mesh (Unit 13) — tier-3 self-time-locked.
                     The enroll page needs the authenticated user's username so
