@@ -14,18 +14,52 @@
  * recovery components — this page is a thin layer that:
  *   (a) routes the threshold-reached event through the new factor blob
  *   (b) forces the master-password reset that the layered design needs.
+ *
+ * KNOWN CONTRACT GAP (tracked as a #221 follow-up):
+ *
+ * The existing ``RecoveryInitiation`` and ``RecoveryProgress``
+ * components are self-contained: ``RecoveryInitiation`` calls
+ * ``useNavigate`` to jump to ``/recovery/social/progress/:requestId``
+ * on success, and ``RecoveryProgress`` reads ``requestId`` from
+ * ``useParams()`` (not from props). The ``onInitiated`` /
+ * ``onSecretReconstructed`` props this page passes are therefore
+ * silently ignored today and the v2 page can't actually drive
+ * through the recovery phases as a single-page flow.
+ *
+ * Two ways forward, neither fully landed in this PR:
+ *   (i) Extend the existing components to accept the callback
+ *       props, falling back to navigate-based behavior when they
+ *       are absent (back-compat with the legacy passkey flow).
+ *  (ii) Inline the username-form + polling logic in this file so
+ *       the v2 page has its own implementation that doesn't rely
+ *       on the legacy components.
+ *
+ * The PR description already calls out this caveat (
+ *   "If the existing components do not yet accept the new props
+ *   (secretType, secretHex, onSecretReconstructed), the wrapped-DEK
+ *   enrollment in (a) still happens — the seed-routing TODO is
+ *   wired in a follow-up."
+ * ), so the enrollment side of the layered mesh is correct and
+ * forward-compatible; only the orchestration of the recover side
+ * is pending the existing-component contract change. This page
+ * still renders, the enroll flow works end-to-end, and the
+ * recover-side bug is gated to /recovery/social-mesh/recover-v2,
+ * which is not yet linked from the user-facing UI.
  */
 import React, { lazy, Suspense, useState } from 'react';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import recoveryFactorService from '../../../services/recoveryFactorService';
+import { bytesToHex } from '../../../utils/hex';
 
 const RecoveryInitiation = lazy(() => import('../social/RecoveryInitiation'));
 const RecoveryProgress = lazy(() => import('../social/RecoveryProgress'));
 
-function bytesToHex(bytes) {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
+/**
+ * Tier-2 social-mesh recovery page. See module docstring for the
+ * known contract gap with the existing social-recovery components;
+ * the enrollment side (SocialMeshDEKEnroll) is fully functional
+ * and is the side the user-facing routes link to.
+ */
 export default function SocialMeshDEKRecover() {
   const [phase, setPhase] = useState('await-username'); // 'in-progress' | 'change-password' | 'done'
   const [username, setUsername] = useState('');
@@ -42,6 +76,15 @@ export default function SocialMeshDEKRecover() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  /**
+   * Phase-transition handler invoked once the social-recovery
+   * pipeline has accepted a recovery request. Currently expected
+   * to be called by ``RecoveryInitiation``'s ``onInitiated``
+   * callback — but see the module-level KNOWN CONTRACT GAP for
+   * why that callback isn't wired in the legacy component yet.
+   *
+   * @param {string} attemptId
+   */
   function handleInitiated(attemptId) {
     setRecoveryAttemptId(attemptId);
     setPhase('in-progress');
@@ -50,6 +93,17 @@ export default function SocialMeshDEKRecover() {
   /**
    * Called by RecoveryProgress when the existing pipeline has
    * reconstructed the secret in-browser via Lagrange interpolation.
+   */
+  /**
+   * Phase-transition handler invoked once the social-recovery
+   * pipeline has reconstructed the seed in-browser via Lagrange
+   * interpolation over the released guardian shards. Looks up the
+   * matching wrapped DEK factor (anonymous lookup with a decoy
+   * fallback for unknown usernames), unwraps it locally with the
+   * reconstructed seed, and stashes the unwrap inputs so
+   * handleChangePassword can rotate the master row.
+   *
+   * @param {Uint8Array} seedBytes 32-byte recovery seed.
    */
   async function handleSeedReconstructed(seedBytes) {
     setBusy(true);
@@ -84,6 +138,14 @@ export default function SocialMeshDEKRecover() {
     }
   }
 
+  /**
+   * Submit handler for the new-master-password form. Delegates to
+   * ``sessionVaultCryptoV3.rewrapMasterPasswordFromRecovery`` with
+   * the reconstructed seed as ``recoverySecret`` and
+   * ``factorType: 'social_mesh'`` so the helper can hit the
+   * anonymous /recover-rotate/ endpoint and pass the auth_hash gate.
+   * On success transitions to the terminal 'done' phase.
+   */
   async function handleChangePassword() {
     if (newPassword.length < 8) {
       setError('New password must be at least 8 characters.');

@@ -21,13 +21,31 @@
  */
 import React, { lazy, Suspense, useState } from 'react';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
+import { bytesToHex } from '../../../utils/hex';
 
 const CircleSetup = lazy(() => import('../social/CircleSetup'));
 
-function bytesToHex(bytes) {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
+/**
+ * Tier-2 (Social-Mesh) ENROLLMENT page for the layered recovery
+ * mesh. Two responsibilities, separated for clarity:
+ *
+ *   1. Wrap the vault DEK under a KEK derived from a fresh 32-byte
+ *      `recovery_seed` and POST it as a `social_mesh` recovery
+ *      factor (writes a RecoveryWrappedDEK row + the auth_hash gate
+ *      proof).
+ *   2. Walk the user through the existing CircleSetup flow so the
+ *      `recovery_seed` itself is split across guardians via the
+ *      Shamir/Kyber pipeline shared with passkey-recovery.
+ *
+ * The two writes happen on different server objects
+ * (RecoveryWrappedDEK vs PasskeyRecoverySetup + RecoveryShard rows)
+ * and are not yet atomic — see the recovery_setup_id TODO around
+ * the CircleSetup callback. Until that is wired, a partial-failure
+ * window exists between (1) and (2).
+ *
+ * Reached only when the user is signed in (route is gated by
+ * `isAuthenticated` in App.jsx).
+ */
 export default function SocialMeshDEKEnroll() {
   const [masterPassword, setMasterPassword] = useState('');
   const [phase, setPhase] = useState('await-password'); // -> 'circle-setup' -> 'done'
@@ -35,6 +53,18 @@ export default function SocialMeshDEKEnroll() {
   const [busy, setBusy] = useState(false);
   const [recoverySeedHex, setRecoverySeedHex] = useState(null);
 
+  /**
+   * Step (1) of enrollment: generate the seed, wrap the DEK under
+   * a KEK derived from it, and POST the resulting envelope as a
+   * `social_mesh` recovery factor. On success advances to the
+   * CircleSetup phase that owns step (2).
+   *
+   * Clears `masterPassword` from React state as soon as the wrap
+   * has succeeded — the CircleSetup phase only needs the seed
+   * (already in `recoverySeedHex`), not the master password.
+   * Holding the plaintext master password through the whole
+   * guardian-setup flow would be unnecessarily long-lived.
+   */
   async function handleStart() {
     if (!masterPassword) {
       setError('Master password required.');
@@ -56,11 +86,24 @@ export default function SocialMeshDEKEnroll() {
           // Pointer to the social-recovery setup row that owns the
           // shard distribution. Populated by CircleSetup once the
           // user finalizes their guardians.
+          //
+          // TODO(#221 follow-up): patch this back onto the just-
+          // enrolled factor row once CircleSetup surfaces the
+          // recovery_setup_id via onComplete(id). Today the
+          // existing CircleSetup component fires onComplete()
+          // with no argument so the id never makes it back here;
+          // recovery side will need to re-discover the setup by
+          // username instead. Tracked as a backend concern in
+          // sessionVaultCryptoV3 — once an `updateRecoveryFactorMeta`
+          // helper exists, wire the patch call.
           recovery_setup_id: null,
           secret_type: 'vault_dek_seed',
         },
       });
       setRecoverySeedHex(seedHex);
+      // Clear the plaintext master password from React state now
+      // that the wrap has completed. CircleSetup doesn't need it.
+      setMasterPassword('');
       setPhase('circle-setup');
     } catch (err) {
       setError(err?.message || 'Enrollment failed.');
