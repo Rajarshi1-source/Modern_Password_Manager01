@@ -32,6 +32,13 @@ export default function SocialMeshDEKRecover() {
   const [recoveryAttemptId, setRecoveryAttemptId] = useState(null);
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  // Stashed at threshold-met so handleChangePassword can drive the
+  // master-wrapped row rotation. The session DEK alone isn't enough
+  // because v3's session DEK is non-extractable; we re-derive an
+  // extractable handle from the same factor blob + seed inside
+  // sessionVaultCryptoV3.rewrapMasterPasswordFromRecovery.
+  const [unlockedFactor, setUnlockedFactor] = useState(null);
+  const [recoveredSeedHex, setRecoveredSeedHex] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -49,16 +56,26 @@ export default function SocialMeshDEKRecover() {
     setError('');
     try {
       const seedHex = bytesToHex(seedBytes);
-      const factors = await recoveryFactorService.listRecoveryFactors();
-      const factor = (factors || []).find((f) => f.factor_type === 'social_mesh');
+      // Anonymous lookup — the recover page is unauthenticated. The
+      // legacy `listRecoveryFactors` call here was broken on two
+      // axes: it required an auth session and it didn't return
+      // `blob`. The new lookup endpoint returns {blob, dek_id} for
+      // a real (username, factor_type) pair or a deterministic
+      // decoy for unknown ones, so existence isn't leaked.
+      const factor = await recoveryFactorService.lookupRecoveryFactor(
+        username,
+        'social_mesh',
+      );
       if (!factor || !factor.blob) {
-        throw new Error('No social-mesh factor on file (or server omitted blob).');
+        throw new Error('Recovery factor unavailable.');
       }
       await sessionVaultCryptoV3.unlockWithRecoveryFactor(
         factor.blob,
         seedHex,
         factor.dek_id,
       );
+      setUnlockedFactor(factor);
+      setRecoveredSeedHex(seedHex);
       setPhase('change-password');
     } catch (err) {
       setError(err?.message || 'Recovery failed.');
@@ -76,14 +93,30 @@ export default function SocialMeshDEKRecover() {
       setError('Passwords do not match.');
       return;
     }
+    if (!unlockedFactor || !recoveredSeedHex || !username) {
+      setError('Recovery state lost — please restart from the beginning.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      // Same caveat as Tier 1/3: v3 does not yet expose a
-      // session-DEK-rooted master-password rotation primitive. For
-      // now we treat the recovery as an opportunity to set a new
-      // master password via the change endpoint, leaning on the
-      // session DEK already being live.
+      // Hits the anonymous /api/auth/vault/wrapped-dek/recover-rotate/
+      // endpoint via the v3 helper. The helper unwraps the factor
+      // blob locally with the recovered seed (guaranteed to succeed
+      // — we just did the same unwrap above), wraps the resulting
+      // DEK under a new master-password KEK, and POSTs the rotation
+      // along with username + factor_type + auth_hash so the server
+      // can verify the caller actually possesses the recovery secret
+      // (not just dek_id, which lookup discloses). dek_id stays
+      // stable so other recovery factors are not orphaned.
+      await sessionVaultCryptoV3.rewrapMasterPasswordFromRecovery({
+        factorBlob: unlockedFactor.blob,
+        recoverySecret: recoveredSeedHex,
+        newPassword,
+        dekId: unlockedFactor.dek_id,
+        username,
+        factorType: 'social_mesh',
+      });
       setPhase('done');
     } catch (err) {
       setError(err?.message || 'Password change failed.');

@@ -23,6 +23,20 @@ from . import passkey_primary_recovery_views
 from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
+# Import Layered Recovery Mesh views (Unit 4)
+from .wrapped_dek_view import VaultWrappedDEKView, WrappedDEKRecoveryRotateView
+# Import Layered Recovery Mesh views (Unit 5)
+from .recovery_factor_view import (
+    RecoveryFactorListCreateView,
+    RecoveryFactorLookupView,
+)
+# Import Layered Recovery Mesh views (Unit 6)
+from .time_locked_view import (
+    TimeLockedEnrollBundleView,
+    TimeLockedInitiateView,
+    TimeLockedReleaseView,
+    TimeLockedCanaryAckView,
+)
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -142,6 +156,39 @@ urlpatterns = [
     path('quantum-recovery/approve_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'approve_recovery'}), name='quantum-recovery-approve'),
     path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
     path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
+
+    # ==================== Layered Recovery Mesh Endpoints ====================
+    # Unit 4 — wrapped DEK (master-password KEK over the user's vault DEK).
+    # Server stores ciphertext only; never decrypts the blob.
+    path('vault/wrapped-dek/', VaultWrappedDEKView.as_view(), name='vault-wrapped-dek'),
+    # Anonymous post-recovery rotation. Used by the recovery pages
+    # which run while the user is not yet authenticated; ties the
+    # rotation to (username, factor_type, dek_id) so only a caller
+    # who has hit lookup with a real combination can rotate.
+    path('vault/wrapped-dek/recover-rotate/', WrappedDEKRecoveryRotateView.as_view(), name='vault-wrapped-dek-recover-rotate'),
+    # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
+    # social mesh, time-locked, passkey). Server stores ciphertext only.
+    path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
+    # Anonymous lookup of a wrapped factor by (username, factor_type).
+    # Used by the unauthenticated recovery pages to fetch the blob they
+    # need to unwrap with the user's recovery secret. Returns a decoy
+    # blob for unknown usernames so account existence is not leaked.
+    path('vault/recovery-factors/lookup/', RecoveryFactorLookupView.as_view(), name='vault-recovery-factor-lookup'),
+    # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
+    # share; release gated by configurable delay + canary-cancellation.
+    #
+    # NOTE: the standalone ``vault/time-locked/enroll/`` route has been
+    # retired. Stale clients calling that endpoint could replace
+    # ``TimeLockedRecovery.server_half`` without rotating the matching
+    # ``RecoveryWrappedDEK`` row, which would silently break any
+    # previously-issued ``.dlrec`` file. All time-locked enrollments
+    # MUST go through the atomic bundle endpoint below. The view class
+    # is kept in ``time_locked_view.py`` for tests and is no longer
+    # routable from any URL.
+    path('vault/time-locked/enroll-bundle/', TimeLockedEnrollBundleView.as_view(), name='vault-time-locked-enroll-bundle'),
+    path('vault/time-locked/initiate/', TimeLockedInitiateView.as_view(), name='vault-time-locked-initiate'),
+    path('vault/time-locked/release/', TimeLockedReleaseView.as_view(), name='vault-time-locked-release'),
+    path('vault/time-locked/canary-ack/', TimeLockedCanaryAckView.as_view(), name='vault-time-locked-canary-ack'),
 
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
     # Keypair generation
