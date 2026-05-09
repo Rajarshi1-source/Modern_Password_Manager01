@@ -81,9 +81,17 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
       );
       // Stash unwrap inputs so handleChangePassword can re-derive an
       // extractable DEK from the same factor blob and rotate the
-      // master-wrapped row under the new password.
+      // master-wrapped row under the new password. We KEEP
+      // normalizedKey in state because the next phase needs it; we
+      // CLEAR the raw recoveryKey input now since the unwrap
+      // succeeded and we no longer need the as-typed (possibly
+      // hyphenated/mixed-case) form. This shortens the lifetime of
+      // the as-typed string in React's update history without
+      // affecting the rotation flow (which uses the normalized
+      // form from state).
       setUnlockedFactor(factor);
       setNormalizedKey(normalized);
+      setRecoveryKey('');
       setPhase('change-password');
     } catch (err) {
       setError(err?.message || 'Recovery failed.');
@@ -132,6 +140,18 @@ export default function RecoveryKeyUseV2({ onSuccess }) {
         username: trimmedUsername,
         factorType: 'recovery_key',
       });
+      // The rotation succeeded; the session DEK is now installed
+      // (non-extractable) inside sessionVaultCryptoV3. Drop every
+      // piece of secret material we held in component state. React
+      // can't deeply scrub the previous render snapshot but at
+      // least no controlled input or local state retains the value
+      // beyond this point — the 'done' phase has no fields and
+      // the component will most likely be unmounted shortly when
+      // the parent navigates onSuccess().
+      setUnlockedFactor(null);
+      setNormalizedKey(null);
+      setNewPassword('');
+      setConfirmNewPassword('');
       setPhase('done');
       if (onSuccess) onSuccess();
     } catch (err) {
