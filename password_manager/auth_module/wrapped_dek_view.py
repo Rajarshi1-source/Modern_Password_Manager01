@@ -227,8 +227,14 @@ class WrappedDEKRecoveryRotateView(APIView):
             # ≥130 bits of preimage resistance for tier-1 secrets
             # (32^26 alphabet) and ≥256 for tier 2/3, so it cannot
             # be brute-forced offline even on full DB exfiltration.
+            #
+            # The row is locked with select_for_update() inside the
+            # outer transaction so a concurrent revoke / re-enroll
+            # cannot race past this read and let an old recovery
+            # secret authorize one last rotation.
             factor = (
                 RecoveryWrappedDEK.objects
+                .select_for_update()
                 .filter(
                     user=user,
                     factor_type=factor_type,
@@ -242,12 +248,37 @@ class WrappedDEKRecoveryRotateView(APIView):
                     {'error': 'recovery target not found'},
                     status=404,
                 )
+
+            # Empty stored auth_hash means the row was created
+            # before this field existed (i.e. on a deployment that
+            # ran an earlier version of the layered-recovery code).
+            # The server has nothing to compare against, so we cannot
+            # safely accept the rotation: trusting any submitted
+            # auth_hash on a legacy row would let an attacker who
+            # only hit lookup take ownership of the rotation by
+            # being the first to submit a hash. Instead, surface a
+            # distinguishable status so the client can show an
+            # actionable message — the user must re-enroll the
+            # factor (which writes a real auth_hash) before recovery
+            # via this endpoint will work.
+            if not factor.auth_hash:
+                return Response(
+                    {
+                        'error': 'recovery factor pre-dates auth_hash',
+                        're_enroll_required': True,
+                        'detail': (
+                            'This recovery factor was enrolled before the '
+                            'rotation auth_hash existed. Sign in with your '
+                            'master password (or another active recovery '
+                            'factor) and re-enroll this factor to refresh it.'
+                        ),
+                    },
+                    status=409,
+                )
+
             # Constant-time comparison so a partial match doesn't
-            # leak timing information. Empty stored hash means the
-            # factor was enrolled before auth_hash existed; reject
-            # the rotation and force a re-enrollment via the
-            # authenticated path before recovery can succeed.
-            if not factor.auth_hash or not _hmac.compare_digest(
+            # leak timing information.
+            if not _hmac.compare_digest(
                 factor.auth_hash.lower(), auth_hash_in.lower(),
             ):
                 return Response(

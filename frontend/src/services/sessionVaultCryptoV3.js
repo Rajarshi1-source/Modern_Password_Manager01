@@ -324,13 +324,33 @@ export async function rewrapMasterPasswordFromRecovery({
   // (not just the dek_id, which is publicly leaked by lookup).
   const authHash = await computeAuthHash(recoverySecret);
 
-  await axios.post(WRAPPED_DEK_RECOVER_ROTATE_URL, {
-    username,
-    factor_type: factorType,
-    dek_id: dekId,
-    blob,
-    auth_hash: authHash,
-  });
+  try {
+    await axios.post(WRAPPED_DEK_RECOVER_ROTATE_URL, {
+      username,
+      factor_type: factorType,
+      dek_id: dekId,
+      blob,
+      auth_hash: authHash,
+    });
+  } catch (err) {
+    // The server returns 409 with `re_enroll_required: true` for
+    // recovery factors that pre-date the auth_hash field. The user
+    // can still unwrap their factor blob locally (the unwrap above
+    // succeeded), but the master row cannot be rotated anonymously.
+    // Surface a recognisable error so the UI can show an actionable
+    // message instead of a generic "Recovery failed".
+    if (err?.response?.status === 409 && err.response.data?.re_enroll_required) {
+      const detail = err.response.data?.detail || '';
+      const ex = new Error(
+        'This recovery factor pre-dates the rotation auth_hash and cannot be '
+        + 'used to set a new master password through the anonymous flow. '
+        + (detail ? detail : 'Re-enroll the factor while signed in, then retry recovery.'),
+      );
+      ex.code = 'RECOVERY_REENROLL_REQUIRED';
+      throw ex;
+    }
+    throw err;
+  }
 
   // Install the same DEK as the live session key, non-extractable.
   sessionDEK = await reimportNonExtractable(dekX);

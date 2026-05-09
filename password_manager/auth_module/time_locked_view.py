@@ -428,46 +428,89 @@ class TimeLockedInitiateView(APIView):
                 'release_after': decoy_release_after.isoformat(),
             })
 
-        rec = (
-            TimeLockedRecovery.objects
-            .filter(user=user, is_active=True)
-            .order_by('-enrolled_at')
-            .first()
-        )
-        if not rec:
+        # Lock the row so two concurrent initiates serialize and we
+        # can read+decide+write atomically.
+        with transaction.atomic():
+            rec = (
+                TimeLockedRecovery.objects
+                .select_for_update()
+                .filter(user=user, is_active=True)
+                .order_by('-enrolled_at')
+                .first()
+            )
+            if not rec:
+                return Response({
+                    'success': True,
+                    'release_after': decoy_release_after.isoformat(),
+                })
+
+            # If a recovery is already in flight (ALERTING) we MUST
+            # NOT overwrite release_after / canary_state / ack token.
+            # An attacker who knows the username could otherwise call
+            # initiate repeatedly to:
+            #   (a) push the deadline forward indefinitely so the
+            #       legitimate user's recovery never elapses, or
+            #   (b) reset canary_state from ACKNOWLEDGED back to
+            #       ALERTING, undoing a prior cancel-by-canary.
+            # Idempotent behavior: return the existing release_after
+            # for ALERTING; treat ACKNOWLEDGED / EXPIRED / unset as
+            # the right time to start a fresh cycle.
+            now = timezone.now()
+            existing_state = rec.canary_state
+            if existing_state == TimeLockedRecovery.CanaryState.ALERTING and rec.release_after:
+                # Idempotent — caller probably retried. Don't audit
+                # spam, don't re-send canary, don't extend the clock.
+                return Response({
+                    'success': True,
+                    'release_after': rec.release_after.isoformat(),
+                })
+            if existing_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
+                # Legitimate user already cancelled this recovery
+                # via the canary link. Re-initiating from this state
+                # would overwrite their cancel. The user must
+                # re-enroll (which deactivates the row) to start a
+                # fresh time-lock cycle. Surface the same uniform
+                # decoy shape — we still don't want to leak that
+                # there's an enrollment in this special state.
+                return Response({
+                    'success': True,
+                    'release_after': decoy_release_after.isoformat(),
+                })
+
+            # Fresh cycle: QUIET -> ALERTING, or EXPIRED -> ALERTING
+            # (the prior recovery completed; this is the user
+            # starting another one against a still-active row, which
+            # is unusual but valid if the bundle endpoint hasn't
+            # rotated yet).
+            rec.release_after = now + timedelta(days=delay_days)
+            rec.canary_state = TimeLockedRecovery.CanaryState.ALERTING
+            rec.canary_ack_token = secrets.token_urlsafe(32)
+            rec.initiated_at = now
+            rec.last_canary_sent = now
+            rec.save(update_fields=[
+                'release_after', 'canary_state', 'canary_ack_token',
+                'initiated_at', 'last_canary_sent',
+            ])
+
+            _send_canary(user, rec)
+
+            RecoveryAuditLog.objects.create(
+                user=user,
+                event_type='recovery_initiated',
+                event_data={
+                    'subsystem': 'time_locked',
+                    'recovery_id': rec.pk,
+                    'release_after': rec.release_after.isoformat(),
+                    'delay_days': delay_days,
+                    'previous_state': existing_state,
+                },
+                ip_address=_client_ip(request),
+                user_agent=_user_agent(request),
+            )
             return Response({
                 'success': True,
-                'release_after': decoy_release_after.isoformat(),
-            })
-
-        rec.release_after = timezone.now() + timedelta(days=delay_days)
-        rec.canary_state = TimeLockedRecovery.CanaryState.ALERTING
-        rec.canary_ack_token = secrets.token_urlsafe(32)
-        rec.initiated_at = timezone.now()
-        rec.last_canary_sent = timezone.now()
-        rec.save(update_fields=[
-            'release_after', 'canary_state', 'canary_ack_token',
-            'initiated_at', 'last_canary_sent',
-        ])
-
-        _send_canary(user, rec)
-
-        RecoveryAuditLog.objects.create(
-            user=user,
-            event_type='recovery_initiated',
-            event_data={
-                'subsystem': 'time_locked',
-                'recovery_id': rec.pk,
                 'release_after': rec.release_after.isoformat(),
-                'delay_days': delay_days,
-            },
-            ip_address=_client_ip(request),
-            user_agent=_user_agent(request),
-        )
-        return Response({
-            'success': True,
-            'release_after': rec.release_after.isoformat(),
-        })
+            })
 
 
 class TimeLockedReleaseView(APIView):
@@ -481,14 +524,36 @@ class TimeLockedReleaseView(APIView):
     throttle_classes = [RecoveryCompleteThrottle]
 
     def post(self, request):
-        """Atomically check eligibility and consume the active row."""
+        """Atomically check eligibility and consume the active row.
+
+        The response shape is uniform with ``initiate`` to close the
+        enumeration oracle: an attacker who calls initiate (which
+        already returns the same shape for unknown vs real users)
+        and then immediately calls release MUST NOT be able to
+        distinguish ``user has active enrollment`` from ``user does
+        not exist`` from the response. We therefore synthesize a
+        decoy 403+release_after for unknown / un-enrolled accounts
+        instead of leaking 404.
+        """
         username = request.data.get('username')
         if not isinstance(username, str) or not username:
             return Response({'error': 'username required'}, status=400)
+
+        # Decoy shape used for both 'user does not exist' and 'user
+        # exists but has no active time-locked recovery'. Same
+        # formula as TimeLockedInitiateView's decoy so a probe of
+        # initiate-then-release returns a stable picture for an
+        # unknown username.
+        delay_days = compute_time_lock_delay_days(None)
+        decoy_release_after = timezone.now() + timedelta(days=delay_days)
+
         try:
             user = User.objects.get(username=username)
         except User.DoesNotExist:
-            return Response({'error': 'no recovery in progress'}, status=404)
+            return Response({
+                'error': 'delay not elapsed',
+                'release_after': decoy_release_after.isoformat(),
+            }, status=403)
 
         ip = _client_ip(request)
         ua = _user_agent(request)
@@ -514,7 +579,11 @@ class TimeLockedReleaseView(APIView):
                 .first()
             )
             if not rec or not rec.release_after:
-                return Response({'error': 'no recovery in progress'}, status=404)
+                # Same decoy as the no-such-user branch above.
+                return Response({
+                    'error': 'delay not elapsed',
+                    'release_after': decoy_release_after.isoformat(),
+                }, status=403)
 
             if rec.canary_state == TimeLockedRecovery.CanaryState.ACKNOWLEDGED:
                 ServerHalfReleaseLog.objects.create(

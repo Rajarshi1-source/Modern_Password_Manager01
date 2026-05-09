@@ -194,7 +194,14 @@ export async function initiateTimeLock(username) {
  *   1. Delay not elapsed — body is `{error, release_after}`. The
  *      caller should keep polling; we translate to
  *      `{ ready: false, releaseAfter }` so the countdown UI doesn't
- *      have to wrap every poll in try/catch.
+ *      have to wrap every poll in try/catch. The same shape is also
+ *      returned for unknown / un-enrolled accounts (this is
+ *      intentional: it closes the existence-oracle that would
+ *      otherwise pair with `initiate`'s uniform decoy response).
+ *      The legitimate user with a valid .dlrec / wrapped factor
+ *      will eventually find the delay actually elapsed; an
+ *      unknown-user attacker will see a perpetual "still waiting"
+ *      and learn nothing.
  *
  *   2. Cancelled by canary acknowledgement — body is `{error}` (no
  *      `release_after`). The caller should STOP polling and surface
