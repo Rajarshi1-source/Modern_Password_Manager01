@@ -1204,11 +1204,22 @@ function App() {
 
       // Layered Recovery Mesh (Unit 15) — additionally bootstrap the v3
       // wrapped-DEK session. If the user has never been enrolled in v3
-      // before, run the one-shot legacy-to-v3 migration. The legacy v2
-      // session key above stays live so any items still encrypted under
+      // before, run the legacy-to-v3 migration. The legacy v2 session
+      // key above stays live so any items still encrypted under
       // svc-gcm-1 keep decrypting; new items go through v3.
+      //
+      // After a successful v3 unlock OR a successful enrollment, run a
+      // sweep that re-encrypts any leftover svc-gcm-1 items under v3.
+      // This makes the migration ACTUALLY idempotent across logins: if
+      // the first per-account run was interrupted mid-loop (network
+      // blip, PUT failure), this pass on the next login picks up the
+      // remaining items. Without it, the user gets enrolled in v3 but
+      // un-migrated items stay un-migrated forever because NOT_ENROLLED
+      // never fires again.
+      let v3Ready = false;
       try {
         await sessionVaultCryptoV3.unlockWithMasterPassword(loginData.password);
+        v3Ready = true;
       } catch (v3Err) {
         if (v3Err?.message === 'NOT_ENROLLED') {
           try {
@@ -1219,6 +1230,7 @@ function App() {
               loginData.password,
               loginData.email
             );
+            v3Ready = true;
           } catch (migErr) {
             console.warn('Legacy-to-v3 vault migration failed:', migErr);
           }
@@ -1227,6 +1239,22 @@ function App() {
           // legacy v2 session key is still live, so the vault remains
           // usable; recovery factors just won't work this session.
           console.warn('v3 wrapped-DEK unlock failed:', v3Err);
+        }
+      }
+
+      // Opportunistic retry of un-migrated v2 items on every successful
+      // login. This is a no-op if nothing is left (single GET, zero
+      // PUTs). For a fully-migrated user it adds one round trip; for a
+      // user whose first migration was interrupted it makes forward
+      // progress until everything is on v3.
+      if (v3Ready) {
+        try {
+          const { migrateRemainingV2Items } = await import(
+            './services/legacyVaultMigration'
+          );
+          await migrateRemainingV2Items();
+        } catch (sweepErr) {
+          console.warn('Opportunistic v2-item sweep failed:', sweepErr);
         }
       }
 
