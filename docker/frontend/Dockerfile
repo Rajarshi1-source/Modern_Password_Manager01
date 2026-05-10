@@ -13,7 +13,7 @@
 # Node 22 on linux/arm64 from an amd64 runner. The frontend build output is
 # static assets, so it is architecture-independent — only the final nginx
 # stage needs to be multi-arch.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS deps
+FROM --platform=$BUILDPLATFORM node:26-alpine AS deps
 
 # Set working directory
 WORKDIR /app
@@ -29,7 +29,7 @@ RUN npm ci && \
 # -----------------------------------------------------------------------------
 # Stage 2: Builder - Build the application
 # -----------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:26-alpine AS builder
 
 # Set working directory
 WORKDIR /app
