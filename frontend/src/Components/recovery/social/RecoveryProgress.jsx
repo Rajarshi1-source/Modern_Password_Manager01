@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import './RecoveryProgress.css';
@@ -16,24 +16,95 @@ const normalizeStatus = (s) => {
   return s;
 };
 
-const RecoveryProgress = () => {
-  const { requestId } = useParams();
+/**
+ * Social-recovery progress page. Used in two routes:
+ *
+ *   1. Legacy passkey recovery (/recovery/social/progress/:requestId):
+ *      `requestId` comes from `useParams()`; component is self-
+ *      contained and just polls + renders.
+ *
+ *   2. Layered Recovery Mesh tier-2 (/recovery/social-mesh/recover-v2):
+ *      `SocialMeshDEKRecover` composes this component and supplies
+ *      both `recoveryAttemptId` (the request id from the in-page
+ *      flow, no route param available) and `onSecretReconstructed`
+ *      (callback invoked once with the reconstructed secret bytes
+ *      when the polling sees `status === 'approved'` /
+ *      `'completed'` and the server returns the reconstructed
+ *      secret in the response).
+ *
+ * Both modes coexist through optional props that default to the
+ * legacy params-based behavior — back-compat preserved.
+ *
+ * @param {object} [props]
+ * @param {string} [props.recoveryAttemptId]
+ *   When provided, used as the request id INSTEAD of useParams(). The
+ *   tier-2 page passes this because its route path is
+ *   /recovery/social-mesh/recover-v2 with no :requestId segment.
+ * @param {(secretBytes: Uint8Array) => void} [props.onSecretReconstructed]
+ *   When provided, called exactly once with the reconstructed secret
+ *   the moment the polling sees a final-status response that carries
+ *   the reconstructed bytes. The tier-2 page uses this to drive its
+ *   own state machine into the change-password phase. Legacy callers
+ *   omit it and rely on the rendered "Recovery Completed" link.
+ */
+const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => {
+  // Resolve the request id: prefer the prop (tier-2), fall back to
+  // route params (legacy passkey route). Prop wins so a tier-2 page
+  // composed under a legacy-shaped route can still work.
+  const params = useParams();
+  const requestId = recoveryAttemptId || params.requestId;
+
   const [request, setRequest] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Guard so onSecretReconstructed fires exactly once even if the
+  // 5-second polling loop sees the success payload more than once
+  // before the parent unmounts us.
+  const reconstructedFiredRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
+    if (!requestId) {
+      setError('Recovery request id missing');
+      setLoading(false);
+      return;
+    }
     try {
       const resp = await ApiService.socialRecovery.getRequest(requestId);
       setRequest(resp.data);
       setError(null);
+      // If the server has reconstructed the secret AND the caller
+      // gave us a callback to deliver it, fire exactly once. The
+      // server is expected to surface the bytes in one of:
+      //   - resp.data.reconstructed_secret (preferred)
+      //   - resp.data.secret_bytes
+      // both base64-encoded; we decode to Uint8Array. If the field
+      // is absent (older backend, or completion event without
+      // payload) we leave the callback un-fired; the parent's
+      // own polling/timeout path can fall back to a fresh attempt.
+      if (typeof onSecretReconstructed === 'function' && !reconstructedFiredRef.current) {
+        const b64 = resp.data?.reconstructed_secret || resp.data?.secret_bytes;
+        if (typeof b64 === 'string' && b64.length > 0) {
+          try {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+            reconstructedFiredRef.current = true;
+            onSecretReconstructed(bytes);
+          } catch (decodeErr) {
+            // Surface decode failure to the user — there's no
+            // sensible fallback if the server returned garbage.
+            // eslint-disable-next-line no-console
+            console.warn('RecoveryProgress: secret decode failed:', decodeErr);
+          }
+        }
+      }
     } catch (err) {
       const handled = ApiService.handleError(err);
       setError(handled.error || 'Failed to load recovery status');
     } finally {
       setLoading(false);
     }
-  }, [requestId]);
+  }, [requestId, onSecretReconstructed]);
 
   useEffect(() => {
     fetchStatus();
