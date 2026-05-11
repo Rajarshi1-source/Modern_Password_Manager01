@@ -42,7 +42,7 @@ psycopg[binary]>=3.2.0  # PostgreSQL adapter (async-capable)
 
 # API and HTTP
 requests>=2.32.4
-urllib3>=2.6.0
+urllib3>=2.7.0
 
 # Data Validation
 pydantic>=2.10.6
