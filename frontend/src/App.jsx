@@ -1208,29 +1208,41 @@ function App() {
       // key above stays live so any items still encrypted under
       // svc-gcm-1 keep decrypting; new items go through v3.
       //
-      // After a successful v3 unlock OR a successful enrollment, run a
-      // sweep that re-encrypts any leftover svc-gcm-1 items under v3.
-      // This makes the migration ACTUALLY idempotent across logins: if
-      // the first per-account run was interrupted mid-loop (network
-      // blip, PUT failure), this pass on the next login picks up the
-      // remaining items. Without it, the user gets enrolled in v3 but
-      // un-migrated items stay un-migrated forever because NOT_ENROLLED
-      // never fires again.
+      // The migration is split into "first-time enrollment" (await'd —
+      // the user is blocked while we mint their wrapped DEK and run the
+      // initial item rewrite) and "opportunistic sweep" (fire-and-
+      // forget — runs in the background, makes forward progress on any
+      // items missed by a prior interrupted migration, no-op when the
+      // vault is fully on v3). The two-stage structure means a
+      // partially-migrated user makes progress on every subsequent
+      // login without ever blocking login on a multi-second PUT loop.
+      //
+      // The dynamic import is hoisted to a single await so we don't
+      // double-fetch the module on the first-enrollment path.
       let v3Ready = false;
+      let firstTimeEnrollmentRanSweep = false;
+      let legacyMigrationModule = null;
       try {
         await sessionVaultCryptoV3.unlockWithMasterPassword(loginData.password);
         v3Ready = true;
       } catch (v3Err) {
         if (v3Err?.message === 'NOT_ENROLLED') {
           try {
-            const { migrateLegacyUserToWrappedDEK } = await import(
+            legacyMigrationModule = await import(
               './services/legacyVaultMigration'
             );
-            await migrateLegacyUserToWrappedDEK(
-              loginData.password,
-              loginData.email
-            );
+            const migResult = await legacyMigrationModule
+              .migrateLegacyUserToWrappedDEK(
+                loginData.password,
+                loginData.email
+              );
             v3Ready = true;
+            // The first-time path already ran the per-item sweep
+            // inside `migrateLegacyUserToWrappedDEK`, so we can skip
+            // the opportunistic outer sweep on THIS login. Subsequent
+            // logins will hit the unlock-success branch and run the
+            // sweep unconditionally.
+            firstTimeEnrollmentRanSweep = Boolean(migResult?.enrolled);
           } catch (migErr) {
             console.warn('Legacy-to-v3 vault migration failed:', migErr);
           }
@@ -1242,19 +1254,44 @@ function App() {
         }
       }
 
-      // Opportunistic retry of un-migrated v2 items on every successful
-      // login. This is a no-op if nothing is left (single GET, zero
-      // PUTs). For a fully-migrated user it adds one round trip; for a
-      // user whose first migration was interrupted it makes forward
-      // progress until everything is on v3.
-      if (v3Ready) {
+      // Opportunistic retry of un-migrated v2 items. Fire-and-forget:
+      // the sweep is idempotent and single-flight, so blocking login on
+      // it offers no extra safety but does add a multi-second stall
+      // for large vaults. On completion we trigger a vault refetch so
+      // the in-memory `vaultItems` aren't stale w.r.t. the rewritten
+      // ciphertext (the decrypt effect uses v2 which would otherwise
+      // surface `_legacyPlaintext` cards for the rewritten rows until
+      // the next page load).
+      if (v3Ready && !firstTimeEnrollmentRanSweep) {
+        const sweepPromise = (legacyMigrationModule
+          ? Promise.resolve(legacyMigrationModule)
+          : import('./services/legacyVaultMigration')
+        )
+          .then((mod) => mod.migrateRemainingV2Items())
+          .then((result) => {
+            // Only refetch when we actually rewrote something —
+            // avoids a useless round trip on already-migrated users.
+            if (result?.migratedCount > 0 && typeof fetchVaultItems === 'function') {
+              fetchVaultItems();
+            }
+          })
+          .catch((sweepErr) => {
+            console.warn('Opportunistic v2-item sweep failed:', sweepErr);
+          });
+        // Discard the promise — we don't await login on it.
+        void sweepPromise;
+      } else if (firstTimeEnrollmentRanSweep && typeof fetchVaultItems === 'function') {
+        // The first-time-enrollment sweep that already ran inside
+        // `migrateLegacyUserToWrappedDEK` re-wrote items server-side;
+        // the in-memory vault items still hold the pre-migration
+        // ciphertext. Trigger a refetch so the UI picks up the v3
+        // envelopes; the v2 decryptor handles them via the
+        // `_legacyPlaintext` sentinel but the UX is cleaner with
+        // fresh ciphertext that v3 can decrypt directly.
         try {
-          const { migrateRemainingV2Items } = await import(
-            './services/legacyVaultMigration'
-          );
-          await migrateRemainingV2Items();
-        } catch (sweepErr) {
-          console.warn('Opportunistic v2-item sweep failed:', sweepErr);
+          fetchVaultItems();
+        } catch (refetchErr) {
+          console.warn('Post-migration vault refetch failed:', refetchErr);
         }
       }
 
