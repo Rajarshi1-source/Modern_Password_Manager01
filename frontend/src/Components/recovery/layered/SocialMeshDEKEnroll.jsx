@@ -21,6 +21,7 @@
  */
 import React, { lazy, Suspense, useState } from 'react';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
+import recoveryFactorService from '../../../services/recoveryFactorService';
 import { bytesToHex } from '../../../utils/hex';
 
 const CircleSetup = lazy(() => import('../social/CircleSetup'));
@@ -40,8 +41,14 @@ const CircleSetup = lazy(() => import('../social/CircleSetup'));
  * The two writes happen on different server objects
  * (RecoveryWrappedDEK vs PasskeyRecoverySetup + RecoveryShard rows)
  * and are not yet atomic — see the recovery_setup_id TODO around
- * the CircleSetup callback. Until that is wired, a partial-failure
- * window exists between (1) and (2).
+ * the CircleSetup callback. The followup PR wires the
+ * recovery_setup_id round-trip via:
+ *   - CircleSetup surfaces the new circle's id via onComplete(id)
+ *   - recoveryFactorService.updateRecoveryFactorMeta PATCHes the
+ *     id into the wdek factor row's factor_meta
+ * so recovery-side code can locate the setup by reading
+ * factor_meta.recovery_setup_id instead of having to re-discover
+ * it by username.
  *
  * Reached only when the user is signed in (route is gated by
  * `isAuthenticated` in App.jsx).
@@ -52,6 +59,11 @@ export default function SocialMeshDEKEnroll() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [recoverySeedHex, setRecoverySeedHex] = useState(null);
+  // Stash the current dek_id at enrollment so the post-CircleSetup
+  // PATCH can prove DEK possession server-side. enrollRecoveryFactor
+  // does not return it directly, so we read it from the v3 session
+  // state where v3's enroll/unlock paths install it.
+  const [dekId, setDekId] = useState(null);
 
   /**
    * Step (1) of enrollment: generate the seed, wrap the DEK under
@@ -84,23 +96,17 @@ export default function SocialMeshDEKEnroll() {
         masterPassword,
         meta: {
           // Pointer to the social-recovery setup row that owns the
-          // shard distribution. Populated by CircleSetup once the
-          // user finalizes their guardians.
-          //
-          // TODO(#221 follow-up): patch this back onto the just-
-          // enrolled factor row once CircleSetup surfaces the
-          // recovery_setup_id via onComplete(id). Today the
-          // existing CircleSetup component fires onComplete()
-          // with no argument so the id never makes it back here;
-          // recovery side will need to re-discover the setup by
-          // username instead. Tracked as a backend concern in
-          // sessionVaultCryptoV3 — once an `updateRecoveryFactorMeta`
-          // helper exists, wire the patch call.
+          // shard distribution. Populated by the
+          // `handleCircleComplete` callback below after CircleSetup
+          // commits and surfaces the circle_id.
           recovery_setup_id: null,
           secret_type: 'vault_dek_seed',
         },
       });
       setRecoverySeedHex(seedHex);
+      // Capture the dek_id so handleCircleComplete can supply
+      // proof-of-DEK-possession to the meta PATCH endpoint.
+      setDekId(sessionVaultCryptoV3.getSessionDEKId());
       // Clear the plaintext master password from React state now
       // that the wrap has completed. CircleSetup doesn't need it.
       setMasterPassword('');
@@ -109,6 +115,43 @@ export default function SocialMeshDEKEnroll() {
       setError(err?.message || 'Enrollment failed.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Invoked by CircleSetup's `onComplete` callback after a
+   * guardian circle has been committed server-side. PATCHes the
+   * returned `circle_id` into the wdek factor row's factor_meta
+   * as `recovery_setup_id` so the recover-side flow can look up
+   * the matching setup row by reading the factor's meta.
+   *
+   * If the patch fails (network blip, auth expired, etc.) we log
+   * + surface the error but still advance to the `done` phase —
+   * the guardian circle exists, the factor row exists, the only
+   * loss is the cross-reference, which recovery-side code can
+   * fall back to discovering by username.
+   *
+   * @param {string} circleId
+   */
+  async function handleCircleComplete(circleId) {
+    if (!circleId || !dekId) {
+      setPhase('done');
+      return;
+    }
+    try {
+      await recoveryFactorService.updateRecoveryFactorMeta({
+        factorType: 'social_mesh',
+        dekId,
+        metaPatch: { recovery_setup_id: circleId },
+      });
+    } catch (err) {
+      setError(
+        err?.message
+        || 'Could not link the new guardian circle to your recovery factor. '
+        + 'You can still recover by username on this device.',
+      );
+    } finally {
+      setPhase('done');
     }
   }
 
@@ -155,16 +198,16 @@ export default function SocialMeshDEKEnroll() {
         <Suspense fallback={<p>Loading guardian picker…</p>}>
           {/* CircleSetup component owns the guardian + threshold UX
               and the call to /quantum-recovery/setup_recovery/.
-              It accepts an optional `secretType` and `secretHex`
-              prop so the same setup wizard can split either a passkey
-              private key (existing default) or our new vault DEK seed.
-              If the component does not yet accept those props, this
-              still renders correctly; the seed-routing TODO is then
-              wired in a follow-up. */}
+              It accepts `secretType` + `secretHex` so it pre-fills
+              with our seed and hides the master-secret input, and
+              calls `onComplete(circleId)` once the guardian circle
+              is committed server-side. We then PATCH that id back
+              onto the wdek factor row's factor_meta so the recovery
+              side can locate the setup. */}
           <CircleSetup
             secretType="vault_dek_seed"
             secretHex={recoverySeedHex}
-            onComplete={() => setPhase('done')}
+            onComplete={handleCircleComplete}
           />
         </Suspense>
       </section>

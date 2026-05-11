@@ -22,14 +22,57 @@ const statusBadge = (status) => {
   return map[status] || '#6c757d';
 };
 
-const CircleSetup = () => {
+/**
+ * Guardian-circle management page. Used in two routes:
+ *
+ *   1. Legacy passkey recovery (/recovery/social/circles): the user
+ *      types a master secret + voucher list and the page manages
+ *      the full create/list/revoke workflow.
+ *
+ *   2. Layered Recovery Mesh tier-2 enroll (in `SocialMeshDEKEnroll`):
+ *      the parent has ALREADY generated a 32-byte `recovery_seed`
+ *      and wrapped the vault DEK under it; this component is then
+ *      composed to split THAT same seed across guardians.
+ *      `secretHex` is supplied, the master-secret input is hidden,
+ *      and on successful create we hand the `circle_id` (the
+ *      recovery_setup_id) back via `onComplete(id)` so the parent
+ *      can PATCH it into the wdek factor row's meta.
+ *
+ * Optional props default the component to the legacy management
+ * behavior so back-compat is preserved for the existing route.
+ *
+ * @param {object} [props]
+ * @param {string} [props.secretHex]
+ *   Pre-filled master secret (hex). When present the input is
+ *   hidden and the value is used verbatim. When absent the user
+ *   types it (legacy flow).
+ * @param {string} [props.secretType]
+ *   Informational — surfaces "vault_dek_seed" vs the implicit
+ *   legacy "passkey_private_key". Not currently sent to the
+ *   server; the existing createCircle endpoint doesn't yet
+ *   accept a secret_type discriminator.
+ * @param {(circleId: string) => void} [props.onComplete]
+ *   Invoked with the server-issued `circle_id` after a successful
+ *   create. Tier-2 wraps this in a PATCH to the wdek factor row's
+ *   factor_meta so recovery-side code can locate the setup. When
+ *   absent, the legacy flow just refreshes the local circle list
+ *   and re-renders.
+ */
+const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
   const [circles, setCircles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const [masterSecret, setMasterSecret] = useState('');
+  // When secretHex is supplied (tier-2 mode), use it verbatim and
+  // hide the manual-entry field. We never let the parent's value
+  // be re-typed — losing it would mean the parent's wdek envelope
+  // (already wrapped under that exact seed) becomes orphaned.
+  const externallyControlledSecret = typeof secretHex === 'string' && secretHex.length > 0;
+  const [masterSecret, setMasterSecret] = useState(
+    externallyControlledSecret ? secretHex : '',
+  );
   const [threshold, setThreshold] = useState(3);
   const [minStake, setMinStake] = useState(0);
   const [cooldown, setCooldown] = useState(24);
@@ -88,7 +131,7 @@ const CircleSetup = () => {
 
     setSubmitting(true);
     try {
-      await ApiService.socialRecovery.createCircle({
+      const resp = await ApiService.socialRecovery.createCircle({
         master_secret_hex: masterSecret,
         threshold: Number(threshold),
         min_total_stake: Number(minStake),
@@ -100,9 +143,26 @@ const CircleSetup = () => {
         })),
       });
       setShowForm(false);
-      setMasterSecret('');
+      // Only clear the master secret in legacy / unmanaged mode.
+      // In tier-2 mode the parent owns the value and clearing here
+      // would also clear the parent's bound reference (since we
+      // initialized state from props at mount); leave it alone so
+      // the parent can finish its own cleanup after onComplete.
+      if (!externallyControlledSecret) {
+        setMasterSecret('');
+      }
       setVouchers([EMPTY_VOUCHER(), EMPTY_VOUCHER(), EMPTY_VOUCHER()]);
       await loadCircles();
+      // Tier-2 hand-off: surface the new circle's id so the
+      // caller can PATCH it back onto the wdek factor row's
+      // factor_meta (recovery_setup_id). The server's
+      // createCircle response shape exposes the id at
+      // `circle_id` (mirroring the model field used elsewhere in
+      // this component, e.g. circle.circle_id at L318).
+      if (typeof onComplete === 'function') {
+        const circleId = resp?.data?.circle_id;
+        onComplete(circleId);
+      }
     } catch (err) {
       setError(ApiService.handleError(err).error || 'Failed to create circle.');
     } finally {
@@ -136,19 +196,37 @@ const CircleSetup = () => {
           <h3>Create Recovery Circle</h3>
 
           <div className="form-grid">
-            <div className="form-group full">
-              <label>Master Secret (hex)</label>
-              <input
-                type="text"
-                value={masterSecret}
-                onChange={(e) => setMasterSecret(e.target.value.trim())}
-                placeholder="64+ hex chars — generated from your vault key"
-                autoComplete="off"
-                spellCheck="false"
-                required
-              />
-              <small>Generated client-side from your vault KEK. Never sent in plaintext after sharing.</small>
-            </div>
+            {externallyControlledSecret ? (
+              // Tier-2 mode: the parent has already wrapped the
+              // vault DEK under THIS exact seed and POSTed the wdek
+              // row. Letting the user retype it would silently
+              // orphan that envelope. Hide the field and surface a
+              // read-only badge so the user knows we have it.
+              <div className="form-group full">
+                <label>Recovery Seed</label>
+                <p className="muted-note">
+                  Using your layered-recovery seed
+                  {secretType ? <> (<code>{secretType}</code>)</> : null}
+                  . The seed never leaves your browser; only
+                  guardian shards encrypted to each guardian's
+                  Kyber public key are stored.
+                </p>
+              </div>
+            ) : (
+              <div className="form-group full">
+                <label>Master Secret (hex)</label>
+                <input
+                  type="text"
+                  value={masterSecret}
+                  onChange={(e) => setMasterSecret(e.target.value.trim())}
+                  placeholder="64+ hex chars — generated from your vault key"
+                  autoComplete="off"
+                  spellCheck="false"
+                  required
+                />
+                <small>Generated client-side from your vault KEK. Never sent in plaintext after sharing.</small>
+              </div>
+            )}
 
             <div className="form-group">
               <label>Threshold (M)</label>

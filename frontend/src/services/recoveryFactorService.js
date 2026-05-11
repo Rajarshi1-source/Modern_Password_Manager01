@@ -159,6 +159,33 @@ export async function enrollTimeLockBundle({
  * @param {('recovery_key'|'social_mesh'|'time_locked'|'passkey')} factorType
  * @returns {Promise<{blob: object, dek_id: string}>}
  */
+/**
+ * Authenticated PATCH of ``RecoveryWrappedDEK.factor_meta``.
+ *
+ * Used by the tier-2 social-mesh enrollment flow to write back the
+ * ``recovery_setup_id`` after ``CircleSetup`` commits server-side.
+ * The endpoint shallow-merges ``metaPatch`` into the existing
+ * ``factor_meta`` object on the user's most-recently-created
+ * ACTIVE row of the requested ``factorType`` (the partial unique
+ * constraint guarantees at most one). Keys with a JSON-``null``
+ * value are removed; other keys overwrite. Reserved keys
+ * (``factor_type``, ``secret_type``) are rejected server-side.
+ *
+ * @param {object} args
+ * @param {('recovery_key'|'social_mesh'|'time_locked'|'passkey')} args.factorType
+ * @param {string} args.dekId            Proof-of-DEK-possession.
+ * @param {object} args.metaPatch        Shallow patch object.
+ * @returns {Promise<{success: true, meta: object}>}
+ */
+export async function updateRecoveryFactorMeta({ factorType, dekId, metaPatch }) {
+  const { data } = await axios.patch(`${BASE}/recovery-factors/meta/`, {
+    factor_type: factorType,
+    dek_id: dekId,
+    meta_patch: metaPatch,
+  });
+  return data;
+}
+
 export async function lookupRecoveryFactor(username, factorType) {
   const { data } = await axios.post(`${BASE}/recovery-factors/lookup/`, {
     username,
@@ -258,6 +285,7 @@ export default {
   listRecoveryFactors,
   createRecoveryFactor,
   lookupRecoveryFactor,
+  updateRecoveryFactorMeta,
   enrollTimeLock,
   enrollTimeLockBundle,
   initiateTimeLock,

@@ -302,6 +302,122 @@ def _decoy_dek_id(username: str, factor_type: str) -> str:
     return str(uuid.UUID(bytes=bytes(raw)))
 
 
+class RecoveryFactorMetaUpdateView(APIView):
+    """Authenticated PATCH of ``RecoveryWrappedDEK.factor_meta``.
+
+    Used by the tier-2 social-mesh enrollment flow to write back the
+    ``recovery_setup_id`` once ``CircleSetup`` has created the
+    PasskeyRecoverySetup row, after the wdek factor row has already
+    been written by ``RecoveryFactorListCreateView``. Without this
+    endpoint the factor_meta on the wdek row stays
+    ``recovery_setup_id: null`` forever and recovery-side code has
+    to re-discover the setup by username, which is brittle.
+
+    Body: ``{factor_type, dek_id, meta_patch}``
+      - ``factor_type``: which factor row to patch (we always
+        select the user's most-recently-created ACTIVE row of this
+        type — there's at most one due to the partial unique
+        constraint introduced in migration 0013).
+      - ``dek_id``: proof-of-DEK-possession; must match
+        ``RecoveryWrappedDEK.dek_id``.
+      - ``meta_patch``: a JSON object that is shallow-merged into
+        the existing ``factor_meta``. Keys with a JSON-``null``
+        value are removed; other keys overwrite. We never let the
+        client set ``secret_type`` through this endpoint because
+        flipping that field after enrollment would silently re-
+        route which Shamir-pipeline scope a shard belongs to.
+
+    Notable: the endpoint NEVER touches the ``blob``, ``status``,
+    or ``auth_hash`` columns — only ``factor_meta``. Those fields
+    are managed by the create/rotate flows, not by this metadata
+    patch.
+
+    Returns the merged ``factor_meta`` on success.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [RecoveryThrottle]
+
+    # Keys we refuse to let the client mutate through factor_meta —
+    # they are either re-typed/re-namespaced versions of fields that
+    # live on the column itself (factor_type) or have security
+    # consequences if flipped (secret_type controls which Shamir
+    # pipeline scope the shard belongs to).
+    _META_RESERVED_KEYS = frozenset({
+        'factor_type',
+        'secret_type',
+    })
+
+    def patch(self, request):
+        ftype = request.data.get('factor_type')
+        if ftype not in RecoveryWrappedDEK.FactorType.values:
+            return Response({'error': 'invalid factor_type'}, status=400)
+
+        dek_id_in = request.data.get('dek_id')
+        if not isinstance(dek_id_in, str) or not dek_id_in:
+            return Response({'error': 'dek_id required'}, status=400)
+
+        meta_patch = request.data.get('meta_patch')
+        if not isinstance(meta_patch, dict):
+            return Response({'error': 'meta_patch must be an object'}, status=400)
+        # Reject reserved keys at the boundary so a typo in the
+        # client can never silently rewrite security-relevant
+        # metadata.
+        for reserved in self._META_RESERVED_KEYS:
+            if reserved in meta_patch:
+                return Response(
+                    {'error': f'meta_patch may not include reserved key: {reserved}'},
+                    status=400,
+                )
+
+        with transaction.atomic():
+            factor = (
+                RecoveryWrappedDEK.objects
+                .select_for_update()
+                .filter(
+                    user=request.user,
+                    factor_type=ftype,
+                    status=RecoveryWrappedDEK.Status.ACTIVE,
+                )
+                .order_by('-created_at')
+                .first()
+            )
+            if factor is None:
+                return Response({'error': 'no active factor of this type'}, status=404)
+            if str(factor.dek_id) != dek_id_in:
+                return Response({'error': 'dek_id mismatch'}, status=409)
+
+            # Shallow merge. JSON-null sentinel deletes the key.
+            current = dict(factor.factor_meta or {})
+            for key, value in meta_patch.items():
+                if value is None:
+                    current.pop(key, None)
+                else:
+                    current[key] = value
+            factor.factor_meta = current
+            factor.save(update_fields=['factor_meta'])
+
+            RecoveryAuditLog.objects.create(
+                user=request.user,
+                event_type='setup_updated',
+                event_data={
+                    'subsystem': 'recovery_factor',
+                    'action': 'meta_patched',
+                    'factor_type': ftype,
+                    'factor_id': factor.id,
+                    # Log the SHAPE of the patch (keys only), not
+                    # the values, so audit logs don't accumulate
+                    # references to ids that may themselves be
+                    # sensitive in some deployments.
+                    'patched_keys': sorted(meta_patch.keys()),
+                },
+                ip_address=_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:1024],
+            )
+
+        return Response({'success': True, 'meta': current})
+
+
 class RecoveryFactorLookupView(APIView):
     """Anonymous lookup of a wrapped recovery factor by username.
 
