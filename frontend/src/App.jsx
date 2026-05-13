@@ -1017,11 +1017,28 @@ function App() {
             // v2 didn't recognise this envelope — most likely a v3
             // ``svc-gcm-2`` row. Try v3 before surfacing the
             // "Legacy plaintext" warning.
+            //
+            // CRITICAL on the failure path: do NOT overwrite v2Result
+            // with `{_decryptError: true}`. v2Result already holds
+            // the decoded fields of any *genuine* legacy-plaintext
+            // row (the v2 decryptor flags those with
+            // ``_legacyPlaintext: true`` after extracting the
+            // visible name / username / website fields). If v3
+            // also throws, the envelope is either a real legacy
+            // plaintext blob or a payload we genuinely can't
+            // decrypt — falling back to v2Result keeps the visible
+            // fields plus the "⚠ Legacy plaintext entry — re-save
+            // to encrypt" warning intact, which is strictly better
+            // UX than collapsing to a hard decrypt error that
+            // hides the row entirely until next refetch.
             try {
               next[item.item_id] = await sessionVaultCryptoV3.decryptItem(item.encrypted_data);
             } catch (v3Err) {
-              console.error('Failed to v3-decrypt vault item', item.item_id, v3Err);
-              next[item.item_id] = { _decryptError: true };
+              console.warn(
+                'v3 fallback failed; falling back to v2 legacy-plaintext result',
+                item.item_id, v3Err,
+              );
+              next[item.item_id] = v2Result;
             }
           } else {
             next[item.item_id] = v2Result;
@@ -1290,12 +1307,27 @@ function App() {
           : import('./services/legacyVaultMigration')
         )
           .then((mod) => mod.migrateRemainingV2Items())
-          .then((result) => {
-            // Only refetch when we actually rewrote something —
-            // avoids a useless round trip on already-migrated users.
-            // Return the promise so a refetch rejection flows through
-            // to the outer .catch instead of escaping unhandled.
-            if (result?.migratedCount > 0 && typeof fetchVaultItems === 'function') {
+          .then(() => {
+            // Always refetch when v3 became ready on this login,
+            // regardless of how many items the sweep actually
+            // rewrote. Reason: the parallel ``fetchVaultItems``
+            // useEffect (line ~977) can resolve its GET BEFORE
+            // ``await sessionVaultCryptoV3.unlockWithMasterPassword``
+            // completes; the decrypt useEffect then runs with
+            // ``hasSessionKey() === false``, so every v3 envelope
+            // falls through to the v2 ``_legacyPlaintext`` branch.
+            // For a fully-migrated user the sweep returns
+            // ``migratedCount = 0`` — under the prior
+            // "only refetch when rewrote something" gate, the user
+            // would see "⚠ Legacy plaintext entry" cards on
+            // perfectly valid v3 ciphertext until they reloaded
+            // or mutated the vault.
+            //
+            // The cost of an unconditional refetch is exactly one
+            // extra GET on already-migrated users, which is
+            // strictly preferable to incorrect UI. Return the
+            // promise so a rejection flows into the outer .catch.
+            if (typeof fetchVaultItems === 'function') {
               return fetchVaultItems();
             }
             return undefined;
