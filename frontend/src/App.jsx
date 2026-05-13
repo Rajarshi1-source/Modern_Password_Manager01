@@ -22,6 +22,7 @@ import abTestingService from './services/abTestingService';
 import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
 import sessionVaultCrypto from './services/sessionVaultCrypto';
+import sessionVaultCryptoV3 from './services/sessionVaultCryptoV3';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
 
@@ -200,7 +201,13 @@ const GlobalStyle = createGlobalStyle`
 `;
 
 // Login form component (memoized to prevent unnecessary re-renders)
-const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) => {
+// Named inner function so `react/display-name` can infer a display
+// name from the memoized component without an explicit
+// `.displayName` assignment. Lint rule was blocking CI on this PR
+// even though the memo wrapper is pre-existing — kept as a named-
+// function form because it also gives React DevTools a stable
+// component label in profiler traces.
+const LoginForm = memo(function LoginForm({ onLogin, onForgotPassword, toggleAuthMode, error }) {
   // Use controlled inputs to preserve values when password visibility toggles
   const [loginData, setLoginData] = useState({
     email: '',
@@ -491,7 +498,9 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
 });
 
 // Signup form component (memoized to prevent unnecessary re-renders)
-const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
+// Named inner function for `react/display-name`; see the
+// `LoginForm` definition above for the rationale.
+const SignupForm = memo(function SignupForm({ onSignup, toggleAuthMode, error }) {
   const [signupData, setSignupData] = useState({
     email: '',
     password: '',
@@ -955,9 +964,16 @@ function App() {
   // Memoized so effects that depend on it don't capture a stale closure.
   // Declared BEFORE the effect that references it so the effect's dep array
   // (evaluated during render) doesn't hit the TDZ.
-  const fetchVaultItems = useCallback(async () => {
+  const fetchVaultItems = useCallback(async ({ silent = false } = {}) => {
+    // `silent` skips the loading-spinner state change so a
+    // post-migration refetch doesn't flash the "Loading your
+    // passwords…" placeholder after the vault has already
+    // rendered. The auth-change useEffect calls this with default
+    // (non-silent) semantics on the initial login fetch; the
+    // post-migration refetch in handleLogin's sweep branches
+    // passes `{ silent: true }`.
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const response = await axios.get('/api/vault/');
       // Ensure vaultItems is always an array
       const items = response.data?.results || response.data || [];
@@ -971,7 +987,7 @@ function App() {
       }
       setVaultItems([]); // Reset to empty array on error
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -1010,8 +1026,47 @@ function App() {
       const next = {};
       for (const item of vaultItems) {
         if (!item || !item.item_id) continue;
+        // Try v2 first. v2 returns ``{_legacyPlaintext: true}`` for
+        // any payload it doesn't recognise as its own ``svc-gcm-1``
+        // shape — including v3 ``svc-gcm-2`` envelopes. After the
+        // legacy-to-v3 migration (Unit 15) the server holds v3
+        // ciphertext, so v2 will (correctly) refuse it; we fall
+        // back to v3's decryptor in that case. Order is v2-first
+        // so legacy items decrypt without an extra round trip
+        // through v3 KDF; the v3 fallback only fires for migrated
+        // and freshly-written rows.
         try {
-          next[item.item_id] = await sessionVaultCrypto.decryptItem(item.encrypted_data);
+          const v2Result = await sessionVaultCrypto.decryptItem(item.encrypted_data);
+          if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
+            // v2 didn't recognise this envelope — most likely a v3
+            // ``svc-gcm-2`` row. Try v3 before surfacing the
+            // "Legacy plaintext" warning.
+            //
+            // CRITICAL on the failure path: do NOT overwrite v2Result
+            // with `{_decryptError: true}`. v2Result already holds
+            // the decoded fields of any *genuine* legacy-plaintext
+            // row (the v2 decryptor flags those with
+            // ``_legacyPlaintext: true`` after extracting the
+            // visible name / username / website fields). If v3
+            // also throws, the envelope is either a real legacy
+            // plaintext blob or a payload we genuinely can't
+            // decrypt — falling back to v2Result keeps the visible
+            // fields plus the "⚠ Legacy plaintext entry — re-save
+            // to encrypt" warning intact, which is strictly better
+            // UX than collapsing to a hard decrypt error that
+            // hides the row entirely until next refetch.
+            try {
+              next[item.item_id] = await sessionVaultCryptoV3.decryptItem(item.encrypted_data);
+            } catch (v3Err) {
+              console.warn(
+                'v3 fallback failed; falling back to v2 legacy-plaintext result',
+                item.item_id, v3Err,
+              );
+              next[item.item_id] = v2Result;
+            }
+          } else {
+            next[item.item_id] = v2Result;
+          }
         } catch (err) {
           console.error('Failed to decrypt vault item', item.item_id, err);
           next[item.item_id] = { _decryptError: true };
@@ -1210,6 +1265,134 @@ function App() {
         console.warn('Failed to initialize session vault key:', cryptoErr);
       }
 
+      // Layered Recovery Mesh (Unit 15) — additionally bootstrap the v3
+      // wrapped-DEK session. If the user has never been enrolled in v3
+      // before, run the legacy-to-v3 migration. The legacy v2 session
+      // key above stays live so any items still encrypted under
+      // svc-gcm-1 keep decrypting; new items go through v3.
+      //
+      // The migration is split into "first-time enrollment" (await'd —
+      // the user is blocked while we mint their wrapped DEK and run the
+      // initial item rewrite) and "opportunistic sweep" (fire-and-
+      // forget — runs in the background, makes forward progress on any
+      // items missed by a prior interrupted migration, no-op when the
+      // vault is fully on v3). The two-stage structure means a
+      // partially-migrated user makes progress on every subsequent
+      // login without ever blocking login on a multi-second PUT loop.
+      //
+      // The dynamic import is hoisted to a single await so we don't
+      // double-fetch the module on the first-enrollment path.
+      let v3Ready = false;
+      let firstTimeEnrollmentRanSweep = false;
+      let legacyMigrationModule = null;
+      try {
+        await sessionVaultCryptoV3.unlockWithMasterPassword(loginData.password);
+        v3Ready = true;
+      } catch (v3Err) {
+        if (v3Err?.message === 'NOT_ENROLLED') {
+          try {
+            legacyMigrationModule = await import(
+              './services/legacyVaultMigration'
+            );
+            const migResult = await legacyMigrationModule
+              .migrateLegacyUserToWrappedDEK(
+                loginData.password,
+                loginData.email
+              );
+            v3Ready = true;
+            // The first-time path already ran the per-item sweep
+            // inside `migrateLegacyUserToWrappedDEK`, so we can skip
+            // the opportunistic outer sweep on THIS login. Subsequent
+            // logins will hit the unlock-success branch and run the
+            // sweep unconditionally.
+            firstTimeEnrollmentRanSweep = Boolean(migResult?.enrolled);
+          } catch (migErr) {
+            console.warn('Legacy-to-v3 vault migration failed:', migErr);
+          }
+        } else {
+          // Unexpected error from v3 unlock — log and continue. The
+          // legacy v2 session key is still live, so the vault remains
+          // usable; recovery factors just won't work this session.
+          console.warn('v3 wrapped-DEK unlock failed:', v3Err);
+        }
+      }
+
+      // Opportunistic retry of un-migrated v2 items. Fire-and-forget:
+      // the sweep is idempotent and single-flight, so blocking login on
+      // it offers no extra safety but does add a multi-second stall
+      // for large vaults. On completion we trigger a vault refetch so
+      // the in-memory `vaultItems` aren't stale w.r.t. the rewritten
+      // ciphertext (the decrypt effect uses v2 which would otherwise
+      // surface `_legacyPlaintext` cards for the rewritten rows until
+      // the next page load).
+      if (v3Ready && !firstTimeEnrollmentRanSweep) {
+        const sweepPromise = (legacyMigrationModule
+          ? Promise.resolve(legacyMigrationModule)
+          : import('./services/legacyVaultMigration')
+        )
+          .then((mod) => mod.migrateRemainingV2Items())
+          .then(() => {
+            // Always refetch when v3 became ready on this login,
+            // regardless of how many items the sweep actually
+            // rewrote. Reason: the parallel ``fetchVaultItems``
+            // useEffect (line ~977) can resolve its GET BEFORE
+            // ``await sessionVaultCryptoV3.unlockWithMasterPassword``
+            // completes; the decrypt useEffect then runs with
+            // ``hasSessionKey() === false``, so every v3 envelope
+            // falls through to the v2 ``_legacyPlaintext`` branch.
+            // For a fully-migrated user the sweep returns
+            // ``migratedCount = 0`` — under the prior
+            // "only refetch when rewrote something" gate, the user
+            // would see "⚠ Legacy plaintext entry" cards on
+            // perfectly valid v3 ciphertext until they reloaded
+            // or mutated the vault.
+            //
+            // The cost of an unconditional refetch is exactly one
+            // extra GET on already-migrated users, which is
+            // strictly preferable to incorrect UI. Return the
+            // promise so a rejection flows into the outer .catch.
+            //
+            // `silent: true` skips the loading-spinner toggle so
+            // this refetch doesn't flash "Loading your passwords…"
+            // over an already-rendered vault — the auth-change
+            // effect's initial fetch (line ~997) already toggled
+            // the spinner and the vault is on-screen by the time
+            // this resolves.
+            if (typeof fetchVaultItems === 'function') {
+              return fetchVaultItems({ silent: true });
+            }
+            return undefined;
+          })
+          .catch((sweepErr) => {
+            console.warn('Opportunistic v2-item sweep failed:', sweepErr);
+          });
+        // Discard the promise — we don't await login on it.
+        void sweepPromise;
+      } else if (firstTimeEnrollmentRanSweep && typeof fetchVaultItems === 'function') {
+        // The first-time-enrollment sweep that already ran inside
+        // `migrateLegacyUserToWrappedDEK` re-wrote items server-side;
+        // the in-memory vault items still hold the pre-migration
+        // ciphertext. Trigger a refetch so the UI picks up the v3
+        // envelopes. The decrypt useEffect now tries v3 when v2
+        // returns `_legacyPlaintext`, so even without the refetch
+        // the user would see plaintext — but a fresh GET surfaces
+        // any concurrent edits and matches what subsequent vault
+        // operations will see, which is the cleaner default.
+        //
+        // We cannot use try/catch around an un-awaited Promise —
+        // the Promise rejection escapes the synchronous catch
+        // unhandled. Use `.catch()` instead so refetch failures
+        // are actually surfaced.
+        Promise.resolve()
+          // `silent: true` — see the opportunistic-sweep branch
+          // above for the rationale (avoid flashing the loading
+          // placeholder over an already-rendered vault).
+          .then(() => fetchVaultItems({ silent: true }))
+          .catch((refetchErr) => {
+            console.warn('Post-migration vault refetch failed:', refetchErr);
+          });
+      }
+
       // Initialize error tracker user context
       errorTracker.setUserContext({
         email: loginData.email,
@@ -1237,7 +1420,11 @@ function App() {
         error: err.message
       }).catch(console.warn);
     }
-  }, [login, setError]);
+    // fetchVaultItems is closed over for the post-migration refetch
+    // path; even though it is itself a useCallback with stable
+    // identity (deps=[]), include it here to satisfy
+    // react-hooks/exhaustive-deps without disabling the lint rule.
+  }, [login, setError, fetchVaultItems]);
 
   const handleSignup = useCallback(async (signupData) => {
     // OAuth path — the social provider has already produced tokens. Reuse
@@ -1367,6 +1554,20 @@ function App() {
       // Drop the in-memory vault encryption key so it cannot be reused after
       // logout and so a subsequent login for a different user starts clean.
       sessionVaultCrypto.clearSessionKey();
+      // Same for the v3 wrapped-DEK session (Unit 15). The try/catch
+      // is defensive — clearSessionKey is a newer API surface than
+      // the v2 sibling above — but we LOG on failure rather than
+      // swallow it. A throw here means an in-memory DEK survived
+      // logout, which is exactly the kind of regression error
+      // tracking needs to surface.
+      try {
+        sessionVaultCryptoV3.clearSessionKey();
+      } catch (clearErr) {
+        console.warn(
+          'Failed to clear v3 vault session key on logout:',
+          clearErr,
+        );
+      }
 
       // Clear vault items
       setVaultItems([]);
