@@ -131,6 +131,16 @@ export default function SocialMeshDEKEnroll() {
    * loss is the cross-reference, which recovery-side code can
    * fall back to discovering by username.
    *
+   * NOTE: currently unreachable in tier-2 mode. `CircleSetup`
+   * refuses to commit when `secretHex` is supplied because the
+   * legacy `/api/social-recovery/circles/` endpoint splits the
+   * secret server-side, which would break the zero-knowledge
+   * property of the vault recovery seed. This callback stays in
+   * place for the follow-up that adds a client-side Shamir +
+   * Kyber pipeline — at that point `CircleSetup` will fire
+   * `onComplete(circleId)` and this PATCH will populate
+   * `factor_meta.recovery_setup_id`.
+   *
    * @param {string} circleId
    */
   async function handleCircleComplete(circleId) {
