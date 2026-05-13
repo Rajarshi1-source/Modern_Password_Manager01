@@ -955,9 +955,16 @@ function App() {
   // Memoized so effects that depend on it don't capture a stale closure.
   // Declared BEFORE the effect that references it so the effect's dep array
   // (evaluated during render) doesn't hit the TDZ.
-  const fetchVaultItems = useCallback(async () => {
+  const fetchVaultItems = useCallback(async ({ silent = false } = {}) => {
+    // `silent` skips the loading-spinner state change so a
+    // post-migration refetch doesn't flash the "Loading your
+    // passwords…" placeholder after the vault has already
+    // rendered. The auth-change useEffect calls this with default
+    // (non-silent) semantics on the initial login fetch; the
+    // post-migration refetch in handleLogin's sweep branches
+    // passes `{ silent: true }`.
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const response = await axios.get('/api/vault/');
       // Ensure vaultItems is always an array
       const items = response.data?.results || response.data || [];
@@ -971,7 +978,7 @@ function App() {
       }
       setVaultItems([]); // Reset to empty array on error
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -1335,8 +1342,15 @@ function App() {
             // extra GET on already-migrated users, which is
             // strictly preferable to incorrect UI. Return the
             // promise so a rejection flows into the outer .catch.
+            //
+            // `silent: true` skips the loading-spinner toggle so
+            // this refetch doesn't flash "Loading your passwords…"
+            // over an already-rendered vault — the auth-change
+            // effect's initial fetch (line ~997) already toggled
+            // the spinner and the vault is on-screen by the time
+            // this resolves.
             if (typeof fetchVaultItems === 'function') {
-              return fetchVaultItems();
+              return fetchVaultItems({ silent: true });
             }
             return undefined;
           })
@@ -1361,7 +1375,10 @@ function App() {
         // unhandled. Use `.catch()` instead so refetch failures
         // are actually surfaced.
         Promise.resolve()
-          .then(() => fetchVaultItems())
+          // `silent: true` — see the opportunistic-sweep branch
+          // above for the rationale (avoid flashing the loading
+          // placeholder over an already-rendered vault).
+          .then(() => fetchVaultItems({ silent: true }))
           .catch((refetchErr) => {
             console.warn('Post-migration vault refetch failed:', refetchErr);
           });
@@ -1528,8 +1545,20 @@ function App() {
       // Drop the in-memory vault encryption key so it cannot be reused after
       // logout and so a subsequent login for a different user starts clean.
       sessionVaultCrypto.clearSessionKey();
-      // Same for the v3 wrapped-DEK session (Unit 15).
-      try { sessionVaultCryptoV3.clearSessionKey(); } catch {}
+      // Same for the v3 wrapped-DEK session (Unit 15). The try/catch
+      // is defensive — clearSessionKey is a newer API surface than
+      // the v2 sibling above — but we LOG on failure rather than
+      // swallow it. A throw here means an in-memory DEK survived
+      // logout, which is exactly the kind of regression error
+      // tracking needs to surface.
+      try {
+        sessionVaultCryptoV3.clearSessionKey();
+      } catch (clearErr) {
+        console.warn(
+          'Failed to clear v3 vault session key on logout:',
+          clearErr,
+        );
+      }
 
       // Clear vault items
       setVaultItems([]);
