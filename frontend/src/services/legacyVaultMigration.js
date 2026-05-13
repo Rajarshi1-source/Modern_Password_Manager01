@@ -34,10 +34,24 @@
  * As more code paths migrate to v3, the eventual full retirement
  * of v2 can drop the key here too.
  *
- * Concurrency: a module-level in-flight Promise singleton ensures
- * that two near-simultaneous callers (e.g. two tabs, or a
- * double-fired login) share the same sweep rather than racing
- * decrypt-and-rewrite against each other on the same rows.
+ * Concurrency:
+ *
+ *   * Within a single JS realm (i.e. the same tab or worker), a
+ *     module-level in-flight Promise singleton coalesces
+ *     near-simultaneous callers — a fast double-fired login won't
+ *     start two sweeps against the same rows.
+ *
+ *   * Across tabs the singleton does NOT apply: each tab has its
+ *     own module-level state. Cross-tab safety here comes from
+ *     the per-item ``_legacyPlaintext`` sentinel below — a tab
+ *     that races in after another tab's PATCH attempts to decrypt
+ *     a v3 envelope with the v2 decryptor, receives
+ *     ``{_legacyPlaintext: true}``, and skips the row rather than
+ *     re-encrypting stale plaintext.
+ *
+ *   * Across tabs the per-item ``updated_at`` precondition check
+ *     adds a second line of defence against losing a concurrent
+ *     edit a user has just made in another window.
  */
 import axios from 'axios';
 import * as legacyV2 from './sessionVaultCrypto';
@@ -57,10 +71,27 @@ let inFlightSweep = null;
  *
  * @returns {Promise<Array<object>>}
  */
+// Upper bound on pagination iterations. With PAGE_SIZE=100 this
+// covers 20 000 vault items per user — well above any realistic
+// vault — and exists to bound a pathological server response in
+// which `data.next` never goes null. Without the bound, a buggy
+// backend could spin login indefinitely.
+const FETCH_ALL_MAX_PAGES = 200;
+
 async function fetchAllVaultItems() {
   const out = [];
   let url = '/api/vault/';
+  let pageCount = 0;
   while (url) {
+    if (pageCount >= FETCH_ALL_MAX_PAGES) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `legacyVaultMigration: pagination loop hit FETCH_ALL_MAX_PAGES=${FETCH_ALL_MAX_PAGES}; `
+        + 'stopping. Migration will resume on next login.',
+      );
+      break;
+    }
+    pageCount += 1;
     // eslint-disable-next-line no-await-in-loop -- sequential by design
     const { data } = await axios.get(url);
     if (Array.isArray(data)) {
@@ -136,17 +167,53 @@ export async function migrateRemainingV2Items() {
       try {
         // eslint-disable-next-line no-await-in-loop
         const reencrypted = await sessionVaultCryptoV3.encryptItem(plain);
-        // PATCH (not PUT) so we only update encrypted_data; PUT
-        // with `...item` would re-send writable fields like
-        // item_type / folder_id / favorite / tags / last_used_at
-        // with stale values, clobbering any concurrent edit made
-        // from another tab or device between this client's GET
-        // and PATCH.
-        // eslint-disable-next-line no-await-in-loop
-        await axios.patch(`/api/vault/${item.id}/`, {
-          encrypted_data: reencrypted,
-        });
-        migratedCount += 1;
+        // Optimistic-concurrency precondition: if another tab /
+        // device updated this row between fetchAllVaultItems() and
+        // here, the user's most recent edit may carry a NEWER
+        // plaintext that we'd silently overwrite with the OLDER
+        // plaintext we just decrypted. Refetch the single row and
+        // skip if its `updated_at` has advanced.
+        //
+        // The check is best-effort: if the row has no `updated_at`
+        // field, or the precondition GET fails, we fall through to
+        // the PATCH (which is the previous behaviour — strictly no
+        // worse). PATCH only updates encrypted_data, so we're not
+        // re-sending stale writable fields like item_type / folder
+        // _id / favorite / tags / last_used_at either way.
+        let skipDueToConcurrentEdit = false;
+        if (item.updated_at) {
+          try {
+            // eslint-disable-next-line no-await-in-loop
+            const fresh = await axios.get(`/api/vault/${item.id}/`);
+            const freshUpdatedAt = fresh?.data?.updated_at;
+            if (
+              typeof freshUpdatedAt === 'string'
+              && freshUpdatedAt !== item.updated_at
+            ) {
+              skipDueToConcurrentEdit = true;
+              // eslint-disable-next-line no-console
+              console.warn(
+                `legacyVaultMigration: skipping ${item.id} — concurrent edit detected `
+                + `(was ${item.updated_at}, now ${freshUpdatedAt})`,
+              );
+            }
+          } catch (preErr) {
+            // Precondition GET failed — log and proceed. This keeps
+            // behaviour no worse than the no-check baseline.
+            // eslint-disable-next-line no-console
+            console.warn(
+              `legacyVaultMigration: precondition GET failed for ${item.id}:`,
+              preErr?.message,
+            );
+          }
+        }
+        if (!skipDueToConcurrentEdit) {
+          // eslint-disable-next-line no-await-in-loop
+          await axios.patch(`/api/vault/${item.id}/`, {
+            encrypted_data: reencrypted,
+          });
+          migratedCount += 1;
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(`legacyVaultMigration: rewrite failed for ${item.id}:`, err);

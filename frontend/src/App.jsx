@@ -1002,8 +1002,30 @@ function App() {
       const next = {};
       for (const item of vaultItems) {
         if (!item || !item.item_id) continue;
+        // Try v2 first. v2 returns ``{_legacyPlaintext: true}`` for
+        // any payload it doesn't recognise as its own ``svc-gcm-1``
+        // shape — including v3 ``svc-gcm-2`` envelopes. After the
+        // legacy-to-v3 migration (Unit 15) the server holds v3
+        // ciphertext, so v2 will (correctly) refuse it; we fall
+        // back to v3's decryptor in that case. Order is v2-first
+        // so legacy items decrypt without an extra round trip
+        // through v3 KDF; the v3 fallback only fires for migrated
+        // and freshly-written rows.
         try {
-          next[item.item_id] = await sessionVaultCrypto.decryptItem(item.encrypted_data);
+          const v2Result = await sessionVaultCrypto.decryptItem(item.encrypted_data);
+          if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
+            // v2 didn't recognise this envelope — most likely a v3
+            // ``svc-gcm-2`` row. Try v3 before surfacing the
+            // "Legacy plaintext" warning.
+            try {
+              next[item.item_id] = await sessionVaultCryptoV3.decryptItem(item.encrypted_data);
+            } catch (v3Err) {
+              console.error('Failed to v3-decrypt vault item', item.item_id, v3Err);
+              next[item.item_id] = { _decryptError: true };
+            }
+          } else {
+            next[item.item_id] = v2Result;
+          }
         } catch (err) {
           console.error('Failed to decrypt vault item', item.item_id, err);
           next[item.item_id] = { _decryptError: true };
@@ -1271,9 +1293,12 @@ function App() {
           .then((result) => {
             // Only refetch when we actually rewrote something —
             // avoids a useless round trip on already-migrated users.
+            // Return the promise so a refetch rejection flows through
+            // to the outer .catch instead of escaping unhandled.
             if (result?.migratedCount > 0 && typeof fetchVaultItems === 'function') {
-              fetchVaultItems();
+              return fetchVaultItems();
             }
+            return undefined;
           })
           .catch((sweepErr) => {
             console.warn('Opportunistic v2-item sweep failed:', sweepErr);
@@ -1285,14 +1310,21 @@ function App() {
         // `migrateLegacyUserToWrappedDEK` re-wrote items server-side;
         // the in-memory vault items still hold the pre-migration
         // ciphertext. Trigger a refetch so the UI picks up the v3
-        // envelopes; the v2 decryptor handles them via the
-        // `_legacyPlaintext` sentinel but the UX is cleaner with
-        // fresh ciphertext that v3 can decrypt directly.
-        try {
-          fetchVaultItems();
-        } catch (refetchErr) {
-          console.warn('Post-migration vault refetch failed:', refetchErr);
-        }
+        // envelopes. The decrypt useEffect now tries v3 when v2
+        // returns `_legacyPlaintext`, so even without the refetch
+        // the user would see plaintext — but a fresh GET surfaces
+        // any concurrent edits and matches what subsequent vault
+        // operations will see, which is the cleaner default.
+        //
+        // We cannot use try/catch around an un-awaited Promise —
+        // the Promise rejection escapes the synchronous catch
+        // unhandled. Use `.catch()` instead so refetch failures
+        // are actually surfaced.
+        Promise.resolve()
+          .then(() => fetchVaultItems())
+          .catch((refetchErr) => {
+            console.warn('Post-migration vault refetch failed:', refetchErr);
+          });
       }
 
       // Initialize error tracker user context
@@ -1322,7 +1354,11 @@ function App() {
         error: err.message
       }).catch(console.warn);
     }
-  }, [login, setError]);
+    // fetchVaultItems is closed over for the post-migration refetch
+    // path; even though it is itself a useCallback with stable
+    // identity (deps=[]), include it here to satisfy
+    // react-hooks/exhaustive-deps without disabling the lint rule.
+  }, [login, setError, fetchVaultItems]);
 
   const handleSignup = useCallback(async (signupData) => {
     // OAuth path — the social provider has already produced tokens. Reuse
