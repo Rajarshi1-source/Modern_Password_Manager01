@@ -192,7 +192,13 @@ const GlobalStyle = createGlobalStyle`
 `;
 
 // Login form component (memoized to prevent unnecessary re-renders)
-const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) => {
+// Named inner function so `react/display-name` can infer a display
+// name from the memoized component without an explicit
+// `.displayName` assignment. Lint rule was blocking CI on this PR
+// even though the memo wrapper is pre-existing — kept as a named-
+// function form because it also gives React DevTools a stable
+// component label in profiler traces.
+const LoginForm = memo(function LoginForm({ onLogin, onForgotPassword, toggleAuthMode, error }) {
   // Use controlled inputs to preserve values when password visibility toggles
   const [loginData, setLoginData] = useState({
     email: '',
@@ -483,7 +489,9 @@ const LoginForm = memo(({ onLogin, onForgotPassword, toggleAuthMode, error }) =>
 });
 
 // Signup form component (memoized to prevent unnecessary re-renders)
-const SignupForm = memo(({ onSignup, toggleAuthMode, error }) => {
+// Named inner function for `react/display-name`; see the
+// `LoginForm` definition above for the rationale.
+const SignupForm = memo(function SignupForm({ onSignup, toggleAuthMode, error }) {
   const [signupData, setSignupData] = useState({
     email: '',
     password: '',
