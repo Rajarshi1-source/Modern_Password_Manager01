@@ -138,7 +138,15 @@ export const RecoveryInitiation = ({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="your.email@example.com"
-              required
+              // The legacy backend (InitiateRequestSerializer) allows
+              // initiator_email to be omitted/blank, and the legacy
+              // /recovery/social/initiate route relied on that. The
+              // tier-2 wrapper, however, drives downstream factor
+              // lookup off this value and cannot accept a blank
+              // string. So we require the field only in controlled
+              // mode (tier-2) and leave it optional on the legacy
+              // route — matching prior UX and serializer behavior.
+              required={isControlled}
               disabled={loading}
             />
           </div>

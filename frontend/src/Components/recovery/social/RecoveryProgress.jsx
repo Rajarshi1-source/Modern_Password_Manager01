@@ -153,6 +153,13 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
           } catch (decodeErr) {
             // Surface decode failure to the user — there's no
             // sensible fallback if the server returned garbage.
+            // Latch the one-shot guard so the 5-second poll doesn't
+            // re-attempt a permanently undecodable payload: the next
+            // tick would otherwise call setError(null) at the top of
+            // fetchStatus, then re-throw here, causing the error
+            // message to flicker on/off every 5 seconds and giving
+            // the user no chance to act on it.
+            reconstructedFiredRef.current = true;
             // eslint-disable-next-line no-console
             console.warn('RecoveryProgress: secret decode failed:', decodeErr);
             setError(
