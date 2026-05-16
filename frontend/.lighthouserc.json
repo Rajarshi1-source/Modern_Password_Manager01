@@ -1,7 +1,7 @@
 {
   "ci": {
     "collect": {
-      "staticDistDir": "./dist",
+      "staticDistDir": "./frontend/dist",
       "url": ["http://localhost/index.html"],
       "numberOfRuns": 1,
       "settings": {
