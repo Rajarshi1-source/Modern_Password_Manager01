@@ -56,6 +56,14 @@ VALID_BLOB = {
     'wrapped': 'd3JhcHBlZHdyYXBwZWR3cmFwcGVk',
 }
 
+# Proof-of-secret-knowledge hash the wrapped-DEK rotation endpoint
+# checks at recovery time. The recovery-factor create/bundle endpoints
+# require it at enrollment so the server has bytes to compare against
+# during a later rotation. Shape is 64-char lowercase hex (a SHA-256
+# digest of "rotation-auth-v1:" + recovery_secret); the server never
+# decrypts it, only memcmp's it under hmac.compare_digest.
+VALID_AUTH_HASH = 'a' * 64
+
 
 @pytest.fixture
 def user(db):
@@ -143,6 +151,7 @@ class TestRecoveryFactorView:
         r = auth_client.post(self.URL, {
             'factor_type': 'recovery_key', 'blob': VALID_BLOB,
             'dek_id': dek_id, 'meta': {},
+            'auth_hash': VALID_AUTH_HASH,
         }, format='json')
         assert r.status_code == 201
         assert RecoveryWrappedDEK.objects.filter(user=user).count() == 1
@@ -151,6 +160,7 @@ class TestRecoveryFactorView:
         dek_id = self._enroll_dek(auth_client)
         auth_client.post(self.URL, {
             'factor_type': 'recovery_key', 'blob': VALID_BLOB, 'dek_id': dek_id,
+            'auth_hash': VALID_AUTH_HASH,
         }, format='json')
         RecoveryWrappedDEK.objects.filter(user=user).update(status='revoked')
         r = auth_client.get(self.URL)
@@ -159,7 +169,12 @@ class TestRecoveryFactorView:
 
     def test_unique_active_recovery_key(self, auth_client):
         dek_id = self._enroll_dek(auth_client)
-        body = {'factor_type': 'recovery_key', 'blob': VALID_BLOB, 'dek_id': dek_id}
+        body = {
+            'factor_type': 'recovery_key',
+            'blob': VALID_BLOB,
+            'dek_id': dek_id,
+            'auth_hash': VALID_AUTH_HASH,
+        }
         r1 = auth_client.post(self.URL, body, format='json')
         assert r1.status_code == 201
         r2 = auth_client.post(self.URL, body, format='json')
@@ -180,15 +195,30 @@ class TestRecoveryFactorView:
 @pytest.mark.skipif(not HAS_TIME_LOCKED, reason='Unit 2 not landed')
 @pytest.mark.django_db
 class TestTimeLocked:
-    ENROLL = '/api/auth/vault/time-locked/enroll/'
+    # NOTE: the standalone /enroll/ URL was retired (see comment in
+    # auth_module/urls.py around vault/time-locked/enroll-bundle/).
+    # All tier-3 enrollments must now go through the atomic bundle
+    # endpoint that writes the TimeLockedRecovery server half AND
+    # the matching RecoveryWrappedDEK row in one transaction.
+    ENROLL_BUNDLE = '/api/auth/vault/time-locked/enroll-bundle/'
+    DEK_URL = '/api/auth/vault/wrapped-dek/'
     INITIATE = '/api/auth/vault/time-locked/initiate/'
     RELEASE = '/api/auth/vault/time-locked/release/'
     ACK = '/api/auth/vault/time-locked/canary-ack/'
 
     def test_enroll_stores_server_half(self, auth_client, user):
-        r = auth_client.post(self.ENROLL, {
+        # The bundle endpoint is gated on a prior wrapped-DEK
+        # enrollment (proof-of-DEK-possession via dek_id). Enroll one
+        # first so the tier-3 bundle has a dek_id to bind against.
+        wdek_resp = auth_client.put(self.DEK_URL, {'blob': VALID_BLOB}, format='json')
+        dek_id = wdek_resp.json()['dek_id']
+
+        r = auth_client.post(self.ENROLL_BUNDLE, {
             'server_half': base64.b64encode(b'opaque-share-bytes').decode(),
             'half_metadata': {'salt': 'c2FsdA==', 'kdf_params': {'t': 3}},
+            'dek_id': dek_id,
+            'blob': VALID_BLOB,
+            'auth_hash': VALID_AUTH_HASH,
         }, format='json')
         assert r.status_code == 201
         assert TimeLockedRecovery.objects.filter(user=user, is_active=True).count() == 1
@@ -226,8 +256,17 @@ class TestTimeLocked:
         r = APIClient().post(self.ACK, {'token': 'abc-token-xyz'}, format='json')
         assert r.status_code == 200
         rec.refresh_from_db()
-        assert rec.is_active is False
+        # By design (see TimeLockedCanaryAckView.post comment), the
+        # canary-ack endpoint flips canary_state but deliberately
+        # KEEPS is_active=True. That keeps the row visible to a
+        # subsequent /release/ call so it can read the ACKNOWLEDGED
+        # state under the same row lock and refuse with
+        # 'cancelled_by_canary' — a property test_release_refused_
+        # after_canary_ack exercises end-to-end. Asserting is_active
+        # False here would force the view back into a design that
+        # erases the cancel signal from the forensics trail.
         assert rec.canary_state == 'acknowledged'
+        assert rec.is_active is True
 
     def test_initiate_does_not_leak_existence(self):
         r = APIClient().post(self.INITIATE, {'username': 'ghost-account'}, format='json')
