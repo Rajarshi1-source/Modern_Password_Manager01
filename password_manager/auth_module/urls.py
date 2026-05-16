@@ -29,6 +29,7 @@ from .wrapped_dek_view import VaultWrappedDEKView, WrappedDEKRecoveryRotateView
 from .recovery_factor_view import (
     RecoveryFactorListCreateView,
     RecoveryFactorLookupView,
+    RecoveryFactorMetaUpdateView,
 )
 # Import Layered Recovery Mesh views (Unit 6)
 from .time_locked_view import (
@@ -174,6 +175,10 @@ urlpatterns = [
     # need to unwrap with the user's recovery secret. Returns a decoy
     # blob for unknown usernames so account existence is not leaked.
     path('vault/recovery-factors/lookup/', RecoveryFactorLookupView.as_view(), name='vault-recovery-factor-lookup'),
+    # Authenticated PATCH of factor_meta. Used by the tier-2 social-
+    # mesh enrollment flow to write back recovery_setup_id after
+    # CircleSetup commits the guardian circle server-side.
+    path('vault/recovery-factors/meta/', RecoveryFactorMetaUpdateView.as_view(), name='vault-recovery-factor-meta'),
     # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
     # share; release gated by configurable delay + canary-cancellation.
     #

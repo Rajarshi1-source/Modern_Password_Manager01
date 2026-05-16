@@ -22,14 +22,57 @@ const statusBadge = (status) => {
   return map[status] || '#6c757d';
 };
 
-const CircleSetup = () => {
+/**
+ * Guardian-circle management page. Used in two routes:
+ *
+ *   1. Legacy passkey recovery (/recovery/social/circles): the user
+ *      types a master secret + voucher list and the page manages
+ *      the full create/list/revoke workflow.
+ *
+ *   2. Layered Recovery Mesh tier-2 enroll (in `SocialMeshDEKEnroll`):
+ *      the parent has ALREADY generated a 32-byte `recovery_seed`
+ *      and wrapped the vault DEK under it; this component is then
+ *      composed to split THAT same seed across guardians.
+ *      `secretHex` is supplied, the master-secret input is hidden,
+ *      and on successful create we hand the `circle_id` (the
+ *      recovery_setup_id) back via `onComplete(id)` so the parent
+ *      can PATCH it into the wdek factor row's meta.
+ *
+ * Optional props default the component to the legacy management
+ * behavior so back-compat is preserved for the existing route.
+ *
+ * @param {object} [props]
+ * @param {string} [props.secretHex]
+ *   Pre-filled master secret (hex). When present the input is
+ *   hidden and the value is used verbatim. When absent the user
+ *   types it (legacy flow).
+ * @param {string} [props.secretType]
+ *   Informational — surfaces "vault_dek_seed" vs the implicit
+ *   legacy "passkey_private_key". Not currently sent to the
+ *   server; the existing createCircle endpoint doesn't yet
+ *   accept a secret_type discriminator.
+ * @param {(circleId: string) => void} [props.onComplete]
+ *   Invoked with the server-issued `circle_id` after a successful
+ *   create. Tier-2 wraps this in a PATCH to the wdek factor row's
+ *   factor_meta so recovery-side code can locate the setup. When
+ *   absent, the legacy flow just refreshes the local circle list
+ *   and re-renders.
+ */
+const CircleSetup = ({ secretHex, secretType, onComplete } = {}) => {
   const [circles, setCircles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const [masterSecret, setMasterSecret] = useState('');
+  // When secretHex is supplied (tier-2 mode), use it verbatim and
+  // hide the manual-entry field. We never let the parent's value
+  // be re-typed — losing it would mean the parent's wdek envelope
+  // (already wrapped under that exact seed) becomes orphaned.
+  const externallyControlledSecret = typeof secretHex === 'string' && secretHex.length > 0;
+  const [masterSecret, setMasterSecret] = useState(
+    externallyControlledSecret ? secretHex : '',
+  );
   const [threshold, setThreshold] = useState(3);
   const [minStake, setMinStake] = useState(0);
   const [cooldown, setCooldown] = useState(24);
@@ -68,6 +111,47 @@ const CircleSetup = () => {
     e.preventDefault();
     setError(null);
 
+    // 🔴 ZK GUARD — tier-2 social-mesh DEK enrollment cannot use
+    // the legacy `/api/social-recovery/circles/` endpoint.
+    //
+    // That endpoint takes `master_secret_hex` as plaintext and
+    // performs the Shamir split + per-guardian Kyber wrap
+    // SERVER-SIDE (see
+    // password_manager/social_recovery/services/circle_service.py:
+    // ~L116-L121). For the legacy passkey-recovery flow that's
+    // tolerated because the secret being split is a passkey
+    // private key the server already holds.
+    //
+    // In tier-2 mode (`externallyControlledSecret === true`) the
+    // secret is the freshly-generated 32-byte recovery seed that
+    // wraps the vault DEK. Letting the server see that seed AND
+    // the wrapped factor blob (which it stores) collapses the
+    // zero-knowledge property — the server could unwrap the DEK
+    // and read the entire vault. That is exactly the situation
+    // the layered-recovery design exists to prevent.
+    //
+    // The correct architecture is client-side Shamir + per-
+    // guardian Kyber, then POST only the encrypted shards. That
+    // pipeline doesn't exist yet (it's the "client-side share
+    // split" follow-up tracked separately from this PR), so we
+    // hard-refuse in tier-2 mode rather than silently committing
+    // a ZK violation. The tier-2 enroll route stays unlinked
+    // from the main UI in the meantime.
+    if (externallyControlledSecret) {
+      setError(
+        'Tier-2 social-mesh DEK enrollment is not yet available. '
+        + 'The current /api/social-recovery/circles/ endpoint performs '
+        + 'the Shamir split server-side, which would expose your vault '
+        + 'recovery seed to the server. A client-side split + Kyber '
+        + 'wrap pipeline is required before this flow can be enabled; '
+        + 'tracked as a follow-up to #233. Your wdek factor row from '
+        + 'step (1) of enrollment remains valid for other recovery '
+        + 'tiers; you can revoke it from /settings/security if you '
+        + 'do not want it lingering.',
+      );
+      return;
+    }
+
     if (!/^[0-9a-fA-F]+$/.test(masterSecret) || masterSecret.length < 32) {
       setError('Master secret must be a hex string of at least 32 chars.');
       return;
@@ -88,7 +172,7 @@ const CircleSetup = () => {
 
     setSubmitting(true);
     try {
-      await ApiService.socialRecovery.createCircle({
+      const resp = await ApiService.socialRecovery.createCircle({
         master_secret_hex: masterSecret,
         threshold: Number(threshold),
         min_total_stake: Number(minStake),
@@ -100,9 +184,26 @@ const CircleSetup = () => {
         })),
       });
       setShowForm(false);
-      setMasterSecret('');
+      // Only clear the master secret in legacy / unmanaged mode.
+      // In tier-2 mode the parent owns the value and clearing here
+      // would also clear the parent's bound reference (since we
+      // initialized state from props at mount); leave it alone so
+      // the parent can finish its own cleanup after onComplete.
+      if (!externallyControlledSecret) {
+        setMasterSecret('');
+      }
       setVouchers([EMPTY_VOUCHER(), EMPTY_VOUCHER(), EMPTY_VOUCHER()]);
       await loadCircles();
+      // Tier-2 hand-off: surface the new circle's id so the
+      // caller can PATCH it back onto the wdek factor row's
+      // factor_meta (recovery_setup_id). The server's
+      // createCircle response shape exposes the id at
+      // `circle_id` (mirroring the model field used elsewhere in
+      // this component, e.g. circle.circle_id at L318).
+      if (typeof onComplete === 'function') {
+        const circleId = resp?.data?.circle_id;
+        onComplete(circleId);
+      }
     } catch (err) {
       setError(ApiService.handleError(err).error || 'Failed to create circle.');
     } finally {
@@ -136,19 +237,42 @@ const CircleSetup = () => {
           <h3>Create Recovery Circle</h3>
 
           <div className="form-grid">
-            <div className="form-group full">
-              <label>Master Secret (hex)</label>
-              <input
-                type="text"
-                value={masterSecret}
-                onChange={(e) => setMasterSecret(e.target.value.trim())}
-                placeholder="64+ hex chars — generated from your vault key"
-                autoComplete="off"
-                spellCheck="false"
-                required
-              />
-              <small>Generated client-side from your vault KEK. Never sent in plaintext after sharing.</small>
-            </div>
+            {externallyControlledSecret ? (
+              // Tier-2 mode: the parent has already wrapped the
+              // vault DEK under THIS exact seed and POSTed the wdek
+              // row. Letting the user retype it would silently
+              // orphan that envelope. Hide the field and surface a
+              // read-only badge so the user knows we have it.
+              <div className="form-group full">
+                <label>Recovery Seed</label>
+                <p className="muted-note" role="alert">
+                  <strong>⚠ Not yet available.</strong> Tier-2
+                  social-mesh DEK enrollment is gated until the
+                  client-side Shamir + Kyber pipeline lands —
+                  the current backend endpoint would perform the
+                  split server-side, breaking the zero-knowledge
+                  property for your vault seed. Your wdek factor
+                  row from step (1) is unaffected; submitting
+                  this form will surface a clear error rather
+                  than commit anything. (Tracked as a follow-up
+                  to #233.)
+                </p>
+              </div>
+            ) : (
+              <div className="form-group full">
+                <label>Master Secret (hex)</label>
+                <input
+                  type="text"
+                  value={masterSecret}
+                  onChange={(e) => setMasterSecret(e.target.value.trim())}
+                  placeholder="64+ hex chars — generated from your vault key"
+                  autoComplete="off"
+                  spellCheck="false"
+                  required
+                />
+                <small>Generated client-side from your vault KEK. Never sent in plaintext after sharing.</small>
+              </div>
+            )}
 
             <div className="form-group">
               <label>Threshold (M)</label>

@@ -361,6 +361,13 @@ export async function rewrapMasterPasswordFromRecovery({
 // ─── Public API: item encryption ───────────────────────────────────
 
 export const hasSessionKey = () => sessionDEK !== null;
+/**
+ * Read the current session's `dek_id`. Used by callers that need
+ * proof-of-DEK-possession for follow-up PATCH endpoints (e.g.
+ * factor_meta updates after CircleSetup commits server-side).
+ * Returns `null` when the vault is locked.
+ */
+export const getSessionDEKId = () => sessionDEKId;
 export const clearSessionKey = () => {
   sessionDEK = null;
   sessionDEKId = null;
@@ -421,6 +428,7 @@ export default {
   unlockWithRecoveryFactor,
   rewrapMasterPasswordFromRecovery,
   hasSessionKey,
+  getSessionDEKId,
   clearSessionKey,
   encryptItem,
   decryptItem,
