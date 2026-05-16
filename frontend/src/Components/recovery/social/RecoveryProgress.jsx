@@ -62,6 +62,13 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
   // before the parent unmounts us.
   const reconstructedFiredRef = useRef(false);
 
+  // Reset the one-shot guard when the request id changes so a fresh
+  // recovery attempt (same mounted component, new requestId) can still
+  // deliver its secret to the parent.
+  useEffect(() => {
+    reconstructedFiredRef.current = false;
+  }, [requestId]);
+
   const fetchStatus = useCallback(async () => {
     if (!requestId) {
       setError('Recovery request id missing');
@@ -81,7 +88,13 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
       // is absent (older backend, or completion event without
       // payload) we leave the callback un-fired; the parent's
       // own polling/timeout path can fall back to a fresh attempt.
-      if (typeof onSecretReconstructed === 'function' && !reconstructedFiredRef.current) {
+      //
+      // Gate on a final status so an intermediate poll (e.g. pending
+      // with stale fields) cannot fire the callback prematurely with
+      // a decoy / stale value.
+      const polledStatus = normalizeStatus(resp.data?.status);
+      const isFinal = polledStatus === 'approved' || polledStatus === 'completed';
+      if (isFinal && typeof onSecretReconstructed === 'function' && !reconstructedFiredRef.current) {
         const b64 = resp.data?.reconstructed_secret || resp.data?.secret_bytes;
         if (typeof b64 === 'string' && b64.length > 0) {
           try {

@@ -40,13 +40,15 @@ export const RecoveryInitiation = ({
   const [error, setError] = useState(null);
   const navigate = useNavigate();
 
-  // Bridge controlled / uncontrolled. When the parent supplies
-  // `email` + `onEmailChange` we operate in controlled mode; when
-  // either is missing we fall back to local state so the legacy
-  // route still works untouched.
-  const email = controlledEmail !== undefined ? controlledEmail : internalEmail;
+  // Bridge controlled / uncontrolled. We only enter controlled mode
+  // when the parent supplies BOTH `email` and a working `onEmailChange`
+  // setter — otherwise the input would silently become read-only when
+  // a parent passes `email` without a setter.
+  const isControlled =
+    controlledEmail !== undefined && typeof onEmailChange === 'function';
+  const email = isControlled ? controlledEmail : internalEmail;
   const setEmail = (value) => {
-    if (typeof onEmailChange === 'function') onEmailChange(value);
+    if (isControlled) onEmailChange(value);
     else setInternalEmail(value);
   };
 

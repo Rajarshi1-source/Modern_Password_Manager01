@@ -185,8 +185,8 @@ export default function SocialMeshDEKRecover() {
               It calls our `onInitiated(attemptId)` once the server
               has accepted the recovery request. */}
           <RecoveryInitiation
-            username={username}
-            onUsernameChange={setUsername}
+            email={username}
+            onEmailChange={setUsername}
             onInitiated={handleInitiated}
           />
         </Suspense>
