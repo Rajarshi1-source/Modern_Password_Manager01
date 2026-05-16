@@ -119,13 +119,46 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
             const bin = atob(standardB64);
             const bytes = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+            // Set the guard BEFORE calling so a synchronous re-entry
+            // inside the same poll cycle cannot double-fire. The
+            // parent handoff is typically async (factor lookup +
+            // unwrap), so we also watch for a rejection and RESET
+            // the guard in that case — otherwise a transient lookup
+            // failure would permanently strand the user in the
+            // in-progress phase (the 5-second poll keeps seeing the
+            // same completed payload but never re-delivers it).
             reconstructedFiredRef.current = true;
-            onSecretReconstructed(bytes);
+            try {
+              const handoff = onSecretReconstructed(bytes);
+              if (handoff && typeof handoff.then === 'function') {
+                handoff.catch((handoffErr) => {
+                  reconstructedFiredRef.current = false;
+                  // eslint-disable-next-line no-console
+                  console.warn(
+                    'RecoveryProgress: parent handoff rejected, will retry on next poll:',
+                    handoffErr,
+                  );
+                });
+              }
+            } catch (syncErr) {
+              // Sync throw from the parent — reset and let the next
+              // poll re-deliver the same completed payload.
+              reconstructedFiredRef.current = false;
+              // eslint-disable-next-line no-console
+              console.warn(
+                'RecoveryProgress: parent handoff threw, will retry on next poll:',
+                syncErr,
+              );
+            }
           } catch (decodeErr) {
             // Surface decode failure to the user — there's no
             // sensible fallback if the server returned garbage.
             // eslint-disable-next-line no-console
             console.warn('RecoveryProgress: secret decode failed:', decodeErr);
+            setError(
+              'Secret decode failed — the server may have returned invalid data. '
+              + 'Please try restarting recovery.',
+            );
           }
         }
       }

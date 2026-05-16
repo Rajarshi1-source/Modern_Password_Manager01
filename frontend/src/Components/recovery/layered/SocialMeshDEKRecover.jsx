@@ -45,6 +45,18 @@ import { bytesToHex } from '../../../utils/hex';
 const RecoveryInitiation = lazy(() => import('../social/RecoveryInitiation'));
 const RecoveryProgress = lazy(() => import('../social/RecoveryProgress'));
 
+// Mirror of TIER2_ENROLL_BLOCKED on the enroll page. The tier-2
+// recover path is end-to-end blocked on the same client-side
+// Shamir + Kyber pipeline: the legacy poll endpoint
+// (RequestDetailView) does not surface `reconstructed_secret` /
+// `secret_bytes`, and the only endpoint that returns the secret
+// (CompleteRequestView) performs server-side Shamir, which would
+// violate the ZK invariant for the social-mesh DEK seed. Until the
+// client-side pipeline lands, this page short-circuits to a
+// "not yet available" notice rather than letting users initiate a
+// guardian recovery whose shards can never be combined client-side.
+const TIER2_RECOVER_BLOCKED = true;
+
 /**
  * Tier-2 social-mesh recovery page. Composes the legacy
  * social-recovery components (now callback-aware) to drive a
@@ -181,6 +193,21 @@ export default function SocialMeshDEKRecover() {
   }
 
   if (phase === 'await-username') {
+    if (TIER2_RECOVER_BLOCKED) {
+      return (
+        <section data-testid="social-mesh-dek-recover">
+          <h1>Recover with Social-Mesh</h1>
+          <p role="alert" data-testid="sm-recover-unavailable">
+            Social-Mesh recovery is not yet available. The current poll
+            endpoint cannot deliver the reconstructed seed without
+            violating the zero-knowledge property of the vault DEK; this
+            page is blocked until the client-side Shamir + Kyber pipeline
+            lands. Until then, please use Recovery Key or Time-Locked
+            recovery.
+          </p>
+        </section>
+      );
+    }
     return (
       <section data-testid="social-mesh-dek-recover">
         <h1>Recover with Social-Mesh</h1>
