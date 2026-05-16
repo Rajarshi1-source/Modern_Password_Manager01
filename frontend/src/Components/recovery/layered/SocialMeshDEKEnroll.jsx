@@ -26,6 +26,15 @@ import { bytesToHex } from '../../../utils/hex';
 
 const CircleSetup = lazy(() => import('../social/CircleSetup'));
 
+// Hard gate. While true, the await-password phase shows an
+// unavailable notice instead of the master-password input. This
+// prevents users from creating a wrapped-DEK row that the legacy
+// CircleSetup endpoint cannot finish without violating the ZK
+// invariant (server-side Shamir over the vault-DEK seed). Flip to
+// false once the client-side Shamir + Kyber pipeline is wired and
+// CircleSetup tier-2 mode can complete locally.
+const TIER2_ENROLL_BLOCKED = true;
+
 /**
  * Tier-2 (Social-Mesh) ENROLLMENT page for the layered recovery
  * mesh. Two responsibilities, separated for clarity:
@@ -38,17 +47,22 @@ const CircleSetup = lazy(() => import('../social/CircleSetup'));
  *      `recovery_seed` itself is split across guardians via the
  *      Shamir/Kyber pipeline shared with passkey-recovery.
  *
- * The two writes happen on different server objects
- * (RecoveryWrappedDEK vs PasskeyRecoverySetup + RecoveryShard rows)
- * and are not yet atomic — see the recovery_setup_id TODO around
- * the CircleSetup callback. The followup PR wires the
- * recovery_setup_id round-trip via:
- *   - CircleSetup surfaces the new circle's id via onComplete(id)
- *   - recoveryFactorService.updateRecoveryFactorMeta PATCHes the
- *     id into the wdek factor row's factor_meta
- * so recovery-side code can locate the setup by reading
- * factor_meta.recovery_setup_id instead of having to re-discover
- * it by username.
+ * recovery_setup_id round-trip is wired in this PR: CircleSetup
+ * fires `onComplete(circleId)`, `handleCircleComplete` then PATCHes
+ * the id into the wdek factor row's `factor_meta` via
+ * `recoveryFactorService.updateRecoveryFactorMeta`, so recovery-side
+ * code can locate the matching setup by reading
+ * `factor_meta.recovery_setup_id` instead of re-discovering by
+ * username.
+ *
+ * Currently unreachable end-to-end in tier-2 mode: `CircleSetup`
+ * hard-refuses to commit when an externally-controlled seed is
+ * supplied because the legacy `/api/social-recovery/circles/`
+ * endpoint Shamir-splits server-side, which would break the
+ * zero-knowledge property of the vault recovery seed. The follow-up
+ * client-side Shamir + Kyber pipeline will unblock this; until
+ * then `handleStart` refuses upfront (see below) to avoid
+ * revoking any prior working `social_mesh` factor row.
  *
  * Reached only when the user is signed in (route is gated by
  * `isAuthenticated` in App.jsx).
@@ -76,6 +90,17 @@ export default function SocialMeshDEKEnroll() {
    * (already in `recoverySeedHex`), not the master password.
    * Holding the plaintext master password through the whole
    * guardian-setup flow would be unnecessarily long-lived.
+   *
+   * UPFRONT REFUSAL: the next step (CircleSetup tier-2 mode) is
+   * intentionally gated until the client-side Shamir + Kyber pipeline
+   * lands, so committing the wrapped-DEK row here would (a) revoke
+   * any prior ACTIVE `social_mesh` factor (the backend's partial
+   * unique constraint revokes on insert) and (b) leave the user with
+   * a new factor row whose guardian setup can never complete. The
+   * `await-password` render below short-circuits to an unavailable
+   * notice instead of showing the password input, so this function
+   * is only reachable once the gate is lifted. When the client-side
+   * pipeline lands, remove `TIER2_ENROLL_BLOCKED` and the notice.
    */
   async function handleStart() {
     if (!masterPassword) {
@@ -175,6 +200,18 @@ export default function SocialMeshDEKEnroll() {
   }
 
   if (phase === 'await-password') {
+    if (TIER2_ENROLL_BLOCKED) {
+      return (
+        <section data-testid="social-mesh-dek-enroll">
+          <h1>Set up Social-Mesh Recovery</h1>
+          <p role="alert" data-testid="sm-enroll-unavailable">
+            Social-Mesh enrollment is not yet available. It depends on the
+            client-side Shamir + Kyber pipeline, which is on the roadmap.
+            Until then, please use Recovery Key or Time-Locked recovery.
+          </p>
+        </section>
+      );
+    }
     return (
       <section data-testid="social-mesh-dek-enroll">
         <h1>Set up Social-Mesh Recovery</h1>
