@@ -16,7 +16,15 @@ from .models import (
     BreachSource, MLBreachData, UserCredentialMonitoring,
     MLBreachMatch, DarkWebScrapeLog, BreachPatternAnalysis
 )
-from .ml_services import get_breach_classifier, get_credential_matcher
+# NOTE: `.ml_services` is intentionally NOT imported at module level.
+# It pulls in `torch` and `transformers` at import time, which in turn
+# imports `triton` via `torch._dynamo`. On CI runners without CUDA,
+# triton's native library can segfault during initialization. Because
+# `password_manager/__init__.py` always loads Celery and Celery's
+# `autodiscover_tasks()` walks every INSTALLED_APPS' `tasks.py`, an
+# eager import here would crash pytest before a single test ran.
+# Import inside the task bodies instead — that path only fires when
+# the task actually executes (in a Celery worker, not under pytest).
 from vault.models import BreachAlert
 from .ml_config import MLDarkWebConfig
 
@@ -36,7 +44,10 @@ def process_scraped_content(self, content: str, source_id: int, content_metadata
     """
     try:
         logger.info(f"Processing content from source {source_id}")
-        
+
+        # Deferred — see module docstring on `.ml_services` import.
+        from .ml_services import get_breach_classifier
+
         # Get the breach classifier
         classifier = get_breach_classifier()
         
@@ -130,9 +141,12 @@ def match_credentials_against_breach(self, breach_id: int):
             breach.save()
             return {'success': True, 'matches': 0}
         
+        # Deferred — see module docstring on `.ml_services` import.
+        from .ml_services import get_credential_matcher
+
         # Get credential matcher
         matcher = get_credential_matcher()
-        
+
         # Get all active monitored credentials
         monitored_credentials = UserCredentialMonitoring.objects.filter(is_active=True)
         
@@ -644,6 +658,9 @@ def monitor_user_credentials(user_id: int, credentials: List[str]):
         credentials: List of credentials (emails) to monitor
     """
     try:
+        # Deferred — see module docstring on `.ml_services` import.
+        from .ml_services import get_credential_matcher
+
         user = User.objects.get(id=user_id)
         matcher = get_credential_matcher()
         
