@@ -18,6 +18,7 @@ Tests cover:
 import pytest
 from django.test import TestCase, Client
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import Mock, patch, MagicMock, AsyncMock
@@ -487,7 +488,9 @@ class TestOceanEntropyModels(TestCase):
                 wind_speed=8.5,
                 bytes_fetched=64,
                 quality_score=0.9,
-                buoy_reading_timestamp=datetime.utcnow(),
+                # Use timezone-aware "now" — Django's USE_TZ=True
+                # rejects naive datetimes with a RuntimeWarning.
+                buoy_reading_timestamp=timezone.now(),
             )
             
             self.assertEqual(batch.buoy_id, '44013')
