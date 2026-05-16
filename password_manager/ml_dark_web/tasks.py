@@ -45,7 +45,8 @@ def process_scraped_content(self, content: str, source_id: int, content_metadata
     try:
         logger.info(f"Processing content from source {source_id}")
 
-        # Deferred — see module docstring on `.ml_services` import.
+        # Deferred — see the module-level comment above explaining why
+        # `.ml_services` is not imported at the top of this file.
         from .ml_services import get_breach_classifier
 
         # Get the breach classifier
@@ -141,7 +142,8 @@ def match_credentials_against_breach(self, breach_id: int):
             breach.save()
             return {'success': True, 'matches': 0}
         
-        # Deferred — see module docstring on `.ml_services` import.
+        # Deferred — see the module-level comment above explaining why
+        # `.ml_services` is not imported at the top of this file.
         from .ml_services import get_credential_matcher
 
         # Get credential matcher
@@ -658,7 +660,8 @@ def monitor_user_credentials(user_id: int, credentials: List[str]):
         credentials: List of credentials (emails) to monitor
     """
     try:
-        # Deferred — see module docstring on `.ml_services` import.
+        # Deferred — see the module-level comment above explaining why
+        # `.ml_services` is not imported at the top of this file.
         from .ml_services import get_credential_matcher
 
         user = User.objects.get(id=user_id)
