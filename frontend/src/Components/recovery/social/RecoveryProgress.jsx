@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import ApiService from '../../../services/api';
 import './RecoveryProgress.css';
@@ -16,24 +16,176 @@ const normalizeStatus = (s) => {
   return s;
 };
 
-const RecoveryProgress = () => {
-  const { requestId } = useParams();
+/**
+ * Social-recovery progress page. Used in two routes:
+ *
+ *   1. Legacy passkey recovery (/recovery/social/progress/:requestId):
+ *      `requestId` comes from `useParams()`; component is self-
+ *      contained and just polls + renders.
+ *
+ *   2. Layered Recovery Mesh tier-2 (/recovery/social-mesh/recover-v2):
+ *      `SocialMeshDEKRecover` composes this component and supplies
+ *      both `recoveryAttemptId` (the request id from the in-page
+ *      flow, no route param available) and `onSecretReconstructed`
+ *      (callback invoked once with the reconstructed secret bytes
+ *      when the polling sees `status === 'approved'` /
+ *      `'completed'` and the server returns the reconstructed
+ *      secret in the response).
+ *
+ * Both modes coexist through optional props that default to the
+ * legacy params-based behavior — back-compat preserved.
+ *
+ * @param {object} [props]
+ * @param {string} [props.recoveryAttemptId]
+ *   When provided, used as the request id INSTEAD of useParams(). The
+ *   tier-2 page passes this because its route path is
+ *   /recovery/social-mesh/recover-v2 with no :requestId segment.
+ * @param {(secretBytes: Uint8Array) => void} [props.onSecretReconstructed]
+ *   When provided, called exactly once with the reconstructed secret
+ *   the moment the polling sees a final-status response that carries
+ *   the reconstructed bytes. The tier-2 page uses this to drive its
+ *   own state machine into the change-password phase. Legacy callers
+ *   omit it and rely on the rendered "Recovery Completed" link.
+ */
+const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => {
+  // Resolve the request id: prefer the prop (tier-2), fall back to
+  // route params (legacy passkey route). Prop wins so a tier-2 page
+  // composed under a legacy-shaped route can still work.
+  const params = useParams();
+  const requestId = recoveryAttemptId || params.requestId;
+
   const [request, setRequest] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Guard so onSecretReconstructed fires exactly once even if the
+  // 5-second polling loop sees the success payload more than once
+  // before the parent unmounts us.
+  const reconstructedFiredRef = useRef(false);
+
+  // Reset the one-shot guard when the request id changes so a fresh
+  // recovery attempt (same mounted component, new requestId) can still
+  // deliver its secret to the parent.
+  useEffect(() => {
+    reconstructedFiredRef.current = false;
+  }, [requestId]);
 
   const fetchStatus = useCallback(async () => {
+    if (!requestId) {
+      setError('Recovery request id missing');
+      setLoading(false);
+      return;
+    }
     try {
       const resp = await ApiService.socialRecovery.getRequest(requestId);
       setRequest(resp.data);
-      setError(null);
+      // Do NOT clear a latched decode-failure message. Once
+      // reconstructedFiredRef.current is true after a decode throw,
+      // the same bytes will fail identically on every subsequent
+      // tick; clearing the error here would give the user exactly
+      // one 5-second read window and then silently return them to
+      // the normal progress view. The decode catch sets this
+      // message and tells the user to restart recovery — keep it
+      // visible until they do.
+      if (!reconstructedFiredRef.current) {
+        setError(null);
+      }
+      // If the server has reconstructed the secret AND the caller
+      // gave us a callback to deliver it, fire exactly once. The
+      // server is expected to surface the bytes in one of:
+      //   - resp.data.reconstructed_secret (preferred)
+      //   - resp.data.secret_bytes
+      // both base64-encoded; we decode to Uint8Array. If the field
+      // is absent (older backend, or completion event without
+      // payload) we leave the callback un-fired; the parent's
+      // own polling/timeout path can fall back to a fresh attempt.
+      //
+      // Gate on a final status so an intermediate poll (e.g. pending
+      // with stale fields) cannot fire the callback prematurely with
+      // a decoy / stale value.
+      //
+      // NOTE on the tier-2 completion gap: the legacy poll endpoint
+      // backing `getRequest` (RequestDetailView) does NOT return the
+      // reconstructed secret in its current serializer shape — only
+      // CompleteRequestView returns it (as `secret_hex`). That
+      // completion path is server-side Shamir which would violate the
+      // ZK invariant for the social-mesh DEK seed, so the tier-2
+      // enroll path is intentionally gated (see CircleSetup's
+      // externallyControlledSecret hard-refusal). When the follow-up
+      // client-side Shamir + Kyber pipeline lands, the poller will
+      // either be extended to expose `reconstructed_secret` /
+      // `secret_bytes`, or the parent will drive completion directly
+      // — at which point this block fires onSecretReconstructed.
+      const polledStatus = normalizeStatus(resp.data?.status);
+      const isFinal = polledStatus === 'approved' || polledStatus === 'completed';
+      if (isFinal && typeof onSecretReconstructed === 'function' && !reconstructedFiredRef.current) {
+        const b64 = resp.data?.reconstructed_secret || resp.data?.secret_bytes;
+        if (typeof b64 === 'string' && b64.length > 0) {
+          try {
+            // Normalize URL-safe base64 (`-`→`+`, `_`→`/`) and pad
+            // before atob() — some backends (esp. JWT-style Python
+            // libs) emit URL-safe alphabet which native atob rejects.
+            const padLen = (4 - (b64.length % 4)) % 4;
+            const standardB64 = b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(padLen);
+            const bin = atob(standardB64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+            // Set the guard BEFORE calling so a synchronous re-entry
+            // inside the same poll cycle cannot double-fire. The
+            // parent handoff is typically async (factor lookup +
+            // unwrap), so we also watch for a rejection and RESET
+            // the guard in that case — otherwise a transient lookup
+            // failure would permanently strand the user in the
+            // in-progress phase (the 5-second poll keeps seeing the
+            // same completed payload but never re-delivers it).
+            reconstructedFiredRef.current = true;
+            try {
+              const handoff = onSecretReconstructed(bytes);
+              if (handoff && typeof handoff.then === 'function') {
+                handoff.catch((handoffErr) => {
+                  reconstructedFiredRef.current = false;
+                  // eslint-disable-next-line no-console
+                  console.warn(
+                    'RecoveryProgress: parent handoff rejected, will retry on next poll:',
+                    handoffErr,
+                  );
+                });
+              }
+            } catch (syncErr) {
+              // Sync throw from the parent — reset and let the next
+              // poll re-deliver the same completed payload.
+              reconstructedFiredRef.current = false;
+              // eslint-disable-next-line no-console
+              console.warn(
+                'RecoveryProgress: parent handoff threw, will retry on next poll:',
+                syncErr,
+              );
+            }
+          } catch (decodeErr) {
+            // Surface decode failure to the user — there's no
+            // sensible fallback if the server returned garbage.
+            // Latch the one-shot guard so the 5-second poll doesn't
+            // re-attempt a permanently undecodable payload: the next
+            // tick would otherwise call setError(null) at the top of
+            // fetchStatus, then re-throw here, causing the error
+            // message to flicker on/off every 5 seconds and giving
+            // the user no chance to act on it.
+            reconstructedFiredRef.current = true;
+            // eslint-disable-next-line no-console
+            console.warn('RecoveryProgress: secret decode failed:', decodeErr);
+            setError(
+              'Secret decode failed — the server may have returned invalid data. '
+              + 'Please try restarting recovery.',
+            );
+          }
+        }
+      }
     } catch (err) {
       const handled = ApiService.handleError(err);
       setError(handled.error || 'Failed to load recovery status');
     } finally {
       setLoading(false);
     }
-  }, [requestId]);
+  }, [requestId, onSecretReconstructed]);
 
   useEffect(() => {
     fetchStatus();

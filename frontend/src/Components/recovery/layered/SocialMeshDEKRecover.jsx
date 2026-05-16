@@ -15,38 +15,29 @@
  *   (a) routes the threshold-reached event through the new factor blob
  *   (b) forces the master-password reset that the layered design needs.
  *
- * KNOWN CONTRACT GAP (tracked as a #221 follow-up):
- *
  * The existing ``RecoveryInitiation`` and ``RecoveryProgress``
- * components are self-contained: ``RecoveryInitiation`` calls
- * ``useNavigate`` to jump to ``/recovery/social/progress/:requestId``
- * on success, and ``RecoveryProgress`` reads ``requestId`` from
- * ``useParams()`` (not from props). The ``onInitiated`` /
- * ``onSecretReconstructed`` props this page passes are therefore
- * silently ignored today and the v2 page can't actually drive
- * through the recovery phases as a single-page flow.
+ * components now accept optional callback props (added in the
+ * follow-up to #221):
  *
- * Two ways forward, neither fully landed in this PR:
- *   (i) Extend the existing components to accept the callback
- *       props, falling back to navigate-based behavior when they
- *       are absent (back-compat with the legacy passkey flow).
- *  (ii) Inline the username-form + polling logic in this file so
- *       the v2 page has its own implementation that doesn't rely
- *       on the legacy components.
+ *   * ``RecoveryInitiation({ email, onEmailChange, onInitiated })``
+ *     — when ``onInitiated`` is supplied, it is invoked with the
+ *     server-issued request_id instead of navigating to the legacy
+ *     ``/recovery/social/progress/:requestId`` route. Email is
+ *     controllable so this page can keep it in its own state.
  *
- * The PR description already calls out this caveat (
- *   "If the existing components do not yet accept the new props
- *   (secretType, secretHex, onSecretReconstructed), the wrapped-DEK
- *   enrollment in (a) still happens — the seed-routing TODO is
- *   wired in a follow-up."
- * ), so the enrollment side of the layered mesh is correct and
- * forward-compatible; only the orchestration of the recover side
- * is pending the existing-component contract change. This page
- * still renders, the enroll flow works end-to-end, and the
- * recover-side bug is gated to /recovery/social-mesh/recover-v2,
- * which is not yet linked from the user-facing UI.
+ *   * ``RecoveryProgress({ recoveryAttemptId, onSecretReconstructed })``
+ *     — when ``recoveryAttemptId`` is supplied, it is used instead
+ *     of ``useParams()``; when ``onSecretReconstructed`` is
+ *     supplied, the polling loop decodes the server-returned
+ *     reconstructed_secret (base64) into a Uint8Array and fires
+ *     the callback exactly once.
+ *
+ * Back-compat for the legacy passkey-recovery route is preserved:
+ * those components fall back to ``useNavigate`` / ``useParams``
+ * when the new props are absent, so existing callers see no
+ * behavior change.
  */
-import React, { lazy, Suspense, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useState } from 'react';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import recoveryFactorService from '../../../services/recoveryFactorService';
 import { bytesToHex } from '../../../utils/hex';
@@ -54,11 +45,23 @@ import { bytesToHex } from '../../../utils/hex';
 const RecoveryInitiation = lazy(() => import('../social/RecoveryInitiation'));
 const RecoveryProgress = lazy(() => import('../social/RecoveryProgress'));
 
+// Mirror of TIER2_ENROLL_BLOCKED on the enroll page. The tier-2
+// recover path is end-to-end blocked on the same client-side
+// Shamir + Kyber pipeline: the legacy poll endpoint
+// (RequestDetailView) does not surface `reconstructed_secret` /
+// `secret_bytes`, and the only endpoint that returns the secret
+// (CompleteRequestView) performs server-side Shamir, which would
+// violate the ZK invariant for the social-mesh DEK seed. Until the
+// client-side pipeline lands, this page short-circuits to a
+// "not yet available" notice rather than letting users initiate a
+// guardian recovery whose shards can never be combined client-side.
+const TIER2_RECOVER_BLOCKED = true;
+
 /**
- * Tier-2 social-mesh recovery page. See module docstring for the
- * known contract gap with the existing social-recovery components;
- * the enrollment side (SocialMeshDEKEnroll) is fully functional
- * and is the side the user-facing routes link to.
+ * Tier-2 social-mesh recovery page. Composes the legacy
+ * social-recovery components (now callback-aware) to drive a
+ * single-page state machine: ``await-username`` →
+ * ``in-progress`` → ``change-password`` → ``done``.
  */
 export default function SocialMeshDEKRecover() {
   const [phase, setPhase] = useState('await-username'); // 'in-progress' | 'change-password' | 'done'
@@ -78,10 +81,8 @@ export default function SocialMeshDEKRecover() {
 
   /**
    * Phase-transition handler invoked once the social-recovery
-   * pipeline has accepted a recovery request. Currently expected
-   * to be called by ``RecoveryInitiation``'s ``onInitiated``
-   * callback — but see the module-level KNOWN CONTRACT GAP for
-   * why that callback isn't wired in the legacy component yet.
+   * pipeline has accepted a recovery request. Wired through
+   * ``RecoveryInitiation``'s ``onInitiated`` prop.
    *
    * @param {string} attemptId
    */
@@ -91,10 +92,6 @@ export default function SocialMeshDEKRecover() {
   }
 
   /**
-   * Called by RecoveryProgress when the existing pipeline has
-   * reconstructed the secret in-browser via Lagrange interpolation.
-   */
-  /**
    * Phase-transition handler invoked once the social-recovery
    * pipeline has reconstructed the seed in-browser via Lagrange
    * interpolation over the released guardian shards. Looks up the
@@ -103,9 +100,17 @@ export default function SocialMeshDEKRecover() {
    * reconstructed seed, and stashes the unwrap inputs so
    * handleChangePassword can rotate the master row.
    *
+   * Memoized on `username` because `RecoveryProgress` includes its
+   * `onSecretReconstructed` prop in the dependency array of the
+   * `useCallback` that backs its polling `setInterval`. A new
+   * function identity on each parent render would tear down and
+   * recreate the 5-second poll, which can never converge if a
+   * parent re-render (e.g. setBusy(true) inside this very handler)
+   * lands mid-interval.
+   *
    * @param {Uint8Array} seedBytes 32-byte recovery seed.
    */
-  async function handleSeedReconstructed(seedBytes) {
+  const handleSeedReconstructed = useCallback(async (seedBytes) => {
     setBusy(true);
     setError('');
     try {
@@ -133,10 +138,16 @@ export default function SocialMeshDEKRecover() {
       setPhase('change-password');
     } catch (err) {
       setError(err?.message || 'Recovery failed.');
+      // Re-throw so RecoveryProgress's handoff.catch() resets its
+      // one-shot guard. Without this, a transient lookup/unwrap
+      // failure would be silently swallowed — the 5-second poll
+      // would never re-deliver the same completed payload and the
+      // user would be stranded on the in-progress phase.
+      throw err;
     } finally {
       setBusy(false);
     }
-  }
+  }, [username]);
 
   /**
    * Submit handler for the new-master-password form. Delegates to
@@ -188,6 +199,21 @@ export default function SocialMeshDEKRecover() {
   }
 
   if (phase === 'await-username') {
+    if (TIER2_RECOVER_BLOCKED) {
+      return (
+        <section data-testid="social-mesh-dek-recover">
+          <h1>Recover with Social-Mesh</h1>
+          <p role="alert" data-testid="sm-recover-unavailable">
+            Social-Mesh recovery is not yet available. The current poll
+            endpoint cannot deliver the reconstructed seed without
+            violating the zero-knowledge property of the vault DEK; this
+            page is blocked until the client-side Shamir + Kyber pipeline
+            lands. Until then, please use Recovery Key or Time-Locked
+            recovery.
+          </p>
+        </section>
+      );
+    }
     return (
       <section data-testid="social-mesh-dek-recover">
         <h1>Recover with Social-Mesh</h1>
@@ -196,8 +222,8 @@ export default function SocialMeshDEKRecover() {
               It calls our `onInitiated(attemptId)` once the server
               has accepted the recovery request. */}
           <RecoveryInitiation
-            username={username}
-            onUsernameChange={setUsername}
+            email={username}
+            onEmailChange={setUsername}
             onInitiated={handleInitiated}
           />
         </Suspense>

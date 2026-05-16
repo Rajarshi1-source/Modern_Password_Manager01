@@ -4,12 +4,53 @@ import DeviceFingerprint from '../../../utils/deviceFingerprint';
 import ApiService from '../../../services/api';
 import './RecoveryInitiation.css';
 
-export const RecoveryInitiation = () => {
-  const [email, setEmail] = useState('');
+/**
+ * Social-recovery initiation form. Used in two routes:
+ *
+ *   1. Legacy passkey recovery (/recovery/social/initiate): the
+ *      component manages its own email/circleId state and navigates
+ *      to /recovery/social/progress/:requestId on success.
+ *
+ *   2. Layered Recovery Mesh tier-2 (/recovery/social-mesh/recover-v2):
+ *      `SocialMeshDEKRecover` composes this component and supplies
+ *      callback props so it can drive its own state machine
+ *      (`await-username` → `in-progress` → `change-password` →
+ *      `done`) without route navigation.
+ *
+ * Both modes are supported through optional props that default to
+ * the legacy navigate-based behavior — back-compat is preserved.
+ *
+ * @param {object} [props]
+ * @param {string} [props.email]               Controlled email value.
+ * @param {(email: string) => void} [props.onEmailChange]
+ * @param {(requestId: string) => void} [props.onInitiated]
+ *   When provided, called with the server-issued `request_id`
+ *   INSTEAD of navigating. The caller is responsible for advancing
+ *   its own phase. When absent, the legacy navigate-to-progress
+ *   behavior fires.
+ */
+export const RecoveryInitiation = ({
+  email: controlledEmail,
+  onEmailChange,
+  onInitiated,
+} = {}) => {
+  const [internalEmail, setInternalEmail] = useState('');
   const [circleId, setCircleId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const navigate = useNavigate();
+
+  // Bridge controlled / uncontrolled. We only enter controlled mode
+  // when the parent supplies BOTH `email` and a working `onEmailChange`
+  // setter — otherwise the input would silently become read-only when
+  // a parent passes `email` without a setter.
+  const isControlled =
+    controlledEmail !== undefined && typeof onEmailChange === 'function';
+  const email = isControlled ? controlledEmail : internalEmail;
+  const setEmail = (value) => {
+    if (isControlled) onEmailChange(value);
+    else setInternalEmail(value);
+  };
 
   const handleInitiateRecovery = async (e) => {
     e.preventDefault();
@@ -33,7 +74,14 @@ export const RecoveryInitiation = () => {
 
       const requestId = resp.data?.request_id;
       if (!requestId) throw new Error('Server did not return a request id');
-      navigate(`/recovery/social/progress/${requestId}`);
+      // Hand the request_id to the caller's state machine if the
+      // tier-2 wrapper opted in. Otherwise navigate to the legacy
+      // progress route.
+      if (typeof onInitiated === 'function') {
+        onInitiated(requestId);
+      } else {
+        navigate(`/recovery/social/progress/${requestId}`);
+      }
     } catch (err) {
       const handled = ApiService.handleError(err);
       setError(handled.error || 'Failed to initiate recovery');
@@ -90,6 +138,15 @@ export const RecoveryInitiation = () => {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="your.email@example.com"
+              // The legacy backend (InitiateRequestSerializer) allows
+              // initiator_email to be omitted/blank, and the legacy
+              // /recovery/social/initiate route relied on that. The
+              // tier-2 wrapper, however, drives downstream factor
+              // lookup off this value and cannot accept a blank
+              // string. So we require the field only in controlled
+              // mode (tier-2) and leave it optional on the legacy
+              // route — matching prior UX and serializer behavior.
+              required={isControlled}
               disabled={loading}
             />
           </div>
