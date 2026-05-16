@@ -138,6 +138,12 @@ export default function SocialMeshDEKRecover() {
       setPhase('change-password');
     } catch (err) {
       setError(err?.message || 'Recovery failed.');
+      // Re-throw so RecoveryProgress's handoff.catch() resets its
+      // one-shot guard. Without this, a transient lookup/unwrap
+      // failure would be silently swallowed — the 5-second poll
+      // would never re-deliver the same completed payload and the
+      // user would be stranded on the in-progress phase.
+      throw err;
     } finally {
       setBusy(false);
     }

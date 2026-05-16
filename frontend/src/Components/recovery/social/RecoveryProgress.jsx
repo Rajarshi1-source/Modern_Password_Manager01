@@ -78,7 +78,17 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
     try {
       const resp = await ApiService.socialRecovery.getRequest(requestId);
       setRequest(resp.data);
-      setError(null);
+      // Do NOT clear a latched decode-failure message. Once
+      // reconstructedFiredRef.current is true after a decode throw,
+      // the same bytes will fail identically on every subsequent
+      // tick; clearing the error here would give the user exactly
+      // one 5-second read window and then silently return them to
+      // the normal progress view. The decode catch sets this
+      // message and tells the user to restart recovery — keep it
+      // visible until they do.
+      if (!reconstructedFiredRef.current) {
+        setError(null);
+      }
       // If the server has reconstructed the secret AND the caller
       // gave us a callback to deliver it, fire exactly once. The
       // server is expected to surface the bytes in one of:
