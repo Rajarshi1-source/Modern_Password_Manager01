@@ -37,7 +37,7 @@
  * when the new props are absent, so existing callers see no
  * behavior change.
  */
-import React, { lazy, Suspense, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useState } from 'react';
 import sessionVaultCryptoV3 from '../../../services/sessionVaultCryptoV3';
 import recoveryFactorService from '../../../services/recoveryFactorService';
 import { bytesToHex } from '../../../utils/hex';
@@ -80,10 +80,6 @@ export default function SocialMeshDEKRecover() {
   }
 
   /**
-   * Called by RecoveryProgress when the existing pipeline has
-   * reconstructed the secret in-browser via Lagrange interpolation.
-   */
-  /**
    * Phase-transition handler invoked once the social-recovery
    * pipeline has reconstructed the seed in-browser via Lagrange
    * interpolation over the released guardian shards. Looks up the
@@ -92,9 +88,17 @@ export default function SocialMeshDEKRecover() {
    * reconstructed seed, and stashes the unwrap inputs so
    * handleChangePassword can rotate the master row.
    *
+   * Memoized on `username` because `RecoveryProgress` includes its
+   * `onSecretReconstructed` prop in the dependency array of the
+   * `useCallback` that backs its polling `setInterval`. A new
+   * function identity on each parent render would tear down and
+   * recreate the 5-second poll, which can never converge if a
+   * parent re-render (e.g. setBusy(true) inside this very handler)
+   * lands mid-interval.
+   *
    * @param {Uint8Array} seedBytes 32-byte recovery seed.
    */
-  async function handleSeedReconstructed(seedBytes) {
+  const handleSeedReconstructed = useCallback(async (seedBytes) => {
     setBusy(true);
     setError('');
     try {
@@ -125,7 +129,7 @@ export default function SocialMeshDEKRecover() {
     } finally {
       setBusy(false);
     }
-  }
+  }, [username]);
 
   /**
    * Submit handler for the new-master-password form. Delegates to

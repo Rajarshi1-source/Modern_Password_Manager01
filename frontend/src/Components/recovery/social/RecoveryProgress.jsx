@@ -92,13 +92,31 @@ const RecoveryProgress = ({ recoveryAttemptId, onSecretReconstructed } = {}) => 
       // Gate on a final status so an intermediate poll (e.g. pending
       // with stale fields) cannot fire the callback prematurely with
       // a decoy / stale value.
+      //
+      // NOTE on the tier-2 completion gap: the legacy poll endpoint
+      // backing `getRequest` (RequestDetailView) does NOT return the
+      // reconstructed secret in its current serializer shape — only
+      // CompleteRequestView returns it (as `secret_hex`). That
+      // completion path is server-side Shamir which would violate the
+      // ZK invariant for the social-mesh DEK seed, so the tier-2
+      // enroll path is intentionally gated (see CircleSetup's
+      // externallyControlledSecret hard-refusal). When the follow-up
+      // client-side Shamir + Kyber pipeline lands, the poller will
+      // either be extended to expose `reconstructed_secret` /
+      // `secret_bytes`, or the parent will drive completion directly
+      // — at which point this block fires onSecretReconstructed.
       const polledStatus = normalizeStatus(resp.data?.status);
       const isFinal = polledStatus === 'approved' || polledStatus === 'completed';
       if (isFinal && typeof onSecretReconstructed === 'function' && !reconstructedFiredRef.current) {
         const b64 = resp.data?.reconstructed_secret || resp.data?.secret_bytes;
         if (typeof b64 === 'string' && b64.length > 0) {
           try {
-            const bin = atob(b64);
+            // Normalize URL-safe base64 (`-`→`+`, `_`→`/`) and pad
+            // before atob() — some backends (esp. JWT-style Python
+            // libs) emit URL-safe alphabet which native atob rejects.
+            const padLen = (4 - (b64.length % 4)) % 4;
+            const standardB64 = b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(padLen);
+            const bin = atob(standardB64);
             const bytes = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
             reconstructedFiredRef.current = true;

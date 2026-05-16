@@ -138,6 +138,7 @@ export const RecoveryInitiation = ({
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="your.email@example.com"
+              required
               disabled={loading}
             />
           </div>
