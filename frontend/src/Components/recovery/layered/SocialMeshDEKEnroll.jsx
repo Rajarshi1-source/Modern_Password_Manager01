@@ -145,6 +145,15 @@ export default function SocialMeshDEKEnroll() {
    */
   async function handleCircleComplete(circleId) {
     if (!circleId || !dekId) {
+      // Surface the missing-id failure to the user instead of
+      // silently transitioning to the success screen. The guardian
+      // circle and factor row both exist; only the cross-reference
+      // is lost, so this is a soft error (recoverable by username),
+      // but it must be visible so the user knows the link is missing.
+      setError(
+        'Guardian circle created, but linking it to the recovery factor did '
+        + 'not complete. You can still recover by username on this device.',
+      );
       setPhase('done');
       return;
     }
@@ -227,6 +236,9 @@ export default function SocialMeshDEKEnroll() {
   return (
     <section data-testid="social-mesh-dek-enroll">
       <h1>Social-mesh recovery enabled</h1>
+      {error ? (
+        <p role="alert" data-testid="sm-enroll-link-warning">{error}</p>
+      ) : null}
       <p data-testid="sm-enroll-success">
         Your guardians have been notified. They will be asked to help if you ever start
         recovery.
