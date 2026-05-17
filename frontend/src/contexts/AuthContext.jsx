@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 import ApiService from '../services/api';
-import { setStoredUser } from '../utils/userStorage';
+import { clearStoredUser } from '../utils/userStorage';
 
 const AuthContext = createContext();
 
@@ -98,12 +98,11 @@ export const AuthProvider = ({ children }) => {
       const userData = userResponse.data;
       
       setCurrentUser(userData);
-      // setStoredUser no longer writes to localStorage (CodeQL #1048,
-      // Copilot Autofix accepted). It clears any pre-fix payload so
-      // old sessions don't leave a stale user object behind. The
-      // profile now lives only in React state — see
-      // utils/userStorage.js and PR #246 for the full architecture.
-      setStoredUser('user', userData);
+      // clearStoredUser removes any legacy payload but never writes
+      // (CodeQL #1048, Copilot Autofix accepted). Profile lives only
+      // in React state; see utils/userStorage.js and PR #246 for the
+      // full architecture.
+      clearStoredUser('user', userData);
       setIsAuthenticated(true);
       
       // Initialize device fingerprint after successful login
@@ -188,7 +187,7 @@ export const AuthProvider = ({ children }) => {
         
         // Set user data — scrub before persisting (see userStorage.js)
         setCurrentUser(user);
-        setStoredUser('user', user);
+        clearStoredUser('user', user);
         setIsAuthenticated(true);
         
         // Initialize device fingerprint after successful passkey login
@@ -338,7 +337,7 @@ export const AuthProvider = ({ children }) => {
       };
       
       setCurrentUser(newUser);
-      setStoredUser('user', newUser);
+      clearStoredUser('user', newUser);
       setIsAuthenticated(true);
       
       // Initialize device fingerprint after successful registration
@@ -411,7 +410,7 @@ export const AuthProvider = ({ children }) => {
       // Update current user
       const updatedUser = { ...currentUser, ...response.data };
       setCurrentUser(updatedUser);
-      setStoredUser('user', updatedUser);
+      clearStoredUser('user', updatedUser);
       
       return updatedUser;
     } catch (error) {

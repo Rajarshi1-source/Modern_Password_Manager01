@@ -74,32 +74,82 @@ class TestCurrentUserView:
         """The endpoint must NOT include fields the SPA's
         SAFE_USER_FIELDS whitelist doesn't recognise — e.g.
         `password`, `last_login` raw object, or any future
-        backend-only addition. Pinning the exact key set prevents
-        accidental leakage."""
+        backend-only addition. Pinning the key set prevents
+        accidental leakage.
+
+        Profile-extension fields (`display_name`, `avatar`,
+        `avatar_url`, `locale`, `preferred_language`, `timezone`)
+        only appear when `request.user.profile` exists — they're
+        in the SAFE_USER_FIELDS whitelist on the frontend but
+        not all deployments have a Profile model. The assertion
+        below uses `<=` (subset) instead of `==` (equality) so a
+        deployment that DOES surface profile fields is also valid
+        and the test isn't flaky against Profile-model existence.
+        """
         resp = auth_client.get(self.URL)
         assert resp.status_code == 200
         body = resp.json()
 
-        expected_keys = {
+        always_present = {
             'id', 'username', 'email',
             'first_name', 'last_name',
             'date_joined',
             'is_staff', 'is_superuser',
         }
-        assert set(body.keys()) == expected_keys, (
-            f'Response keys diverged from the whitelist: '
-            f'unexpected {set(body.keys()) - expected_keys}, '
-            f'missing {expected_keys - set(body.keys())}'
+        optional_profile_fields = {
+            'display_name', 'avatar', 'avatar_url',
+            'locale', 'preferred_language', 'timezone',
+        }
+        allowed = always_present | optional_profile_fields
+
+        # Every key in the response must be in the allowed set
+        # (mirror of SAFE_USER_FIELDS) — nothing else is permitted
+        # to leak through.
+        unexpected = set(body.keys()) - allowed
+        assert not unexpected, (
+            f'Response keys include non-whitelisted fields: {unexpected}'
         )
+        # And the always-present subset must be there.
+        missing = always_present - set(body.keys())
+        assert not missing, f'Always-present keys missing: {missing}'
 
     def test_password_hash_never_surfaces(self, auth_client):
         """Defense in depth: the user's password hash must never
         appear in the JSON body, regardless of the whitelist."""
         resp = auth_client.get(self.URL)
         raw_body = resp.content.decode('utf-8')
-        # The hashed password starts with the hasher prefix (e.g.
-        # `pbkdf2_sha256$`). Match the generic shape rather than a
-        # specific algorithm so this test stays correct if the
-        # PASSWORD_HASHERS setting changes.
-        assert '$' not in raw_body or 'pbkdf2' not in raw_body.lower()
-        assert 'password' not in {k.lower() for k in resp.json().keys()}
+        # Two independent invariants, each its own assertion so a
+        # failure of either is unambiguous in the report. Using
+        # `and` joined into a single OR-expression previously made
+        # the test pass trivially whenever `$` was absent
+        # (which ISO-8601 timestamps guarantee on every response).
+        assert 'pbkdf2' not in raw_body.lower(), (
+            'password hash algorithm prefix leaked into response body'
+        )
+        assert 'password' not in {k.lower() for k in resp.json().keys()}, (
+            'response has a key named "password"'
+        )
+
+    def test_drf_token_auth_works(self, db):
+        """Legacy AuthContext.jsx sessions present
+        `Authorization: Token <drf_token>`. The endpoint must
+        accept that, not just the JWT bearer header — otherwise
+        users on the legacy provider get 401 on every reload
+        and the bootstrap code drops their token. Codex P2 on
+        PR #245 follow-up.
+        """
+        from rest_framework.authtoken.models import Token
+        user = User.objects.create_user(
+            username='legacy',
+            email='legacy@example.com',
+            password='masterpw1234',  # noqa: S106
+        )
+        token, _ = Token.objects.get_or_create(user=user)
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+        resp = c.get(self.URL)
+        assert resp.status_code == 200, (
+            'DRF Token auth must work on /api/auth/me/ '
+            'so legacy AuthContext sessions can hydrate on reload'
+        )
+        assert resp.json()['username'] == 'legacy'

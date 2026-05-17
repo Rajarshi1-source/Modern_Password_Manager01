@@ -175,7 +175,18 @@ axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    
+
+    // Bootstrap-probe calls (the `/api/auth/me/` hydration request
+    // fired by initAuth on page reload) opt out of refresh-on-401
+    // by setting `_isBootstrap: true` on the request config. A 401
+    // there means "session dead, drop the token" — letting the
+    // interceptor enter its refresh-or-redirect loop would race
+    // initAuth and could hard-redirect during the initial render.
+    // CodeRabbit edge-case on PR #245 follow-up.
+    if (originalRequest?._isBootstrap) {
+      return Promise.reject(error);
+    }
+
     // If 401 and haven't retried yet
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (isRefreshing) {
@@ -221,8 +232,8 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   
   // Initialize auth state. Persisting the user profile to
-  // Persisting the user profile to localStorage was removed
-  // (CodeQL #1048; see utils/userStorage.js). On bootstrap we
+  // localStorage was removed (CodeQL #1048; see
+  // utils/userStorage.js). On bootstrap we
   // hydrate the user from `GET /api/auth/me/` instead, which
   // closes the UX regression CodeRabbit + Codex flagged on PR
   // #245 (consumers like BreachAlertsDashboard that read
@@ -250,9 +261,17 @@ export const AuthProvider = ({ children }) => {
       }
 
       // Token is present — hydrate the user from the server.
+      // Mark this call as a bootstrap probe so the response
+      // interceptor's 401 refresh-then-retry path skips it. We
+      // want a 401 here to bubble straight back to this function,
+      // which treats it as "session dead, drop the token" rather
+      // than entering the interceptor's refresh-or-redirect loop
+      // (which races initAuth and can hard-redirect during the
+      // initial render). CodeRabbit edge-case on PR #245 follow-up.
       try {
         const resp = await axios.get('/api/auth/me/', {
           headers: { Authorization: `Bearer ${accessToken}` },
+          _isBootstrap: true,
         });
         if (!cancelled) {
           setUser(resp.data);

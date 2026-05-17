@@ -29,15 +29,41 @@ sees the same field set.
 """
 from __future__ import annotations
 
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 
 class CurrentUserView(APIView):
-    """GET /api/auth/me/ — minimal profile of the authenticated user."""
+    """GET /api/auth/me/ — minimal profile of the authenticated user.
 
+    Accepts BOTH `Authorization: Bearer <jwt>` and
+    `Authorization: Token <drf_token>` because the SPA has two
+    coexisting auth providers right now:
+
+      * `hooks/useAuth.jsx` issues SimpleJWT bearer tokens
+        (against `/api/auth/token/`).
+      * `contexts/AuthContext.jsx` issues DRF authtokens
+        (against `/auth/login/`).
+
+    The project's `DEFAULT_AUTHENTICATION_CLASSES` setting only
+    configures `JWTAuthentication`, so without this explicit
+    override the legacy-context sessions would 401 here on
+    every reload — and the bootstrap code then clears the token
+    on 401, kicking those users back to the login screen.
+    Codex P2 on PR #245 follow-up flagged this exact regression.
+
+    The whitelist is intentionally narrow but EXTENDED via
+    optional `request.user.profile` fields so a custom Profile
+    model can surface `display_name`, `avatar`, `locale`, etc.
+    without requiring this view to import that model. CodeRabbit
+    medium on PR #245 follow-up.
+    """
+
+    authentication_classes = [JWTAuthentication, TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request: Request) -> Response:
@@ -60,4 +86,22 @@ class CurrentUserView(APIView):
             'is_staff': bool(getattr(user, 'is_staff', False)),
             'is_superuser': bool(getattr(user, 'is_superuser', False)),
         }
+
+        # Extend with Profile-model fields when available. Using
+        # getattr-with-None-fallback so a deployment without a
+        # Profile relation surfaces null (the SPA already handles
+        # missing optional fields gracefully) rather than erroring.
+        # Adding a new field here MUST be paired with adding it to
+        # SAFE_USER_FIELDS on the frontend.
+        profile = getattr(user, 'profile', None)
+        if profile is not None:
+            body.update({
+                'display_name': getattr(profile, 'display_name', None),
+                'avatar': getattr(profile, 'avatar', None),
+                'avatar_url': getattr(profile, 'avatar_url', None),
+                'locale': getattr(profile, 'locale', None),
+                'preferred_language': getattr(profile, 'preferred_language', None),
+                'timezone': getattr(profile, 'timezone', None),
+            })
+
         return Response(body)
