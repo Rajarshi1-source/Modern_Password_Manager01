@@ -241,6 +241,14 @@ export class CryptoService {
       ? CryptoJS.enc.Base64.parse(key)
       : key;
 
+    // TODO(security): migrate this legacy CryptoJS path to AES-GCM
+    // for authenticated encryption (CodeQL alert #1041 / CWE-916
+    // family). CBC + Pkcs7 has no integrity tag; the higher-level
+    // wrapped-DEK envelope (sessionVaultCryptoV3) already uses
+    // AES-GCM and is what new code should reach for. Keeping CBC
+    // here for now because cipher-text in user vaults predates the
+    // v3 path and rotating it requires a re-encrypt sweep that is
+    // out of scope for the alert-cleanup PR.
     const encrypted = CryptoJS.AES.encrypt(dataToProcess, keyWordArray, {
       iv: iv,
       mode: CryptoJS.mode.CBC,

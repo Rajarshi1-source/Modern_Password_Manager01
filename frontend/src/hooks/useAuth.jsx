@@ -47,6 +47,7 @@ import {
   getAccessToken as getInMemoryAccessToken,
   clearAccessToken,
 } from '../services/tokenStore';
+import { scrubUserForStorage } from '../utils/userStorage';
 
 // Opt-in feature flag for the HttpOnly-cookie refresh-token flow.
 // When true, the SPA:
@@ -92,11 +93,34 @@ const storage = {
   setRefreshToken: (token) => localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, token),
   removeRefreshToken: () => localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY),
   
-  getUser: () => {
-    const user = localStorage.getItem(USER_STORAGE_KEY);
-    return user ? JSON.parse(user) : null;
+  // getUser intentionally returns null. Persisting the user object
+  // to localStorage was removed in response to CodeQL alert #1048;
+  // see utils/userStorage.js for the rationale. Any pre-fix value is
+  // cleaned up by the AuthProvider bootstrap. Callers that need
+  // user data should pull it from React state (via useAuth().user)
+  // or fetch it from the backend.
+  getUser: () => null,
+  setUser: (user) => {
+    // Validate input shape via the scrub helper but DO NOT persist
+    // to localStorage. See utils/userStorage.js for the CodeQL-#1048
+    // + PR #246 rationale. Audible warning on non-object input so
+    // a regression that starts passing the wrong shape is caught
+    // during development rather than silently no-op'ing (CodeRabbit
+    // nit on PR #245).
+    if (user !== undefined && user !== null) {
+      const scrubbed = scrubUserForStorage(user);
+      if (scrubbed === null) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[useAuth] storage.setUser received a non-object user; ignoring.',
+          { type: typeof user },
+        );
+      }
+    }
+    // Remove any value left behind by older builds so a stale PII
+    // payload doesn't sit in localStorage indefinitely.
+    localStorage.removeItem(USER_STORAGE_KEY);
   },
-  setUser: (user) => localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user)),
   removeUser: () => localStorage.removeItem(USER_STORAGE_KEY),
   
   clearAll: () => {
@@ -209,17 +233,27 @@ axios.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// URLs of the refresh endpoints themselves. The interceptor must NEVER
-// try to refresh-on-401 against these — doing so creates a recursive
-// loop: the refresh call 401s (cookie missing/expired) → interceptor
-// fires refresh-on-401 → calls refresh again → 401 again → meanwhile
-// `isRefreshing` is already true so the second attempt subscribes
-// to `onTokenRefreshed` and waits forever for a notification that
-// will never come, hanging every queued request. Codex P1 on PR #246
-// caught this.
+// URLs that mint refresh credentials. The response interceptor must
+// NEVER try to refresh-on-401 against these — doing so creates the
+// recursive deadlock Codex P1 caught on PR #245 follow-up:
+//
+//   1. initAuth calls refreshAccessToken() because /me/ 401'd.
+//   2. refreshAccessToken() POSTs to /api/auth/token/refresh/.
+//   3. The refresh token is ALSO expired → 401.
+//   4. Interceptor catches that 401. Sets isRefreshing = true.
+//      Calls refreshAccessToken() recursively.
+//   5. The recursive call POSTs to /api/auth/token/refresh/ → 401.
+//   6. Interceptor catches THAT 401. isRefreshing is true so it
+//      subscribes via subscribeTokenRefresh and waits forever for
+//      a notification that will never come.
+//
+// Result: initAuth's await on refreshAccessToken() never resolves;
+// setIsLoading(false) is never called; app stuck on loading screen.
+// Both legacy and cookie refresh URLs are listed so the guard is
+// symmetric across the dual-flow migration.
 const _REFRESH_URLS = new Set([
-  '/api/auth/cookie/token/refresh/',
   '/api/auth/token/refresh/',
+  '/api/auth/cookie/token/refresh/',
 ]);
 
 function _isRefreshUrl(config) {
@@ -242,11 +276,23 @@ axios.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    // Never refresh-on-401 the refresh endpoint itself. A 401 from a
-    // refresh call means "your refresh credential is invalid" — the
-    // user must log in again. Bouncing it back through the same
-    // interceptor would deadlock.
+    // Never refresh-on-401 the refresh endpoint itself — that's the
+    // recursive deadlock Codex P1 caught on PR #245 follow-up. A 401
+    // here means "your refresh credential is invalid"; the caller
+    // must handle the rejection (initAuth / login flow), not bounce
+    // back into another refresh attempt.
     if (_isRefreshUrl(originalRequest)) {
+      return Promise.reject(error);
+    }
+
+    // Bootstrap-probe calls (the `/api/auth/me/` hydration request
+    // fired by initAuth on page reload) opt out of refresh-on-401
+    // by setting `_isBootstrap: true` on the request config. A 401
+    // there means "session dead, drop the token" — letting the
+    // interceptor enter its refresh-or-redirect loop would race
+    // initAuth and could hard-redirect during the initial render.
+    // CodeRabbit edge-case on PR #245 follow-up.
+    if (originalRequest?._isBootstrap) {
       return Promise.reject(error);
     }
 
@@ -315,85 +361,137 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   
-  // Initialize auth state from storage.
+  // Initialize auth state on mount. Two-tier flow:
   //
-  // Cookie flow:
-  //   1. Ask backend to mint an access token from the HttpOnly
-  //      refresh cookie. If that succeeds, fetch the real user
-  //      profile from /api/auth/me/ so consumers
-  //      (VaultUnlockModal, ReputationDashboard, etc.) that read
-  //      user.id/user.email don't break. Setting a placeholder
-  //      {authenticated: true} was a Codex P2 finding — those
-  //      consumers explicitly need real identity fields.
-  //   2. If the cookie refresh fails (no cookie / cookie expired),
-  //      FALL THROUGH to the legacy localStorage path. Users who
-  //      were signed in via the legacy flow BEFORE
-  //      VITE_USE_COOKIE_AUTH was flipped on still have valid
-  //      access/refresh tokens in localStorage; treating them as
-  //      logged out the moment the flag deploys would force-
-  //      logout an entire user base. Codex P2 finding #2.
+  // 1. Cookie mode (VITE_USE_COOKIE_AUTH=true):
+  //    a. Ask backend to mint an access token from the HttpOnly
+  //       refresh cookie. If that succeeds, fetch the real user
+  //       profile from /api/auth/me/ so consumers (VaultUnlockModal,
+  //       ReputationDashboard, …) that read user.id/user.email don't
+  //       break. Setting a placeholder {authenticated: true} was a
+  //       Codex P2 finding on PR #246.
+  //    b. If the cookie refresh fails (no cookie / cookie expired),
+  //       FALL THROUGH to the legacy localStorage path below. Users
+  //       who were signed in via the legacy flow BEFORE
+  //       VITE_USE_COOKIE_AUTH was flipped on still have valid
+  //       access/refresh tokens in localStorage; treating them as
+  //       logged out on the flag-deploy is the wrong default.
+  //       Codex P2 finding #2 on PR #246.
   //
-  // Legacy flow: read user + access token from localStorage as
-  // before, so existing sessions survive.
+  // 2. Legacy / fallback path: hydrate from GET /api/auth/me/ using
+  //    the localStorage access token. On 401, try refresh-then-retry
+  //    (PR #245 Codex P1) so a still-valid 7-day refresh token isn't
+  //    thrown away every 15 minutes. Also flushes any legacy USER
+  //    blob (PII payload from older builds — CodeQL #1048).
+  //
+  // The bootstrap /me calls carry `_isBootstrap: true` so the
+  // response interceptor's auto-refresh path skips them — we handle
+  // their 401s manually here to avoid the redirect-during-render
+  // race that landed on PR #245.
   useEffect(() => {
     let cancelled = false;
 
-    const initAuth = async () => {
-      let triedCookieFlow = false;
+    // Inner helper so both the cookie-mode and legacy-path branches
+    // can share the same /me-fetch logic without duplicating it.
+    // Returns true on success, false on failure (caller decides what
+    // to do with state).
+    const hydrateUserFromMe = async () => {
+      try {
+        const resp = await axios.get('/api/auth/me/', { _isBootstrap: true });
+        if (!cancelled) {
+          setUser(resp.data);
+          setIsAuthenticated(true);
+        }
+        return { ok: true, status: 200 };
+      } catch (err) {
+        return { ok: false, status: err?.response?.status ?? 0 };
+      }
+    };
 
+    const initAuth = async () => {
+      // Flush any legacy USER blob before doing anything else — the
+      // helper writes never run (see utils/userStorage.js) but older
+      // builds may have left one behind. Cookie- and legacy-flow
+      // paths agree on this cleanup.
+      localStorage.removeItem(USER_STORAGE_KEY);
+
+      // ─── Cookie path ──────────────────────────────────────────
       if (USE_COOKIE_AUTH) {
-        triedCookieFlow = true;
         try {
           const access = await refreshAccessTokenViaCookie();
           if (cancelled) return;
           if (access) {
-            // Have a fresh access token — fetch the real user
-            // profile so user.id / user.email are populated.
-            // _isBootstrap so the response interceptor doesn't
-            // try its own refresh-then-retry on a 401 from /me/.
-            try {
-              const resp = await axios.get('/api/auth/me/', {
-                _isBootstrap: true,
-              });
-              if (!cancelled) {
-                setUser(resp.data);
-                setIsAuthenticated(true);
-              }
-            } catch {
-              // /me failed but the access token is valid. Mark
-              // authenticated; consumers handle null user
-              // gracefully. (Network blip / 5xx case.)
-              if (!cancelled) setIsAuthenticated(true);
+            const meRes = await hydrateUserFromMe();
+            if (cancelled) return;
+            if (!meRes.ok) {
+              // /me failed even though we just minted a fresh access
+              // token. Likely a transient 5xx; the access token is
+              // valid so mark authenticated and let consumers handle
+              // null user gracefully. A 401 here is unexpected but
+              // mirror the legacy-path behavior: stay signed out.
+              if (meRes.status !== 401) setIsAuthenticated(true);
             }
-            if (!cancelled) setIsLoading(false);
+            setIsLoading(false);
             return;
           }
-          // access === null: cookie missing/expired. Fall through
-          // to the legacy localStorage path below.
+          // access === null: cookie missing / cookie expired. Fall
+          // through to the legacy path so a pre-flag session with
+          // localStorage tokens isn't force-logged-out on flag flip.
         } catch {
-          // Network error during cookie refresh. Fall through to
-          // the legacy path so a transient outage doesn't
-          // unconditionally bounce active migration users.
+          // Network error during cookie refresh. Same fall-through.
         }
       }
 
-      // Legacy localStorage path. Reached when:
-      //   * USE_COOKIE_AUTH is false (default), OR
-      //   * USE_COOKIE_AUTH is true but the cookie refresh
-      //     returned null / threw, AND the user might still have
-      //     a valid legacy session from before the flag deploy.
-      const storedUser = storage.getUser();
+      // ─── Legacy / fallback path ──────────────────────────────
       const accessToken = storage.getAccessToken();
-
-      if (storedUser && accessToken) {
-        setUser(storedUser);
-        setIsAuthenticated(true);
-      } else if (triedCookieFlow) {
-        // Neither cookie nor legacy storage has anything for us.
-        // User is unauthenticated; let the login screen render.
+      if (!accessToken) {
+        if (!cancelled) setIsLoading(false);
+        return;
       }
 
-      setIsLoading(false);
+      // Try /me with the legacy access token (interceptor attaches
+      // the Authorization header from storage.getAccessToken()
+      // automatically).
+      const first = await hydrateUserFromMe();
+      if (cancelled) return;
+      if (first.ok) {
+        if (!cancelled) setIsLoading(false);
+        return;
+      }
+
+      if (first.status === 401) {
+        // Access token expired. A 7-day refresh token may still be
+        // valid (SIMPLE_JWT.REFRESH_TOKEN_LIFETIME), so try a
+        // refresh-then-retry before declaring the session dead.
+        // Codex P1 on PR #245 follow-up.
+        let refreshedAccess = null;
+        try {
+          refreshedAccess = await refreshAccessToken();
+        } catch {
+          // Refresh failed — `refreshAccessToken` already cleared
+          // storage. Session is genuinely dead.
+          refreshedAccess = null;
+        }
+
+        if (refreshedAccess) {
+          const retry = await hydrateUserFromMe();
+          if (cancelled) return;
+          if (!retry.ok && !cancelled) {
+            // Even with a fresh access token, /me failed. Bail.
+            // Guarded on !cancelled for stylistic consistency.
+            storage.clearAll();
+          }
+        }
+        // else: refresh failed → already cleared; stay signed out.
+      } else if (!cancelled) {
+        // Network error / 5xx — we have a token, profile fetch
+        // failed transiently. Mark authenticated so navigation
+        // doesn't bounce the user to login; user-dependent
+        // components handle null gracefully.
+        setIsAuthenticated(true);
+      }
+
+      if (!cancelled) setIsLoading(false);
     };
 
     initAuth();
@@ -571,13 +669,20 @@ export const AuthProvider = ({ children }) => {
 
   // Token-accessor that components like DuressCodeManager,
   // DuressEventLog, ReputationDashboard et al. call as
-  // `useAuth().getAccessToken()` and pass into fetch services. Under
-  // cookie auth the token lives in `tokenStore` (module-scope memory),
-  // NOT in localStorage — if we kept exposing `storage.getAccessToken`
-  // here, those components would build `Authorization: Bearer null`
-  // immediately after a cookie login. Codex P2 on PR #246.
+  // `useAuth().getAccessToken()` and pass into fetch services that
+  // build `Authorization: Bearer ${authToken}`.
+  //
+  // Cookie mode is layered: the in-memory tokenStore is the
+  // canonical source after a pure-cookie login, but legacy-fallback
+  // sessions (cookie flag on, no cookie, valid pre-flag localStorage
+  // tokens) keep the token in localStorage. The exposed getter
+  // mirrors the request-interceptor's `getInMemoryAccessToken() ||
+  // storage.getAccessToken()` pattern so the two reads never disagree
+  // — without this fallback, fetch-service callers in legacy-fallback
+  // sessions would build `Bearer null` even though the axios
+  // interceptor sends the right header. Codex P2 on PR #246 follow-up.
   const getAccessToken = USE_COOKIE_AUTH
-    ? getInMemoryAccessToken
+    ? () => getInMemoryAccessToken() || storage.getAccessToken()
     : storage.getAccessToken;
 
   const value = {

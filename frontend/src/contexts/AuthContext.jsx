@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 import ApiService from '../services/api';
+import { clearStoredUser } from '../utils/userStorage';
 
 const AuthContext = createContext();
 
@@ -10,30 +11,85 @@ export const AuthProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Initialize auth state from local storage
+  // Initialize auth state. We no longer read the user profile from
+  // `localStorage` (CodeQL #1048, see utils/userStorage.js). To avoid
+  // the UX regression that CodeRabbit + Codex flagged on PR #245
+  // (`user` permanently null after reload so consumers of
+  // `currentUser.email` show empty values), we explicitly hydrate
+  // from `GET /api/auth/me/` when a token is present. If that fetch
+  // 401s, the token is dead and we drop it.
   useEffect(() => {
+    let cancelled = false;
+
     const initializeAuth = async () => {
       const token = localStorage.getItem('token');
-      const userData = localStorage.getItem('user');
-      
-      if (token && userData) {
-        // Set default auth header for all requests
-        axios.defaults.headers.common['Authorization'] = `Token ${token}`;
-        setCurrentUser(JSON.parse(userData));
-        setIsAuthenticated(true);
-        
-        // Initialize device fingerprint for existing sessions
-        try {
-          await ApiService.initializeDeviceFingerprint();
-        } catch (error) {
-          console.warn('Failed to initialize device fingerprint:', error);
+
+      // Clean up any pre-fix 'user' blob that might be lurking from
+      // an older build. Subsequent reads will get null which the
+      // updated consumers expect.
+      localStorage.removeItem('user');
+
+      if (!token) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
+
+      axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+
+      // Hydrate the user profile from the server. The `/api/auth/me/`
+      // endpoint identifies the user from `request.user` so we don't
+      // need to carry a user_id around in localStorage.
+      //
+      // `_isBootstrap: true` opts this call out of the global response
+      // interceptor's auto-refresh/redirect path. Without the flag, a
+      // dead DRF token would land in `useAuth.jsx`'s interceptor
+      // (registered at module import time via the BreachAlertsDashboard
+      // import chain), which then reads `storage.getRefreshToken()` —
+      // the WRONG key for the AuthContext flow (DRF uses `token`, not
+      // `refreshToken`) — and ultimately `storage.clearAll()` +
+      // `window.location.href = '/'`. CodeRabbit medium on PR #245
+      // follow-up caught this asymmetric race.
+      try {
+        const resp = await axios.get('/api/auth/me/', { _isBootstrap: true });
+        if (!cancelled) {
+          setCurrentUser(resp.data);
+          setIsAuthenticated(true);
+
+          // Best-effort device fingerprint init — only when we have
+          // a confirmed-live session AND the component is still
+          // mounted. Calling it after unmount is harmless (no state
+          // mutations) but inconsistent with the rest of the
+          // cancelled-guard discipline in this useEffect; the
+          // network call is also wasted work. CodeRabbit nit on
+          // PR #245 follow-up.
+          try {
+            await ApiService.initializeDeviceFingerprint();
+          } catch (error) {
+            console.warn('Failed to initialize device fingerprint:', error);
+          }
+        }
+      } catch (err) {
+        if (err?.response?.status === 401) {
+          // Token is dead. Drop it and leave the user signed out.
+          // (We do NOT clear localStorage indiscriminately here;
+          // logout has its own path for that.)
+          localStorage.removeItem('token');
+          delete axios.defaults.headers.common['Authorization'];
+        } else if (!cancelled) {
+          // Network error / 5xx → we have a token, we just couldn't
+          // fetch the profile right now. Mark authenticated so the
+          // routes don't bounce the user to login; consumers handle
+          // null currentUser gracefully (matching the post-PR-#245
+          // contract).
+          setIsAuthenticated(true);
         }
       }
-      
-      setLoading(false);
+
+      if (!cancelled) setLoading(false);
     };
-    
+
     initializeAuth();
+    return () => { cancelled = true; };
   }, []);
 
   const login = async (username, password) => {
@@ -58,7 +114,11 @@ export const AuthProvider = ({ children }) => {
       const userData = userResponse.data;
       
       setCurrentUser(userData);
-      localStorage.setItem('user', JSON.stringify(userData));
+      // clearStoredUser removes any legacy payload but never writes
+      // (CodeQL #1048, Copilot Autofix accepted). Profile lives only
+      // in React state; see utils/userStorage.js and PR #246 for the
+      // full architecture.
+      clearStoredUser('user', userData);
       setIsAuthenticated(true);
       
       // Initialize device fingerprint after successful login
@@ -141,9 +201,9 @@ export const AuthProvider = ({ children }) => {
           axios.defaults.headers.common['Authorization'] = `Token ${token}`;
         }
         
-        // Set user data
+        // Set user data — scrub before persisting (see userStorage.js)
         setCurrentUser(user);
-        localStorage.setItem('user', JSON.stringify(user));
+        clearStoredUser('user', user);
         setIsAuthenticated(true);
         
         // Initialize device fingerprint after successful passkey login
@@ -293,7 +353,7 @@ export const AuthProvider = ({ children }) => {
       };
       
       setCurrentUser(newUser);
-      localStorage.setItem('user', JSON.stringify(newUser));
+      clearStoredUser('user', newUser);
       setIsAuthenticated(true);
       
       // Initialize device fingerprint after successful registration
@@ -366,7 +426,7 @@ export const AuthProvider = ({ children }) => {
       // Update current user
       const updatedUser = { ...currentUser, ...response.data };
       setCurrentUser(updatedUser);
-      localStorage.setItem('user', JSON.stringify(updatedUser));
+      clearStoredUser('user', updatedUser);
       
       return updatedUser;
     } catch (error) {

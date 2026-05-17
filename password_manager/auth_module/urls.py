@@ -19,9 +19,10 @@ from . import oidc_views
 from . import mfa_views
 # Import HttpOnly-cookie refresh-token views
 from . import cookie_auth_view
-# Current-user endpoint (GET /api/auth/me/) — also lands in PR #245.
-# Used by the cookie-flow bootstrap to hydrate the user profile
-# without persisting it to localStorage.
+# Current-user endpoint (GET /api/auth/me/). Originally landed in
+# PR #245 (CodeQL #1048 follow-up). Used by both the legacy
+# AuthContext bootstrap and the cookie-flow bootstrap to hydrate
+# the user profile without persisting it to localStorage.
 from . import current_user_view
 # Import Primary Passkey Recovery views
 from . import passkey_primary_recovery_views
@@ -91,7 +92,10 @@ urlpatterns = [
         cookie_auth_view.CookieTokenLogoutView.as_view(),
         name='cookie_token_logout',
     ),
-    # Current-user hydration endpoint (also defined in PR #245).
+    # Current-user endpoint used by the SPA bootstrap (both legacy
+    # AuthContext and cookie flow) to hydrate the user profile after
+    # page reload. We no longer persist the user object to localStorage;
+    # see CodeQL #1048 + the SPA's utils/userStorage.js.
     path(
         'me/',
         current_user_view.CurrentUserView.as_view(),

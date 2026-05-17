@@ -13,6 +13,7 @@ import SocialLoginButtons from './Components/auth/SocialLoginButtons';
 import LoadingIndicator from './Components/common/LoadingIndicator';
 import ErrorBoundary from './Components/common/ErrorBoundary';
 import ApiService from './services/api';
+import { clearStoredUser } from './utils/userStorage';
 import toast, { Toaster } from 'react-hot-toast';
 import oauthService from './services/oauthService';
 import SessionMonitor from './Components/security/SessionMonitor';
@@ -1224,7 +1225,14 @@ function App() {
           localStorage.removeItem('refreshToken');
         }
         if (oauthUser) {
-          localStorage.setItem('user', JSON.stringify(oauthUser));
+          // OAuth provider payloads (Google/Microsoft/Apple) often
+          // include access tokens, refresh tokens, and a ream of
+          // provider-specific identity claims. `clearStoredUser`
+          // removes any legacy payload and never writes, so none
+          // of that material reaches localStorage. The user object
+          // lives only in React state (set above via dispatch).
+          // See utils/userStorage.js for the rationale.
+          clearStoredUser('user', oauthUser);
         }
 
         errorTracker.setUserContext({
