@@ -1,7 +1,11 @@
 # =============================================================================
 # Kubernetes Ingress - Password Manager
 # =============================================================================
-# Routes traffic to frontend, API, and WebSocket services
+# Layer-7 reverse proxy: TLS, routing, rate limits, WebSocket upgrades. A cloud
+# load balancer in front of the cluster typically forwards to the Ingress
+# controller Service. In-cluster Services (ClusterIP) still do L4-style
+# distribution to pod endpoints. See documentation/ENTERPRISE_ARCHITECTURE_OPS.md
+# =============================================================================
 # Requires: nginx-ingress-controller and cert-manager
 # =============================================================================
 

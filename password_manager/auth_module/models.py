@@ -4,6 +4,9 @@ from django.utils import timezone
 from push_notifications.models import APNSDevice, GCMDevice
 import uuid
 
+from .recovery_models_v2 import *  # noqa: F401,F403  Layered Recovery Mesh — Unit 1
+from .time_locked_models import *  # noqa: F401,F403  Layered Recovery Mesh — Unit 2
+
 # Create your models here.
 
 

@@ -13,7 +13,7 @@ def install_dependencies():
     packages = [
         "fido2==1.1.0",         # Specific version that works with our code
         "cryptography>=40.0.0",  # Required for FIDO2 operations
-        "pyOpenSSL>=23.0.0",     # Required for WebAuthn operations
+        "pyOpenSSL>=26.0.0",     # Required for WebAuthn operations
         "cbor2>=5.4.6",          # Required for CTAP message format
         "legacy-cgi>=2.0.0"      # Required for Python 3.13 compatibility
     ]

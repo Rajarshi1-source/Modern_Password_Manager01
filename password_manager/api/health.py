@@ -58,28 +58,19 @@ def health_check(request):
 
 def readiness_check(request):
     """
-    Readiness check endpoint for deployment health
+    Lightweight readiness for high-frequency probes (K8s readinessProbe).
+
+    Uses a single DB round-trip only. Use /health/ or /ht/ for deep checks
+    (cache, migration metadata, etc.).
     """
     try:
-        # Perform more thorough checks for readiness
         with connection.cursor() as cursor:
-            # Check if migrations are applied
-            cursor.execute("SELECT COUNT(*) FROM django_migrations")
-            migration_count = cursor.fetchone()[0]
-            
-        if migration_count > 0:
-            return JsonResponse({
-                'status': 'ready',
-                'timestamp': timezone.now().isoformat(),
-                'migrations_applied': migration_count
-            })
-        else:
-            return JsonResponse({
-                'status': 'not_ready',
-                'error': 'No migrations found',
-                'timestamp': timezone.now().isoformat()
-            }, status=503)
-            
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+        return JsonResponse({
+            'status': 'ready',
+            'timestamp': timezone.now().isoformat(),
+        })
     except Exception as e:
         logger.error(f"Readiness check failed: {e}")
         return JsonResponse({

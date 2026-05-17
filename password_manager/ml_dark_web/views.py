@@ -20,7 +20,13 @@ from .tasks import (
     monitor_user_credentials, check_user_against_all_breaches,
     scrape_dark_web_source, scrape_all_active_sources
 )
-from .ml_services import get_breach_classifier, get_credential_matcher
+# NOTE: `.ml_services` is intentionally NOT imported at module level here,
+# even though ml_dark_web URLs are not currently wired into the root urls.py
+# (so this module is not loaded during pytest). This is defensive: if a
+# future change adds an `include('ml_dark_web.urls')` to the root config,
+# importing torch + transformers at the top of this file would re-introduce
+# the triton native-lib segfault that PR #241 fixed in `tasks.py`. Import
+# the helpers inside the view bodies that actually use them instead.
 from vault.models import BreachAlert
 
 logger = logging.getLogger(__name__)
@@ -65,7 +71,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error adding credentials: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -87,7 +93,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error fetching monitored credentials: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -176,7 +182,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error fetching breach matches: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -234,7 +240,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error initiating scan: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -282,7 +288,7 @@ class MLDarkWebViewSet(viewsets.ViewSet):
         except Exception as e:
             logger.error(f"Error fetching statistics: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -374,7 +380,7 @@ class MLDarkWebAdminViewSet(viewsets.ViewSet):
         
         except Exception as e:
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -458,7 +464,7 @@ class MLDarkWebAdminViewSet(viewsets.ViewSet):
         
         except Exception as e:
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -480,7 +486,7 @@ class MLDarkWebAdminViewSet(viewsets.ViewSet):
         
         except Exception as e:
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -505,6 +511,10 @@ def classify_text(request):
         )
     
     try:
+        # Deferred — see the module-level comment above the .ml_services
+        # block explaining why this is not imported at the top.
+        from .ml_services import get_breach_classifier
+
         classifier = get_breach_classifier()
         result = classifier.classify_breach(text)
         
@@ -513,7 +523,7 @@ def classify_text(request):
     except Exception as e:
         logger.error(f"Error classifying text: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -561,7 +571,7 @@ def mark_alert_read(request, alert_id):
     except Exception as e:
         logger.error(f"Error marking alert as read: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -617,6 +627,6 @@ def get_breach_alerts(request):
     except Exception as e:
         logger.error(f"Error fetching breach alerts: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

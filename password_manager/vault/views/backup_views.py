@@ -13,10 +13,12 @@ import os
 import base64
 import hashlib
 import logging
-from django.conf import settings
 from password_manager.api_utils import error_response, success_response
 
 logger = logging.getLogger(__name__)
+
+# Placeholder row while payload lives only in object storage (valet-key upload flow).
+CLOUD_ONLY_PAYLOAD_META = {'cloud_only': True, 'v': 1}
 
 
 def _derive_wrapping_key(user_key: str) -> bytes:
@@ -188,7 +190,96 @@ class BackupViewSet(viewsets.ModelViewSet):
                 'cloud_synced': backup.cloud_sync_status == 'synced',
                 'envelope_encrypted': is_envelope_encrypted,
             })
-    
+
+    @action(detail=False, methods=['post'], url_path='start-cloud-upload')
+    def start_cloud_upload(self, request):
+        """
+        Valet-key flow: create DB row and return a presigned PUT URL so the client
+        uploads encrypted backup bytes directly to object storage.
+        """
+        cloud_service = CloudStorageService()
+        if not cloud_service.supports_presigned_urls:
+            return error_response(
+                'Cloud storage is not configured for presigned URLs '
+                '(set CLOUD_STORAGE_BUCKET or AWS_STORAGE_BUCKET_NAME and credentials).',
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        name = request.data.get(
+            'name',
+            f"Cloud backup {timezone.now().strftime('%Y-%m-%d %H:%M')}",
+        )
+        with transaction.atomic():
+            backup = VaultBackup.objects.create(
+                user=request.user,
+                name=name,
+                encrypted_data=json.dumps(CLOUD_ONLY_PAYLOAD_META),
+                size=0,
+                cloud_sync_status='pending',
+            )
+            cloud_path = f'backups/{request.user.id}/{backup.id}'
+            backup.cloud_storage_path = cloud_path
+            backup.save(update_fields=['cloud_storage_path'])
+
+        presigned = cloud_service.generate_presigned_put_url(
+            cloud_path,
+            content_type='application/octet-stream',
+        )
+        if not presigned:
+            backup.delete()
+            return error_response(
+                'Could not generate upload URL',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response({
+            'backup_id': str(backup.id),
+            'upload_url': presigned['url'],
+            'method': 'PUT',
+            'headers': {'Content-Type': 'application/octet-stream'},
+            'cloud_path': cloud_path,
+            'expires_in': presigned['expires_in'],
+            'backend': presigned['backend'],
+        })
+
+    @action(detail=True, methods=['post'], url_path='complete-cloud-upload')
+    def complete_cloud_upload(self, request, pk=None):
+        """Call after a successful PUT of the backup blob to object storage."""
+        backup = self.get_object()
+        try:
+            size = int(request.data.get('size', 0))
+        except (TypeError, ValueError):
+            size = 0
+        backup.size = size
+        backup.cloud_sync_status = 'synced'
+        backup.save(update_fields=['size', 'cloud_sync_status'])
+        return Response({
+            'success': True,
+            'backup_id': str(backup.id),
+            'size': backup.size,
+            'cloud_sync_status': backup.cloud_sync_status,
+        })
+
+    @action(detail=True, methods=['get'], url_path='cloud-download-url')
+    def cloud_download_url(self, request, pk=None):
+        """Return a short-lived presigned GET URL for backups stored in object storage."""
+        backup = self.get_object()
+        if not backup.cloud_storage_path:
+            return error_response(
+                'No cloud object for this backup',
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        cloud_service = CloudStorageService()
+        presigned = cloud_service.generate_presigned_get_url(backup.cloud_storage_path)
+        if not presigned:
+            return error_response(
+                'Could not generate download URL',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response({
+            'download_url': presigned['url'],
+            'expires_in': presigned['expires_in'],
+            'backend': presigned['backend'],
+        })
+
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         """Restore vault from a backup"""
@@ -200,9 +291,29 @@ class BackupViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             try:
                 raw_data = backup.encrypted_data
-                
-                # Optionally download from cloud if local data is missing
-                if not raw_data and backup.cloud_storage_path:
+
+                try:
+                    stub = json.loads(raw_data) if raw_data else {}
+                except json.JSONDecodeError:
+                    stub = {}
+                if (
+                    stub.get('cloud_only')
+                    and stub.get('v') == CLOUD_ONLY_PAYLOAD_META['v']
+                    and backup.cloud_storage_path
+                ):
+                    cloud_service = CloudStorageService()
+                    blob = cloud_service.download_backup(backup.cloud_storage_path)
+                    if not blob:
+                        return error_response(
+                            'Failed to download backup from cloud',
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        )
+                    raw_data = (
+                        blob.decode('utf-8')
+                        if isinstance(blob, bytes)
+                        else blob
+                    )
+                elif not raw_data and backup.cloud_storage_path:
                     cloud_service = CloudStorageService()
                     raw_data = cloud_service.download_backup(backup.cloud_storage_path)
                     if not raw_data:
@@ -210,7 +321,9 @@ class BackupViewSet(viewsets.ModelViewSet):
                             'Failed to download backup from cloud',
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
                         )
-                
+                    if isinstance(raw_data, bytes):
+                        raw_data = raw_data.decode('utf-8')
+
                 parsed = json.loads(raw_data)
                 
                 # Check if this is an envelope-encrypted backup

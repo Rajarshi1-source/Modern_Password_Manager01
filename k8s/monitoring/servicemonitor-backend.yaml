@@ -1,0 +1,24 @@
+# Optional: use with kube-prometheus-stack / prometheus-operator.
+# Install the operator in your cluster, then apply this so the Operator's
+# Prometheus instance scrapes the backend without relying on pod annotations.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: password-manager-backend
+  namespace: password-manager
+  labels:
+    app: password-manager
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app: password-manager
+      component: backend
+  namespaceSelector:
+    matchNames:
+      - password-manager
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scheme: http

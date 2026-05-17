@@ -8,7 +8,12 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Dependencies - Install npm packages
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS deps
+# Pinned to $BUILDPLATFORM so npm/Node always runs natively on the runner.
+# This avoids QEMU "Illegal instruction" (exit 132) crashes when emulating
+# Node 22 on linux/arm64 from an amd64 runner. The frontend build output is
+# static assets, so it is architecture-independent — only the final nginx
+# stage needs to be multi-arch.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS deps
 
 # Set working directory
 WORKDIR /app
@@ -24,7 +29,7 @@ RUN npm ci && \
 # -----------------------------------------------------------------------------
 # Stage 2: Builder - Build the application
 # -----------------------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:22-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -58,8 +63,8 @@ RUN npm run build
 # -----------------------------------------------------------------------------
 FROM nginx:1.27-alpine AS production
 
-# Install curl for health checks
-RUN apk add --no-cache curl
+# Refresh indexes and upgrade OS packages (libssl3, libxml2, etc.) then curl for health checks
+RUN apk update && apk upgrade --no-cache && apk add --no-cache curl
 
 # Create non-root user
 RUN addgroup -g 1000 -S nginx-app && \
@@ -85,15 +90,16 @@ RUN chown -R nginx-app:nginx-app /usr/share/nginx/html && \
 COPY docker/frontend/entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
-# Expose port
-EXPOSE 80
+# Expose port (nginx listens on 8080 because the non-root nginx-app user
+# cannot bind to privileged ports < 1024).
+EXPOSE 8080
 
 # Switch to non-root user
 USER nginx-app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost/health || exit 1
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Use custom entrypoint
 ENTRYPOINT ["/docker-entrypoint.sh"]

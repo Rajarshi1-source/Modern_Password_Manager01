@@ -18,6 +18,9 @@ from django.db.models import Count, Avg, Sum, Q
 from django.contrib.auth.models import User
 from datetime import timedelta
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def _anonymize_ip(ip_address: str) -> str:
@@ -125,10 +128,14 @@ def track_events(request):
             }
         }, status=status.HTTP_202_ACCEPTED)
         
-    except Exception as e:
+    except Exception:
+        # Log the full traceback server-side; never echo the
+        # exception text back to the client (CodeQL
+        # py/stack-trace-exposure).
+        logger.exception("Analytics view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -320,10 +327,14 @@ def get_analytics_dashboard(request):
         
         return Response(dashboard_data)
         
-    except Exception as e:
+    except Exception:
+        # Log the full traceback server-side; never echo the
+        # exception text back to the client (CodeQL
+        # py/stack-trace-exposure).
+        logger.exception("Analytics view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -372,9 +383,13 @@ def get_user_journey(request):
                 } for s in sessions]
             })
         
-    except Exception as e:
+    except Exception:
+        # Log the full traceback server-side; never echo the
+        # exception text back to the client (CodeQL
+        # py/stack-trace-exposure).
+        logger.exception("Analytics view failed")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'An internal error occurred'
         }, status=status.HTTP_400_BAD_REQUEST)
 

@@ -18,7 +18,6 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 import logging
 import hashlib
-import hmac
 import json
 
 from django.conf import settings
@@ -87,16 +86,23 @@ def predict_password_strength(request):
         
         # Save prediction if requested and user is authenticated
         if save_prediction and request.user.is_authenticated:
-            # Keyed deduplication hash. A bare hashlib.sha256(password)
-            # is trivially attackable: a database breach exposes a
-            # rainbow-table-friendly fingerprint that reveals when two
-            # users share a password. HMAC with the server-side
-            # SECRET_KEY makes the digest useless without the key.
-            password_hash = hmac.new(
-                settings.SECRET_KEY.encode(),
+            # Computationally-expensive dedup digest. SHA-256 (and
+            # plain HMAC-SHA256) are too cheap for password-derived
+            # data — an attacker who steals the table can brute-force
+            # at GPU speeds. PBKDF2-HMAC-SHA256 with a per-user salt
+            # derived from SECRET_KEY+user.pk keeps the digest
+            # deterministic (so dedup still works), unique per-user
+            # (so cross-user correlation fails), and slow enough to
+            # frustrate offline cracking.
+            per_user_salt = hashlib.sha256(
+                f"{settings.SECRET_KEY}:{request.user.pk}".encode()
+            ).digest()
+            password_hash = hashlib.pbkdf2_hmac(
+                "sha256",
                 password.encode(),
-                hashlib.sha256,
-            ).hexdigest()
+                per_user_salt,
+                iterations=200_000,
+            ).hex()
             
             PasswordStrengthPrediction.objects.create(
                 user=request.user,

@@ -50,7 +50,7 @@ def start_session(request):
         return Response(session_info, status=status.HTTP_201_CREATED)
     except Exception as e:
         logger.error(f"Error starting session: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -79,7 +79,7 @@ def submit_frame(request):
         return Response(result)
     except Exception as e:
         logger.error(f"Error processing frame: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -100,7 +100,7 @@ def get_challenge(request):
         return Response({'challenge': session_status.get('current_challenge')})
     except Exception as e:
         logger.error(f"Error getting challenge: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -120,7 +120,7 @@ def submit_challenge_response(request):
         return Response({'status': 'received', 'next_challenge': True})
     except Exception as e:
         logger.error(f"Error submitting response: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -160,7 +160,7 @@ def complete_session(request):
         })
     except Exception as e:
         logger.error(f"Error completing session: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -178,7 +178,7 @@ def get_profile(request):
         })
     except Exception as e:
         logger.error(f"Error getting profile: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET', 'PUT'])
@@ -207,7 +207,7 @@ def settings_view(request):
             return Response({'status': 'updated'})
     except Exception as e:
         logger.error(f"Error with settings: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -229,4 +229,4 @@ def get_history(request):
         })
     except Exception as e:
         logger.error(f"Error getting history: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -51,9 +51,10 @@ def enroll(request):
         return _disabled_response()
     try:
         features, extras = _validate_features(request.data)
-    except ValueError as exc:
+    except ValueError:
+        logger.exception("heartbeat_auth: feature validation failed")
         return Response(
-            {'success': False, 'error': 'invalid_payload', 'message': str(exc)},
+            {'success': False, 'error': 'invalid_payload'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -70,9 +71,10 @@ def verify(request):
         return _disabled_response()
     try:
         features, extras = _validate_features(request.data)
-    except ValueError as exc:
+    except ValueError:
+        logger.exception("heartbeat_auth: feature validation failed")
         return Response(
-            {'success': False, 'error': 'invalid_payload', 'message': str(exc)},
+            {'success': False, 'error': 'invalid_payload'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 

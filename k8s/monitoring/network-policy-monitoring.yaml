@@ -1,0 +1,45 @@
+# Allow Prometheus pods to scrape annotated workloads (backend :8000 metrics).
+# Apply after Prometheus StatefulSet if default-deny egress is enabled on prometheus pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape-egress
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: prometheus
+  policyTypes:
+    - Egress
+  egress:
+    # Backend metrics
+    - to:
+        - podSelector:
+            matchLabels:
+              app: password-manager
+              component: backend
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Alertmanager
+    - to:
+        - podSelector:
+            matchLabels:
+              app: password-manager
+              component: alertmanager
+      ports:
+        - protocol: TCP
+          port: 9093
+    # Kubernetes API (pod discovery)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    # DNS (already covered by allow-dns if applied cluster-wide; duplicate ok)
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53

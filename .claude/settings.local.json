@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python -c 'import ast; files = ['\\\\''password_manager/shared/performance_middleware.py'\\\\'','\\\\''password_manager/logging_manager/handlers.py'\\\\'','\\\\''password_manager/auth_module/views.py'\\\\'','\\\\''password_manager/security/services/security_service.py'\\\\'','\\\\''password_manager/security/services/quantum_entanglement_service.py'\\\\'','\\\\''password_manager/security/services/pattern_analysis_engine.py'\\\\'','\\\\''password_manager/security/services/predictive_expiration_service.py'\\\\'','\\\\''password_manager/security/services/threat_intelligence_service.py'\\\\'','\\\\''password_manager/security/tasks/__init__.py'\\\\'','\\\\''password_manager/security/tasks/honeypot_tasks.py'\\\\'','\\\\''password_manager/security/api/ocean_entropy_views.py'\\\\'','\\\\''password_manager/security/api/adaptive_password_views.py'\\\\'','\\\\''password_manager/security/api/predictive_expiration_views.py'\\\\'','\\\\''password_manager/security/models/core.py'\\\\'','\\\\''password_manager/security/models/duress_models.py'\\\\'','\\\\''password_manager/security/services/airline_api_service.py'\\\\'','\\\\''password_manager/security/services/natural_entropy_providers.py'\\\\'','\\\\''password_manager/security/services/ocean_wave_entropy_service.py'\\\\'','\\\\''password_manager/self_destruct/services/policy_service.py'\\\\'','\\\\''password_manager/social_recovery/services/audit_service.py'\\\\''] *)"
-    ]
-  }
-}

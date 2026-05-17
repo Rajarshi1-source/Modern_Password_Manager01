@@ -17,12 +17,34 @@ from . import oauth_views
 from . import oidc_views
 # Import MFA views
 from . import mfa_views
+# Import HttpOnly-cookie refresh-token views
+from . import cookie_auth_view
+# Current-user endpoint (GET /api/auth/me/). Originally landed in
+# PR #245 (CodeQL #1048 follow-up). Used by both the legacy
+# AuthContext bootstrap and the cookie-flow bootstrap to hydrate
+# the user profile without persisting it to localStorage.
+from . import current_user_view
 # Import Primary Passkey Recovery views
 from . import passkey_primary_recovery_views
 # Import Kyber (Post-Quantum) views
 from . import kyber_views
 # Import Quantum Recovery views
 from . import quantum_recovery_views
+# Import Layered Recovery Mesh views (Unit 4)
+from .wrapped_dek_view import VaultWrappedDEKView, WrappedDEKRecoveryRotateView
+# Import Layered Recovery Mesh views (Unit 5)
+from .recovery_factor_view import (
+    RecoveryFactorListCreateView,
+    RecoveryFactorLookupView,
+    RecoveryFactorMetaUpdateView,
+)
+# Import Layered Recovery Mesh views (Unit 6)
+from .time_locked_view import (
+    TimeLockedEnrollBundleView,
+    TimeLockedInitiateView,
+    TimeLockedReleaseView,
+    TimeLockedCanaryAckView,
+)
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -50,6 +72,35 @@ urlpatterns = [
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
+    # HttpOnly-cookie refresh-token endpoints (foundation for the
+    # localStorage -> cookie migration). These coexist with the legacy
+    # /token/ + /token/refresh/ paths above — new clients opt in via the
+    # frontend feature flag, existing logged-in users keep their session.
+    # See auth_module/cookie_auth_view.py for the threat-model rationale.
+    path(
+        'cookie/token/',
+        cookie_auth_view.CookieTokenObtainView.as_view(),
+        name='cookie_token_obtain',
+    ),
+    path(
+        'cookie/token/refresh/',
+        cookie_auth_view.CookieTokenRefreshView.as_view(),
+        name='cookie_token_refresh',
+    ),
+    path(
+        'cookie/token/logout/',
+        cookie_auth_view.CookieTokenLogoutView.as_view(),
+        name='cookie_token_logout',
+    ),
+    # Current-user endpoint used by the SPA bootstrap (both legacy
+    # AuthContext and cookie flow) to hydrate the user profile after
+    # page reload. We no longer persist the user object to localStorage;
+    # see CodeQL #1048 + the SPA's utils/userStorage.js.
+    path(
+        'me/',
+        current_user_view.CurrentUserView.as_view(),
+        name='current_user',
+    ),
     # Recovery key endpoints
     path('setup-recovery-key/', views.AuthViewSet.as_view({'post': 'setup_recovery_key'}), name='setup-recovery-key'),
     path('update-recovery-status/', views.AuthViewSet.as_view({'post': 'update_recovery_status'}), name='update-recovery-status'),
@@ -142,6 +193,43 @@ urlpatterns = [
     path('quantum-recovery/approve_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'approve_recovery'}), name='quantum-recovery-approve'),
     path('quantum-recovery/enable_travel_lock/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'enable_travel_lock'}), name='quantum-recovery-travel-lock'),
     path('quantum-recovery/complete_recovery/', quantum_recovery_views.QuantumRecoveryViewSet.as_view({'post': 'complete_recovery'}), name='quantum-recovery-complete'),
+
+    # ==================== Layered Recovery Mesh Endpoints ====================
+    # Unit 4 — wrapped DEK (master-password KEK over the user's vault DEK).
+    # Server stores ciphertext only; never decrypts the blob.
+    path('vault/wrapped-dek/', VaultWrappedDEKView.as_view(), name='vault-wrapped-dek'),
+    # Anonymous post-recovery rotation. Used by the recovery pages
+    # which run while the user is not yet authenticated; ties the
+    # rotation to (username, factor_type, dek_id) so only a caller
+    # who has hit lookup with a real combination can rotate.
+    path('vault/wrapped-dek/recover-rotate/', WrappedDEKRecoveryRotateView.as_view(), name='vault-wrapped-dek-recover-rotate'),
+    # Unit 5 — list/enroll wrapped-DEK recovery factors (recovery key,
+    # social mesh, time-locked, passkey). Server stores ciphertext only.
+    path('vault/recovery-factors/', RecoveryFactorListCreateView.as_view(), name='vault-recovery-factors'),
+    # Anonymous lookup of a wrapped factor by (username, factor_type).
+    # Used by the unauthenticated recovery pages to fetch the blob they
+    # need to unwrap with the user's recovery secret. Returns a decoy
+    # blob for unknown usernames so account existence is not leaked.
+    path('vault/recovery-factors/lookup/', RecoveryFactorLookupView.as_view(), name='vault-recovery-factor-lookup'),
+    # Authenticated PATCH of factor_meta. Used by the tier-2 social-
+    # mesh enrollment flow to write back recovery_setup_id after
+    # CircleSetup commits the guardian circle server-side.
+    path('vault/recovery-factors/meta/', RecoveryFactorMetaUpdateView.as_view(), name='vault-recovery-factor-meta'),
+    # Unit 6 — self-time-locked recovery. Server holds one Shamir 2-of-2
+    # share; release gated by configurable delay + canary-cancellation.
+    #
+    # NOTE: the standalone ``vault/time-locked/enroll/`` route has been
+    # retired. Stale clients calling that endpoint could replace
+    # ``TimeLockedRecovery.server_half`` without rotating the matching
+    # ``RecoveryWrappedDEK`` row, which would silently break any
+    # previously-issued ``.dlrec`` file. All time-locked enrollments
+    # MUST go through the atomic bundle endpoint below. The view class
+    # is kept in ``time_locked_view.py`` for tests and is no longer
+    # routable from any URL.
+    path('vault/time-locked/enroll-bundle/', TimeLockedEnrollBundleView.as_view(), name='vault-time-locked-enroll-bundle'),
+    path('vault/time-locked/initiate/', TimeLockedInitiateView.as_view(), name='vault-time-locked-initiate'),
+    path('vault/time-locked/release/', TimeLockedReleaseView.as_view(), name='vault-time-locked-release'),
+    path('vault/time-locked/canary-ack/', TimeLockedCanaryAckView.as_view(), name='vault-time-locked-canary-ack'),
 
     # ==================== Kyber Post-Quantum Cryptography Endpoints ====================
     # Keypair generation

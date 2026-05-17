@@ -265,7 +265,7 @@ qiskit==2.3.0
 qiskit-ibm-runtime==0.45.1
 queuelib==1.8.0
 RapidFuzz==3.14.3
-redis==5.2.1
+redis==7.0.1
 referencing==0.37.0
 regex==2025.11.3
 requests==2.33.0

@@ -354,16 +354,36 @@ Password Manager Team
         beneficiary.notified_at = timezone.now()
         beneficiary.save()
         
-        logger.info(f"Notified beneficiary {beneficiary.email} for capsule {capsule_id}")
-        
+        # Log only non-sensitive identifiers — emails are PII and the
+        # exception string from send_mail can include the verification
+        # token that was rendered into the message body. CodeQL's
+        # py/clear-text-logging-sensitive-data flagged the previous
+        # f-string interpolation.
+        logger.info(
+            "Notified beneficiary id=%s for capsule=%s",
+            beneficiary_id,
+            capsule_id,
+        )
+
         return {'success': True, 'email': beneficiary.email}
-        
+
     except CapsuleBeneficiary.DoesNotExist:
-        logger.error(f"Beneficiary {beneficiary_id} not found for capsule {capsule_id}")
+        logger.error(
+            "Beneficiary id=%s not found for capsule=%s",
+            beneficiary_id,
+            capsule_id,
+        )
         return {'success': False}
-    except Exception as e:
-        logger.error(f"Error notifying beneficiary {beneficiary_id}: {e}")
-        return {'success': False, 'error': str(e)}
+    except Exception:
+        # exc_info=True routes the traceback through logging's
+        # formatter rather than interpolating the (possibly token-
+        # carrying) exception text into the log line.
+        logger.exception(
+            "Error notifying beneficiary id=%s for capsule=%s",
+            beneficiary_id,
+            capsule_id,
+        )
+        return {'success': False, 'error': 'internal_error'}
 
 
 # =============================================================================

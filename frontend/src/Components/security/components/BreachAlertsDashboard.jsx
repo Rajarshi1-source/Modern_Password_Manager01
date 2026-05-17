@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import styled from 'styled-components';
 import { FaShieldAlt, FaBell, FaCheckCircle, FaFilter } from 'react-icons/fa';
 import useBreachWebSocket from '../../../hooks/useBreachWebSocket';
+import { useAuth } from '../../../hooks/useAuth';
 import BreachToast from './BreachToast';
 import BreachAlertCard from './BreachAlertCard';
 import BreachDetailModal from './BreachDetailModal';
@@ -234,8 +235,17 @@ const BreachAlertsDashboard = () => {
   const [toastAlert, setToastAlert] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null);
   
-  // Get user ID from auth context or localStorage
-  const userId = localStorage.getItem('user') ? JSON.parse(localStorage.getItem('user')).id : null;
+  // Get user ID from the auth context rather than localStorage. The
+  // legacy `localStorage.getItem('user')` path was removed when
+  // CodeQL alert #1048 (`js/clear-text-storage-of-sensitive-data`)
+  // landed — persisting the user blob to localStorage made it XSS-
+  // exfiltratable. Components that need user data now pull it from
+  // the auth provider, which holds it in React state only.
+  // `userId` is null until the user logs in (or until something
+  // hydrates `user` from the API in the legacy flow); the
+  // `if (userId) fetchAlerts()` gate below already handles that.
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
 
   // Handle new real-time alerts
   const handleNewAlert = useCallback((alertData) => {

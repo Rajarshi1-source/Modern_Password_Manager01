@@ -5,6 +5,7 @@ Handles async processing of breach detection, credential matching, and alerts
 
 from celery import shared_task, group, chord
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils import timezone
 from django.core.cache import cache
 import logging
@@ -16,7 +17,15 @@ from .models import (
     BreachSource, MLBreachData, UserCredentialMonitoring,
     MLBreachMatch, DarkWebScrapeLog, BreachPatternAnalysis
 )
-from .ml_services import get_breach_classifier, get_credential_matcher
+# NOTE: `.ml_services` is intentionally NOT imported at module level.
+# It pulls in `torch` and `transformers` at import time, which in turn
+# imports `triton` via `torch._dynamo`. On CI runners without CUDA,
+# triton's native library can segfault during initialization. Because
+# `password_manager/__init__.py` always loads Celery and Celery's
+# `autodiscover_tasks()` walks every INSTALLED_APPS' `tasks.py`, an
+# eager import here would crash pytest before a single test ran.
+# Import inside the task bodies instead — that path only fires when
+# the task actually executes (in a Celery worker, not under pytest).
 from vault.models import BreachAlert
 from .ml_config import MLDarkWebConfig
 
@@ -36,7 +45,11 @@ def process_scraped_content(self, content: str, source_id: int, content_metadata
     """
     try:
         logger.info(f"Processing content from source {source_id}")
-        
+
+        # Deferred — see the module-level comment above explaining why
+        # `.ml_services` is not imported at the top of this file.
+        from .ml_services import get_breach_classifier
+
         # Get the breach classifier
         classifier = get_breach_classifier()
         
@@ -130,9 +143,13 @@ def match_credentials_against_breach(self, breach_id: int):
             breach.save()
             return {'success': True, 'matches': 0}
         
+        # Deferred — see the module-level comment above explaining why
+        # `.ml_services` is not imported at the top of this file.
+        from .ml_services import get_credential_matcher
+
         # Get credential matcher
         matcher = get_credential_matcher()
-        
+
         # Get all active monitored credentials
         monitored_credentials = UserCredentialMonitoring.objects.filter(is_active=True)
         
@@ -188,11 +205,58 @@ def match_credentials_against_breach(self, breach_id: int):
                     id__in=batch_cred_ids
                 ).update(last_checked=timezone.now())
         
-        # Update breach status
-        breach.processing_status = 'matched' if matches_found > 0 else 'completed'
-        breach.processed_at = timezone.now()
-        breach.affected_records = matches_found
-        breach.save()
+        # Close-out the breach record. Two race-safety properties that
+        # the previous in-memory `breach.processing_status` check
+        # didn't give us (Codex P1 + CodeRabbit major on PR #244):
+        #
+        # 1. The status decision is made via an atomic SQL UPDATE with
+        #    a WHERE-clause precondition, not a Python-level if/else
+        #    against an object loaded at task start. That closes the
+        #    "task A loads breach as 'analyzing'; task B finishes and
+        #    sets 'matched'; task A's stale in-memory view thinks
+        #    it's still 'analyzing' and overwrites with 'completed'"
+        #    interleaving.
+        #
+        # 2. `affected_records` is the TRUE TOTAL across all runs, not
+        #    this run's per-run delta. `matches_found` only counts
+        #    rows we created via `get_or_create`; if another run
+        #    already populated MLBreachMatch we'd shrink the recorded
+        #    total. Re-derive the count from the DB.
+        #
+        # Once a breach is in 'matched' it stays there — `matched` is
+        # monotonic. The exclude(processing_status='matched') below is
+        # what makes "completed" race-safe: if another writer set
+        # 'matched' between our load and our write, the WHERE clause
+        # filters us out and we no-op on the status flip (still bump
+        # processed_at + affected_records to true_total).
+        true_total = MLBreachMatch.objects.filter(breach=breach).count()
+        now = timezone.now()
+
+        if true_total > 0:
+            # There ARE matches for this breach (this run, or a prior
+            # run that completed during ours). Always 'matched'; record
+            # the true total. Single unconditional UPDATE — `matched`
+            # is monotonic so concurrent writes converge.
+            MLBreachData.objects.filter(pk=breach.pk).update(
+                processing_status='matched',
+                affected_records=true_total,
+                processed_at=now,
+            )
+        else:
+            # No matches at all. Mark 'completed' ONLY if a concurrent
+            # writer hasn't already set 'matched'. The exclude() makes
+            # the UPDATE atomic relative to other writers — if their
+            # 'matched' write landed first, our row count is 0 and the
+            # decision matrix is a no-op (still safe to bump processed_at
+            # in a second UPDATE if we wanted, but skip it to keep the
+            # losing-the-race path a clean no-op).
+            MLBreachData.objects.filter(pk=breach.pk).exclude(
+                processing_status='matched',
+            ).update(
+                processing_status='completed',
+                affected_records=0,
+                processed_at=now,
+            )
         
         logger.info(f"Credential matching completed for breach {breach_id}. {matches_found} matches found.")
         
@@ -208,6 +272,238 @@ def match_credentials_against_breach(self, breach_id: int):
     
     except Exception as e:
         logger.error(f"Error matching credentials: {e}", exc_info=True)
+        return {'success': False, 'error': str(e)}
+
+
+@shared_task
+def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch: int = 200):
+    """
+    Periodic sweep that re-drives credential matching for breaches the
+    inline pipeline didn't finish.
+
+    This task is the target of the Celery beat schedule entry
+    ``check-data-breaches`` (every 6 hours; see
+    ``password_manager/celery.py``). Without a matching function on
+    the module, beat would silently ``KeyError`` on each fire — which
+    is exactly the dead-entry CodeRabbit flagged in the review of
+    PR #241. Adding the function here makes the schedule actually
+    work and gives us an observable sweep loop in production.
+
+    What it does
+    ------------
+    Finds ``MLBreachData`` rows in a non-terminal processing state and
+    dispatches :func:`match_credentials_against_breach` for each. Two
+    sources of work:
+
+      * ``processing_status='pending'`` — breach detected but no
+        matching pass started yet (e.g. inline classifier landed but
+        the matcher worker was offline at the time).
+      * ``processing_status='analyzing'`` rows whose ``detected_at`` is
+        older than ``stale_analyzing_minutes`` — worker likely crashed
+        mid-pass; rematching is safe because the matcher path is
+        idempotent (``MLBreachMatch.get_or_create``).
+
+    Bounded dispatch
+    ----------------
+    The query is capped at ``max_dispatch`` rows so a sudden flood of
+    pending breaches can't generate a multi-thousand-task storm in one
+    beat tick. Unprocessed rows roll over to the next 6-hour tick.
+
+    Idempotence
+    -----------
+    Re-dispatching ``match_credentials_against_breach`` for the same
+    ``breach_id`` is safe: the matcher uses
+    ``MLBreachMatch.objects.get_or_create`` keyed by
+    ``(user, breach, monitored_credential)`` and only counts newly-
+    created rows in its ``matches_found`` return value.
+
+    Args:
+        stale_analyzing_minutes: How old an ``analyzing`` row must be
+            before we treat it as stuck and rematch it.
+        max_dispatch: Per-tick safety cap on dispatched matching tasks.
+
+    Returns:
+        ``{'success': bool, 'dispatched': int, 'pending': int,
+        'stuck': int}`` so the beat log line is observable. Failure
+        modes set ``success=False`` and an ``error`` key.
+    """
+    # Reject obviously-malformed input (CodeRabbit major on PR #244):
+    # negative `max_dispatch` makes a queryset slice `[:negative]` skip
+    # the safety cap entirely on some ORMs; negative
+    # `stale_analyzing_minutes` would make the cutoff point in the
+    # future and silently re-dispatch every analyzing row. Fail closed
+    # with a clear error instead of producing weird behaviour.
+    if not isinstance(stale_analyzing_minutes, int) or stale_analyzing_minutes < 0:
+        return {'success': False, 'error': 'stale_analyzing_minutes must be a non-negative int'}
+    if not isinstance(max_dispatch, int) or max_dispatch < 0:
+        return {'success': False, 'error': 'max_dispatch must be a non-negative int'}
+    if max_dispatch == 0:
+        # Caller explicitly disabled this tick. Return a clean zero.
+        return {'success': True, 'dispatched': 0, 'pending': 0, 'stuck': 0}
+
+    try:
+        stuck_cutoff = timezone.now() - timezone.timedelta(minutes=stale_analyzing_minutes)
+        # An ``analyzing`` row is "stuck" when the last time the matcher
+        # pipeline touched it (either by claim or by completion) is
+        # older than the staleness cutoff. We use ``processed_at`` for
+        # this when set (claim writes it, completion writes it) and
+        # fall back to ``detected_at`` when ``processed_at`` is NULL
+        # — that's the case for rows that were created in the
+        # ``analyzing`` state but never reached either path. Codex P2
+        # on PR #244 caught the earlier version where a stuck-row
+        # claim wrote ``analyzing`` over ``analyzing`` without moving
+        # any timestamp out of the stale window, so the same row
+        # stayed eligible for every subsequent tick.
+        stuck_filter = (
+            Q(processing_status='analyzing')
+            & (
+                Q(processed_at__isnull=True, detected_at__lt=stuck_cutoff)
+                | Q(processed_at__lt=stuck_cutoff)
+            )
+        )
+
+        # Build the candidate set as a single query so we keep the
+        # ordering deterministic (oldest-first) for both halves —
+        # important so the same backlog isn't repeatedly partial-
+        # processed on every tick.
+        candidates = (
+            MLBreachData.objects
+            .filter(Q(processing_status='pending') | stuck_filter)
+            .order_by('detected_at')
+            .values_list('id', 'processing_status')[:max_dispatch]
+        )
+        candidates = list(candidates)
+
+        pending = sum(1 for _id, status in candidates if status == 'pending')
+        stuck = sum(1 for _id, status in candidates if status == 'analyzing')
+
+        # Atomically CLAIM each candidate before dispatching the match
+        # task. Codex P1 on PR #244 caught a real race: between the
+        # candidate-select above and the dispatch below, another worker
+        # (or a previous still-queued copy of this sweep) could already
+        # be processing the same row. Without a claim step we'd
+        # double-dispatch — and the matcher's "find zero NEW matches"
+        # path used to regress 'matched' rows back to 'completed' with
+        # affected_records=0. The matcher fix (above) closes the
+        # regression hole; the claim step also closes the duplicate-
+        # work hole that the matcher's get_or_create makes harmless
+        # but still wasteful.
+        #
+        # The claim semantics:
+        #   * pending row: atomic transition pending → analyzing.
+        #     UPDATE returns 1 only if the row is STILL pending. If a
+        #     racing worker already flipped it to analyzing, we get
+        #     zero and skip dispatch.
+        #   * stuck-analyzing row: re-claim with an explicit
+        #     stuck-window precondition (same WHERE we used in the
+        #     candidate select). The status stays 'analyzing'; the
+        #     WHERE clause is what makes the UPDATE atomic.
+        #
+        # Both branches also write `processed_at = now` so a
+        # subsequent sweep tick sees the row as "freshly touched"
+        # and excludes it from the stuck candidate set. Without this
+        # bump, a slow-running matcher pass (>= stale_analyzing_minutes)
+        # would let the next tick re-dispatch the same row.
+        #
+        # Broker-publish failure handling: if `.delay()` raises (e.g.
+        # Redis down), we revert the claim so the next sweep can pick
+        # the row back up without waiting for staleness recapture.
+        # CodeRabbit major on PR #244.
+        now = timezone.now()
+        dispatched = 0
+        for breach_id, original_status in candidates:
+            # Snapshot the pre-claim processed_at so a broker-publish
+            # failure can fully revert the claim (status + timestamp).
+            # Codex P2 on PR #244 follow-up: without this, a stuck-row
+            # claim that failed to dispatch left processed_at freshened
+            # to "now", hiding the row from the next sweep's stuck
+            # filter until staleness recapture (~30 min).
+            prior_processed_at = (
+                MLBreachData.objects
+                .filter(id=breach_id)
+                .values_list('processed_at', flat=True)
+                .first()
+            )
+            if original_status == 'pending':
+                claim_qs = MLBreachData.objects.filter(
+                    id=breach_id, processing_status='pending',
+                )
+                claimed = claim_qs.update(
+                    processing_status='analyzing',
+                    processed_at=now,
+                )
+            else:
+                # Stuck-analyzing: re-confirm the stuck-window
+                # precondition at UPDATE time so a worker that just
+                # started won't lose its claim to us. WHERE clause
+                # mirrors the `stuck_filter` used in the candidate
+                # select. The UPDATE writes the same `analyzing`
+                # status back (no-op data-wise), but moves
+                # `processed_at` out of the stale window — that's
+                # the real claim signal.
+                claim_qs = MLBreachData.objects.filter(
+                    id=breach_id,
+                    processing_status='analyzing',
+                ).filter(
+                    Q(processed_at__isnull=True, detected_at__lt=stuck_cutoff)
+                    | Q(processed_at__lt=stuck_cutoff)
+                )
+                claimed = claim_qs.update(
+                    processing_status='analyzing',
+                    processed_at=now,
+                )
+            if claimed:
+                try:
+                    match_credentials_against_breach.delay(breach_id)
+                    dispatched += 1
+                except Exception:
+                    # Broker publish failed. Revert the claim so the
+                    # row is available to the next sweep tick rather
+                    # than waiting for staleness recapture (~30 min).
+                    #
+                    # We revert BOTH dimensions of the claim:
+                    #   * status (pending → analyzing flip, when the
+                    #     original was 'pending')
+                    #   * processed_at (we bumped it to `now`; restore
+                    #     the pre-claim value so the next sweep's
+                    #     stuck filter sees the row as eligible again
+                    #     instead of hidden for stale_analyzing_minutes)
+                    revert_fields = {'processed_at': prior_processed_at}
+                    if original_status == 'pending':
+                        revert_fields['processing_status'] = 'pending'
+                    MLBreachData.objects.filter(id=breach_id).update(**revert_fields)
+                    # Re-raise so the outer try/except logs the
+                    # broker error and returns success=False.
+                    raise
+
+        # NOTE on the count semantics (CodeRabbit nit on PR #244):
+        # `pending` and `stuck` are the counts from the candidate
+        # SELECT BEFORE the per-row claim races. `dispatched` is the
+        # count of rows that ACTUALLY won their claim and got
+        # forwarded to the matcher. After a lost race, `dispatched`
+        # is strictly less than `pending + stuck`. The log line and
+        # return shape preserve both numbers so the gap between
+        # "candidates seen" and "dispatched" is observable in
+        # production.
+        logger.info(
+            'check_compromised_passwords dispatched=%d '
+            '(candidates_pending=%d, candidates_stuck=%d, candidates_total=%d)',
+            dispatched, pending, stuck, len(candidates),
+        )
+        return {
+            'success': True,
+            'dispatched': dispatched,
+            'pending': pending,
+            'stuck': stuck,
+        }
+    except Exception as e:  # noqa: BLE001 — sweep must never crash beat
+        # Use logger.exception with a static message so Semgrep's
+        # `python-logger-credential-disclosure` rule (which scans the
+        # format-string argument for secret-looking literals) doesn't
+        # false-positive on the task name. The traceback carries the
+        # diagnostic context; the exception's str() goes into the
+        # response payload, not the log message.
+        logger.exception('check_compromised_passwords sweep failed')  # nosemgrep
         return {'success': False, 'error': str(e)}
 
 
@@ -644,6 +940,10 @@ def monitor_user_credentials(user_id: int, credentials: List[str]):
         credentials: List of credentials (emails) to monitor
     """
     try:
+        # Deferred — see the module-level comment above explaining why
+        # `.ml_services` is not imported at the top of this file.
+        from .ml_services import get_credential_matcher
+
         user = User.objects.get(id=user_id)
         matcher = get_credential_matcher()
         

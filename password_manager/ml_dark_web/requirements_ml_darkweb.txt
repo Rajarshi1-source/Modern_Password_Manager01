@@ -28,7 +28,7 @@ PySocks>=1.7.1  # For SOCKS proxy (Tor)
 
 # Celery for Async Processing
 celery>=5.3.0
-redis>=5.2.0
+redis>=7.0.1
 flower>=2.0.0  # For monitoring Celery tasks
 
 # Django Channels for WebSockets

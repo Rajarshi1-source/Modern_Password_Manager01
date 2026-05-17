@@ -231,20 +231,24 @@ def send_message(request, session_id):
             }
         })
         
-    except ClaudeServiceError as e:
-        logger.warning(f"Claude service error for user {request.user.username}: {e}")
-        
-        # Store error as system message
+    except ClaudeServiceError:
+        logger.exception(
+            "Claude service error for user %s", request.user.username
+        )
+
+        # Store a generic system message; the raw exception text can
+        # leak provider URLs or internal server names that should not
+        # be persisted alongside user-visible chat history.
         ChatMessage.objects.create(
             session=session,
             role='system',
-            content=f"Error: {str(e)}",
+            content="The assistant is temporarily unavailable.",
             metadata={'error': True}
         )
-        
+
         return Response({
             'status': 'error',
-            'error': str(e),
+            'error': 'assistant_unavailable',
             'user_message': {
                 'id': str(user_msg.id),
                 'role': 'user',

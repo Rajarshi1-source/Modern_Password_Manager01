@@ -1,0 +1,25 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pm-require-pod-non-root
+  annotations:
+    policies.kyverno.io/title: Require pod securityContext.runAsNonRoot (password-manager)
+    policies.kyverno.io/category: Pod Security Standards
+spec:
+  validationFailureAction: audit
+  background: true
+  rules:
+    - name: pod-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - password-manager
+      validate:
+        message: Pod spec.securityContext.runAsNonRoot must be true (aligns with hardened Deployments in k8s/deployment.yaml).
+        pattern:
+          spec:
+            securityContext:
+              runAsNonRoot: true
