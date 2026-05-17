@@ -1,0 +1,289 @@
+"""
+HttpOnly-cookie-based refresh-token endpoints.
+
+Why this exists
+---------------
+The existing ``/api/auth/token/`` and ``/api/auth/token/refresh/``
+endpoints return the refresh token in the JSON response. The web
+client then writes it to ``localStorage``, which means any XSS in
+the SPA (or a compromised third-party script) can exfiltrate the
+refresh token and impersonate the user for the entire refresh-token
+lifetime (currently 7 days, see ``settings.SIMPLE_JWT``).
+
+The hardened pattern, recommended for browser-based SPAs, is:
+
+  * The refresh token lives in an **HttpOnly, Secure, SameSite=Strict
+    cookie** scoped to ``/api/auth/``. JavaScript cannot read or
+    enumerate it; only the browser's network stack sends it back on
+    matching requests.
+  * The access token is **kept in memory only** in the SPA (a closure
+    or module-level variable, never persisted to ``localStorage`` /
+    ``sessionStorage``). On page reload the SPA calls the
+    cookie-refresh endpoint to mint a fresh access token from the
+    cookie. The 15-minute access-token TTL means the in-memory copy
+    is short-lived even if it is briefly exposed in a heap dump.
+  * Refresh-on-use rotation is preserved (``ROTATE_REFRESH_TOKENS``
+    + ``BLACKLIST_AFTER_ROTATION`` from ``SIMPLE_JWT``). Every
+    refresh issues a new cookie and blacklists the old one.
+
+Scope of this PR
+----------------
+This module provides the foundation alongside the existing endpoints.
+It does NOT remove or change the legacy ``/token/`` and
+``/token/refresh/`` paths — those keep working so existing logged-in
+users keep their sessions. New code can opt into the cookie flow via
+a frontend feature flag; once that flag is fully rolled out the
+legacy endpoints can be retired in a follow-up.
+
+Three views:
+
+  ``CookieTokenObtainView``
+      POST username + password → issues access token in JSON body,
+      sets refresh token as HttpOnly cookie.
+
+  ``CookieTokenRefreshView``
+      POST with the HttpOnly refresh cookie → returns a new access
+      token in JSON, rotates the refresh cookie. No body required.
+
+  ``CookieTokenLogoutView``
+      POST → blacklists the refresh token (if SimpleJWT blacklist
+      app is installed), clears the cookie.
+
+CSRF
+----
+``SameSite=Strict`` is the primary defense against cross-site request
+forgery for these endpoints — a malicious origin cannot cause the
+browser to send the cookie on a cross-site request. We additionally
+require the SPA's ``X-Requested-With: XMLHttpRequest`` header on the
+refresh endpoint as a belt-and-suspenders check: a legitimate
+``fetch()``/``axios`` call from the SPA sets it; an HTML form GET
+from another origin would not. CSRF token exchange is unnecessary
+for these specific endpoints because the cookie itself is the
+authenticator, and same-site enforcement plus the header check
+covers the relevant attack surface.
+"""
+from __future__ import annotations
+
+from datetime import timedelta
+from typing import Optional
+
+from django.conf import settings
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.permissions import AllowAny
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
+
+
+# ---------------------------------------------------------------------------
+# Cookie shape — single source of truth.
+#
+# All cookie settings are derived from environment / Django settings so a
+# test environment (HTTP localhost, dev) can relax ``secure`` and ``samesite``
+# while production deployments keep them strict. Defaults match the
+# OWASP recommendation for refresh tokens.
+# ---------------------------------------------------------------------------
+
+REFRESH_COOKIE_NAME = getattr(settings, "AUTH_REFRESH_COOKIE_NAME", "auth_refresh")
+REFRESH_COOKIE_PATH = getattr(settings, "AUTH_REFRESH_COOKIE_PATH", "/api/auth/")
+REFRESH_COOKIE_DOMAIN = getattr(settings, "AUTH_REFRESH_COOKIE_DOMAIN", None)
+# `secure=True` requires HTTPS. In local dev (DEBUG=True) we relax this so
+# the cookie still flows over http://localhost:8000. NEVER set this to
+# False in production — an HTTP refresh-token cookie is an open lobby for
+# network attackers.
+REFRESH_COOKIE_SECURE = getattr(
+    settings, "AUTH_REFRESH_COOKIE_SECURE", not settings.DEBUG
+)
+# `Strict` is the right answer for an SPA-only refresh endpoint: the
+# cookie should never travel cross-site under any circumstance. If a
+# future use-case needs OAuth-style cross-site redirects we can downgrade
+# to `Lax` per endpoint, but the refresh cookie itself must stay Strict.
+REFRESH_COOKIE_SAMESITE = getattr(settings, "AUTH_REFRESH_COOKIE_SAMESITE", "Strict")
+
+
+def _refresh_cookie_max_age_seconds() -> int:
+    """Pull the configured refresh-token TTL and convert to seconds."""
+    lifetime: timedelta = settings.SIMPLE_JWT.get(
+        "REFRESH_TOKEN_LIFETIME", timedelta(days=7)
+    )
+    return int(lifetime.total_seconds())
+
+
+def _set_refresh_cookie(response: Response, token_value: str) -> None:
+    """Write the refresh-token cookie with the hardened attribute set."""
+    response.set_cookie(
+        REFRESH_COOKIE_NAME,
+        token_value,
+        max_age=_refresh_cookie_max_age_seconds(),
+        path=REFRESH_COOKIE_PATH,
+        domain=REFRESH_COOKIE_DOMAIN,
+        secure=REFRESH_COOKIE_SECURE,
+        httponly=True,
+        samesite=REFRESH_COOKIE_SAMESITE,
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    """Delete the refresh cookie. Must mirror path/domain/samesite from
+    ``_set_refresh_cookie`` or the browser will keep the original."""
+    response.delete_cookie(
+        REFRESH_COOKIE_NAME,
+        path=REFRESH_COOKIE_PATH,
+        domain=REFRESH_COOKIE_DOMAIN,
+        samesite=REFRESH_COOKIE_SAMESITE,
+    )
+
+
+def _read_refresh_cookie(request: Request) -> Optional[str]:
+    """Return the cookie value or None if absent."""
+    raw = request.COOKIES.get(REFRESH_COOKIE_NAME)
+    return raw if isinstance(raw, str) and raw else None
+
+
+class CookieTokenObtainView(APIView):
+    """POST username + password → access token in body, refresh in cookie.
+
+    Mirrors ``TokenObtainPairView`` but the response body contains only
+    the access token. The refresh token is set in an HttpOnly cookie so
+    the SPA never has direct access to it.
+    """
+
+    permission_classes = [AllowAny]
+    # Reuse the project's existing token-obtain serializer so the
+    # refresh-token-family limit (auth_module.token_family) still
+    # applies: concurrent-device cap, family rotation tracking,
+    # everything stays identical to the JSON flow.
+    serializer_class = TokenObtainPairSerializer
+
+    def post(self, request: Request) -> Response:
+        serializer = self.serializer_class(data=request.data, context={"request": request})
+        try:
+            serializer.is_valid(raise_exception=True)
+        except TokenError as exc:
+            raise InvalidToken(exc.args[0]) from exc
+
+        validated = serializer.validated_data
+        access = validated.get("access")
+        refresh = validated.get("refresh")
+
+        body = {"access": access, "token_type": "Bearer"}
+        # Surface the same useful claims the legacy endpoint did, minus
+        # the refresh token itself — that lives in the cookie now.
+        if "user" in validated:
+            body["user"] = validated["user"]
+
+        response = Response(body, status=status.HTTP_200_OK)
+        if refresh is not None:
+            _set_refresh_cookie(response, str(refresh))
+        return response
+
+
+class CookieTokenRefreshView(APIView):
+    """POST (cookie-only) → returns a new access token, rotates the refresh cookie."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        # Belt-and-suspenders on top of SameSite=Strict: refuse refreshes
+        # that don't carry the SPA's XHR header. A cross-site HTML form
+        # POST cannot set this header. This isn't a security boundary on
+        # its own (a same-origin XSS could forge it trivially) but it
+        # closes a class of mistakes where a malformed third-party page
+        # accidentally triggers a refresh.
+        if request.META.get("HTTP_X_REQUESTED_WITH") != "XMLHttpRequest":
+            return Response(
+                {"detail": "refresh requires X-Requested-With: XMLHttpRequest"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        raw_refresh = _read_refresh_cookie(request)
+        if not raw_refresh:
+            return Response(
+                {"detail": "refresh cookie missing"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            refresh = RefreshToken(raw_refresh)
+        except TokenError:
+            # Treat any decode/validation failure as "not authenticated"
+            # AND clear the bad cookie so the client doesn't keep
+            # presenting it on every retry.
+            response = Response(
+                {"detail": "refresh token invalid or expired"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+            _clear_refresh_cookie(response)
+            return response
+
+        new_access = str(refresh.access_token)
+
+        # Honour SIMPLE_JWT.ROTATE_REFRESH_TOKENS — the project sets this
+        # to True. We always rotate when called via this endpoint: a
+        # successful refresh issues a fresh refresh-token cookie and
+        # blacklists the old one (if the blacklist app is installed).
+        new_refresh_value = raw_refresh
+        if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS", False):
+            try:
+                if settings.SIMPLE_JWT.get("BLACKLIST_AFTER_ROTATION", False):
+                    try:
+                        refresh.blacklist()
+                    except AttributeError:
+                        # blacklist() is only available when the
+                        # token_blacklist app is installed. The project
+                        # installs it; fall through gracefully if a test
+                        # environment doesn't.
+                        pass
+                refresh.set_jti()
+                refresh.set_exp()
+                refresh.set_iat()
+                new_refresh_value = str(refresh)
+            except TokenError:
+                # If rotation fails (e.g. the existing token is exactly
+                # at expiry mid-rotation), respond as unauthenticated
+                # rather than silently leaving a half-rotated cookie.
+                response = Response(
+                    {"detail": "refresh rotation failed"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+                _clear_refresh_cookie(response)
+                return response
+
+        response = Response(
+            {"access": new_access, "token_type": "Bearer"},
+            status=status.HTTP_200_OK,
+        )
+        _set_refresh_cookie(response, new_refresh_value)
+        return response
+
+
+class CookieTokenLogoutView(APIView):
+    """POST → blacklists the refresh token (if installed) and clears the cookie.
+
+    Idempotent: calling logout with no cookie returns 200. Calling it
+    with a malformed cookie still clears the cookie and returns 200 —
+    the user wanted to log out and the cookie is gone, which is the
+    user-visible contract.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request: Request) -> Response:
+        raw_refresh = _read_refresh_cookie(request)
+        if raw_refresh:
+            try:
+                refresh = RefreshToken(raw_refresh)
+                try:
+                    refresh.blacklist()
+                except AttributeError:
+                    pass  # blacklist app not installed
+            except TokenError:
+                # Malformed cookie — just clear it.
+                pass
+        response = Response({"detail": "logged out"}, status=status.HTTP_200_OK)
+        _clear_refresh_cookie(response)
+        return response

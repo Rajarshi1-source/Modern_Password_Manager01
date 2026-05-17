@@ -38,6 +38,28 @@
 
 import { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import axios from 'axios';
+import {
+  loginWithCookie,
+  refreshAccessTokenViaCookie,
+  logoutWithCookie,
+} from '../services/cookieAuthService';
+import {
+  getAccessToken as getInMemoryAccessToken,
+  isAuthenticated as isInMemoryAuthenticated,
+} from '../services/tokenStore';
+
+// Opt-in feature flag for the HttpOnly-cookie refresh-token flow.
+// When true, the SPA:
+//   * never writes the refresh token to localStorage (it lives in an
+//     HttpOnly cookie issued by /api/auth/cookie/token/),
+//   * keeps the short-lived access token in a module-scope closure
+//     in `services/tokenStore.js` (never persisted),
+//   * refreshes via /api/auth/cookie/token/refresh/ (cookie-only).
+// When false (default), the legacy localStorage flow runs untouched
+// so existing logged-in users keep their session. Roll this out by
+// setting VITE_USE_COOKIE_AUTH=true in the environment.
+const USE_COOKIE_AUTH =
+  (import.meta?.env?.VITE_USE_COOKIE_AUTH || '').toString().toLowerCase() === 'true';
 
 // ==============================================================================
 // AUTH CONTEXT
@@ -101,25 +123,39 @@ const onTokenRefreshed = (newAccessToken) => {
 };
 
 const refreshAccessToken = async () => {
+  // Cookie-flow path: the refresh token is in an HttpOnly cookie the
+  // browser sends automatically; the SPA never sees the refresh token.
+  // The cookieAuthService writes the new access token into tokenStore
+  // (module-scope memory), so we just return it for the interceptor's
+  // retry logic. Returns null if the cookie is missing/expired — the
+  // caller's catch path handles that as "user must log in again".
+  if (USE_COOKIE_AUTH) {
+    const access = await refreshAccessTokenViaCookie();
+    if (!access) {
+      throw new Error('Refresh cookie missing or expired');
+    }
+    return access;
+  }
+
   const refreshToken = storage.getRefreshToken();
-  
+
   if (!refreshToken) {
     throw new Error('No refresh token available');
   }
-  
+
   try {
     const response = await axios.post('/api/auth/token/refresh/', {
       refresh: refreshToken
     });
-    
+
     const { access, refresh: newRefreshToken } = response.data;
-    
+
     storage.setAccessToken(access);
     if (newRefreshToken) {
       // If backend rotates refresh tokens
       storage.setRefreshToken(newRefreshToken);
     }
-    
+
     return access;
   } catch (error) {
     // Refresh token invalid or expired
@@ -132,15 +168,21 @@ const refreshAccessToken = async () => {
 // AXIOS INTERCEPTORS
 // ==============================================================================
 
-// Request interceptor: Add Authorization header
+// Request interceptor: Add Authorization header.
+// In cookie-flow mode the access token lives in the tokenStore
+// closure (services/tokenStore.js) and is never persisted to
+// localStorage. The legacy path keeps reading from localStorage so
+// existing logged-in users transition without a forced re-login.
 axios.interceptors.request.use(
   (config) => {
-    const accessToken = storage.getAccessToken();
-    
+    const accessToken = USE_COOKIE_AUTH
+      ? getInMemoryAccessToken()
+      : storage.getAccessToken();
+
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`;
     }
-    
+
     return config;
   },
   (error) => Promise.reject(error)
@@ -176,8 +218,16 @@ axios.interceptors.response.use(
         return axios(originalRequest);
       } catch (refreshError) {
         isRefreshing = false;
-        // Refresh failed - user needs to login again
-        storage.clearAll();
+        // Refresh failed - user needs to login again. Clear both
+        // stores so we don't strand a half-state in either flow.
+        if (USE_COOKIE_AUTH) {
+          // Best-effort server-side logout (clears the cookie) and
+          // drops the in-memory access token. Awaited only briefly;
+          // we redirect either way.
+          logoutWithCookie().catch(() => {});
+        } else {
+          storage.clearAll();
+        }
         window.location.href = '/'; // Redirect to login
         return Promise.reject(refreshError);
       }
@@ -196,21 +246,54 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   
-  // Initialize auth state from storage
+  // Initialize auth state from storage.
+  //
+  // Cookie flow: there is no persisted access token on page reload —
+  // it's deliberately memory-only. We ask the backend to mint one
+  // from the HttpOnly refresh cookie. If the cookie is missing or
+  // expired the call returns null and we stay unauthenticated; the
+  // user lands on the login page as expected.
+  //
+  // Legacy flow: read user + access token from localStorage exactly
+  // as before, so existing sessions survive.
   useEffect(() => {
-    const initAuth = () => {
+    let cancelled = false;
+
+    const initAuth = async () => {
+      if (USE_COOKIE_AUTH) {
+        try {
+          const access = await refreshAccessTokenViaCookie();
+          if (cancelled) return;
+          if (access) {
+            // We don't persist the user object in the cookie flow
+            // either — it would be the same XSS-exfil sink. The
+            // backend echoes minimal user fields on the next
+            // authenticated request; for now we mark authenticated
+            // and let consumers fetch their own profile.
+            setIsAuthenticated(true);
+            setUser(isInMemoryAuthenticated() ? { authenticated: true } : null);
+          }
+        } catch {
+          /* network error during init — stay unauthenticated */
+        } finally {
+          if (!cancelled) setIsLoading(false);
+        }
+        return;
+      }
+
       const storedUser = storage.getUser();
       const accessToken = storage.getAccessToken();
-      
+
       if (storedUser && accessToken) {
         setUser(storedUser);
         setIsAuthenticated(true);
       }
-      
+
       setIsLoading(false);
     };
-    
+
     initAuth();
+    return () => { cancelled = true; };
   }, []);
   
   /**
@@ -222,21 +305,45 @@ export const AuthProvider = ({ children }) => {
   const login = useCallback(async (credentials) => {
     try {
       setIsLoading(true);
-      
-      // Call Django SimpleJWT token endpoint (uses username field by default)
+
+      // Cookie flow: backend issues an HttpOnly refresh cookie and
+      // returns the short-lived access token in the JSON body. The
+      // access token is written to tokenStore (in-memory) by
+      // loginWithCookie itself; we never persist it.
+      if (USE_COOKIE_AUTH) {
+        const { user: userData } = await loginWithCookie({
+          username: credentials.email || credentials.username,
+          password: credentials.password,
+        });
+        let userProfile = userData;
+        if (!userProfile) {
+          try {
+            const profileResponse = await axios.get('/api/user/profile/');
+            userProfile = profileResponse.data;
+          } catch {
+            userProfile = { email: credentials.email || credentials.username };
+          }
+        }
+        // Profile is held in React state only — not persisted to
+        // localStorage so the value can't be exfiltrated by XSS.
+        setUser(userProfile);
+        setIsAuthenticated(true);
+        return userProfile;
+      }
+
+      // Legacy localStorage flow — unchanged so existing sessions
+      // and clients that haven't flipped the feature flag keep
+      // working exactly as before.
       const response = await axios.post('/api/auth/token/', {
         username: credentials.email || credentials.username,
         password: credentials.password
       });
-      
+
       const { access, refresh, user: userData } = response.data;
-      
-      // Store tokens
+
       storage.setAccessToken(access);
       storage.setRefreshToken(refresh);
-      
-      // If user data is returned, store it
-      // Otherwise, fetch user profile
+
       let userProfile = userData;
       if (!userProfile) {
         try {
@@ -246,17 +353,16 @@ export const AuthProvider = ({ children }) => {
           userProfile = profileResponse.data;
         } catch (error) {
           console.warn('Failed to fetch user profile:', error);
-          // Use basic user info from token or credentials
           userProfile = {
             email: credentials.email || credentials.username
           };
         }
       }
-      
+
       storage.setUser(userProfile);
       setUser(userProfile);
       setIsAuthenticated(true);
-      
+
       return userProfile;
     } catch (error) {
       console.error('Login failed:', error);
@@ -271,23 +377,33 @@ export const AuthProvider = ({ children }) => {
    */
   const logout = useCallback(async () => {
     try {
-      const refreshToken = storage.getRefreshToken();
-      
-      if (refreshToken) {
-        // Optional: Call backend logout endpoint to blacklist refresh token
-        try {
-          await axios.post('/api/auth/token/blacklist/', {
-            refresh: refreshToken
-          });
-        } catch (error) {
-          console.warn('Token blacklist failed:', error);
+      if (USE_COOKIE_AUTH) {
+        // logoutWithCookie hits /api/auth/cookie/token/logout/ which
+        // blacklists the refresh token (when the SimpleJWT blacklist
+        // app is installed) and clears the HttpOnly cookie. It also
+        // clears the in-memory access token via tokenStore.
+        await logoutWithCookie();
+      } else {
+        const refreshToken = storage.getRefreshToken();
+
+        if (refreshToken) {
+          // Optional: Call backend logout endpoint to blacklist refresh token
+          try {
+            await axios.post('/api/auth/token/blacklist/', {
+              refresh: refreshToken
+            });
+          } catch (error) {
+            console.warn('Token blacklist failed:', error);
+          }
         }
       }
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      // Clear local storage regardless of API call success
-      storage.clearAll();
+      // Local cleanup runs regardless of API call success.
+      if (!USE_COOKIE_AUTH) {
+        storage.clearAll();
+      }
       // Clear any default Authorization header that OAuth flows may have set;
       // leaving it behind would cause the next request to carry a stale token
       // that is no longer in storage.

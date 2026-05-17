@@ -641,6 +641,33 @@ PUSH_NOTIFICATIONS_SETTINGS = {
     'WP_CLAIMS': {'sub': f"mailto:{os.environ.get('WP_VAPID_EMAIL', 'admin@example.com')}"}
 }
 
+# =============================================================================
+# Auth refresh-token cookie (HttpOnly migration)
+# =============================================================================
+# Foundation for moving the refresh token out of `localStorage` into an
+# HttpOnly+Secure+SameSite=Strict cookie. The cookie endpoints live in
+# `auth_module.cookie_auth_view` and are URL-routed at
+#   /api/auth/cookie/token/          (login → access in body, refresh in cookie)
+#   /api/auth/cookie/token/refresh/  (cookie-only → rotated cookie + new access)
+#   /api/auth/cookie/token/logout/   (blacklist + clear cookie)
+#
+# Defaults below match the OWASP recommendation for refresh tokens.
+# Production deployments behind HTTPS should leave AUTH_REFRESH_COOKIE_SECURE
+# at its default (auto-enabled when DEBUG=False). Local dev over plain HTTP
+# auto-relaxes it (DEBUG=True). Never force this to False in production.
+AUTH_REFRESH_COOKIE_NAME = os.environ.get('AUTH_REFRESH_COOKIE_NAME', 'auth_refresh')
+AUTH_REFRESH_COOKIE_PATH = os.environ.get('AUTH_REFRESH_COOKIE_PATH', '/api/auth/')
+# A blank string ('') means "don't pin to a domain" — the cookie is sent
+# only to the exact host that set it. That's the strictest default and the
+# right answer for most deployments. Set this only if you intentionally
+# share the cookie across subdomains.
+AUTH_REFRESH_COOKIE_DOMAIN = os.environ.get('AUTH_REFRESH_COOKIE_DOMAIN') or None
+AUTH_REFRESH_COOKIE_SECURE = (
+    os.environ.get('AUTH_REFRESH_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes')
+    or not DEBUG
+)
+AUTH_REFRESH_COOKIE_SAMESITE = os.environ.get('AUTH_REFRESH_COOKIE_SAMESITE', 'Strict')
+
 # JWT Settings
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # Short-lived access tokens
