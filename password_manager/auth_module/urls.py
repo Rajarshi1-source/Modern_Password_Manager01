@@ -19,6 +19,10 @@ from . import oidc_views
 from . import mfa_views
 # Import HttpOnly-cookie refresh-token views
 from . import cookie_auth_view
+# Current-user endpoint (GET /api/auth/me/) — also lands in PR #245.
+# Used by the cookie-flow bootstrap to hydrate the user profile
+# without persisting it to localStorage.
+from . import current_user_view
 # Import Primary Passkey Recovery views
 from . import passkey_primary_recovery_views
 # Import Kyber (Post-Quantum) views
@@ -86,6 +90,12 @@ urlpatterns = [
         'cookie/token/logout/',
         cookie_auth_view.CookieTokenLogoutView.as_view(),
         name='cookie_token_logout',
+    ),
+    # Current-user hydration endpoint (also defined in PR #245).
+    path(
+        'me/',
+        current_user_view.CurrentUserView.as_view(),
+        name='current_user',
     ),
     # Recovery key endpoints
     path('setup-recovery-key/', views.AuthViewSet.as_view({'post': 'setup_recovery_key'}), name='setup-recovery-key'),

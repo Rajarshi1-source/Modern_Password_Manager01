@@ -45,7 +45,6 @@ import {
 } from '../services/cookieAuthService';
 import {
   getAccessToken as getInMemoryAccessToken,
-  isAuthenticated as isInMemoryAuthenticated,
   clearAccessToken,
 } from '../services/tokenStore';
 
@@ -297,45 +296,80 @@ export const AuthProvider = ({ children }) => {
   
   // Initialize auth state from storage.
   //
-  // Cookie flow: there is no persisted access token on page reload —
-  // it's deliberately memory-only. We ask the backend to mint one
-  // from the HttpOnly refresh cookie. If the cookie is missing or
-  // expired the call returns null and we stay unauthenticated; the
-  // user lands on the login page as expected.
+  // Cookie flow:
+  //   1. Ask backend to mint an access token from the HttpOnly
+  //      refresh cookie. If that succeeds, fetch the real user
+  //      profile from /api/auth/me/ so consumers
+  //      (VaultUnlockModal, ReputationDashboard, etc.) that read
+  //      user.id/user.email don't break. Setting a placeholder
+  //      {authenticated: true} was a Codex P2 finding — those
+  //      consumers explicitly need real identity fields.
+  //   2. If the cookie refresh fails (no cookie / cookie expired),
+  //      FALL THROUGH to the legacy localStorage path. Users who
+  //      were signed in via the legacy flow BEFORE
+  //      VITE_USE_COOKIE_AUTH was flipped on still have valid
+  //      access/refresh tokens in localStorage; treating them as
+  //      logged out the moment the flag deploys would force-
+  //      logout an entire user base. Codex P2 finding #2.
   //
-  // Legacy flow: read user + access token from localStorage exactly
-  // as before, so existing sessions survive.
+  // Legacy flow: read user + access token from localStorage as
+  // before, so existing sessions survive.
   useEffect(() => {
     let cancelled = false;
 
     const initAuth = async () => {
+      let triedCookieFlow = false;
+
       if (USE_COOKIE_AUTH) {
+        triedCookieFlow = true;
         try {
           const access = await refreshAccessTokenViaCookie();
           if (cancelled) return;
           if (access) {
-            // We don't persist the user object in the cookie flow
-            // either — it would be the same XSS-exfil sink. The
-            // backend echoes minimal user fields on the next
-            // authenticated request; for now we mark authenticated
-            // and let consumers fetch their own profile.
-            setIsAuthenticated(true);
-            setUser(isInMemoryAuthenticated() ? { authenticated: true } : null);
+            // Have a fresh access token — fetch the real user
+            // profile so user.id / user.email are populated.
+            // _isBootstrap so the response interceptor doesn't
+            // try its own refresh-then-retry on a 401 from /me/.
+            try {
+              const resp = await axios.get('/api/auth/me/', {
+                _isBootstrap: true,
+              });
+              if (!cancelled) {
+                setUser(resp.data);
+                setIsAuthenticated(true);
+              }
+            } catch {
+              // /me failed but the access token is valid. Mark
+              // authenticated; consumers handle null user
+              // gracefully. (Network blip / 5xx case.)
+              if (!cancelled) setIsAuthenticated(true);
+            }
+            if (!cancelled) setIsLoading(false);
+            return;
           }
+          // access === null: cookie missing/expired. Fall through
+          // to the legacy localStorage path below.
         } catch {
-          /* network error during init — stay unauthenticated */
-        } finally {
-          if (!cancelled) setIsLoading(false);
+          // Network error during cookie refresh. Fall through to
+          // the legacy path so a transient outage doesn't
+          // unconditionally bounce active migration users.
         }
-        return;
       }
 
+      // Legacy localStorage path. Reached when:
+      //   * USE_COOKIE_AUTH is false (default), OR
+      //   * USE_COOKIE_AUTH is true but the cookie refresh
+      //     returned null / threw, AND the user might still have
+      //     a valid legacy session from before the flag deploy.
       const storedUser = storage.getUser();
       const accessToken = storage.getAccessToken();
 
       if (storedUser && accessToken) {
         setUser(storedUser);
         setIsAuthenticated(true);
+      } else if (triedCookieFlow) {
+        // Neither cookie nor legacy storage has anything for us.
+        // User is unauthenticated; let the login screen render.
       }
 
       setIsLoading(false);
