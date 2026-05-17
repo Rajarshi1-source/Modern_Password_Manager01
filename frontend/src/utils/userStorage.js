@@ -26,22 +26,42 @@
  * new safe display field is a one-line whitelist change here.
  */
 
-// Whitelist of `user` fields we are willing to write to
-// localStorage. Anything outside this list is dropped before
-// JSON.stringify, so future backend additions cannot quietly
-// expand the persisted attack surface.
+// Whitelist of `user` fields the scrub helper retains. Originally
+// designed for "fields safe to persist to localStorage"; since this
+// module no longer writes to localStorage at all, the list now
+// governs which fields callers may project into transient React
+// state (e.g. via `scrubUserForStorage` for input validation).
+//
+// Each field is here because UI code legitimately renders it.
+// Adding a new field is a deliberate decision; it should NOT be
+// done casually to silence a runtime warning.
+//
+// Note: `email`, `first_name`, `last_name`, and `date_joined` are
+// PII (GDPR-relevant). `is_staff` / `is_superuser` reveal privilege
+// level which could help target spear-phishing. We accept them
+// here because they are needed for UI rendering and because the
+// scrubbed object now lives only in React state (per-session) —
+// not in any persistent store. CodeRabbit nit on PR #245.
 const SAFE_USER_FIELDS = Object.freeze([
+  // ----- identifiers (needed by API calls that take user_id) -----
   'id',
   'user_id',
   'pk',
+  // ----- display name fields (rendered in header / nav) -----
   'username',
-  'email',
   'first_name',
   'last_name',
   'display_name',
+  // ----- PII used in UI (GDPR-relevant) -----
+  'email',
   'date_joined',
+  // ----- privilege flags (toggle admin UI affordances) -----
+  // Reveal privilege level if exfiltrated. Acceptable because the
+  // UI legitimately gates affordances on them; they're also
+  // re-asserted by the backend on every authenticated request.
   'is_staff',
   'is_superuser',
+  // ----- visual / preference -----
   'avatar',
   'avatar_url',
   'locale',
@@ -70,46 +90,62 @@ export function scrubUserForStorage(user) {
 }
 
 /**
- * Removes any previously-persisted user object under `storageKey`.
+ * Remove any previously-persisted user object under `storageKey`.
  *
- * NOTE: this function NO LONGER WRITES to localStorage, despite the
- * "set" in the name. CodeQL flagged the previous setItem call
- * (`js/clear-text-storage-of-sensitive-data`, alert #1048) and
- * Copilot Autofix proposed turning the write into a remove —
- * accepted because:
+ * The name is "clear", not "set", because this function does NOT
+ * write to localStorage — it only ensures the slot is empty. CodeQL
+ * #1048 (`js/clear-text-storage-of-sensitive-data`) led us to stop
+ * persisting the user profile to client storage entirely; the
+ * underlying issue is that even a whitelist-scrubbed object is still
+ * a PII payload exfiltratable by any XSS in the SPA.
  *
- *   1. The proper architectural fix (HttpOnly refresh-token cookies
- *      + in-memory access token + profile re-fetched from API on
- *      bootstrap) is shipping in PR #246. Once that flag rolls out
- *      we never persist user state to localStorage at all.
+ * Bootstrap code (AuthContext.jsx, useAuth.jsx) now hydrates the
+ * user from `GET /api/auth/me/` on page reload instead of from
+ * cached localStorage. The profile lives only in React state.
  *
- *   2. In the meantime, even the whitelist-scrubbed object is still
- *      a PII payload exfiltratable by any XSS in the SPA. CodeQL's
- *      taint analysis is correct that it shouldn't be persisted at
- *      all — the narrowed field set was a half-measure.
+ * Validation behaviour:
+ *   * `scrubUserForStorage` is run as an input check — non-object
+ *     input produces a `console.warn` so call-site misuse is
+ *     audible during development. (Doesn't throw; we don't want a
+ *     stray bad call to take down the login flow.)
+ *   * The legacy `storageKey` slot is removed regardless, so users
+ *     upgrading from a pre-fix build don't leave a stale PII
+ *     payload in localStorage indefinitely.
  *
- * Behavioural consequence for legacy callers: `currentUser` is no
- * longer restored from localStorage on page reload. Bootstrap code
- * (AuthContext.jsx, useAuth.jsx) now authenticates from the token
- * alone and re-fetches the profile from the backend when needed,
- * which is the same pattern PR #246's cookie flow uses.
- *
- * We keep `scrubUserForStorage` as a pure function so callers can
- * still produce a display-safe projection for transient React
- * state or for sending to a logging endpoint.
+ * `scrubUserForStorage` is kept as a pure function so callers can
+ * project a display-safe view into transient React state (e.g.
+ * for sending to a logging endpoint) without re-importing this
+ * whole concern.
  *
  * @param {string} storageKey
- * @param {object | null | undefined} _user  unused — kept so call
- *   sites compile without changes, and so the scrub helper is
- *   still invoked as a runtime check on inputs.
+ * @param {object | null | undefined} user  passed for input
+ *   validation; the value itself is never written anywhere.
  */
-export function setStoredUser(storageKey, _user) {
-  // Validate the input shape via the scrub helper. This keeps any
-  // accidental misuse (e.g. passing a non-object) audible at the
-  // call site rather than silently no-op'ing.
-  scrubUserForStorage(_user);
-  // Clear any value previously persisted by older builds so users
-  // upgrading from a pre-fix version don't leave a stale PII payload
-  // in localStorage indefinitely.
+export function clearStoredUser(storageKey, user) {
+  if (user !== undefined && user !== null) {
+    const scrubbed = scrubUserForStorage(user);
+    if (scrubbed === null) {
+      // Non-null input that the scrub rejected (i.e. not an object)
+      // means the caller passed something this helper can't validate.
+      // Audible so a regression that starts passing the wrong shape
+      // gets noticed in dev rather than silently no-op'ing.
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[userStorage] clearStoredUser received a non-object user; ignoring.',
+        { type: typeof user },
+      );
+    }
+  }
   localStorage.removeItem(storageKey);
 }
+
+/**
+ * @deprecated Use {@link clearStoredUser}. The name `setStoredUser`
+ * is a maintainability hazard — it no longer writes anything; it
+ * only clears the slot. Kept as a backward-compat alias so existing
+ * call sites continue to compile while migration to the new name
+ * progresses. CodeRabbit major nit on PR #245.
+ *
+ * Equivalent to `clearStoredUser(storageKey, user)`.
+ */
+export const setStoredUser = clearStoredUser;

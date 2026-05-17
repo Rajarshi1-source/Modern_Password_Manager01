@@ -79,9 +79,22 @@ const storage = {
   // or fetch it from the backend.
   getUser: () => null,
   setUser: (user) => {
-    // Validate input shape but DO NOT persist to localStorage. See
-    // utils/userStorage.js for the CodeQL-#1048 + PR #246 rationale.
-    scrubUserForStorage(user);
+    // Validate input shape via the scrub helper but DO NOT persist
+    // to localStorage. See utils/userStorage.js for the CodeQL-#1048
+    // + PR #246 rationale. Audible warning on non-object input so
+    // a regression that starts passing the wrong shape is caught
+    // during development rather than silently no-op'ing (CodeRabbit
+    // nit on PR #245).
+    if (user !== undefined && user !== null) {
+      const scrubbed = scrubUserForStorage(user);
+      if (scrubbed === null) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[useAuth] storage.setUser received a non-object user; ignoring.',
+          { type: typeof user },
+        );
+      }
+    }
     // Remove any value left behind by older builds so a stale PII
     // payload doesn't sit in localStorage indefinitely.
     localStorage.removeItem(USER_STORAGE_KEY);
@@ -208,24 +221,64 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   
   // Initialize auth state. Persisting the user profile to
-  // localStorage was removed (CodeQL #1048; see
-  // utils/userStorage.js), so the legacy `storage.getUser()`
-  // now returns null and we authenticate from the access token
-  // alone. `user` stays null until login() runs (which sets it
-  // from the server response) or a component fetches the
-  // profile via API.
+  // Persisting the user profile to localStorage was removed
+  // (CodeQL #1048; see utils/userStorage.js). On bootstrap we
+  // hydrate the user from `GET /api/auth/me/` instead, which
+  // closes the UX regression CodeRabbit + Codex flagged on PR
+  // #245 (consumers like BreachAlertsDashboard that read
+  // `useAuth().user?.id` would otherwise see null until the
+  // next login).
+  //
+  // Also runs `localStorage.removeItem(USER_STORAGE_KEY)` so a
+  // PII blob from an older build doesn't sit around indefinitely
+  // for users who simply reload with an existing access token.
+  // Codex P1 caught that the legacy-blob cleanup only existed
+  // in the OTHER provider (contexts/AuthContext.jsx) and never
+  // ran for sessions wrapped by THIS provider (main.jsx imports
+  // AuthProvider from hooks/useAuth.jsx).
   useEffect(() => {
-    const initAuth = () => {
-      const accessToken = storage.getAccessToken();
+    let cancelled = false;
 
-      if (accessToken) {
-        setIsAuthenticated(true);
+    const initAuth = async () => {
+      // Flush any legacy user blob before doing anything else.
+      localStorage.removeItem(USER_STORAGE_KEY);
+
+      const accessToken = storage.getAccessToken();
+      if (!accessToken) {
+        if (!cancelled) setIsLoading(false);
+        return;
       }
 
-      setIsLoading(false);
+      // Token is present — hydrate the user from the server.
+      try {
+        const resp = await axios.get('/api/auth/me/', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!cancelled) {
+          setUser(resp.data);
+          setIsAuthenticated(true);
+        }
+      } catch (err) {
+        if (err?.response?.status === 401) {
+          // Access token dead. Don't try to refresh here — the
+          // response interceptor handles 401-on-other-endpoints,
+          // and this endpoint specifically is the "is my session
+          // alive?" check. Treat it as "not authenticated".
+          storage.clearAll();
+        } else if (!cancelled) {
+          // Network error / 5xx — we have a token, profile fetch
+          // failed transiently. Mark authenticated so navigation
+          // doesn't bounce the user to login; user-dependent
+          // components handle null gracefully.
+          setIsAuthenticated(true);
+        }
+      }
+
+      if (!cancelled) setIsLoading(false);
     };
-    
+
     initAuth();
+    return () => { cancelled = true; };
   }, []);
   
   /**

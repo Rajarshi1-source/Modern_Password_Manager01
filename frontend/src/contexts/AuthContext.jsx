@@ -11,15 +11,16 @@ export const AuthProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Initialize auth state. The legacy localStorage 'user' key is no
-  // longer read here — see utils/userStorage.js for the CodeQL-#1048
-  // rationale (Copilot Autofix accepted; PR #246 is the proper
-  // HttpOnly-cookie migration). On reload we authenticate from the
-  // token alone; `currentUser` stays null until something fetches it
-  // (the login path itself, or a component that needs it). Any stale
-  // 'user' value left in localStorage by older builds is also
-  // removed so it doesn't sit around as a PII payload.
+  // Initialize auth state. We no longer read the user profile from
+  // `localStorage` (CodeQL #1048, see utils/userStorage.js). To avoid
+  // the UX regression that CodeRabbit + Codex flagged on PR #245
+  // (`user` permanently null after reload so consumers of
+  // `currentUser.email` show empty values), we explicitly hydrate
+  // from `GET /api/auth/me/` when a token is present. If that fetch
+  // 401s, the token is dead and we drop it.
   useEffect(() => {
+    let cancelled = false;
+
     const initializeAuth = async () => {
       const token = localStorage.getItem('token');
 
@@ -28,22 +29,51 @@ export const AuthProvider = ({ children }) => {
       // updated consumers expect.
       localStorage.removeItem('user');
 
-      if (token) {
-        axios.defaults.headers.common['Authorization'] = `Token ${token}`;
-        setIsAuthenticated(true);
+      if (!token) {
+        if (!cancelled) setLoading(false);
+        return;
+      }
 
-        // Initialize device fingerprint for existing sessions
-        try {
-          await ApiService.initializeDeviceFingerprint();
-        } catch (error) {
-          console.warn('Failed to initialize device fingerprint:', error);
+      axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+
+      // Hydrate the user profile from the server. The `/api/auth/me/`
+      // endpoint identifies the user from `request.user` so we don't
+      // need to carry a user_id around in localStorage.
+      try {
+        const resp = await axios.get('/api/auth/me/');
+        if (!cancelled) {
+          setCurrentUser(resp.data);
+          setIsAuthenticated(true);
+        }
+      } catch (err) {
+        if (err?.response?.status === 401) {
+          // Token is dead. Drop it and leave the user signed out.
+          // (We do NOT clear localStorage indiscriminately here;
+          // logout has its own path for that.)
+          localStorage.removeItem('token');
+          delete axios.defaults.headers.common['Authorization'];
+        } else if (!cancelled) {
+          // Network error / 5xx → we have a token, we just couldn't
+          // fetch the profile right now. Mark authenticated so the
+          // routes don't bounce the user to login; consumers handle
+          // null currentUser gracefully (matching the post-PR-#245
+          // contract).
+          setIsAuthenticated(true);
         }
       }
 
-      setLoading(false);
+      // Initialize device fingerprint for existing sessions (best-effort)
+      try {
+        await ApiService.initializeDeviceFingerprint();
+      } catch (error) {
+        console.warn('Failed to initialize device fingerprint:', error);
+      }
+
+      if (!cancelled) setLoading(false);
     };
 
     initializeAuth();
+    return () => { cancelled = true; };
   }, []);
 
   const login = async (username, password) => {
