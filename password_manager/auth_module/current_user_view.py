@@ -25,7 +25,10 @@ call the same endpoint with no client-side identity bookkeeping.
 The response shape mirrors the field whitelist in
 `frontend/src/utils/userStorage.js::SAFE_USER_FIELDS` so a
 component that previously read from cached `localStorage.user`
-sees the same field set.
+sees the same field set. A custom Profile model (when present on
+`request.user.profile`) extends the response with `display_name`,
+`avatar`, etc. via getattr-fallback so deployments without one
+surface null rather than erroring.
 """
 from __future__ import annotations
 
@@ -51,10 +54,10 @@ class CurrentUserView(APIView):
 
     The project's `DEFAULT_AUTHENTICATION_CLASSES` setting only
     configures `JWTAuthentication`, so without this explicit
-    override the legacy-context sessions would 401 here on
-    every reload — and the bootstrap code then clears the token
-    on 401, kicking those users back to the login screen.
-    Codex P2 on PR #245 follow-up flagged this exact regression.
+    override the legacy-context sessions would 401 here on every
+    reload — and the bootstrap code then clears the token on 401,
+    kicking those users back to the login screen. Codex P2 on
+    PR #245 follow-up flagged this exact regression.
 
     The whitelist is intentionally narrow but EXTENDED via
     optional `request.user.profile` fields so a custom Profile
@@ -64,7 +67,7 @@ class CurrentUserView(APIView):
     """
 
     # Tuples so Ruff RUF012 (mutable class-attr) doesn't flag, and so
-    # a stray `+=` on the class doesn't mutate the shared default.
+    # a stray `+=` on the class can't mutate the shared default.
     authentication_classes = (JWTAuthentication, TokenAuthentication)
     permission_classes = (IsAuthenticated,)
 

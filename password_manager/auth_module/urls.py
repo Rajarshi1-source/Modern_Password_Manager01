@@ -17,8 +17,12 @@ from . import oauth_views
 from . import oidc_views
 # Import MFA views
 from . import mfa_views
-# Current-user endpoint (GET /api/auth/me/) — see CodeQL #1048
-# follow-up on PR #245.
+# Import HttpOnly-cookie refresh-token views
+from . import cookie_auth_view
+# Current-user endpoint (GET /api/auth/me/). Originally landed in
+# PR #245 (CodeQL #1048 follow-up). Used by both the legacy
+# AuthContext bootstrap and the cookie-flow bootstrap to hydrate
+# the user profile without persisting it to localStorage.
 from . import current_user_view
 # Import Primary Passkey Recovery views
 from . import passkey_primary_recovery_views
@@ -68,10 +72,30 @@ urlpatterns = [
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
-    # Current-user endpoint used by the SPA bootstrap to hydrate
-    # the user profile after page reload (we no longer persist
-    # the user object to localStorage; see CodeQL #1048 + the
-    # SPA's utils/userStorage.js).
+    # HttpOnly-cookie refresh-token endpoints (foundation for the
+    # localStorage -> cookie migration). These coexist with the legacy
+    # /token/ + /token/refresh/ paths above — new clients opt in via the
+    # frontend feature flag, existing logged-in users keep their session.
+    # See auth_module/cookie_auth_view.py for the threat-model rationale.
+    path(
+        'cookie/token/',
+        cookie_auth_view.CookieTokenObtainView.as_view(),
+        name='cookie_token_obtain',
+    ),
+    path(
+        'cookie/token/refresh/',
+        cookie_auth_view.CookieTokenRefreshView.as_view(),
+        name='cookie_token_refresh',
+    ),
+    path(
+        'cookie/token/logout/',
+        cookie_auth_view.CookieTokenLogoutView.as_view(),
+        name='cookie_token_logout',
+    ),
+    # Current-user endpoint used by the SPA bootstrap (both legacy
+    # AuthContext and cookie flow) to hydrate the user profile after
+    # page reload. We no longer persist the user object to localStorage;
+    # see CodeQL #1048 + the SPA's utils/userStorage.js.
     path(
         'me/',
         current_user_view.CurrentUserView.as_view(),

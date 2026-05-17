@@ -641,6 +641,33 @@ PUSH_NOTIFICATIONS_SETTINGS = {
     'WP_CLAIMS': {'sub': f"mailto:{os.environ.get('WP_VAPID_EMAIL', 'admin@example.com')}"}
 }
 
+# =============================================================================
+# Auth refresh-token cookie (HttpOnly migration)
+# =============================================================================
+# Foundation for moving the refresh token out of `localStorage` into an
+# HttpOnly+Secure+SameSite=Strict cookie. The cookie endpoints live in
+# `auth_module.cookie_auth_view` and are URL-routed at
+#   /api/auth/cookie/token/          (login → access in body, refresh in cookie)
+#   /api/auth/cookie/token/refresh/  (cookie-only → rotated cookie + new access)
+#   /api/auth/cookie/token/logout/   (blacklist + clear cookie)
+#
+# Defaults below match the OWASP recommendation for refresh tokens.
+# Production deployments behind HTTPS should leave AUTH_REFRESH_COOKIE_SECURE
+# at its default (auto-enabled when DEBUG=False). Local dev over plain HTTP
+# auto-relaxes it (DEBUG=True). Never force this to False in production.
+AUTH_REFRESH_COOKIE_NAME = os.environ.get('AUTH_REFRESH_COOKIE_NAME', 'auth_refresh')
+AUTH_REFRESH_COOKIE_PATH = os.environ.get('AUTH_REFRESH_COOKIE_PATH', '/api/auth/')
+# A blank string ('') means "don't pin to a domain" — the cookie is sent
+# only to the exact host that set it. That's the strictest default and the
+# right answer for most deployments. Set this only if you intentionally
+# share the cookie across subdomains.
+AUTH_REFRESH_COOKIE_DOMAIN = os.environ.get('AUTH_REFRESH_COOKIE_DOMAIN') or None
+AUTH_REFRESH_COOKIE_SECURE = (
+    os.environ.get('AUTH_REFRESH_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes')
+    or not DEBUG
+)
+AUTH_REFRESH_COOKIE_SAMESITE = os.environ.get('AUTH_REFRESH_COOKIE_SAMESITE', 'Strict')
+
 # JWT Settings
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # Short-lived access tokens
@@ -795,10 +822,25 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
 ]
 
-# When using JWT auth (Authorization header), no cookies are required for API calls.
-# Set to False to avoid exposing cookies unnecessarily.
-# Note: WebSocket connections using query param tokens also work without credentials=True
-CORS_ALLOW_CREDENTIALS = False
+# Cookie-auth (HttpOnly refresh-token, see AUTH_REFRESH_COOKIE_* above and
+# auth_module.cookie_auth_view) needs the browser to actually send the
+# refresh cookie on cross-origin requests when the SPA and API are on
+# different origins. Without `Access-Control-Allow-Credentials: true` the
+# browser strips the cookie from cross-origin POSTs to
+# /api/auth/cookie/token/refresh/ and the opt-in flow can't refresh.
+#
+# Env-driven so:
+#   * dev (single origin, frontend proxy → backend) keeps the historical
+#     default of False
+#   * staging / prod / canary with `VITE_USE_COOKIE_AUTH=true` flips it
+#     to True via `CORS_ALLOW_CREDENTIALS=true` in the deploy env
+#
+# CORS_ALLOW_CREDENTIALS=True REQUIRES an explicit `CORS_ALLOWED_ORIGINS`
+# list (which the project already maintains above) — the wildcard "*"
+# combination is rejected by every modern browser.
+CORS_ALLOW_CREDENTIALS = (
+    os.environ.get('CORS_ALLOW_CREDENTIALS', '').lower() in ('1', 'true', 'yes')
+)
 
 CORS_ALLOW_METHODS = [
     'GET',
