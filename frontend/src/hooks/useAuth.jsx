@@ -348,6 +348,19 @@ export const AuthProvider = ({ children }) => {
       // access token is written to tokenStore (in-memory) by
       // loginWithCookie itself; we never persist it.
       if (USE_COOKIE_AUTH) {
+        // Wipe any legacy localStorage tokens BEFORE the cookie
+        // login. If the user previously authenticated via the
+        // localStorage flow (pre-flag, or in another build), the
+        // access/refresh tokens are still sitting in localStorage —
+        // readable by any XSS payload until they expire (up to 7
+        // days for the refresh token). Codex P2 on PR #246 follow-up
+        // caught this: a successful hardened cookie login was
+        // leaving the old long-lived refresh token in storage,
+        // undermining the entire migration.
+        try {
+          storage.clearAll();
+        } catch { /* never let cleanup throw */ }
+
         const { user: userData } = await loginWithCookie({
           username: credentials.email || credentials.username,
           password: credentials.password,

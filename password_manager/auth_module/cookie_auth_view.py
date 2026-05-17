@@ -225,15 +225,36 @@ class CookieTokenRefreshView(APIView):
 
         try:
             refresh = RefreshToken(raw_refresh)
-        except TokenError:
+        except TokenError as token_err:
             # Treat any decode/validation failure as "not authenticated"
-            # AND clear the bad cookie so the client doesn't keep
-            # presenting it on every retry.
+            # and respond 401. We DO NOT clear the cookie on a
+            # blacklisted-token error because that is the symptom of a
+            # rotation race (Codex P2 on PR #246 follow-up):
+            #
+            #   * Tab A and Tab B both have the same refresh cookie.
+            #   * Both fire /refresh/ concurrently.
+            #   * Tab A's request lands first, blacklists the old
+            #     token, sets a fresh cookie on Tab A's response.
+            #   * Tab B's request lands next. Decoding raises
+            #     TokenError("Token is blacklisted").
+            #   * If we clear the cookie here, Tab B's Set-Cookie:
+            #     deletion arrives at the browser AFTER Tab A's
+            #     rotated cookie and overwrites it — kicking the
+            #     whole session out for a benign concurrent refresh.
+            #
+            # For any other TokenError (truly malformed cookie,
+            # expired-and-not-rotatable, etc.) we still clear so the
+            # client doesn't keep presenting a bad value on every
+            # retry. Matching on the message string is fragile but
+            # SimpleJWT raises a consistent "blacklisted" wording.
+            err_text = str(token_err).lower()
+            is_rotation_race = 'blacklist' in err_text
             response = Response(
                 {"detail": "refresh token invalid or expired"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-            _clear_refresh_cookie(response)
+            if not is_rotation_race:
+                _clear_refresh_cookie(response)
             return response
 
         new_access = str(refresh.access_token)

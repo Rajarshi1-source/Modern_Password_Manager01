@@ -141,6 +141,50 @@ class TestCookieTokenRefreshView:
         # Django's test cookies dict surfaces deletion as empty value.
         assert resp.cookies[REFRESH_COOKIE_NAME].value == ''
 
+    def test_refresh_with_blacklisted_cookie_does_not_clear(self, client, user):
+        """Codex P2 on PR #246 follow-up: when the cookie's token has
+        been blacklisted (rotation race symptom), we MUST NOT clear
+        the cookie — doing so would overwrite the freshly rotated
+        cookie set by a concurrent refresh request from another tab.
+
+        Reproduce the race deterministically: log in to get a real
+        refresh token, then blacklist it via the SimpleJWT internals
+        (mirrors what the rotation step does to the *previous* token
+        when the other tab refreshes first). The next refresh call
+        for that same cookie value gets a "Token is blacklisted"
+        TokenError, and the response must be 401 with NO Set-Cookie
+        deletion.
+        """
+        # Log in to mint a real refresh cookie.
+        login = client.post(self.LOGIN_URL, {'username': user.username, 'password': 'masterpw1234'}, format='json')
+        assert login.status_code == 200
+        raw_refresh = client.cookies[REFRESH_COOKIE_NAME].value
+        assert raw_refresh
+
+        # Blacklist that token directly. Skip the test if the
+        # blacklist app isn't installed (the production project
+        # installs it; CI environments without it are out of scope).
+        try:
+            from rest_framework_simplejwt.tokens import RefreshToken
+            RefreshToken(raw_refresh).blacklist()
+        except (ImportError, AttributeError):
+            pytest.skip('token_blacklist app not available in this env')
+
+        # Now refresh against the SAME (just-blacklisted) cookie.
+        resp = client.post(self.REFRESH_URL, **_xhr_headers())
+        assert resp.status_code == 401
+        # CRITICAL: the rotation-race symptom must NOT trigger a
+        # cookie deletion. If the response surfaces a Set-Cookie
+        # with an empty value, the browser would overwrite the
+        # newly rotated cookie set by the racing tab, kicking
+        # the user out of an otherwise valid session.
+        if REFRESH_COOKIE_NAME in resp.cookies:
+            assert resp.cookies[REFRESH_COOKIE_NAME].value != '', (
+                'blacklisted-token 401 must not emit a delete-cookie '
+                '(it would overwrite a freshly rotated cookie from a '
+                'concurrent refresh)'
+            )
+
 
 @pytest.mark.django_db
 class TestCookieTokenLogoutView:
