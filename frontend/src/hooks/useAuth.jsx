@@ -335,7 +335,15 @@ export const AuthProvider = ({ children }) => {
               }
             } catch {
               // Even with a fresh access token, /me failed. Bail.
-              storage.clearAll();
+              // Guard on `!cancelled` for stylistic consistency
+              // with the rest of this useEffect — `storage.clearAll`
+              // is localStorage-only and safe to run after unmount,
+              // but skipping it when the component has gone away
+              // matches the discipline. CodeRabbit nit on PR #245
+              // follow-up.
+              if (!cancelled) {
+                storage.clearAll();
+              }
             }
           }
           // else: refresh failed → already cleared; stay signed out.
