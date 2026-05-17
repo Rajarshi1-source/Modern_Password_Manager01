@@ -11,18 +11,27 @@ export const AuthProvider = ({ children }) => {
   const [error, setError] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // Initialize auth state from local storage
+  // Initialize auth state. The legacy localStorage 'user' key is no
+  // longer read here — see utils/userStorage.js for the CodeQL-#1048
+  // rationale (Copilot Autofix accepted; PR #246 is the proper
+  // HttpOnly-cookie migration). On reload we authenticate from the
+  // token alone; `currentUser` stays null until something fetches it
+  // (the login path itself, or a component that needs it). Any stale
+  // 'user' value left in localStorage by older builds is also
+  // removed so it doesn't sit around as a PII payload.
   useEffect(() => {
     const initializeAuth = async () => {
       const token = localStorage.getItem('token');
-      const userData = localStorage.getItem('user');
-      
-      if (token && userData) {
-        // Set default auth header for all requests
+
+      // Clean up any pre-fix 'user' blob that might be lurking from
+      // an older build. Subsequent reads will get null which the
+      // updated consumers expect.
+      localStorage.removeItem('user');
+
+      if (token) {
         axios.defaults.headers.common['Authorization'] = `Token ${token}`;
-        setCurrentUser(JSON.parse(userData));
         setIsAuthenticated(true);
-        
+
         // Initialize device fingerprint for existing sessions
         try {
           await ApiService.initializeDeviceFingerprint();
@@ -30,10 +39,10 @@ export const AuthProvider = ({ children }) => {
           console.warn('Failed to initialize device fingerprint:', error);
         }
       }
-      
+
       setLoading(false);
     };
-    
+
     initializeAuth();
   }, []);
 
@@ -59,9 +68,11 @@ export const AuthProvider = ({ children }) => {
       const userData = userResponse.data;
       
       setCurrentUser(userData);
-      // setStoredUser whitelists only display-safe fields; raw
-      // backend payloads may contain tokens/embeddings/etc. that
-      // must NEVER reach localStorage. See utils/userStorage.js.
+      // setStoredUser no longer writes to localStorage (CodeQL #1048,
+      // Copilot Autofix accepted). It clears any pre-fix payload so
+      // old sessions don't leave a stale user object behind. The
+      // profile now lives only in React state — see
+      // utils/userStorage.js and PR #246 for the full architecture.
       setStoredUser('user', userData);
       setIsAuthenticated(true);
       

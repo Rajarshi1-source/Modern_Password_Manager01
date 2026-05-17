@@ -71,18 +71,20 @@ const storage = {
   setRefreshToken: (token) => localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, token),
   removeRefreshToken: () => localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY),
   
-  getUser: () => {
-    const user = localStorage.getItem(USER_STORAGE_KEY);
-    return user ? JSON.parse(user) : null;
-  },
+  // getUser intentionally returns null. Persisting the user object
+  // to localStorage was removed in response to CodeQL alert #1048;
+  // see utils/userStorage.js for the rationale. Any pre-fix value is
+  // cleaned up by the AuthProvider bootstrap. Callers that need
+  // user data should pull it from React state (via useAuth().user)
+  // or fetch it from the backend.
+  getUser: () => null,
   setUser: (user) => {
-    // Whitelist display-safe fields before writing to localStorage.
-    // Raw backend `user` payloads may carry tokens / embeddings /
-    // role metadata that must never reach a XSS-readable store.
-    // See utils/userStorage.js for the field list.
-    const safe = scrubUserForStorage(user);
-    if (safe === null) return;
-    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(safe));
+    // Validate input shape but DO NOT persist to localStorage. See
+    // utils/userStorage.js for the CodeQL-#1048 + PR #246 rationale.
+    scrubUserForStorage(user);
+    // Remove any value left behind by older builds so a stale PII
+    // payload doesn't sit in localStorage indefinitely.
+    localStorage.removeItem(USER_STORAGE_KEY);
   },
   removeUser: () => localStorage.removeItem(USER_STORAGE_KEY),
   
@@ -205,17 +207,21 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   
-  // Initialize auth state from storage
+  // Initialize auth state. Persisting the user profile to
+  // localStorage was removed (CodeQL #1048; see
+  // utils/userStorage.js), so the legacy `storage.getUser()`
+  // now returns null and we authenticate from the access token
+  // alone. `user` stays null until login() runs (which sets it
+  // from the server response) or a component fetches the
+  // profile via API.
   useEffect(() => {
     const initAuth = () => {
-      const storedUser = storage.getUser();
       const accessToken = storage.getAccessToken();
-      
-      if (storedUser && accessToken) {
-        setUser(storedUser);
+
+      if (accessToken) {
         setIsAuthenticated(true);
       }
-      
+
       setIsLoading(false);
     };
     

@@ -70,15 +70,46 @@ export function scrubUserForStorage(user) {
 }
 
 /**
- * Convenience: write the scrubbed user object to localStorage
- * under the given key. No-ops when given falsy input rather than
- * writing `null` over a previously-good value.
+ * Removes any previously-persisted user object under `storageKey`.
+ *
+ * NOTE: this function NO LONGER WRITES to localStorage, despite the
+ * "set" in the name. CodeQL flagged the previous setItem call
+ * (`js/clear-text-storage-of-sensitive-data`, alert #1048) and
+ * Copilot Autofix proposed turning the write into a remove —
+ * accepted because:
+ *
+ *   1. The proper architectural fix (HttpOnly refresh-token cookies
+ *      + in-memory access token + profile re-fetched from API on
+ *      bootstrap) is shipping in PR #246. Once that flag rolls out
+ *      we never persist user state to localStorage at all.
+ *
+ *   2. In the meantime, even the whitelist-scrubbed object is still
+ *      a PII payload exfiltratable by any XSS in the SPA. CodeQL's
+ *      taint analysis is correct that it shouldn't be persisted at
+ *      all — the narrowed field set was a half-measure.
+ *
+ * Behavioural consequence for legacy callers: `currentUser` is no
+ * longer restored from localStorage on page reload. Bootstrap code
+ * (AuthContext.jsx, useAuth.jsx) now authenticates from the token
+ * alone and re-fetches the profile from the backend when needed,
+ * which is the same pattern PR #246's cookie flow uses.
+ *
+ * We keep `scrubUserForStorage` as a pure function so callers can
+ * still produce a display-safe projection for transient React
+ * state or for sending to a logging endpoint.
  *
  * @param {string} storageKey
- * @param {object | null | undefined} user
+ * @param {object | null | undefined} _user  unused — kept so call
+ *   sites compile without changes, and so the scrub helper is
+ *   still invoked as a runtime check on inputs.
  */
-export function setStoredUser(storageKey, user) {
-  const safe = scrubUserForStorage(user);
-  if (safe === null) return;
-  localStorage.setItem(storageKey, JSON.stringify(safe));
+export function setStoredUser(storageKey, _user) {
+  // Validate the input shape via the scrub helper. This keeps any
+  // accidental misuse (e.g. passing a non-object) audible at the
+  // call site rather than silently no-op'ing.
+  scrubUserForStorage(_user);
+  // Clear any value previously persisted by older builds so users
+  // upgrading from a pre-fix version don't leave a stale PII payload
+  // in localStorage indefinitely.
+  localStorage.removeItem(storageKey);
 }
