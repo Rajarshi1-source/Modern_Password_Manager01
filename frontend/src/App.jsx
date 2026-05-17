@@ -13,6 +13,7 @@ import SocialLoginButtons from './Components/auth/SocialLoginButtons';
 import LoadingIndicator from './Components/common/LoadingIndicator';
 import ErrorBoundary from './Components/common/ErrorBoundary';
 import ApiService from './services/api';
+import { setStoredUser } from './utils/userStorage';
 import toast, { Toaster } from 'react-hot-toast';
 import oauthService from './services/oauthService';
 import SessionMonitor from './Components/security/SessionMonitor';
@@ -1224,7 +1225,12 @@ function App() {
           localStorage.removeItem('refreshToken');
         }
         if (oauthUser) {
-          localStorage.setItem('user', JSON.stringify(oauthUser));
+          // OAuth provider payloads (Google/Microsoft/Apple) often
+          // include the access token, refresh token, photo URL, and
+          // a ream of provider-specific identity claims. Persist
+          // only the display-safe whitelist — see
+          // utils/userStorage.js for the field list.
+          setStoredUser('user', oauthUser);
         }
 
         errorTracker.setUserContext({

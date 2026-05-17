@@ -38,6 +38,7 @@
 
 import { useState, useEffect, useCallback, createContext, useContext } from 'react';
 import axios from 'axios';
+import { scrubUserForStorage } from '../utils/userStorage';
 
 // ==============================================================================
 // AUTH CONTEXT
@@ -74,7 +75,15 @@ const storage = {
     const user = localStorage.getItem(USER_STORAGE_KEY);
     return user ? JSON.parse(user) : null;
   },
-  setUser: (user) => localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user)),
+  setUser: (user) => {
+    // Whitelist display-safe fields before writing to localStorage.
+    // Raw backend `user` payloads may carry tokens / embeddings /
+    // role metadata that must never reach a XSS-readable store.
+    // See utils/userStorage.js for the field list.
+    const safe = scrubUserForStorage(user);
+    if (safe === null) return;
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(safe));
+  },
   removeUser: () => localStorage.removeItem(USER_STORAGE_KEY),
   
   clearAll: () => {

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
 import ApiService from '../services/api';
+import { setStoredUser } from '../utils/userStorage';
 
 const AuthContext = createContext();
 
@@ -58,7 +59,10 @@ export const AuthProvider = ({ children }) => {
       const userData = userResponse.data;
       
       setCurrentUser(userData);
-      localStorage.setItem('user', JSON.stringify(userData));
+      // setStoredUser whitelists only display-safe fields; raw
+      // backend payloads may contain tokens/embeddings/etc. that
+      // must NEVER reach localStorage. See utils/userStorage.js.
+      setStoredUser('user', userData);
       setIsAuthenticated(true);
       
       // Initialize device fingerprint after successful login
@@ -141,9 +145,9 @@ export const AuthProvider = ({ children }) => {
           axios.defaults.headers.common['Authorization'] = `Token ${token}`;
         }
         
-        // Set user data
+        // Set user data — scrub before persisting (see userStorage.js)
         setCurrentUser(user);
-        localStorage.setItem('user', JSON.stringify(user));
+        setStoredUser('user', user);
         setIsAuthenticated(true);
         
         // Initialize device fingerprint after successful passkey login
@@ -293,7 +297,7 @@ export const AuthProvider = ({ children }) => {
       };
       
       setCurrentUser(newUser);
-      localStorage.setItem('user', JSON.stringify(newUser));
+      setStoredUser('user', newUser);
       setIsAuthenticated(true);
       
       // Initialize device fingerprint after successful registration
@@ -366,7 +370,7 @@ export const AuthProvider = ({ children }) => {
       // Update current user
       const updatedUser = { ...currentUser, ...response.data };
       setCurrentUser(updatedUser);
-      localStorage.setItem('user', JSON.stringify(updatedUser));
+      setStoredUser('user', updatedUser);
       
       return updatedUser;
     } catch (error) {
