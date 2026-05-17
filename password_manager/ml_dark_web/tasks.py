@@ -412,6 +412,18 @@ def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch:
         now = timezone.now()
         dispatched = 0
         for breach_id, original_status in candidates:
+            # Snapshot the pre-claim processed_at so a broker-publish
+            # failure can fully revert the claim (status + timestamp).
+            # Codex P2 on PR #244 follow-up: without this, a stuck-row
+            # claim that failed to dispatch left processed_at freshened
+            # to "now", hiding the row from the next sweep's stuck
+            # filter until staleness recapture (~30 min).
+            prior_processed_at = (
+                MLBreachData.objects
+                .filter(id=breach_id)
+                .values_list('processed_at', flat=True)
+                .first()
+            )
             if original_status == 'pending':
                 claim_qs = MLBreachData.objects.filter(
                     id=breach_id, processing_status='pending',
@@ -448,17 +460,18 @@ def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch:
                     # Broker publish failed. Revert the claim so the
                     # row is available to the next sweep tick rather
                     # than waiting for staleness recapture (~30 min).
-                    # We only revert pending → analyzing claims;
-                    # stuck-analyzing rows started as `analyzing` and
-                    # we only bumped a timestamp on them — undoing
-                    # the timestamp bump would just move them back
-                    # into the candidate pool, which the next sweep
-                    # tick would do anyway after `stale_analyzing_minutes`.
+                    #
+                    # We revert BOTH dimensions of the claim:
+                    #   * status (pending → analyzing flip, when the
+                    #     original was 'pending')
+                    #   * processed_at (we bumped it to `now`; restore
+                    #     the pre-claim value so the next sweep's
+                    #     stuck filter sees the row as eligible again
+                    #     instead of hidden for stale_analyzing_minutes)
+                    revert_fields = {'processed_at': prior_processed_at}
                     if original_status == 'pending':
-                        MLBreachData.objects.filter(
-                            id=breach_id,
-                            processing_status='analyzing',
-                        ).update(processing_status='pending')
+                        revert_fields['processing_status'] = 'pending'
+                    MLBreachData.objects.filter(id=breach_id).update(**revert_fields)
                     # Re-raise so the outer try/except logs the
                     # broker error and returns success=False.
                     raise

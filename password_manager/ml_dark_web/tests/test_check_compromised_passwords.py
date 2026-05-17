@@ -349,6 +349,48 @@ class TestCheckCompromisedPasswords:
             'claim must bump processed_at well past the staleness cutoff'
         )
 
+    def test_stuck_claim_revert_restores_processed_at_on_publish_failure(
+        self, source, monkeypatch,
+    ):
+        """Codex P2 on PR #244 follow-up: when ``.delay()`` fails for a
+        stuck-analyzing row, the claim's ``processed_at`` bump must
+        also be reverted. Otherwise the row is hidden from the next
+        sweep's stuck filter until staleness recapture (~30 min) —
+        the row was never queued, but it's also unreachable.
+
+        We exercise the same ``processed_at IS NULL`` starting state
+        as ``test_claim_bumps_processed_at_out_of_stale_window`` so
+        the assertion is unambiguous: pre-claim was NULL, post-claim
+        is now, post-revert must be NULL again.
+        """
+        stuck = _make_breach(
+            source, status='analyzing', age_minutes=60, breach_id='stuck-pub-fail',
+        )
+        stuck.refresh_from_db()
+        assert stuck.processed_at is None  # baseline
+
+        def explode(_breach_id):
+            raise RuntimeError('broker offline')
+
+        monkeypatch.setattr(
+            'ml_dark_web.tasks.match_credentials_against_breach.delay',
+            explode,
+        )
+        result = check_compromised_passwords()
+        assert result['success'] is False
+
+        stuck.refresh_from_db()
+        # processed_at must be restored to its pre-claim NULL.
+        # If we left it at "now", the next sweep's stuck filter
+        # would treat this row as freshly-touched and skip it.
+        assert stuck.processed_at is None, (
+            'failed dispatch must revert processed_at for stuck rows '
+            'so the next sweep can immediately re-pick them up'
+        )
+        # Status was 'analyzing' before AND after — no change there;
+        # only the timestamp claim signal was reverted.
+        assert stuck.processing_status == 'analyzing'
+
     def test_subsequent_sweep_does_not_re_dispatch_recently_claimed(self, source):
         """Codex P2 on PR #244 follow-up (end-to-end): once a sweep
         claims a stuck row, an immediate second sweep must not
@@ -439,7 +481,7 @@ class TestMatcherIdempotenceWhenReDispatched:
         # loop actually executes (otherwise the loop body never runs
         # and the decision matrix is exercised with matches_found=0
         # for a trivially-correct reason).
-        user = User.objects.create_user(username='prior-victim', password='x')
+        user = User.objects.create_user(username='prior-victim', password='x')  # noqa: S106
         UserCredentialMonitoring.objects.create(
             user=user,
             email_hash='hashed-cred-1',
