@@ -46,6 +46,7 @@ import {
 import {
   getAccessToken as getInMemoryAccessToken,
   isAuthenticated as isInMemoryAuthenticated,
+  clearAccessToken,
 } from '../services/tokenStore';
 
 // Opt-in feature flag for the HttpOnly-cookie refresh-token flow.
@@ -253,15 +254,26 @@ axios.interceptors.response.use(
         return axios(originalRequest);
       } catch (refreshError) {
         isRefreshing = false;
-        // Refresh failed - user needs to login again. Clear both
-        // stores so we don't strand a half-state in either flow.
+        // Refresh failed → drop local auth state and redirect to
+        // login. In cookie mode we deliberately DO NOT call
+        // logoutWithCookie() here: the refresh failure may be the
+        // losing-tab side of a benign two-tab rotation race (this
+        // tab's cookie value was blacklisted because the other tab
+        // already rotated). The backend's refresh endpoint preserves
+        // the cookie in that case (see `is_rotation_race` branch in
+        // cookie_auth_view.py), and if we then fire a logout we'd
+        // delete the WINNING tab's freshly rotated cookie — exactly
+        // the regression the backend fix was meant to prevent.
+        //
+        // Instead: drop only the in-memory access token. The cookie
+        // either (a) was just rotated by another tab and stays valid,
+        // or (b) is genuinely dead and will be cleaned up on its
+        // own max-age or by an explicit user-initiated logout. The
+        // /login redirect is unchanged — the user sees the login
+        // page either way; if (a) they can refresh and continue,
+        // if (b) they re-authenticate. Codex P2 on PR #246 follow-up.
         if (USE_COOKIE_AUTH) {
-          // Fire-and-forget server-side logout (NOT awaited): clears
-          // the HttpOnly cookie + drops the in-memory access token.
-          // We redirect immediately for faster UX; if the network
-          // round-trip fails the local state is still cleared, so
-          // the user-visible outcome is the same.
-          logoutWithCookie().catch(() => {});
+          clearAccessToken();
         } else {
           storage.clearAll();
         }

@@ -185,6 +185,53 @@ class TestCookieTokenRefreshView:
                 'concurrent refresh)'
             )
 
+    def test_refresh_works_with_stale_bearer_header(self, client, user):
+        """Codex P2 on PR #246 follow-up: the SPA's request interceptor
+        attaches `Authorization: Bearer <expired>` to every outgoing
+        request, including the cookie refresh. The endpoint must NOT
+        let DRF's global JWTAuthentication reject the request based
+        on that stale header — refresh is supposed to identify the
+        user from the HttpOnly cookie, not from the bearer.
+
+        Without the `authentication_classes = []` override on the
+        view, the global JWTAuthentication runs first, rejects the
+        expired bearer with 401, and the view's `post()` never reads
+        the cookie. That would turn an otherwise-valid cookie session
+        into a forced logout on every refresh cycle.
+        """
+        # Mint a real refresh cookie via login.
+        login = client.post(
+            self.LOGIN_URL,
+            {'username': user.username, 'password': 'masterpw1234'},
+            format='json',
+        )
+        assert login.status_code == 200
+
+        # Build a deliberately-expired/garbage bearer header. We just
+        # need something that JWTAuthentication will REJECT — a
+        # syntactically valid JWT with a bad signature or expired
+        # claim. The fastest "guaranteed garbage" is a literal
+        # malformed string; JWTAuthentication raises InvalidToken,
+        # which DRF surfaces as 401 BEFORE the view runs unless we
+        # disable authentication on the view.
+        stale_bearer = 'eyJhbGciOiJIUzI1NiJ9.this.is.not.valid'
+
+        resp = client.post(
+            self.REFRESH_URL,
+            HTTP_AUTHORIZATION=f'Bearer {stale_bearer}',
+            **_xhr_headers(),
+        )
+        # Refresh must succeed (200) from the cookie alone. If
+        # authentication_classes wasn't overridden on the view, the
+        # global JWTAuthentication would 401 before reading the
+        # cookie and this assertion would fail.
+        assert resp.status_code == 200, (
+            'cookie refresh must ignore stale bearer headers; the '
+            'view should rely on the HttpOnly cookie alone'
+        )
+        body = resp.json()
+        assert 'access' in body and body['access']
+
 
 @pytest.mark.django_db
 class TestCookieTokenLogoutView:

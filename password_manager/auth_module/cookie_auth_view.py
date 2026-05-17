@@ -152,6 +152,15 @@ class CookieTokenObtainView(APIView):
     the SPA never has direct access to it.
     """
 
+    # Disable bearer authentication: this endpoint identifies the user
+    # from username/password in the request body, not from any
+    # Authorization header. The SPA may have a stale bearer attached
+    # from a previous session (the request interceptor attaches it
+    # to every outgoing call); DRF authenticates before checking
+    # permissions, so JWTAuthentication on an expired token would
+    # 401 the login attempt. Same fix pattern as CookieTokenRefreshView
+    # below.
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def get_serializer_class(self):
@@ -201,6 +210,19 @@ class CookieTokenObtainView(APIView):
 class CookieTokenRefreshView(APIView):
     """POST (cookie-only) → returns a new access token, rotates the refresh cookie."""
 
+    # Disable bearer authentication on this endpoint. The SPA's request
+    # interceptor attaches `Authorization: Bearer <access>` to every
+    # outgoing request, but by the time the SPA decides to refresh,
+    # that access token is by definition expired. DRF authenticates
+    # BEFORE checking permissions, so the global JWTAuthentication
+    # would reject the expired bearer with 401 before our `post()`
+    # ever reads the refresh cookie — turning an otherwise-valid
+    # cookie session into a forced logout on every refresh cycle.
+    # Codex P2 on PR #246 follow-up. Setting authentication_classes
+    # to an empty list bypasses authentication entirely; AllowAny on
+    # permissions still applies and our `post()` does its own cookie-
+    # based identification.
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request: Request) -> Response:
@@ -330,6 +352,11 @@ class CookieTokenLogoutView(APIView):
     user-visible contract.
     """
 
+    # Same reasoning as CookieTokenRefreshView — the SPA will be sending
+    # this with an expired Authorization: Bearer header in tow. We
+    # don't want DRF's global JWTAuthentication to 401 before the
+    # cookie-based logout runs.
+    authentication_classes = []
     permission_classes = [AllowAny]
 
     def post(self, request: Request) -> Response:
