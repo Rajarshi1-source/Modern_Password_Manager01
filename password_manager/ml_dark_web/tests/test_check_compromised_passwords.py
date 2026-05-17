@@ -21,6 +21,13 @@ from ml_dark_web.models import BreachSource, MLBreachData
 from ml_dark_web.tasks import check_compromised_passwords
 
 
+def _refresh_status(breach: MLBreachData) -> str:
+    """Convenience: refetch the row and return its processing_status."""
+    return MLBreachData.objects.values_list(
+        'processing_status', flat=True,
+    ).get(pk=breach.pk)
+
+
 @pytest.fixture
 def source(db):
     """Minimal BreachSource so MLBreachData rows have a valid FK."""
@@ -168,3 +175,231 @@ class TestCheckCompromisedPasswords:
         result = check_compromised_passwords()
         assert result['success'] is False
         assert 'matcher backend offline' in result['error']
+
+    # ------------------------------------------------------------------
+    # Tests added in response to PR #244 review feedback.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize('bad_value', [-1, -30, -200])
+    def test_rejects_negative_stale_analyzing_minutes(self, bad_value):
+        """CodeRabbit major on PR #244: validate input bounds.
+
+        A negative staleness window would push the cutoff into the
+        future and silently re-dispatch every ``analyzing`` row on
+        each tick. Reject up-front.
+        """
+        with patch('ml_dark_web.tasks.match_credentials_against_breach.delay') as m:
+            result = check_compromised_passwords(stale_analyzing_minutes=bad_value)
+        assert result['success'] is False
+        assert 'stale_analyzing_minutes' in result['error']
+        m.assert_not_called()
+
+    @pytest.mark.parametrize('bad_value', [-1, -100])
+    def test_rejects_negative_max_dispatch(self, bad_value):
+        """CodeRabbit major on PR #244: validate input bounds.
+
+        Negative ``max_dispatch`` makes the queryset slice
+        ``[:negative]`` skip the safety cap entirely on some ORMs.
+        Reject up-front instead of producing surprising behaviour.
+        """
+        with patch('ml_dark_web.tasks.match_credentials_against_breach.delay') as m:
+            result = check_compromised_passwords(max_dispatch=bad_value)
+        assert result['success'] is False
+        assert 'max_dispatch' in result['error']
+        m.assert_not_called()
+
+    def test_zero_max_dispatch_is_a_clean_no_op(self, source):
+        """``max_dispatch=0`` is a valid "disable this tick" signal."""
+        _make_breach(source, status='pending', age_minutes=1, breach_id='pending-quiet')
+        with patch('ml_dark_web.tasks.match_credentials_against_breach.delay') as m:
+            result = check_compromised_passwords(max_dispatch=0)
+        assert result == {
+            'success': True,
+            'dispatched': 0,
+            'pending': 0,
+            'stuck': 0,
+        }
+        m.assert_not_called()
+
+    def test_pending_row_is_atomically_claimed_before_dispatch(self, source):
+        """Codex P1 on PR #244: dispatch must atomically claim the row.
+
+        After a successful dispatch the row's status must be
+        ``analyzing`` so a subsequent sweep can't double-dispatch.
+        """
+        breach = _make_breach(source, status='pending', age_minutes=1, breach_id='claim-me')
+        with patch('ml_dark_web.tasks.match_credentials_against_breach.delay') as m:
+            result = check_compromised_passwords()
+        assert result['dispatched'] == 1
+        m.assert_called_once_with(breach.pk)
+        # The claim happened — row is no longer pending.
+        assert _refresh_status(breach) == 'analyzing'
+
+    def test_lost_claim_race_skips_dispatch(self, source):
+        """Codex P1 on PR #244: simulate a row whose status flips
+        between the candidate-select and the claim UPDATE.
+
+        We do that by having ``.delay`` flip the *next* candidate's
+        status during the first dispatch. The candidate select has
+        already happened, so the second loop iteration must observe
+        the changed status via the claim precondition and skip.
+        """
+        first = _make_breach(source, status='pending', age_minutes=2, breach_id='first')
+        second = _make_breach(source, status='pending', age_minutes=1, breach_id='second')
+
+        def flip_second(_breach_id):
+            # Simulate a concurrent worker completing the second row
+            # while we're mid-loop. The claim precondition for the
+            # second row will now fail (status != 'pending') so we
+            # must NOT dispatch it.
+            MLBreachData.objects.filter(pk=second.pk).update(processing_status='completed')
+
+        with patch(
+            'ml_dark_web.tasks.match_credentials_against_breach.delay',
+            side_effect=flip_second,
+        ) as m:
+            result = check_compromised_passwords()
+
+        # Two candidates were SELECTED (pending=2), but only one was
+        # successfully CLAIMED + dispatched. The other lost the race.
+        assert result['pending'] == 2
+        assert result['dispatched'] == 1
+        assert m.call_count == 1
+        dispatched_id = m.call_args_list[0].args[0]
+        assert dispatched_id == first.pk
+        # Second row keeps the status the racing worker set; not analyzing.
+        assert _refresh_status(second) == 'completed'
+
+    def test_stuck_analyzing_claim_respects_staleness_at_claim_time(self, source):
+        """Codex P1 on PR #244: the stuck-analyzing claim must re-
+        verify the staleness gate at UPDATE time.
+
+        We exercise the race by having the dispatch of the FIRST
+        stuck row freshen the SECOND row's ``detected_at`` (simulating
+        a concurrent worker finally re-touching it). The second row
+        passed the initial candidate select but its claim must fail
+        because the staleness precondition now matches at "now".
+        """
+        # Two stuck rows ordered by detected_at; processed first → second.
+        stuck_first = _make_breach(
+            source, status='analyzing', age_minutes=120, breach_id='stuck-first',
+        )
+        stuck_second = _make_breach(
+            source, status='analyzing', age_minutes=60, breach_id='stuck-second',
+        )
+
+        def freshen_second(_breach_id):
+            # When we dispatch stuck_first, simulate a concurrent
+            # worker freshly touching stuck_second so its detected_at
+            # is now well WITHIN the staleness threshold.
+            MLBreachData.objects.filter(pk=stuck_second.pk).update(
+                detected_at=timezone.now(),
+            )
+
+        with patch(
+            'ml_dark_web.tasks.match_credentials_against_breach.delay',
+            side_effect=freshen_second,
+        ) as m:
+            result = check_compromised_passwords()
+
+        # stuck_first wins its claim (still old at claim time) and
+        # dispatches. stuck_second's claim fails because the freshen
+        # side-effect ran before our loop reached it — so its
+        # detected_at__lt=cutoff precondition now misses.
+        dispatched_ids = {call.args[0] for call in m.call_args_list}
+        assert stuck_first.pk in dispatched_ids
+        assert stuck_second.pk not in dispatched_ids
+        assert result['dispatched'] == 1
+        assert result['stuck'] == 2  # both made it into the candidate select
+
+
+@pytest.mark.django_db
+class TestMatcherIdempotenceWhenReDispatched:
+    """Codex P1 on PR #244: a re-run of ``match_credentials_against_breach``
+    that finds zero NEW matches must NOT regress a prior ``matched``
+    status to ``completed`` with ``affected_records=0``.
+
+    We exercise the small no-identifiers helper path that doesn't
+    require the heavy ML stack: a breach with no extracted
+    credentials and no extracted emails. That path used to overwrite
+    status unconditionally; this test pins the matcher to PR-#244's
+    decision matrix.
+    """
+
+    def test_matched_status_preserved_on_zero_new_matches(self, source, monkeypatch):
+        """Direct exercise of the post-loop decision matrix.
+
+        We inject a fake `get_credential_matcher` into sys.modules so
+        the real ml_services module (which loads torch+transformers)
+        never imports. The fake matcher returns zero matches, which
+        is exactly the duplicate-run scenario.
+        """
+        import sys
+        import types
+        from ml_dark_web.models import UserCredentialMonitoring
+        from django.contrib.auth.models import User
+
+        # Build a breach that already has a successful match recorded.
+        breach = MLBreachData.objects.create(
+            breach_id='prior-matched',
+            title='prior',
+            description='prior',
+            source=source,
+            severity='HIGH',
+            confidence_score=0.9,
+            raw_content='',
+            processing_status='matched',
+            affected_records=5,
+            extracted_credentials=['hashed-cred-1'],
+            extracted_emails=[],
+        )
+
+        # The credential matcher will be loaded via deferred import
+        # inside the task body. Pre-populate sys.modules with a fake
+        # so torch / transformers never get touched.
+        fake_module = types.ModuleType('ml_dark_web.ml_services')
+
+        class _FakeMatcher:
+            def find_matches(self, _email_hash, _identifiers):
+                return []  # zero NEW matches — the regression scenario
+            def hash_credential(self, _credential):
+                return 'hash'
+            def get_embedding(self, _hash):
+                import numpy as np
+                return np.zeros(8, dtype=np.float32)
+
+        fake_module.get_credential_matcher = lambda: _FakeMatcher()
+        fake_module.get_breach_classifier = lambda: None
+        monkeypatch.setitem(sys.modules, 'ml_dark_web.ml_services', fake_module)
+
+        # Need at least one UserCredentialMonitoring row so the matcher
+        # loop actually executes (otherwise the loop body never runs
+        # and the decision matrix is exercised with matches_found=0
+        # for a trivially-correct reason).
+        user = User.objects.create_user(username='prior-victim', password='x')
+        UserCredentialMonitoring.objects.create(
+            user=user,
+            email_hash='hashed-cred-1',
+            domain='example.invalid',
+            is_active=True,
+        )
+
+        # match_credentials_against_breach is a bound Celery task
+        # (@shared_task(bind=True)) so calling it directly would treat
+        # `breach.id` as `self`. `.apply()` runs the underlying
+        # function synchronously and passes a real bound task instance
+        # in as `self`. We read the return payload off the result.
+        from ml_dark_web.tasks import match_credentials_against_breach
+        async_result = match_credentials_against_breach.apply(args=[breach.id])
+        result = async_result.get()
+        assert result['success'] is True
+        assert result['matches'] == 0
+
+        # The critical assertion: prior 'matched' state survives.
+        breach.refresh_from_db()
+        assert breach.processing_status == 'matched', (
+            'duplicate scan must not regress matched → completed'
+        )
+        assert breach.affected_records == 5, (
+            'duplicate scan must not zero out a real prior match count'
+        )

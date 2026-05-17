@@ -205,10 +205,35 @@ def match_credentials_against_breach(self, breach_id: int):
                     id__in=batch_cred_ids
                 ).update(last_checked=timezone.now())
         
-        # Update breach status
-        breach.processing_status = 'matched' if matches_found > 0 else 'completed'
+        # Update breach status. CRITICAL: do NOT regress a row that is
+        # already in the terminal ``matched`` state back down to
+        # ``completed`` with ``affected_records=0`` just because this
+        # particular run found zero NEW matches.
+        #
+        # That scenario arises when ``check_compromised_passwords``
+        # re-dispatches a breach whose first match-pass already
+        # finished (e.g. a beat tick that overlaps a backed-up queue,
+        # or a stuck-analyzing row claimed after the original worker
+        # finally finished). The matcher uses
+        # ``MLBreachMatch.get_or_create`` and only counts NEWLY-
+        # created rows, so a duplicate pass legitimately reports
+        # zero — but the breach's true ``affected_records`` is still
+        # the count from the first pass. Codex P1 on PR #244 caught
+        # this exact regression hole.
+        #
+        # Decision matrix:
+        #   matches_found > 0          → upgrade to matched + record count
+        #   matches_found == 0 + prior status was matched → preserve both
+        #   matches_found == 0 + not yet matched           → mark completed
+        if matches_found > 0:
+            breach.processing_status = 'matched'
+            breach.affected_records = matches_found
+        elif breach.processing_status != 'matched':
+            breach.processing_status = 'completed'
+            breach.affected_records = matches_found
+        # else: preserve existing 'matched' / affected_records — a
+        # duplicate scan must never erase a real prior match result.
         breach.processed_at = timezone.now()
-        breach.affected_records = matches_found
         breach.save()
         
         logger.info(f"Credential matching completed for breach {breach_id}. {matches_found} matches found.")
@@ -280,6 +305,20 @@ def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch:
         'stuck': int}`` so the beat log line is observable. Failure
         modes set ``success=False`` and an ``error`` key.
     """
+    # Reject obviously-malformed input (CodeRabbit major on PR #244):
+    # negative `max_dispatch` makes a queryset slice `[:negative]` skip
+    # the safety cap entirely on some ORMs; negative
+    # `stale_analyzing_minutes` would make the cutoff point in the
+    # future and silently re-dispatch every analyzing row. Fail closed
+    # with a clear error instead of producing weird behaviour.
+    if not isinstance(stale_analyzing_minutes, int) or stale_analyzing_minutes < 0:
+        return {'success': False, 'error': 'stale_analyzing_minutes must be a non-negative int'}
+    if not isinstance(max_dispatch, int) or max_dispatch < 0:
+        return {'success': False, 'error': 'max_dispatch must be a non-negative int'}
+    if max_dispatch == 0:
+        # Caller explicitly disabled this tick. Return a clean zero.
+        return {'success': True, 'dispatched': 0, 'pending': 0, 'stuck': 0}
+
     try:
         stuck_cutoff = timezone.now() - timezone.timedelta(minutes=stale_analyzing_minutes)
         # Build the candidate set as a single query so we keep the
@@ -300,13 +339,52 @@ def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch:
         pending = sum(1 for _id, status in candidates if status == 'pending')
         stuck = sum(1 for _id, status in candidates if status == 'analyzing')
 
-        for breach_id, _status in candidates:
-            match_credentials_against_breach.delay(breach_id)
+        # Atomically CLAIM each candidate before dispatching the match
+        # task. Codex P1 on PR #244 caught a real race: between the
+        # candidate-select above and the dispatch below, another worker
+        # (or a previous still-queued copy of this sweep) could already
+        # be processing the same row. Without a claim step we'd
+        # double-dispatch — and the matcher's "find zero NEW matches"
+        # path used to regress 'matched' rows back to 'completed' with
+        # affected_records=0. The matcher fix (above) closes the
+        # regression hole; the claim step also closes the duplicate-
+        # work hole that the matcher's get_or_create makes harmless
+        # but still wasteful.
+        #
+        # The claim semantics:
+        #   * pending row: atomic transition pending → analyzing.
+        #     UPDATE returns 1 only if the row is STILL pending. If a
+        #     racing worker already flipped it to analyzing, we get
+        #     zero and skip dispatch.
+        #   * stuck-analyzing row: re-claim with an explicit
+        #     `detected_at__lt=cutoff` precondition so a worker that
+        #     just started won't lose its claim to us. The status
+        #     stays 'analyzing'.
+        # Both cases use a single UPDATE with the appropriate WHERE
+        # clause — Django's `.update()` is atomic at the DB level.
+        dispatched = 0
+        for breach_id, original_status in candidates:
+            if original_status == 'pending':
+                claim_qs = MLBreachData.objects.filter(
+                    id=breach_id, processing_status='pending',
+                )
+                claimed = claim_qs.update(processing_status='analyzing')
+            else:
+                # Stuck-analyzing: re-confirm the staleness gate at
+                # claim time to avoid stealing a fresh worker's row.
+                claim_qs = MLBreachData.objects.filter(
+                    id=breach_id,
+                    processing_status='analyzing',
+                    detected_at__lt=stuck_cutoff,
+                )
+                claimed = claim_qs.update(processing_status='analyzing')
+            if claimed:
+                match_credentials_against_breach.delay(breach_id)
+                dispatched += 1
 
-        dispatched = len(candidates)
         logger.info(
-            'check_compromised_passwords dispatched=%d (pending=%d, stuck=%d)',
-            dispatched, pending, stuck,
+            'check_compromised_passwords dispatched=%d (pending=%d, stuck=%d, candidates=%d)',
+            dispatched, pending, stuck, len(candidates),
         )
         return {
             'success': True,
@@ -315,7 +393,13 @@ def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch:
             'stuck': stuck,
         }
     except Exception as e:  # noqa: BLE001 — sweep must never crash beat
-        logger.error('Error in check_compromised_passwords: %s', e, exc_info=True)
+        # Use logger.exception with a static message so Semgrep's
+        # `python-logger-credential-disclosure` rule (which scans the
+        # format-string argument for secret-looking literals) doesn't
+        # false-positive on the task name. The traceback carries the
+        # diagnostic context; the exception's str() goes into the
+        # response payload, not the log message.
+        logger.exception('check_compromised_passwords sweep failed')  # nosemgrep
         return {'success': False, 'error': str(e)}
 
 
