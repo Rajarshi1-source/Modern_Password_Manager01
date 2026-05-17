@@ -205,36 +205,58 @@ def match_credentials_against_breach(self, breach_id: int):
                     id__in=batch_cred_ids
                 ).update(last_checked=timezone.now())
         
-        # Update breach status. CRITICAL: do NOT regress a row that is
-        # already in the terminal ``matched`` state back down to
-        # ``completed`` with ``affected_records=0`` just because this
-        # particular run found zero NEW matches.
+        # Close-out the breach record. Two race-safety properties that
+        # the previous in-memory `breach.processing_status` check
+        # didn't give us (Codex P1 + CodeRabbit major on PR #244):
         #
-        # That scenario arises when ``check_compromised_passwords``
-        # re-dispatches a breach whose first match-pass already
-        # finished (e.g. a beat tick that overlaps a backed-up queue,
-        # or a stuck-analyzing row claimed after the original worker
-        # finally finished). The matcher uses
-        # ``MLBreachMatch.get_or_create`` and only counts NEWLY-
-        # created rows, so a duplicate pass legitimately reports
-        # zero — but the breach's true ``affected_records`` is still
-        # the count from the first pass. Codex P1 on PR #244 caught
-        # this exact regression hole.
+        # 1. The status decision is made via an atomic SQL UPDATE with
+        #    a WHERE-clause precondition, not a Python-level if/else
+        #    against an object loaded at task start. That closes the
+        #    "task A loads breach as 'analyzing'; task B finishes and
+        #    sets 'matched'; task A's stale in-memory view thinks
+        #    it's still 'analyzing' and overwrites with 'completed'"
+        #    interleaving.
         #
-        # Decision matrix:
-        #   matches_found > 0          → upgrade to matched + record count
-        #   matches_found == 0 + prior status was matched → preserve both
-        #   matches_found == 0 + not yet matched           → mark completed
-        if matches_found > 0:
-            breach.processing_status = 'matched'
-            breach.affected_records = matches_found
-        elif breach.processing_status != 'matched':
-            breach.processing_status = 'completed'
-            breach.affected_records = matches_found
-        # else: preserve existing 'matched' / affected_records — a
-        # duplicate scan must never erase a real prior match result.
-        breach.processed_at = timezone.now()
-        breach.save()
+        # 2. `affected_records` is the TRUE TOTAL across all runs, not
+        #    this run's per-run delta. `matches_found` only counts
+        #    rows we created via `get_or_create`; if another run
+        #    already populated MLBreachMatch we'd shrink the recorded
+        #    total. Re-derive the count from the DB.
+        #
+        # Once a breach is in 'matched' it stays there — `matched` is
+        # monotonic. The exclude(processing_status='matched') below is
+        # what makes "completed" race-safe: if another writer set
+        # 'matched' between our load and our write, the WHERE clause
+        # filters us out and we no-op on the status flip (still bump
+        # processed_at + affected_records to true_total).
+        true_total = MLBreachMatch.objects.filter(breach=breach).count()
+        now = timezone.now()
+
+        if true_total > 0:
+            # There ARE matches for this breach (this run, or a prior
+            # run that completed during ours). Always 'matched'; record
+            # the true total. Single unconditional UPDATE — `matched`
+            # is monotonic so concurrent writes converge.
+            MLBreachData.objects.filter(pk=breach.pk).update(
+                processing_status='matched',
+                affected_records=true_total,
+                processed_at=now,
+            )
+        else:
+            # No matches at all. Mark 'completed' ONLY if a concurrent
+            # writer hasn't already set 'matched'. The exclude() makes
+            # the UPDATE atomic relative to other writers — if their
+            # 'matched' write landed first, our row count is 0 and the
+            # decision matrix is a no-op (still safe to bump processed_at
+            # in a second UPDATE if we wanted, but skip it to keep the
+            # losing-the-race path a clean no-op).
+            MLBreachData.objects.filter(pk=breach.pk).exclude(
+                processing_status='matched',
+            ).update(
+                processing_status='completed',
+                affected_records=0,
+                processed_at=now,
+            )
         
         logger.info(f"Credential matching completed for breach {breach_id}. {matches_found} matches found.")
         
@@ -321,16 +343,32 @@ def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch:
 
     try:
         stuck_cutoff = timezone.now() - timezone.timedelta(minutes=stale_analyzing_minutes)
+        # An ``analyzing`` row is "stuck" when the last time the matcher
+        # pipeline touched it (either by claim or by completion) is
+        # older than the staleness cutoff. We use ``processed_at`` for
+        # this when set (claim writes it, completion writes it) and
+        # fall back to ``detected_at`` when ``processed_at`` is NULL
+        # — that's the case for rows that were created in the
+        # ``analyzing`` state but never reached either path. Codex P2
+        # on PR #244 caught the earlier version where a stuck-row
+        # claim wrote ``analyzing`` over ``analyzing`` without moving
+        # any timestamp out of the stale window, so the same row
+        # stayed eligible for every subsequent tick.
+        stuck_filter = (
+            Q(processing_status='analyzing')
+            & (
+                Q(processed_at__isnull=True, detected_at__lt=stuck_cutoff)
+                | Q(processed_at__lt=stuck_cutoff)
+            )
+        )
+
         # Build the candidate set as a single query so we keep the
         # ordering deterministic (oldest-first) for both halves —
         # important so the same backlog isn't repeatedly partial-
         # processed on every tick.
         candidates = (
             MLBreachData.objects
-            .filter(
-                Q(processing_status='pending')
-                | Q(processing_status='analyzing', detected_at__lt=stuck_cutoff)
-            )
+            .filter(Q(processing_status='pending') | stuck_filter)
             .order_by('detected_at')
             .values_list('id', 'processing_status')[:max_dispatch]
         )
@@ -357,33 +395,86 @@ def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch:
         #     racing worker already flipped it to analyzing, we get
         #     zero and skip dispatch.
         #   * stuck-analyzing row: re-claim with an explicit
-        #     `detected_at__lt=cutoff` precondition so a worker that
-        #     just started won't lose its claim to us. The status
-        #     stays 'analyzing'.
-        # Both cases use a single UPDATE with the appropriate WHERE
-        # clause — Django's `.update()` is atomic at the DB level.
+        #     stuck-window precondition (same WHERE we used in the
+        #     candidate select). The status stays 'analyzing'; the
+        #     WHERE clause is what makes the UPDATE atomic.
+        #
+        # Both branches also write `processed_at = now` so a
+        # subsequent sweep tick sees the row as "freshly touched"
+        # and excludes it from the stuck candidate set. Without this
+        # bump, a slow-running matcher pass (>= stale_analyzing_minutes)
+        # would let the next tick re-dispatch the same row.
+        #
+        # Broker-publish failure handling: if `.delay()` raises (e.g.
+        # Redis down), we revert the claim so the next sweep can pick
+        # the row back up without waiting for staleness recapture.
+        # CodeRabbit major on PR #244.
+        now = timezone.now()
         dispatched = 0
         for breach_id, original_status in candidates:
             if original_status == 'pending':
                 claim_qs = MLBreachData.objects.filter(
                     id=breach_id, processing_status='pending',
                 )
-                claimed = claim_qs.update(processing_status='analyzing')
+                claimed = claim_qs.update(
+                    processing_status='analyzing',
+                    processed_at=now,
+                )
             else:
-                # Stuck-analyzing: re-confirm the staleness gate at
-                # claim time to avoid stealing a fresh worker's row.
+                # Stuck-analyzing: re-confirm the stuck-window
+                # precondition at UPDATE time so a worker that just
+                # started won't lose its claim to us. WHERE clause
+                # mirrors the `stuck_filter` used in the candidate
+                # select. The UPDATE writes the same `analyzing`
+                # status back (no-op data-wise), but moves
+                # `processed_at` out of the stale window — that's
+                # the real claim signal.
                 claim_qs = MLBreachData.objects.filter(
                     id=breach_id,
                     processing_status='analyzing',
-                    detected_at__lt=stuck_cutoff,
+                ).filter(
+                    Q(processed_at__isnull=True, detected_at__lt=stuck_cutoff)
+                    | Q(processed_at__lt=stuck_cutoff)
                 )
-                claimed = claim_qs.update(processing_status='analyzing')
+                claimed = claim_qs.update(
+                    processing_status='analyzing',
+                    processed_at=now,
+                )
             if claimed:
-                match_credentials_against_breach.delay(breach_id)
-                dispatched += 1
+                try:
+                    match_credentials_against_breach.delay(breach_id)
+                    dispatched += 1
+                except Exception:
+                    # Broker publish failed. Revert the claim so the
+                    # row is available to the next sweep tick rather
+                    # than waiting for staleness recapture (~30 min).
+                    # We only revert pending → analyzing claims;
+                    # stuck-analyzing rows started as `analyzing` and
+                    # we only bumped a timestamp on them — undoing
+                    # the timestamp bump would just move them back
+                    # into the candidate pool, which the next sweep
+                    # tick would do anyway after `stale_analyzing_minutes`.
+                    if original_status == 'pending':
+                        MLBreachData.objects.filter(
+                            id=breach_id,
+                            processing_status='analyzing',
+                        ).update(processing_status='pending')
+                    # Re-raise so the outer try/except logs the
+                    # broker error and returns success=False.
+                    raise
 
+        # NOTE on the count semantics (CodeRabbit nit on PR #244):
+        # `pending` and `stuck` are the counts from the candidate
+        # SELECT BEFORE the per-row claim races. `dispatched` is the
+        # count of rows that ACTUALLY won their claim and got
+        # forwarded to the matcher. After a lost race, `dispatched`
+        # is strictly less than `pending + stuck`. The log line and
+        # return shape preserve both numbers so the gap between
+        # "candidates seen" and "dispatched" is observable in
+        # production.
         logger.info(
-            'check_compromised_passwords dispatched=%d (pending=%d, stuck=%d, candidates=%d)',
+            'check_compromised_passwords dispatched=%d '
+            '(candidates_pending=%d, candidates_stuck=%d, candidates_total=%d)',
             dispatched, pending, stuck, len(candidates),
         )
         return {

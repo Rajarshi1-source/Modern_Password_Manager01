@@ -163,7 +163,7 @@ class TestCheckCompromisedPasswords:
 
     def test_swallows_unexpected_errors(self, source, monkeypatch):
         """The sweep must never crash beat — failures return success=False."""
-        _make_breach(source, status='pending', age_minutes=1, breach_id='boom')
+        breach = _make_breach(source, status='pending', age_minutes=1, breach_id='boom')
 
         def explode(_breach_id):
             raise RuntimeError('matcher backend offline')
@@ -175,6 +175,13 @@ class TestCheckCompromisedPasswords:
         result = check_compromised_passwords()
         assert result['success'] is False
         assert 'matcher backend offline' in result['error']
+        # CodeRabbit major on PR #244 follow-up: the claim must be
+        # REVERTED when the broker publish fails. Otherwise the
+        # row sits as 'analyzing' until staleness recapture
+        # (~stale_analyzing_minutes), wasting a whole tick interval.
+        assert _refresh_status(breach) == 'pending', (
+            'failed dispatch must revert pending → analyzing claim'
+        )
 
     # ------------------------------------------------------------------
     # Tests added in response to PR #244 review feedback.
@@ -312,6 +319,59 @@ class TestCheckCompromisedPasswords:
         assert result['dispatched'] == 1
         assert result['stuck'] == 2  # both made it into the candidate select
 
+    def test_claim_bumps_processed_at_out_of_stale_window(self, source):
+        """Codex P2 on PR #244 follow-up: a stuck-row claim must move
+        ``processed_at`` to "now" so the next sweep tick does NOT
+        re-dispatch the same row before staleness recapture.
+
+        Without this bump, a single matcher pass that runs longer
+        than the beat interval would be dispatched on every tick.
+        """
+        stuck = _make_breach(
+            source, status='analyzing', age_minutes=60, breach_id='stuck-bump',
+        )
+        # processed_at starts NULL on a freshly-created MLBreachData
+        # row — the closeout path is what writes it.
+        stuck.refresh_from_db()
+        assert stuck.processed_at is None
+
+        with patch('ml_dark_web.tasks.match_credentials_against_breach.delay') as m:
+            check_compromised_passwords()
+        assert m.call_count == 1
+
+        stuck.refresh_from_db()
+        cutoff = timezone.now() - timedelta(minutes=30)
+        assert stuck.processed_at is not None, (
+            'claim must write processed_at so subsequent sweeps know '
+            'the row was recently touched'
+        )
+        assert stuck.processed_at > cutoff, (
+            'claim must bump processed_at well past the staleness cutoff'
+        )
+
+    def test_subsequent_sweep_does_not_re_dispatch_recently_claimed(self, source):
+        """Codex P2 on PR #244 follow-up (end-to-end): once a sweep
+        claims a stuck row, an immediate second sweep must not
+        re-dispatch it. The processed_at bump on claim is what
+        guarantees this.
+        """
+        _make_breach(
+            source, status='analyzing', age_minutes=60, breach_id='claim-once',
+        )
+
+        with patch('ml_dark_web.tasks.match_credentials_against_breach.delay') as m1:
+            check_compromised_passwords()
+        assert m1.call_count == 1
+
+        # Second sweep, immediately after — processed_at is fresh
+        # (well within the staleness window), so the stuck filter
+        # excludes the row entirely.
+        with patch('ml_dark_web.tasks.match_credentials_against_breach.delay') as m2:
+            result = check_compromised_passwords()
+        assert m2.call_count == 0
+        assert result['stuck'] == 0
+        assert result['dispatched'] == 0
+
 
 @pytest.mark.django_db
 class TestMatcherIdempotenceWhenReDispatched:
@@ -337,7 +397,10 @@ class TestMatcherIdempotenceWhenReDispatched:
         import sys
         import types
         from ml_dark_web.models import UserCredentialMonitoring
-        from django.contrib.auth.models import User
+        # Use get_user_model so a project AUTH_USER_MODEL override
+        # still hits the right table. CodeRabbit nit on PR #244.
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
 
         # Build a breach that already has a successful match recorded.
         breach = MLBreachData.objects.create(
