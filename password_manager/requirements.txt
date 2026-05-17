@@ -59,7 +59,7 @@ requests==2.33.0
 certifi>=2025.11.12
 charset-normalizer==3.4.1
 idna==3.10
-urllib3==2.6.3
+urllib3==2.7.0
 dnspython==2.7.0
 
 # AWS & Cloud Storage

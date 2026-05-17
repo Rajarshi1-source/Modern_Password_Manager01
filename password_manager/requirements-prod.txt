@@ -33,7 +33,12 @@ twilio>=8.0.0
 
 # Web & API
 requests==2.33.0
-urllib3==2.6.3
+# Snyk SNYK-PYTHON-URLLIB3-* — bumped 2.6.3 → 2.7.0 alongside the
+# matching pin in requirements.txt (PR #239). All other pins
+# (-core, -lock, ml_dark_web -lock) are bumped in this same commit
+# so the production image (which installs requirements-prod.txt)
+# actually ships the fixed version, not the pre-bump 2.6.3.
+urllib3==2.7.0
 
 # Servers
 gunicorn>=21.2.0
