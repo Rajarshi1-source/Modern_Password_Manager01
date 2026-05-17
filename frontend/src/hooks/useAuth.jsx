@@ -170,11 +170,53 @@ axios.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// URLs that mint refresh credentials. The response interceptor must
+// NEVER try to refresh-on-401 against these — doing so creates the
+// recursive deadlock Codex P1 caught on PR #245 follow-up:
+//
+//   1. initAuth calls refreshAccessToken() because /me/ 401'd.
+//   2. refreshAccessToken() POSTs to /api/auth/token/refresh/.
+//   3. The refresh token is ALSO expired → 401.
+//   4. Interceptor catches that 401. Sets isRefreshing = true.
+//      Calls refreshAccessToken() recursively.
+//   5. The recursive call POSTs to /api/auth/token/refresh/ → 401.
+//   6. Interceptor catches THAT 401. isRefreshing is true so it
+//      subscribes via subscribeTokenRefresh and waits forever for
+//      a notification that will never come.
+//
+// Result: initAuth's await on refreshAccessToken() never resolves;
+// setIsLoading(false) is never called; app stuck on loading screen.
+const _REFRESH_URLS = new Set([
+  '/api/auth/token/refresh/',
+  '/api/auth/cookie/token/refresh/',
+]);
+
+function _isRefreshUrl(config) {
+  if (!config || !config.url) return false;
+  try {
+    const path = config.url.startsWith('http')
+      ? new URL(config.url).pathname
+      : config.url;
+    return _REFRESH_URLS.has(path);
+  } catch {
+    return _REFRESH_URLS.has(config.url);
+  }
+}
+
 // Response interceptor: Handle 401 and auto-refresh
 axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
+
+    // Never refresh-on-401 the refresh endpoint itself — that's the
+    // recursive deadlock Codex P1 caught on PR #245 follow-up. A 401
+    // here means "your refresh credential is invalid"; the caller
+    // must handle the rejection (initAuth / login flow), not bounce
+    // back into another refresh attempt.
+    if (_isRefreshUrl(originalRequest)) {
+      return Promise.reject(error);
+    }
 
     // Bootstrap-probe calls (the `/api/auth/me/` hydration request
     // fired by initAuth on page reload) opt out of refresh-on-401

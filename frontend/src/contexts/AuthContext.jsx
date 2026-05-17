@@ -54,16 +54,19 @@ export const AuthProvider = ({ children }) => {
         if (!cancelled) {
           setCurrentUser(resp.data);
           setIsAuthenticated(true);
-        }
 
-        // Best-effort device fingerprint init — only when we have a
-        // confirmed-live session. Calling it after a 401 token drop
-        // is semantically nonsense and clutters log traces. CodeRabbit
-        // minor on PR #245 follow-up.
-        try {
-          await ApiService.initializeDeviceFingerprint();
-        } catch (error) {
-          console.warn('Failed to initialize device fingerprint:', error);
+          // Best-effort device fingerprint init — only when we have
+          // a confirmed-live session AND the component is still
+          // mounted. Calling it after unmount is harmless (no state
+          // mutations) but inconsistent with the rest of the
+          // cancelled-guard discipline in this useEffect; the
+          // network call is also wasted work. CodeRabbit nit on
+          // PR #245 follow-up.
+          try {
+            await ApiService.initializeDeviceFingerprint();
+          } catch (error) {
+            console.warn('Failed to initialize device fingerprint:', error);
+          }
         }
       } catch (err) {
         if (err?.response?.status === 401) {
