@@ -5,6 +5,7 @@ Handles async processing of breach detection, credential matching, and alerts
 
 from celery import shared_task, group, chord
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils import timezone
 from django.core.cache import cache
 import logging
@@ -224,6 +225,97 @@ def match_credentials_against_breach(self, breach_id: int):
     
     except Exception as e:
         logger.error(f"Error matching credentials: {e}", exc_info=True)
+        return {'success': False, 'error': str(e)}
+
+
+@shared_task
+def check_compromised_passwords(stale_analyzing_minutes: int = 30, max_dispatch: int = 200):
+    """
+    Periodic sweep that re-drives credential matching for breaches the
+    inline pipeline didn't finish.
+
+    This task is the target of the Celery beat schedule entry
+    ``check-data-breaches`` (every 6 hours; see
+    ``password_manager/celery.py``). Without a matching function on
+    the module, beat would silently ``KeyError`` on each fire — which
+    is exactly the dead-entry CodeRabbit flagged in the review of
+    PR #241. Adding the function here makes the schedule actually
+    work and gives us an observable sweep loop in production.
+
+    What it does
+    ------------
+    Finds ``MLBreachData`` rows in a non-terminal processing state and
+    dispatches :func:`match_credentials_against_breach` for each. Two
+    sources of work:
+
+      * ``processing_status='pending'`` — breach detected but no
+        matching pass started yet (e.g. inline classifier landed but
+        the matcher worker was offline at the time).
+      * ``processing_status='analyzing'`` rows whose ``detected_at`` is
+        older than ``stale_analyzing_minutes`` — worker likely crashed
+        mid-pass; rematching is safe because the matcher path is
+        idempotent (``MLBreachMatch.get_or_create``).
+
+    Bounded dispatch
+    ----------------
+    The query is capped at ``max_dispatch`` rows so a sudden flood of
+    pending breaches can't generate a multi-thousand-task storm in one
+    beat tick. Unprocessed rows roll over to the next 6-hour tick.
+
+    Idempotence
+    -----------
+    Re-dispatching ``match_credentials_against_breach`` for the same
+    ``breach_id`` is safe: the matcher uses
+    ``MLBreachMatch.objects.get_or_create`` keyed by
+    ``(user, breach, monitored_credential)`` and only counts newly-
+    created rows in its ``matches_found`` return value.
+
+    Args:
+        stale_analyzing_minutes: How old an ``analyzing`` row must be
+            before we treat it as stuck and rematch it.
+        max_dispatch: Per-tick safety cap on dispatched matching tasks.
+
+    Returns:
+        ``{'success': bool, 'dispatched': int, 'pending': int,
+        'stuck': int}`` so the beat log line is observable. Failure
+        modes set ``success=False`` and an ``error`` key.
+    """
+    try:
+        stuck_cutoff = timezone.now() - timezone.timedelta(minutes=stale_analyzing_minutes)
+        # Build the candidate set as a single query so we keep the
+        # ordering deterministic (oldest-first) for both halves —
+        # important so the same backlog isn't repeatedly partial-
+        # processed on every tick.
+        candidates = (
+            MLBreachData.objects
+            .filter(
+                Q(processing_status='pending')
+                | Q(processing_status='analyzing', detected_at__lt=stuck_cutoff)
+            )
+            .order_by('detected_at')
+            .values_list('id', 'processing_status')[:max_dispatch]
+        )
+        candidates = list(candidates)
+
+        pending = sum(1 for _id, status in candidates if status == 'pending')
+        stuck = sum(1 for _id, status in candidates if status == 'analyzing')
+
+        for breach_id, _status in candidates:
+            match_credentials_against_breach.delay(breach_id)
+
+        dispatched = len(candidates)
+        logger.info(
+            'check_compromised_passwords dispatched=%d (pending=%d, stuck=%d)',
+            dispatched, pending, stuck,
+        )
+        return {
+            'success': True,
+            'dispatched': dispatched,
+            'pending': pending,
+            'stuck': stuck,
+        }
+    except Exception as e:  # noqa: BLE001 — sweep must never crash beat
+        logger.error('Error in check_compromised_passwords: %s', e, exc_info=True)
         return {'success': False, 'error': str(e)}
 
 
