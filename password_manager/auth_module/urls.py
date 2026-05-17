@@ -17,6 +17,9 @@ from . import oauth_views
 from . import oidc_views
 # Import MFA views
 from . import mfa_views
+# Current-user endpoint (GET /api/auth/me/) — see CodeQL #1048
+# follow-up on PR #245.
+from . import current_user_view
 # Import Primary Passkey Recovery views
 from . import passkey_primary_recovery_views
 # Import Kyber (Post-Quantum) views
@@ -65,6 +68,15 @@ urlpatterns = [
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
+    # Current-user endpoint used by the SPA bootstrap to hydrate
+    # the user profile after page reload (we no longer persist
+    # the user object to localStorage; see CodeQL #1048 + the
+    # SPA's utils/userStorage.js).
+    path(
+        'me/',
+        current_user_view.CurrentUserView.as_view(),
+        name='current_user',
+    ),
     # Recovery key endpoints
     path('setup-recovery-key/', views.AuthViewSet.as_view({'post': 'setup_recovery_key'}), name='setup-recovery-key'),
     path('update-recovery-status/', views.AuthViewSet.as_view({'post': 'update_recovery_status'}), name='update-recovery-status'),

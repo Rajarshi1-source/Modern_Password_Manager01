@@ -25,6 +25,18 @@ class ABTestService {
 
   _saveAssignments() {
     try {
+      // CodeQL alert js/clear-text-storage-of-sensitive-data (#1051):
+      // The "data" stored here is the per-experiment variant
+      // assignment string ("control" / "variantA" / etc.) for a
+      // pseudo-random A/B bucket. It is not derived from, and does
+      // not reveal, any user-secret material — knowing a user's
+      // variant gives an attacker zero ability to reach the vault.
+      // CodeQL flags it only because the key/value pattern matches
+      // the generic "client storage" sink; the value class is not
+      // sensitive. Keeping localStorage here is intentional so the
+      // assignment survives reloads. If we ever start writing
+      // user-identifying data into this map, this assumption needs
+      // to be re-checked.
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.assignments));
     } catch (e) {
       // Ignore storage errors
