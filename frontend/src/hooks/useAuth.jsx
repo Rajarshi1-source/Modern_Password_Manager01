@@ -124,17 +124,32 @@ const onTokenRefreshed = (newAccessToken) => {
 
 const refreshAccessToken = async () => {
   // Cookie-flow path: the refresh token is in an HttpOnly cookie the
-  // browser sends automatically; the SPA never sees the refresh token.
-  // The cookieAuthService writes the new access token into tokenStore
-  // (module-scope memory), so we just return it for the interceptor's
-  // retry logic. Returns null if the cookie is missing/expired — the
-  // caller's catch path handles that as "user must log in again".
+  // browser sends automatically; the SPA never sees the refresh
+  // token. cookieAuthService writes the new access token into
+  // tokenStore (module-scope memory) and returns it for the
+  // interceptor's retry logic.
+  //
+  // FALLBACK to legacy refresh when the cookie path can't proceed.
+  // This is the migration bridge for users whose session predates
+  // the flag flip — they have a valid localStorage refresh token
+  // but no HttpOnly cookie yet. Codex P2 #1 on PR #246 follow-up
+  // caught that the original "cookie-only in cookie mode" wiring
+  // would force-logout these users on the next 401. The fallback
+  // window closes naturally once the refresh token rotates into
+  // the cookie flow (which it can't here directly; the user has
+  // to log in once via the cookie path) — but for the lifetime
+  // of an existing legacy session it keeps refresh working.
   if (USE_COOKIE_AUTH) {
-    const access = await refreshAccessTokenViaCookie();
-    if (!access) {
-      throw new Error('Refresh cookie missing or expired');
+    try {
+      const access = await refreshAccessTokenViaCookie();
+      if (access) return access;
+      // access === null: cookie missing / refresh returned no token.
+      // Fall through to the legacy refresh below if available.
+    } catch {
+      /* fall through to legacy */
     }
-    return access;
+    // No cookie path succeeded. The legacy refresh-token may still
+    // be in localStorage from a pre-flag session — try it.
   }
 
   const refreshToken = storage.getRefreshToken();
@@ -169,14 +184,20 @@ const refreshAccessToken = async () => {
 // ==============================================================================
 
 // Request interceptor: Add Authorization header.
-// In cookie-flow mode the access token lives in the tokenStore
-// closure (services/tokenStore.js) and is never persisted to
-// localStorage. The legacy path keeps reading from localStorage so
-// existing logged-in users transition without a forced re-login.
+// In cookie-flow mode the access token lives in tokenStore (memory)
+// and is never persisted to localStorage. The legacy path reads
+// from localStorage.
+//
+// Migration window: when the cookie flag is on but the user is on
+// the legacy-fallback path (no cookie, but valid pre-flag localStorage
+// tokens), the in-memory tokenStore is empty so we fall through to
+// localStorage. Codex P2 #1 on PR #246 follow-up caught that without
+// this fallback, every API call from a fallback session went out
+// without an Authorization header and 401'd.
 axios.interceptors.request.use(
   (config) => {
     const accessToken = USE_COOKIE_AUTH
-      ? getInMemoryAccessToken()
+      ? (getInMemoryAccessToken() || storage.getAccessToken())
       : storage.getAccessToken();
 
     if (accessToken) {
@@ -497,9 +518,16 @@ export const AuthProvider = ({ children }) => {
       console.error('Logout error:', error);
     } finally {
       // Local cleanup runs regardless of API call success.
-      if (!USE_COOKIE_AUTH) {
-        storage.clearAll();
-      }
+      //
+      // ALWAYS clear localStorage — including in cookie mode. A user
+      // who authenticated via the legacy-fallback path during the
+      // migration window has accessToken/refreshToken/user sitting
+      // in localStorage; if we skip clearAll() in cookie mode the
+      // next reload's bootstrap fall-through path picks them up and
+      // silently logs them back in. Codex P2 #2 on PR #246
+      // follow-up caught this — logout must be the same idempotent
+      // "wipe ALL credential surfaces" in both modes.
+      storage.clearAll();
       // Clear any default Authorization header that OAuth flows may have set;
       // leaving it behind would cause the next request to carry a stale token
       // that is no longer in storage.
