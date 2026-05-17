@@ -117,13 +117,17 @@ class TestCookieTokenRefreshView:
         # iat at minimum), and never include the refresh token in the body.
         assert new_access and new_access != original_access
         assert 'refresh' not in body
-        # The cookie was rotated — value should differ from the login
-        # cookie. (If ROTATE_REFRESH_TOKENS is somehow off in this env,
-        # we accept the same value but still require the cookie to be
-        # present and HttpOnly.)
+        # The cookie was rotated — value MUST differ from the login
+        # cookie. The project's settings.SIMPLE_JWT has
+        # ROTATE_REFRESH_TOKENS=True, so accepting "same value" here
+        # would let a regression in the rotation path slip through.
         assert REFRESH_COOKIE_NAME in resp.cookies
         new_cookie = resp.cookies[REFRESH_COOKIE_NAME]
         assert new_cookie.value, 'refresh cookie must be re-set on rotation'
+        assert new_cookie.value != original_refresh_cookie, (
+            'refresh cookie value must change on rotation '
+            '(ROTATE_REFRESH_TOKENS is enabled in settings.SIMPLE_JWT)'
+        )
         assert new_cookie['httponly'], 'rotated cookie must remain HttpOnly'
 
     def test_refresh_with_garbage_cookie_clears_it(self, client, user):

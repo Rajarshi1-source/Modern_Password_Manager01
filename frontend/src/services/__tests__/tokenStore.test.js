@@ -42,11 +42,16 @@ describe('tokenStore — in-memory access token', () => {
   });
 
   it('isAccessTokenExpired honours the provided TTL hint', () => {
-    setAccessToken('jwt-abc', 900); // 15 minutes
-    expect(isAccessTokenExpired()).toBe(false);
-    // Past the grace window — fake the clock forward.
+    // Enable fake timers BEFORE setAccessToken so the recorded
+    // expiry is computed against the controlled clock too. With
+    // real-then-fake ordering the expiry uses real Date.now() while
+    // the expiry check uses fake — subtle but enough to make the
+    // grace-window arithmetic drift in unrelated test runs.
     vi.useFakeTimers();
     try {
+      setAccessToken('jwt-abc', 900); // 15 minutes
+      expect(isAccessTokenExpired()).toBe(false);
+      // Past the grace window — fake the clock forward.
       vi.advanceTimersByTime(900 * 1000 + 1000);
       expect(isAccessTokenExpired()).toBe(true);
     } finally {

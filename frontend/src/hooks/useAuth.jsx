@@ -188,12 +188,47 @@ axios.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// URLs of the refresh endpoints themselves. The interceptor must NEVER
+// try to refresh-on-401 against these — doing so creates a recursive
+// loop: the refresh call 401s (cookie missing/expired) → interceptor
+// fires refresh-on-401 → calls refresh again → 401 again → meanwhile
+// `isRefreshing` is already true so the second attempt subscribes
+// to `onTokenRefreshed` and waits forever for a notification that
+// will never come, hanging every queued request. Codex P1 on PR #246
+// caught this.
+const _REFRESH_URLS = new Set([
+  '/api/auth/cookie/token/refresh/',
+  '/api/auth/token/refresh/',
+]);
+
+function _isRefreshUrl(config) {
+  if (!config || !config.url) return false;
+  // Compare on the path portion only — axios may give us a relative
+  // path or a full URL depending on baseURL configuration.
+  try {
+    const path = config.url.startsWith('http')
+      ? new URL(config.url).pathname
+      : config.url;
+    return _REFRESH_URLS.has(path);
+  } catch {
+    return _REFRESH_URLS.has(config.url);
+  }
+}
+
 // Response interceptor: Handle 401 and auto-refresh
 axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
-    
+
+    // Never refresh-on-401 the refresh endpoint itself. A 401 from a
+    // refresh call means "your refresh credential is invalid" — the
+    // user must log in again. Bouncing it back through the same
+    // interceptor would deadlock.
+    if (_isRefreshUrl(originalRequest)) {
+      return Promise.reject(error);
+    }
+
     // If 401 and haven't retried yet
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (isRefreshing) {
@@ -221,9 +256,11 @@ axios.interceptors.response.use(
         // Refresh failed - user needs to login again. Clear both
         // stores so we don't strand a half-state in either flow.
         if (USE_COOKIE_AUTH) {
-          // Best-effort server-side logout (clears the cookie) and
-          // drops the in-memory access token. Awaited only briefly;
-          // we redirect either way.
+          // Fire-and-forget server-side logout (NOT awaited): clears
+          // the HttpOnly cookie + drops the in-memory access token.
+          // We redirect immediately for faster UX; if the network
+          // round-trip fails the local state is still cleared, so
+          // the user-visible outcome is the same.
           logoutWithCookie().catch(() => {});
         } else {
           storage.clearAll();
@@ -430,14 +467,32 @@ export const AuthProvider = ({ children }) => {
   }, [logout]);
   
   /**
-   * Update user profile in state and storage
+   * Update user profile in state and (legacy mode) storage.
+   *
+   * In cookie mode the profile is held in React state only — see PR
+   * #246 + the CodeQL #1048 rationale. Persisting it would re-introduce
+   * the XSS-exfil hole the cookie flow is meant to close. CodeRabbit
+   * outside-diff finding on PR #246.
    */
   const updateUser = useCallback((updates) => {
     const updatedUser = { ...user, ...updates };
-    storage.setUser(updatedUser);
+    if (!USE_COOKIE_AUTH) {
+      storage.setUser(updatedUser);
+    }
     setUser(updatedUser);
   }, [user]);
-  
+
+  // Token-accessor that components like DuressCodeManager,
+  // DuressEventLog, ReputationDashboard et al. call as
+  // `useAuth().getAccessToken()` and pass into fetch services. Under
+  // cookie auth the token lives in `tokenStore` (module-scope memory),
+  // NOT in localStorage — if we kept exposing `storage.getAccessToken`
+  // here, those components would build `Authorization: Bearer null`
+  // immediately after a cookie login. Codex P2 on PR #246.
+  const getAccessToken = USE_COOKIE_AUTH
+    ? getInMemoryAccessToken
+    : storage.getAccessToken;
+
   const value = {
     user,
     isAuthenticated,
@@ -447,8 +502,11 @@ export const AuthProvider = ({ children }) => {
     refreshToken,
     updateUser,
     // Utility methods
-    getAccessToken: storage.getAccessToken,
-    getRefreshToken: storage.getRefreshToken,
+    getAccessToken,
+    // In cookie mode the refresh token lives in an HttpOnly cookie
+    // that JS cannot read. Expose a no-op getter so callers that
+    // still ask for it don't read a stale localStorage value.
+    getRefreshToken: USE_COOKIE_AUTH ? () => null : storage.getRefreshToken,
   };
   
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

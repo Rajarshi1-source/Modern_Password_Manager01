@@ -822,10 +822,25 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8000",
 ]
 
-# When using JWT auth (Authorization header), no cookies are required for API calls.
-# Set to False to avoid exposing cookies unnecessarily.
-# Note: WebSocket connections using query param tokens also work without credentials=True
-CORS_ALLOW_CREDENTIALS = False
+# Cookie-auth (HttpOnly refresh-token, see AUTH_REFRESH_COOKIE_* above and
+# auth_module.cookie_auth_view) needs the browser to actually send the
+# refresh cookie on cross-origin requests when the SPA and API are on
+# different origins. Without `Access-Control-Allow-Credentials: true` the
+# browser strips the cookie from cross-origin POSTs to
+# /api/auth/cookie/token/refresh/ and the opt-in flow can't refresh.
+#
+# Env-driven so:
+#   * dev (single origin, frontend proxy → backend) keeps the historical
+#     default of False
+#   * staging / prod / canary with `VITE_USE_COOKIE_AUTH=true` flips it
+#     to True via `CORS_ALLOW_CREDENTIALS=true` in the deploy env
+#
+# CORS_ALLOW_CREDENTIALS=True REQUIRES an explicit `CORS_ALLOWED_ORIGINS`
+# list (which the project already maintains above) — the wildcard "*"
+# combination is rejected by every modern browser.
+CORS_ALLOW_CREDENTIALS = (
+    os.environ.get('CORS_ALLOW_CREDENTIALS', '').lower() in ('1', 'true', 'yes')
+)
 
 CORS_ALLOW_METHODS = [
     'GET',

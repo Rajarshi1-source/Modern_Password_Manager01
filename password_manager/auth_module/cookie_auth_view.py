@@ -69,13 +69,13 @@ from typing import Optional
 
 from django.conf import settings
 from django.utils import timezone
+from django.utils.module_loading import import_string
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 
@@ -153,14 +153,30 @@ class CookieTokenObtainView(APIView):
     """
 
     permission_classes = [AllowAny]
-    # Reuse the project's existing token-obtain serializer so the
-    # refresh-token-family limit (auth_module.token_family) still
-    # applies: concurrent-device cap, family rotation tracking,
-    # everything stays identical to the JSON flow.
-    serializer_class = TokenObtainPairSerializer
+
+    def get_serializer_class(self):
+        """Resolve the configured token-obtain serializer dynamically.
+
+        Hard-coding ``TokenObtainPairSerializer`` here bypasses the
+        project setting ``SIMPLE_JWT['TOKEN_OBTAIN_SERIALIZER']``,
+        which on this codebase points at
+        ``auth_module.token_family.FamilyLimitedTokenObtainPairSerializer``.
+        Without going through that subclass the cookie login path
+        wouldn't enforce the concurrent-device cap that the legacy
+        JSON /token/ flow already enforces — a real regression
+        on the opt-in flow.
+
+        Falls back to the SimpleJWT default if the project hasn't
+        configured the setting.
+        """
+        configured = settings.SIMPLE_JWT.get(
+            "TOKEN_OBTAIN_SERIALIZER",
+            "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
+        )
+        return import_string(configured)
 
     def post(self, request: Request) -> Response:
-        serializer = self.serializer_class(data=request.data, context={"request": request})
+        serializer = self.get_serializer_class()(data=request.data, context={"request": request})
         try:
             serializer.is_valid(raise_exception=True)
         except TokenError as exc:
@@ -226,7 +242,15 @@ class CookieTokenRefreshView(APIView):
         # to True. We always rotate when called via this endpoint: a
         # successful refresh issues a fresh refresh-token cookie and
         # blacklists the old one (if the blacklist app is installed).
-        new_refresh_value = raw_refresh
+        #
+        # ``new_refresh_value`` stays None when we did NOT rotate. We
+        # only ever re-write the cookie on actual rotation; this both
+        # (a) avoids the CodeQL "cookie constructed from user-supplied
+        # input" warning that fires when we'd re-set the same user-
+        # supplied token value verbatim, and (b) is a true reflection
+        # of the contract — if there's no rotation, there's no new
+        # cookie to set.
+        new_refresh_value: Optional[str] = None
         if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS", False):
             try:
                 if settings.SIMPLE_JWT.get("BLACKLIST_AFTER_ROTATION", False):
@@ -241,6 +265,20 @@ class CookieTokenRefreshView(APIView):
                 refresh.set_jti()
                 refresh.set_exp()
                 refresh.set_iat()
+                # Register the rotated token in the OutstandingToken
+                # table so ``enforce_token_family_limit`` (from
+                # auth_module.token_family) can count it. Without
+                # ``.outstand()`` SimpleJWT's family-limit enforcement
+                # would silently miss every refresh-rotated token
+                # issued through this endpoint and the device cap
+                # would drift relative to the JSON /token/refresh/
+                # path. Wrapped in AttributeError because the method
+                # only exists when the token_blacklist app is
+                # installed; the project installs it.
+                try:
+                    refresh.outstand()
+                except AttributeError:
+                    pass
                 new_refresh_value = str(refresh)
             except TokenError:
                 # If rotation fails (e.g. the existing token is exactly
@@ -257,7 +295,8 @@ class CookieTokenRefreshView(APIView):
             {"access": new_access, "token_type": "Bearer"},
             status=status.HTTP_200_OK,
         )
-        _set_refresh_cookie(response, new_refresh_value)
+        if new_refresh_value is not None:
+            _set_refresh_cookie(response, new_refresh_value)
         return response
 
 
