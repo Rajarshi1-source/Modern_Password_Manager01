@@ -231,22 +231,16 @@ export const AuthProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   
-  // Initialize auth state. Persisting the user profile to
-  // localStorage was removed (CodeQL #1048; see
-  // utils/userStorage.js). On bootstrap we
-  // hydrate the user from `GET /api/auth/me/` instead, which
-  // closes the UX regression CodeRabbit + Codex flagged on PR
-  // #245 (consumers like BreachAlertsDashboard that read
-  // `useAuth().user?.id` would otherwise see null until the
-  // next login).
+  // Initialize auth state. Hydrate `user` from `GET /api/auth/me/`
+  // so consumers (e.g. BreachAlertsDashboard) don't see null on
+  // reload — the user profile is no longer cached in localStorage
+  // per CodeQL #1048 (see utils/userStorage.js). Also flushes any
+  // legacy user blob left behind by an older build.
   //
-  // Also runs `localStorage.removeItem(USER_STORAGE_KEY)` so a
-  // PII blob from an older build doesn't sit around indefinitely
-  // for users who simply reload with an existing access token.
-  // Codex P1 caught that the legacy-blob cleanup only existed
-  // in the OTHER provider (contexts/AuthContext.jsx) and never
-  // ran for sessions wrapped by THIS provider (main.jsx imports
-  // AuthProvider from hooks/useAuth.jsx).
+  // The bootstrap /me call carries `_isBootstrap: true` so the
+  // response interceptor's auto-refresh path skips it — we handle
+  // the 401 here, manually, to avoid the redirect-during-render
+  // race that fixed-edge-case caught on PR #245.
   useEffect(() => {
     let cancelled = false;
 
@@ -260,30 +254,49 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
-      // Token is present — hydrate the user from the server.
-      // Mark this call as a bootstrap probe so the response
-      // interceptor's 401 refresh-then-retry path skips it. We
-      // want a 401 here to bubble straight back to this function,
-      // which treats it as "session dead, drop the token" rather
-      // than entering the interceptor's refresh-or-redirect loop
-      // (which races initAuth and can hard-redirect during the
-      // initial render). CodeRabbit edge-case on PR #245 follow-up.
+      // Token is present — hydrate the user from the server. The
+      // request interceptor adds the Authorization header from
+      // `storage.getAccessToken()` automatically, so we don't pass
+      // one explicitly (CodeRabbit nit on PR #245 follow-up).
       try {
-        const resp = await axios.get('/api/auth/me/', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-          _isBootstrap: true,
-        });
+        const resp = await axios.get('/api/auth/me/', { _isBootstrap: true });
         if (!cancelled) {
           setUser(resp.data);
           setIsAuthenticated(true);
         }
       } catch (err) {
         if (err?.response?.status === 401) {
-          // Access token dead. Don't try to refresh here — the
-          // response interceptor handles 401-on-other-endpoints,
-          // and this endpoint specifically is the "is my session
-          // alive?" check. Treat it as "not authenticated".
-          storage.clearAll();
+          // Access token expired. A 7-day refresh token may still be
+          // valid (SIMPLE_JWT.REFRESH_TOKEN_LIFETIME), so try a
+          // refresh-then-retry before declaring the session dead.
+          // Without this, every page reload past the 15-minute
+          // access-token TTL is a forced logout. Codex P1 on
+          // PR #245 follow-up.
+          let refreshedAccess = null;
+          try {
+            refreshedAccess = await refreshAccessToken();
+          } catch {
+            // Refresh failed — `refreshAccessToken` already cleared
+            // storage. Session is genuinely dead.
+            refreshedAccess = null;
+          }
+
+          if (refreshedAccess) {
+            try {
+              // Re-fetch /me with the freshly rotated access token.
+              // No explicit Authorization needed — the interceptor
+              // reads the now-updated value from storage.
+              const retry = await axios.get('/api/auth/me/', { _isBootstrap: true });
+              if (!cancelled) {
+                setUser(retry.data);
+                setIsAuthenticated(true);
+              }
+            } catch {
+              // Even with a fresh access token, /me failed. Bail.
+              storage.clearAll();
+            }
+          }
+          // else: refresh failed → already cleared; stay signed out.
         } else if (!cancelled) {
           // Network error / 5xx — we have a token, profile fetch
           // failed transiently. Mark authenticated so navigation

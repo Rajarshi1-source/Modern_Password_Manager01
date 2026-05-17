@@ -39,11 +39,31 @@ export const AuthProvider = ({ children }) => {
       // Hydrate the user profile from the server. The `/api/auth/me/`
       // endpoint identifies the user from `request.user` so we don't
       // need to carry a user_id around in localStorage.
+      //
+      // `_isBootstrap: true` opts this call out of the global response
+      // interceptor's auto-refresh/redirect path. Without the flag, a
+      // dead DRF token would land in `useAuth.jsx`'s interceptor
+      // (registered at module import time via the BreachAlertsDashboard
+      // import chain), which then reads `storage.getRefreshToken()` —
+      // the WRONG key for the AuthContext flow (DRF uses `token`, not
+      // `refreshToken`) — and ultimately `storage.clearAll()` +
+      // `window.location.href = '/'`. CodeRabbit medium on PR #245
+      // follow-up caught this asymmetric race.
       try {
-        const resp = await axios.get('/api/auth/me/');
+        const resp = await axios.get('/api/auth/me/', { _isBootstrap: true });
         if (!cancelled) {
           setCurrentUser(resp.data);
           setIsAuthenticated(true);
+        }
+
+        // Best-effort device fingerprint init — only when we have a
+        // confirmed-live session. Calling it after a 401 token drop
+        // is semantically nonsense and clutters log traces. CodeRabbit
+        // minor on PR #245 follow-up.
+        try {
+          await ApiService.initializeDeviceFingerprint();
+        } catch (error) {
+          console.warn('Failed to initialize device fingerprint:', error);
         }
       } catch (err) {
         if (err?.response?.status === 401) {
@@ -60,13 +80,6 @@ export const AuthProvider = ({ children }) => {
           // contract).
           setIsAuthenticated(true);
         }
-      }
-
-      // Initialize device fingerprint for existing sessions (best-effort)
-      try {
-        await ApiService.initializeDeviceFingerprint();
-      } catch (error) {
-        console.warn('Failed to initialize device fingerprint:', error);
       }
 
       if (!cancelled) setLoading(false);

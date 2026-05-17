@@ -63,8 +63,10 @@ class CurrentUserView(APIView):
     medium on PR #245 follow-up.
     """
 
-    authentication_classes = [JWTAuthentication, TokenAuthentication]
-    permission_classes = [IsAuthenticated]
+    # Tuples so Ruff RUF012 (mutable class-attr) doesn't flag, and so
+    # a stray `+=` on the class doesn't mutate the shared default.
+    authentication_classes = (JWTAuthentication, TokenAuthentication)
+    permission_classes = (IsAuthenticated,)
 
     def get(self, request: Request) -> Response:
         user = request.user

@@ -1226,10 +1226,12 @@ function App() {
         }
         if (oauthUser) {
           // OAuth provider payloads (Google/Microsoft/Apple) often
-          // include the access token, refresh token, photo URL, and
-          // a ream of provider-specific identity claims. Persist
-          // only the display-safe whitelist — see
-          // utils/userStorage.js for the field list.
+          // include access tokens, refresh tokens, and a ream of
+          // provider-specific identity claims. `clearStoredUser`
+          // removes any legacy payload and never writes, so none
+          // of that material reaches localStorage. The user object
+          // lives only in React state (set above via dispatch).
+          // See utils/userStorage.js for the rationale.
           clearStoredUser('user', oauthUser);
         }
 

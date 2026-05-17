@@ -44,9 +44,15 @@ class TestCurrentUserView:
     URL = '/api/auth/me/'
 
     def test_unauthenticated_returns_401(self):
-        """No credentials at all → 401, never any profile data."""
+        """No credentials at all → 401, never any profile data.
+
+        Pinning to exactly 401 (not 401-or-403) so a regression that
+        flips the view to a permission-classes-without-auth setup
+        (which would surface 403) gets caught — that flip would mean
+        we'd stopped requiring authentication.
+        """
         resp = APIClient().get(self.URL)
-        assert resp.status_code in (401, 403)
+        assert resp.status_code == 401
 
     def test_authenticated_returns_whitelisted_profile(self, auth_client, user):
         """Authenticated GET → 200 with whitelisted fields only."""
@@ -129,6 +135,23 @@ class TestCurrentUserView:
         assert 'password' not in {k.lower() for k in resp.json().keys()}, (
             'response has a key named "password"'
         )
+
+    def test_jwt_bearer_auth_works(self, user):
+        """Symmetric to test_drf_token_auth_works: explicitly exercise
+        the SimpleJWT bearer path (not via force_authenticate, which
+        bypasses authentication classes entirely). Locks the
+        `[JWTAuthentication, TokenAuthentication]` configuration on
+        the view — if a future change drops JWTAuthentication, this
+        test fails immediately rather than silently regressing for
+        the dominant useAuth.jsx flow.
+        """
+        from rest_framework_simplejwt.tokens import AccessToken
+        token = str(AccessToken.for_user(user))
+        c = APIClient()
+        c.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+        resp = c.get(self.URL)
+        assert resp.status_code == 200
+        assert resp.json()['username'] == user.username
 
     def test_drf_token_auth_works(self, db):
         """Legacy AuthContext.jsx sessions present
