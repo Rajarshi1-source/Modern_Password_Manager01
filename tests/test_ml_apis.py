@@ -44,8 +44,8 @@ def test_password_strength():
     ]
     
     for password, description in test_passwords:
-        print(f"\n{Colors.BOLD}Testing: {description}{Colors.ENDC}")
-        print(f"Password: {password}")
+        print(f"\n{Colors.BOLD}Testing: {description}{Colors.ENDC}")  # lgtm[py/clear-text-logging-sensitive-data]
+        print(f"Password: {'*' * len(password)} (length={len(password)})")  # lgtm[py/clear-text-logging-sensitive-data]
         
         try:
             response = requests.post(

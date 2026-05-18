@@ -53,7 +53,8 @@ def get_adapter(name: str | None = None) -> AnchorAdapter:
     if resolved == "arbitrum" and "arbitrum" not in _REGISTRY:
         _try_register_arbitrum()
     if resolved not in _REGISTRY:
-        logger.warning(
+        # `resolved` is a configuration string (adapter name), not PII.
+        logger.warning(  # lgtm[py/clear-text-logging-sensitive-data]
             "Unknown anchor adapter %r — falling back to NullAnchor.", resolved,
         )
         return _REGISTRY[NullAnchor.name]

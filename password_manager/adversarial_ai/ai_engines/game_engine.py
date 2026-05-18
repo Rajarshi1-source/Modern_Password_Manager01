@@ -171,9 +171,11 @@ class GameEngine:
         )
     
     def _generate_battle_id(self, features: Dict) -> str:
-        """Generate unique battle ID."""
+        """Generate unique battle ID from non-secret feature counts + timestamp."""
         data = f"{features.get('length', 0)}-{features.get('entropy', 0)}-{datetime.now().isoformat()}"
-        return hashlib.sha256(data.encode()).hexdigest()[:16]
+        return hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
+            data.encode(), usedforsecurity=False
+        ).hexdigest()[:16]
     
     def _simulate_battle_rounds(
         self,

@@ -8,12 +8,15 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Crypto Builder - Compile liboqs and Python crypto libraries
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS crypto-builder
+FROM python:3.11-slim-bookworm AS crypto-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system build tools required for liboqs and crypto libraries
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system build tools required for liboqs and crypto libraries.
+# `apt-get -y upgrade` pulls patched curl + util-linux to address Trivy
+# CVEs #1393, #1396, #1399-#1403; without it the image inherits whatever
+# was frozen into the python:3.11-slim-bookworm base.
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     ninja-build \
@@ -69,7 +72,7 @@ RUN pip install --no-cache-dir concrete-python==2.5.0 || echo "concrete-python i
 # -----------------------------------------------------------------------------
 # Stage 2: Dependencies Builder - Install Python dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS deps-builder
+FROM python:3.11-slim-bookworm AS deps-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -78,8 +81,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DEFAULT_TIMEOUT=120 \
     PIP_RESOLVER_BACKTRACK_LIMIT=200000
 
-# Install build dependencies for Python packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install build dependencies for Python packages. `apt-get -y upgrade`
+# patches curl / util-linux in the builder layer (Trivy #1393, #1396,
+# #1399-#1403) so any tooling that links against them has the fixed
+# versions.
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     g++ \
@@ -89,7 +95,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libssl-dev \
     libgmp-dev \
-    libmpfr-dev \
     libmpfr-dev \
     libomp-dev \
     gfortran \
@@ -144,7 +149,7 @@ RUN PY_SITELIB=$(python -c "import sysconfig; print(sysconfig.get_path('purelib'
 # -----------------------------------------------------------------------------
 # Stage 3: Production - Final optimized image
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim AS production
+FROM python:3.11-slim-bookworm AS production
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -157,10 +162,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_USER=appuser \
     APP_GROUP=appgroup
 
-# Install runtime dependencies including crypto runtime libraries
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install runtime dependencies including crypto runtime libraries.
+# `curl` is intentionally NOT installed in the runtime stage — the
+# HEALTHCHECK below uses python's stdlib urllib instead. Dropping curl
+# closes Trivy CVEs #1399-#1403 (curl/libcurl) at the layer level
+# rather than only patching them. `apt-get -y upgrade` patches the
+# remaining transitive packages (util-linux: Trivy #1393, #1396).
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     libpq5 \
-    curl \
     netcat-openbsd \
     libgmp10 \
     libmpfr6 \
@@ -210,9 +219,13 @@ USER 1000:1000
 # 8001 - Daphne (WebSockets)
 EXPOSE 8000 8001
 
-# Health check
+# Health check — uses python stdlib urllib instead of curl so the
+# runtime image doesn't need to ship curl (see Trivy CVEs #1399-#1403).
+# urllib.request.urlopen raises on non-2xx responses, which gives the
+# right non-zero exit code for the orchestrator to mark the container
+# unhealthy.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/api/health/ || exit 1
+    CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health/', timeout=8).status == 200 else 1)" || exit 1
 
 # Default entrypoint
 ENTRYPOINT ["/entrypoint.sh"]

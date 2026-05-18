@@ -428,7 +428,11 @@ def generate_password_hash(password):
     Returns:
         str: Hexadecimal hash
     """
-    return hashlib.sha256(password.encode()).hexdigest()
+    # Test fixture helper — produces a deterministic password digest for
+    # assertions only; not used for storage or authentication.
+    return hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
+        password.encode(), usedforsecurity=False
+    ).hexdigest()
 
 
 # ==============================================================================

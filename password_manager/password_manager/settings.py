@@ -86,6 +86,11 @@ if not SECRET_KEY:
         from django.core.exceptions import ImproperlyConfigured
         raise ImproperlyConfigured("The SECRET_KEY setting must not be empty in production.")
 
+# Pepper for password_manager.security.utils.sensitive_hash. Falls back to
+# SECRET_KEY when unset so the helper is always functional; rotating either
+# value invalidates derived deduplication keys but never breaks auth.
+SENSITIVE_HASH_PEPPER = os.environ.get('SENSITIVE_HASH_PEPPER', SECRET_KEY)
+
 # Parse ALLOWED_HOSTS from environment variable (strip whitespace from each entry)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8000,[::1]').split(',') if h.strip()]
 
@@ -430,6 +435,11 @@ REST_FRAMEWORK = {
     'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.NamespaceVersioning',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
     'PAGE_SIZE': 100,
+    # Centralised exception handler: logs full traceback server-side but
+    # returns sanitised error envelopes to clients. Resolves CodeQL
+    # py/stack-trace-exposure family (alerts #1270-#1303) and prevents
+    # any per-view `str(e)` from reaching the response body unfiltered.
+    'EXCEPTION_HANDLER': 'shared.error_handlers.custom_exception_handler',
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',

@@ -13,9 +13,10 @@ Implements password memory training using:
 """
 
 import logging
-import hashlib
 import math
 from typing import List, Dict, Any, Optional, Tuple
+
+from password_manager.security.utils.sensitive_hash import hash_for_dedup
 from dataclasses import dataclass
 from datetime import timedelta
 from django.utils import timezone
@@ -123,7 +124,7 @@ class MemoryTrainingService:
         program = PasswordTrainingProgram.objects.create(
             user=self.user,
             vault_item=vault_item,
-            password_hash=hashlib.sha256(password.encode()).hexdigest(),
+            password_hash=hash_for_dedup(password, domain="memory-training-pw"),
             password_length=len(password),
             chunk_count=len(chunks),
             status='not_started',
@@ -135,7 +136,7 @@ class MemoryTrainingService:
             MemoryStrengthScore.objects.create(
                 program=program,
                 chunk_index=i,
-                chunk_hash=hashlib.sha256(chunk.encode()).hexdigest(),
+                chunk_hash=hash_for_dedup(chunk, domain="memory-training-chunk"),
                 strength_score=0.0,
             )
         
@@ -305,7 +306,7 @@ class MemoryTrainingService:
         score, _ = MemoryStrengthScore.objects.get_or_create(
             program=program,
             chunk_index=chunk_index,
-            defaults={'chunk_hash': hashlib.sha256(correct_chunk.encode()).hexdigest()}
+            defaults={'chunk_hash': hash_for_dedup(correct_chunk, domain="memory-training-chunk")}
         )
         
         # Calculate quality (0-5 for SM-2)

@@ -101,7 +101,7 @@ def create_alias(request):
     except Exception as e:
         logger.error(f"Error creating email alias: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -138,7 +138,7 @@ def list_aliases(request):
     except Exception as e:
         logger.error(f"Error listing aliases: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -227,7 +227,7 @@ def alias_detail(request, alias_id):
         except Exception as e:
             logger.error(f"Error deleting alias: {e}")
             return Response({
-                'error': str(e)
+                'error': 'internal_error'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -286,7 +286,7 @@ def toggle_alias(request, alias_id):
     except Exception as e:
         logger.error(f"Error toggling alias: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -319,7 +319,7 @@ def alias_activity(request, alias_id):
     except Exception as e:
         logger.error(f"Error fetching alias activity: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -375,7 +375,7 @@ def configure_provider(request):
     except Exception as e:
         logger.error(f"Error configuring provider: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -404,6 +404,6 @@ def list_providers(request):
     except Exception as e:
         logger.error(f"Error listing providers: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

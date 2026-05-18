@@ -10,6 +10,8 @@ import random
 import string
 import hashlib
 from typing import Dict, List, Any, Optional
+
+from password_manager.security.utils.sensitive_hash import short_hash_id
 from datetime import datetime, timedelta
 import uuid
 import os
@@ -344,11 +346,13 @@ class DecoyVaultService:
         user: User
     ) -> str:
         """Inject a tracking token into fake credentials"""
-        # Create a unique identifier that can track if these credentials are used
-        token = hashlib.md5(  # nosec B324 — non-security use: decoy tracking identifier
-            f"{user.id}:{password}:{timezone.now().timestamp()}".encode(),
-            usedforsecurity=False,
-        ).hexdigest()[:6]
+        # HMAC-keyed tracking identifier; password component is the FAKE decoy
+        # password, but route through the keyed helper for defense in depth.
+        token = short_hash_id(  # noqa: F841  # lgtm[py/weak-sensitive-data-hashing]
+            f"{user.id}:{password}:{timezone.now().timestamp()}",
+            domain="decoy-tracking-token",
+            length=6,
+        )
         
         # Subtly embed token (not visible in normal display)
         return f"{password}"  # In production, would use invisible unicode

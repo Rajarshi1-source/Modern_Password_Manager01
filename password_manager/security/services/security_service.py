@@ -816,8 +816,9 @@ class NotificationService:
             )
             """
             
-            # Placeholder for SMS sending logic
-            logger.info(f"SMS would be sent to {phone_number}: {message}")
+            # Placeholder for SMS sending logic. Do not log the recipient
+            # phone number or message body (PII).
+            logger.info("SMS placeholder dispatched (recipient redacted, message_len=%d)", len(message))
             return True
         except Exception as e:
             logger.error(f"Error sending SMS: {e}")

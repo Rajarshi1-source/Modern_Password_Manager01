@@ -367,6 +367,7 @@ class HybridPasswordGenerateView(APIView):
         import hmac
         import secrets
         import math
+        from password_manager.security.utils.sensitive_hash import hash_for_dedup
         
         try:
             from security.services.ocean_wave_entropy_service import (
@@ -437,8 +438,8 @@ class HybridPasswordGenerateView(APIView):
             # Calculate entropy bits
             entropy_bits = length * math.log2(len(charset))
             
-            # Generate signature
-            password_hash = hashlib.sha256(password.encode()).hexdigest()
+            # Generate signature (HMAC-keyed identifier for the password)
+            password_hash = hash_for_dedup(password, domain="ocean-entropy-cert")
             signature = hmac.new(
                 key=secrets.token_bytes(32),
                 msg=password_hash[:16].encode(),

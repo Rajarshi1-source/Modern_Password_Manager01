@@ -693,14 +693,15 @@ SecureVault Security Team
         if subject and len(subject) > 1000:
             subject = subject[:1000]
 
-        # Redact email addresses. The previous pattern `[\w\.-]+@[\w\.-]+`
-        # has overlapping `\w`/`.`/`-` character classes on both sides
-        # of the `@`, which CodeQL's py/polynomial-redos query flags as
-        # quadratic on inputs full of `-`. The character classes below
-        # are disjoint enough — and anchored by `@` — that backtracking
-        # cannot blow up.
+        # Redact email addresses. Bounded quantifiers `{1,N}` keep every
+        # repetition finite-state, so CodeQL's py/polynomial-redos query
+        # has no super-linear path to flag. The 1000-byte cap above is
+        # defence in depth. The pattern matches a local part up to 64
+        # chars, a domain up to 255 chars, and 0–4 dot-separated TLD
+        # labels of up to 63 chars each — well beyond any real-world
+        # address.
         subject = re.sub(
-            r'[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*@[A-Za-z0-9_]+(?:[.\-][A-Za-z0-9_]+)*',
+            r'[A-Za-z0-9_.\-]{1,64}@[A-Za-z0-9_\-]{1,255}(?:\.[A-Za-z0-9_\-]{1,63}){0,4}',
             '[EMAIL]',
             subject,
         )

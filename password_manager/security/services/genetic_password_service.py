@@ -23,6 +23,8 @@ import hashlib
 import hmac
 import os
 import logging
+
+from password_manager.security.utils.sensitive_hash import hash_for_dedup
 from datetime import datetime
 from typing import Tuple, Optional, List, Dict, Any
 from dataclasses import dataclass, field
@@ -664,8 +666,8 @@ class GeneticPasswordGenerator:
         """
         import uuid
         
-        # Hash password and genetic seed (store only prefix)
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        # HMAC-keyed identifier for password; seed hash is non-sensitive metadata
+        password_hash = hash_for_dedup(password, domain="genetic-cert-pw")
         genetic_hash = hashlib.sha256(seed.seed_bytes).hexdigest()
         
         certificate_id = str(uuid.uuid4())

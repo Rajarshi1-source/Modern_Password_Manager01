@@ -89,8 +89,13 @@ export class CryptoService {
       return btoa(JSON.stringify(result));
     } catch (error) {
       console.error('WebCrypto encryption failed, falling back to CryptoJS:', error);
-      // Fall back to previous encryption method
-      return this.legacyEncrypt(data, salt);
+      // Derive a strong key (Argon2id, PBKDF2 fallback inside deriveKey)
+      // BEFORE handing off to legacyEncrypt. Passing the raw salt here
+      // would let CryptoJS run its weak internal EVP_BytesToKey KDF on
+      // the master password — the pattern CodeQL flags as
+      // js/insufficient-password-hash.
+      const derivedKey = await this.deriveKey(salt);
+      return this.legacyEncrypt(data, derivedKey);
     }
   }
   
@@ -208,6 +213,17 @@ export class CryptoService {
   // and skips the weak internal KDF.
   async legacyEncrypt(data, key) {
     // SECURITY NOTE: Encryption occurs client-side - plaintext data never sent to server
+
+    // Guard against accidental misuse: the `key` argument must be the
+    // *derived* key (Argon2id / PBKDF2 output, base64-encoded ~44 chars
+    // for a 32-byte key, or a CryptoJS WordArray). Anything shorter is
+    // almost certainly a raw password or salt and would force CryptoJS
+    // through its weak internal KDF.
+    if (typeof key === 'string' && key.length < 40) {
+      throw new Error(
+        'legacyEncrypt requires a derived key (Argon2id/PBKDF2), not a raw password or salt'
+      );
+    }
 
     // Compress data before encryption for large items
     let dataToEncrypt = data;

@@ -44,9 +44,12 @@ def run_adversarial_analysis(self, user_id: int, password_features: dict, save_r
         if save_result:
             user = User.objects.get(id=user_id)
             
-            # Create password hash for deduplication
+            # Deduplication key derived from non-secret feature counts (length, entropy).
+            # The raw password is never read here.
             feature_str = f"{password_features.get('length', 0)}-{password_features.get('entropy', 0)}"
-            password_hash = hashlib.sha256(feature_str.encode()).hexdigest()
+            password_hash = hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
+                feature_str.encode(), usedforsecurity=False
+            ).hexdigest()
             
             battle = AdversarialBattle.objects.create(
                 user=user,

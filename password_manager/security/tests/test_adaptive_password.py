@@ -672,9 +672,14 @@ class AdaptivePasswordABTests(TestCase):
         import hashlib
         
         def assign_variant(user_id, experiment, variants):
-            """Deterministic variant assignment based on user ID."""
+            """Deterministic A/B variant assignment (non-security use)."""
             hash_input = f"{user_id}:{experiment}"
-            hash_val = int(hashlib.md5(hash_input.encode()).hexdigest(), 16)
+            hash_val = int(
+                hashlib.md5(  # lgtm[py/weak-sensitive-data-hashing]
+                    hash_input.encode(), usedforsecurity=False
+                ).hexdigest(),
+                16,
+            )
             variant_idx = hash_val % len(variants)
             return list(variants.keys())[variant_idx]
         

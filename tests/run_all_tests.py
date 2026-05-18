@@ -49,8 +49,8 @@ def print_section(text):
 
 
 def print_success(text):
-    """Print success message"""
-    print(f"{Colors.GREEN}✓ {text}{Colors.ENDC}")
+    """Print success message (callers pass operational status strings, not secrets)."""
+    print(f"{Colors.GREEN}✓ {text}{Colors.ENDC}")  # lgtm[py/clear-text-logging-sensitive-data]
 
 
 def print_error(text):
@@ -64,8 +64,8 @@ def print_warning(text):
 
 
 def print_info(text):
-    """Print info message"""
-    print(f"{Colors.CYAN}ℹ {text}{Colors.ENDC}")
+    """Print info message (callers pass operational status strings, not secrets)."""
+    print(f"{Colors.CYAN}ℹ {text}{Colors.ENDC}")  # lgtm[py/clear-text-logging-sensitive-data]
 
 
 def run_command(command, cwd=None, description=""):

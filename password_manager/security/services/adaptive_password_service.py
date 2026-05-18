@@ -20,13 +20,14 @@ Privacy:
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
-import hashlib
 import json
 import logging
 import math
 import random
 import numpy as np
 from datetime import datetime, timedelta
+
+from password_manager.security.utils.sensitive_hash import short_hash_id
 
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -333,9 +334,8 @@ class PrivacyGuard:
         return value + noise
     
     def hash_password_prefix(self, password: str) -> str:
-        """Get privacy-safe hash prefix of password."""
-        full_hash = hashlib.sha256(password.encode()).hexdigest()
-        return full_hash[:16]
+        """Get privacy-safe HMAC-keyed hash prefix of password."""
+        return short_hash_id(password, domain="adaptive-pw-prefix", length=16)
     
     def sanitize_pattern(self, pattern: TypingPattern) -> TypingPattern:
         """Apply DP noise to pattern data."""

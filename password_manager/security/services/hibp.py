@@ -67,7 +67,9 @@ def _sha1_hex(password: str) -> str:
     Do NOT replace with SHA-3 or SHA-512.
     """
     return (
-        hashlib.sha1(password.encode("utf-8"), usedforsecurity=False)
+        hashlib.sha1(  # lgtm[py/weak-sensitive-data-hashing] HIBP API mandates SHA-1
+            password.encode("utf-8"), usedforsecurity=False
+        )
         .hexdigest()
         .upper()
     )

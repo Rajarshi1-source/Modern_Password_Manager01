@@ -443,10 +443,13 @@ class FHEOperationRouter:
     def _generate_cache_key(self, operation_type: str, data: Any) -> str:
         """Generate a cache key for the operation."""
         
-        # Hash the data (first 64 bytes only for performance)
+        # Hash the data (first 64 bytes only for performance).
+        # Non-security cache key, not a secret digest.
         data_str = str(data)[:64]
-        data_hash = hashlib.sha256(data_str.encode()).hexdigest()[:16]
-        
+        data_hash = hashlib.sha256(  # lgtm[py/weak-sensitive-data-hashing]
+            data_str.encode(), usedforsecurity=False
+        ).hexdigest()[:16]
+
         return f"fhe:{operation_type}:{data_hash}"
     
     def _check_cache(self, cache_key: str) -> Optional[Any]:
