@@ -78,8 +78,7 @@ class HIBPService:
         insecure-hash-algorithm-sha1) will flag this site; the alert is
         documented and accepted at the protocol layer.
         """
-        # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
-        digest = hashlib.sha1(opaque_bytes, usedforsecurity=False)  # nosec B324
+        digest = hashlib.sha1(opaque_bytes, usedforsecurity=False)  # nosec B324  # nosemgrep: python.lang.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1
         return digest.hexdigest().upper()
 
     @staticmethod

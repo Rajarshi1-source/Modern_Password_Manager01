@@ -696,12 +696,12 @@ SecureVault Security Team
         # Redact email addresses. Bounded quantifiers `{1,N}` keep every
         # repetition finite-state, so CodeQL's py/polynomial-redos query
         # has no super-linear path to flag. The 1000-byte cap above is
-        # defence in depth. The pattern matches a local part up to 64
-        # chars, a domain up to 255 chars, and 0–4 dot-separated TLD
-        # labels of up to 63 chars each — well beyond any real-world
-        # address.
+        # defence in depth. The local-part character class includes the
+        # RFC 5321 subset that real-world addresses actually use — most
+        # importantly `+` so `user+tag@example.com`-style aliases get
+        # fully redacted instead of leaving `+tag@example.com` behind.
         subject = re.sub(
-            r'[A-Za-z0-9_.\-]{1,64}@[A-Za-z0-9_\-]{1,255}(?:\.[A-Za-z0-9_\-]{1,63}){0,4}',
+            r"[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9\-]{1,255}(?:\.[A-Za-z0-9\-]{1,63}){0,4}",
             '[EMAIL]',
             subject,
         )

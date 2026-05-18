@@ -98,8 +98,8 @@ def create_alias(request):
             'created_at': alias.created_at
         }, status=status.HTTP_201_CREATED)
         
-    except Exception as e:
-        logger.error(f"Error creating email alias: {e}")
+    except Exception:
+        logger.exception("Error creating email alias")
         return Response({
             'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -135,8 +135,8 @@ def list_aliases(request):
         
         return Response(result, status=status.HTTP_200_OK)
         
-    except Exception as e:
-        logger.error(f"Error listing aliases: {e}")
+    except Exception:
+        logger.exception("Error listing aliases")
         return Response({
             'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -224,8 +224,8 @@ def alias_detail(request, alias_id):
                 'message': 'Alias deleted successfully'
             }, status=status.HTTP_200_OK)
             
-        except Exception as e:
-            logger.error(f"Error deleting alias: {e}")
+        except Exception:
+            logger.exception("Error deleting alias")
             return Response({
                 'error': 'internal_error'
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -283,8 +283,8 @@ def toggle_alias(request, alias_id):
         return Response({
             'error': 'Alias not found'
         }, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        logger.error(f"Error toggling alias: {e}")
+    except Exception:
+        logger.exception("Error toggling alias")
         return Response({
             'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -316,8 +316,8 @@ def alias_activity(request, alias_id):
         return Response({
             'error': 'Alias not found'
         }, status=status.HTTP_404_NOT_FOUND)
-    except Exception as e:
-        logger.error(f"Error fetching alias activity: {e}")
+    except Exception:
+        logger.exception("Error fetching alias activity")
         return Response({
             'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -372,8 +372,8 @@ def configure_provider(request):
             'is_default': is_default
         }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
         
-    except Exception as e:
-        logger.error(f"Error configuring provider: {e}")
+    except Exception:
+        logger.exception("Error configuring provider")
         return Response({
             'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -401,8 +401,8 @@ def list_providers(request):
         
         return Response(result, status=status.HTTP_200_OK)
         
-    except Exception as e:
-        logger.error(f"Error listing providers: {e}")
+    except Exception:
+        logger.exception("Error listing providers")
         return Response({
             'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

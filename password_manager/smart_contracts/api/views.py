@@ -98,7 +98,9 @@ def vault_detail(request, vault_id):
     try:
         result = service.cancel_vault(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError):
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
         return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -186,7 +188,9 @@ def vault_check_in(request, vault_id):
     try:
         result = service.check_in(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError):
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
         return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -204,7 +208,9 @@ def multi_sig_approve(request, vault_id):
     try:
         result = service.approve_multi_sig(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError):
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
         return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -237,7 +243,9 @@ def dao_vote(request, vault_id):
     try:
         result = service.cast_vote(vault, request.user, vote_serializer.validated_data['approve'])
         return Response(result)
-    except (ValueError, PermissionError):
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
         return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -268,7 +276,9 @@ def escrow_release(request, vault_id):
     try:
         result = service.release_escrow(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError):
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
         return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 

@@ -54,23 +54,23 @@ def print_success(status_message):
     py/clear-text-logging-sensitive-data heuristic can still trace
     dataflow into here from other files in this directory, so the
     print call is built without f-string interpolation."""
-    print(Colors.GREEN + "✓ " + str(status_message) + Colors.ENDC)
+    print(Colors.GREEN + "[OK] " + str(status_message) + Colors.ENDC)
 
 
 def print_error(text):
     """Print error message"""
-    print(f"{Colors.RED}✗ {text}{Colors.ENDC}")
+    print(f"{Colors.RED}[FAIL] {text}{Colors.ENDC}")
 
 
 def print_warning(text):
     """Print warning message"""
-    print(f"{Colors.YELLOW}⚠ {text}{Colors.ENDC}")
+    print(f"{Colors.YELLOW}[WARN] {text}{Colors.ENDC}")
 
 
 def print_info(status_message):
     """Print info status. Same dataflow-breaking rewrite as
     :func:`print_success` above."""
-    print(Colors.CYAN + "ℹ " + str(status_message) + Colors.ENDC)
+    print(Colors.CYAN + "[INFO] " + str(status_message) + Colors.ENDC)
 
 
 def run_command(command, cwd=None, description=""):
