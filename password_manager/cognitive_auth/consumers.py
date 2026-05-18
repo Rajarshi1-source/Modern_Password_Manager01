@@ -18,6 +18,7 @@ from password_manager.security.utils.sensitive_hash import hash_for_dedup
 
 from .models import CognitiveSession, CognitiveChallenge, ChallengeResponse
 from .services import ReactionTimeAnalyzer, ImplicitMemoryDetector
+from .services.challenge_generator import ANSWER_HASH_DOMAIN
 
 
 class CognitiveVerificationConsumer(AsyncWebsocketConsumer):
@@ -139,7 +140,7 @@ class CognitiveVerificationConsumer(AsyncWebsocketConsumer):
             return
         
         # Verify response (HMAC keyed, matches ChallengeGenerator)
-        response_hash = hash_for_dedup(response_value, domain="cognitive-challenge-answer")
+        response_hash = hash_for_dedup(response_value, domain=ANSWER_HASH_DOMAIN)
         is_correct = response_hash == challenge.correct_answer_hash
         
         # Analyze response

@@ -17,6 +17,8 @@ from datetime import timedelta
 
 from password_manager.security.utils.sensitive_hash import hash_for_dedup
 
+from .services.challenge_generator import ANSWER_HASH_DOMAIN
+
 from .models import (
     CognitiveProfile, CognitiveSession, CognitiveChallenge,
     ChallengeResponse, PasswordCreationSignature, CognitiveSettings
@@ -179,7 +181,7 @@ def submit_response(request):
         )
     
     # Verify response (HMAC keyed, matches ChallengeGenerator)
-    response_hash = hash_for_dedup(response_value, domain="cognitive-challenge-answer")
+    response_hash = hash_for_dedup(response_value, domain=ANSWER_HASH_DOMAIN)
     is_correct = response_hash == challenge.correct_answer_hash
     
     # Get timing data

@@ -18,7 +18,11 @@ from datetime import timedelta
 
 from password_manager.security.utils.sensitive_hash import hash_for_dedup
 
-_ANSWER_HASH_DOMAIN = "cognitive-challenge-answer"
+# Public so verifier sites (views.py, consumers.py) can import this
+# constant instead of duplicating the string literal — single source of
+# truth for the HMAC domain used in challenge/response hashes.
+ANSWER_HASH_DOMAIN = "cognitive-challenge-answer"
+_ANSWER_HASH_DOMAIN = ANSWER_HASH_DOMAIN  # backward-compat private alias
 
 
 class ChallengeGenerator:
@@ -189,7 +193,7 @@ class ChallengeGenerator:
         correct_index = options.index(chunk)
         
         # HMAC-keyed hash of the correct answer (server-side compare only)
-        answer_hash = hash_for_dedup(chunk, domain=_ANSWER_HASH_DOMAIN)
+        answer_hash = hash_for_dedup(chunk, domain=ANSWER_HASH_DOMAIN)
         
         return {
             'challenge_type': 'scrambled',
@@ -242,7 +246,7 @@ class ChallengeGenerator:
         options = [target_char] + confusable[:3]
         random.shuffle(options)
         
-        answer_hash = hash_for_dedup(target_char, domain=_ANSWER_HASH_DOMAIN)
+        answer_hash = hash_for_dedup(target_char, domain=ANSWER_HASH_DOMAIN)
 
         return {
             'challenge_type': 'stroop',
@@ -297,7 +301,7 @@ class ChallengeGenerator:
         # Priming duration decreases with difficulty
         prime_durations = {'easy': 200, 'medium': 100, 'hard': 50}
         
-        answer_hash = hash_for_dedup(target_char, domain=_ANSWER_HASH_DOMAIN)
+        answer_hash = hash_for_dedup(target_char, domain=ANSWER_HASH_DOMAIN)
 
         return {
             'challenge_type': 'priming',
@@ -348,7 +352,7 @@ class ChallengeGenerator:
         
         # The correct answer is the hidden characters joined
         correct_answer = ''.join([c for _, c in hidden_chars])
-        answer_hash = hash_for_dedup(correct_answer, domain=_ANSWER_HASH_DOMAIN)
+        answer_hash = hash_for_dedup(correct_answer, domain=ANSWER_HASH_DOMAIN)
         
         return {
             'challenge_type': 'partial',
@@ -501,7 +505,7 @@ class ChallengeGenerator:
         Returns:
             Tuple of (is_correct, response_hash)
         """
-        response_hash = hash_for_dedup(response, domain=_ANSWER_HASH_DOMAIN)
+        response_hash = hash_for_dedup(response, domain=ANSWER_HASH_DOMAIN)
         is_correct = response_hash == challenge['correct_answer_hash']
 
         return is_correct, response_hash

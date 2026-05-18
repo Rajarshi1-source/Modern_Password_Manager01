@@ -30,7 +30,14 @@ def _pepper() -> bytes:
         or os.environ.get("SENSITIVE_HASH_PEPPER")
         or settings.SECRET_KEY
     )
-    return pepper.encode("utf-8") if isinstance(pepper, str) else bytes(pepper)
+    if isinstance(pepper, str):
+        return pepper.encode("utf-8")
+    if isinstance(pepper, (bytes, bytearray, memoryview)):
+        return bytes(pepper)
+    raise TypeError(
+        "SENSITIVE_HASH_PEPPER must be str or bytes, "
+        f"got {type(pepper).__name__}"
+    )
 
 
 def hash_for_dedup(value: str | bytes, *, domain: str = "default") -> str:
