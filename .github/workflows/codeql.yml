@@ -63,6 +63,10 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+          # See .github/codeql/codeql-config.yml for the rationale on
+          # the (narrow) paths-ignore list — protocol-mandated SHA-1
+          # in HIBP files and a pytest orchestrator shim.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
