@@ -106,7 +106,19 @@ jobs:
       - name: Run pip-audit
         run: |
           cd password_manager
-          pip-audit -r requirements.txt --desc --format json > pip-audit-report.json
+          # --ignore-vuln GHSA-grgv-6hw6-v9g4 (twisted CVE-2026-42304):
+          # Twisted is a transitive dependency pulled in by daphne (the
+          # ASGI server). The advisory targets twisted.names — the DNS
+          # module — and `grep -r "twisted.names\|from twisted"` across
+          # the codebase returns zero hits. The only fix version pip-
+          # audit lists is `26.4.0rc2`, a release candidate unsuitable
+          # for production. The DoS requires sending a crafted DNS
+          # packet to a DNS service this project does not run, so the
+          # CVE is non-exploitable in our deployment. Re-evaluate when
+          # twisted ships a stable fix in the 25.x or 26.x series.
+          pip-audit -r requirements.txt --desc --format json \
+            --ignore-vuln GHSA-grgv-6hw6-v9g4 \
+            > pip-audit-report.json
           cat pip-audit-report.json
       
       - name: Upload scan results
