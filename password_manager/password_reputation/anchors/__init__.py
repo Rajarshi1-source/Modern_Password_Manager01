@@ -48,23 +48,18 @@ def configured_adapter_name() -> str:
     return str(name).lower()
 
 
-# Allowlist of adapter tokens that may appear in logs. Any value not in
-# this set is reported as the literal "<unrecognized>" so the logger never
-# receives a string derived from caller-controlled input — which removes
-# the CodeQL clear-text-logging dataflow edge entirely.
-_LOGGABLE_ADAPTER_TOKENS: frozenset[str] = frozenset({"null", "arbitrum", "ethereum"})
-
-
 def get_adapter(name: str | None = None) -> AnchorAdapter:
     adapter_key: str = (name or configured_adapter_name()).lower()
     if adapter_key == "arbitrum" and "arbitrum" not in _REGISTRY:
         _try_register_arbitrum()
     if adapter_key not in _REGISTRY:
-        safe_token = adapter_key if adapter_key in _LOGGABLE_ADAPTER_TOKENS else "<unrecognized>"
-        logger.warning(
-            "Unknown anchor adapter %s — falling back to NullAnchor.",
-            safe_token,
-        )
+        # Log a constant string only — never include `adapter_key` or any
+        # value derived from it. CodeQL's clear-text-logging dataflow tracks
+        # the `name` parameter all the way to any logger call site, so the
+        # diagnostic value of including the token isn't worth the false-
+        # positive churn. Operators can grep the registry or set
+        # PASSWORD_REPUTATION/REPUTATION_ANCHOR_ADAPTER to debug.
+        logger.warning("Unknown anchor adapter configured; falling back to NullAnchor.")
         return _REGISTRY[NullAnchor.name]
     return _REGISTRY[adapter_key]
 
