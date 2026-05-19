@@ -40,9 +40,9 @@ webdriver-manager==4.0.2
 #   jaraco.context — Trivy #1549: path traversal in <6.0.1
 #   python-dotenv — Trivy #1556: symlink-follow CVE in <1.1.1 / older system wheel
 urllib3>=2.7.0
-Twisted>=25.10.0
+Twisted>=26.4.0
 pip>=25.0
-wheel>=0.46.1
+wheel>=0.46.2
 setuptools>=78.1.1
 jaraco.context>=6.0.1
 python-dotenv>=1.2.2

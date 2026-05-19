@@ -151,7 +151,7 @@ WORKDIR /app
 COPY password_manager/requirements-core.txt .
 COPY password_manager/requirements-ml.txt .
 
-RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.1" && \
+RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
     pip install --prefer-binary --retries 5 -r requirements-core.txt
 
 RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
@@ -242,7 +242,7 @@ COPY --from=deps-builder /opt/venv /opt/venv
 # Trivy #1556) by removing them so only the venv's pinned version remains.
 RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing \) -prune -exec rm -rf {} + && \
     find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
-    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.1" && \
+    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
     rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
            /usr/local/lib/python3*/dist-packages/python_dotenv* \
            /usr/lib/python3*/dist-packages/pip \
