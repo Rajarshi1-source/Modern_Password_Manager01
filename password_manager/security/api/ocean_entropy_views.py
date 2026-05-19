@@ -367,7 +367,7 @@ class HybridPasswordGenerateView(APIView):
         import hmac
         import secrets
         import math
-        from password_manager.security.utils.sensitive_hash import hash_for_dedup
+        from security.utils.sensitive_hash import hash_for_dedup
         
         try:
             from security.services.ocean_wave_entropy_service import (

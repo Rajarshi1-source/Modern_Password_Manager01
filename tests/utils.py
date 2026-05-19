@@ -11,7 +11,7 @@ import json
 import random
 import string
 
-from password_manager.security.utils.sensitive_hash import hash_for_dedup
+from security.utils.sensitive_hash import hash_for_dedup
 
 
 # ==============================================================================

@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
 from enum import Enum
 
-from password_manager.security.utils.sensitive_hash import short_hash_id
+from security.utils.sensitive_hash import short_hash_id
 
 from .concrete_service import ConcreteService, get_concrete_service, EncryptedValue
 from .seal_service import SEALBatchService, get_seal_service, SEALCiphertext

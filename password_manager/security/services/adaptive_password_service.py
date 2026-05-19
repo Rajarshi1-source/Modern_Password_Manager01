@@ -27,7 +27,7 @@ import random
 import numpy as np
 from datetime import datetime, timedelta
 
-from password_manager.security.utils.sensitive_hash import short_hash_id
+from security.utils.sensitive_hash import short_hash_id
 
 from django.contrib.auth.models import User
 from django.utils import timezone

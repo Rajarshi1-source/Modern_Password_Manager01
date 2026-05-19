@@ -15,7 +15,7 @@ from rest_framework.response import Response
 from django.utils import timezone
 from datetime import timedelta
 
-from password_manager.security.utils.sensitive_hash import hash_for_dedup
+from security.utils.sensitive_hash import hash_for_dedup
 
 from .services.challenge_generator import ANSWER_HASH_DOMAIN
 

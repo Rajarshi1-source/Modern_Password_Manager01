@@ -16,7 +16,7 @@ from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
 
-from password_manager.security.utils.sensitive_hash import hash_for_dedup
+from security.utils.sensitive_hash import hash_for_dedup
 
 # Public so verifier sites (views.py, consumers.py) can import this
 # constant instead of duplicating the string literal — single source of

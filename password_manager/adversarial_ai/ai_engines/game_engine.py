@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime
 
-from password_manager.security.utils.sensitive_hash import short_hash_id
+from security.utils.sensitive_hash import short_hash_id
 
 from .attacker_ai import AttackerAI, AttackSimulationResult, AttackResult
 from .defender_ai import DefenderAI, DefenseAssessment, Recommendation

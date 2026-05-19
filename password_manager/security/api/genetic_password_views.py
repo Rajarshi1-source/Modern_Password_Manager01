@@ -27,7 +27,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
-from password_manager.security.utils.sensitive_hash import hash_for_dedup
+from security.utils.sensitive_hash import hash_for_dedup
 
 from django.utils import timezone
 from django.contrib.auth.models import User

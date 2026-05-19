@@ -24,7 +24,7 @@ import hmac
 import os
 import logging
 
-from password_manager.security.utils.sensitive_hash import hash_for_dedup
+from security.utils.sensitive_hash import hash_for_dedup
 from datetime import datetime
 from typing import Tuple, Optional, List, Dict, Any
 from dataclasses import dataclass, field

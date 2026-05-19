@@ -88,4 +88,4 @@ class HIBPService:
     @staticmethod
     def hash_password(password):
         """Public wrapper preserving the historical ``hash_password`` name."""
-        return BreachMonitor._hibp_protocol_digest(password.encode('utf-8'))
+        return HIBPService._hibp_protocol_digest(password.encode('utf-8'))

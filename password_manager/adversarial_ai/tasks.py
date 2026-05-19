@@ -14,7 +14,7 @@ from celery import shared_task
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
-from password_manager.security.utils.sensitive_hash import hash_for_dedup
+from security.utils.sensitive_hash import hash_for_dedup
 
 logger = logging.getLogger(__name__)
 User = get_user_model()

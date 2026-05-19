@@ -11,7 +11,7 @@ import logging
 import time
 import uuid
 
-from password_manager.security.utils.sensitive_hash import short_hash_id
+from security.utils.sensitive_hash import short_hash_id
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 

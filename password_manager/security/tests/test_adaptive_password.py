@@ -669,7 +669,7 @@ class AdaptivePasswordABTests(TestCase):
     
     def test_ab_user_assignment(self):
         """Test consistent user assignment to variants."""
-        from password_manager.security.utils.sensitive_hash import hash_for_dedup
+        from security.utils.sensitive_hash import hash_for_dedup
 
         def assign_variant(user_id, experiment, variants):
             """Deterministic A/B variant assignment (non-security use).

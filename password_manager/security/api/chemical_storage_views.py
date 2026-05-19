@@ -23,7 +23,7 @@ import logging
 import hashlib
 from datetime import datetime, timedelta
 
-from password_manager.security.utils.sensitive_hash import short_hash_id
+from security.utils.sensitive_hash import short_hash_id
 
 from django.utils import timezone
 from django.contrib.auth.decorators import login_required

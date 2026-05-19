@@ -11,7 +11,7 @@ import string
 import hashlib
 from typing import Dict, List, Any, Optional
 
-from password_manager.security.utils.sensitive_hash import short_hash_id
+from security.utils.sensitive_hash import short_hash_id
 from datetime import datetime, timedelta
 import uuid
 import os
