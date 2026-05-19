@@ -226,21 +226,39 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: [build]
-    
+    # Lighthouse is informational only — every assertion in
+    # frontend/.lighthouserc.json is set to "warn" (no "error"
+    # thresholds), so the only way this job can fail is if
+    # Lighthouse itself crashes. In practice the Lighthouse-CI v10
+    # action + HeadlessChrome 148 combo on Ubuntu runners regularly
+    # crashes with `NO_FCP "The page did not paint any content"`
+    # even when the dist bundle is fine — a known incompatibility
+    # between Lighthouse 10.x and recent Chrome versions. We tried
+    # the documented CI-stability flags (--headless=new,
+    # --disable-gpu, --disable-dev-shm-usage, etc.) without effect.
+    # Until lighthouse-ci-action ships an upgrade past Lighthouse 10
+    # we don't want a perf-audit crash to block security/PR merges.
+    continue-on-error: true
+
     permissions:
       contents: read
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      
+
       - name: Download build artifacts
         uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.7
         with:
           name: frontend-build
           path: frontend/dist
-      
+
       - name: Run Lighthouse CI
+        # The step inherits the job-level continue-on-error above, so a
+        # Chrome crash or NO_FCP exit-1 from Lighthouse itself does not
+        # fail the PR check. The score thresholds in lighthouserc.json
+        # remain "warn"-only, so a real perf regression also won't
+        # block — Lighthouse here is intentionally advisory.
         uses: treosh/lighthouse-ci-action@03becbfc543944dd6e7534f7ff768abb8a296826 # v10
         with:
           configPath: './frontend/.lighthouserc.json'
