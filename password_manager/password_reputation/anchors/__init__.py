@@ -49,16 +49,19 @@ def configured_adapter_name() -> str:
 
 
 def get_adapter(name: str | None = None) -> AnchorAdapter:
-    resolved = (name or configured_adapter_name()).lower()
-    if resolved == "arbitrum" and "arbitrum" not in _REGISTRY:
+    adapter_key: str = (name or configured_adapter_name()).lower()
+    if adapter_key == "arbitrum" and "arbitrum" not in _REGISTRY:
         _try_register_arbitrum()
-    if resolved not in _REGISTRY:
-        # `resolved` is a configuration string (adapter name), not PII.
-        logger.warning(  # lgtm[py/clear-text-logging-sensitive-data]
-            "Unknown anchor adapter %r — falling back to NullAnchor.", resolved,
-        )
+    if adapter_key not in _REGISTRY:
+        # Log a constant string only — never include `adapter_key` or any
+        # value derived from it. CodeQL's clear-text-logging dataflow tracks
+        # the `name` parameter all the way to any logger call site, so the
+        # diagnostic value of including the token isn't worth the false-
+        # positive churn. Operators can grep the registry or set
+        # PASSWORD_REPUTATION/REPUTATION_ANCHOR_ADAPTER to debug.
+        logger.warning("Unknown anchor adapter configured; falling back to NullAnchor.")
         return _REGISTRY[NullAnchor.name]
-    return _REGISTRY[resolved]
+    return _REGISTRY[adapter_key]
 
 
 def available_adapters() -> list[str]:

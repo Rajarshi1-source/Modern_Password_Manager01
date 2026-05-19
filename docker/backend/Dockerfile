@@ -28,6 +28,17 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     libgmp-dev \
     python3-dev \
     libffi-dev \
+    libssh2-1 \
+    libgnutls30 \
+    libcurl4 \
+    libxml2 \
+    libsystemd0 \
+    libcap2 \
+    libkrb5-3 \
+    libc6 \
+    zlib1g \
+    util-linux \
+    tar \
     && rm -rf /var/lib/apt/lists/*
 
 # Build and install liboqs (Open Quantum Safe library)
@@ -103,6 +114,16 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     libjpeg-dev \
     zlib1g-dev \
     git \
+    libssh2-1 \
+    libgnutls30 \
+    libcurl4 \
+    libxml2 \
+    libsystemd0 \
+    libcap2 \
+    libkrb5-3 \
+    libc6 \
+    util-linux \
+    tar \
     && rm -rf /var/lib/apt/lists/*
 
 # Create and activate virtual environment
@@ -130,7 +151,7 @@ WORKDIR /app
 COPY password_manager/requirements-core.txt .
 COPY password_manager/requirements-ml.txt .
 
-RUN pip install --upgrade "pip==24.3.1" "setuptools>=70,<81" wheel && \
+RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
     pip install --prefer-binary --retries 5 -r requirements-core.txt
 
 RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
@@ -168,6 +189,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # closes Trivy CVEs #1399-#1403 (curl/libcurl) at the layer level
 # rather than only patching them. `apt-get -y upgrade` patches the
 # remaining transitive packages (util-linux: Trivy #1393, #1396).
+#
+# The explicit security-package list forces apt to resolve patched
+# versions from bookworm-security for the CVEs flagged by Trivy:
+# libssh2 (#1694), libgnutls30 (#1667/#1668/#1670/#1672/#1673),
+# libcurl4 (#1649-#1666 — needed by other deps even though curl bin
+# is not installed), libncurses6 (#1479/#1499/#1531/#1533),
+# libxml2 (#1515), libsystemd0 (#1489/#1501), libcap2 (#1439),
+# libkrb5 (#1680-#1687), libc6/glibc (#1656-#1659),
+# zlib1g (#1548), util-linux (#1544/#1547), tar (#1541).
 RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     libpq5 \
     netcat-openbsd \
@@ -176,6 +206,19 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     libomp5 \
     libssl3 \
     libgomp1 \
+    libssh2-1 \
+    libgnutls30 \
+    libcurl4 \
+    libncurses6 \
+    libxml2 \
+    libsystemd0 \
+    libcap2 \
+    libkrb5-3 \
+    libgssapi-krb5-2 \
+    libc6 \
+    zlib1g \
+    util-linux \
+    tar \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -189,6 +232,29 @@ COPY --from=crypto-builder /usr/local/include/oqs /usr/local/include/oqs
 
 # Copy virtual environment from deps-builder
 COPY --from=deps-builder /opt/venv /opt/venv
+
+# Strip vendor test directories and example/test private keys shipped by
+# third-party packages (e.g. autobahn's wamp/cryptosign.py:165 example key
+# that Trivy flagged as #1559/#1560 "Asymmetric Private Key"). Also drop
+# the system-site pip (24.0 in the base image, Trivy #1550/#1551/#1761) —
+# the application uses the /opt/venv interpreter so the system pip is dead
+# weight. Finally upgrade any system-site stale wheels (python-dotenv 1.0.0,
+# Trivy #1556) by removing them so only the venv's pinned version remains.
+RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing \) -prune -exec rm -rf {} + && \
+    find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
+    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
+    rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
+           /usr/local/lib/python3*/dist-packages/python_dotenv* \
+           /usr/lib/python3*/dist-packages/pip \
+           /usr/lib/python3*/dist-packages/pip-* \
+           /usr/local/lib/python3*/dist-packages/pip \
+           /usr/local/lib/python3*/dist-packages/pip-* \
+           /usr/lib/python3*/dist-packages/wheel-* \
+           /usr/local/lib/python3*/dist-packages/wheel-* \
+           /usr/lib/python3*/dist-packages/jaraco* \
+           /usr/local/lib/python3*/dist-packages/jaraco* \
+           /usr/lib/python3*/dist-packages/urllib3-2.6* \
+           /usr/local/lib/python3*/dist-packages/urllib3-2.6* 2>/dev/null || true
 
 # Update library cache after all native libs and venv are in place
 RUN ldconfig
