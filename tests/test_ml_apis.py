@@ -57,7 +57,8 @@ def test_password_strength():
             response = requests.post(
                 f"{API_BASE}/password-strength/",
                 json={"password": fixture_value},
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=10
             )
             
             if response.status_code == 200:
@@ -122,7 +123,8 @@ def test_anomaly_detection():
             response = requests.post(
                 f"{API_BASE}/anomaly-detection/",
                 json=data,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
+                timeout=10
             )
             
             if response.status_code == 200:
@@ -162,7 +164,8 @@ def test_threat_analysis():
         response = requests.post(
             f"{API_BASE}/threat-analysis/",
             json=test_data,
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
+            timeout=10,
         )
         
         if response.status_code == 200:
