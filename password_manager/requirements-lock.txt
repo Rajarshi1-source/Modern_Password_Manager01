@@ -335,7 +335,7 @@ transformers==5.0.0rc3
 trio==0.32.0
 trio-websocket==0.12.2
 twilio==9.10.5
-Twisted==25.5.0
+Twisted==26.4.0rc2
 txaio==25.9.2
 typer==0.20.0
 typer-slim==0.20.0
