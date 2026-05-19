@@ -56,7 +56,7 @@ jobs:
       
       - name: Upload Gitleaks SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225  # v4.35.2
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         with:
           sarif_file: gitleaks-results.sarif
           category: gitleaks
@@ -176,7 +176,7 @@ jobs:
 
       # FIX #2: Pinned to commit hash
       - name: Upload Trivy Results
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225  # v4.35.2
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         if: always()
         with:
           sarif_file: 'trivy-fs.sarif'
@@ -205,7 +205,7 @@ jobs:
       
       # FIX #2: Pinned to commit hash
       - name: Upload Grype Results
-        uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225  # v4.35.2
+        uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         if: always()
         with:
           sarif_file: grype-fs.sarif
