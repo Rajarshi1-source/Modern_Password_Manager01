@@ -18,8 +18,27 @@ name: CodeQL Analysis
 on:
   push:
     branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
+  # NOTE: `pull_request` trigger intentionally omitted while GitHub's
+  # default CodeQL setup is enabled at the repo level. The default
+  # setup already runs CodeQL on every PR (its result appears under
+  # the same "Analyze (python)" / "Analyze (javascript-typescript)"
+  # check names), and any attempt by THIS advanced workflow to also
+  # upload SARIF on a PR fails with:
+  #
+  #     "CodeQL analyses from advanced configurations cannot be
+  #      processed when the default setup is enabled"
+  #
+  # The result was two identically-named check rows per PR — one
+  # PASS (default setup) and one FAIL (this workflow's structural
+  # conflict). That blocked every PR's required-checks gate.
+  #
+  # Once the repo owner flips Settings → Code security → Code
+  # scanning → "Switch to advanced" (disabling the default setup),
+  # restore the pull_request trigger below to get PR-time coverage
+  # from this workflow's custom paths-ignore config.
+  #
+  # pull_request:
+  #   branches: [main, develop]
   schedule:
     - cron: '0 3 * * 1'  # weekly on Monday at 03:00 UTC
   workflow_dispatch:
