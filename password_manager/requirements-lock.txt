@@ -32,14 +32,14 @@ cachetools==6.2.1
 catalogue==2.0.10
 cbor2==5.9.0
 celery==5.6.3
-certifi==2025.11.12
+certifi==2026.4.22
 certvalidator==0.11.1
 cffi==2.0.0
 channels==4.2.2
 channels_redis==4.2.1
 chardet==5.2.0
 charset-normalizer==3.4.1
-ckzg==2.1.5
+ckzg==2.1.7
 click==8.1.8
 click-didyoumean==0.3.1
 click-plugins==1.1.1
@@ -127,7 +127,7 @@ google-resumable-media==2.7.2
 googleapis-common-protos==1.70.0
 gprof2dot==2025.4.14
 grpcio==1.75.1
-grpcio-status==1.75.1
+grpcio-status==1.80.0
 gunicorn==23.0.0
 gymnasium==1.2.3
 h11==0.16.0
