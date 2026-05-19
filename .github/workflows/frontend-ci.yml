@@ -226,19 +226,6 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: [build]
-    # Lighthouse is informational only — every assertion in
-    # frontend/.lighthouserc.json is set to "warn" (no "error"
-    # thresholds), so the only way this job can fail is if
-    # Lighthouse itself crashes. In practice the Lighthouse-CI v10
-    # action + HeadlessChrome 148 combo on Ubuntu runners regularly
-    # crashes with `NO_FCP "The page did not paint any content"`
-    # even when the dist bundle is fine — a known incompatibility
-    # between Lighthouse 10.x and recent Chrome versions. We tried
-    # the documented CI-stability flags (--headless=new,
-    # --disable-gpu, --disable-dev-shm-usage, etc.) without effect.
-    # Until lighthouse-ci-action ships an upgrade past Lighthouse 10
-    # we don't want a perf-audit crash to block security/PR merges.
-    continue-on-error: true
 
     permissions:
       contents: read
@@ -254,11 +241,28 @@ jobs:
           path: frontend/dist
 
       - name: Run Lighthouse CI
-        # The step inherits the job-level continue-on-error above, so a
-        # Chrome crash or NO_FCP exit-1 from Lighthouse itself does not
-        # fail the PR check. The score thresholds in lighthouserc.json
-        # remain "warn"-only, so a real perf regression also won't
-        # block — Lighthouse here is intentionally advisory.
+        # STEP-level continue-on-error: makes the step's non-zero exit
+        # report as success in the PR check rollup. Job-level
+        # continue-on-error only affects whether DEPENDENT jobs run —
+        # it does NOT clear the red ✗ on the PR check tile (verified
+        # empirically on commit 208ba00 which still failed the PR).
+        # Step-level is the correct knob for "this step is allowed to
+        # fail without blocking the merge gate."
+        #
+        # Why we tolerate failures here: Lighthouse-CI v10 +
+        # HeadlessChrome 148 on Ubuntu runners regularly crashes with
+        # `NO_FCP "The page did not paint any content"` even when the
+        # dist bundle renders fine. We tried every documented CI-
+        # stability flag (--headless=new, --disable-gpu,
+        # --disable-dev-shm-usage, --disable-features=VizDisplay
+        # Compositor, maxWaitForFcp: 30000) in commit f367244 —
+        # none helped. The action's own repo hasn't shipped an
+        # upgrade past Lighthouse 10 yet, so we can't just bump the
+        # SHA. Additionally every assertion in
+        # frontend/.lighthouserc.json is set to "warn" only, so even
+        # if Lighthouse DID complete a real perf regression wouldn't
+        # block. Remove this flag when the action ships Lighthouse 11+.
+        continue-on-error: true
         uses: treosh/lighthouse-ci-action@03becbfc543944dd6e7534f7ff768abb8a296826 # v10
         with:
           configPath: './frontend/.lighthouserc.json'
