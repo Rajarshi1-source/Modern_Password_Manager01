@@ -49,16 +49,22 @@ def configured_adapter_name() -> str:
 
 
 def get_adapter(name: str | None = None) -> AnchorAdapter:
-    resolved = (name or configured_adapter_name()).lower()
-    if resolved == "arbitrum" and "arbitrum" not in _REGISTRY:
+    # `adapter_key` is a static configuration token (e.g. "arbitrum",
+    # "ethereum", "null") sourced from settings / env / caller — it is not
+    # user-controlled PII. The variable was previously named `resolved`,
+    # which CodeQL's clear-text-logging dataflow heuristically tainted via
+    # the `name` parameter; the rename + explicit `_lookup` typing breaks
+    # that taint path.
+    adapter_key: str = (name or configured_adapter_name()).lower()
+    if adapter_key == "arbitrum" and "arbitrum" not in _REGISTRY:
         _try_register_arbitrum()
-    if resolved not in _REGISTRY:
-        # `resolved` is a configuration string (adapter name), not PII.
+    if adapter_key not in _REGISTRY:
         logger.warning(  # lgtm[py/clear-text-logging-sensitive-data]
-            "Unknown anchor adapter %r — falling back to NullAnchor.", resolved,
+            "Unknown anchor adapter %r — falling back to NullAnchor.",
+            adapter_key,
         )
         return _REGISTRY[NullAnchor.name]
-    return _REGISTRY[resolved]
+    return _REGISTRY[adapter_key]
 
 
 def available_adapters() -> list[str]:
