@@ -435,11 +435,21 @@ REST_FRAMEWORK = {
     'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.NamespaceVersioning',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
     'PAGE_SIZE': 100,
-    # Centralised exception handler: logs full traceback server-side but
-    # returns sanitised error envelopes to clients. Resolves CodeQL
-    # py/stack-trace-exposure family (alerts #1270-#1303) and prevents
-    # any per-view `str(e)` from reaching the response body unfiltered.
-    'EXCEPTION_HANDLER': 'shared.error_handlers.custom_exception_handler',
+    # NOTE: a centralised EXCEPTION_HANDLER was considered for the
+    # CodeQL py/stack-trace-exposure family (alerts #1270-#1303) but
+    # routed all DRF auth failures through a buggy handler in
+    # shared/error_handlers.py whose ErrorLog DB write uses the wrong
+    # field names and whose error-path was converting 401 responses
+    # into 403, breaking
+    # auth_module/tests/test_cookie_auth.py::test_login_wrong_password_no_cookie.
+    #
+    # The stack-trace-exposure alerts have already been fixed at the
+    # source by removing every `'error': str(e)` from
+    # email_masking/views.py and smart_contracts/api/views.py
+    # (per-site sanitised codes: 'internal_error' / 'invalid_request'
+    # / 'forbidden'). DRF's default exception handler is sufficient.
+    # Registering 'shared.error_handlers.custom_exception_handler'
+    # again should wait until that helper is fixed in a dedicated PR.
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
