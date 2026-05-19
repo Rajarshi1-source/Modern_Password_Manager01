@@ -1,0 +1,21 @@
+# Safety CLI policy file.
+#
+# `safety check` (v2.x) auto-looks for `.safety-policy.yml` in the
+# current working directory and emits a CLI-validation error when it's
+# absent, even though no `--policy-file` flag is passed in our CI
+# invocation:
+#
+#     Error: Invalid value for '--policy-file': Policy file YAML is
+#     not valid.
+#     HINT: [Errno 2] No such file or directory: '.safety-policy.yml'
+#
+# The error is currently swallowed by `|| true` in the workflow, but
+# it pollutes the build log and pairs awkwardly with the (separate)
+# pip-audit failure. A minimal empty-ignore policy clears the noise
+# without altering scanning behavior.
+#
+# Add `ignore:` entries here only when a finding is genuinely
+# non-exploitable and tracked in an issue. Prefer upgrading the
+# vulnerable package whenever possible.
+version: 1
+ignore: {}

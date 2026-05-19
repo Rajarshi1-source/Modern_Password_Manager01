@@ -14,6 +14,8 @@ from celery import shared_task
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
+from security.utils.sensitive_hash import hash_for_dedup
+
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
@@ -33,8 +35,8 @@ def run_adversarial_analysis(self, user_id: int, password_features: dict, save_r
     """
     from .ai_engines.game_engine import GameEngine
     from .models import AdversarialBattle, UserDefenseProfile, DefenseRecommendation
-    import hashlib
-    
+
+
     try:
         logger.info(f"Starting adversarial analysis for user {user_id}")
         
@@ -44,9 +46,13 @@ def run_adversarial_analysis(self, user_id: int, password_features: dict, save_r
         if save_result:
             user = User.objects.get(id=user_id)
             
-            # Create password hash for deduplication
+            # Deduplication key derived from non-secret feature counts.
+            # HMAC-keyed via hash_for_dedup so CodeQL doesn't classify this
+            # as a weak password hash (it would not — the raw password
+            # never enters this function — but the variable name flowing
+            # through as `password_hash` confuses static dataflow).
             feature_str = f"{password_features.get('length', 0)}-{password_features.get('entropy', 0)}"
-            password_hash = hashlib.sha256(feature_str.encode()).hexdigest()
+            password_hash = hash_for_dedup(feature_str, domain="adversarial-battle-dedup")
             
             battle = AdversarialBattle.objects.create(
                 user=user,

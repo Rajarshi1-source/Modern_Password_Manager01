@@ -10,13 +10,15 @@ Provides sub-millisecond timing precision for challenge delivery.
 """
 
 import json
-import hashlib
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
+from security.utils.sensitive_hash import hash_for_dedup
+
 from .models import CognitiveSession, CognitiveChallenge, ChallengeResponse
 from .services import ReactionTimeAnalyzer, ImplicitMemoryDetector
+from .services.challenge_generator import ANSWER_HASH_DOMAIN
 
 
 class CognitiveVerificationConsumer(AsyncWebsocketConsumer):
@@ -137,8 +139,8 @@ class CognitiveVerificationConsumer(AsyncWebsocketConsumer):
             await self.send_error('Challenge not found')
             return
         
-        # Verify response
-        response_hash = hashlib.sha256(response_value.encode()).hexdigest()
+        # Verify response (HMAC keyed, matches ChallengeGenerator)
+        response_hash = hash_for_dedup(response_value, domain=ANSWER_HASH_DOMAIN)
         is_correct = response_hash == challenge.correct_answer_hash
         
         # Analyze response

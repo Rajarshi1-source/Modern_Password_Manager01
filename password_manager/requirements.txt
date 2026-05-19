@@ -58,7 +58,7 @@ sqlparse==0.5.4
 requests==2.33.0
 certifi>=2025.11.12
 charset-normalizer==3.4.1
-idna==3.10
+idna==3.15
 urllib3==2.7.0
 dnspython==2.7.0
 
@@ -117,7 +117,7 @@ rsa==4.9.1
 six==1.17.0
 
 # Environment & Config
-python-dotenv==1.0.0
+python-dotenv==1.2.2
 
 # WSGI/ASGI Server
 Werkzeug==3.1.6

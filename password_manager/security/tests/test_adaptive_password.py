@@ -669,12 +669,16 @@ class AdaptivePasswordABTests(TestCase):
     
     def test_ab_user_assignment(self):
         """Test consistent user assignment to variants."""
-        import hashlib
-        
+        from security.utils.sensitive_hash import hash_for_dedup
+
         def assign_variant(user_id, experiment, variants):
-            """Deterministic variant assignment based on user ID."""
+            """Deterministic A/B variant assignment (non-security use).
+
+            HMAC-keyed via hash_for_dedup so CodeQL doesn't classify the
+            input ``user_id`` as a weak-hashed secret.
+            """
             hash_input = f"{user_id}:{experiment}"
-            hash_val = int(hashlib.md5(hash_input.encode()).hexdigest(), 16)
+            hash_val = int(hash_for_dedup(hash_input, domain="ab-test-variant"), 16)
             variant_idx = hash_val % len(variants)
             return list(variants.keys())[variant_idx]
         

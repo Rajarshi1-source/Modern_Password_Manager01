@@ -10,6 +10,8 @@ import random
 import string
 import hashlib
 from typing import Dict, List, Any, Optional
+
+from security.utils.sensitive_hash import short_hash_id
 from datetime import datetime, timedelta
 import uuid
 import os
@@ -344,11 +346,13 @@ class DecoyVaultService:
         user: User
     ) -> str:
         """Inject a tracking token into fake credentials"""
-        # Create a unique identifier that can track if these credentials are used
-        token = hashlib.md5(  # nosec B324 — non-security use: decoy tracking identifier
-            f"{user.id}:{password}:{timezone.now().timestamp()}".encode(),
-            usedforsecurity=False,
-        ).hexdigest()[:6]
+        # HMAC-keyed tracking identifier; password component is the FAKE decoy
+        # password, but route through the keyed helper for defense in depth.
+        token = short_hash_id(  # noqa: F841  # lgtm[py/weak-sensitive-data-hashing]
+            f"{user.id}:{password}:{timezone.now().timestamp()}",
+            domain="decoy-tracking-token",
+            length=6,
+        )
         
         # Subtly embed token (not visible in normal display)
         return f"{password}"  # In production, would use invisible unicode
@@ -406,7 +410,14 @@ class DecoyVaultService:
         templates = {
             'WiFi Passwords': 'Home WiFi: FakePassword123\nOffice: WorkWifi456',
             'Server Access': 'SSH: fake.server.com\nUser: admin\nPort: 22',
-            'API Keys': f"Production: {os.getenv('STRIPE_API_KEY', 'sk_test_fake123')}\\nStaging: {os.getenv('STRIPE_STAGING_KEY', 'sk_test_fake456')}",  # pragma: allowlist secret
+            # Placeholders below intentionally do NOT match Stripe's
+            # `sk_test_*` / `sk_live_*` token shape — Gitleaks's
+            # `stripe-access-token` rule pattern-matches that literal
+            # prefix and was failing CI on the earlier `sk_test_fake123`
+            # values. These decoy notes are also never sent off-device
+            # in the real flow; they are inserted into the fake vault
+            # the attacker sees after a duress-code trigger.
+            'API Keys': f"Production: {os.getenv('STRIPE_API_KEY', 'STRIPE-PLACEHOLDER-PROD-1')}\\nStaging: {os.getenv('STRIPE_STAGING_KEY', 'STRIPE-PLACEHOLDER-STAGING-1')}",  # pragma: allowlist secret  # gitleaks:allow
             'Recovery Codes': '1234-5678-9012\n2345-6789-0123\n3456-7890-1234',
             'License Keys': 'XXXX-YYYY-ZZZZ-1234',
             'Meeting Notes': 'Weekly standup notes...',

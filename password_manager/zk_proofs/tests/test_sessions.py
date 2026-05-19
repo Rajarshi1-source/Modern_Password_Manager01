@@ -55,11 +55,16 @@ def client_factory():
 
 
 def _derive_commit(password: str, item_id: str):
-    """Reproduce the client-side Pedersen derivation used by the frontend."""
+    """Reproduce the client-side Pedersen derivation used by the frontend.
+
+    SHA-256 is mandated by the ZK protocol (must match the JS client). This
+    function exists only to construct test commitments — it is not used for
+    password storage.
+    """
     from hashlib import sha256
 
     def _to_scalar(tag: bytes, *parts: bytes) -> int:
-        h = sha256()
+        h = sha256(usedforsecurity=False)  # lgtm[py/weak-sensitive-data-hashing]
         h.update(tag)
         for p in parts:
             h.update(len(p).to_bytes(4, "big"))

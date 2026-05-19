@@ -10,12 +10,19 @@ Supports scrambled, stroop, priming, and partial reveal challenge types.
 """
 
 import random
-import hashlib
 import secrets
 from typing import Dict, List, Any, Optional, Tuple
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
+
+from security.utils.sensitive_hash import hash_for_dedup
+
+# Public so verifier sites (views.py, consumers.py) can import this
+# constant instead of duplicating the string literal — single source of
+# truth for the HMAC domain used in challenge/response hashes.
+ANSWER_HASH_DOMAIN = "cognitive-challenge-answer"
+_ANSWER_HASH_DOMAIN = ANSWER_HASH_DOMAIN  # backward-compat private alias
 
 
 class ChallengeGenerator:
@@ -185,8 +192,8 @@ class ChallengeGenerator:
         random.shuffle(options)
         correct_index = options.index(chunk)
         
-        # Hash the correct answer
-        answer_hash = hashlib.sha256(chunk.encode()).hexdigest()
+        # HMAC-keyed hash of the correct answer (server-side compare only)
+        answer_hash = hash_for_dedup(chunk, domain=ANSWER_HASH_DOMAIN)
         
         return {
             'challenge_type': 'scrambled',
@@ -239,8 +246,8 @@ class ChallengeGenerator:
         options = [target_char] + confusable[:3]
         random.shuffle(options)
         
-        answer_hash = hashlib.sha256(target_char.encode()).hexdigest()
-        
+        answer_hash = hash_for_dedup(target_char, domain=ANSWER_HASH_DOMAIN)
+
         return {
             'challenge_type': 'stroop',
             'difficulty': difficulty,
@@ -294,8 +301,8 @@ class ChallengeGenerator:
         # Priming duration decreases with difficulty
         prime_durations = {'easy': 200, 'medium': 100, 'hard': 50}
         
-        answer_hash = hashlib.sha256(target_char.encode()).hexdigest()
-        
+        answer_hash = hash_for_dedup(target_char, domain=ANSWER_HASH_DOMAIN)
+
         return {
             'challenge_type': 'priming',
             'difficulty': difficulty,
@@ -345,7 +352,7 @@ class ChallengeGenerator:
         
         # The correct answer is the hidden characters joined
         correct_answer = ''.join([c for _, c in hidden_chars])
-        answer_hash = hashlib.sha256(correct_answer.encode()).hexdigest()
+        answer_hash = hash_for_dedup(correct_answer, domain=ANSWER_HASH_DOMAIN)
         
         return {
             'challenge_type': 'partial',
@@ -498,7 +505,7 @@ class ChallengeGenerator:
         Returns:
             Tuple of (is_correct, response_hash)
         """
-        response_hash = hashlib.sha256(response.encode()).hexdigest()
+        response_hash = hash_for_dedup(response, domain=ANSWER_HASH_DOMAIN)
         is_correct = response_hash == challenge['correct_answer_hash']
-        
+
         return is_correct, response_hash

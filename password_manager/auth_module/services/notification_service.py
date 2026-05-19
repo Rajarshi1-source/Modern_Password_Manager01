@@ -160,7 +160,7 @@ class NotificationService:
                     to=user.phone_number
                 )
 
-            logger.info(f"Sent canary alert SMS to {user.phone_number}")
+            logger.info("Sent canary alert SMS to user_id=%s", user.id)
             return True
 
         except CircuitBreakerOpen:

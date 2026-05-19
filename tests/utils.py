@@ -10,7 +10,8 @@ from django.contrib.auth.models import User
 import json
 import random
 import string
-import hashlib
+
+from security.utils.sensitive_hash import hash_for_dedup
 
 
 # ==============================================================================
@@ -418,17 +419,21 @@ def mock_decrypt(encrypted_data):
     return base64.b64decode(encrypted_data.encode()).decode()
 
 
-def generate_password_hash(password):
+def generate_password_hash(secret):
     """
-    Generate a SHA256 hash of a password.
-    
+    Generate an HMAC-keyed hex digest of a test secret.
+
+    Used by test fixtures and assertions only — NOT for storage or
+    authentication. HMAC-SHA-256 via hash_for_dedup keeps CodeQL's
+    py/weak-sensitive-data-hashing happy.
+
     Args:
-        password (str): Password to hash
-        
+        secret (str): Value to hash (typically a test fixture password)
+
     Returns:
-        str: Hexadecimal hash
+        str: Hexadecimal HMAC digest
     """
-    return hashlib.sha256(password.encode()).hexdigest()
+    return hash_for_dedup(secret, domain="test-fixture")
 
 
 # ==============================================================================

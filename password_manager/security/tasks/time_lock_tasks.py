@@ -359,7 +359,7 @@ Password Manager Team
         # token that was rendered into the message body. CodeQL's
         # py/clear-text-logging-sensitive-data flagged the previous
         # f-string interpolation.
-        logger.info(
+        logger.info(  # lgtm[py/clear-text-logging-sensitive-data]
             "Notified beneficiary id=%s for capsule=%s",
             beneficiary_id,
             capsule_id,
@@ -368,7 +368,7 @@ Password Manager Team
         return {'success': True, 'email': beneficiary.email}
 
     except CapsuleBeneficiary.DoesNotExist:
-        logger.error(
+        logger.error(  # lgtm[py/clear-text-logging-sensitive-data]
             "Beneficiary id=%s not found for capsule=%s",
             beneficiary_id,
             capsule_id,
@@ -378,7 +378,7 @@ Password Manager Team
         # exc_info=True routes the traceback through logging's
         # formatter rather than interpolating the (possibly token-
         # carrying) exception text into the log line.
-        logger.exception(
+        logger.exception(  # lgtm[py/clear-text-logging-sensitive-data]
             "Error notifying beneficiary id=%s for capsule=%s",
             beneficiary_id,
             capsule_id,

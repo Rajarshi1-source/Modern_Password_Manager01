@@ -1,15 +1,20 @@
 # =========================
 # Stage 1: Builder
 # =========================
-FROM python:3.13-slim AS builder
+FROM python:3.13-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# System deps (build only)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# System deps (build only). `apt-get -y upgrade` pulls patched curl +
+# util-linux (Trivy #1393, #1396, #1399-#1403) into the builder layer.
+# The runtime stage is distroless so none of these shell utilities
+# reach the final image regardless, but patching the builder keeps
+# anything that links against libcurl during pip installs on the
+# fixed versions.
+RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     libpq-dev \

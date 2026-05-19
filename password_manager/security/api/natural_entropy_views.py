@@ -10,6 +10,8 @@ import hashlib
 import logging
 import time
 import uuid
+
+from security.utils.sensitive_hash import short_hash_id
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 
@@ -195,8 +197,8 @@ def generate_natural_password(request: Request) -> Response:
         else:
             combined_quality = 0.0
         
-        # Compute password hash prefix for certificate
-        password_hash = hashlib.sha256(password.encode()).hexdigest()[:16]
+        # Compute HMAC-keyed password hash prefix for certificate
+        password_hash = short_hash_id(password, domain="natural-entropy-cert", length=16)
         
         # Create signature
         signature_data = f"{password_hash}:{','.join(sorted(quality_scores.keys()))}:{timezone.now().isoformat()}"

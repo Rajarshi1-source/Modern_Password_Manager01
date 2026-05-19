@@ -27,6 +27,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any
 
+from security.utils.sensitive_hash import hash_for_dedup
+
 from django.utils import timezone
 from django.contrib.auth.models import User
 
@@ -527,7 +529,7 @@ def generate_genetic_password(request):
         import math
         entropy_bits = int(math.log2(len(charset)) * length)
         
-        password_hash = hashlib.sha256(generated_password.encode()).hexdigest()
+        password_hash = hash_for_dedup(generated_password, domain="genetic-views-cert")
         
         cert_data = {
             'password_hash_prefix': f"sha256:{password_hash[:16]}...",

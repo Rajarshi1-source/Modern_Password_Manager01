@@ -14,7 +14,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
 from datetime import timedelta
-import hashlib
+
+from security.utils.sensitive_hash import hash_for_dedup
+
+from .services.challenge_generator import ANSWER_HASH_DOMAIN
 
 from .models import (
     CognitiveProfile, CognitiveSession, CognitiveChallenge,
@@ -177,8 +180,8 @@ def submit_response(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Verify response
-    response_hash = hashlib.sha256(response_value.encode()).hexdigest()
+    # Verify response (HMAC keyed, matches ChallengeGenerator)
+    response_hash = hash_for_dedup(response_value, domain=ANSWER_HASH_DOMAIN)
     is_correct = response_hash == challenge.correct_answer_hash
     
     # Get timing data

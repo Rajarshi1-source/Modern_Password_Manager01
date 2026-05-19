@@ -47,7 +47,6 @@ import {
   getAccessToken as getInMemoryAccessToken,
   clearAccessToken,
 } from '../services/tokenStore';
-import { scrubUserForStorage } from '../utils/userStorage';
 
 // Opt-in feature flag for the HttpOnly-cookie refresh-token flow.
 // When true, the SPA:
@@ -82,51 +81,29 @@ export const useAuth = () => {
 
 const TOKEN_STORAGE_KEY = 'accessToken';
 const REFRESH_TOKEN_STORAGE_KEY = 'refreshToken';
-const USER_STORAGE_KEY = 'user';
+
+// User profile lives in React state only — never persisted to
+// localStorage. Resolves CodeQL alerts #1048/#1049/#1050 by
+// eliminating the storage flow CodeQL was tracking. Rehydration on
+// page load happens via GET /api/auth/me/ in initAuth(). The only
+// 'user' key references that remain are removeItem() cleanups for
+// users upgrading from pre-fix builds.
+const LEGACY_USER_KEY = 'user';
 
 const storage = {
   getAccessToken: () => localStorage.getItem(TOKEN_STORAGE_KEY),
   setAccessToken: (token) => localStorage.setItem(TOKEN_STORAGE_KEY, token),
   removeAccessToken: () => localStorage.removeItem(TOKEN_STORAGE_KEY),
-  
+
   getRefreshToken: () => localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY),
   setRefreshToken: (token) => localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, token),
   removeRefreshToken: () => localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY),
-  
-  // getUser intentionally returns null. Persisting the user object
-  // to localStorage was removed in response to CodeQL alert #1048;
-  // see utils/userStorage.js for the rationale. Any pre-fix value is
-  // cleaned up by the AuthProvider bootstrap. Callers that need
-  // user data should pull it from React state (via useAuth().user)
-  // or fetch it from the backend.
-  getUser: () => null,
-  setUser: (user) => {
-    // Validate input shape via the scrub helper but DO NOT persist
-    // to localStorage. See utils/userStorage.js for the CodeQL-#1048
-    // + PR #246 rationale. Audible warning on non-object input so
-    // a regression that starts passing the wrong shape is caught
-    // during development rather than silently no-op'ing (CodeRabbit
-    // nit on PR #245).
-    if (user !== undefined && user !== null) {
-      const scrubbed = scrubUserForStorage(user);
-      if (scrubbed === null) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          '[useAuth] storage.setUser received a non-object user; ignoring.',
-          { type: typeof user },
-        );
-      }
-    }
-    // Remove any value left behind by older builds so a stale PII
-    // payload doesn't sit in localStorage indefinitely.
-    localStorage.removeItem(USER_STORAGE_KEY);
-  },
-  removeUser: () => localStorage.removeItem(USER_STORAGE_KEY),
-  
+
   clearAll: () => {
     storage.removeAccessToken();
     storage.removeRefreshToken();
-    storage.removeUser();
+    // Defensive cleanup of any legacy user blob left by older builds.
+    localStorage.removeItem(LEGACY_USER_KEY);
   }
 };
 
@@ -409,11 +386,10 @@ export const AuthProvider = ({ children }) => {
     };
 
     const initAuth = async () => {
-      // Flush any legacy USER blob before doing anything else — the
-      // helper writes never run (see utils/userStorage.js) but older
-      // builds may have left one behind. Cookie- and legacy-flow
-      // paths agree on this cleanup.
-      localStorage.removeItem(USER_STORAGE_KEY);
+      // Flush any legacy user blob a pre-fix build may have left
+      // behind. The current code never writes it; this is purely a
+      // cleanup for upgrading users.
+      localStorage.removeItem(LEGACY_USER_KEY);
 
       // ─── Cookie path ──────────────────────────────────────────
       if (USE_COOKIE_AUTH) {
@@ -574,7 +550,7 @@ export const AuthProvider = ({ children }) => {
         }
       }
 
-      storage.setUser(userProfile);
+      // Profile is held in React state only — never persisted.
       setUser(userProfile);
       setIsAuthenticated(true);
 
@@ -661,9 +637,8 @@ export const AuthProvider = ({ children }) => {
    */
   const updateUser = useCallback((updates) => {
     const updatedUser = { ...user, ...updates };
-    if (!USE_COOKIE_AUTH) {
-      storage.setUser(updatedUser);
-    }
+    // Profile lives in React state only on both cookie and legacy
+    // flows. Never persist to localStorage.
     setUser(updatedUser);
   }, [user]);
 

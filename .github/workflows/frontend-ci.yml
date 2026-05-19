@@ -226,21 +226,43 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: [build]
-    
+
     permissions:
       contents: read
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      
+
       - name: Download build artifacts
         uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.7
         with:
           name: frontend-build
           path: frontend/dist
-      
+
       - name: Run Lighthouse CI
+        # STEP-level continue-on-error: makes the step's non-zero exit
+        # report as success in the PR check rollup. Job-level
+        # continue-on-error only affects whether DEPENDENT jobs run —
+        # it does NOT clear the red ✗ on the PR check tile (verified
+        # empirically on commit 208ba00 which still failed the PR).
+        # Step-level is the correct knob for "this step is allowed to
+        # fail without blocking the merge gate."
+        #
+        # Why we tolerate failures here: Lighthouse-CI v10 +
+        # HeadlessChrome 148 on Ubuntu runners regularly crashes with
+        # `NO_FCP "The page did not paint any content"` even when the
+        # dist bundle renders fine. We tried every documented CI-
+        # stability flag (--headless=new, --disable-gpu,
+        # --disable-dev-shm-usage, --disable-features=VizDisplay
+        # Compositor, maxWaitForFcp: 30000) in commit f367244 —
+        # none helped. The action's own repo hasn't shipped an
+        # upgrade past Lighthouse 10 yet, so we can't just bump the
+        # SHA. Additionally every assertion in
+        # frontend/.lighthouserc.json is set to "warn" only, so even
+        # if Lighthouse DID complete a real perf regression wouldn't
+        # block. Remove this flag when the action ships Lighthouse 11+.
+        continue-on-error: true
         uses: treosh/lighthouse-ci-action@03becbfc543944dd6e7534f7ff768abb8a296826 # v10
         with:
           configPath: './frontend/.lighthouserc.json'

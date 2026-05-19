@@ -78,7 +78,7 @@ def vault_list(request):
     except Exception as e:
         logger.error(f"Vault creation failed: {e}")
         return Response(
-            {'error': str(e)},
+            {'error': 'invalid_request'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -98,8 +98,10 @@ def vault_detail(request, vault_id):
     try:
         result = service.cancel_vault(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError) as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
+        return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # =============================================================================
@@ -133,8 +135,8 @@ def vault_unlock(request, vault_id):
             return Response(result)
         else:
             return Response(result, status=status.HTTP_403_FORBIDDEN)
-    except ValueError as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except ValueError:
+        return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['POST'])
@@ -151,10 +153,12 @@ def vault_reveal(request, vault_id):
     service = VaultService()
     try:
         result = service.reveal_password(vault, request.user)
-    except ValueError as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-    except PermissionError as e:
-        return Response({'error': str(e)}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
+        logger.exception("Smart-contract reveal failed (ValueError)")
+        return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError:
+        logger.exception("Smart-contract reveal denied")
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
 
     if not result.get('unlocked'):
         return Response(result, status=status.HTTP_403_FORBIDDEN)
@@ -184,8 +188,10 @@ def vault_check_in(request, vault_id):
     try:
         result = service.check_in(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError) as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
+        return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # =============================================================================
@@ -202,8 +208,10 @@ def multi_sig_approve(request, vault_id):
     try:
         result = service.approve_multi_sig(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError) as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
+        return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])
@@ -235,8 +243,10 @@ def dao_vote(request, vault_id):
     try:
         result = service.cast_vote(vault, request.user, vote_serializer.validated_data['approve'])
         return Response(result)
-    except (ValueError, PermissionError) as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
+        return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])
@@ -266,8 +276,10 @@ def escrow_release(request, vault_id):
     try:
         result = service.release_escrow(vault, request.user)
         return Response(result)
-    except (ValueError, PermissionError) as e:
-        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    except PermissionError:
+        return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
+    except ValueError:
+        return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])

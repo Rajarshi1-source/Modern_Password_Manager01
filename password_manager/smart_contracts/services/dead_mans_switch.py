@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
 
+from security.utils.sensitive_hash import short_hash_id
 from smart_contracts.models.vault import SmartContractVault, VaultStatus, ConditionType
 from smart_contracts.models.escrow import InheritancePlan
 
@@ -119,7 +120,10 @@ class DeadMansSwitchService:
                 )
                 plan.beneficiary_notified = True
                 plan.save(update_fields=['beneficiary_notified'])
-                logger.info(f"Beneficiary notification sent to {plan.beneficiary_email}")
+                logger.info(
+                    "Beneficiary notification sent, beneficiary_hash=%s",
+                    short_hash_id(plan.beneficiary_email, domain="beneficiary-log"),
+                )
             except Exception as e:
                 logger.error(f"Failed to send beneficiary notification: {e}")
 
@@ -152,4 +156,8 @@ class DeadMansSwitchService:
             except Exception as e:
                 logger.error(f"Failed to send release notification: {e}")
 
-        logger.info(f"Dead man's switch triggered: vault {vault.id} released to {plan.beneficiary_email}")
+        logger.info(
+            "Dead man's switch triggered: vault %s released to beneficiary_hash=%s",
+            vault.id,
+            short_hash_id(plan.beneficiary_email, domain="beneficiary-log") if plan.beneficiary_email else "none",
+        )

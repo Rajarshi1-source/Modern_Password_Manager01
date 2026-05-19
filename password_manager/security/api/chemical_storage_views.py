@@ -23,6 +23,8 @@ import logging
 import hashlib
 from datetime import datetime, timedelta
 
+from security.utils.sensitive_hash import short_hash_id
+
 from django.utils import timezone
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.http import require_http_methods
@@ -147,7 +149,7 @@ def encode_password_to_dna(request):
                     user=request.user,
                     service_name=service_name,
                     sequence_hash=hashlib.sha256(dna_sequence.sequence.encode()).hexdigest(),
-                    password_hash_prefix=hashlib.sha256(password.encode()).hexdigest()[:16],
+                    password_hash_prefix=short_hash_id(password, domain="chemical-cert", length=16),
                     sequence_length_bp=len(dna_sequence.sequence),
                     gc_content=dna_sequence.gc_content,
                     has_error_correction=use_ecc,
