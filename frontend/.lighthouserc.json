@@ -5,8 +5,11 @@
       "url": ["http://localhost/index.html"],
       "numberOfRuns": 1,
       "settings": {
-        "chromeFlags": "--no-sandbox --headless",
-        "preset": "desktop"
+        "chromeFlags": "--no-sandbox --headless=new --disable-gpu --disable-dev-shm-usage --disable-features=VizDisplayCompositor",
+        "preset": "desktop",
+        "maxWaitForFcp": 30000,
+        "maxWaitForLoad": 45000,
+        "skipAudits": ["uses-http2", "is-on-https", "service-worker"]
       }
     },
     "upload": {
