@@ -33,9 +33,11 @@ def ingest(request):
     try:
         result = services.ingest(request.user, serializer.validated_data)
     except RuntimeError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        logger.exception("Handled RuntimeError in view")
+        return Response({"error": 'internal_error'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Handled ValueError in view")
+        return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
     except Exception:
         logger.exception("ambient_auth.ingest failed")
         return Response(
@@ -79,9 +81,11 @@ def promote_context(request):
             serializer.validated_data["label"],
         )
     except LookupError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        logger.exception("Handled LookupError in view")
+        return Response({"error": 'not_found'}, status=status.HTTP_404_NOT_FOUND)
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Handled ValueError in view")
+        return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
     return Response(AmbientContextSerializer(ctx).data, status=status.HTTP_201_CREATED)
 
 
@@ -92,7 +96,8 @@ def context_detail(request, context_id):
         try:
             services.delete_context(request.user, context_id)
         except LookupError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+            logger.exception("Handled LookupError in view")
+            return Response({"error": 'not_found'}, status=status.HTTP_404_NOT_FOUND)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     serializer = RenameContextSerializer(data=request.data)
@@ -104,9 +109,11 @@ def context_detail(request, context_id):
             serializer.validated_data["label"],
         )
     except LookupError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        logger.exception("Handled LookupError in view")
+        return Response({"error": 'not_found'}, status=status.HTTP_404_NOT_FOUND)
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Handled ValueError in view")
+        return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
     return Response(AmbientContextSerializer(ctx).data)
 
 
@@ -155,7 +162,8 @@ def signal_config(request):
                 enabled_on_surfaces=patch.get("enabled_on_surfaces"),
             )
         except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response(services.get_signal_configs(request.user))
 

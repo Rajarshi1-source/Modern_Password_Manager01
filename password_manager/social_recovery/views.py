@@ -1,6 +1,8 @@
 """DRF views for social_recovery."""
 from __future__ import annotations
 
+import logging
+
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -31,6 +33,8 @@ from .services.recovery_completion_service import cancel_request
 
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 def _client_ip(request):
@@ -75,7 +79,8 @@ class CircleListCreateView(APIView):
                 cooldown_hours=data.get("cooldown_hours", 24),
             )
         except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
             CircleSerializer(circle).data, status=status.HTTP_201_CREATED
@@ -114,7 +119,8 @@ class AcceptInvitationView(APIView):
                 signature=data["signature"],
             )
         except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
             {
                 "voucher_id": str(voucher.voucher_id),
@@ -146,7 +152,8 @@ class InitiateRecoveryView(APIView):
                 geo=data.get("geo", {}),
             )
         except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
             RequestSerializer(recovery_request).data, status=status.HTTP_201_CREATED
         )
@@ -185,7 +192,8 @@ class AttestRequestView(APIView):
                 user_agent=request.META.get("HTTP_USER_AGENT", ""),
             )
         except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
             {
                 "attestation_id": str(attestation.attestation_id),
@@ -209,7 +217,8 @@ class CompleteRequestView(APIView):
                 decrypted_shares=serializer.validated_data["decrypted_shares"],
             )
         except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"secret_hex": secret_hex, "status": recovery_request.status})
 
 
@@ -228,7 +237,8 @@ class CancelRequestView(APIView):
                 slash_denies=bool(request.data.get("slash_approvers", False)),
             )
         except ValueError as exc:
-            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"status": recovery_request.status})
 
 

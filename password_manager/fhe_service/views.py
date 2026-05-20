@@ -142,7 +142,7 @@ def encrypt_data(request):
         )
         
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -231,7 +231,7 @@ def strength_check(request):
         logger.error(f"Strength check error: {e}")
         
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -333,7 +333,7 @@ def batch_strength_check(request):
         logger.error(f"Batch strength check error: {e}")
         
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -401,7 +401,7 @@ def encrypted_search(request):
         logger.error(f"Encrypted search error: {e}")
         
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -457,7 +457,7 @@ def generate_keys(request):
         logger.error(f"Key generation error: {e}")
         
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -489,7 +489,7 @@ def get_keys(request):
         logger.error(f"Get keys error: {e}")
         
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -513,11 +513,11 @@ def fhe_status(request):
         
     except Exception as e:
         logger.error(f"FHE status error: {e}")
-        
+
         return Response({
             'success': False,
-            'error': str(e)
-        })
+            'error': 'internal_error'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -560,7 +560,7 @@ def fhe_metrics(request):
         logger.error(f"FHE metrics error: {e}")
         
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

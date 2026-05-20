@@ -79,8 +79,9 @@ def initiate_session(request):
             user_agent=ua,
         )
     except pairing_service.PairingError as exc:
+        logger.exception("Handled PairingError in view")
         return Response(
-            {'success': False, 'error': exc.code, 'message': str(exc)},
+            {'success': False, 'error': exc.code, 'message': 'internal_error'},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -121,8 +122,9 @@ def claim_session(request):
             user_agent=ua,
         )
     except pairing_service.PairingError as exc:
+        logger.exception("Handled PairingError in view")
         return Response(
-            {'success': False, 'error': exc.code, 'message': str(exc)},
+            {'success': False, 'error': exc.code, 'message': 'internal_error'},
             status=exc.http_status,
         )
 
@@ -162,8 +164,9 @@ def confirm_session(request, session_id: uuid.UUID):
             user_agent=ua,
         )
     except pairing_service.PairingError as exc:
+        logger.exception("Handled PairingError in view")
         return Response(
-            {'success': False, 'error': exc.code, 'message': str(exc)},
+            {'success': False, 'error': exc.code, 'message': 'internal_error'},
             status=exc.http_status,
         )
 
@@ -228,8 +231,9 @@ def share_payload(request, session_id: uuid.UUID):
             user_agent=ua,
         )
     except pairing_service.PairingError as exc:
+        logger.exception("Handled PairingError in view")
         return Response(
-            {'success': False, 'error': exc.code, 'message': str(exc)},
+            {'success': False, 'error': exc.code, 'message': 'internal_error'},
             status=exc.http_status,
         )
     return Response({'success': True})
@@ -251,8 +255,9 @@ def fetch_delivered_payload(request, session_id: uuid.UUID):
             user_agent=ua,
         )
     except pairing_service.PairingError as exc:
+        logger.exception("Handled PairingError in view")
         return Response(
-            {'success': False, 'error': exc.code, 'message': str(exc)},
+            {'success': False, 'error': exc.code, 'message': 'internal_error'},
             status=exc.http_status,
         )
     return Response({'success': True, **data})
@@ -276,8 +281,9 @@ def enroll_device(request, session_id: uuid.UUID):
             user_agent=ua,
         )
     except pairing_service.PairingError as exc:
+        logger.exception("Handled PairingError in view")
         return Response(
-            {'success': False, 'error': exc.code, 'message': str(exc)},
+            {'success': False, 'error': exc.code, 'message': 'internal_error'},
             status=exc.http_status,
         )
     return Response({'success': True, **token_info})

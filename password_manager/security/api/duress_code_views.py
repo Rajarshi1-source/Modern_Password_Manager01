@@ -81,8 +81,8 @@ def duress_config(request):
             logger.error(f"Failed to update duress config: {e}")
             return Response({
                 'success': False,
-                'error': str(e)
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'error': 'internal_error'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # =============================================================================
@@ -159,9 +159,10 @@ def duress_codes_list(request):
             }, status=status.HTTP_201_CREATED)
             
         except ValueError as e:
+            logger.exception("Handled ValueError in view")
             return Response({
                 'success': False,
-                'error': str(e)
+                'error': 'invalid_request'
             }, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(f"Failed to create duress code: {e}")
@@ -230,9 +231,10 @@ def duress_code_detail(request, code_id):
                 }
             })
         except ValueError as e:
+            logger.exception("Handled ValueError in view")
             return Response({
                 'success': False,
-                'error': str(e)
+                'error': 'invalid_request'
             }, status=status.HTTP_400_BAD_REQUEST)
     
     elif request.method == 'DELETE':
@@ -407,8 +409,8 @@ def trusted_authorities_list(request):
             logger.error(f"Failed to add authority: {e}")
             return Response({
                 'success': False,
-                'error': str(e)
-            }, status=status.HTTP_400_BAD_REQUEST)
+                'error': 'internal_error'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
@@ -657,5 +659,5 @@ def test_duress_activation(request):
         logger.error(f"Test activation failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

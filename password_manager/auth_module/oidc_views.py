@@ -208,7 +208,7 @@ def oidc_authorize(request):
         logger.error(f"OIDC authorize error: {e}")
         return Response({
             'success': False,
-            'message': str(e),
+            'message': 'internal_error',
             'code': 'oidc_error',
         }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -438,16 +438,18 @@ def oidc_validate_token(request):
         })
         
     except OIDCValidationError as e:
+        logger.exception("Handled OIDCValidationError in view")
         return Response({
             'success': False,
             'valid': False,
-            'message': str(e),
+            'message': 'internal_error',
             'code': 'validation_failed',
         }, status=status.HTTP_401_UNAUTHORIZED)
     except OIDCError as e:
+        logger.exception("Handled OIDCError in view")
         return Response({
             'success': False,
-            'message': str(e),
+            'message': 'internal_error',
             'code': 'oidc_error',
         }, status=status.HTTP_400_BAD_REQUEST)
 

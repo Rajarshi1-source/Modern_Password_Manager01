@@ -153,18 +153,21 @@ def create_share(request):
         )
 
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'invalid_request'},
             status=status.HTTP_400_BAD_REQUEST,
         )
     except PermissionError as e:
+        logger.exception("Handled PermissionError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'forbidden'},
             status=status.HTTP_403_FORBIDDEN,
         )
     except RuntimeError as e:
+        logger.exception("Handled RuntimeError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_403_FORBIDDEN,
         )
     except Exception as e:
@@ -265,13 +268,15 @@ def revoke_share(request, share_id):
         })
 
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'invalid_request'},
             status=status.HTTP_400_BAD_REQUEST,
         )
     except PermissionError as e:
+        logger.exception("Handled PermissionError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'forbidden'},
             status=status.HTTP_403_FORBIDDEN,
         )
     except Exception as e:
@@ -326,13 +331,15 @@ def use_autofill(request, share_id):
         })
 
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'invalid_request'},
             status=status.HTTP_400_BAD_REQUEST,
         )
     except PermissionError as e:
+        logger.exception("Handled PermissionError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'forbidden'},
             status=status.HTTP_403_FORBIDDEN,
         )
     except Exception as e:
@@ -385,9 +392,19 @@ def share_logs(request, share_id):
             user=request.user,
         )
 
-        # Paginate
-        page_size = int(request.query_params.get('page_size', 50))
-        page = int(request.query_params.get('page', 1))
+        # Paginate. Parse pagination args inside their own try so malformed
+        # page/page_size query params return 400 (client error) instead of
+        # falling through to the outer `except ValueError` which historically
+        # returned 404 — that misclassified bad input as a missing resource.
+        try:
+            page_size = int(request.query_params.get('page_size', 50))
+            page = int(request.query_params.get('page', 1))
+        except (TypeError, ValueError):
+            logger.exception("Handled invalid pagination params in share_logs")
+            return Response(
+                {'error': 'invalid_request'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         offset = (page - 1) * page_size
 
         total = logs.count()
@@ -403,13 +420,15 @@ def share_logs(request, share_id):
         })
 
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'invalid_request'},
             status=status.HTTP_404_NOT_FOUND,
         )
     except PermissionError as e:
+        logger.exception("Handled PermissionError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'forbidden'},
             status=status.HTTP_403_FORBIDDEN,
         )
 
@@ -470,8 +489,9 @@ def create_group(request):
         )
 
     except PermissionError as e:
+        logger.exception("Handled PermissionError in view")
         return Response(
-            {'error': str(e)},
+            {'error': 'forbidden'},
             status=status.HTTP_403_FORBIDDEN,
         )
 
@@ -653,5 +673,5 @@ def sharing_status(request):
         logger.error(f"[FHE Sharing] Status error: {e}")
         return Response({
             'success': False,
-            'error': str(e),
+            'error': 'internal_error',
         })

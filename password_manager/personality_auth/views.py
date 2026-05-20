@@ -121,10 +121,12 @@ class InferView(APIView):
                 message_limit=serializer.validated_data.get('message_limit', 120),
             )
         except PermissionError as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_403_FORBIDDEN)
+            logger.exception("Handled PermissionError in view")
+            return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
         except LLMSchemaError as exc:
+            logger.exception("Handled LLMSchemaError in view")
             return Response(
-                {'error': 'inference_model_failed', 'detail': str(exc)},
+                {'error': 'inference_model_failed', 'detail': 'internal_error'},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         return Response(
@@ -175,15 +177,18 @@ class StartChallengeView(APIView):
                 question_count=data.get('question_count', 3),
             )
         except PermissionError as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_403_FORBIDDEN)
+            logger.exception("Handled PermissionError in view")
+            return Response({'error': 'forbidden'}, status=status.HTTP_403_FORBIDDEN)
         except RateLimited as exc:
+            logger.exception("Handled RateLimited in view")
             return Response(
-                {'error': 'rate_limited', 'detail': str(exc)},
+                {'error': 'rate_limited', 'detail': 'internal_error'},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
             )
         except RuntimeError as exc:
+            logger.exception("Handled RuntimeError in view")
             return Response(
-                {'error': 'no_questions', 'detail': str(exc)},
+                {'error': 'no_questions', 'detail': 'internal_error'},
                 status=status.HTTP_409_CONFLICT,
             )
 
@@ -234,7 +239,8 @@ class SubmitAnswerView(APIView):
                 answer_metadata=data.get('answer_metadata'),
             )
         except ValueError as exc:
-            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            logger.exception("Handled ValueError in view")
+            return Response({'error': 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response(
             {

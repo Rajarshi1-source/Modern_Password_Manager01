@@ -63,7 +63,8 @@ def register_did(request):
             make_primary=serializer.validated_data.get("make_primary", True),
         )
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Handled ValueError in view")
+        return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
     return Response(UserDIDSerializer(obj).data, status=status.HTTP_201_CREATED)
 
 
@@ -81,7 +82,8 @@ def resolve(request, did):
     try:
         doc = resolve_did(did)
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Handled ValueError in view")
+        return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
     return Response(doc)
 
 
@@ -108,7 +110,8 @@ def issue(request):
             validity_days=serializer.validated_data.get("validity_days", 365),
         )
     except ValueError as exc:
-        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Handled ValueError in view")
+        return Response({"error": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Best-effort fanout to storage backends.
     try:

@@ -1,3 +1,5 @@
+import logging
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -7,6 +9,9 @@ from vault.models import BreachAlert
 from security.services.breach_monitor import HIBPService
 from security.tasks import scan_user_vault
 from password_manager.throttling import PasswordCheckRateThrottle, SecurityOperationThrottle
+
+logger = logging.getLogger(__name__)
+
 
 class DarkWebViewSet(viewsets.ViewSet):
     """API endpoints for dark web monitoring and breach alerts"""
@@ -31,8 +36,9 @@ class DarkWebViewSet(viewsets.ViewSet):
             response = HIBPService.check_password_prefix(hash_prefix)
             return Response(response)
         except Exception as e:
+            logger.exception("Handled Exception in view")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -122,9 +128,17 @@ class DarkWebViewSet(viewsets.ViewSet):
                     'result': task.result
                 }
             elif task.state == 'FAILURE':
+                # Celery's `task.result` for FAILURE is the exception
+                # repr/traceback. Log it server-side and return only the
+                # sanitized constant to the client (CodeQL #1133-#1303
+                # family, completing the codemod's coverage manually).
+                logger.error(
+                    "Vault scan task failed",
+                    extra={'task_id': task_id, 'task_result': str(task.result)},
+                )
                 response = {
                     'status': 'failed',
-                    'error': str(task.result)
+                    'error': 'internal_error',
                 }
             else:
                 response = {
@@ -135,7 +149,8 @@ class DarkWebViewSet(viewsets.ViewSet):
             return Response(response)
             
         except Exception as e:
+            logger.exception("Handled Exception in view")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

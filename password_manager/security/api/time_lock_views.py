@@ -256,7 +256,7 @@ class UnlockCapsuleView(APIView):
         except Exception as e:
             logger.error(f"Unlock failed: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

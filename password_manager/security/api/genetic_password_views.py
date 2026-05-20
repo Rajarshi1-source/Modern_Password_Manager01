@@ -157,9 +157,10 @@ def initiate_connection(request):
         })
         
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'invalid_request'
         }, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"OAuth initiation failed: {e}")
@@ -278,7 +279,7 @@ def oauth_callback(request):
         logger.error(f"OAuth callback failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -332,9 +333,10 @@ def upload_dna_file(request):
         try:
             snp_data, format_detected = provider.parse_uploaded_file(file_content, filename)
         except ValueError as e:
+            logger.exception("Handled ValueError in view")
             return Response({
                 'success': False,
-                'error': str(e)
+                'error': 'invalid_request'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         if len(snp_data) < 100:
@@ -590,7 +592,7 @@ def generate_genetic_password(request):
         logger.error(f"Genetic password generation failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -650,9 +652,10 @@ def list_certificates(request):
             'offset': offset,
         })
     except Exception as e:
+        logger.exception("Handled Exception in view")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -697,7 +700,7 @@ def get_evolution_status(request):
         logger.error(f"Evolution status check failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -762,7 +765,7 @@ def trigger_evolution(request):
         logger.error(f"Evolution trigger failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -806,9 +809,10 @@ def get_connection_status(request):
         return Response(response_data)
         
     except Exception as e:
+        logger.exception("Handled Exception in view")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -845,7 +849,7 @@ def disconnect_dna(request):
         logger.error(f"DNA disconnect failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -882,7 +886,8 @@ def update_preferences(request):
         })
         
     except Exception as e:
+        logger.exception("Handled Exception in view")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

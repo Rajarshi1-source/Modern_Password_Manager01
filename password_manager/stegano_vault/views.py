@@ -98,8 +98,9 @@ def stego_embed(request):
     try:
         stego_bytes = services.embed_blob_in_png(cover_bytes, blob_bytes)
     except services.PngLsbError as exc:
+        logger.exception("Handled PngLsbError in view")
         return Response(
-            {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            {"detail": 'internal_error'}, status=status.HTTP_400_BAD_REQUEST
         )
     services.log_event(
         user=request.user,
@@ -135,8 +136,9 @@ def stego_extract(request):
     try:
         blob = services.extract_blob_from_png(img_bytes)
     except services.PngLsbError as exc:
+        logger.exception("Handled PngLsbError in view")
         return Response(
-            {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+            {"detail": 'internal_error'}, status=status.HTTP_400_BAD_REQUEST
         )
     services.log_event(
         user=request.user,
@@ -214,7 +216,8 @@ def stego_store(request):
             user_agent=_user_agent(request),
         )
     except ValueError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.exception("Handled ValueError in view")
+        return Response({"detail": 'invalid_request'}, status=status.HTTP_400_BAD_REQUEST)
     return Response(StegoVaultSerializer(sv).data, status=status.HTTP_201_CREATED)
 
 

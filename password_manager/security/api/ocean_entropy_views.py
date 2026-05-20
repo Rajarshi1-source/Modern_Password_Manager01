@@ -95,17 +95,18 @@ class OceanEntropyStatusView(APIView):
                 },
             })
             
-        except ImportError as e:
+        except ImportError:
+            logger.exception("Ocean entropy import failed")
             return Response({
                 'status': 'unavailable',
-                'error': 'Ocean entropy service not installed',
-                'details': str(e),
+                'error': 'internal_error',
+                'message': 'Ocean entropy service not installed',
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.exception("Ocean entropy status error")
             return Response({
                 'status': 'error',
-                'error': str(e),
+                'error': 'internal_error',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -169,7 +170,7 @@ class OceanBuoyListView(APIView):
         except Exception as e:
             logger.exception("Buoy list error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -228,7 +229,7 @@ class OceanReadingsView(APIView):
         except Exception as e:
             logger.exception("Ocean readings error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -292,7 +293,7 @@ class OceanEntropyGenerateView(APIView):
         except Exception as e:
             logger.exception("Ocean entropy generation error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
                 'message': 'Failed to generate ocean entropy',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -335,7 +336,7 @@ class OceanPoolStatusView(APIView):
         except Exception as e:
             logger.exception("Ocean pool status error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -487,14 +488,15 @@ class HybridPasswordGenerateView(APIView):
 
             
         except InsufficientEntropySources as e:
+            logger.exception("Handled InsufficientEntropySources in view")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
                 'message': 'At least 2 entropy sources required',
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.exception("Hybrid password generation error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
                 'message': 'Failed to generate hybrid password',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
@@ -581,7 +583,7 @@ class LiveWaveDataView(APIView):
         except Exception as e:
             logger.exception("Live wave data error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -630,7 +632,7 @@ class UserOceanStatsView(APIView):
         except Exception as e:
             logger.exception("User ocean stats error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -664,6 +666,6 @@ class HybridCertificateView(APIView):
         except Exception as e:
             logger.exception("Certificate retrieval error")
             return Response({
-                'error': str(e),
+                'error': 'internal_error',
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

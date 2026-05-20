@@ -86,7 +86,7 @@ def timeline_view(request):
     except Exception as e:
         logger.error(f"Timeline error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -124,7 +124,7 @@ def strength_evolution_view(request, vault_item_id=None):
     except Exception as e:
         logger.error(f"Strength evolution error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -167,7 +167,7 @@ def security_events_view(request):
     except Exception as e:
         logger.error(f"Security events error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -217,7 +217,7 @@ def what_if_run_view(request):
     except Exception as e:
         logger.error(f"What-if error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -243,7 +243,7 @@ def what_if_history_view(request):
     except Exception as e:
         logger.error(f"What-if history error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -277,7 +277,7 @@ def time_machine_view(request, timestamp):
     except Exception as e:
         logger.error(f"Time machine error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -307,7 +307,7 @@ def achievements_view(request):
     except Exception as e:
         logger.error(f"Achievements error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -360,7 +360,7 @@ def security_score_view(request):
     except Exception as e:
         logger.error(f"Security score error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
@@ -383,6 +383,6 @@ def dashboard_view(request):
     except Exception as e:
         logger.error(f"Dashboard error: {e}", exc_info=True)
         return Response(
-            {'error': str(e)},
+            {'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
