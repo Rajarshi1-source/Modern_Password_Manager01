@@ -7,11 +7,13 @@ password checking.
 """
 
 from rest_framework.throttling import ScopedRateThrottle, AnonRateThrottle, UserRateThrottle
-from rest_framework.throttling import BaseThrottle
+from rest_framework.throttling import BaseThrottle, SimpleRateThrottle
 from django.core.cache import cache
 from django.conf import settings
 import time
 import logging
+import uuid
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +167,246 @@ class DeadDropCollectThrottle(ScopedRateThrottle):
             'scope': self.scope,
             'ident': ident
         }
+
+
+def _coerce_uuid_str(value) -> Optional[str]:
+    """Return a canonical UUID string if ``value`` parses as one, else ``None``.
+
+    Treating ``"not-a-uuid"`` as a valid resource key was the original
+    bug here: anything truthy was accepted, so the per-resource bucket
+    silently absorbed malformed inputs and the documented IP-only
+    fallback never triggered. Validating against ``uuid.UUID`` makes
+    the fallback reachable.
+    """
+    if value is None:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _vouch_resource_ident(request, view):
+    """Return the most specific resource identifier available on the
+    request, or ``None`` if none can be derived.
+
+    Priority order matches the public social-recovery surface:
+
+      1. ``voucher_id`` from the JSON body (``AttestRequestView``).
+      2. ``request_id`` from the URL (``CompleteRequestView``).
+      3. ``circle_id`` from the JSON body (``InitiateRecoveryView``).
+
+    Returning ``None`` lets the caller bypass the per-resource bucket
+    while still applying the per-IP cap — the right behaviour when the
+    payload isn't parseable (malformed JSON), hasn't been parsed yet,
+    or supplies an identifier the server cannot validate.
+
+    A request that *carries* ``voucher_id`` (the key is present) but
+    whose value fails to parse as a UUID drops through to ``None``
+    rather than falling back to ``request_id`` — falling back would let
+    an attacker pin per-resource quota to whatever string they want
+    while still hitting the attest endpoint. ``request_id`` / ``circle_id``
+    are only consulted when their respective key was not supplied.
+    """
+    try:
+        data = getattr(request, 'data', None) or {}
+    except Exception:
+        # ``request.data`` is lazy; if the parser blows up we don't want
+        # to take the throttle down with it. Fall through to IP-only.
+        data = {}
+    kwargs = getattr(view, 'kwargs', None) or {}
+
+    # 1) voucher_id (attestation)
+    if 'voucher_id' in data:
+        voucher_id = _coerce_uuid_str(data.get('voucher_id'))
+        # Present but malformed -> IP-only bucket. We intentionally do NOT
+        # fall through to request_id here: an attacker supplying garbage
+        # voucher_ids on the attest endpoint should not be able to opt
+        # themselves into a different (potentially fresher) resource
+        # bucket by doing so.
+        if voucher_id is None:
+            return None
+        return f"voucher:{voucher_id}"
+
+    # 2) request_id (URL kwarg on complete endpoint)
+    request_id = _coerce_uuid_str(kwargs.get('request_id'))
+    if request_id:
+        return f"request:{request_id}"
+
+    # 3) circle_id (body or URL kwarg on initiate endpoint)
+    circle_id = _coerce_uuid_str(
+        data.get('circle_id') if 'circle_id' in data else kwargs.get('circle_id')
+    )
+    if circle_id:
+        return f"circle:{circle_id}"
+
+    return None
+
+
+class _DynamicRateThrottleMixin:
+    """Make ``get_rate`` re-read ``api_settings.DEFAULT_THROTTLE_RATES``
+    on every instantiation rather than caching the value at class-import
+    time.
+
+    DRF's ``SimpleRateThrottle`` binds the rate dict to a class attribute
+    (``THROTTLE_RATES = api_settings.DEFAULT_THROTTLE_RATES``) the moment
+    the module is imported. ``override_settings(REST_FRAMEWORK=...)`` in
+    tests reloads ``api_settings`` itself but the *class attribute* still
+    points at the original dict — so the rate frozen at import wins.
+    Reading fresh here lets ``override_settings`` actually take effect.
+    """
+
+    def get_rate(self):
+        from rest_framework.settings import api_settings
+        try:
+            return api_settings.DEFAULT_THROTTLE_RATES[self.scope]
+        except KeyError as exc:  # pragma: no cover - configuration bug
+            msg = (
+                f"No default throttle rate set for '{self.scope}' scope; "
+                f"add it to REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']."
+            )
+            raise RuntimeError(msg) from exc
+
+
+class _VouchPerResourceBucket(_DynamicRateThrottleMixin, SimpleRateThrottle):
+    """Per-(voucher|request|circle) token bucket."""
+
+    scope = 'vouch_attestation'
+
+    def get_cache_key(self, request, view):
+        ident = _vouch_resource_ident(request, view)
+        if ident is None:
+            # No identifiable resource -> skip the per-resource bucket;
+            # the per-IP bucket alone is responsible for this request.
+            return None
+        return self.cache_format % {'scope': self.scope, 'ident': ident}
+
+
+class _VouchPerIPBucket(_DynamicRateThrottleMixin, SimpleRateThrottle):
+    """Per-IP token bucket. Caps fan-out from a single host even when
+    the attacker rotates ``voucher_id`` values."""
+
+    scope = 'vouch_attestation_ip'
+
+    def get_cache_key(self, request, view):
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': self.get_ident(request),
+        }
+
+
+class VouchAttestationThrottle(BaseThrottle):
+    """Compose per-resource + per-IP buckets for the public social-recovery
+    endpoints.
+
+    Two independent buckets:
+
+    * ``vouch_attestation``     — keyed on voucher/request/circle id.
+      Stops a single compromised voucher key from flipping a quorum.
+    * ``vouch_attestation_ip``  — keyed on client IP. Stops a single
+      host from spreading the attack across many voucher ids.
+
+    The request is allowed only if BOTH buckets accept it. A rejection
+    in either bucket emits an ``attestation_rate_limited`` audit row so
+    operators see when this fires.
+
+    ``BaseThrottle`` (rather than ``ScopedRateThrottle``) is used because
+    DRF supports exactly one scope per ``ScopedRateThrottle`` instance;
+    we need two distinct rates checked simultaneously.
+    """
+
+    def __init__(self):
+        self._resource = _VouchPerResourceBucket()
+        self._ip = _VouchPerIPBucket()
+        self._last_wait = None
+
+    def allow_request(self, request, view):
+        ok_resource = self._resource.allow_request(request, view)
+        ok_ip = self._ip.allow_request(request, view)
+        if ok_resource and ok_ip:
+            return True
+
+        # The composite has rejected the request, but
+        # ``SimpleRateThrottle.throttle_success`` already wrote a
+        # timestamp into the cache of whichever child returned True.
+        # Without a rollback that "ghost hit" persists, so an attacker
+        # who is already throttled on one dimension can keep consuming
+        # the OTHER dimension's budget — eventually causing unrelated
+        # legitimate traffic on that shared dimension to be 429'd.
+        # Pop the recorded hit so each bucket only counts requests the
+        # composite actually allowed.
+        if ok_resource and not ok_ip:
+            self._rollback_hit(self._resource)
+        elif ok_ip and not ok_resource:
+            self._rollback_hit(self._ip)
+        # If both children rejected, neither wrote — nothing to undo.
+
+        # Compute the longer of the two recommended back-offs so ``wait``
+        # returns something useful in the ``Retry-After`` header.
+        waits = []
+        for bucket, ok in ((self._resource, ok_resource), (self._ip, ok_ip)):
+            if not ok:
+                w = bucket.wait()
+                if w is not None:
+                    waits.append(w)
+        self._last_wait = max(waits) if waits else None
+
+        self._emit_audit_event(request, view, ok_resource, ok_ip)
+        return False
+
+    def wait(self):
+        return self._last_wait
+
+    @staticmethod
+    def _rollback_hit(bucket):
+        """Undo the timestamp ``SimpleRateThrottle.throttle_success``
+        wrote into the cache for ``bucket``.
+
+        Concurrency note: another worker could write to the same key
+        between the original ``cache.set`` and this rollback. We accept
+        that small race because the alternative (leaving a ghost hit on
+        a denied request) is strictly worse — false 429s for unrelated
+        traffic on the same bucket. Best-effort by design.
+        """
+        try:
+            key = getattr(bucket, 'key', None)
+            history = getattr(bucket, 'history', None)
+            if not key or not history:
+                return
+            # ``throttle_success`` does ``history.insert(0, self.now)`` —
+            # the just-recorded hit is at index 0.
+            history.pop(0)
+            bucket.cache.set(key, history, bucket.duration)
+        except Exception:  # pragma: no cover - rollback is best-effort
+            logger.exception("failed to roll back composite throttle hit")
+
+    @staticmethod
+    def _emit_audit_event(request, view, ok_resource, ok_ip):
+        """Best-effort audit row. Never raise from a throttle path —
+        failing here would 500 the request instead of cleanly 429-ing."""
+        try:
+            from social_recovery.services.audit_service import record_event
+            ip = None
+            try:
+                ip = _VouchPerIPBucket().get_ident(request)
+            except Exception:
+                ip = None
+            record_event(
+                event_type='attestation_rate_limited',
+                ip_address=ip,
+                user_agent=request.META.get('HTTP_USER_AGENT', '')[:255],
+                event_data={
+                    'view': view.__class__.__name__,
+                    'path': request.path,
+                    'bucket_resource_ok': bool(ok_resource),
+                    'bucket_ip_ok': bool(ok_ip),
+                    'resource_ident': _vouch_resource_ident(request, view),
+                },
+            )
+        except Exception:  # pragma: no cover - audit is best-effort
+            logger.exception(
+                "failed to record attestation_rate_limited audit row",
+            )
 
 
 class MeshNodePingThrottle(ScopedRateThrottle):
