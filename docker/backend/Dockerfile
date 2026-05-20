@@ -151,7 +151,12 @@ WORKDIR /app
 COPY password_manager/requirements-core.txt .
 COPY password_manager/requirements-ml.txt .
 
-RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
+# setuptools is upper-bounded at <82 because neurokit2 0.2.13 and
+# torch 2.12.0+cpu both declare ``setuptools<82``. Letting pip upgrade
+# past that ceiling produces a noisy "dependency conflict" line in the
+# CI log (it does not currently break the build, but a future pip
+# version may promote it to a hard failure).
+RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" && \
     pip install --prefer-binary --retries 5 -r requirements-core.txt
 
 RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
@@ -250,7 +255,7 @@ COPY --from=deps-builder /opt/venv /opt/venv
 #   doesn't re-fire on the .pyc copy.
 RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing \) -prune -exec rm -rf {} + && \
     find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
-    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
+    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" && \
     find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf {} + && \
     # Fail the build if the strip left autobahn/wamp behind — without this
     # guard, a future autobahn upgrade that reorganises the package layout
