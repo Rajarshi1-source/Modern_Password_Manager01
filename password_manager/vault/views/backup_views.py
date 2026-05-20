@@ -36,6 +36,7 @@ from vault.services.cloud_storage import CloudStorageService
 import base64
 import json
 import logging
+from typing import Optional
 
 from password_manager.api_utils import error_response, success_response
 
@@ -58,6 +59,74 @@ _ENVELOPE_REQUIRED_KEYS = (
 # server does NOT perform any AES operation on backup payloads.
 _GCM_NONCE_LEN = 12
 _MIN_AESGCM_CT_LEN = 16  # GCM authentication tag length
+
+# Fields that, if present in a stored blob, indicate the client tried
+# to smuggle a key-encrypting-key. Used by the cloud-upload validator.
+_KEK_FIELD_NAMES = ('encryption_key', 'kek', 'wrapping_key', 'master_key')
+
+
+def _scan_for_kek_fields(node) -> Optional[str]:
+    """Walk a parsed-JSON structure looking for KEK-alias keys.
+
+    Returns the first offending key path found, or ``None`` if the
+    structure is clean. Used after a client direct-PUTs to object
+    storage to verify the blob doesn't carry a plaintext KEK.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _KEK_FIELD_NAMES and value not in (None, '', [], {}):
+                return key
+            nested = _scan_for_kek_fields(value)
+            if nested is not None:
+                return f"{key}.{nested}" if nested else key
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            nested = _scan_for_kek_fields(item)
+            if nested is not None:
+                return f"[{i}].{nested}" if nested else f"[{i}]"
+    return None
+
+
+def _validate_cloud_blob(blob_text: str) -> str:
+    """Validate a backup blob fetched from object storage post-upload.
+
+    Returns ``''`` on success, else a human-readable error message.
+
+    Accepts two shapes:
+
+    1. A v1 envelope (``{"version": "envelope-v1", ...}``) — validated
+       by :func:`_validate_envelope`. This is the zero-knowledge path.
+    2. A legacy plain-JSON backup (``{"items": [...], ...}``) — checked
+       for any KEK-alias field at any depth, since the historical
+       create_backup path would dump those into the blob unencrypted.
+
+    The blob MUST be JSON. Opaque/binary uploads are rejected because
+    the server cannot tell whether they carry KEK material; clients
+    using the valet-key path must base64-encode envelope fields and
+    JSON-serialise them, matching the v1 envelope contract.
+    """
+    if not blob_text:
+        return "uploaded blob is empty"
+    try:
+        parsed = json.loads(blob_text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return (
+            "uploaded blob is not valid JSON; the cloud-upload path "
+            "requires a JSON-encoded v1 envelope"
+        )
+    if not isinstance(parsed, dict):
+        return "uploaded blob must be a JSON object"
+    if parsed.get('version') == ENVELOPE_VERSION_V1:
+        # Same validator the synchronous create_backup path uses.
+        return _validate_envelope(parsed)
+    # Plain-JSON backup: scan recursively for smuggled KEK fields.
+    smuggled = _scan_for_kek_fields(parsed)
+    if smuggled:
+        return (
+            f"uploaded blob contains a KEK-alias field ({smuggled}); "
+            "the server must not store plaintext key material"
+        )
+    return ''
 
 
 # Counter for canary observability. Operators can poll
@@ -206,6 +275,15 @@ def _validate_envelope(envelope) -> str:
     """
     if not isinstance(envelope, dict):
         return "envelope must be a JSON object"
+    # Reject ANY field outside the strict allow-list. Without this an
+    # attacker (or a buggy client) could smuggle a plaintext KEK back in
+    # via e.g. ``{"envelope": {..., "encryption_key": "<secret>"}}`` and
+    # the server would store it verbatim through the "safe" path —
+    # silently breaking the zero-knowledge guarantee.
+    allowed_keys = {'version', *_ENVELOPE_REQUIRED_KEYS}
+    unexpected = sorted(set(envelope) - allowed_keys)
+    if unexpected:
+        return f"envelope contains unexpected fields: {', '.join(unexpected)}"
     version = envelope.get('version')
     if version != ENVELOPE_VERSION_V1:
         return f"unsupported envelope version: {version!r}"
@@ -403,13 +481,77 @@ class BackupViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='complete-cloud-upload')
     def complete_cloud_upload(self, request, pk=None):
-        """Call after a successful PUT of the backup blob to object storage."""
+        """Confirm a presigned-upload completed and validate the blob.
+
+        The valet-key path lets the client PUT the backup payload
+        directly to object storage, bypassing our request body. That
+        means the zero-knowledge checks the synchronous ``create_backup``
+        endpoint enforces would otherwise be skipped here — a legacy
+        client could PUT a plaintext backup (or smuggle ``encryption_key``
+        into the envelope dict) and the server would silently mark it
+        synced.
+
+        Before flipping ``cloud_sync_status`` to ``synced`` we therefore
+        fetch the uploaded blob, parse it, and run the same KEK-alias
+        / envelope-shape validation the in-band path uses. Validation
+        failure transitions the row to ``failed`` and returns 400 with
+        the specific error so the client can fix and re-upload.
+        """
+        rejection = _reject_plaintext_kek(request)
+        if rejection is not None:
+            return rejection
+
         backup = self.get_object()
         try:
             size = int(request.data.get('size', 0))
         except (TypeError, ValueError):
             size = 0
-        backup.size = size
+
+        if not backup.cloud_storage_path:
+            return error_response(
+                'Backup has no cloud_storage_path to validate against',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code='no_cloud_path',
+            )
+
+        cloud_service = CloudStorageService()
+        try:
+            blob = cloud_service.download_backup(backup.cloud_storage_path)
+        except Exception as exc:
+            logger.exception("cloud download failed during validation")
+            backup.cloud_sync_status = 'failed'
+            backup.save(update_fields=['cloud_sync_status'])
+            return error_response(
+                f'Failed to validate uploaded blob: {exc}',
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                code='cloud_download_failed',
+            )
+
+        if blob is None:
+            backup.cloud_sync_status = 'failed'
+            backup.save(update_fields=['cloud_sync_status'])
+            return error_response(
+                'Uploaded object not found in cloud storage',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code='cloud_object_missing',
+            )
+        blob_text = blob.decode('utf-8') if isinstance(blob, bytes) else blob
+
+        validation_error = _validate_cloud_blob(blob_text)
+        if validation_error:
+            logger.warning(
+                "complete_cloud_upload rejected blob for backup %s: %s",
+                backup.id, validation_error,
+            )
+            backup.cloud_sync_status = 'failed'
+            backup.save(update_fields=['cloud_sync_status'])
+            return error_response(
+                validation_error,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code='invalid_cloud_blob',
+            )
+
+        backup.size = size if size > 0 else len(blob_text)
         backup.cloud_sync_status = 'synced'
         backup.save(update_fields=['size', 'cloud_sync_status'])
         return Response({
@@ -603,9 +745,13 @@ class BackupViewSet(viewsets.ModelViewSet):
                     details={'envelope': parsed},
                 )
 
-            # Mode 2: plain-JSON backup.
+            # Mode 2: plain-JSON backup. An empty ``items`` list is a
+            # legitimate state — a user can back up an empty vault and
+            # later restore it without losing the "this backup exists"
+            # signal — so only reject when ``items`` is missing entirely
+            # or the wrong shape.
             items = parsed.get('items')
-            if not items:
+            if items is None or not isinstance(items, list):
                 return error_response(
                     'Invalid backup data',
                     status_code=status.HTTP_400_BAD_REQUEST,

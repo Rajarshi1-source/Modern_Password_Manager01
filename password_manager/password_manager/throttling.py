@@ -12,6 +12,8 @@ from django.core.cache import cache
 from django.conf import settings
 import time
 import logging
+import uuid
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +169,23 @@ class DeadDropCollectThrottle(ScopedRateThrottle):
         }
 
 
+def _coerce_uuid_str(value) -> Optional[str]:
+    """Return a canonical UUID string if ``value`` parses as one, else ``None``.
+
+    Treating ``"not-a-uuid"`` as a valid resource key was the original
+    bug here: anything truthy was accepted, so the per-resource bucket
+    silently absorbed malformed inputs and the documented IP-only
+    fallback never triggered. Validating against ``uuid.UUID`` makes
+    the fallback reachable.
+    """
+    if value is None:
+        return None
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _vouch_resource_ident(request, view):
     """Return the most specific resource identifier available on the
     request, or ``None`` if none can be derived.
@@ -179,7 +198,15 @@ def _vouch_resource_ident(request, view):
 
     Returning ``None`` lets the caller bypass the per-resource bucket
     while still applying the per-IP cap — the right behaviour when the
-    payload isn't parseable (malformed JSON) or hasn't been parsed yet.
+    payload isn't parseable (malformed JSON), hasn't been parsed yet,
+    or supplies an identifier the server cannot validate.
+
+    A request that *carries* ``voucher_id`` (the key is present) but
+    whose value fails to parse as a UUID drops through to ``None``
+    rather than falling back to ``request_id`` — falling back would let
+    an attacker pin per-resource quota to whatever string they want
+    while still hitting the attest endpoint. ``request_id`` / ``circle_id``
+    are only consulted when their respective key was not supplied.
     """
     try:
         data = getattr(request, 'data', None) or {}
@@ -187,16 +214,32 @@ def _vouch_resource_ident(request, view):
         # ``request.data`` is lazy; if the parser blows up we don't want
         # to take the throttle down with it. Fall through to IP-only.
         data = {}
-    voucher_id = data.get('voucher_id')
-    if voucher_id:
-        return f"voucher:{voucher_id}"
     kwargs = getattr(view, 'kwargs', None) or {}
-    request_id = kwargs.get('request_id')
+
+    # 1) voucher_id (attestation)
+    if 'voucher_id' in data:
+        voucher_id = _coerce_uuid_str(data.get('voucher_id'))
+        # Present but malformed -> IP-only bucket. We intentionally do NOT
+        # fall through to request_id here: an attacker supplying garbage
+        # voucher_ids on the attest endpoint should not be able to opt
+        # themselves into a different (potentially fresher) resource
+        # bucket by doing so.
+        if voucher_id is None:
+            return None
+        return f"voucher:{voucher_id}"
+
+    # 2) request_id (URL kwarg on complete endpoint)
+    request_id = _coerce_uuid_str(kwargs.get('request_id'))
     if request_id:
         return f"request:{request_id}"
-    circle_id = data.get('circle_id') or kwargs.get('circle_id')
+
+    # 3) circle_id (body or URL kwarg on initiate endpoint)
+    circle_id = _coerce_uuid_str(
+        data.get('circle_id') if 'circle_id' in data else kwargs.get('circle_id')
+    )
     if circle_id:
         return f"circle:{circle_id}"
+
     return None
 
 
@@ -283,6 +326,21 @@ class VouchAttestationThrottle(BaseThrottle):
         if ok_resource and ok_ip:
             return True
 
+        # The composite has rejected the request, but
+        # ``SimpleRateThrottle.throttle_success`` already wrote a
+        # timestamp into the cache of whichever child returned True.
+        # Without a rollback that "ghost hit" persists, so an attacker
+        # who is already throttled on one dimension can keep consuming
+        # the OTHER dimension's budget — eventually causing unrelated
+        # legitimate traffic on that shared dimension to be 429'd.
+        # Pop the recorded hit so each bucket only counts requests the
+        # composite actually allowed.
+        if ok_resource and not ok_ip:
+            self._rollback_hit(self._resource)
+        elif ok_ip and not ok_resource:
+            self._rollback_hit(self._ip)
+        # If both children rejected, neither wrote — nothing to undo.
+
         # Compute the longer of the two recommended back-offs so ``wait``
         # returns something useful in the ``Retry-After`` header.
         waits = []
@@ -298,6 +356,29 @@ class VouchAttestationThrottle(BaseThrottle):
 
     def wait(self):
         return self._last_wait
+
+    @staticmethod
+    def _rollback_hit(bucket):
+        """Undo the timestamp ``SimpleRateThrottle.throttle_success``
+        wrote into the cache for ``bucket``.
+
+        Concurrency note: another worker could write to the same key
+        between the original ``cache.set`` and this rollback. We accept
+        that small race because the alternative (leaving a ghost hit on
+        a denied request) is strictly worse — false 429s for unrelated
+        traffic on the same bucket. Best-effort by design.
+        """
+        try:
+            key = getattr(bucket, 'key', None)
+            history = getattr(bucket, 'history', None)
+            if not key or not history:
+                return
+            # ``throttle_success`` does ``history.insert(0, self.now)`` —
+            # the just-recorded hit is at index 0.
+            history.pop(0)
+            bucket.cache.set(key, history, bucket.duration)
+        except Exception:  # pragma: no cover - rollback is best-effort
+            logger.exception("failed to roll back composite throttle hit")
 
     @staticmethod
     def _emit_audit_event(request, view, ok_resource, ok_ip):

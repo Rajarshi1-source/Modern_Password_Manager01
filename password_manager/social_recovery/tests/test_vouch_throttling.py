@@ -230,16 +230,72 @@ class VouchAttestationThrottleTests(TestCase):
     # ------------------------------------------------------------------
     # Graceful failure modes
     # ------------------------------------------------------------------
+    def test_ip_rejection_does_not_consume_resource_bucket(self):
+        """When the IP bucket exhausts first, the composite throttle
+        rolls back the hit ``SimpleRateThrottle`` recorded in the
+        per-resource bucket. Without the rollback an attacker who is
+        already IP-throttled could still drain unrelated voucher
+        buckets, causing false 429s for legitimate traffic on those
+        voucher ids later.
+
+        We verify by introspecting the cache: after IP rejection on
+        request 3, the per-resource bucket must still hold exactly the
+        two hits from requests 1-2.
+        """
+        from password_manager import settings as pm_settings
+        voucher = "11111111-1111-1111-1111-111111111111"
+        tight = {
+            **pm_settings.REST_FRAMEWORK,
+            "DEFAULT_THROTTLE_RATES": {
+                **pm_settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"],
+                "vouch_attestation": "10/min",     # resource has headroom
+                "vouch_attestation_ip": "2/min",    # IP is the limiter
+            },
+        }
+        url = self._attest_url()
+        with override_settings(REST_FRAMEWORK=tight):
+            cache.clear()
+            for i in range(2):
+                r = self.client.post(
+                    url, self._attest_payload(voucher), format="json",
+                )
+                self.assertNotEqual(r.status_code, 429, f"setup {i + 1}")
+            # 3rd request: IP bucket is full -> composite rejects.
+            r = self.client.post(
+                url, self._attest_payload(voucher), format="json",
+            )
+            self.assertEqual(r.status_code, 429)
+
+            # Cache key format matches DRF's ``SimpleRateThrottle.cache_format``
+            # (``throttle_<scope>_<ident>``).
+            resource_key = f"throttle_vouch_attestation_voucher:{voucher}"
+            history = cache.get(resource_key, [])
+            self.assertEqual(
+                len(history), 2,
+                "per-resource bucket retained a ghost hit from the "
+                "IP-rejected request",
+            )
+
     def test_malformed_voucher_id_falls_back_to_ip_only_bucket(self):
-        """A malformed ``voucher_id`` should not crash the throttle —
-        the per-resource bucket is simply skipped and the per-IP cap
-        still applies. We verify with a tight IP rate."""
+        """A malformed ``voucher_id`` must not be treated as a per-
+        resource key — the bucket should be skipped entirely so the
+        per-IP cap is the only thing limiting the request.
+
+        We prove this with a per-resource rate of ``1/min`` AND a per-
+        IP rate of ``3/min``: if the malformed value were silently
+        used as a resource key, the second request would 429 (per-
+        resource bucket exhausted). With the bucket skipped, the IP
+        bucket alone applies and we get to ``3`` allowed requests
+        before throttling.
+        """
         from password_manager import settings as pm_settings
         tight = {
             **pm_settings.REST_FRAMEWORK,
             "DEFAULT_THROTTLE_RATES": {
                 **pm_settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"],
-                "vouch_attestation": "10000/hour",
+                # Tight per-resource rate: if the malformed voucher_id
+                # were ever used as the bucket key, request #2 would 429.
+                "vouch_attestation": "1/min",
                 "vouch_attestation_ip": "3/min",
             },
         }
@@ -249,6 +305,11 @@ class VouchAttestationThrottleTests(TestCase):
             cache.clear()
             for i in range(3):
                 r = self.client.post(url, bad_payload, format="json")
-                self.assertNotEqual(r.status_code, 429, f"attempt {i + 1}")
+                self.assertNotEqual(
+                    r.status_code, 429,
+                    f"attempt {i + 1} hit 429 — per-resource bucket is "
+                    "incorrectly absorbing malformed voucher_id values",
+                )
+            # 4th request: per-IP bucket exhausted.
             r = self.client.post(url, bad_payload, format="json")
             self.assertEqual(r.status_code, 429)

@@ -1334,7 +1334,18 @@ BACKUP_ENVELOPE_ENFORCEMENT = os.environ.get(
     'strict' if BACKUP_REQUIRE_CLIENT_ENVELOPE else 'off',
 ).lower()
 if BACKUP_ENVELOPE_ENFORCEMENT not in ('strict', 'header', 'off'):
-    BACKUP_ENVELOPE_ENFORCEMENT = 'strict'
+    # Silently coercing a typoed value to ``strict`` would turn an
+    # operator-typo into an unexpected hard cutover for any legacy
+    # client still in the field, defeating the point of the ``header`` /
+    # ``off`` canary modes. Fail fast at startup so misconfigurations
+    # are caught before traffic hits.
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "BACKUP_ENVELOPE_ENFORCEMENT must be one of: strict, header, off "
+        f"(got {BACKUP_ENVELOPE_ENFORCEMENT!r}). The legacy boolean "
+        "BACKUP_REQUIRE_CLIENT_ENVELOPE may also be used "
+        "(True -> strict, False -> off)."
+    )
 
 # Header a migrated client sets to opt into strict enforcement. The
 # value is treated as opaque (any non-empty string counts) so we don't

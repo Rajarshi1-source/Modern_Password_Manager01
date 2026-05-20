@@ -370,6 +370,63 @@ class BackupZeroKnowledgeContractTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json().get('code'), 'invalid_envelope')
 
+    def test_create_backup_rejects_envelope_with_smuggled_kek(self):
+        """A client cannot bypass the zero-knowledge contract by hiding
+        a ``encryption_key`` field INSIDE the envelope dict. The
+        validator's allow-list rejects any unexpected key, so the
+        ``{envelope: {..., encryption_key: ...}}`` smuggling path
+        returns 400 ``invalid_envelope`` and the row is never created."""
+        url = '/api/vault/backups/create_backup/'
+        envelope = self._envelope()
+        envelope['encryption_key'] = 'should-never-be-stored'
+        response = self.client.post(
+            url,
+            data={'name': 'sneaky', 'envelope': envelope},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        body = response.json()
+        self.assertEqual(body['code'], 'invalid_envelope')
+        self.assertIn('encryption_key', body['message'])
+        # And no backup row was created.
+        self.assertFalse(
+            VaultBackup.objects.filter(user=self.user, name='sneaky').exists()
+        )
+
+    def test_create_backup_rejects_envelope_with_arbitrary_extra_field(self):
+        """Same allow-list defence catches any other unknown key — not
+        just ``encryption_key`` — so a future smuggling vector that
+        invents a new field name is also closed off."""
+        url = '/api/vault/backups/create_backup/'
+        envelope = self._envelope()
+        envelope['junk_field'] = 'noise'
+        response = self.client.post(
+            url,
+            data={'name': 'junky', 'envelope': envelope},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json().get('code'), 'invalid_envelope')
+
+    def test_restore_allows_empty_plaintext_backup(self):
+        """An empty vault legitimately backs up as ``{"items": []}``.
+        ``restore`` must accept that (return 200, zero items written)
+        rather than treating empty-list as malformed."""
+        backup = VaultBackup.objects.create(
+            user=self.user,
+            name='empty',
+            encrypted_data=json.dumps({
+                'version': '1.0',
+                'created_at': '2026-01-01T00:00:00+00:00',
+                'item_count': 0,
+                'items': [],
+            }),
+        )
+        url = f'/api/vault/backups/{backup.id}/restore/'
+        response = self.client.post(url, data={}, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['restored_items'], 0)
+
     def test_create_backup_without_envelope_falls_through_to_plain_json(self):
         """When the client supplies no envelope, the server stores the
         list of (already field-level encrypted) items as plain JSON. This
@@ -482,6 +539,117 @@ class BackupZeroKnowledgeContractTests(TestCase):
         self.assertEqual(
             body['data']['encrypted_data'], envelope['encrypted_data'],
         )
+
+    # ------------------------------------------------------------------
+    # Cloud-upload validation (valet-key path)
+    # ------------------------------------------------------------------
+    def _cloud_backup_row(self):
+        """Pre-stage a backup row in the same shape ``start_cloud_upload``
+        would create, ready for ``complete_cloud_upload`` to validate."""
+        from vault.views.backup_views import CLOUD_ONLY_PAYLOAD_META
+        return VaultBackup.objects.create(
+            user=self.user,
+            name='cloud',
+            encrypted_data=json.dumps(CLOUD_ONLY_PAYLOAD_META),
+            size=0,
+            cloud_sync_status='pending',
+            cloud_storage_path=f'backups/{self.user.id}/test-blob',
+        )
+
+    def test_complete_cloud_upload_accepts_valid_envelope(self):
+        """A v1 envelope already PUT to object storage validates and
+        the row flips to ``synced``."""
+        from unittest.mock import patch
+        envelope = self._envelope()
+        blob = json.dumps(envelope).encode('utf-8')
+        backup = self._cloud_backup_row()
+        url = f'/api/vault/backups/{backup.id}/complete-cloud-upload/'
+        with patch(
+            'vault.views.backup_views.CloudStorageService.download_backup',
+            return_value=blob,
+        ):
+            response = self.client.post(
+                url, data={'size': len(blob)}, format='json',
+            )
+        self.assertEqual(response.status_code, 200)
+        backup.refresh_from_db()
+        self.assertEqual(backup.cloud_sync_status, 'synced')
+
+    def test_complete_cloud_upload_rejects_blob_with_kek_field(self):
+        """An attacker who PUT a JSON blob carrying ``encryption_key``
+        (anywhere in the structure) directly to object storage cannot
+        get the server to mark it synced. The row goes to ``failed``
+        and the endpoint returns 400 ``invalid_cloud_blob``."""
+        from unittest.mock import patch
+        blob = json.dumps({
+            'version': '1.0',
+            'items': [],
+            'encryption_key': 'leaked',
+        }).encode('utf-8')
+        backup = self._cloud_backup_row()
+        url = f'/api/vault/backups/{backup.id}/complete-cloud-upload/'
+        with patch(
+            'vault.views.backup_views.CloudStorageService.download_backup',
+            return_value=blob,
+        ):
+            response = self.client.post(url, data={}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['code'], 'invalid_cloud_blob')
+        backup.refresh_from_db()
+        self.assertEqual(backup.cloud_sync_status, 'failed')
+
+    def test_complete_cloud_upload_rejects_kek_nested_inside_items(self):
+        """The recursive KEK scanner catches a KEK alias even when it's
+        buried inside a nested item record."""
+        from unittest.mock import patch
+        blob = json.dumps({
+            'version': '1.0',
+            'items': [
+                {'item_id': 'x', 'kek': 'sneaky-deeply-nested'},
+            ],
+        }).encode('utf-8')
+        backup = self._cloud_backup_row()
+        url = f'/api/vault/backups/{backup.id}/complete-cloud-upload/'
+        with patch(
+            'vault.views.backup_views.CloudStorageService.download_backup',
+            return_value=blob,
+        ):
+            response = self.client.post(url, data={}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['code'], 'invalid_cloud_blob')
+
+    def test_complete_cloud_upload_rejects_envelope_with_extra_fields(self):
+        """An envelope-shaped blob with smuggled ``encryption_key`` is
+        rejected by ``_validate_envelope``'s allow-list, same as in the
+        synchronous create path."""
+        from unittest.mock import patch
+        envelope = self._envelope()
+        envelope['encryption_key'] = 'smuggled-via-cloud-path'
+        blob = json.dumps(envelope).encode('utf-8')
+        backup = self._cloud_backup_row()
+        url = f'/api/vault/backups/{backup.id}/complete-cloud-upload/'
+        with patch(
+            'vault.views.backup_views.CloudStorageService.download_backup',
+            return_value=blob,
+        ):
+            response = self.client.post(url, data={}, format='json')
+        self.assertEqual(response.status_code, 400)
+        backup.refresh_from_db()
+        self.assertEqual(backup.cloud_sync_status, 'failed')
+
+    def test_complete_cloud_upload_rejects_non_json_blob(self):
+        """An opaque/binary upload is refused — the cloud path is
+        contracted to be a JSON-encoded v1 envelope."""
+        from unittest.mock import patch
+        backup = self._cloud_backup_row()
+        url = f'/api/vault/backups/{backup.id}/complete-cloud-upload/'
+        with patch(
+            'vault.views.backup_views.CloudStorageService.download_backup',
+            return_value=b'\x00\x01\x02 not json',
+        ):
+            response = self.client.post(url, data={}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['code'], 'invalid_cloud_blob')
 
 
 class UserSaltModelTests(TestCase):
