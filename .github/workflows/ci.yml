@@ -489,12 +489,23 @@ jobs:
           version: 'v1.29.0'
       
       - name: Configure kubectl
+        id: configure_kubectl
         env:
           KUBE_CONFIG_PRODUCTION: ${{ secrets.KUBE_CONFIG_PRODUCTION }}
         run: |
+          # When the production deploy secret isn't configured (e.g.
+          # forks, repos that haven't onboarded the GitOps target yet),
+          # exit cleanly and signal subsequent steps to skip via the
+          # `deploy_enabled` output. Same pattern used by codacy.yml's
+          # "Verify Codacy token is set" step. Treating "no secret" as a
+          # clean skip keeps the deploy job from blocking the workflow
+          # on every push to main while still surfacing the missing-
+          # configuration warning in the job log.
           if [ -z "${KUBE_CONFIG_PRODUCTION}" ]; then
-            echo "::error::Secret KUBE_CONFIG_PRODUCTION is not set. Cannot deploy."
-            exit 1
+            echo "::warning::Secret KUBE_CONFIG_PRODUCTION is not set — skipping production deploy."
+            echo "Set the secret in Settings > Secrets and variables > Actions > KUBE_CONFIG_PRODUCTION to enable."
+            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           printf '%s' "${KUBE_CONFIG_PRODUCTION}" | base64 -d > "${RUNNER_TEMP}/kubeconfig"
           chmod 600 "${RUNNER_TEMP}/kubeconfig"
@@ -505,8 +516,10 @@ jobs:
           fi
           # Persist KUBECONFIG for subsequent steps
           echo "KUBECONFIG=${RUNNER_TEMP}/kubeconfig" >> "$GITHUB_ENV"
+          echo "deploy_enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Create backup before deployment
+        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         run: |
           # Wait for at least one backend pod to be ready before backup
           kubectl wait pod \
@@ -514,17 +527,18 @@ jobs:
             -n password-manager \
             --for=condition=Ready \
             --timeout=120s
-          
+
           BACKEND_POD=$(kubectl get pod -n password-manager \
             -l app=password-manager,component=backend \
             -o jsonpath='{.items[0].metadata.name}')
-          
+
           kubectl exec -n password-manager "$BACKEND_POD" -- \
             python manage.py dumpdata \
             --natural-foreign --natural-primary \
             -o /app/backup_$(date +%Y%m%d_%H%M%S).json || echo "Backup failed, continuing"
-      
+
       - name: Run database migrations (one-shot Job)
+        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         env:
           GITHUB_SHA: ${{ github.sha }}
         run: |
@@ -536,7 +550,9 @@ jobs:
             -n password-manager --timeout=600s
 
       - name: Deploy to Kubernetes (Production)
+        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         run: |
+          set -euo pipefail
           # Apply latest manifests
           kubectl apply -f k8s/production/ -n password-manager
 
@@ -566,19 +582,21 @@ jobs:
           kubectl rollout status deployment/frontend -n password-manager --timeout=300s
       
       - name: Run smoke tests
+        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         run: |
           # Wait for services to be ready
           sleep 30
-          
+
           # Health checks
           curl -f https://yourapp.com/api/health/ || exit 1
           curl -f https://yourapp.com/health || exit 1
-          
+
           echo " Smoke tests passed!"
-      
+
       - name: Notify deployment success
-        # Skip if no webhook is configured (e.g., forks without secrets).
-        if: success() && env.SLACK_WEBHOOK_URL != ''
+        # Skip if no webhook is configured (e.g., forks without secrets) or
+        # if the deploy was skipped because KUBE_CONFIG_PRODUCTION is unset.
+        if: success() && env.SLACK_WEBHOOK_URL != '' && steps.configure_kubectl.outputs.deploy_enabled == 'true'
         uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -598,7 +616,14 @@ jobs:
             }
 
       - name: Notify deployment failure
-        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        # Fire on every failure case EXCEPT the intentional "no secret
+        # configured" skip — i.e. `deploy_enabled` is unset (early step
+        # failure such as malformed/base64-invalid KUBE_CONFIG_PRODUCTION
+        # or the missing-`server:` sanity check) should still notify,
+        # since the deploy was attempted and did not succeed.
+        # `!= 'false'` matches both 'true' AND '' (unset); only the
+        # literal 'false' value (set by the "no secret" branch) skips.
+        if: failure() && env.SLACK_WEBHOOK_URL != '' && steps.configure_kubectl.outputs.deploy_enabled != 'false'
         uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
