@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional
 
+from django.conf import settings
 from django.utils import timezone
 
 from ..models import (
@@ -62,13 +63,192 @@ _PII_PATTERNS = (
 _MAX_MESSAGE_CHARS = 400
 
 
+class _PresidioAdapter:
+    """Lazily-initialised Microsoft Presidio backend for PII scrubbing.
+
+    Presidio is an *optional* dependency. The adapter defers the import of
+    ``presidio_analyzer`` / ``presidio_anonymizer`` (and their spaCy NLP
+    backend) until the first call to ``scrub`` so:
+
+    * Deployments without the optional packages installed are unaffected.
+    * Test environments that disable the feature pay no import cost.
+    * A broken model file or missing spaCy weights is detected the first
+      time scrubbing is requested and reported as a single warning, after
+      which the adapter falls back to regex permanently.
+
+    The analyzer + anonymizer engines are cached on the instance, so the
+    spaCy model is loaded at most once per process even though the
+    adapter is consumed from a singleton (see ``_get_presidio_adapter``).
+    """
+
+    def __init__(self, language: str = 'en') -> None:
+        self.language = language
+        self._analyzer = None
+        self._anonymizer = None
+        self._initialised = False
+        self._available = False
+
+    def _ensure_initialised(self) -> None:
+        if self._initialised:
+            return
+        self._initialised = True
+        try:
+            from presidio_analyzer import AnalyzerEngine
+            from presidio_anonymizer import AnonymizerEngine
+        except Exception as exc:
+            logger.warning(
+                "presidio-analyzer/anonymizer not importable (%s); "
+                "personality PII scrub will use the regex backend",
+                exc,
+            )
+            return
+        try:
+            self._analyzer = AnalyzerEngine()
+            self._anonymizer = AnonymizerEngine()
+        except Exception as exc:
+            # Most commonly: the spaCy model (e.g. en_core_web_lg) is not
+            # installed. We treat this as a soft failure rather than
+            # propagating because the regex fallback still provides the
+            # high-signal cases.
+            logger.warning(
+                "presidio engines failed to initialise (%s); falling back "
+                "to regex-only PII scrub for personality inference",
+                exc,
+            )
+            self._analyzer = None
+            self._anonymizer = None
+            return
+        self._available = True
+        logger.info(
+            "presidio PII scrubber initialised (language=%s)",
+            self.language,
+        )
+
+    @property
+    def available(self) -> bool:
+        self._ensure_initialised()
+        return self._available
+
+    def scrub(self, text: str) -> str:
+        """Replace presidio-detected spans with ``<ENTITY_TYPE>`` tags.
+
+        The default Presidio anonymizer replaces each detected span with
+        a tag of the form ``<PERSON>``, ``<LOCATION>``, etc. We forward
+        that result through the regex pass downstream so high-entropy
+        tokens Presidio doesn't recognise still get caught.
+        """
+        if not self.available:
+            return text
+        try:
+            results = self._analyzer.analyze(text=text, language=self.language)
+        except Exception:
+            logger.exception(
+                "presidio analyze() failed; returning text unchanged "
+                "(regex pass will still apply)",
+            )
+            return text
+        if not results:
+            return text
+        try:
+            anonymised = self._anonymizer.anonymize(
+                text=text, analyzer_results=results,
+            )
+        except Exception:
+            logger.exception(
+                "presidio anonymize() failed; returning text unchanged",
+            )
+            return text
+        return getattr(anonymised, 'text', text)
+
+
+_presidio_adapter: Optional[_PresidioAdapter] = None
+
+
+def _get_presidio_adapter() -> Optional[_PresidioAdapter]:
+    """Return the process-singleton Presidio adapter, or ``None`` if the
+    feature flag is disabled.
+
+    Reading the flag at call time (rather than caching) means an
+    operator can flip ``PERSONALITY_AUTH_USE_PRESIDIO`` via
+    ``override_settings`` in tests or via a config reload at runtime
+    without restarting the process.
+    """
+    global _presidio_adapter
+    if not getattr(settings, 'PERSONALITY_AUTH_USE_PRESIDIO', False):
+        return None
+    if _presidio_adapter is None:
+        language = getattr(settings, 'PERSONALITY_AUTH_PRESIDIO_LANGUAGE', 'en')
+        _presidio_adapter = _PresidioAdapter(language=language)
+    return _presidio_adapter
+
+
+def _reset_presidio_adapter_for_tests() -> None:
+    """Clear the singleton so a test that flips the feature flag or
+    swaps in a fake adapter starts from a clean slate."""
+    global _presidio_adapter
+    _presidio_adapter = None
+
+
 def _scrub_pii(text: str) -> str:
-    """Apply the PII redaction patterns and clamp the result in size."""
+    """Redact PII from a chat message before forwarding to the LLM.
+
+    Two backends, applied in order so the regex pass acts as a safety
+    net for whatever the NLP pass misses:
+
+    1. **Presidio** (opt-in via ``PERSONALITY_AUTH_USE_PRESIDIO``).
+       Microsoft Presidio's analyzer + anonymizer driven by a spaCy
+       NER model. Detects ``PERSON``, ``LOCATION``, ``DATE_TIME``,
+       ``IBAN``, ``NRP``, ``US_DRIVER_LICENSE``, ``MEDICAL_LICENSE``,
+       ``CRYPTO``, and several other entity classes that the regex
+       pass below would never catch. Disabled by default because the
+       dependency stack (``presidio-analyzer``, ``presidio-anonymizer``,
+       and a spaCy model — recommended ``en_core_web_lg``, ~560 MB) is
+       heavy. If presidio is enabled but the import or model load
+       fails, the adapter records a one-time warning and this step is
+       skipped — the regex pass below still runs.
+
+    2. **Regex pass** (always-on). Matches the high-signal patterns in
+       ``_PII_PATTERNS``: email, phone, credit-card-ish digit runs,
+       SSN, IPv4, URLs, secret/token assignments, and long base64/hex
+       blobs. Runs unconditionally so high-entropy values that NER
+       tools tend to miss (random API keys, base64 secrets) are still
+       caught.
+
+    Finally the result is clamped to ``_MAX_MESSAGE_CHARS`` so a pasted
+    document doesn't dominate the prompt window.
+
+    **Residual limits** (acknowledged, defence-in-depth only):
+
+    * NER misses unusual names, code-switched text, and OOV entities.
+    * The regex pass only matches the patterns it knows about; free-
+      text identifiers (informal addresses, niche identifiers) that
+      neither backend recognises will still reach the LLM.
+    * The clamp loses trailing content — a multi-paragraph paste's
+      tail is dropped. This is intentional.
+
+    Treat the resulting prompt as semi-trusted, not as fully sanitised.
+    """
     if not isinstance(text, str) or not text:
         return ''
+
     out = text
+
+    adapter = _get_presidio_adapter()
+    if adapter is not None:
+        try:
+            scrubbed = adapter.scrub(out)
+            if isinstance(scrubbed, str):
+                out = scrubbed
+        except Exception:
+            # Defence-in-depth: never let the optional backend take the
+            # request down. The regex pass below still runs.
+            logger.exception(
+                "presidio scrub raised; continuing with regex-only output",
+            )
+
     for pattern, replacement in _PII_PATTERNS:
         out = pattern.sub(replacement, out)
+
     if len(out) > _MAX_MESSAGE_CHARS:
         out = out[:_MAX_MESSAGE_CHARS] + ' [...]'
     return out

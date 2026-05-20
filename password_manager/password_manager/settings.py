@@ -510,6 +510,29 @@ PERSONALITY_AUTH_MAX_MESSAGES_ANALYSED = int(
     os.environ.get('PERSONALITY_AUTH_MAX_MESSAGES_ANALYSED', '120')
 )
 
+# --------------------------------------------------------------------
+# Optional Presidio-based PII scrubbing for personality inference.
+#
+# When enabled, ``personality_auth.services.inference_service._scrub_pii``
+# runs Microsoft Presidio's analyzer + anonymizer over each chat message
+# before it is forwarded to the external LLM. Presidio adds NER-driven
+# detection of PERSON, LOCATION, DATE_TIME, IBAN, NRP, MEDICAL_LICENSE
+# and several other entity types that the original regex pass misses.
+#
+# Default is OFF because the optional dependencies are heavy
+# (``presidio-analyzer``, ``presidio-anonymizer`` plus a spaCy NLP model;
+# the recommended ``en_core_web_lg`` is ~560 MB). If the toggle is on
+# but either dependency fails to import, ``_scrub_pii`` logs a warning
+# and falls back to the regex pass — defence in depth without a hard
+# operational dependency.
+# --------------------------------------------------------------------
+PERSONALITY_AUTH_USE_PRESIDIO = (
+    os.environ.get('PERSONALITY_AUTH_USE_PRESIDIO', 'False').lower() == 'true'
+)
+PERSONALITY_AUTH_PRESIDIO_LANGUAGE = os.environ.get(
+    'PERSONALITY_AUTH_PRESIDIO_LANGUAGE', 'en',
+)
+
 # Additional throttling settings
 ANON_VAULT_RATE = '10/hour'  # Rate limit for anonymous vault access
 
