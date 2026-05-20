@@ -18,6 +18,7 @@ Date: October 2025
 import logging
 import traceback
 import sys
+from django.conf import settings
 from django.http import JsonResponse
 from django.utils import timezone
 from django.core.exceptions import (
@@ -26,7 +27,7 @@ from django.core.exceptions import (
     ObjectDoesNotExist
 )
 from django.db import DatabaseError
-from rest_framework.views import exception_handler as drf_exception_handler
+from rest_framework.views import exception_handler as drf_exception_handler, set_rollback
 from rest_framework import status
 from rest_framework.exceptions import (
     APIException,
@@ -199,45 +200,105 @@ class ErrorHandlerMiddleware:
 
 def custom_exception_handler(exc, context):
     """
-    Custom exception handler for Django REST Framework
+    Custom DRF exception handler that closes the CodeQL
+    `py/stack-trace-exposure` family of alerts (#1133-#1303) without
+    leaking exception detail to clients in production.
+
+    Design notes:
+    * The DRF default handler is called first and its status code is
+      preserved verbatim. We never convert 401 ↔ 403 or 400 ↔ 422 —
+      doing so previously broke `test_login_wrong_password_no_cookie`
+      in auth_module/tests/test_cookie_auth.py.
+    * DRF's `APIException` subclasses carry a curated, safe `.detail`
+      attribute (e.g. "Invalid token", or a `{"field": [...]}` dict
+      from a ValidationError). Those are returned to the client as-is.
+    * For non-DRF unhandled exceptions, the response body contains
+      only a constant `code` and a generic `error` message — never
+      `str(exc)`. The full exception detail still goes to `logger`
+      and to the ErrorLog table for operators.
+    * In DEBUG mode the full exception text is included under
+      `details` to keep local development ergonomic.
     """
-    
-    # Log the exception
+
+    # Log the exception (best-effort; never let logging break a request).
+    # `logger.exception` is called inside an except block, so it picks up
+    # the active exception via sys.exc_info() and emits the traceback;
+    # passing exc_info=True is redundant but explicit.
     request = context.get('request')
-    log_error(exc, request)
-    
-    # Call DRF's default exception handler first
+    try:
+        log_error(exc, request)
+    except Exception:  # pragma: no cover - defensive
+        logger.exception(
+            "custom_exception_handler: log_error failed", exc_info=True
+        )
+
+    # Call DRF's default exception handler first.
     response = drf_exception_handler(exc, context)
-    
-    # If DRF handled it, customize the response
+
+    debug_mode = bool(getattr(settings, 'DEBUG', False))
+
     if response is not None:
-        # Standardize the error response format
+        # DRF handled it — keep the status code DRF chose. Only the
+        # body is replaced with a standardized shape. `response.data`
+        # is the curated `exc.detail`, which is safe to surface.
+        safe_details = response.data if isinstance(response.data, dict) else {'detail': response.data}
         custom_response_data = {
             'success': False,
             'error': get_error_message(exc),
             'code': get_error_code(exc),
-            'details': response.data if isinstance(response.data, dict) else {'detail': response.data}
+            'details': safe_details,
         }
-        
         response.data = custom_response_data
         return response
-    
-    # Handle custom application errors
+
+    # Custom application errors carry their own safe message/code.
+    # Mark the request transaction for rollback before returning so a
+    # 4xx/5xx ApplicationError doesn't leave partial DB writes committed
+    # under ATOMIC_REQUESTS=True. DRF's default `exception_handler` does
+    # this internally via `set_rollback()` — we replicate it on every
+    # branch where we return a response ourselves instead of letting
+    # DRF do it.
     if isinstance(exc, ApplicationError):
+        set_rollback()
         return JsonResponse({
             'success': False,
             'error': exc.message,
             'code': exc.code,
-            'details': exc.details
+            'details': exc.details,
         }, status=exc.status_code)
-    
-    # If DRF didn't handle it, return None to let Django handle it
-    return None
+
+    # Anything else is an *unhandled* exception. Do NOT expose its
+    # repr/str to the client — that's exactly what CodeQL flags.
+    if debug_mode:
+        unhandled_details = {
+            'exception_type': type(exc).__name__,
+            'exception_message': str(exc),
+        }
+    else:
+        unhandled_details = {}
+
+    # Same rollback caveat as above: ATOMIC_REQUESTS=True would otherwise
+    # commit any partial writes from this request because we return a
+    # JsonResponse instead of letting the exception propagate.
+    set_rollback()
+    return JsonResponse({
+        'success': False,
+        'error': 'An unexpected error occurred',
+        'code': 'internal_error',
+        'details': unhandled_details,
+    }, status=500)
 
 
 def get_error_message(exc):
-    """Extract user-friendly error message from exception"""
-    
+    """Extract user-friendly error message from exception.
+
+    The return value is rendered into the response body, so it MUST NOT
+    contain stack traces, file paths, credentials, or raw `str(exc)`
+    output for non-DRF exceptions (CodeQL py/stack-trace-exposure family).
+    DRF's `APIException` subclasses carry curated `.detail` strings that
+    are safe to surface; everything else falls back to a constant.
+    """
+
     if isinstance(exc, ApplicationError):
         return exc.message
     elif isinstance(exc, ValidationError):
@@ -254,10 +315,12 @@ def get_error_message(exc):
         return 'Method not allowed'
     elif isinstance(exc, Throttled):
         return 'Too many requests'
-    elif hasattr(exc, 'detail'):
+    elif isinstance(exc, APIException) and hasattr(exc, 'detail'):
+        # DRF APIException subclasses are designed to be client-safe.
         return str(exc.detail)
     else:
-        return str(exc)
+        # Unknown / unhandled exception — never leak its str() form.
+        return 'An unexpected error occurred'
 
 
 def get_error_code(exc):
@@ -312,46 +375,100 @@ def log_error(exception, request=None):
             'user_agent': request.META.get('HTTP_USER_AGENT', 'Unknown'),
         })
     
-    # Log to appropriate logger based on severity
+    # Log to appropriate logger based on severity. We pass the exception
+    # via `exc_info=` so logging emits the full traceback through the
+    # standard formatter — the `extra=error_context` payload alone is
+    # NOT rendered by the project's default 'verbose'/'simple' formatters
+    # (see password_manager/settings.py LOGGING['formatters']), so an
+    # exc_info-less call would silently drop the traceback at stdout/stderr.
     if isinstance(exception, (ValidationError, ValidationErrorCustom)):
-        logger.warning(f"Validation error: {exception}", extra=error_context)
+        logger.warning("Validation error: %s", exception, extra=error_context, exc_info=exception)
     elif isinstance(exception, (UnauthorizedError, ForbiddenError, PermissionDenied)):
-        logger.warning(f"Authorization error: {exception}", extra=error_context)
+        logger.warning("Authorization error: %s", exception, extra=error_context, exc_info=exception)
     elif isinstance(exception, (ResourceNotFoundError, ObjectDoesNotExist, NotFound)):
-        logger.info(f"Not found error: {exception}", extra=error_context)
+        logger.info("Not found error: %s", exception, extra=error_context, exc_info=exception)
     elif isinstance(exception, DatabaseError):
-        logger.critical(f"Database error: {exception}", extra=error_context)
+        logger.critical("Database error: %s", exception, extra=error_context, exc_info=exception)
     else:
-        logger.error(f"Unhandled exception: {exception}", extra=error_context)
+        logger.error("Unhandled exception: %s", exception, extra=error_context, exc_info=exception)
     
-    # Store in database for tracking (optional)
+    # Store in database for tracking (best-effort). The ErrorLog model
+    # lives in shared.models — the field names below MUST match
+    # shared/models.py exactly. A previous version of this function used
+    # `error_type`/`error_message`/`stack_trace`/`request_path`/
+    # `request_method`/`severity` (which do not exist on the model) and
+    # raised IntegrityError on every request, which is why registering
+    # this handler in REST_FRAMEWORK had to be reverted. See the comment
+    # block in password_manager/password_manager/settings.py.
     try:
         from .models import ErrorLog
-        
+
+        user_obj = None
+        if (
+            request is not None
+            and hasattr(request, 'user')
+            and getattr(request.user, 'is_authenticated', False)
+        ):
+            user_obj = request.user
+
         ErrorLog.objects.create(
-            error_type=error_context['exception_type'],
-            error_message=error_context['exception_message'],
-            stack_trace=error_context['traceback'],
-            request_path=error_context.get('path', ''),
-            request_method=error_context.get('method', ''),
-            user_id=request.user.id if request and hasattr(request, 'user') and request.user.is_authenticated else None,
-            ip_address=error_context.get('ip_address', ''),
-            user_agent=error_context.get('user_agent', ''),
-            severity=get_error_severity(exception)
+            level=_severity_to_level(get_error_severity(exception)),
+            message=error_context['exception_message'],
+            exception_type=error_context['exception_type'],
+            traceback=error_context['traceback'],
+            path=error_context.get('path', '') or '',
+            method=error_context.get('method', '') or '',
+            user=user_obj,
+            user_agent=error_context.get('user_agent', '') or '',
+            ip_address=error_context.get('ip_address') or None,
         )
-    except Exception as e:
+    except Exception as exc_log:
         # Don't let error logging break the application
-        logger.error(f"Failed to log error to database: {e}")
+        logger.warning("Failed to log error to database: %s", exc_log)
+
+
+# Map the legacy severity strings used by `get_error_severity` onto the
+# ErrorLog.level choices ('DEBUG'/'INFO'/'WARNING'/'ERROR'/'CRITICAL').
+_SEVERITY_TO_LEVEL = {
+    'debug': 'DEBUG',
+    'info': 'INFO',
+    'warning': 'WARNING',
+    'error': 'ERROR',
+    'critical': 'CRITICAL',
+}
+
+
+def _severity_to_level(severity: str) -> str:
+    return _SEVERITY_TO_LEVEL.get((severity or 'error').lower(), 'ERROR')
 
 
 def get_error_severity(exception):
-    """Determine error severity level"""
-    
+    """Determine error severity level used by ErrorLog and the logger.
+
+    The DRF exception classes (`AuthenticationFailed`, `NotAuthenticated`,
+    `PermissionDenied`, `Throttled`, `NotFound`, `MethodNotAllowed`) are
+    classified explicitly so that routine 401/403/404/405/429 responses
+    don't get stored as `ERROR` in ErrorLog and skew operator dashboards.
+    """
+
     if isinstance(exception, (ValidationError, ValidationErrorCustom)):
         return 'warning'
-    elif isinstance(exception, (UnauthorizedError, ForbiddenError)):
+    elif isinstance(
+        exception,
+        (
+            UnauthorizedError,
+            ForbiddenError,
+            PermissionDenied,
+            AuthenticationFailed,
+            NotAuthenticated,
+            Throttled,
+            MethodNotAllowed,
+        ),
+    ):
+        # 401/403/405/429 — client-side problems, not service errors
         return 'warning'
-    elif isinstance(exception, (ResourceNotFoundError, ObjectDoesNotExist)):
+    elif isinstance(exception, (ResourceNotFoundError, ObjectDoesNotExist, NotFound)):
+        # 404 — informational, not an error
         return 'info'
     elif isinstance(exception, DatabaseError):
         return 'critical'

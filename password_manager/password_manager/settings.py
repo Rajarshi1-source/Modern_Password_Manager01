@@ -435,21 +435,23 @@ REST_FRAMEWORK = {
     'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.NamespaceVersioning',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
     'PAGE_SIZE': 100,
-    # NOTE: a centralised EXCEPTION_HANDLER was considered for the
-    # CodeQL py/stack-trace-exposure family (alerts #1270-#1303) but
-    # routed all DRF auth failures through a buggy handler in
-    # shared/error_handlers.py whose ErrorLog DB write uses the wrong
-    # field names and whose error-path was converting 401 responses
-    # into 403, breaking
-    # auth_module/tests/test_cookie_auth.py::test_login_wrong_password_no_cookie.
+    # Centralised DRF exception handler that closes the CodeQL
+    # py/stack-trace-exposure family (alerts #1133-#1303) by never
+    # surfacing str(exc) for unhandled exceptions. See the design notes
+    # in shared/error_handlers.py::custom_exception_handler.
     #
-    # The stack-trace-exposure alerts have already been fixed at the
-    # source by removing every `'error': str(e)` from
-    # email_masking/views.py and smart_contracts/api/views.py
-    # (per-site sanitised codes: 'internal_error' / 'invalid_request'
-    # / 'forbidden'). DRF's default exception handler is sufficient.
-    # Registering 'shared.error_handlers.custom_exception_handler'
-    # again should wait until that helper is fixed in a dedicated PR.
+    # The two bugs that previously forced reverting this registration
+    # have been fixed:
+    #   * ErrorLog DB writes now use the correct field names from
+    #     shared/models.py::ErrorLog (level/message/exception_type/
+    #     traceback/path/method/user/...) instead of the legacy
+    #     error_type/error_message/stack_trace/... names that raised
+    #     IntegrityError on every request.
+    #   * The handler now preserves DRF's chosen status code verbatim
+    #     (no 401 ↔ 403 conversion), so
+    #     auth_module/tests/test_cookie_auth.py::test_login_wrong_password_no_cookie
+    #     still passes.
+    'EXCEPTION_HANDLER': 'shared.error_handlers.custom_exception_handler',
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
