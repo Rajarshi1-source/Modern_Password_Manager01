@@ -82,7 +82,7 @@ def duress_config(request):
             return Response({
                 'success': False,
                 'error': 'internal_error'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # =============================================================================
@@ -410,7 +410,7 @@ def trusted_authorities_list(request):
             return Response({
                 'success': False,
                 'error': 'internal_error'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET', 'PUT', 'DELETE'])

@@ -427,5 +427,5 @@ def frontend_performance_report(request):
         return Response({
             'success': False,
             'error': 'internal_error'
-        }, status=400)
+        }, status=500)
 

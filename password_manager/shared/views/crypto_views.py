@@ -163,10 +163,14 @@ def test_encryption(request):
         return Response({
             'error': 'internal_error'
         }, status=status.HTTP_400_BAD_REQUEST)
-    except Exception as e:
-        logger.error(f"Encryption test failed: {e}")
+    except Exception:
+        # Codemod skipped this site because the leak was in an f-string,
+        # not `str(e)` standalone — fixed manually here as part of PR #257
+        # review. The full exception goes to the log; the client gets the
+        # sanitized constant only.
+        logger.exception("Encryption test failed")
         return Response({
-            'error': f'Test failed: {str(e)}'
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

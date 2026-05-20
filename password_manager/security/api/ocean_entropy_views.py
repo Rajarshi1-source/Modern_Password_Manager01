@@ -95,11 +95,12 @@ class OceanEntropyStatusView(APIView):
                 },
             })
             
-        except ImportError as e:
+        except ImportError:
+            logger.exception("Ocean entropy import failed")
             return Response({
                 'status': 'unavailable',
-                'error': 'Ocean entropy service not installed',
-                'details': str(e),
+                'error': 'internal_error',
+                'message': 'Ocean entropy service not installed',
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         except Exception as e:
             logger.exception("Ocean entropy status error")

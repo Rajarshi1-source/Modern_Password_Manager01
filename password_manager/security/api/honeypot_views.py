@@ -78,7 +78,7 @@ class HoneypotConfigView(APIView):
             logger.error(f"Config update failed: {e}")
             return Response(
                 {'error': 'internal_error'},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
 

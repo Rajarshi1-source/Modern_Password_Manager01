@@ -409,8 +409,12 @@ class _SanitizeTransformer(cst.CSTTransformer):
         - str(<exc_name>.args[0])  (we treat as leak)
         - f-strings containing {<exc_name>}  — left alone (False) for now
         Conservative: only match str(<bare name>) where the name matches
-        the active except binding (or is `e`/`exc`/`err` when binding
-        is None — covers anonymous reraises).
+        the active except binding OR one of the common conventional names
+        (`e`/`exc`/`err`/`error`). The fallback set is always considered
+        so the codemod still catches inconsistent naming within a single
+        handler (e.g. `except ValueError as exc:` whose body still uses
+        `str(e)` from a copy-pasted block) and anonymous reraises where
+        `node.name is None`.
         """
 
         if not isinstance(value, cst.Call):
@@ -554,7 +558,12 @@ def main(argv: List[str]) -> int:
             files_changed += 1
             total_replaced += report.replaced
             status = "would-change" if args.check else "rewrote"
-            print(f"{status}: {path.relative_to(Path.cwd())} ({report.replaced} site(s))")
+            try:
+                display_path = path.relative_to(Path.cwd())
+            except ValueError:
+                # path is outside Path.cwd() — print as-is rather than crash
+                display_path = path
+            print(f"{status}: {display_path} ({report.replaced} site(s))")
         if report.notes:
             for note in report.notes:
                 print(f"  note: {note}", file=sys.stderr)

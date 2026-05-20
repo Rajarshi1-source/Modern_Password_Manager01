@@ -513,11 +513,11 @@ def fhe_status(request):
         
     except Exception as e:
         logger.error(f"FHE status error: {e}")
-        
+
         return Response({
             'success': False,
             'error': 'internal_error'
-        })
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])

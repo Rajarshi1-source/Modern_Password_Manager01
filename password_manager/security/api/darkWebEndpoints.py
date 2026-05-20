@@ -128,9 +128,17 @@ class DarkWebViewSet(viewsets.ViewSet):
                     'result': task.result
                 }
             elif task.state == 'FAILURE':
+                # Celery's `task.result` for FAILURE is the exception
+                # repr/traceback. Log it server-side and return only the
+                # sanitized constant to the client (CodeQL #1133-#1303
+                # family, completing the codemod's coverage manually).
+                logger.error(
+                    "Vault scan task failed",
+                    extra={'task_id': task_id, 'task_result': str(task.result)},
+                )
                 response = {
                     'status': 'failed',
-                    'error': str(task.result)
+                    'error': 'internal_error',
                 }
             else:
                 response = {
