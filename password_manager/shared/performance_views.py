@@ -426,6 +426,6 @@ def frontend_performance_report(request):
         logger.error(f"Error processing frontend performance report: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=400)
 

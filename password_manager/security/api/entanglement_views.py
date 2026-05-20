@@ -74,8 +74,9 @@ class InitiatePairingView(APIView):
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
             
         except ValueError as e:
+            logger.exception("Handled ValueError in view")
             return Response(
-                {'error': str(e)},
+                {'error': 'invalid_request'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
@@ -115,8 +116,9 @@ class VerifyPairingView(APIView):
             return Response(result, status=status.HTTP_200_OK)
             
         except ValueError as e:
+            logger.exception("Handled ValueError in view")
             return Response(
-                {'error': str(e)},
+                {'error': 'invalid_request'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:

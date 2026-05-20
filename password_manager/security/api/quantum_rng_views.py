@@ -121,7 +121,7 @@ def generate_quantum_password(request):
         logger.error(f"Quantum password generation failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -182,7 +182,7 @@ def get_random_bytes(request):
         logger.error(f"Random bytes generation failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -223,7 +223,7 @@ def get_certificate(request, certificate_id):
         logger.error(f"Certificate retrieval failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -265,7 +265,7 @@ def list_certificates(request):
         logger.error(f"Certificate listing failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -325,5 +325,5 @@ def get_pool_status(request):
         logger.error(f"Pool status check failed: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

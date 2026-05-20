@@ -159,8 +159,9 @@ def test_encryption(request):
             }, status=status.HTTP_400_BAD_REQUEST)
         
     except (EncryptionError, DecryptionError) as e:
+        logger.exception("Handled EncryptionError/DecryptionError in view")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Encryption test failed: {e}")

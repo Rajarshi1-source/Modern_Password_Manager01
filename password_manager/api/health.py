@@ -75,7 +75,7 @@ def readiness_check(request):
         logger.error(f"Readiness check failed: {e}")
         return JsonResponse({
             'status': 'not_ready',
-            'error': str(e),
+            'error': 'internal_error',
             'timestamp': timezone.now().isoformat()
         }, status=503)
 

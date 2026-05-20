@@ -179,7 +179,7 @@ def encode_password_to_dna(request):
     except Exception as e:
         logger.error(f"DNA encoding failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -218,14 +218,15 @@ def decode_dna_to_password(request):
         })
         
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'invalid_request'},
             status=status.HTTP_400_BAD_REQUEST
         )
     except Exception as e:
         logger.error(f"DNA decoding failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -316,14 +317,15 @@ def create_time_lock(request):
         })
         
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'invalid_request'},
             status=status.HTTP_400_BAD_REQUEST
         )
     except Exception as e:
         logger.error(f"Time-lock creation failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -422,8 +424,9 @@ def unlock_capsule(request, capsule_id):
             status=status.HTTP_404_NOT_FOUND
         )
     except ValueError as e:
+        logger.exception("Handled ValueError in view")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'invalid_request'},
             status=status.HTTP_400_BAD_REQUEST
         )
 
@@ -517,7 +520,7 @@ def order_synthesis(request):
     except Exception as e:
         logger.error(f"Synthesis order failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -597,7 +600,7 @@ def request_sequencing(request):
     except Exception as e:
         logger.error(f"Sequencing request failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -624,7 +627,7 @@ def list_certificates(request):
     except Exception as e:
         logger.error(f"Certificate listing failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -684,7 +687,7 @@ def get_subscription(request):
     except Exception as e:
         logger.error(f"Subscription fetch failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -773,7 +776,7 @@ def store_password_chemically(request):
     except Exception as e:
         logger.error(f"Chemical storage workflow failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -797,6 +800,6 @@ def list_lab_providers(request):
     except Exception as e:
         logger.error(f"Provider listing failed: {e}")
         return Response(
-            {'success': False, 'error': str(e)},
+            {'success': False, 'error': 'internal_error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )

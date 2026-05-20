@@ -148,7 +148,7 @@ class GoogleLogin(SocialLoginView):
                 return Response({
                     'success': False,
                     'message': 'OAuth authentication failed',
-                    'error': str(e),
+                    'error': 'internal_error',
                     'fallback_available': True,
                     'fallback_method': 'authy',
                     'email': email
@@ -157,7 +157,7 @@ class GoogleLogin(SocialLoginView):
             return Response({
                 'success': False,
                 'message': 'OAuth authentication failed',
-                'error': str(e),
+                'error': 'internal_error',
                 'fallback_available': False
             }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -203,7 +203,7 @@ class GitHubLogin(SocialLoginView):
                 return Response({
                     'success': False,
                     'message': 'OAuth authentication failed',
-                    'error': str(e),
+                    'error': 'internal_error',
                     'fallback_available': True,
                     'fallback_method': 'authy',
                     'email': email
@@ -212,7 +212,7 @@ class GitHubLogin(SocialLoginView):
             return Response({
                 'success': False,
                 'message': 'OAuth authentication failed',
-                'error': str(e),
+                'error': 'internal_error',
                 'fallback_available': False
             }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -258,7 +258,7 @@ class AppleLogin(SocialLoginView):
                 return Response({
                     'success': False,
                     'message': 'OAuth authentication failed',
-                    'error': str(e),
+                    'error': 'internal_error',
                     'fallback_available': True,
                     'fallback_method': 'authy',
                     'email': email
@@ -267,7 +267,7 @@ class AppleLogin(SocialLoginView):
             return Response({
                 'success': False,
                 'message': 'OAuth authentication failed',
-                'error': str(e),
+                'error': 'internal_error',
                 'fallback_available': False
             }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -356,7 +356,7 @@ def oauth_fallback_authy(request):
         return Response({
             'success': False,
             'message': 'Failed to initiate Authy fallback',
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -421,6 +421,6 @@ def verify_authy_fallback(request):
         return Response({
             'success': False,
             'message': 'Verification failed',
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

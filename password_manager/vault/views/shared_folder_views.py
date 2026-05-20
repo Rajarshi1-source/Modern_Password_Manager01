@@ -78,7 +78,7 @@ def create_shared_folder(request):
     except Exception as e:
         logger.error(f"Error creating shared folder: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -149,7 +149,7 @@ def list_shared_folders(request):
     except Exception as e:
         logger.error(f"Error listing shared folders: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -252,7 +252,7 @@ def folder_detail(request, folder_id):
     except Exception as e:
         logger.error(f"Error in folder_detail: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -370,7 +370,7 @@ def invite_member(request, folder_id):
     except Exception as e:
         logger.error(f"Error inviting member: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -419,7 +419,7 @@ def accept_invitation(request, invitation_token):
     except Exception as e:
         logger.error(f"Error accepting invitation: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -459,7 +459,7 @@ def decline_invitation(request, invitation_token):
     except Exception as e:
         logger.error(f"Error declining invitation: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -496,7 +496,7 @@ def pending_invitations(request):
     except Exception as e:
         logger.error(f"Error getting pending invitations: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -559,7 +559,7 @@ def folder_members(request, folder_id):
     except Exception as e:
         logger.error(f"Error listing folder members: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

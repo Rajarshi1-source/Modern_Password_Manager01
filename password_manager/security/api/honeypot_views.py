@@ -77,7 +77,7 @@ class HoneypotConfigView(APIView):
         except Exception as e:
             logger.error(f"Config update failed: {e}")
             return Response(
-                {'error': str(e)},
+                {'error': 'internal_error'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -138,8 +138,9 @@ class HoneypotListCreateView(APIView):
             }, status=status.HTTP_201_CREATED)
             
         except ValueError as e:
+            logger.exception("Handled ValueError in view")
             return Response(
-                {'error': str(e)},
+                {'error': 'invalid_request'},
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:

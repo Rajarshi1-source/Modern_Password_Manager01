@@ -107,7 +107,7 @@ def get_detector_status(request):
         logger.exception(f"Error getting detector status: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -194,7 +194,7 @@ def generate_cosmic_password(request):
         logger.exception(f"Error generating cosmic password: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -252,7 +252,7 @@ def get_recent_events(request):
         logger.exception(f"Error getting cosmic events: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -302,7 +302,7 @@ def update_collection_settings(request):
         logger.exception(f"Error updating collection settings: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -359,5 +359,5 @@ def generate_entropy_batch(request):
         logger.exception(f"Error generating entropy batch: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

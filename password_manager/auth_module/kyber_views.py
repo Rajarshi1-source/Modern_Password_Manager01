@@ -249,7 +249,7 @@ async def generate_keypair_view(request):
         logger.error(f"Keypair generation error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -340,7 +340,7 @@ async def encrypt_view(request):
         logger.error(f"Encryption error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -436,7 +436,7 @@ async def decrypt_view(request):
         logger.error(f"Decryption error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -542,7 +542,7 @@ async def batch_encrypt_view(request):
         logger.error(f"Batch encryption error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -600,7 +600,7 @@ async def batch_keygen_view(request):
         logger.error(f"Batch keygen error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -660,7 +660,7 @@ def get_kyber_status(request):
         logger.error(f"Status error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -694,7 +694,7 @@ def get_kyber_metrics(request):
         logger.error(f"Metrics error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -720,7 +720,7 @@ def reset_kyber_metrics(request):
         logger.error(f"Metrics reset error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -786,7 +786,7 @@ def get_user_public_key(request):
         logger.error(f"Get public key error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -821,6 +821,6 @@ def invalidate_keypair(request):
         logger.error(f"Invalidate keypair error: {e}")
         return Response({
             'status': 'error',
-            'message': str(e)
+            'message': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

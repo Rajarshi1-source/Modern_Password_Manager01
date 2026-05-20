@@ -82,7 +82,7 @@ class StormListView(APIView):
         except Exception as e:
             logger.error(f"Failed to list storms: {e}")
             return Response(
-                {'error': 'Failed to fetch storm data', 'detail': str(e)},
+                {'error': 'Failed to fetch storm data', 'detail': 'internal_error'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
@@ -132,7 +132,7 @@ class StormStatusView(APIView):
         except Exception as e:
             logger.error(f"Failed to get storm status: {e}")
             return Response(
-                {'error': 'Failed to fetch storm status', 'detail': str(e)},
+                {'error': 'Failed to fetch storm status', 'detail': 'internal_error'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
@@ -175,7 +175,7 @@ class StormBuoysView(APIView):
         except Exception as e:
             logger.error(f"Failed to get storm buoys: {e}")
             return Response(
-                {'error': 'Failed to fetch storm buoy data', 'detail': str(e)},
+                {'error': 'Failed to fetch storm buoy data', 'detail': 'internal_error'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
@@ -263,7 +263,7 @@ class GenerateStormEntropyView(APIView):
         except Exception as e:
             logger.error(f"Failed to generate storm entropy: {e}")
             return Response(
-                {'error': 'Failed to generate storm entropy', 'detail': str(e)},
+                {'error': 'Failed to generate storm entropy', 'detail': 'internal_error'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )
 
@@ -298,6 +298,6 @@ class ScanStormsView(APIView):
         except Exception as e:
             logger.error(f"Failed to scan for storms: {e}")
             return Response(
-                {'error': 'Storm scan failed', 'detail': str(e)},
+                {'error': 'Storm scan failed', 'detail': 'internal_error'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE
             )

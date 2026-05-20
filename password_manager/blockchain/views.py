@@ -145,7 +145,7 @@ def verify_commitment(request, commitment_id):
     except Exception as e:
         logger.exception(f"Error verifying commitment {commitment_id}: {e}")
         return Response({
-            'error': str(e),
+            'error': 'internal_error',
             'verified': False
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -226,7 +226,7 @@ def anchor_status(request):
     except Exception as e:
         logger.exception(f"Error getting anchor status: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -295,7 +295,7 @@ def trigger_anchor(request):
         logger.exception(f"Error triggering anchor: {e}")
         return Response({
             'success': False,
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -385,5 +385,5 @@ def user_commitments(request):
     except Exception as e:
         logger.exception(f"Error getting user commitments: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -104,7 +104,7 @@ def update_member_role(request, folder_id, member_id):
     except Exception as e:
         logger.error(f"Error updating member role: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -167,7 +167,7 @@ def remove_member(request, folder_id, member_id):
     except Exception as e:
         logger.error(f"Error removing member: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -249,7 +249,7 @@ def add_item_to_folder(request, folder_id):
     except Exception as e:
         logger.error(f"Error adding item to folder: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -302,7 +302,7 @@ def folder_items(request, folder_id):
     except Exception as e:
         logger.error(f"Error listing folder items: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -396,7 +396,7 @@ def folder_item_detail(request, folder_id, item_id):
     except Exception as e:
         logger.error(f"Error in folder_item_detail: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -454,7 +454,7 @@ def folder_activity(request, folder_id):
     except Exception as e:
         logger.error(f"Error getting folder activity: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -508,7 +508,7 @@ def leave_folder(request, folder_id):
     except Exception as e:
         logger.error(f"Error leaving folder: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -598,6 +598,6 @@ def rotate_folder_key(request, folder_id):
     except Exception as e:
         logger.error(f"Error rotating folder key: {e}")
         return Response({
-            'error': str(e)
+            'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

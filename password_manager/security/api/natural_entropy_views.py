@@ -476,7 +476,7 @@ def get_lightning_activity(request: Request) -> Response:
     except Exception as e:
         logger.error(f"Lightning activity fetch failed: {e}")
         return Response({
-            'error': str(e),
+            'error': 'internal_error',
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
@@ -499,7 +499,7 @@ def get_seismic_activity(request: Request) -> Response:
     except Exception as e:
         logger.error(f"Seismic activity fetch failed: {e}")
         return Response({
-            'error': str(e),
+            'error': 'internal_error',
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
@@ -522,7 +522,7 @@ def get_solar_wind_status(request: Request) -> Response:
     except Exception as e:
         logger.error(f"Solar wind fetch failed: {e}")
         return Response({
-            'error': str(e),
+            'error': 'internal_error',
         }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
 
@@ -572,7 +572,7 @@ def user_entropy_preferences(request: Request) -> Response:
     except Exception as e:
         logger.exception("Failed to handle entropy preferences")
         return Response({
-            'error': str(e),
+            'error': 'internal_error',
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -599,5 +599,5 @@ def get_user_certificates(request: Request) -> Response:
     except Exception as e:
         logger.exception("Failed to fetch certificates")
         return Response({
-            'error': str(e),
+            'error': 'internal_error',
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

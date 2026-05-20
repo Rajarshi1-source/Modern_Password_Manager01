@@ -1135,7 +1135,8 @@ class AuthViewSet(viewsets.ViewSet):
             }, status=status.HTTP_200_OK)
         
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Handled Exception in view")
+            return Response({"error": 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'])
     def update_recovery_status(self, request):
@@ -1179,7 +1180,8 @@ class AuthViewSet(viewsets.ViewSet):
         except RecoveryKey.DoesNotExist:
             return Response({"error": "Recovery key not found"}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception("Handled Exception in view")
+            return Response({"error": 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'])
     def validate_recovery_key(self, request):
@@ -1378,6 +1380,7 @@ class AuthViewSet(viewsets.ViewSet):
             return Response({"error": "Account not set up properly for recovery"}, 
                           status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
+            logger.exception("Handled Exception in view")
             # Log unexpected errors
             if 'user' in locals():
                 RecoveryAttemptLog.log_attempt(
@@ -1386,7 +1389,7 @@ class AuthViewSet(viewsets.ViewSet):
                     result='failure',
                     request=request
                 )
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'])
     def verify_email_exists(self, request):
