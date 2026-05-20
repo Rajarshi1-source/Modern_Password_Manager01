@@ -221,8 +221,14 @@ def test_use_umbral_share_domain_mismatch(
         data={'domain': 'evil.com'},
         format='json',
     )
+    # The view used to echo the raw exception message ("Autofill denied:
+    # domain 'evil.com' not allowed") back to the client. PR #257 closed
+    # that CodeQL py/stack-trace-exposure path — the body now carries the
+    # sanitized `invalid_request` code and the descriptive message is in
+    # the server log via logger.exception. Assert on the new contract:
+    # status code + sanitized code constant.
     assert use_resp.status_code == 400
-    assert 'not allowed' in str(use_resp.data).lower()
+    assert use_resp.data == {'error': 'invalid_request'}
 
 
 def test_revoked_umbral_share_blocks_use(
@@ -254,8 +260,11 @@ def test_revoked_umbral_share_blocks_use(
         data={'domain': 'example.com'},
         format='json',
     )
+    # Same contract change as test_use_umbral_share_domain_mismatch: the
+    # service still raises ValueError("This share has been revoked"), but
+    # the view no longer echoes that into the response body. See PR #257.
     assert use_resp.status_code == 400
-    assert 'revoked' in str(use_resp.data).lower()
+    assert use_resp.data == {'error': 'invalid_request'}
 
 
 def test_backcompat_simulated_share_still_works(
