@@ -23,44 +23,42 @@ KSV0125
 # We do not use MiniZip; Python's stdlib `zipfile` does not link
 # against zlib's MiniZip API. zlib is used only for HTTP compression
 # and gzip-encoded responses. Re-evaluate after Debian 12.13.
-CVE-2023-45853 exp:2026-08-20
+CVE-2023-45853 exp:2026-09-01
 
 # libsqlite3-0 — integer overflow in sqlite3KeyInfoFromExprList
 # Exploitation requires arbitrary SQL execution against the SQLite
 # engine; production uses PostgreSQL. SQLite is only present because
 # Python's stdlib bundles it. Not reachable from user input.
-CVE-2025-7458 exp:2026-08-20
+CVE-2025-7458 exp:2026-08-15
 
 # libssh2-1 — integer overflow in userauth_password
 # We do not initiate outbound SSH connections from the API container.
 # libssh2 is installed only because libcurl depends on it; libcurl is
 # itself unreachable from user-controlled URL strings (the healthcheck
 # uses urllib.request, not libcurl).
-CVE-2026-7598 exp:2026-08-20
+CVE-2026-7598 exp:2026-07-15
 
 # ncurses-bin — stack overflow in infocmp/analyze_string
 # The infocmp utility is a developer tool that is not invoked by the
 # running application. Reachable only by a shell user inside the
 # container — but the runtime runs as nonroot 1000:1000 with no
-# interactive shell access.
-CVE-2025-69720 exp:2026-08-20
-
-# ncurses (segmentation fault via _nc_wrap_entry) — multiple medium
-# alerts (Trivy #1839/#1840/#1842). Same threat model as above.
-CVE-2025-69719 exp:2026-08-20
+# interactive shell access. This entry also covers the medium-severity
+# Trivy alerts #1839/#1840/#1842 ("ncurses: segmentation fault via
+# _nc_wrap_entry()") which surface the same underlying CVE.
+CVE-2025-69720 exp:2026-07-20
 
 # libldap-2.5-0 — null pointer dereference in ber_memalloc_x
 # We do not run an LDAP client. libldap is pulled in transitively by
 # libkrb5; the dereference is reachable only from LDAP request paths
 # we do not execute.
-CVE-2023-2953 exp:2026-08-20
+CVE-2023-2953 exp:2026-07-05
 
 # libgcrypt20 — heap overflow / DoS via crafted ECDH ciphertext
 # Reachable only if an attacker can supply ECDH ciphertext to
 # gcry_pk_decrypt. Our code uses ``cryptography`` (which uses OpenSSL,
 # not libgcrypt) for all asymmetric crypto. libgcrypt is present via
 # GnuPG/dependencies only.
-CVE-2026-41989 exp:2026-08-20
+CVE-2026-41989 exp:2026-08-01
 
 # libcurl4 — cookie leak via custom Host header on connection reuse
 # The runtime image does NOT ship the curl binary (HEALTHCHECK uses
@@ -68,11 +66,11 @@ CVE-2026-41989 exp:2026-08-20
 # / libxml2 dynamic-link it. Our Python code uses requests/httpx, both
 # of which use OpenSSL, not libcurl. No code path passes user-controlled
 # Host headers to libcurl.
-CVE-2026-6276 exp:2026-08-20
+CVE-2026-6276 exp:2026-07-25
 
 # libcurl4 — wrong SMB connection reuse
 # We do not initiate SMB transfers anywhere in the codebase.
-CVE-2026-5773 exp:2026-08-20
+CVE-2026-5773 exp:2026-07-25
 
 # =============================================================================
 # Bundled-library false positives (third-party docs / fixtures)
@@ -91,10 +89,35 @@ autobahn-wamp-example-key
 # =============================================================================
 # Re-evaluation policy
 # =============================================================================
-# All ``exp:`` dates are 90 days out. When an entry expires, the Trivy job
-# will re-fail until either:
-#   (a) Debian publishes a fixed version (apt-get -y upgrade in the
-#       Dockerfile picks it up automatically), or
-#   (b) The justification is renewed for another 90 days with a fresh
-#       threat assessment.
-# Do not extend without re-confirming the package is still unreachable.
+# Expiry dates are intentionally staggered across July-September so the
+# re-evaluation burden doesn't land all at once. The earliest dates are
+# attached to the higher-severity entries (libssh2, libcurl) so they
+# come up for review first.
+#
+# When an entry expires, the Trivy job will re-fail until either:
+#   (a) Debian publishes a fixed version (`apt-get -y upgrade` in the
+#       Dockerfile picks it up automatically — confirm by checking the
+#       installed-version output in the scan log), or
+#   (b) The justification is renewed with a FRESH threat assessment.
+#
+# Verification checklist for each renewal (do every item, not just the
+# convenient ones):
+#
+#   1. Re-read the CVE entry on https://security-tracker.debian.org/tracker/<CVE>
+#      and check the bookworm row. If "fixed" appears, drop the entry and
+#      rely on apt-get upgrade instead.
+#   2. `grep -rE '<vulnerable-api>' password_manager/ frontend/` (substitute
+#      the API named in the advisory, e.g. `MiniZip`, `nltk.util.filestring`,
+#      `keras.utils.get_file`). If grep finds a NEW call site, the entry
+#      is no longer safe to keep — open a tracking issue and address the
+#      call site before extending.
+#   3. Re-confirm the runtime image still does NOT expose the package's
+#      attack surface: e.g. no curl binary in the image, no SSH client,
+#      no LDAP client. The Dockerfile is the source of truth here.
+#   4. Set a NEW expiry no further than 60 days out. Do not blanket-extend
+#      to 90 days a second time; if the package still has no upstream
+#      fix after the second cycle, file a tracking issue and consider
+#      switching the base image / dropping the dependency.
+#
+# Anything that hits a third 60-day renewal MUST be converted into a
+# concrete migration plan rather than another comment block.

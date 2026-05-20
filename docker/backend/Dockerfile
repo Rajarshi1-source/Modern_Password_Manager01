@@ -252,6 +252,16 @@ RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing 
     find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
     /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
     find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf {} + && \
+    # Fail the build if the strip left autobahn/wamp behind — without this
+    # guard, a future autobahn upgrade that reorganises the package layout
+    # would silently re-introduce Trivy #1559/#1560 (the example Ed25519
+    # private key in autobahn.wamp.cryptosign) without us noticing until a
+    # subsequent scan ran. A loud failure here is better than a quiet
+    # regression of a documented zero-knowledge-adjacent finding.
+    if find /opt/venv -type d -path "*/autobahn/wamp" -print -quit | grep -q .; then \
+        echo "ERROR: autobahn/wamp survived strip — Trivy #1559/#1560 will re-fire." >&2; \
+        exit 1; \
+    fi && \
     rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
            /usr/local/lib/python3*/dist-packages/python_dotenv* \
            /usr/lib/python3*/dist-packages/pip \
