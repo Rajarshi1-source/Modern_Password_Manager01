@@ -1,18 +1,42 @@
+"""Vault backup API.
+
+Zero-knowledge contract
+-----------------------
+The server NEVER sees the user's key-encrypting-key (KEK) or any material
+from which it could be derived. Envelope encryption is performed entirely
+client-side: the client derives the KEK from the master password, generates
+a random data-encryption key (DEK), wraps the DEK under the KEK, and POSTs
+the already-sealed envelope to ``create_backup``. The server stores the
+ciphertext verbatim.
+
+On restore, the server returns the stored ciphertext (or a presigned URL to
+it for cloud-stored backups). The client unwraps the envelope locally and
+either restores items directly or POSTs the decrypted (but still
+field-level encrypted) item list back to ``restore`` for batch insert.
+
+This module previously accepted a plaintext ``encryption_key`` field and
+ran ``PBKDF2 -> AES-GCM`` on the server. That was a zero-knowledge
+violation: a DB dump combined with captured request bodies (or memory
+forensics on the server) recovered the master-key material. The endpoint
+now refuses such payloads outright; see ``BACKUP_REQUIRE_CLIENT_ENVELOPE``
+in settings for the rollout flag.
+"""
+
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from vault.models.vault_models import EncryptedVaultItem
 from vault.models.backup_models import VaultBackup
 from vault.serializer import BackupSerializer, VaultItemSerializer
 from vault.services.cloud_storage import CloudStorageService
-import json
-import os
 import base64
-import hashlib
+import json
 import logging
+
 from password_manager.api_utils import error_response, success_response
 
 logger = logging.getLogger(__name__)
@@ -20,101 +44,240 @@ logger = logging.getLogger(__name__)
 # Placeholder row while payload lives only in object storage (valet-key upload flow).
 CLOUD_ONLY_PAYLOAD_META = {'cloud_only': True, 'v': 1}
 
+# Shape of a v1 client-sealed envelope. The server validates that all
+# required keys are present and base64-decodable but never inspects the
+# wrapped bytes themselves.
+ENVELOPE_VERSION_V1 = 'envelope-v1'
+_ENVELOPE_REQUIRED_KEYS = (
+    'encrypted_data',
+    'data_nonce',
+    'wrapped_dek',
+    'kek_nonce',
+)
+# AES-GCM constants used only for sanity-checking envelope shape — the
+# server does NOT perform any AES operation on backup payloads.
+_GCM_NONCE_LEN = 12
+_MIN_AESGCM_CT_LEN = 16  # GCM authentication tag length
 
-def _derive_wrapping_key(user_key: str) -> bytes:
+
+# Counter for canary observability. Operators can poll
+# ``backup_views._kek_rejection_stats`` (or hook it into Prometheus via
+# a dedicated exporter) to watch the legacy-client traffic curve
+# approach zero before flipping the enforcement mode to ``strict``.
+_kek_rejection_stats = {
+    'strict_400': 0,
+    'header_400': 0,
+    'header_422': 0,
+    'off_422': 0,
+}
+
+
+def _resolve_enforcement_mode():
+    """Return the effective enforcement mode, normalised + validated.
+
+    Reading at call time (rather than module-import time) means tests can
+    flip the setting via ``override_settings``/``self.settings(...)``
+    without resetting the import cache.
     """
-    Derive a 256-bit wrapping key from the user-provided key using HKDF-like
-    derivation (SHA-256 + salt). The user_key is typically derived client-side
-    from the master password.
+    mode = getattr(settings, 'BACKUP_ENVELOPE_ENFORCEMENT', None)
+    if mode in ('strict', 'header', 'off'):
+        return mode
+    # Fall back to the legacy boolean for back-compat.
+    return 'strict' if getattr(settings, 'BACKUP_REQUIRE_CLIENT_ENVELOPE', True) else 'off'
+
+
+def _client_claims_v2(request) -> bool:
+    """True if the client announced a migrated build via the canary header.
+
+    The header value is opaque: any non-empty string counts. We don't
+    pin it to a specific version today so the server doesn't have to
+    ship a new build every time a client bumps its envelope-handling
+    version.
     """
-    salt = b'securevault-backup-envelope-v1'
-    return hashlib.pbkdf2_hmac('sha256', user_key.encode('utf-8'), salt, 100_000)
+    header_name = getattr(
+        settings,
+        'BACKUP_ENVELOPE_CLIENT_VERSION_HEADER',
+        'HTTP_X_BACKUP_ENVELOPE_CLIENT_VERSION',
+    )
+    meta = getattr(request, 'META', {}) or {}
+    value = meta.get(header_name, '')
+    return bool(value and str(value).strip())
 
 
-def _envelope_encrypt(plaintext_bytes: bytes, wrapping_key: bytes) -> dict:
+def _reject_plaintext_kek(request):
+    """Return a ready-to-send error response if the payload carries an
+    ``encryption_key`` field (or any equivalent KEK material), else None.
+
+    Accepting the plaintext KEK on the server defeats the zero-knowledge
+    contract the rest of the codebase enforces. We refuse outright. The
+    rollout mode (``BACKUP_ENVELOPE_ENFORCEMENT``) controls only the
+    response surface — in EVERY mode the server discards the supplied
+    KEK without using it.
+
+    Modes
+    -----
+    ``strict``
+        Always 400 ``zero_knowledge_violation``. Default; correct end
+        state once all clients have migrated.
+
+    ``header``
+        Canary mode. Clients that announce themselves via
+        ``X-Backup-Envelope-Client-Version`` get the strict 400 (they
+        regressed). Clients without the header are presumed pre-
+        migration and get a 422 ``zero_knowledge_violation_deprecated``
+        so their UI can surface a clear "update your client" message
+        rather than an opaque error.
+
+    ``off``
+        Always 422 deprecation. Last-resort rollback switch.
     """
-    Envelope encryption using AES-256-GCM.
+    data = request.data if hasattr(request, 'data') else {}
+    rejected_fields = [
+        f for f in ('encryption_key', 'kek', 'wrapping_key', 'master_key')
+        if data.get(f)
+    ]
+    if not rejected_fields:
+        return None
 
-    1. Generate a random Data Encryption Key (DEK)
-    2. Encrypt the plaintext with the DEK
-    3. Wrap (encrypt) the DEK with the wrapping_key (KEK)
-    4. Return all components needed for decryption
+    mode = _resolve_enforcement_mode()
+    user_id = getattr(getattr(request, 'user', None), 'id', '<anon>')
+    claims_v2 = _client_claims_v2(request)
 
-    Returns dict with base64-encoded components.
+    # Decide which response shape to emit.
+    if mode == 'strict' or (mode == 'header' and claims_v2):
+        bucket = 'strict_400' if mode == 'strict' else 'header_400'
+        _kek_rejection_stats[bucket] += 1
+        logger.warning(
+            "backup KEK rejected (mode=%s, user=%s, claims_v2=%s, "
+            "fields=%s): hard 400",
+            mode, user_id, claims_v2, rejected_fields,
+        )
+        return error_response(
+            (
+                "Plaintext encryption_key is not accepted. Derive the KEK "
+                "client-side, wrap the backup envelope locally, and POST "
+                "the sealed envelope object instead. See the backup API "
+                "documentation for the v1 envelope schema."
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code='zero_knowledge_violation',
+            details={
+                'expected_field': 'envelope',
+                'rejected_fields': rejected_fields,
+                'enforcement_mode': mode,
+                'client_claims_v2': claims_v2,
+            },
+        )
+
+    # ``header`` mode + no v2 header, OR ``off`` mode: soft 422 so legacy
+    # clients can surface an upgrade prompt to the user.
+    bucket = 'header_422' if mode == 'header' else 'off_422'
+    _kek_rejection_stats[bucket] += 1
+    logger.warning(
+        "backup KEK deprecated (mode=%s, user=%s, claims_v2=%s, "
+        "fields=%s): soft 422 — legacy client still in field",
+        mode, user_id, claims_v2, rejected_fields,
+    )
+    return error_response(
+        (
+            "Plaintext encryption_key is deprecated and was ignored. "
+            "Upgrade the client to send a sealed envelope; this lenient "
+            "mode will be removed once the canary rollout completes."
+        ),
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        code='zero_knowledge_violation_deprecated',
+        details={
+            'expected_field': 'envelope',
+            'enforcement_mode': mode,
+            'client_claims_v2': claims_v2,
+            'upgrade_required': True,
+        },
+    )
+
+
+def _validate_envelope(envelope) -> str:
+    """Return '' if the envelope shape is acceptable, else an error message.
+
+    Validation is structural only — the server cannot (and must not) verify
+    that the wrapped bytes decrypt to anything meaningful, because it does
+    not hold the KEK. Rejecting malformed envelopes early prevents storing
+    garbage that the client would later fail to decrypt with a confusing
+    error.
     """
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-    # Step 1: Generate random DEK (256-bit)
-    dek = os.urandom(32)
-
-    # Step 2: Encrypt data with DEK
-    data_nonce = os.urandom(12)  # 96-bit nonce for AES-GCM
-    data_cipher = AESGCM(dek)
-    encrypted_data = data_cipher.encrypt(data_nonce, plaintext_bytes, None)
-
-    # Step 3: Wrap DEK with KEK (user's wrapping key)
-    kek_nonce = os.urandom(12)
-    kek_cipher = AESGCM(wrapping_key)
-    wrapped_dek = kek_cipher.encrypt(kek_nonce, dek, None)
-
-    return {
-        'version': 'envelope-v1',
-        'encrypted_data': base64.b64encode(encrypted_data).decode('utf-8'),
-        'data_nonce': base64.b64encode(data_nonce).decode('utf-8'),
-        'wrapped_dek': base64.b64encode(wrapped_dek).decode('utf-8'),
-        'kek_nonce': base64.b64encode(kek_nonce).decode('utf-8'),
-    }
-
-
-def _envelope_decrypt(envelope: dict, wrapping_key: bytes) -> bytes:
-    """
-    Decrypt envelope-encrypted data.
-
-    1. Unwrap the DEK using the wrapping_key (KEK)
-    2. Decrypt the data with the DEK
-    """
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-    # Decode components
-    wrapped_dek = base64.b64decode(envelope['wrapped_dek'])
-    kek_nonce = base64.b64decode(envelope['kek_nonce'])
-    encrypted_data = base64.b64decode(envelope['encrypted_data'])
-    data_nonce = base64.b64decode(envelope['data_nonce'])
-
-    # Step 1: Unwrap DEK
-    kek_cipher = AESGCM(wrapping_key)
-    dek = kek_cipher.decrypt(kek_nonce, wrapped_dek, None)
-
-    # Step 2: Decrypt data
-    data_cipher = AESGCM(dek)
-    plaintext = data_cipher.decrypt(data_nonce, encrypted_data, None)
-
-    return plaintext
+    if not isinstance(envelope, dict):
+        return "envelope must be a JSON object"
+    version = envelope.get('version')
+    if version != ENVELOPE_VERSION_V1:
+        return f"unsupported envelope version: {version!r}"
+    for key in _ENVELOPE_REQUIRED_KEYS:
+        value = envelope.get(key)
+        if not isinstance(value, str) or not value:
+            return f"envelope missing required field: {key}"
+        try:
+            decoded = base64.b64decode(value, validate=True)
+        except (ValueError, TypeError, base64.binascii.Error):
+            return f"envelope field {key} is not valid base64"
+        if key.endswith('_nonce') and len(decoded) != _GCM_NONCE_LEN:
+            return f"envelope {key} must be a 12-byte AES-GCM nonce"
+        if key in ('encrypted_data', 'wrapped_dek') and len(decoded) < _MIN_AESGCM_CT_LEN:
+            return f"envelope {key} is too short to be a valid AES-GCM ciphertext"
+    return ''
 
 
 class BackupViewSet(viewsets.ModelViewSet):
-    """API endpoints for vault backups"""
+    """API endpoints for vault backups (zero-knowledge)."""
     permission_classes = [IsAuthenticated]
     serializer_class = BackupSerializer
-    
+
     def get_queryset(self):
         """Return only backups belonging to authenticated user"""
         return VaultBackup.objects.filter(user=self.request.user)
-    
+
+    # ------------------------------------------------------------------
+    # Create
+    # ------------------------------------------------------------------
     @action(detail=False, methods=['post'])
     def create_backup(self, request):
-        """Create a new vault backup"""
+        """Create a new vault backup.
+
+        Two acceptable payload shapes:
+
+        1. ``{"envelope": {...}, "name": "..."}`` — the client has already
+           performed envelope encryption locally. The server stores the
+           envelope JSON verbatim.
+        2. ``{"name": "..."}`` (no envelope) — store the list of
+           field-level-encrypted vault items as plain JSON. Items are
+           still individually encrypted client-side; the only thing the
+           envelope adds is hiding the list of item IDs from a DB reader.
+
+        ANY payload containing ``encryption_key`` (or other plaintext KEK
+        material) is rejected — see ``_reject_plaintext_kek``.
+        """
+        rejection = _reject_plaintext_kek(request)
+        if rejection is not None:
+            return rejection
+
+        # Validate envelope (if supplied) BEFORE doing any DB work.
+        envelope = request.data.get('envelope')
+        is_envelope_encrypted = False
+        if envelope is not None:
+            err = _validate_envelope(envelope)
+            if err:
+                return error_response(
+                    f"Invalid backup envelope: {err}",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    code='invalid_envelope',
+                )
+            is_envelope_encrypted = True
+
         with transaction.atomic():
-            # Get all vault items
             vault_items = EncryptedVaultItem.objects.filter(
                 user=request.user,
-                deleted=False
+                deleted=False,
             )
-            
-            # Serialize items for backup
-            items_data = []
-            for item in vault_items:
-                items_data.append({
+
+            items_data = [
+                {
                     'id': str(item.id),
                     'item_id': item.item_id,
                     'item_type': item.item_type,
@@ -122,81 +285,79 @@ class BackupViewSet(viewsets.ModelViewSet):
                     'created_at': item.created_at.isoformat(),
                     'updated_at': item.updated_at.isoformat(),
                     'favorite': item.favorite,
-                    'tags': item.tags
-                })
-            
-            # Create backup package with metadata
-            backup_data = {
-                'version': '1.0',
-                'created_at': timezone.now().isoformat(),
-                'item_count': len(items_data),
-                'items': items_data
-            }
-            
-            # Convert to JSON bytes
-            backup_json = json.dumps(backup_data)
-            
-            # Envelope encryption: if user provides an encryption_key,
-            # wrap the backup with AES-256-GCM envelope encryption.
-            user_key = request.data.get('encryption_key')
-            is_envelope_encrypted = False
-            
-            if user_key:
-                try:
-                    wrapping_key = _derive_wrapping_key(user_key)
-                    envelope = _envelope_encrypt(
-                        backup_json.encode('utf-8'), wrapping_key
-                    )
-                    stored_data = json.dumps(envelope)
-                    is_envelope_encrypted = True
-                    logger.info(
-                        f"Backup created with envelope encryption for user {request.user.id}"
-                    )
-                except Exception as e:
-                    logger.error(f"Envelope encryption failed, storing without: {e}")
-                    stored_data = backup_json
+                    'tags': item.tags,
+                }
+                for item in vault_items
+            ]
+
+            if is_envelope_encrypted:
+                # Client has already sealed the items list. Store the
+                # envelope verbatim; the server has no way to inspect it.
+                stored_data = json.dumps(envelope)
+                # Item count cannot be derived from the ciphertext; record
+                # the server-side count for the response only (a UX hint).
+                server_item_count = len(items_data)
+                logger.info(
+                    "Backup created (envelope-v1) for user %s with %d items",
+                    request.user.id,
+                    server_item_count,
+                )
             else:
-                # No user key provided — store as-is (data is already
-                # client-side encrypted at the field level)
-                stored_data = backup_json
-            
-            # Create backup in database
+                backup_data = {
+                    'version': '1.0',
+                    'created_at': timezone.now().isoformat(),
+                    'item_count': len(items_data),
+                    'items': items_data,
+                }
+                stored_data = json.dumps(backup_data)
+                server_item_count = len(items_data)
+
             backup = VaultBackup.objects.create(
                 user=request.user,
-                name=request.data.get('name', f"Backup {timezone.now().strftime('%Y-%m-%d %H:%M')}"),
+                name=request.data.get(
+                    'name', f"Backup {timezone.now().strftime('%Y-%m-%d %H:%M')}"
+                ),
                 encrypted_data=stored_data,
-                size=len(stored_data)
+                size=len(stored_data),
             )
-            
-            # Upload to cloud storage
+
             cloud_service = CloudStorageService()
             cloud_path = cloud_service.upload_backup(
-                request.user.id, 
+                request.user.id,
                 stored_data,
-                str(backup.id)
+                str(backup.id),
             )
-            
+
             if cloud_path:
                 backup.cloud_storage_path = cloud_path
                 backup.cloud_sync_status = 'synced'
                 backup.save()
-            
+
             return Response({
                 'id': backup.id,
                 'name': backup.name,
                 'created_at': backup.created_at,
-                'item_count': len(items_data),
+                'item_count': server_item_count,
                 'size': backup.size,
                 'cloud_synced': backup.cloud_sync_status == 'synced',
                 'envelope_encrypted': is_envelope_encrypted,
             })
 
+    # ------------------------------------------------------------------
+    # Direct cloud-upload (valet-key) flow — unchanged
+    # ------------------------------------------------------------------
     @action(detail=False, methods=['post'], url_path='start-cloud-upload')
     def start_cloud_upload(self, request):
+        """Create DB row and return a presigned PUT URL.
+
+        The client uploads the already-sealed envelope bytes directly to
+        object storage. The server never sees the KEK or the envelope's
+        plaintext.
         """
-        Valet-key flow: create DB row and return a presigned PUT URL so the client
-        uploads encrypted backup bytes directly to object storage.
-        """
+        rejection = _reject_plaintext_kek(request)
+        if rejection is not None:
+            return rejection
+
         cloud_service = CloudStorageService()
         if not cloud_service.supports_presigned_urls:
             return error_response(
@@ -280,103 +441,206 @@ class BackupViewSet(viewsets.ModelViewSet):
             'backend': presigned['backend'],
         })
 
+    # ------------------------------------------------------------------
+    # Ciphertext fetch (for client-side decryption of envelope backups)
+    # ------------------------------------------------------------------
+    @action(detail=True, methods=['get'], url_path='ciphertext')
+    def ciphertext(self, request, pk=None):
+        """Return the raw stored backup blob so the client can decrypt locally.
+
+        For envelope-encrypted backups, this is the only way to read the
+        ciphertext without round-tripping through the cloud presigned URL.
+        The response shape is::
+
+            {"format": "envelope-v1" | "plaintext-json", "data": <object>}
+
+        The server attaches NO KEK material and performs NO decryption.
+        """
+        backup = self.get_object()
+        raw_data = backup.encrypted_data
+
+        # Cloud-only stub -> fetch from object storage transparently.
+        try:
+            stub = json.loads(raw_data) if raw_data else {}
+        except (json.JSONDecodeError, TypeError):
+            stub = {}
+        if (
+            stub.get('cloud_only')
+            and stub.get('v') == CLOUD_ONLY_PAYLOAD_META['v']
+            and backup.cloud_storage_path
+        ):
+            cloud_service = CloudStorageService()
+            blob = cloud_service.download_backup(backup.cloud_storage_path)
+            if not blob:
+                return error_response(
+                    'Failed to download backup from cloud',
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            raw_data = (
+                blob.decode('utf-8') if isinstance(blob, bytes) else blob
+            )
+
+        try:
+            parsed = json.loads(raw_data) if raw_data else {}
+        except (json.JSONDecodeError, TypeError):
+            return error_response(
+                'Stored backup is not valid JSON',
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        fmt = (
+            'envelope-v1'
+            if parsed.get('version') == ENVELOPE_VERSION_V1
+            else 'plaintext-json'
+        )
+        return Response({
+            'backup_id': str(backup.id),
+            'format': fmt,
+            'data': parsed,
+        })
+
+    # ------------------------------------------------------------------
+    # Restore
+    # ------------------------------------------------------------------
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
-        """Restore vault from a backup"""
+        """Restore vault items from a backup.
+
+        Modes:
+
+        * **Client-supplied items** (preferred for envelope backups):
+          ``{"items": [...]}`` — the client has already decrypted the
+          envelope locally and POSTs the (still field-level encrypted)
+          item list. The server batch-writes them and never sees plaintext
+          KEK material.
+
+        * **Plain-JSON backup** (legacy or items-already-individually
+          encrypted): ``{}`` — server reads the stored blob, which must be
+          ``{"items": [...]}``, and restores from it.
+
+        * **Envelope backup with no client-supplied items**: returns a
+          ``422 envelope_requires_client_decryption`` with the stored
+          ciphertext attached so the client can decrypt and re-call. The
+          server never attempts to decrypt itself.
+        """
+        rejection = _reject_plaintext_kek(request)
+        if rejection is not None:
+            return rejection
+
         try:
             backup = self.get_object()
         except VaultBackup.DoesNotExist:
-            return error_response('Backup not found', status_code=status.HTTP_404_NOT_FOUND)
-        
+            return error_response(
+                'Backup not found', status_code=status.HTTP_404_NOT_FOUND,
+            )
+
         with transaction.atomic():
+            # Mode 1: client supplied decrypted items directly.
+            client_items = request.data.get('items')
+            if client_items is not None:
+                if not isinstance(client_items, list):
+                    return error_response(
+                        '"items" must be a list',
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        code='invalid_items',
+                    )
+                return self._restore_from_items(
+                    request, backup, client_items,
+                )
+
+            # Mode 2/3: try to read the stored blob.
+            raw_data = backup.encrypted_data
             try:
-                raw_data = backup.encrypted_data
-
-                try:
-                    stub = json.loads(raw_data) if raw_data else {}
-                except json.JSONDecodeError:
-                    stub = {}
-                if (
-                    stub.get('cloud_only')
-                    and stub.get('v') == CLOUD_ONLY_PAYLOAD_META['v']
-                    and backup.cloud_storage_path
-                ):
-                    cloud_service = CloudStorageService()
-                    blob = cloud_service.download_backup(backup.cloud_storage_path)
-                    if not blob:
-                        return error_response(
-                            'Failed to download backup from cloud',
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        )
-                    raw_data = (
-                        blob.decode('utf-8')
-                        if isinstance(blob, bytes)
-                        else blob
+                stub = json.loads(raw_data) if raw_data else {}
+            except (json.JSONDecodeError, TypeError):
+                stub = {}
+            if (
+                stub.get('cloud_only')
+                and stub.get('v') == CLOUD_ONLY_PAYLOAD_META['v']
+                and backup.cloud_storage_path
+            ):
+                cloud_service = CloudStorageService()
+                blob = cloud_service.download_backup(backup.cloud_storage_path)
+                if not blob:
+                    return error_response(
+                        'Failed to download backup from cloud',
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     )
-                elif not raw_data and backup.cloud_storage_path:
-                    cloud_service = CloudStorageService()
-                    raw_data = cloud_service.download_backup(backup.cloud_storage_path)
-                    if not raw_data:
-                        return error_response(
-                            'Failed to download backup from cloud',
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
-                        )
-                    if isinstance(raw_data, bytes):
-                        raw_data = raw_data.decode('utf-8')
+                raw_data = (
+                    blob.decode('utf-8') if isinstance(blob, bytes) else blob
+                )
+            elif not raw_data and backup.cloud_storage_path:
+                cloud_service = CloudStorageService()
+                raw_data = cloud_service.download_backup(
+                    backup.cloud_storage_path,
+                )
+                if not raw_data:
+                    return error_response(
+                        'Failed to download backup from cloud',
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+                if isinstance(raw_data, bytes):
+                    raw_data = raw_data.decode('utf-8')
 
+            try:
                 parsed = json.loads(raw_data)
-                
-                # Check if this is an envelope-encrypted backup
-                if parsed.get('version') == 'envelope-v1':
-                    user_key = request.data.get('encryption_key')
-                    if not user_key:
-                        return error_response(
-                            'This backup is envelope-encrypted. '
-                            'Please provide the encryption_key used during backup.',
-                            status_code=status.HTTP_400_BAD_REQUEST
-                        )
-                    try:
-                        wrapping_key = _derive_wrapping_key(user_key)
-                        decrypted_bytes = _envelope_decrypt(parsed, wrapping_key)
-                        backup_data = json.loads(decrypted_bytes.decode('utf-8'))
-                    except Exception as e:
-                        logger.warning(f"Envelope decryption failed: {e}")
-                        return error_response(
-                            'Decryption failed. Incorrect encryption key or corrupted backup.',
-                            status_code=status.HTTP_400_BAD_REQUEST
-                        )
-                else:
-                    backup_data = parsed
-                
-                if not backup_data.get('items'):
-                    return error_response('Invalid backup data', status_code=status.HTTP_400_BAD_REQUEST)
-                
-                # Clear existing vault items if specified
-                if request.data.get('clear_existing', False):
-                    EncryptedVaultItem.objects.filter(user=request.user).delete()
-                
-                # Restore items
-                restored_count = 0
-                for item_data in backup_data['items']:
-                    EncryptedVaultItem.objects.update_or_create(
-                        user=request.user,
-                        item_id=item_data['item_id'],
-                        defaults={
-                            'item_type': item_data['item_type'],
-                            'encrypted_data': item_data['encrypted_data'],
-                            'favorite': item_data.get('favorite', False),
-                            'tags': item_data.get('tags', [])
-                        }
-                    )
-                    restored_count += 1
-                
-                return success_response({
-                    'success': True,
-                    'restored_items': restored_count,
-                    'backup_id': backup.id,
-                    'backup_name': backup.name,
-                    'backup_date': backup.created_at
-                })
-                
-            except Exception as e:
-                return error_response(f'Restore failed: {str(e)}', status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            except (json.JSONDecodeError, TypeError):
+                return error_response(
+                    'Stored backup is not valid JSON',
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            # Mode 3: envelope -> tell the client to decrypt locally.
+            if parsed.get('version') == ENVELOPE_VERSION_V1:
+                return error_response(
+                    (
+                        'Backup is envelope-encrypted. Decrypt the envelope '
+                        'client-side and re-call this endpoint with the '
+                        'decrypted items list as "items".'
+                    ),
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    code='envelope_requires_client_decryption',
+                    details={'envelope': parsed},
+                )
+
+            # Mode 2: plain-JSON backup.
+            items = parsed.get('items')
+            if not items:
+                return error_response(
+                    'Invalid backup data',
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            return self._restore_from_items(request, backup, items)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _restore_from_items(self, request, backup, items):
+        """Batch-write a list of (already field-level encrypted) items."""
+        if request.data.get('clear_existing', False):
+            EncryptedVaultItem.objects.filter(user=request.user).delete()
+
+        restored_count = 0
+        for item_data in items:
+            item_id = item_data.get('item_id')
+            if not item_id:
+                continue
+            EncryptedVaultItem.objects.update_or_create(
+                user=request.user,
+                item_id=item_id,
+                defaults={
+                    'item_type': item_data.get('item_type', 'password'),
+                    'encrypted_data': item_data.get('encrypted_data', ''),
+                    'favorite': item_data.get('favorite', False),
+                    'tags': item_data.get('tags', []),
+                },
+            )
+            restored_count += 1
+
+        return success_response({
+            'success': True,
+            'restored_items': restored_count,
+            'backup_id': backup.id,
+            'backup_name': backup.name,
+            'backup_date': backup.created_at,
+        })

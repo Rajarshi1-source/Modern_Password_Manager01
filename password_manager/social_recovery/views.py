@@ -11,6 +11,8 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from password_manager.throttling import VouchAttestationThrottle
+
 from .models import RecoveryCircle, SocialRecoveryRequest, Voucher
 from .serializers import (
     AcceptInvitationSerializer,
@@ -136,7 +138,12 @@ class AcceptInvitationView(APIView):
 
 
 class InitiateRecoveryView(APIView):
+    # Unauthenticated: anyone in possession of a circle_id can start a
+    # request. Combined with the throttle below this is fine — quorum
+    # still requires voucher signatures — but without rate limiting a
+    # discoverer of any circle_id could pin the cooldown timer.
     permission_classes = [AllowAny]
+    throttle_classes = [VouchAttestationThrottle]
 
     def post(self, request):
         serializer = InitiateRequestSerializer(data=request.data)
@@ -168,7 +175,12 @@ class RequestDetailView(APIView):
 
 
 class AttestRequestView(APIView):
+    # The attestation endpoint is the spam target: a leaked voucher key
+    # could otherwise be POSTed at full line-rate until quorum flips.
+    # ``VouchAttestationThrottle`` caps both per-voucher (10/min default)
+    # and per-IP (50/hour default) — both buckets must allow the request.
     permission_classes = [AllowAny]
+    throttle_classes = [VouchAttestationThrottle]
 
     def post(self, request, request_id):
         recovery_request = get_object_or_404(SocialRecoveryRequest, request_id=request_id)
@@ -205,7 +217,12 @@ class AttestRequestView(APIView):
 
 
 class CompleteRequestView(APIView):
+    # Reconstruction is the highest-value step in the flow. Rate-limiting
+    # by request id + IP makes it harder for an attacker who somehow
+    # collected enough share envelopes to brute-force-replay completion
+    # variants against a single recovery request.
     permission_classes = [AllowAny]
+    throttle_classes = [VouchAttestationThrottle]
 
     def post(self, request, request_id):
         recovery_request = get_object_or_404(SocialRecoveryRequest, request_id=request_id)

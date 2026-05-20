@@ -477,6 +477,19 @@ REST_FRAMEWORK = {
         'mesh_node_ping': '60/minute',    # Mesh node heartbeat ceiling per (user, node)
         'personality_challenge': '20/hour',   # Challenge start / answer submissions
         'personality_inference': '6/hour',    # On-demand profile inference
+        # Public social-recovery endpoints (initiate / attest / complete).
+        # Both buckets are checked together by ``VouchAttestationThrottle``:
+        # ``vouch_attestation`` is keyed on voucher/request/circle id and
+        # caps per-resource fan-out (10/min default — a compromised
+        # voucher key cannot flip a quorum); ``vouch_attestation_ip`` is
+        # keyed on client IP and caps cross-resource fan-out from a
+        # single host (50/hour default).
+        'vouch_attestation': os.environ.get(
+            'RATE_LIMIT_VOUCH_ATTESTATION', '10/min',
+        ),
+        'vouch_attestation_ip': os.environ.get(
+            'RATE_LIMIT_VOUCH_ATTESTATION_IP', '50/hour',
+        ),
     }
 }
 
@@ -1280,6 +1293,54 @@ HONEYPOT_CREDENTIALS_ENABLED = (
 SELF_DESTRUCT_PASSWORDS_ENABLED = (
     os.environ.get('SELF_DESTRUCT_PASSWORDS_ENABLED', 'True').lower() == 'true'
 )
+
+# --------------------------------------------------------------------
+# Zero-knowledge backup contract (feature-flag / canary rollout).
+#
+# Three enforcement modes for the backup API's refusal to handle a
+# plaintext ``encryption_key`` field. In ALL modes the server never
+# actually USES the KEK; the mode only controls the response surface so
+# operators can stage the rollout across heterogeneous clients (desktop,
+# mobile, browser extension, frontend) without silently downgrading the
+# security posture.
+#
+#   ``strict``  (default; dev/staging)
+#       Any payload containing ``encryption_key`` (or aliases) is
+#       rejected with 400 ``zero_knowledge_violation``. Use this once
+#       all clients have shipped the envelope build.
+#
+#   ``header``  (recommended prod canary)
+#       Clients that announce themselves via the
+#       ``X-Backup-Envelope-Client-Version: v2`` header are held to the
+#       strict contract (400 if they regress and POST a KEK). Clients
+#       that omit the header — pre-migration builds in the wild — get a
+#       422 ``zero_knowledge_violation_deprecated`` so the UI can surface
+#       a clear "update your client" message instead of an opaque error.
+#
+#   ``off``     (last-resort rollback)
+#       Always returns 422 deprecation. Use only if you need to keep
+#       legacy clients limping during a hot rollback; the server STILL
+#       does not touch the KEK.
+#
+# The legacy boolean ``BACKUP_REQUIRE_CLIENT_ENVELOPE`` is preserved for
+# backwards compatibility: ``True``-> ``strict``, ``False``-> ``off``.
+# Setting ``BACKUP_ENVELOPE_ENFORCEMENT`` explicitly overrides it.
+# --------------------------------------------------------------------
+BACKUP_REQUIRE_CLIENT_ENVELOPE = (
+    os.environ.get('BACKUP_REQUIRE_CLIENT_ENVELOPE', 'True').lower() == 'true'
+)
+BACKUP_ENVELOPE_ENFORCEMENT = os.environ.get(
+    'BACKUP_ENVELOPE_ENFORCEMENT',
+    'strict' if BACKUP_REQUIRE_CLIENT_ENVELOPE else 'off',
+).lower()
+if BACKUP_ENVELOPE_ENFORCEMENT not in ('strict', 'header', 'off'):
+    BACKUP_ENVELOPE_ENFORCEMENT = 'strict'
+
+# Header a migrated client sets to opt into strict enforcement. The
+# value is treated as opaque (any non-empty string counts) so we don't
+# couple the server to a specific client version string today; clients
+# typically send ``v2``.
+BACKUP_ENVELOPE_CLIENT_VERSION_HEADER = 'HTTP_X_BACKUP_ENVELOPE_CLIENT_VERSION'
 
 # Honeypot default alert fan-out channels. Must be a subset of
 # {'email', 'sms', 'webhook', 'signal'}. Operators can set the env var
