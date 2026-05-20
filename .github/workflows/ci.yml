@@ -616,7 +616,14 @@ jobs:
             }
 
       - name: Notify deployment failure
-        if: failure() && env.SLACK_WEBHOOK_URL != '' && steps.configure_kubectl.outputs.deploy_enabled == 'true'
+        # Fire on every failure case EXCEPT the intentional "no secret
+        # configured" skip — i.e. `deploy_enabled` is unset (early step
+        # failure such as malformed/base64-invalid KUBE_CONFIG_PRODUCTION
+        # or the missing-`server:` sanity check) should still notify,
+        # since the deploy was attempted and did not succeed.
+        # `!= 'false'` matches both 'true' AND '' (unset); only the
+        # literal 'false' value (set by the "no secret" branch) skips.
+        if: failure() && env.SLACK_WEBHOOK_URL != '' && steps.configure_kubectl.outputs.deploy_enabled != 'false'
         uses: slackapi/slack-github-action@af78098f536edbc4de71162a307590698245be95 # v3.0.1
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
