@@ -240,9 +240,18 @@ COPY --from=deps-builder /opt/venv /opt/venv
 # the application uses the /opt/venv interpreter so the system pip is dead
 # weight. Finally upgrade any system-site stale wheels (python-dotenv 1.0.0,
 # Trivy #1556) by removing them so only the venv's pinned version remains.
+#
+# autobahn.wamp.cryptosign:
+#   We use Django Channels' ASGI dispatcher, not the WAMP protocol. The
+#   entire ``autobahn/wamp`` package is dead code in our image. Removing
+#   it eliminates Trivy #1559/#1560 (documentation-purpose Ed25519 key in
+#   cryptosign.py:165 mis-detected as a real secret) and trims the image.
+#   Also remove the compiled __pycache__ entry so Trivy's secret scan
+#   doesn't re-fire on the .pyc copy.
 RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing \) -prune -exec rm -rf {} + && \
     find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
     /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
+    find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf {} + && \
     rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
            /usr/local/lib/python3*/dist-packages/python_dotenv* \
            /usr/lib/python3*/dist-packages/pip \

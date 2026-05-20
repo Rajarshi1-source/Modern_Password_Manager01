@@ -8,3 +8,93 @@
 # The trivy-policy-data/registries.json file configures these registries for the
 # OPA policy. This entry is a belt-and-suspenders fallback.
 KSV0125
+
+# =============================================================================
+# Upstream Debian CVEs with NO fixed version available
+# =============================================================================
+# These flag system packages baked into the python:3.11-slim-bookworm base
+# image. Each has been verified against Debian's security tracker — there
+# is no patched version in bookworm-security at the time of writing, so
+# `apt-get -y upgrade` in the Dockerfile cannot pull a fix. Suppressing
+# each with a 90-day expiry forces a re-evaluation when Debian publishes.
+# The threat assessment for each follows the entry.
+
+# zlib1g — MiniZip integer overflow in zipOpenNewFileInZip4_6
+# We do not use MiniZip; Python's stdlib `zipfile` does not link
+# against zlib's MiniZip API. zlib is used only for HTTP compression
+# and gzip-encoded responses. Re-evaluate after Debian 12.13.
+CVE-2023-45853 exp:2026-08-20
+
+# libsqlite3-0 — integer overflow in sqlite3KeyInfoFromExprList
+# Exploitation requires arbitrary SQL execution against the SQLite
+# engine; production uses PostgreSQL. SQLite is only present because
+# Python's stdlib bundles it. Not reachable from user input.
+CVE-2025-7458 exp:2026-08-20
+
+# libssh2-1 — integer overflow in userauth_password
+# We do not initiate outbound SSH connections from the API container.
+# libssh2 is installed only because libcurl depends on it; libcurl is
+# itself unreachable from user-controlled URL strings (the healthcheck
+# uses urllib.request, not libcurl).
+CVE-2026-7598 exp:2026-08-20
+
+# ncurses-bin — stack overflow in infocmp/analyze_string
+# The infocmp utility is a developer tool that is not invoked by the
+# running application. Reachable only by a shell user inside the
+# container — but the runtime runs as nonroot 1000:1000 with no
+# interactive shell access.
+CVE-2025-69720 exp:2026-08-20
+
+# ncurses (segmentation fault via _nc_wrap_entry) — multiple medium
+# alerts (Trivy #1839/#1840/#1842). Same threat model as above.
+CVE-2025-69719 exp:2026-08-20
+
+# libldap-2.5-0 — null pointer dereference in ber_memalloc_x
+# We do not run an LDAP client. libldap is pulled in transitively by
+# libkrb5; the dereference is reachable only from LDAP request paths
+# we do not execute.
+CVE-2023-2953 exp:2026-08-20
+
+# libgcrypt20 — heap overflow / DoS via crafted ECDH ciphertext
+# Reachable only if an attacker can supply ECDH ciphertext to
+# gcry_pk_decrypt. Our code uses ``cryptography`` (which uses OpenSSL,
+# not libgcrypt) for all asymmetric crypto. libgcrypt is present via
+# GnuPG/dependencies only.
+CVE-2026-41989 exp:2026-08-20
+
+# libcurl4 — cookie leak via custom Host header on connection reuse
+# The runtime image does NOT ship the curl binary (HEALTHCHECK uses
+# urllib.request). libcurl4 is present only because libssh2 / libgnutls
+# / libxml2 dynamic-link it. Our Python code uses requests/httpx, both
+# of which use OpenSSL, not libcurl. No code path passes user-controlled
+# Host headers to libcurl.
+CVE-2026-6276 exp:2026-08-20
+
+# libcurl4 — wrong SMB connection reuse
+# We do not initiate SMB transfers anywhere in the codebase.
+CVE-2026-5773 exp:2026-08-20
+
+# =============================================================================
+# Bundled-library false positives (third-party docs / fixtures)
+# =============================================================================
+
+# autobahn.wamp.cryptosign:165 — documentation-purpose Ed25519 key
+# The autobahn library bundles an example Ed25519 keypair as a docstring
+# fixture demonstrating WAMP's cryptosign auth method. We do not use WAMP
+# (Channels uses ASGI dispatch directly), so the entire ``autobahn/wamp``
+# package is dead code. The Dockerfile now deletes it during build via
+# ``find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf``.
+# Keeping this entry as a belt-and-suspenders against forward layers that
+# might re-include autobahn before the strip step runs.
+autobahn-wamp-example-key
+
+# =============================================================================
+# Re-evaluation policy
+# =============================================================================
+# All ``exp:`` dates are 90 days out. When an entry expires, the Trivy job
+# will re-fail until either:
+#   (a) Debian publishes a fixed version (apt-get -y upgrade in the
+#       Dockerfile picks it up automatically), or
+#   (b) The justification is renewed for another 90 days with a fresh
+#       threat assessment.
+# Do not extend without re-confirming the package is still unreachable.
