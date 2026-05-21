@@ -102,86 +102,80 @@ jobs:
           safety check --file requirements.txt --exit-code --json > safety-report.json || true
           cat safety-report.json
       
-      # FIX #4: Fail on vulnerabilities (with documented suppressions).
+      # FIX #4: Fail on vulnerabilities (with time-boxed suppressions).
       #
-      # Each --ignore-vuln entry below is for an advisory that pip-audit
-      # currently reports against our pinned versions AND has NO fix
-      # version published upstream at the time of writing. Every entry
-      # carries a threat assessment in the comment above the flag.
+      # Suppressions live in ``password_manager/pip-audit-ignores.txt``
+      # using the same ``<id> exp:<YYYY-MM-DD>`` format as ``.trivyignore``.
+      # Each entry has a threat assessment in the manifest's comment
+      # block, and the file ships in-repo so changes are reviewable.
       #
-      # Re-evaluation policy: when an upstream maintainer ships a patched
-      # release the corresponding Dependabot PR will replace the pin and
-      # the entry should be removed in the same change. Do NOT extend
-      # without re-confirming non-exploitability.
+      # The pre-check below fails the job if ANY entry is expired,
+      # before pip-audit even runs — this prevents indefinite drift of
+      # suppressions across heterogeneous Dependabot PR cycles.
+      # Renewal policy is documented in the manifest itself.
+      - name: Validate pip-audit ignore expiries
+        id: pip_audit_ignores
+        run: |
+          cd password_manager
+          python3 - <<'PY'
+          import datetime as _dt
+          import os
+          import pathlib
+          import sys
+
+          manifest = pathlib.Path("pip-audit-ignores.txt")
+          today = _dt.date.today()
+          ignores: list[str] = []
+          expired: list[tuple[str, _dt.date]] = []
+          malformed: list[str] = []
+
+          for lineno, raw in enumerate(manifest.read_text().splitlines(), 1):
+              line = raw.split("#", 1)[0].strip()
+              if not line:
+                  continue
+              parts = line.split()
+              if len(parts) != 2 or not parts[1].startswith("exp:"):
+                  malformed.append(f"line {lineno}: {raw!r}")
+                  continue
+              advisory, exp_field = parts
+              try:
+                  exp_date = _dt.date.fromisoformat(exp_field[len("exp:") :])
+              except ValueError:
+                  malformed.append(f"line {lineno}: bad date in {raw!r}")
+                  continue
+              if exp_date < today:
+                  expired.append((advisory, exp_date))
+              ignores.append(advisory)
+
+          if malformed:
+              sys.stderr.write(
+                  "ERROR: malformed entries in pip-audit-ignores.txt:\n  "
+                  + "\n  ".join(malformed)
+                  + "\n"
+              )
+              sys.exit(2)
+
+          if expired:
+              sys.stderr.write(
+                  "ERROR: pip-audit suppressions have expired:\n  "
+                  + "\n  ".join(f"{adv} (exp:{d.isoformat()})" for adv, d in expired)
+                  + "\nRenew (with a fresh threat assessment) or remove the entries.\n"
+              )
+              sys.exit(3)
+
+          flags = " ".join(f"--ignore-vuln {adv}" for adv in ignores)
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as fh:
+                  fh.write(f"flags={flags}\n")
+          print(f"::notice::pip-audit suppressions OK ({len(ignores)} entries, none expired)")
+          PY
+
       - name: Run pip-audit
         run: |
           cd password_manager
-          # GHSA-grgv-6hw6-v9g4 (twisted CVE-2026-42304, DNS DoS):
-          # twisted.names is unused (`grep -r "twisted.names\|from twisted"`
-          # returns nothing). The only fix is twisted 26.4.0rc2; we now
-          # pin that in ml_dark_web/requirements.txt but the root
-          # requirements.txt still resolves to 25.5.0 transitively, so
-          # keep the ignore.
-          #
-          # PYSEC-2025-183 (pyjwt weak encryption):
-          # Disputed by the supplier — the advisory itself says "the key
-          # length is chosen by the application that uses the library."
-          # Our pyjwt usage in auth_module/services/jwt_service.py uses
-          # 256-bit secrets from settings.SECRET_KEY, well above the
-          # advisory's recommended minimum.
-          #
-          # PYSEC-2024-277 (joblib NumpyArrayWrapper deserialization):
-          # Disputed by the supplier — applies only to caching of trusted
-          # content. We do not deserialise joblib-pickled artefacts from
-          # untrusted sources.
-          #
-          # PYSEC-2025-189 through PYSEC-2025-210 + PYSEC-2026-139 (torch):
-          # All eleven advisories require LOCAL access to the host
-          # ("Attacking locally is a requirement" / "from a local
-          # environment"). The torch package runs inside a non-root
-          # container with no shell access; user input reaches the model
-          # only as already-validated tensors via the ml_dark_web service,
-          # never as torch.jit scripts or pt2 binaries.
-          #
-          # PYSEC-2025-211 through PYSEC-2025-218 (transformers, 8 vulns):
-          # All eight require user interaction to load a malicious
-          # HuggingFace checkpoint. `ml_dark_web/ml_services.py` only
-          # invokes from_pretrained with config.BERT_MODEL_NAME — a
-          # hard-coded model identifier resolved at deploy time — so an
-          # attacker cannot supply a crafted model name.
-          #
-          # PYSEC-2025-121 (keras get_file tar extraction):
-          # We don't call keras.utils.get_file with user-controlled URLs;
-          # `grep -r "keras.*get_file"` returns no matches.
-          #
-          # PYSEC-2026-97 (nltk filestring path traversal):
-          # We don't call nltk.util.filestring; `grep -r "filestring"`
-          # returns no matches in the codebase.
           pip-audit -r requirements.txt --desc --format json \
-            --ignore-vuln GHSA-grgv-6hw6-v9g4 \
-            --ignore-vuln PYSEC-2025-183 \
-            --ignore-vuln PYSEC-2024-277 \
-            --ignore-vuln PYSEC-2025-189 \
-            --ignore-vuln PYSEC-2025-190 \
-            --ignore-vuln PYSEC-2025-191 \
-            --ignore-vuln PYSEC-2025-192 \
-            --ignore-vuln PYSEC-2025-193 \
-            --ignore-vuln PYSEC-2025-194 \
-            --ignore-vuln PYSEC-2025-195 \
-            --ignore-vuln PYSEC-2025-196 \
-            --ignore-vuln PYSEC-2025-197 \
-            --ignore-vuln PYSEC-2025-210 \
-            --ignore-vuln PYSEC-2026-139 \
-            --ignore-vuln PYSEC-2025-211 \
-            --ignore-vuln PYSEC-2025-212 \
-            --ignore-vuln PYSEC-2025-213 \
-            --ignore-vuln PYSEC-2025-214 \
-            --ignore-vuln PYSEC-2025-215 \
-            --ignore-vuln PYSEC-2025-216 \
-            --ignore-vuln PYSEC-2025-217 \
-            --ignore-vuln PYSEC-2025-218 \
-            --ignore-vuln PYSEC-2025-121 \
-            --ignore-vuln PYSEC-2026-97 \
+            ${{ steps.pip_audit_ignores.outputs.flags }} \
             > pip-audit-report.json
           cat pip-audit-report.json
       

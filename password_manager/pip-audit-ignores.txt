@@ -1,0 +1,72 @@
+# pip-audit suppressions manifest.
+#
+# Format: one entry per non-comment line, ``<advisory-id> exp:<YYYY-MM-DD>``.
+# Anything else (blank lines, ``#`` comments) is ignored by the parser
+# in .github/workflows/security-multi-scanner.yml.
+#
+# Expiry policy mirrors .trivyignore: dates are staggered across the
+# next ~90 days so re-evaluation doesn't bunch into a single day. When
+# an entry expires the CI pre-check fails the build with a clear
+# "expired suppression" message naming the IDs that need renewal or
+# removal. To renew, re-confirm the threat assessment (the comment
+# block in the workflow YAML lists what to check for each ID) and bump
+# the date by no more than 60 days. After two renewals without an
+# upstream fix, file a tracking issue and consider an alternative
+# mitigation (drop the dependency, switch implementation, etc.).
+#
+# When pip-audit reports a finding for a NEW ID, do NOT add it here
+# without writing the threat assessment in the workflow YAML first —
+# this manifest is the enforcement layer; the workflow is the
+# justification layer.
+
+# -----------------------------------------------------------------------------
+# Twisted DNS DoS — only fix is 26.4.0rc2; root requirements.txt still
+# resolves to 25.5.0 transitively. twisted.names is unused (grep -r).
+GHSA-grgv-6hw6-v9g4 exp:2026-07-25
+
+# pyjwt advisory — disputed by the supplier ("key length is chosen by
+# the application"). Our usage in auth_module/services/jwt_service.py
+# uses 256-bit secrets from settings.SECRET_KEY.
+PYSEC-2025-183 exp:2026-08-01
+
+# joblib NumpyArrayWrapper deserialization — applies to caching of
+# trusted content. We do not deserialise joblib pickles from untrusted
+# sources.
+PYSEC-2024-277 exp:2026-08-01
+
+# torch advisories — all require LOCAL host access. Torch runs inside
+# a non-root container with no shell access; user input reaches the
+# model as already-validated tensors via ml_dark_web/ml_services.py,
+# never as torch.jit scripts or pt2 binaries. Eleven IDs total.
+PYSEC-2025-189 exp:2026-08-10
+PYSEC-2025-190 exp:2026-08-10
+PYSEC-2025-191 exp:2026-08-10
+PYSEC-2025-192 exp:2026-08-15
+PYSEC-2025-193 exp:2026-08-15
+PYSEC-2025-194 exp:2026-08-15
+PYSEC-2025-195 exp:2026-08-20
+PYSEC-2025-196 exp:2026-08-20
+PYSEC-2025-197 exp:2026-08-20
+PYSEC-2025-210 exp:2026-08-25
+PYSEC-2026-139 exp:2026-08-25
+
+# transformers — all require user-loaded malicious HuggingFace
+# checkpoints. ml_dark_web/ml_services.py only invokes from_pretrained
+# with config.BERT_MODEL_NAME (hard-coded at deploy time), so an
+# attacker cannot supply a crafted model name. Eight IDs total.
+PYSEC-2025-211 exp:2026-09-01
+PYSEC-2025-212 exp:2026-09-01
+PYSEC-2025-213 exp:2026-09-01
+PYSEC-2025-214 exp:2026-09-05
+PYSEC-2025-215 exp:2026-09-05
+PYSEC-2025-216 exp:2026-09-05
+PYSEC-2025-217 exp:2026-09-10
+PYSEC-2025-218 exp:2026-09-10
+
+# keras.utils.get_file tar extraction — we don't call get_file with
+# user-controlled URLs (grep -r returns no matches).
+PYSEC-2025-121 exp:2026-09-15
+
+# nltk.util.filestring path traversal — we don't call filestring
+# (grep -r returns no matches).
+PYSEC-2026-97 exp:2026-09-15

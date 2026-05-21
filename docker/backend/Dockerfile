@@ -261,10 +261,18 @@ RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing 
     # guard, a future autobahn upgrade that reorganises the package layout
     # would silently re-introduce Trivy #1559/#1560 (the example Ed25519
     # private key in autobahn.wamp.cryptosign) without us noticing until a
-    # subsequent scan ran. A loud failure here is better than a quiet
-    # regression of a documented zero-knowledge-adjacent finding.
-    if find /opt/venv -type d -path "*/autobahn/wamp" -print -quit | grep -q .; then \
-        echo "ERROR: autobahn/wamp survived strip — Trivy #1559/#1560 will re-fire." >&2; \
+    # subsequent scan ran. The probe checks two complementary signatures
+    # so a future relocation of cryptosign.py outside ``autobahn/wamp/``
+    # still trips the guard: (a) the canonical directory; (b) any file
+    # under ``autobahn/`` whose name contains ``cryptosign``. A loud
+    # failure here is better than a quiet regression of a documented
+    # zero-knowledge-adjacent finding.
+    if find /opt/venv \( \
+            -type d -path "*/autobahn/wamp" \
+            -o -type f -path "*/autobahn/*cryptosign*.py*" \
+       \) -print -quit | grep -q .; then \
+        echo "ERROR: autobahn cryptosign artefacts survived strip — Trivy #1559/#1560 will re-fire." >&2; \
+        find /opt/venv \( -type d -path "*/autobahn/wamp" -o -type f -path "*/autobahn/*cryptosign*.py*" \) -print >&2; \
         exit 1; \
     fi && \
     rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
