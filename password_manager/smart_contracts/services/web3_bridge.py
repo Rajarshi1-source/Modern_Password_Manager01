@@ -72,7 +72,8 @@ TIMELOCKED_VAULT_ABI = [
             {"internalType": "bytes32", "name": "_passwordHash", "type": "bytes32"},
             {"internalType": "address", "name": "_oracleAddress", "type": "address"},
             {"internalType": "uint256", "name": "_priceThreshold", "type": "uint256"},
-            {"internalType": "bool", "name": "_priceAbove", "type": "bool"}
+            {"internalType": "bool", "name": "_priceAbove", "type": "bool"},
+            {"internalType": "uint256", "name": "_maxStaleness", "type": "uint256"}
         ],
         "name": "createPriceOracleVault",
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
@@ -103,6 +104,14 @@ TIMELOCKED_VAULT_ABI = [
     {
         "inputs": [{"internalType": "uint256", "name": "_vaultId", "type": "uint256"}],
         "name": "unlockVault",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    # triggerDeadMansSwitch (dedicated, beneficiary-only)
+    {
+        "inputs": [{"internalType": "uint256", "name": "_vaultId", "type": "uint256"}],
+        "name": "triggerDeadMansSwitch",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"
@@ -331,7 +340,7 @@ class SmartContractWeb3Bridge:
                 from eth_account import Account
                 self.account = Account.from_key(private_key)
                 self._private_key = private_key
-                logger.info(f"Smart contract deployer: {self.account.address}")
+                logger.debug(f"Smart contract deployer: {self.account.address}")
             except Exception as e:
                 logger.error(f"Account load error: {e}")
                 self.account = None
@@ -341,21 +350,26 @@ class SmartContractWeb3Bridge:
             self._private_key = None
 
         # Load VaultAuditLog contract for the on-chain reveal anchor.
-        # Falls back to the TimeLockedVault address so operators without a
-        # separate deployment still get the feature gated off cleanly.
-        audit_address = (
-            self.config.get('VAULT_AUDIT_LOG_ADDRESS', '')
-            or self.config.get('TIMELOCKED_VAULT_ADDRESS', '')
-        )
+        # No fallback: prior versions defaulted to TIMELOCKED_VAULT_ADDRESS
+        # which has no `anchorUnlock(bytes32)` selector, so every audit
+        # broadcast silently reverted. Now an explicit address is required
+        # — if unset, the feature fails CLOSED with `audit_contract = None`
+        # and OnchainUnlockService.enabled returns False.
+        audit_address = self.config.get('VAULT_AUDIT_LOG_ADDRESS', '')
         self.audit_contract = None
-        if self.w3 and audit_address:
+        if not audit_address:
+            logger.warning(
+                "VAULT_AUDIT_LOG_ADDRESS is not configured; on-chain reveal "
+                "audit anchoring is disabled."
+            )
+        elif self.w3:
             try:
                 from web3 import Web3
                 self.audit_contract = self.w3.eth.contract(
                     address=Web3.to_checksum_address(audit_address),
                     abi=VAULT_AUDIT_LOG_ABI,
                 )
-                logger.info(f"VaultAuditLog contract loaded at {audit_address}")
+                logger.debug(f"VaultAuditLog contract loaded at {audit_address}")
             except Exception as e:
                 logger.error(f"VaultAuditLog load error: {e}")
                 self.audit_contract = None

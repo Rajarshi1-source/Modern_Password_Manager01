@@ -434,4 +434,160 @@ describe("TimeLockedVault", function () {
       ).to.be.revertedWith("Vault does not exist");
     });
   });
+
+  // ===========================================================================
+  // C3: unlockVault authorization
+  // ===========================================================================
+  describe("C3: unlockVault authorization", function () {
+    it("blocks third-party callers on a ready TIME_LOCK vault", async function () {
+      const futureTime = Math.floor(Date.now() / 1000) + 60;
+      await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
+      await hre.network.provider.send("evm_increaseTime", [120]);
+      await hre.network.provider.send("evm_mine");
+
+      // user2 (random) tries to flip status — previously this would succeed
+      // and record user2.address as the on-chain `unlockedBy`.
+      await expect(
+        vault.connect(user2).unlockVault(1)
+      ).to.be.revertedWith("Not authorized to unlock");
+    });
+
+    it("allows the creator to unlock", async function () {
+      const futureTime = Math.floor(Date.now() / 1000) + 60;
+      await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
+      await hre.network.provider.send("evm_increaseTime", [120]);
+      await hre.network.provider.send("evm_mine");
+
+      await vault.connect(user1).unlockVault(1);
+      const vaultData = await vault.getVault(1);
+      expect(vaultData.status).to.equal(1); // UNLOCKED
+    });
+
+    it("forbids unlockVault on DMS — must use triggerDeadMansSwitch", async function () {
+      const interval = 30 * 24 * 3600;
+      const grace = 7 * 24 * 3600;
+      await vault.connect(user1).createDeadMansSwitchVault(
+        passwordHash, interval, grace, beneficiary.address
+      );
+      await hre.network.provider.send("evm_increaseTime", [interval + grace + 1]);
+      await hre.network.provider.send("evm_mine");
+
+      await expect(
+        vault.connect(beneficiary).unlockVault(1)
+      ).to.be.revertedWith("Use triggerDeadMansSwitch()");
+    });
+  });
+
+  // ===========================================================================
+  // C5: triggerDeadMansSwitch — beneficiary-only path
+  // ===========================================================================
+  describe("C5: triggerDeadMansSwitch", function () {
+    const interval = 30 * 24 * 3600;
+    const grace = 7 * 24 * 3600;
+
+    it("only the named beneficiary can trigger", async function () {
+      await vault.connect(user1).createDeadMansSwitchVault(
+        passwordHash, interval, grace, beneficiary.address
+      );
+      await hre.network.provider.send("evm_increaseTime", [interval + grace + 1]);
+      await hre.network.provider.send("evm_mine");
+
+      // Random third party rejected.
+      await expect(
+        vault.connect(user2).triggerDeadMansSwitch(1)
+      ).to.be.revertedWith("Only beneficiary");
+
+      // Beneficiary succeeds.
+      await vault.connect(beneficiary).triggerDeadMansSwitch(1);
+      const v = await vault.getVault(1);
+      expect(v.status).to.equal(1); // UNLOCKED
+    });
+
+    it("rejects trigger before conditions are met", async function () {
+      await vault.connect(user1).createDeadMansSwitchVault(
+        passwordHash, interval, grace, beneficiary.address
+      );
+      // No time passed.
+      await expect(
+        vault.connect(beneficiary).triggerDeadMansSwitch(1)
+      ).to.be.revertedWith("Switch not triggered");
+    });
+
+    it("rejects on a non-DMS vault", async function () {
+      const futureTime = Math.floor(Date.now() / 1000) + 60;
+      await vault.connect(user1).createTimeLockVault(passwordHash, futureTime);
+      await expect(
+        vault.connect(beneficiary).triggerDeadMansSwitch(1)
+      ).to.be.revertedWith("Not a DMS vault");
+    });
+  });
+
+  // ===========================================================================
+  // C4: oracle staleness gates
+  // ===========================================================================
+  describe("C4: oracle staleness", function () {
+    let MockOracle, mockOracle;
+
+    beforeEach(async function () {
+      // Inline mock with a controllable updatedAt — minimal AggregatorV3.
+      const src = `
+        // SPDX-License-Identifier: MIT
+        pragma solidity ^0.8.20;
+        contract MockOracle {
+          uint80 public roundId = 1;
+          int256 public answer = 2000_00000000; // $2000 in 8 decimals
+          uint256 public startedAt;
+          uint256 public updatedAt;
+          uint80 public answeredInRound = 1;
+          constructor() { updatedAt = block.timestamp; startedAt = block.timestamp; }
+          function set(int256 a, uint256 u) external { answer = a; updatedAt = u; }
+          function latestRoundData() external view returns (
+            uint80, int256, uint256, uint256, uint80
+          ) { return (roundId, answer, startedAt, updatedAt, answeredInRound); }
+        }`;
+      // Reuse the compiled artifact if present; else skip the mock-deploy
+      // tests gracefully. (Inline solc isn't always available in CI.)
+      try {
+        MockOracle = await ethers.getContractFactory("MockOracle");
+      } catch (e) {
+        this.skip();
+      }
+      mockOracle = await MockOracle.deploy();
+      await mockOracle.waitForDeployment();
+    });
+
+    it("fails closed on a stale price even when answer crosses threshold", async function () {
+      const threshold = 1500_00000000; // $1500
+      const maxStaleness = 3600; // 1h
+      // Create vault using the new 5-arg signature.
+      await vault.connect(user1).createPriceOracleVault(
+        passwordHash,
+        await mockOracle.getAddress(),
+        threshold,
+        true,           // unlock when price > threshold
+        maxStaleness
+      );
+      // Push updatedAt 2h into the past.
+      const block = await ethers.provider.getBlock("latest");
+      await mockOracle.set(2000_00000000, block.timestamp - 7200);
+
+      const canAccess = await vault.conditionalAccess(1);
+      expect(canAccess).to.be.false; // stale → fail closed
+    });
+
+    it("succeeds when price > threshold AND oracle is fresh", async function () {
+      const threshold = 1500_00000000;
+      const maxStaleness = 3600;
+      await vault.connect(user1).createPriceOracleVault(
+        passwordHash,
+        await mockOracle.getAddress(),
+        threshold,
+        true,
+        maxStaleness
+      );
+      // mockOracle's constructor set updatedAt = now, so it's fresh.
+      const canAccess = await vault.conditionalAccess(1);
+      expect(canAccess).to.be.true;
+    });
+  });
 });

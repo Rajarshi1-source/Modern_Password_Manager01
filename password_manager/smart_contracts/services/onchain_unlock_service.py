@@ -94,12 +94,44 @@ class OnchainUnlockService:
         """
         Anchor a reveal on-chain. Returns the ``0x...`` tx hash, or ``None``
         when the feature is disabled / broadcast fails (logged).
+
+        Audit-fix C11 (2026-05): the per-reveal nonce and the resulting
+        commitment hash are persisted to the vault row BEFORE the tx is
+        broadcast. If broadcast fails or revert-races a chain reorg, the
+        DB still records what we tried to anchor so the auditor can
+        reconstruct the preimage of the `VaultUnlocked` event.
+
+        Existing nonce/commitment on the vault row are reused on retry —
+        this keeps the on-chain anchor idempotent (multiple Celery retries
+        will not emit multiple distinct commitments for the same reveal).
         """
         if not self.enabled:
             logger.info("on-chain unlock anchor skipped: feature disabled")
             return None
 
-        commitment = self.build_commitment_hash(vault, user_id)
+        # Reuse the previously-stored nonce on retry; generate-and-save
+        # on first attempt.
+        existing_nonce = bytes(vault.reveal_nonce or b'')
+        if existing_nonce:
+            commitment = self.build_commitment_hash(
+                vault, user_id, nonce=existing_nonce
+            )
+        else:
+            commitment = self.build_commitment_hash(vault, user_id)
+            # `build_commitment_hash` returns the hash but consumed the
+            # nonce internally — recompute deterministically here by
+            # generating a fresh nonce explicitly so we can persist it.
+            import secrets as _secrets
+            fresh_nonce = _secrets.token_bytes(16)
+            commitment = self.build_commitment_hash(
+                vault, user_id, nonce=fresh_nonce
+            )
+            vault.reveal_nonce = fresh_nonce
+            vault.reveal_commitment = '0x' + commitment.hex()
+            vault.save(update_fields=[
+                'reveal_nonce', 'reveal_commitment', 'updated_at',
+            ])
+
         tx_hash = self.bridge.build_and_send(
             self.bridge.audit_contract,
             'anchorUnlock',

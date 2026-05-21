@@ -170,23 +170,54 @@ def verify_vp(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def sign_in_challenge(request):
+    """Issue a nonce + binding cookie for the Sign-in-with-DID flow.
+
+    Audit-fix C9 (2026-05): the challenge response now sets a
+    ``did_signin_binding`` cookie that the verify endpoint MUST observe.
+    This binds an otherwise-replayable VP to the holder's browser.
+    """
+    from .services.sign_in_service import SIGNIN_BINDING_COOKIE
+
     serializer = ChallengeSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    ch = create_challenge(serializer.validated_data["did_string"])
-    return Response(
+    ch, binding_token = create_challenge(serializer.validated_data["did_string"])
+    resp = Response(
         {"nonce": ch.nonce, "expires_at": ch.expires_at.isoformat()}
     )
+    # Cookie scope intentionally narrow: HttpOnly so JS can't read it,
+    # Secure so it never leaves TLS, SameSite=Strict so cross-site CSRF
+    # cannot replay it, max_age aligned with challenge TTL.
+    resp.set_cookie(
+        SIGNIN_BINDING_COOKIE,
+        binding_token,
+        max_age=300,
+        httponly=True,
+        secure=not getattr(settings, 'DEBUG', False),
+        samesite='Strict',
+        path='/',
+    )
+    return resp
 
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def sign_in_verify(request):
+    """Verify a Verifiable Presentation and mint JWTs.
+
+    Reads the ``did_signin_binding`` cookie set at challenge time and
+    passes it through to the service so the atomic nonce-consume UPDATE
+    can require it in the WHERE clause (audit fix C9).
+    """
+    from .services.sign_in_service import SIGNIN_BINDING_COOKIE
+
     serializer = SignInVerifySerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
+    client_binding = request.COOKIES.get(SIGNIN_BINDING_COOKIE)
     ok, user, errors = verify_sign_in_presentation(
         did_string=serializer.validated_data["did_string"],
         vp_jwt=serializer.validated_data["vp_jwt"],
         expected_nonce=serializer.validated_data["nonce"],
+        client_binding=client_binding,
     )
     if not ok or user is None:
         return Response(
@@ -194,7 +225,7 @@ def sign_in_verify(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
     refresh = RefreshToken.for_user(user)
-    return Response(
+    resp = Response(
         {
             "verified": True,
             "access_token": str(refresh.access_token),
@@ -202,6 +233,9 @@ def sign_in_verify(request):
             "user": {"id": user.id, "username": user.username, "email": user.email},
         }
     )
+    # Burn the binding cookie now that it has fulfilled its purpose.
+    resp.delete_cookie(SIGNIN_BINDING_COOKIE, path='/')
+    return resp
 
 
 # ---------------------------------------------------------------------------

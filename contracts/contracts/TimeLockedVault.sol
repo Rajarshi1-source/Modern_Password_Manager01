@@ -78,10 +78,16 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
         uint256 priceThreshold;     // Price in 8 decimals (Chainlink format)
         bool priceAbove;            // true = unlock when price > threshold
         address oracleAddress;
+        uint256 oracleMaxStaleness; // Max seconds since last oracle update
         // Escrow fields
         address arbitrator;
         bool exists;
     }
+
+    /// @dev Default Chainlink heartbeat tolerance when caller does not
+    ///      specify per-feed staleness. 3600s covers most major USD pairs
+    ///      on Arbitrum. Override per-vault when using slower feeds.
+    uint256 public constant DEFAULT_ORACLE_STALENESS = 3600;
 
     // =========================================================================
     // State Variables
@@ -350,16 +356,21 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
      * @param _oracleAddress Chainlink price feed contract address
      * @param _priceThreshold Price threshold (8 decimals, Chainlink format)
      * @param _priceAbove true = unlock when price > threshold; false = price < threshold
+     * @param _maxStaleness Max seconds since the oracle's last update before
+     *        the condition fails closed. Pass 0 to use DEFAULT_ORACLE_STALENESS.
      */
     function createPriceOracleVault(
         bytes32 _passwordHash,
         address _oracleAddress,
         uint256 _priceThreshold,
-        bool _priceAbove
+        bool _priceAbove,
+        uint256 _maxStaleness
     ) external returns (uint256) {
         require(_oracleAddress != address(0), "Invalid oracle address");
         require(_priceThreshold > 0, "Price threshold must be > 0");
         require(_passwordHash != bytes32(0), "Invalid password hash");
+        // Cap at 7 days so a stuck vault is recoverable by cancelling.
+        require(_maxStaleness <= 7 days, "Staleness too large");
 
         uint256 vaultId = nextVaultId++;
         Vault storage v = vaults[vaultId];
@@ -374,6 +385,7 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
         v.priceThreshold = _priceThreshold;
         v.priceAbove = _priceAbove;
         v.oracleAddress = _oracleAddress;
+        v.oracleMaxStaleness = _maxStaleness == 0 ? DEFAULT_ORACLE_STALENESS : _maxStaleness;
         v.exists = true;
 
         userVaults[msg.sender].push(vaultId);
@@ -464,7 +476,12 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
         }
 
         if (v.conditionType == ConditionType.PRICE_ORACLE) {
-            return _checkOraclePrice(v.oracleAddress, v.priceThreshold, v.priceAbove);
+            return _checkOraclePrice(
+                v.oracleAddress,
+                v.priceThreshold,
+                v.priceAbove,
+                v.oracleMaxStaleness == 0 ? DEFAULT_ORACLE_STALENESS : v.oracleMaxStaleness
+            );
         }
 
         // ESCROW: only arbitrator can release (handled in releaseEscrow)
@@ -476,7 +493,17 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
     // =========================================================================
 
     /**
-     * @notice Attempt to unlock a vault (evaluates conditions on-chain)
+     * @notice Attempt to unlock a vault (evaluates conditions on-chain).
+     * @dev Caller must be authorized for the vault's condition type:
+     *      - TIME_LOCK / PRICE_ORACLE: creator (or beneficiary if set).
+     *      - MULTI_SIG: any signer in the M-of-N set.
+     *      - DAO_VOTE: any eligible voter.
+     *      - DEAD_MANS_SWITCH: rejected here — use triggerDeadMansSwitch().
+     *      - ESCROW: rejected here — use releaseEscrow().
+     *
+     *      Without this gate, any third party could flip the on-chain
+     *      `unlockedBy` field the instant conditions were met, producing
+     *      forged "user accessed" trails.
      * @param _vaultId Vault ID to unlock
      */
     function unlockVault(uint256 _vaultId)
@@ -487,10 +514,56 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
     {
         Vault storage v = vaults[_vaultId];
 
-        // Escrow vaults can only be unlocked by the arbitrator
         require(v.conditionType != ConditionType.ESCROW, "Use releaseEscrow()");
+        require(
+            v.conditionType != ConditionType.DEAD_MANS_SWITCH,
+            "Use triggerDeadMansSwitch()"
+        );
+
+        bool authorized;
+        if (
+            v.conditionType == ConditionType.TIME_LOCK ||
+            v.conditionType == ConditionType.PRICE_ORACLE
+        ) {
+            authorized =
+                msg.sender == v.creator ||
+                (v.beneficiary != address(0) && msg.sender == v.beneficiary);
+        } else if (v.conditionType == ConditionType.MULTI_SIG) {
+            authorized =
+                msg.sender == v.creator ||
+                _isAuthorizedSigner(_vaultId, msg.sender);
+        } else if (v.conditionType == ConditionType.DAO_VOTE) {
+            authorized =
+                msg.sender == v.creator ||
+                _isEligibleVoter(_vaultId, msg.sender);
+        }
+        require(authorized, "Not authorized to unlock");
 
         require(conditionalAccess(_vaultId), "Conditions not met");
+
+        v.status = VaultStatus.UNLOCKED;
+        v.updatedAt = block.timestamp;
+
+        emit VaultUnlocked(_vaultId, msg.sender, block.timestamp);
+    }
+
+    /**
+     * @notice Trigger a dead man's switch unlock as the named beneficiary.
+     * @dev Separated from `unlockVault` so the authorization story is
+     *      explicit and so a stale third party can never preempt the
+     *      legitimate inheritor.
+     * @param _vaultId Vault ID to release
+     */
+    function triggerDeadMansSwitch(uint256 _vaultId)
+        external
+        nonReentrant
+        vaultExists(_vaultId)
+        vaultActive(_vaultId)
+    {
+        Vault storage v = vaults[_vaultId];
+        require(v.conditionType == ConditionType.DEAD_MANS_SWITCH, "Not a DMS vault");
+        require(msg.sender == v.beneficiary, "Only beneficiary");
+        require(conditionalAccess(_vaultId), "Switch not triggered");
 
         v.status = VaultStatus.UNLOCKED;
         v.updatedAt = block.timestamp;
@@ -764,16 +837,22 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Check Chainlink oracle price against threshold
-     * @notice Uses a static call to the Chainlink AggregatorV3 interface
+     * @dev Check Chainlink oracle price against threshold with staleness
+     *      and round-completeness guards. Fails CLOSED on any anomaly so a
+     *      frozen feed cannot trigger unintended unlocks.
+     * @param _oracle        AggregatorV3Interface address.
+     * @param _threshold     Threshold in oracle decimals (8 for Chainlink).
+     * @param _above         true = unlock when price > threshold.
+     * @param _maxStaleness  Max seconds since `updatedAt` to accept.
      */
     function _checkOraclePrice(
         address _oracle,
         uint256 _threshold,
-        bool _above
+        bool _above,
+        uint256 _maxStaleness
     ) internal view returns (bool) {
-        // Chainlink AggregatorV3Interface.latestRoundData() selector
-        // Returns: (roundId, answer, startedAt, updatedAt, answeredInRound)
+        // Chainlink AggregatorV3Interface.latestRoundData() returns:
+        //   (roundId, answer, startedAt, updatedAt, answeredInRound)
         (bool success, bytes memory data) = _oracle.staticcall(
             abi.encodeWithSignature("latestRoundData()")
         );
@@ -782,10 +861,20 @@ contract TimeLockedVault is Ownable, ReentrancyGuard {
             return false; // Oracle call failed, condition not met
         }
 
-        // Decode the answer (2nd return value)
-        (, int256 answer,,,) = abi.decode(data, (uint80, int256, uint256, uint256, uint80));
+        (
+            uint80 roundId,
+            int256 answer,
+            ,
+            uint256 updatedAt,
+            uint80 answeredInRound
+        ) = abi.decode(data, (uint80, int256, uint256, uint256, uint80));
 
+        // Sanity + freshness gates.
         if (answer <= 0) return false;
+        if (updatedAt == 0) return false;                       // round incomplete
+        if (block.timestamp < updatedAt) return false;          // clock skew
+        if (block.timestamp - updatedAt > _maxStaleness) return false;
+        if (answeredInRound < roundId) return false;            // stale carry-over
 
         uint256 price = uint256(answer);
 

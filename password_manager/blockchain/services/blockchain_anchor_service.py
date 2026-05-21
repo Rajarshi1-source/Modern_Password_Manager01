@@ -76,7 +76,7 @@ class BlockchainAnchorService:
         self.private_key = os.environ.get('BLOCKCHAIN_PRIVATE_KEY')
         if self.private_key:
             self.account = Account.from_key(self.private_key)
-            logger.info(f"Blockchain deployer account: {self.account.address}")
+            logger.debug(f"Blockchain deployer account: {self.account.address}")
         else:
             logger.warning("BLOCKCHAIN_PRIVATE_KEY not set - anchoring will not work")
             self.account = None
@@ -85,9 +85,10 @@ class BlockchainAnchorService:
         self._initialized = True
     
     def _get_contract_abi(self) -> List[Dict]:
-        """Get the CommitmentRegistry contract ABI"""
-        # Simplified ABI with just the functions we need
+        """Get the CommitmentRegistry contract ABI (post-audit)."""
         return [
+            # anchorCommitment — now permissionless at the tx level; the
+            # signature must recover to an address in `authorizedSigners`.
             {
                 "inputs": [
                     {"internalType": "bytes32", "name": "merkleRoot", "type": "bytes32"},
@@ -99,6 +100,7 @@ class BlockchainAnchorService:
                 "stateMutability": "nonpayable",
                 "type": "function"
             },
+            # verifyCommitment — view (was non-view + event emit before C2 fix).
             {
                 "inputs": [
                     {"internalType": "bytes32", "name": "merkleRoot", "type": "bytes32"},
@@ -108,6 +110,29 @@ class BlockchainAnchorService:
                 "name": "verifyCommitment",
                 "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
                 "stateMutability": "view",
+                "type": "function"
+            },
+            # authorizedSigners(address) -> bool — exposed for operator tooling.
+            {
+                "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+                "name": "authorizedSigners",
+                "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            # addAuthorizedSigner / removeAuthorizedSigner — owner only.
+            {
+                "inputs": [{"internalType": "address", "name": "signer", "type": "address"}],
+                "name": "addAuthorizedSigner",
+                "outputs": [],
+                "stateMutability": "nonpayable",
+                "type": "function"
+            },
+            {
+                "inputs": [{"internalType": "address", "name": "signer", "type": "address"}],
+                "name": "removeAuthorizedSigner",
+                "outputs": [],
+                "stateMutability": "nonpayable",
                 "type": "function"
             },
             {
@@ -348,20 +373,17 @@ class BlockchainAnchorService:
     
     def verify_proof_locally(self, merkle_root: str, leaf_hash: str, proof: list) -> bool:
         """
-        Verify a Merkle proof locally without on-chain call.
-        
-        Recomputes the root from the leaf and proof path, then checks
-        whether it matches the stored merkle_root.
+        Verify a Merkle proof locally without an on-chain call.
+
+        Uses :meth:`MerkleTreeBuilder.hash_pair` so the local and on-chain
+        verification paths are guaranteed to use the same keccak256
+        sorted-pair construction.
         """
         try:
             computed = bytes.fromhex(leaf_hash.replace('0x', ''))
             for sibling_hex in proof:
                 sibling = bytes.fromhex(sibling_hex.replace('0x', ''))
-                if computed < sibling:
-                    combined = computed + sibling
-                else:
-                    combined = sibling + computed
-                computed = Web3.solidity_keccak(['bytes'], [combined])
+                computed = MerkleTreeBuilder.hash_pair(computed, sibling)
 
             expected = bytes.fromhex(merkle_root.replace('0x', ''))
             return computed == expected

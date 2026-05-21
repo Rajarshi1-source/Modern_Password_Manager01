@@ -5,6 +5,7 @@ Smart Contract Vault Tests
 Tests for vault service, condition engine, and API views.
 """
 
+import json
 from datetime import timedelta
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
@@ -280,14 +281,31 @@ class SmartContractAPITest(APITestCase):
         self.assertEqual(len(response.data), 0)
 
     def test_create_time_lock_vault(self):
+        # C12 validator: payload must look like a client-encrypted
+        # envelope. JSON-with-iv+ct is the simplest credible shape.
+        envelope = json.dumps({
+            'iv': 'AAECAwQFBgcICQoLDA==',  # 12 b64 bytes
+            'ct': 'YXJiaXRyYXJ5IGNpcGhlcnRleHQ=',
+            'tag': 'YXV0aGVudGljYXRpb250YWdfMTY=',
+        })
         response = self.client.post('/api/smart-contracts/vaults/', {
             'title': 'API Time Lock',
-            'password_encrypted': 'encrypted_test',
+            'password_encrypted': envelope,
             'condition_type': 'time_lock',
             'unlock_at': (timezone.now() + timedelta(days=7)).isoformat(),
         }, format='json')
         self.assertEqual(response.status_code, http_status.HTTP_201_CREATED)
         self.assertEqual(response.data['condition_type'], 'time_lock')
+
+    def test_create_time_lock_vault_rejects_plaintext(self):
+        """C12 regression: naive plaintext must fail validation."""
+        response = self.client.post('/api/smart-contracts/vaults/', {
+            'title': 'API Time Lock Plaintext',
+            'password_encrypted': 'hunter2',
+            'condition_type': 'time_lock',
+            'unlock_at': (timezone.now() + timedelta(days=7)).isoformat(),
+        }, format='json')
+        self.assertEqual(response.status_code, http_status.HTTP_400_BAD_REQUEST)
 
     def test_vault_detail(self):
         service = VaultService()
