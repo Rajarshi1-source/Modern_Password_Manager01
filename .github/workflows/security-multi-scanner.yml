@@ -121,7 +121,16 @@ jobs:
           import datetime as _dt
           import os
           import pathlib
+          import re
           import sys
+
+          # Strict allow-list for advisory IDs. The parsed value is later
+          # interpolated into a shell command via GITHUB_OUTPUT, so we
+          # MUST refuse any character that the shell could treat as a
+          # metachar — no ``$``, backticks, semicolons, spaces, etc.
+          # The three patterns below match every ID format pip-audit
+          # currently emits (GHSA, PYSEC, CVE) and nothing else.
+          _ID_RX = re.compile(r"^(GHSA-[A-Za-z0-9-]+|PYSEC-\d{4}-\d+|CVE-\d{4}-\d+)$")
 
           manifest = pathlib.Path("pip-audit-ignores.txt")
           today = _dt.date.today()
@@ -138,6 +147,14 @@ jobs:
                   malformed.append(f"line {lineno}: {raw!r}")
                   continue
               advisory, exp_field = parts
+              if not _ID_RX.fullmatch(advisory):
+                  # Anything outside the strict allow-list could carry
+                  # shell metachars; refuse rather than try to escape.
+                  malformed.append(
+                      f"line {lineno}: advisory id {advisory!r} does not "
+                      "match GHSA-/PYSEC-/CVE- format"
+                  )
+                  continue
               try:
                   exp_date = _dt.date.fromisoformat(exp_field[len("exp:") :])
               except ValueError:
@@ -163,6 +180,10 @@ jobs:
               )
               sys.exit(3)
 
+          # Every advisory has now passed the strict regex above, so the
+          # flag string contains only ``[A-Za-z0-9-]`` plus spaces and
+          # the literal ``--ignore-vuln`` token — safe to interpolate
+          # into a shell command without further quoting.
           flags = " ".join(f"--ignore-vuln {adv}" for adv in ignores)
           gh_out = os.environ.get("GITHUB_OUTPUT")
           if gh_out:

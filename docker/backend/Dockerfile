@@ -275,18 +275,25 @@ RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing 
         find /opt/venv \( -type d -path "*/autobahn/wamp" -o -type f -path "*/autobahn/*cryptosign*.py*" \) -print >&2; \
         exit 1; \
     fi && \
-    rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
-           /usr/local/lib/python3*/dist-packages/python_dotenv* \
-           /usr/lib/python3*/dist-packages/pip \
-           /usr/lib/python3*/dist-packages/pip-* \
-           /usr/local/lib/python3*/dist-packages/pip \
-           /usr/local/lib/python3*/dist-packages/pip-* \
-           /usr/lib/python3*/dist-packages/wheel-* \
-           /usr/local/lib/python3*/dist-packages/wheel-* \
-           /usr/lib/python3*/dist-packages/jaraco* \
-           /usr/local/lib/python3*/dist-packages/jaraco* \
-           /usr/lib/python3*/dist-packages/urllib3-2.6* \
-           /usr/local/lib/python3*/dist-packages/urllib3-2.6* 2>/dev/null || true
+    # Brace-grouped so the trailing ``|| true`` ONLY swallows failures
+    # from the system-site cleanup (where a missing path is fine). The
+    # earlier links in the && chain — strip, pip-upgrade, and the
+    # autobahn guard — must still fail-fast. Without the braces, ``||``
+    # binds to the whole left-side of the chain (``&&`` and ``||`` are
+    # left-associative with equal precedence), so a failure in pip or
+    # the guard would be silently masked.
+    { rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
+             /usr/local/lib/python3*/dist-packages/python_dotenv* \
+             /usr/lib/python3*/dist-packages/pip \
+             /usr/lib/python3*/dist-packages/pip-* \
+             /usr/local/lib/python3*/dist-packages/pip \
+             /usr/local/lib/python3*/dist-packages/pip-* \
+             /usr/lib/python3*/dist-packages/wheel-* \
+             /usr/local/lib/python3*/dist-packages/wheel-* \
+             /usr/lib/python3*/dist-packages/jaraco* \
+             /usr/local/lib/python3*/dist-packages/jaraco* \
+             /usr/lib/python3*/dist-packages/urllib3-2.6* \
+             /usr/local/lib/python3*/dist-packages/urllib3-2.6* 2>/dev/null; } || true
 
 # Update library cache after all native libs and venv are in place
 RUN ldconfig
