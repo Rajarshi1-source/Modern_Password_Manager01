@@ -63,9 +63,30 @@ jobs:
           syft version
 
       - name: Generate SBOM (CycloneDX and SPDX) from image
+        # GHCR is eventually consistent for manifest reads. The push above
+        # can complete (build action reports "DONE") while a follow-up
+        # ``manifest GET`` against the same tag still returns 404
+        # MANIFEST_UNKNOWN for a brief window. We retry the Syft scan a
+        # few times with a short backoff rather than fail the whole
+        # build on a transient consistency hit.
         run: |
-          syft ${{ env.IMAGE }} -o cyclonedx-json=sbom.image.cyclonedx.json
-          syft ${{ env.IMAGE }} -o spdx-json=sbom.image.spdx.json
+          attempts=0
+          max_attempts=5
+          backoff=10
+          while : ; do
+            attempts=$((attempts + 1))
+            if syft ${{ env.IMAGE }} -o cyclonedx-json=sbom.image.cyclonedx.json \
+              && syft ${{ env.IMAGE }} -o spdx-json=sbom.image.spdx.json; then
+              break
+            fi
+            if [ "$attempts" -ge "$max_attempts" ]; then
+              echo "ERROR: Syft could not resolve ${{ env.IMAGE }} after $max_attempts attempts" >&2
+              exit 1
+            fi
+            echo "Syft attempt $attempts/$max_attempts failed; retrying in ${backoff}s..." >&2
+            sleep "$backoff"
+            backoff=$((backoff * 2))
+          done
           ls -lh sbom.image.*
 
       - name: (Optional) Generate SBOM for python env (cyclonedx-py)

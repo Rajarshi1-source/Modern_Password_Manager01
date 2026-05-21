@@ -151,7 +151,12 @@ WORKDIR /app
 COPY password_manager/requirements-core.txt .
 COPY password_manager/requirements-ml.txt .
 
-RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
+# setuptools is upper-bounded at <82 because neurokit2 0.2.13 and
+# torch 2.12.0+cpu both declare ``setuptools<82``. Letting pip upgrade
+# past that ceiling produces a noisy "dependency conflict" line in the
+# CI log (it does not currently break the build, but a future pip
+# version may promote it to a hard failure).
+RUN pip install --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" && \
     pip install --prefer-binary --retries 5 -r requirements-core.txt
 
 RUN pip install --prefer-binary --retries 5 -r requirements-ml.txt || \
@@ -240,21 +245,65 @@ COPY --from=deps-builder /opt/venv /opt/venv
 # the application uses the /opt/venv interpreter so the system pip is dead
 # weight. Finally upgrade any system-site stale wheels (python-dotenv 1.0.0,
 # Trivy #1556) by removing them so only the venv's pinned version remains.
+#
+# autobahn.wamp.cryptosign:
+#   We use Django Channels' ASGI dispatcher, not the WAMP protocol. The
+#   entire ``autobahn/wamp`` package is dead code in our image. Removing
+#   it eliminates Trivy #1559/#1560 (documentation-purpose Ed25519 key in
+#   cryptosign.py:165 mis-detected as a real secret) and trims the image.
+#   Also remove the compiled __pycache__ entry so Trivy's secret scan
+#   doesn't re-fire on the .pyc copy.
 RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing \) -prune -exec rm -rf {} + && \
     find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
-    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1" "wheel>=0.46.2" && \
-    rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
-           /usr/local/lib/python3*/dist-packages/python_dotenv* \
-           /usr/lib/python3*/dist-packages/pip \
-           /usr/lib/python3*/dist-packages/pip-* \
-           /usr/local/lib/python3*/dist-packages/pip \
-           /usr/local/lib/python3*/dist-packages/pip-* \
-           /usr/lib/python3*/dist-packages/wheel-* \
-           /usr/local/lib/python3*/dist-packages/wheel-* \
-           /usr/lib/python3*/dist-packages/jaraco* \
-           /usr/local/lib/python3*/dist-packages/jaraco* \
-           /usr/lib/python3*/dist-packages/urllib3-2.6* \
-           /usr/local/lib/python3*/dist-packages/urllib3-2.6* 2>/dev/null || true
+    /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" && \
+    # autobahn 25.12.2 ships cryptosign code at two locations:
+    # ``autobahn/wamp/cryptosign.py`` AND ``autobahn/twisted/cryptosign.py``
+    # (with their compiled __pycache__/*.pyc siblings). Both contain the
+    # documentation-purpose Ed25519 keypair that Trivy flags as a
+    # secret. We don't use WAMP cryptosign auth in either subpackage, so
+    # remove the wamp directory wholesale and ``-delete`` any remaining
+    # cryptosign source/bytecode files anywhere under ``autobahn/``. The
+    # guard below matches the same pattern, so any future relocation
+    # the strip misses is caught loudly.
+    find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf {} + && \
+    find /opt/venv -type f -path "*/autobahn/*cryptosign*.py*" -delete && \
+    # Fail the build if the strip left autobahn/wamp behind — without this
+    # guard, a future autobahn upgrade that reorganises the package layout
+    # would silently re-introduce Trivy #1559/#1560 (the example Ed25519
+    # private key in autobahn.wamp.cryptosign) without us noticing until a
+    # subsequent scan ran. The probe checks two complementary signatures
+    # so a future relocation of cryptosign.py outside ``autobahn/wamp/``
+    # still trips the guard: (a) the canonical directory; (b) any file
+    # under ``autobahn/`` whose name contains ``cryptosign``. A loud
+    # failure here is better than a quiet regression of a documented
+    # zero-knowledge-adjacent finding.
+    if find /opt/venv \( \
+            -type d -path "*/autobahn/wamp" \
+            -o -type f -path "*/autobahn/*cryptosign*.py*" \
+       \) -print -quit | grep -q .; then \
+        echo "ERROR: autobahn cryptosign artefacts survived strip — Trivy #1559/#1560 will re-fire." >&2; \
+        find /opt/venv \( -type d -path "*/autobahn/wamp" -o -type f -path "*/autobahn/*cryptosign*.py*" \) -print >&2; \
+        exit 1; \
+    fi && \
+    # Brace-grouped so the trailing ``|| true`` ONLY swallows failures
+    # from the system-site cleanup (where a missing path is fine). The
+    # earlier links in the && chain — strip, pip-upgrade, and the
+    # autobahn guard — must still fail-fast. Without the braces, ``||``
+    # binds to the whole left-side of the chain (``&&`` and ``||`` are
+    # left-associative with equal precedence), so a failure in pip or
+    # the guard would be silently masked.
+    { rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
+             /usr/local/lib/python3*/dist-packages/python_dotenv* \
+             /usr/lib/python3*/dist-packages/pip \
+             /usr/lib/python3*/dist-packages/pip-* \
+             /usr/local/lib/python3*/dist-packages/pip \
+             /usr/local/lib/python3*/dist-packages/pip-* \
+             /usr/lib/python3*/dist-packages/wheel-* \
+             /usr/local/lib/python3*/dist-packages/wheel-* \
+             /usr/lib/python3*/dist-packages/jaraco* \
+             /usr/local/lib/python3*/dist-packages/jaraco* \
+             /usr/lib/python3*/dist-packages/urllib3-2.6* \
+             /usr/local/lib/python3*/dist-packages/urllib3-2.6* 2>/dev/null; } || true
 
 # Update library cache after all native libs and venv are in place
 RUN ldconfig
