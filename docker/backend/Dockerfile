@@ -256,7 +256,17 @@ COPY --from=deps-builder /opt/venv /opt/venv
 RUN find /opt/venv -depth -type d \( -name tests -o -name test -o -name testing \) -prune -exec rm -rf {} + && \
     find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o -name "example_key*.pem" \) -delete && \
     /opt/venv/bin/python -m pip install --no-cache-dir --upgrade "pip>=25.0" "setuptools>=78.1.1,<82" "wheel>=0.46.2" && \
+    # autobahn 25.12.2 ships cryptosign code at two locations:
+    # ``autobahn/wamp/cryptosign.py`` AND ``autobahn/twisted/cryptosign.py``
+    # (with their compiled __pycache__/*.pyc siblings). Both contain the
+    # documentation-purpose Ed25519 keypair that Trivy flags as a
+    # secret. We don't use WAMP cryptosign auth in either subpackage, so
+    # remove the wamp directory wholesale and ``-delete`` any remaining
+    # cryptosign source/bytecode files anywhere under ``autobahn/``. The
+    # guard below matches the same pattern, so any future relocation
+    # the strip misses is caught loudly.
     find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf {} + && \
+    find /opt/venv -type f -path "*/autobahn/*cryptosign*.py*" -delete && \
     # Fail the build if the strip left autobahn/wamp behind — without this
     # guard, a future autobahn upgrade that reorganises the package layout
     # would silently re-introduce Trivy #1559/#1560 (the example Ed25519
