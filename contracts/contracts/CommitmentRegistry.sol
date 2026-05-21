@@ -9,6 +9,17 @@ import "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
  * @title CommitmentRegistry
  * @dev Registry for anchoring behavioral commitment batches to Arbitrum blockchain
  * @notice Uses Merkle tree batching to reduce gas costs (1000 commitments per batch)
+ *
+ * Security model (post-audit):
+ *   - `verifyCommitment` is a free, private `view`. It does NOT emit an event
+ *     so external indexers cannot learn which leaves are being probed.
+ *   - `anchorCommitment` is permissionless at the transaction level; the
+ *     batch is only accepted if it is signed by an address recorded in
+ *     `authorizedSigners`. This separates the broadcaster (any address
+ *     holding gas) from the authorization key, allowing the latter to live
+ *     in a KMS/HSM while the former is a hot wallet.
+ *   - `owner()` administers the `authorizedSigners` set and otherwise has no
+ *     write authority over anchored data.
  */
 contract CommitmentRegistry is Ownable {
     using ECDSA for bytes32;
@@ -25,9 +36,14 @@ contract CommitmentRegistry is Ownable {
 
     /// @dev Mapping from Merkle root to commitment details
     mapping(bytes32 => Commitment) public commitments;
-    
+
     /// @dev Mapping from submitter address to their Merkle roots
     mapping(address => bytes32[]) public submitterCommitments;
+
+    /// @dev Addresses authorized to sign anchor requests. Independent of
+    ///      `owner()` so the contract owner can rotate the hot signer
+    ///      without redeployment.
+    mapping(address => bool) public authorizedSigners;
 
     /// @dev Events
     event CommitmentAnchored(
@@ -37,37 +53,65 @@ contract CommitmentRegistry is Ownable {
         address indexed submitter
     );
 
-    event CommitmentVerified(
-        bytes32 indexed merkleRoot,
-        bytes32 indexed leafHash,
-        bool valid
-    );
+    event SignerAuthorized(address indexed signer);
+    event SignerRevoked(address indexed signer);
 
     /**
-     * @dev Constructor - initializes contract with owner
+     * @dev Constructor - initializes contract with owner; the deployer
+     *      becomes both `owner()` and an initial authorized signer.
      */
-    constructor() Ownable(msg.sender) {}
+    constructor() Ownable(msg.sender) {
+        authorizedSigners[msg.sender] = true;
+        emit SignerAuthorized(msg.sender);
+    }
+
+    /**
+     * @notice Authorize a new anchor-signing key.
+     */
+    function addAuthorizedSigner(address signer) external onlyOwner {
+        require(signer != address(0), "Invalid signer");
+        require(!authorizedSigners[signer], "Already authorized");
+        authorizedSigners[signer] = true;
+        emit SignerAuthorized(signer);
+    }
+
+    /**
+     * @notice Revoke an existing anchor-signing key.
+     */
+    function removeAuthorizedSigner(address signer) external onlyOwner {
+        require(authorizedSigners[signer], "Not authorized");
+        authorizedSigners[signer] = false;
+        emit SignerRevoked(signer);
+    }
 
     /**
      * @notice Anchor a batch of commitments to the blockchain
      * @param merkleRoot Root hash of the Merkle tree containing all commitments
      * @param batchSize Number of commitments in the batch
-     * @param signature ECDSA signature for anti-spam protection
+     * @param signature ECDSA signature over `keccak256(merkleRoot, batchSize)`
+     *        produced by an address present in `authorizedSigners`.
+     *
+     *        The transaction sender (`msg.sender`) is recorded as the
+     *        submitter but is NOT required to be authorized. This lets a
+     *        gas-funded relayer broadcast on behalf of a KMS-held signer.
      */
     function anchorCommitment(
         bytes32 merkleRoot,
         uint256 batchSize,
         bytes calldata signature
-    ) external onlyOwner {
+    ) external {
         require(batchSize > 0 && batchSize <= 10000, "Invalid batch size");
         require(!commitments[merkleRoot].exists, "Already anchored");
 
-        // Verify signature (additional security layer)
+        // Recover signer and require it is in the authorized set.
         bytes32 messageHash = keccak256(
             abi.encodePacked(merkleRoot, batchSize)
         );
-        address signer = ECDSA.recover(MessageHashUtils.toEthSignedMessageHash(messageHash), signature);
-        require(signer == owner(), "Invalid signature");
+        address signer = ECDSA.recover(
+            MessageHashUtils.toEthSignedMessageHash(messageHash),
+            signature
+        );
+        require(authorizedSigners[signer], "Unauthorized signer");
 
         // Store commitment
         commitments[merkleRoot] = Commitment({
@@ -89,7 +133,9 @@ contract CommitmentRegistry is Ownable {
     }
 
     /**
-     * @notice Verify that a specific commitment exists in a Merkle tree batch
+     * @notice Verify that a specific commitment exists in a Merkle tree batch.
+     * @dev `view` — no state change, no event. Free to call, and external
+     *      observers cannot tell which leaves were probed.
      * @param merkleRoot The root of the Merkle tree
      * @param leafHash Hash of the specific commitment to verify
      * @param proof Array of sibling hashes needed for verification
@@ -99,7 +145,7 @@ contract CommitmentRegistry is Ownable {
         bytes32 merkleRoot,
         bytes32 leafHash,
         bytes32[] calldata proof
-    ) external returns (bool) {
+    ) external view returns (bool) {
         require(commitments[merkleRoot].exists, "Root not found");
 
         bytes32 computedHash = leafHash;
@@ -118,11 +164,7 @@ contract CommitmentRegistry is Ownable {
             }
         }
 
-        bool isValid = computedHash == merkleRoot;
-
-        emit CommitmentVerified(merkleRoot, leafHash, isValid);
-
-        return isValid;
+        return computedHash == merkleRoot;
     }
 
     /**
@@ -161,4 +203,3 @@ contract CommitmentRegistry is Ownable {
         return submitterCommitments[submitter].length;
     }
 }
-

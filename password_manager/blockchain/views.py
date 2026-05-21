@@ -97,7 +97,29 @@ def verify_commitment(request, commitment_id):
         
         # Get blockchain anchor
         blockchain_anchor = merkle_proof.blockchain_anchor
-        
+
+        # Audit-fix C1 (2026-05): proofs anchored with the pre-fix SHA-256
+        # tree are not on-chain-verifiable. Fail closed with a clear status
+        # rather than returning a misleading `verified: false`.
+        legacy_proof = (
+            not getattr(merkle_proof, 'verifiable', True)
+            or getattr(blockchain_anchor, 'hash_algo', 'keccak256') != 'keccak256'
+        )
+        if legacy_proof:
+            return Response({
+                'verified': False,
+                'status': 'legacy_hash_mismatch',
+                'message': (
+                    'This commitment was anchored before a hash-algorithm fix. '
+                    'The on-chain root is correct but cannot be verified by '
+                    'the current code path. Contact support if you need a '
+                    'verifiable proof or re-anchor a new behavioral commitment.'
+                ),
+                'commitment_id': str(commitment.commitment_id),
+                'merkle_root': merkle_proof.merkle_root,
+                'created_at': commitment.creation_timestamp,
+            })
+
         # Verify proof locally
         service = BlockchainAnchorService()
         is_valid_local = service.verify_proof_locally(
@@ -105,7 +127,7 @@ def verify_commitment(request, commitment_id):
             leaf_hash=merkle_proof.commitment_hash,
             proof=merkle_proof.proof
         )
-        
+
         # Optionally verify on-chain (more expensive but authoritative)
         is_valid_onchain = None
         if request.GET.get('verify_onchain', 'false').lower() == 'true':

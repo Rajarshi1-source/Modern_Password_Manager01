@@ -66,7 +66,16 @@ class SmartContractVault(models.Model):
         help_text='Keccak256 hash of the encrypted password (0x prefixed)'
     )
     password_encrypted = models.TextField(
-        help_text='Server-side encrypted password data (AES-256-GCM)'
+        help_text=(
+            'Opaque client-encrypted ciphertext envelope. The server does '
+            'NOT decrypt this field — the user holds the only key. Callers '
+            'are expected to POST a structured envelope (e.g. base64-'
+            'encoded {iv, ct, tag} or a versioned binary blob); the '
+            'serializer rejects payloads that look like plaintext. '
+            'Audit-fix C12 (2026-05) — the previous "AES-256-GCM (server-'
+            'side)" docstring was misleading; no server-side encryption '
+            'is performed at any layer.'
+        )
     )
 
     # Condition configuration
@@ -183,6 +192,23 @@ class SmartContractVault(models.Model):
         null=True,
         blank=True,
         help_text='Wall-clock time the on-chain anchor was confirmed'
+    )
+    # Audit-fix C11 (2026-05): persist the per-reveal nonce so the
+    # 32-byte commitment anchored on-chain
+    #     keccak256(vault_id || user_id || nonce)
+    # is reconstructible after the fact. Without this, an auditor cannot
+    # tie a `VaultUnlocked` event back to a specific vault — the previous
+    # code generated the nonce inside the service and threw it away.
+    reveal_nonce = models.BinaryField(
+        blank=True,
+        default=b'',
+        help_text='16-byte per-reveal nonce used for the on-chain commitment',
+    )
+    reveal_commitment = models.CharField(
+        max_length=66,
+        blank=True,
+        default='',
+        help_text='keccak256 commitment hash anchored on-chain (0x-prefixed)',
     )
 
     class Meta:

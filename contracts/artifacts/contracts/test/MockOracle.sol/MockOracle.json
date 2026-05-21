@@ -1,0 +1,153 @@
+{
+  "_format": "hh3-artifact-1",
+  "contractName": "MockOracle",
+  "sourceName": "contracts/test/MockOracle.sol",
+  "abi": [
+    {
+      "inputs": [],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [],
+      "name": "answer",
+      "outputs": [
+        {
+          "internalType": "int256",
+          "name": "",
+          "type": "int256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "answeredInRound",
+      "outputs": [
+        {
+          "internalType": "uint80",
+          "name": "",
+          "type": "uint80"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "latestRoundData",
+      "outputs": [
+        {
+          "internalType": "uint80",
+          "name": "",
+          "type": "uint80"
+        },
+        {
+          "internalType": "int256",
+          "name": "",
+          "type": "int256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint80",
+          "name": "",
+          "type": "uint80"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "roundId",
+      "outputs": [
+        {
+          "internalType": "uint80",
+          "name": "",
+          "type": "uint80"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "int256",
+          "name": "_answer",
+          "type": "int256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "_updatedAt",
+          "type": "uint256"
+        }
+      ],
+      "name": "set",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint80",
+          "name": "_roundId",
+          "type": "uint80"
+        },
+        {
+          "internalType": "uint80",
+          "name": "_answeredInRound",
+          "type": "uint80"
+        }
+      ],
+      "name": "setRounds",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "startedAt",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "updatedAt",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x608080604052346046576001808060501b03195f5416175f55642e90edd0006001556001808060501b03196004541617600455426003554260025561021a908161004b8239f35b5f80fdfe6080806040526004361015610012575f80fd5b5f3560e01c9081637519ab50146101ca5750806385bb7d69146101ad5780638cd221c914610188578063a22c554014610169578063a806aeba1461010b578063c22c2499146100e5578063f21f537d146100c85763feaf968c14610074575f80fd5b346100c4575f3660031901126100c45760a06001600160501b035f5416600154600254600354906001600160501b0360045416926040519485526020850152604084015260608301526080820152f35b5f80fd5b346100c4575f3660031901126100c4576020600254604051908152f35b346100c4575f3660031901126100c45760206001600160501b0360045416604051908152f35b346100c45760403660031901126100c4576004356001600160501b0381168091036100c457602435906001600160501b0382168092036100c4576001600160501b03195f5416175f556001600160501b031960045416176004555f80f35b346100c45760403660031901126100c457600435600155602435600355005b346100c4575f3660031901126100c45760206001600160501b035f5416604051908152f35b346100c4575f3660031901126100c4576020600154604051908152f35b346100c4575f3660031901126100c4576020906003548152f3fea26469706673582212209a21e395f642b9d826afea2d11cecae185a71ad1a00594a848ca0eefe67226b764736f6c634300081c0033",
+  "deployedBytecode": "0x6080806040526004361015610012575f80fd5b5f3560e01c9081637519ab50146101ca5750806385bb7d69146101ad5780638cd221c914610188578063a22c554014610169578063a806aeba1461010b578063c22c2499146100e5578063f21f537d146100c85763feaf968c14610074575f80fd5b346100c4575f3660031901126100c45760a06001600160501b035f5416600154600254600354906001600160501b0360045416926040519485526020850152604084015260608301526080820152f35b5f80fd5b346100c4575f3660031901126100c4576020600254604051908152f35b346100c4575f3660031901126100c45760206001600160501b0360045416604051908152f35b346100c45760403660031901126100c4576004356001600160501b0381168091036100c457602435906001600160501b0382168092036100c4576001600160501b03195f5416175f556001600160501b031960045416176004555f80f35b346100c45760403660031901126100c457600435600155602435600355005b346100c4575f3660031901126100c45760206001600160501b035f5416604051908152f35b346100c4575f3660031901126100c4576020600154604051908152f35b346100c4575f3660031901126100c4576020906003548152f3fea26469706673582212209a21e395f642b9d826afea2d11cecae185a71ad1a00594a848ca0eefe67226b764736f6c634300081c0033",
+  "linkReferences": {},
+  "deployedLinkReferences": {},
+  "immutableReferences": {},
+  "inputSourceName": "project/contracts/test/MockOracle.sol",
+  "buildInfoId": "solc-0_8_28-6da5c9a6224e728c8bed896ae7392738701594c8"
+}

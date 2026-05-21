@@ -56,7 +56,24 @@ class BlockchainAnchor(models.Model):
         blank=True,
         help_text="Address that submitted the transaction"
     )
-    
+    hash_algo = models.CharField(
+        max_length=16,
+        default='keccak256',
+        help_text=(
+            "Hash algorithm used to build the Merkle tree for this batch. "
+            "Pre-2026-05 rows are 'sha256' and cannot be verified on-chain "
+            "(the contract expects keccak256). New batches use 'keccak256'."
+        ),
+    )
+    verifiable = models.BooleanField(
+        default=True,
+        help_text=(
+            "False for rows anchored before the hash-algorithm fix; their "
+            "on-chain merkle root is correct but cannot be matched by the "
+            "new verifier path. Re-anchor by enqueueing PendingCommitments."
+        ),
+    )
+
     class Meta:
         db_table = 'blockchain_anchors'
         ordering = ['-timestamp']
@@ -140,7 +157,14 @@ class MerkleProof(models.Model):
         blank=True,
         help_text="When this proof was verified"
     )
-    
+    verifiable = models.BooleanField(
+        default=True,
+        help_text=(
+            "Mirrors BlockchainAnchor.verifiable so callers can filter "
+            "without joining. False for legacy SHA-256 proofs."
+        ),
+    )
+
     class Meta:
         db_table = 'merkle_proofs'
         ordering = ['-created_at']

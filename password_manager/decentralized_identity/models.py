@@ -141,7 +141,17 @@ class VCPresentation(models.Model):
 
 
 class SignInChallenge(models.Model):
-    """Nonce issued for the Sign-in-with-DID flow."""
+    """
+    Nonce issued for the Sign-in-with-DID flow.
+
+    Audit-fix C9 (2026-05): each challenge now also carries a
+    `binding_token` returned to the client as an HttpOnly+Secure cookie
+    at challenge issuance. Verification requires that the SAME cookie is
+    re-presented on the verify call. This binds the (otherwise replayable)
+    nonce to the holder's browser session: a stolen VP from another
+    device/network is rejected at the atomic UPDATE level — the cookie
+    is in the WHERE clause.
+    """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     did_string = models.CharField(max_length=255, db_index=True)
@@ -149,6 +159,17 @@ class SignInChallenge(models.Model):
     expires_at = models.DateTimeField()
     consumed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    binding_token = models.CharField(
+        max_length=128,
+        blank=True,
+        default='',
+        help_text=(
+            "Server-issued token echoed via a per-session cookie. Required "
+            "on verify when present; legacy rows (created before C9 fix) "
+            "have an empty string and are honored for backward compat until "
+            "they expire."
+        ),
+    )
 
     class Meta:
         indexes = [models.Index(fields=["did_string", "consumed"])]

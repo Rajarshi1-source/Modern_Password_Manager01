@@ -3,8 +3,63 @@ Vault Serializers
 ==================
 """
 
+import base64
+import json
+
 from rest_framework import serializers
 from smart_contracts.models.vault import SmartContractVault, VaultCondition, ConditionType
+
+
+# Audit-fix C12 (2026-05): minimum length for a credible client-encrypted
+# envelope. The smallest plausible AES-GCM envelope is iv(12) + ct(>=1) +
+# tag(16) = 29 bytes; we require 32 to also cover XChaCha20 nonces (24)
+# plus a 1-byte payload + tag. Anything shorter is almost certainly
+# plaintext or a misconfigured client.
+_MIN_ENVELOPE_BYTES = 32
+
+
+def _looks_like_encrypted_envelope(value: str) -> bool:
+    """Heuristic: payload must parse as JSON-with-IV-fields or as base64
+    decoding to at least _MIN_ENVELOPE_BYTES. Either form proves the
+    client did *something* before POSTing — naive plaintext like
+    'hunter2' fails both branches.
+
+    Intentionally lenient: we don't try to authenticate the envelope
+    (we can't — we don't have the key). We're only catching the obvious
+    misuses (plain ASCII secrets, empty strings, integers as strings).
+    """
+    if not isinstance(value, str) or not value:
+        return False
+
+    # Branch A: structured JSON envelope.
+    stripped = value.strip()
+    if stripped.startswith('{'):
+        try:
+            obj = json.loads(stripped)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(obj, dict):
+            return False
+        # Accept any of the conventional envelope key sets. Field names
+        # vary across clients — we just need to see structure, not full
+        # cryptographic validity (we cannot validate that from here).
+        iv_present = any(k in obj for k in ('iv', 'nonce', 'n'))
+        ct_present = any(k in obj for k in ('ct', 'ciphertext', 'c', 'data'))
+        return iv_present and ct_present
+
+    # Branch B: opaque base64 / base64url blob of credible length.
+    try:
+        # Accept both standard and url-safe alphabets, with or without
+        # padding. Strict mode ensures non-base64 ASCII (e.g. "hunter2")
+        # fails immediately.
+        normalized = stripped + '=' * (-len(stripped) % 4)
+        decoded = base64.b64decode(normalized, validate=True)
+    except (ValueError, TypeError):
+        try:
+            decoded = base64.urlsafe_b64decode(normalized)
+        except Exception:
+            return False
+    return len(decoded) >= _MIN_ENVELOPE_BYTES
 
 
 class VaultConditionSerializer(serializers.ModelSerializer):
@@ -63,6 +118,22 @@ class SmartContractVaultCreateSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, default='')
     password_encrypted = serializers.CharField()
     condition_type = serializers.ChoiceField(choices=ConditionType.choices)
+
+    def validate_password_encrypted(self, value):
+        """C12: reject naive plaintext posted into the ciphertext field.
+
+        See `_looks_like_encrypted_envelope` for the accepted shapes.
+        We can't authenticate the ciphertext (we have no key) but we can
+        catch the obvious misuses that the old docstring invited.
+        """
+        if not _looks_like_encrypted_envelope(value):
+            raise serializers.ValidationError(
+                'password_encrypted must be a client-encrypted envelope '
+                '(structured JSON with iv+ct fields, or base64 of >=32 '
+                'bytes). The server does not encrypt this field; the '
+                'client must encrypt with the master key before POSTing.'
+            )
+        return value
 
     # Time-lock
     unlock_at = serializers.DateTimeField(required=False)

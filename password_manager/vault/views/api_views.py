@@ -251,14 +251,35 @@ class VaultItemViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def get_salt(self, request):
-        """Get user's salt for key derivation"""
+        """Get the user's salt for key derivation.
+
+        Audit-fix C10 (2026-05): when a `vault.UserSalt` row needs to be
+        created on first access, seed `auth_hash` from the authoritative
+        `auth_module.UserSalt` written at registration. Previously the
+        row was created with `auth_hash=b''`, which let any authenticated
+        caller "claim" the empty slot through `verify_auth` and lock the
+        legitimate owner out of their own vault.
+        """
         try:
-            # Get or create salt for user
+            # Pre-fetch the authoritative auth_hash, if it exists. This
+            # is the row that the registration view at
+            # auth_module/views.py::AuthViewSet.register populates with
+            # the client-derived Argon2id hash.
+            seed_auth_hash = b''
+            try:
+                from auth_module.models import UserSalt as AuthSalt
+                seed_auth_hash = bytes(AuthSalt.objects.get(user=request.user).auth_hash)
+            except Exception:
+                # No auth_module row → vault stays in the same "not
+                # initialized" state it was in before; verify_auth will
+                # then refuse the request rather than auto-claim.
+                seed_auth_hash = b''
+
             salt_obj, created = UserSalt.objects.get_or_create(
                 user=request.user,
-                defaults={'salt': generate_salt(), 'auth_hash': b''}
+                defaults={'salt': generate_salt(), 'auth_hash': seed_auth_hash},
             )
-            
+
             return success_response({
                 'salt': salt_obj.get_salt_b64(),
                 'is_new': created
@@ -266,7 +287,7 @@ class VaultItemViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return error_response(
                 message=f"Failed to retrieve salt: {str(e)}",
-                code="salt_retrieval_error", 
+                code="salt_retrieval_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -315,36 +336,40 @@ class VaultItemViewSet(viewsets.ModelViewSet):
         
         try:
             user_id = request.user.id
-            
+
             # Get user salt record
             try:
                 salt_obj = UserSalt.objects.get(user=request.user)
             except UserSalt.DoesNotExist:
                 return error_response(
-                    message="User not initialized",
-                    code="user_not_initialized",
+                    message="Vault not initialized. Complete registration first.",
+                    code="vault_not_initialized",
                     status_code=status.HTTP_400_BAD_REQUEST
                 )
-            
-            # First-time setup: store the auth hash
-            if not salt_obj.auth_hash or salt_obj.auth_hash == b'':
-                # Store hashed version of auth hash
-                server_hash = AuthHashService.hash_auth_hash(auth_hash)
-                salt_obj.auth_hash = bytes.fromhex(server_hash)
-                salt_obj.save()
-                
-                # Cache for future requests
-                vault_cache.set_auth_hash(user_id, server_hash)
-                
-                return success_response({
-                    'valid': True,
-                    'setup': True,
-                    'message': 'Auth hash stored successfully'
-                })
-            
+
+            # Audit-fix C10 (2026-05): the previous "first-time setup"
+            # branch here would WRITE whatever auth_hash the caller sent
+            # into an empty `vault.UserSalt` row, allowing a JWT-bearing
+            # attacker to claim a victim's vault when the row hadn't been
+            # seeded yet. The seeding now happens at `get_salt` time,
+            # populated from the authoritative `auth_module.UserSalt`
+            # row written at registration. Here we refuse to fall back
+            # — any empty `auth_hash` means the vault is in a half-
+            # provisioned state and the user must re-run the registration
+            # finalization flow.
+            if not salt_obj.auth_hash or bytes(salt_obj.auth_hash) == b'':
+                return error_response(
+                    message=(
+                        "Vault is not initialized. Re-authenticate via the "
+                        "registration finalization flow before retrying."
+                    ),
+                    code="vault_not_initialized",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
             # Verify auth hash
             is_valid = AuthHashService.verify_auth_hash(user_id, auth_hash)
-            
+
             if is_valid:
                 return success_response({
                     'valid': True,
@@ -356,7 +381,7 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                     code="invalid_auth",
                     status_code=status.HTTP_401_UNAUTHORIZED
                 )
-                
+
         except Exception as e:
             return error_response(
                 message=f"Auth verification failed: {str(e)}",

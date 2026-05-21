@@ -1975,14 +1975,74 @@ SENTRY_TRACES_SAMPLE_RATE = float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0
 SENTRY_PROFILES_SAMPLE_RATE = float(os.environ.get('SENTRY_PROFILES_SAMPLE_RATE', '0.1'))
 
 if SENTRY_DSN:
+    import re as _sentry_re
     import sentry_sdk
     from sentry_sdk.integrations.django import DjangoIntegration
     from sentry_sdk.integrations.celery import CeleryIntegration
     from sentry_sdk.integrations.logging import LoggingIntegration
     from sentry_sdk.integrations.redis import RedisIntegration
 
+    # ------------------------------------------------------------------
+    # Audit-fix C7 (2026-05): scrub blockchain secrets and addresses from
+    # Sentry payloads. `send_default_pii=False` blocks request PII, but
+    # transaction `from`/`to`, a leaked private key in stack frame locals,
+    # and 0x-prefixed hex blobs are not classified as PII by Sentry and
+    # would otherwise reach the event store.
+    # ------------------------------------------------------------------
+    _SENSITIVE_ENV_NAMES = (
+        'BLOCKCHAIN_PRIVATE_KEY', 'JWT_SECRET_KEY', 'SECRET_KEY',
+        'DATABASE_PASSWORD', 'REDIS_PASSWORD', 'POSTGRES_PASSWORD',
+        'EMAIL_HOST_PASSWORD', 'TWILIO_AUTH_TOKEN',
+    )
+    # Match anything that looks like an Ethereum address (40 hex) or a
+    # private key / hash (64 hex). 40-char lower bound avoids false hits
+    # on ordinary 32-bit hex IDs.
+    _HEX_BLOB = _sentry_re.compile(r'0x[0-9a-fA-F]{40,}')
+
+    def _scrub_str(s):
+        if not isinstance(s, str):
+            return s
+        return _HEX_BLOB.sub('0x<redacted>', s)
+
+    def _scrub_mapping(mapping):
+        if not isinstance(mapping, dict):
+            return mapping
+        out = {}
+        for k, v in mapping.items():
+            if isinstance(k, str) and k.upper() in _SENSITIVE_ENV_NAMES:
+                out[k] = '<redacted>'
+            elif isinstance(v, dict):
+                out[k] = _scrub_mapping(v)
+            elif isinstance(v, list):
+                out[k] = [
+                    _scrub_mapping(x) if isinstance(x, dict) else _scrub_str(x)
+                    for x in v
+                ]
+            else:
+                out[k] = _scrub_str(v)
+        return out
+
+    def _sentry_before_send(event, hint):
+        try:
+            for bag in ('extra', 'contexts', 'tags', 'request'):
+                if bag in event:
+                    event[bag] = _scrub_mapping(event[bag])
+            # Stack-frame locals may capture the private key on init.
+            for ex in event.get('exception', {}).get('values', []) or []:
+                stacktrace = ex.get('stacktrace') or {}
+                for frame in stacktrace.get('frames', []) or []:
+                    if 'vars' in frame:
+                        frame['vars'] = _scrub_mapping(frame['vars'])
+            if isinstance(event.get('message'), str):
+                event['message'] = _scrub_str(event['message'])
+        except Exception:
+            # NEVER let scrubbing crash event delivery — return as-is.
+            return event
+        return event
+
     sentry_sdk.init(
         dsn=SENTRY_DSN,
+        before_send=_sentry_before_send,
         integrations=[
             DjangoIntegration(
                 transaction_style='url',

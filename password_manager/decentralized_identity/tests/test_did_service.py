@@ -249,11 +249,14 @@ class TestSignInFlow:
         mb = did_service.multibase_encode_ed25519_pub(pub)
         register_user_did(user, did, mb)
 
-        challenge = create_challenge(did)
+        challenge, binding = create_challenge(did)
         vp_jwt = _sign_vp(priv, did, challenge.nonce)
 
         ok, signed_in_user, errors = verify_sign_in_presentation(
-            did_string=did, vp_jwt=vp_jwt, expected_nonce=challenge.nonce
+            did_string=did,
+            vp_jwt=vp_jwt,
+            expected_nonce=challenge.nonce,
+            client_binding=binding,
         )
         assert ok is True, errors
         assert signed_in_user.pk == user.pk
@@ -268,14 +271,20 @@ class TestSignInFlow:
         mb = did_service.multibase_encode_ed25519_pub(pub)
         register_user_did(user, did, mb)
 
-        challenge = create_challenge(did)
+        challenge, binding = create_challenge(did)
         vp_jwt = _sign_vp(priv, did, challenge.nonce)
 
         ok1, _, _ = verify_sign_in_presentation(
-            did_string=did, vp_jwt=vp_jwt, expected_nonce=challenge.nonce
+            did_string=did,
+            vp_jwt=vp_jwt,
+            expected_nonce=challenge.nonce,
+            client_binding=binding,
         )
         ok2, _, errors = verify_sign_in_presentation(
-            did_string=did, vp_jwt=vp_jwt, expected_nonce=challenge.nonce
+            did_string=did,
+            vp_jwt=vp_jwt,
+            expected_nonce=challenge.nonce,
+            client_binding=binding,
         )
         assert ok1 is True
         assert ok2 is False
@@ -292,11 +301,60 @@ class TestSignInFlow:
         mb = did_service.multibase_encode_ed25519_pub(pub)
         register_user_did(user, did, mb)
 
-        challenge = create_challenge(did)
+        challenge, binding = create_challenge(did)
         # Sign the VP with the WRONG key.
         vp_jwt = _sign_vp(other, did, challenge.nonce)
         ok, _, errors = verify_sign_in_presentation(
-            did_string=did, vp_jwt=vp_jwt, expected_nonce=challenge.nonce
+            did_string=did,
+            vp_jwt=vp_jwt,
+            expected_nonce=challenge.nonce,
+            client_binding=binding,
         )
         assert ok is False
         assert any("signature" in e.lower() for e in errors)
+
+    def test_missing_binding_cookie_rejected(self):
+        """C9: a stolen VP without the binding cookie must be denied."""
+        user = User.objects.create_user(
+            username="nocookie", email="nc@example.com", password="x"
+        )
+        priv = Ed25519PrivateKey.generate()
+        pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        did = did_service.create_did_key_from_public_key(pub)
+        mb = did_service.multibase_encode_ed25519_pub(pub)
+        register_user_did(user, did, mb)
+
+        challenge, _binding = create_challenge(did)
+        vp_jwt = _sign_vp(priv, did, challenge.nonce)
+
+        ok, _, errors = verify_sign_in_presentation(
+            did_string=did,
+            vp_jwt=vp_jwt,
+            expected_nonce=challenge.nonce,
+            client_binding=None,  # attacker has the VP but not the cookie
+        )
+        assert ok is False
+        assert any("binding" in e.lower() for e in errors)
+
+    def test_wrong_binding_cookie_rejected(self):
+        """C9: a VP replayed with the WRONG binding cookie must be denied."""
+        user = User.objects.create_user(
+            username="badcookie", email="bc@example.com", password="x"
+        )
+        priv = Ed25519PrivateKey.generate()
+        pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        did = did_service.create_did_key_from_public_key(pub)
+        mb = did_service.multibase_encode_ed25519_pub(pub)
+        register_user_did(user, did, mb)
+
+        challenge, _real = create_challenge(did)
+        vp_jwt = _sign_vp(priv, did, challenge.nonce)
+
+        ok, _, errors = verify_sign_in_presentation(
+            did_string=did,
+            vp_jwt=vp_jwt,
+            expected_nonce=challenge.nonce,
+            client_binding="totally-wrong-token-value",
+        )
+        assert ok is False
+        assert any("binding" in e.lower() for e in errors)
