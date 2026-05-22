@@ -265,15 +265,31 @@ class VaultItemViewSet(viewsets.ModelViewSet):
             # is the row that the registration view at
             # auth_module/views.py::AuthViewSet.register populates with
             # the client-derived Argon2id hash.
+            #
+            # We catch ONLY the expected "no auth row yet" and "auth
+            # module unavailable" cases. Letting database errors and
+            # other runtime failures propagate is deliberate: the prior
+            # broad `except Exception` could mask a real DB outage by
+            # silently seeding `b''`, which then trips `verify_auth`'s
+            # `vault_not_initialized` refusal — confusing the user about
+            # the real failure. Tightened per CodeRabbit review.
             seed_auth_hash = b''
             try:
                 from auth_module.models import UserSalt as AuthSalt
-                seed_auth_hash = bytes(AuthSalt.objects.get(user=request.user).auth_hash)
-            except Exception:
-                # No auth_module row → vault stays in the same "not
-                # initialized" state it was in before; verify_auth will
-                # then refuse the request rather than auto-claim.
-                seed_auth_hash = b''
+            except ImportError:
+                # auth_module not installed in this deployment; vault
+                # stays uninitialized just like before.
+                pass
+            else:
+                try:
+                    seed_auth_hash = bytes(
+                        AuthSalt.objects.get(user=request.user).auth_hash or b''
+                    )
+                except AuthSalt.DoesNotExist:
+                    # No row at registration time — leave empty so
+                    # verify_auth correctly refuses with
+                    # vault_not_initialized.
+                    seed_auth_hash = b''
 
             salt_obj, created = UserSalt.objects.get_or_create(
                 user=request.user,

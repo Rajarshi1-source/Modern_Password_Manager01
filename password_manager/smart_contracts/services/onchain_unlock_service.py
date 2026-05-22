@@ -109,28 +109,42 @@ class OnchainUnlockService:
             logger.info("on-chain unlock anchor skipped: feature disabled")
             return None
 
-        # Reuse the previously-stored nonce on retry; generate-and-save
-        # on first attempt.
-        existing_nonce = bytes(vault.reveal_nonce or b'')
-        if existing_nonce:
-            commitment = self.build_commitment_hash(
-                vault, user_id, nonce=existing_nonce
+        # Atomically read-or-create the per-vault nonce so concurrent
+        # Celery workers can't each generate a different one and
+        # broadcast competing commitments. The row is locked with
+        # SELECT FOR UPDATE for the duration of the transaction; the
+        # first worker writes the nonce, the rest read the same value
+        # back and reuse it. Added per CodeRabbit review of PR #262.
+        from django.db import transaction as _txn
+
+        with _txn.atomic():
+            locked = (
+                SmartContractVault.objects
+                .select_for_update()
+                .get(pk=vault.pk)
             )
-        else:
-            commitment = self.build_commitment_hash(vault, user_id)
-            # `build_commitment_hash` returns the hash but consumed the
-            # nonce internally — recompute deterministically here by
-            # generating a fresh nonce explicitly so we can persist it.
-            import secrets as _secrets
-            fresh_nonce = _secrets.token_bytes(16)
+            existing_nonce = bytes(locked.reveal_nonce or b'')
+            if existing_nonce:
+                nonce = existing_nonce
+                fresh = False
+            else:
+                import secrets as _secrets
+                nonce = _secrets.token_bytes(16)
+                fresh = True
+
             commitment = self.build_commitment_hash(
-                vault, user_id, nonce=fresh_nonce
+                locked, user_id, nonce=nonce
             )
-            vault.reveal_nonce = fresh_nonce
-            vault.reveal_commitment = '0x' + commitment.hex()
-            vault.save(update_fields=[
-                'reveal_nonce', 'reveal_commitment', 'updated_at',
-            ])
+
+            if fresh:
+                locked.reveal_nonce = nonce
+                locked.reveal_commitment = '0x' + commitment.hex()
+                locked.save(update_fields=[
+                    'reveal_nonce', 'reveal_commitment', 'updated_at',
+                ])
+                # Reflect the new values onto the caller's instance too.
+                vault.reveal_nonce = locked.reveal_nonce
+                vault.reveal_commitment = locked.reveal_commitment
 
         tx_hash = self.bridge.build_and_send(
             self.bridge.audit_contract,

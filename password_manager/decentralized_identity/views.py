@@ -176,7 +176,10 @@ def sign_in_challenge(request):
     ``did_signin_binding`` cookie that the verify endpoint MUST observe.
     This binds an otherwise-replayable VP to the holder's browser.
     """
-    from .services.sign_in_service import SIGNIN_BINDING_COOKIE
+    from .services.sign_in_service import (
+        CHALLENGE_TTL_SECONDS,
+        SIGNIN_BINDING_COOKIE,
+    )
 
     serializer = ChallengeSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -186,11 +189,13 @@ def sign_in_challenge(request):
     )
     # Cookie scope intentionally narrow: HttpOnly so JS can't read it,
     # Secure so it never leaves TLS, SameSite=Strict so cross-site CSRF
-    # cannot replay it, max_age aligned with challenge TTL.
+    # cannot replay it. Reuse the single source-of-truth TTL constant so
+    # the cookie's max_age can't drift from `ch.expires_at` if the TTL
+    # is ever retuned. Refined per CodeRabbit review.
     resp.set_cookie(
         SIGNIN_BINDING_COOKIE,
         binding_token,
-        max_age=300,
+        max_age=CHALLENGE_TTL_SECONDS,
         httponly=True,
         secure=not getattr(settings, 'DEBUG', False),
         samesite='Strict',

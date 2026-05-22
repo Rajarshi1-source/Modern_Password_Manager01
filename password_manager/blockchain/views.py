@@ -101,8 +101,15 @@ def verify_commitment(request, commitment_id):
         # Audit-fix C1 (2026-05): proofs anchored with the pre-fix SHA-256
         # tree are not on-chain-verifiable. Fail closed with a clear status
         # rather than returning a misleading `verified: false`.
+        # `merkle_proof.verifiable` mirrors `blockchain_anchor.verifiable` for
+        # fast filtering, but `BlockchainAnchor` is the authoritative row.
+        # Treat the proof as legacy if EITHER flag is false OR the anchor's
+        # hash_algo is anything other than keccak256 — fail closed on the
+        # authoritative state even if the mirror has drifted. Added per
+        # CodeRabbit review.
         legacy_proof = (
             not getattr(merkle_proof, 'verifiable', True)
+            or not getattr(blockchain_anchor, 'verifiable', True)
             or getattr(blockchain_anchor, 'hash_algo', 'keccak256') != 'keccak256'
         )
         if legacy_proof:

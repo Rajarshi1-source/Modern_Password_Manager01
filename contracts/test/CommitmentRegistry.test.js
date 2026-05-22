@@ -1,5 +1,23 @@
 const { expect } = require("chai");
-const { ethers } = require("hardhat");
+const { ethers, network } = require("hardhat");
+
+/**
+ * Build the keccak256 message hash that the contract expects on
+ * `anchorCommitment`. Must match exactly:
+ *
+ *   keccak256(
+ *     abi.encodePacked(block.chainid, address(this), merkleRoot, batchSize)
+ *   )
+ *
+ * The chain + contract binding was added after a CodeRabbit review to
+ * prevent cross-chain/cross-contract signature replay.
+ */
+function anchorMessageHash(contractAddress, merkleRoot, batchSize) {
+  return ethers.solidityPackedKeccak256(
+    ["uint256", "address", "bytes32", "uint256"],
+    [BigInt(network.config.chainId || 31337), contractAddress, merkleRoot, batchSize]
+  );
+}
 
 describe("CommitmentRegistry", function () {
   let commitmentRegistry;
@@ -25,9 +43,10 @@ describe("CommitmentRegistry", function () {
       const batchSize = 1000;
 
       // Create signature
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
 
@@ -48,9 +67,10 @@ describe("CommitmentRegistry", function () {
       const merkleRoot = ethers.keccak256(ethers.toUtf8Bytes("test-root"));
       const batchSize = 0;
 
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
 
@@ -63,9 +83,10 @@ describe("CommitmentRegistry", function () {
       const merkleRoot = ethers.keccak256(ethers.toUtf8Bytes("test-root"));
       const batchSize = 1000;
 
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
 
@@ -85,9 +106,10 @@ describe("CommitmentRegistry", function () {
       const merkleRoot = ethers.keccak256(ethers.toUtf8Bytes("test-root"));
       const batchSize = 1000;
 
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
 
@@ -104,9 +126,10 @@ describe("CommitmentRegistry", function () {
       const merkleRoot = ethers.keccak256(ethers.toUtf8Bytes("test-root-2"));
       const batchSize = 1000;
 
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       // Sign with otherAccount; it is NOT in authorizedSigners by default.
       const signature = await otherAccount.signMessage(ethers.getBytes(messageHash));
@@ -128,8 +151,8 @@ describe("CommitmentRegistry", function () {
       // Now otherAccount can sign anchors.
       const merkleRoot = ethers.keccak256(ethers.toUtf8Bytes("rotated"));
       const batchSize = 5;
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"], [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(), merkleRoot, batchSize
       );
       const signature = await otherAccount.signMessage(ethers.getBytes(messageHash));
       await expect(
@@ -160,9 +183,10 @@ describe("CommitmentRegistry", function () {
 
       // Anchor the commitment
       const batchSize = 2;
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
       await commitmentRegistry.anchorCommitment(merkleRoot, batchSize, signature);
@@ -181,9 +205,10 @@ describe("CommitmentRegistry", function () {
       );
 
       const batchSize = 2;
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
       await commitmentRegistry.anchorCommitment(merkleRoot, batchSize, signature);
@@ -203,18 +228,24 @@ describe("CommitmentRegistry", function () {
       );
 
       const batchSize = 2;
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"], [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(), merkleRoot, batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
       await commitmentRegistry.anchorCommitment(merkleRoot, batchSize, signature);
 
-      // .staticCall confirms the function is `view` — would fail
-      // (no return data from a non-view function) if C2 regressed.
+      // .staticCall confirms the function is callable without a tx;
+      // we ALSO directly assert the ABI mutability so a regression that
+      // marks verifyCommitment non-view (which ethers.staticCall would
+      // still happily execute) is caught here. Refined per CodeRabbit
+      // review.
       const result = await commitmentRegistry.verifyCommitment.staticCall(
         merkleRoot, leaf1, [leaf2]
       );
       expect(result).to.be.true;
+      expect(
+        commitmentRegistry.interface.getFunction("verifyCommitment").stateMutability
+      ).to.equal("view");
 
       // The `CommitmentVerified` event was deleted in the C2 fix. Calling
       // verifyCommitment must not emit anything. We assert by checking
@@ -234,9 +265,10 @@ describe("CommitmentRegistry", function () {
 
       // Anchor two commitments
       for (const merkleRoot of [merkleRoot1, merkleRoot2]) {
-        const messageHash = ethers.solidityPackedKeccak256(
-          ["bytes32", "uint256"],
-          [merkleRoot, batchSize]
+        const messageHash = anchorMessageHash(
+          await commitmentRegistry.getAddress(),
+          merkleRoot,
+          batchSize
         );
         const signature = await owner.signMessage(ethers.getBytes(messageHash));
         await commitmentRegistry.anchorCommitment(merkleRoot, batchSize, signature);
@@ -252,9 +284,10 @@ describe("CommitmentRegistry", function () {
       const merkleRoot = ethers.keccak256(ethers.toUtf8Bytes("test-root"));
       const batchSize = 1000;
 
-      const messageHash = ethers.solidityPackedKeccak256(
-        ["bytes32", "uint256"],
-        [merkleRoot, batchSize]
+      const messageHash = anchorMessageHash(
+        await commitmentRegistry.getAddress(),
+        merkleRoot,
+        batchSize
       );
       const signature = await owner.signMessage(ethers.getBytes(messageHash));
       await commitmentRegistry.anchorCommitment(merkleRoot, batchSize, signature);

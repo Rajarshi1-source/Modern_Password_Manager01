@@ -1990,8 +1990,21 @@ if SENTRY_DSN:
     # would otherwise reach the event store.
     # ------------------------------------------------------------------
     _SENSITIVE_ENV_NAMES = (
-        'BLOCKCHAIN_PRIVATE_KEY', 'JWT_SECRET_KEY', 'SECRET_KEY',
-        'DATABASE_PASSWORD', 'REDIS_PASSWORD', 'POSTGRES_PASSWORD',
+        # Blockchain hot-key (signs anchor txs).
+        'BLOCKCHAIN_PRIVATE_KEY',
+        # JWT signing keys — JWT_PRIVATE_KEY is the asymmetric PEM body
+        # the RS256 path uses (settings.py line ~751), JWT_SECRET_KEY is
+        # the legacy HS256 secret.
+        'JWT_SECRET_KEY', 'JWT_PRIVATE_KEY',
+        # Django master secret.
+        'SECRET_KEY',
+        # Database secrets — both env names are referenced in DATABASES
+        # config (DB_PASSWORD on line ~275, DATABASE_PASSWORD elsewhere).
+        'DATABASE_PASSWORD', 'DB_PASSWORD', 'DB_REPLICA_PASSWORD',
+        'POSTGRES_PASSWORD',
+        # Cache / queue secrets.
+        'REDIS_PASSWORD',
+        # Transactional egress secrets.
         'EMAIL_HOST_PASSWORD', 'TWILIO_AUTH_TOKEN',
     )
     # Match anything that looks like an Ethereum address (40 hex) or a
