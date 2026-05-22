@@ -45,6 +45,13 @@ contract CommitmentRegistry is Ownable {
     ///      without redeployment.
     mapping(address => bool) public authorizedSigners;
 
+    /// @dev Number of currently-authorized signers. Maintained alongside
+    ///      `authorizedSigners` so `removeAuthorizedSigner` can refuse to
+    ///      remove the last one (otherwise the registry would be bricked:
+    ///      no signer could anchor and `owner()` is not itself authorized
+    ///      to sign unless explicitly added). Added per CodeRabbit review.
+    uint256 public authorizedSignerCount;
+
     /// @dev Events
     event CommitmentAnchored(
         bytes32 indexed merkleRoot,
@@ -62,6 +69,7 @@ contract CommitmentRegistry is Ownable {
      */
     constructor() Ownable(msg.sender) {
         authorizedSigners[msg.sender] = true;
+        authorizedSignerCount = 1;
         emit SignerAuthorized(msg.sender);
     }
 
@@ -72,16 +80,33 @@ contract CommitmentRegistry is Ownable {
         require(signer != address(0), "Invalid signer");
         require(!authorizedSigners[signer], "Already authorized");
         authorizedSigners[signer] = true;
+        authorizedSignerCount += 1;
         emit SignerAuthorized(signer);
     }
 
     /**
      * @notice Revoke an existing anchor-signing key.
+     * @dev Refuses to remove the last signer so a key rotation mistake
+     *      cannot brick anchoring. To wind the contract down deliberately,
+     *      transfer ownership first; do not use this function.
      */
     function removeAuthorizedSigner(address signer) external onlyOwner {
         require(authorizedSigners[signer], "Not authorized");
+        require(authorizedSignerCount > 1, "Cannot remove last signer");
         authorizedSigners[signer] = false;
+        authorizedSignerCount -= 1;
         emit SignerRevoked(signer);
+    }
+
+    /**
+     * @notice Renouncing ownership is disabled.
+     * @dev If ownership were renounced, no one could ever rotate
+     *      `authorizedSigners` again — meaning a compromised hot key
+     *      could not be revoked. Always transfer ownership to a multisig
+     *      instead of renouncing.
+     */
+    function renounceOwnership() public view override onlyOwner {
+        revert("Renounce disabled");
     }
 
     /**
@@ -104,8 +129,14 @@ contract CommitmentRegistry is Ownable {
         require(!commitments[merkleRoot].exists, "Already anchored");
 
         // Recover signer and require it is in the authorized set.
+        // Bind the signed payload to (chainId, contract address) so a
+        // signature minted for one CommitmentRegistry deployment cannot
+        // be replayed against another deployment or on a different chain
+        // — added per CodeRabbit review. Using `abi.encodePacked` over a
+        // fixed-arity set of fixed-size types so the off-chain `solidityKeccak`
+        // helper produces the same digest byte-for-byte.
         bytes32 messageHash = keccak256(
-            abi.encodePacked(merkleRoot, batchSize)
+            abi.encodePacked(block.chainid, address(this), merkleRoot, batchSize)
         );
         address signer = ECDSA.recover(
             MessageHashUtils.toEthSignedMessageHash(messageHash),

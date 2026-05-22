@@ -11,7 +11,7 @@ sides agree byte-for-byte. Any pre-fix anchored rows are flagged
 on-chain-verifiable again.
 """
 
-from typing import List, Dict
+from typing import Dict, List, Optional
 
 from eth_utils import keccak
 
@@ -90,7 +90,9 @@ class MerkleTreeBuilder:
 
         return proof
 
-    def verify_proof(self, leaf: bytes, proof: List[bytes], root: bytes = None) -> bool:
+    def verify_proof(
+        self, leaf: bytes, proof: List[bytes], root: Optional[bytes] = None
+    ) -> bool:
         """Verify a Merkle proof locally using the canonical hasher."""
         if root is None:
             root = self.root

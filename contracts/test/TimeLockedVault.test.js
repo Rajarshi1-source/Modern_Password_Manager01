@@ -548,7 +548,7 @@ describe("TimeLockedVault", function () {
       // Reuse the compiled artifact if present; else skip the mock-deploy
       // tests gracefully. (Inline solc isn't always available in CI.)
       try {
-        MockOracle = await ethers.getContractFactory("MockOracle");
+        MockOracle = await hre.ethers.getContractFactory("MockOracle");
       } catch (e) {
         this.skip();
       }
@@ -568,7 +568,7 @@ describe("TimeLockedVault", function () {
         maxStaleness
       );
       // Push updatedAt 2h into the past.
-      const block = await ethers.provider.getBlock("latest");
+      const block = await hre.ethers.provider.getBlock("latest");
       await mockOracle.set(2000_00000000, block.timestamp - 7200);
 
       const canAccess = await vault.conditionalAccess(1);

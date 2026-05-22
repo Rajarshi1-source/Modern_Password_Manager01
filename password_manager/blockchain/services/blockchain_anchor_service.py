@@ -241,10 +241,17 @@ class BlockchainAnchorService:
             
             logger.info(f"Built Merkle tree with root: {merkle_root}")
             
-            # Sign the commitment
+            # Sign the commitment. The on-chain contract binds the
+            # signed payload to (chainId, contract address) so a
+            # signature minted for one deployment can't be replayed on
+            # another. Match its `abi.encode(block.chainid, address(this),
+            # merkleRoot, batchSize)` exactly — added per CodeRabbit
+            # review of PR #262.
+            chain_id = self.w3.eth.chain_id
+            contract_addr = Web3.to_checksum_address(self.contract_address)
             message_hash = Web3.solidity_keccak(
-                ['bytes32', 'uint256'],
-                [bytes.fromhex(merkle_root[2:]), len(pending)]
+                ['uint256', 'address', 'bytes32', 'uint256'],
+                [chain_id, contract_addr, bytes.fromhex(merkle_root[2:]), len(pending)]
             )
             msg = encode_defunct(primitive=message_hash)
             signature = self.account.sign_message(msg)
@@ -254,7 +261,36 @@ class BlockchainAnchorService:
                 address=self.contract_address,
                 abi=self.contract_abi
             )
-            
+
+            # Preflight: confirm our signer is still authorized on the
+            # contract before paying gas to send a tx that would just
+            # revert. Catches the "owner rotated us out" case loudly
+            # instead of leaving anchoring quietly broken. Added per
+            # CodeRabbit review of PR #262.
+            try:
+                if not contract.functions.authorizedSigners(
+                    self.account.address
+                ).call():
+                    logger.error(
+                        "Blockchain signer %s is not in CommitmentRegistry."
+                        "authorizedSigners; refusing to broadcast. Have the "
+                        "registry owner call addAuthorizedSigner() and retry.",
+                        self.account.address,
+                    )
+                    blockchain_breaker.on_failure(
+                        PermissionError("unauthorized signer")
+                    )
+                    return None
+            except Exception as e:
+                # The view returns False on uninitialized contracts; treat
+                # any other RPC error as a transient failure (don't trip
+                # the breaker — let the retry path handle it).
+                logger.warning(
+                    "authorizedSigners preflight call failed: %s — proceeding "
+                    "anyway; the on-chain require() will catch a real mismatch.",
+                    e,
+                )
+
             # Build transaction
             nonce = self.w3.eth.get_transaction_count(self.account.address)
             

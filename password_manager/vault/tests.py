@@ -966,15 +966,19 @@ class VerifyAuthC10Tests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def test_empty_auth_hash_is_rejected(self):
-        """No silent first-time-setup: must NOT store the attacker's hash."""
+        """No silent first-time-setup: must NOT store the attacker's hash.
+
+        Asserts the endpoint refuses with 400 + `vault_not_initialized` —
+        not 404. A 404 here would mean the URL is unwired and the test
+        is rubber-stamping the fix without exercising it.
+        """
         resp = self.client.post(
             '/api/vault/items/verify_auth/',
             data={'auth_hash': 'attacker-supplied-hash'},
             format='json',
         )
-        # Either the URL isn't wired in this test harness (404) OR the
-        # endpoint refuses with 400. We accept both; the critical
-        # invariant is that the DB row's auth_hash is STILL EMPTY.
-        self.assertIn(resp.status_code, (400, 404))
+        self.assertEqual(resp.status_code, 400, resp.content)
+        body = resp.json()
+        self.assertEqual(body.get('code'), 'vault_not_initialized')
         refreshed = UserSalt.objects.get(user=self.user)
-        self.assertIn(bytes(refreshed.auth_hash or b''), (b'', b'\x00' * 0))
+        self.assertEqual(bytes(refreshed.auth_hash or b''), b'')

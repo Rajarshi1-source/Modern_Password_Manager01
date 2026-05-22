@@ -31,8 +31,15 @@ async function main() {
   const deployerAddress = await deployer.getAddress();
   const networkConfig = hre.config.networks;
   const currentNetwork = await provider.getNetwork();
+  // `hre.config.networks[*].chainId` is a JS number; `provider.getNetwork().chainId`
+  // is a bigint under ethers v6. Strict-equals never matches, so we coerce
+  // both sides to BigInt before comparing (per CodeRabbit review).
   const networkName = Object.keys(networkConfig).find(
-    name => networkConfig[name]?.chainId === currentNetwork.chainId
+    name => {
+      const cfgId = networkConfig[name]?.chainId;
+      if (cfgId == null) return false;
+      return BigInt(cfgId) === currentNetwork.chainId;
+    }
   ) || "unknown";
 
   console.log("=".repeat(60));

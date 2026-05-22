@@ -60,21 +60,30 @@ class Command(BaseCommand):
             ))
             return
 
-        with transaction.atomic():
-            # Collect the BehavioralCommitments referenced before we drop
-            # the pending rows so we can re-enqueue them with the new hash.
-            commitments_to_requeue = list(
-                stale.select_related('user', 'commitment').values(
-                    'user_id', 'commitment_id', 'commitment__encrypted_embedding'
-                )
+        # Snapshot the rows we plan to replace so the loop has stable
+        # data to work from, but DO NOT delete the originals up front.
+        # If `add_commitment` fails (anchoring disabled, lookup failure,
+        # the process dies mid-loop) we want the pre-fix pending row to
+        # remain so a future invocation can retry. Originals are deleted
+        # one-by-one only after their replacement is successfully
+        # persisted — added per CodeRabbit review.
+        commitments_to_requeue = list(
+            stale.select_related('user', 'commitment').values(
+                'id',  # original PendingCommitment row pk
+                'user_id',
+                'commitment_id',
+                'commitment__encrypted_embedding',
             )
-            stale.delete()
+        )
 
         service = get_blockchain_anchor_service()
         requeued = 0
         skipped_already_anchored = 0
+        failed = 0
 
         for row in commitments_to_requeue:
+            original_pk = row['id']
+
             # Skip if this commitment already has a verifiable proof
             # (could happen if some other batch ran in between).
             already_proven = MerkleProof.objects.filter(
@@ -82,6 +91,10 @@ class Command(BaseCommand):
                 verifiable=True,
             ).exists()
             if already_proven:
+                # Safe to drop the stale row: a fresh verifiable proof
+                # already exists for this commitment.
+                with transaction.atomic():
+                    PendingCommitment.objects.filter(pk=original_pk).delete()
                 skipped_already_anchored += 1
                 continue
 
@@ -92,14 +105,42 @@ class Command(BaseCommand):
                 raw = bytes(raw)
             encrypted_data = raw.hex() if isinstance(raw, (bytes, bytearray)) else (raw or '')
 
-            service.add_commitment(
-                user_id=row['user_id'],
-                commitment_id=row['commitment_id'],
-                encrypted_data=encrypted_data,
-            )
-            requeued += 1
+            # Replace the stale row with a fresh keccak256-hashed one
+            # atomically: the new row is created inside the same
+            # transaction that deletes the old. If `add_commitment`
+            # raises or returns None (e.g. anchoring disabled), the
+            # transaction rolls back and the original survives.
+            try:
+                with transaction.atomic():
+                    new_hash = service.add_commitment(
+                        user_id=row['user_id'],
+                        commitment_id=row['commitment_id'],
+                        encrypted_data=encrypted_data,
+                    )
+                    if not new_hash:
+                        raise RuntimeError(
+                            "add_commitment returned no hash; refusing to "
+                            "delete the original pending row."
+                        )
+                    # Confirm the new row is durable before retiring the old.
+                    if not PendingCommitment.objects.filter(
+                        commitment_hash=new_hash
+                    ).exists():
+                        raise RuntimeError(
+                            "Replacement PendingCommitment did not persist; "
+                            "refusing to delete the original."
+                        )
+                    PendingCommitment.objects.filter(pk=original_pk).delete()
+                requeued += 1
+            except Exception as exc:
+                self.stdout.write(self.style.WARNING(
+                    f"Re-enqueue failed for PendingCommitment {original_pk}: "
+                    f"{exc}. Original row preserved."
+                ))
+                failed += 1
 
         self.stdout.write(self.style.SUCCESS(
             f"Re-enqueued {requeued} commitment(s); "
-            f"skipped {skipped_already_anchored} already-anchored."
+            f"skipped {skipped_already_anchored} already-anchored; "
+            f"failed {failed} (originals preserved)."
         ))

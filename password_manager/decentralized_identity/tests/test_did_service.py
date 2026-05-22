@@ -358,3 +358,36 @@ class TestSignInFlow:
         )
         assert ok is False
         assert any("binding" in e.lower() for e in errors)
+
+    def test_legacy_empty_binding_token_allows_verify_without_cookie(self):
+        """C9 backward-compat: pre-fix challenges have an empty binding_token.
+
+        The service docstring promises these continue to verify without a
+        cookie for one release. Lock that contract down with a regression
+        test so the next refactor can't quietly tighten it (which would
+        knock every in-flight challenge offline).
+        Added per CodeRabbit review of PR #262.
+        """
+        user = User.objects.create_user(
+            username="legacybinding", email="lb@example.com", password="x"
+        )
+        priv = Ed25519PrivateKey.generate()
+        pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        did = did_service.create_did_key_from_public_key(pub)
+        mb = did_service.multibase_encode_ed25519_pub(pub)
+        register_user_did(user, did, mb)
+
+        challenge, _binding = create_challenge(did)
+        # Simulate a pre-C9 row by blanking the binding token in place.
+        SignInChallenge.objects.filter(pk=challenge.pk).update(binding_token="")
+
+        vp_jwt = _sign_vp(priv, did, challenge.nonce)
+
+        ok, signed_in_user, errors = verify_sign_in_presentation(
+            did_string=did,
+            vp_jwt=vp_jwt,
+            expected_nonce=challenge.nonce,
+            client_binding=None,
+        )
+        assert ok is True, errors
+        assert signed_in_user.pk == user.pk
