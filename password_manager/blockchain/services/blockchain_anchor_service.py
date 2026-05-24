@@ -433,10 +433,14 @@ class BlockchainAnchorService:
                 return None
         
         except Exception as e:
-            blockchain_breaker.on_failure(e)
+            # Audit-fix M10: classify before passing to the breaker so
+            # deterministic contract reverts don't count toward the
+            # failure threshold.
+            from .exceptions import classify
+            blockchain_breaker.on_failure(classify(e))
             logger.error(f"Error anchoring batch: {e}", exc_info=True)
             return None
-    
+
     def verify_commitment_on_chain(self, commitment_hash: str) -> bool:
         """
         Verify a commitment exists on the blockchain

@@ -84,6 +84,24 @@ async function main() {
   console.log("\nThis is REQUIRED — the Django backend no longer falls back");
   console.log("to TIMELOCKED_VAULT_ADDRESS when VAULT_AUDIT_LOG_ADDRESS is unset.");
 
+  console.log("\n" + "=".repeat(60));
+  console.log("POST-DEPLOY: authorise the production hot key (M9 audit fix)");
+  console.log("=".repeat(60));
+  console.log(`
+After audit fix M9 the contract requires anchorers to be on an
+allowlist. The deployer is seeded as the initial anchorer. If your
+production Django process uses a different signing key (KMS-backed
+or rotated), you MUST call addAuthorizedAnchorer(prod_signer) before
+the first reveal — otherwise OnchainUnlockService.submit_unlock_anchor
+will revert with "VaultAuditLog: unauthorized anchorer".
+
+  npx hardhat console --network ${networkName}
+  > const log = await ethers.getContractAt("VaultAuditLog", "${contractAddress}")
+  > await log.addAuthorizedAnchorer("<PROD_SIGNER_ADDR>")
+  > // Optional: revoke the deployer once the prod signer is in
+  > await log.removeAuthorizedAnchorer("${deployerAddress}")
+`);
+
   if (networkName === "arbitrumSepolia") {
     console.log(`\nArbiscan: https://sepolia.arbiscan.io/address/${contractAddress}`);
   } else if (networkName === "arbitrumOne") {

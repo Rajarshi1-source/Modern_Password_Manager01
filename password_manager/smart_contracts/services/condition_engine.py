@@ -174,11 +174,20 @@ class ConditionEngine:
         }
 
     def _evaluate_price_oracle(self, vault) -> Dict[str, Any]:
-        """Evaluate price oracle condition."""
+        """
+        Evaluate price oracle condition.
+
+        Audit-fix M5: pass ``fresh_only=True`` so the cache is bypassed
+        for vault evaluation. The 5-minute cache is fine for dashboards
+        but a vault that says "unlock when ETH > $X" must see the same
+        price the on-chain ``_checkOraclePrice`` would — otherwise the
+        Engine could say "met" up to 5 minutes ahead of when the
+        contract agrees.
+        """
         from .oracle_service import OracleService
         oracle = OracleService()
 
-        current_price = oracle.get_eth_usd_price()
+        current_price = oracle.get_eth_usd_price(fresh_only=True)
         if current_price is None:
             return {
                 'met': False,

@@ -100,38 +100,65 @@ class CloudStorageService:
         cloud_path: str,
         content_type: str = 'application/octet-stream',
         ttl_seconds: Optional[int] = None,
+        content_md5: Optional[str] = None,
     ):
         """
         Scoped upload URL so the client sends bytes directly to object storage
         (valet key / constrained privilege). Path should match backups/{user_id}/{id}.
+
+        Audit-fix M8 (2026-05): when ``content_md5`` is provided (base64-
+        encoded MD5 digest of the bytes the client is about to PUT) we
+        bake it into the presigned URL so S3 / GCS reject the PUT if
+        the actual ``Content-MD5`` request header doesn't match. This
+        means a leaked presigned URL alone is not enough to corrupt
+        the backup — the attacker would also have to produce bytes
+        that hash to the legitimate client's pre-committed digest,
+        which is what MD5's preimage resistance buys us. For backups
+        this is "good enough" (we'd really want SHA-256, but the
+        underlying APIs only support MD5 for this purpose).
         """
         ttl = ttl_seconds if ttl_seconds is not None else self._ttl_seconds()
         if self.client and self.bucket_name:
             try:
                 bucket = self.client.bucket(self.bucket_name)
                 blob = bucket.blob(cloud_path)
-                url = blob.generate_signed_url(
+                # GCS v4 signing supports Content-MD5 via the
+                # `headers` argument; the client must echo back the
+                # exact same digest in the `Content-MD5` header.
+                sign_kwargs = dict(
                     version='v4',
                     expiration=timedelta(seconds=ttl),
                     method='PUT',
                     content_type=content_type,
                 )
-                return {'url': url, 'backend': 'gcs', 'expires_in': ttl}
+                if content_md5:
+                    sign_kwargs['headers'] = {'Content-MD5': content_md5}
+                url = blob.generate_signed_url(**sign_kwargs)
+                return {
+                    'url': url, 'backend': 'gcs', 'expires_in': ttl,
+                    'content_md5_required': bool(content_md5),
+                }
             except Exception as e:
                 logger.error("GCS presigned PUT failed: %s", e)
                 return None
         if self._s3_client and self._s3_bucket_name:
             try:
+                params = {
+                    'Bucket': self._s3_bucket_name,
+                    'Key': cloud_path,
+                    'ContentType': content_type,
+                }
+                if content_md5:
+                    params['ContentMD5'] = content_md5
                 url = self._s3_client.generate_presigned_url(
                     'put_object',
-                    Params={
-                        'Bucket': self._s3_bucket_name,
-                        'Key': cloud_path,
-                        'ContentType': content_type,
-                    },
+                    Params=params,
                     ExpiresIn=ttl,
                 )
-                return {'url': url, 'backend': 's3', 'expires_in': ttl}
+                return {
+                    'url': url, 'backend': 's3', 'expires_in': ttl,
+                    'content_md5_required': bool(content_md5),
+                }
             except Exception as e:
                 logger.error("S3 presigned PUT failed: %s", e)
                 return None

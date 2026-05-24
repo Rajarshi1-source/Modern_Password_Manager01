@@ -1,3 +1,4 @@
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -29,7 +30,14 @@ class BlockchainAnchor(models.Model):
         help_text="When the batch was anchored"
     )
     batch_size = models.IntegerField(
-        help_text="Number of commitments in this batch"
+        # Audit-fix M2 (2026-05): match the on-chain
+        # `CommitmentRegistry.anchorCommitment` cap of <= 10000 so any
+        # row whose `batch_size` would have been rejected by the
+        # contract is also rejected at the ORM layer. Min = 1
+        # because an empty batch is meaningless and the contract
+        # already rejects batchSize=0 with "Invalid batch size".
+        validators=[MinValueValidator(1), MaxValueValidator(10000)],
+        help_text="Number of commitments in this batch (1..10000)"
     )
     network = models.CharField(
         max_length=20,

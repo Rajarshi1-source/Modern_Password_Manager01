@@ -28,38 +28,74 @@ DEFAULT_CSP = (
 
 
 # FIX: Middleware to exempt /auth/ and /api/auth/ paths from CSRF
-# This is more reliable than view-level decorators for DRF ViewSets
+# This is more reliable than view-level decorators for DRF ViewSets.
+#
+# Audit-fix M4 (2026-05): the previous implementation blanket-exempted
+# anything under /auth/ or /api/api/. That's fine for the JWT
+# endpoints (Authorization-header auth → no CSRF surface) but it's a
+# foot-gun for anyone who later mounts a session-based endpoint there
+# — `dj_rest_auth.urls`, an OAuth callback that issues session cookies,
+# or a /auth/session/ login route. We keep the prefix allowlist for
+# operational compatibility but layer an explicit ``CSRF_REQUIRED_PATHS``
+# DENYLIST on top: any path matching the denylist keeps CSRF enforced
+# even though it's under the auth prefix. Add to the denylist before
+# wiring a session-based endpoint.
 class CSRFExemptAuthMiddleware:
-    """Exempt authentication endpoints from CSRF verification.
-    
+    """Exempt JWT authentication endpoints from CSRF verification.
+
     JWT-based APIs don't need CSRF protection since they use
     Authorization headers instead of cookies for authentication.
+
+    Paths matching :pyattr:`CSRF_REQUIRED_PATHS` are NOT exempted even
+    if they sit under ``/auth/`` — use this for any future session-
+    cookie endpoint (OAuth callbacks, dj_rest_auth, etc.).
     """
     async_capable = True
     sync_capable = True
-    
+
+    # Prefix allowlist — pure-JWT endpoints. Keep narrow.
+    EXEMPT_PREFIXES = ('/auth/', '/api/auth/')
+
+    # Denylist that overrides the prefix allowlist. Anything matching
+    # one of these (prefix OR exact) keeps CSRF enforcement on even
+    # though it sits under /auth/. NB: OAuth callback is the canonical
+    # case — it lands a cookie-bearing browser request, not a JWT.
+    CSRF_REQUIRED_PATHS = (
+        '/auth/oauth/callback/',
+        '/api/auth/oauth/callback/',
+        '/auth/oauth/fallback/',
+        '/api/auth/oauth/fallback/',
+    )
+
     def __init__(self, get_response):
         self.get_response = get_response
         if iscoroutinefunction(self.get_response):
             markcoroutinefunction(self)
-    
+
     def __call__(self, request):
         if iscoroutinefunction(self.get_response):
             return self.__acall__(request)
         return self._process_sync(request)
-    
+
     async def __acall__(self, request):
         self._exempt_csrf_if_auth(request)
         return await self.get_response(request)
-    
+
     def _process_sync(self, request):
         self._exempt_csrf_if_auth(request)
         return self.get_response(request)
-    
+
     def _exempt_csrf_if_auth(self, request):
-        """Mark auth requests as CSRF exempt"""
-        # Exempt /auth/ and /api/auth/ paths from CSRF
-        if request.path.startswith('/auth/') or request.path.startswith('/api/auth/'):
+        """Mark auth requests as CSRF exempt — unless denylisted."""
+        path = request.path
+        # Denylist wins. A future session-cookie endpoint that someone
+        # adds under /auth/ MUST be added to CSRF_REQUIRED_PATHS or
+        # this middleware will silently disable its CSRF protection.
+        if any(
+            path == p or path.startswith(p) for p in self.CSRF_REQUIRED_PATHS
+        ):
+            return
+        if any(path.startswith(p) for p in self.EXEMPT_PREFIXES):
             setattr(request, '_dont_enforce_csrf_checks', True)
 
 
