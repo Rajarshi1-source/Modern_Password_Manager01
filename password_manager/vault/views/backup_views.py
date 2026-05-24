@@ -804,6 +804,13 @@ class BackupViewSet(viewsets.ModelViewSet):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 details={'item_count': len(items), 'limit': max_items},
             )
+        # Audit-fix (PR #272 review): track item_id uniqueness during
+        # validation. _restore_from_items uses `update_or_create(user,
+        # item_id=...)`, so a payload with two entries sharing the
+        # same item_id would silently let the second clobber the
+        # first — making restore output order-dependent and losing
+        # data with no error reported. Reject the whole batch instead.
+        seen_item_ids: set = set()
         for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 return error_response(
@@ -822,6 +829,20 @@ class BackupViewSet(viewsets.ModelViewSet):
                     status_code=status.HTTP_400_BAD_REQUEST,
                     details={'index': idx, 'missing': missing},
                 )
+            item_id = item['item_id']
+            if item_id in seen_item_ids:
+                return error_response(
+                    message=(
+                        f"Duplicate item_id in restore payload at index "
+                        f"{idx}: {item_id!r}. Each item must have a "
+                        "unique item_id; the restore was aborted before "
+                        "any DB writes."
+                    ),
+                    code="duplicate_restore_item_id",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    details={'index': idx, 'item_id': item_id},
+                )
+            seen_item_ids.add(item_id)
         return None
 
     def _restore_from_items(self, request, backup, items):

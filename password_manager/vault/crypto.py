@@ -122,7 +122,12 @@ def encrypt_vault_item(data, key: bytes) -> bytes:
     if isinstance(data, dict):
         plaintext = json.dumps(data, separators=(',', ':'), sort_keys=True).encode('utf-8')
     elif isinstance(data, str):
-        plaintext = data.encode('utf-8')
+        # Audit-fix (PR #272 review): wrap str payloads in JSON so the
+        # decrypt path's `json.loads(plaintext)` returns the original
+        # string. Without this, an input like '"hunter2"' / '123' /
+        # '{"a":1}' came back as int / list / dict — a silent
+        # round-trip-breaking type change.
+        plaintext = json.dumps(data).encode('utf-8')
     elif isinstance(data, (bytes, bytearray)):
         plaintext = bytes(data)
     else:

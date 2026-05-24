@@ -11,20 +11,24 @@ get the same nonce. They then sign, broadcast, and exactly one wins;
 the other reverts with ``nonce too low``. Under steady load this
 creates a retry storm and occasionally drops an audit anchor entirely.
 
-The fix in this file is intentionally small:
-
+Design
+------
 * In-process ``threading.Lock`` serialises concurrent reservations,
   preventing intra-pod races.
-* The reserved counter is bumped optimistically; on RPC failure
-  (specifically the ``nonce too low`` / ``replacement transaction
-  underpriced`` family of errors) the caller invokes :meth:`resync`
-  which refreshes the counter from the chain.
+* Reservations use a **lease/commit/release** API (audit-fix from
+  PR #272 review). The cached counter is advanced when a nonce is
+  leased, but the caller MUST call :meth:`Lease.commit` after a
+  successful ``send_raw_transaction``, or :meth:`Lease.release` on
+  any failure between lease and broadcast (build / sign / send).
+  Release rolls the counter back to the smallest non-released value
+  so a later transaction doesn't sit behind a permanent gap.
 
-For the cross-pod race we rely on the k8s topology split: the
-``blockchain`` queue runs on a dedicated single-replica deployment
-(``celery-blockchain-worker``). When/if that constraint is relaxed,
-swap this class out for a Redis-backed reservation — the public API
-(``reserve`` / ``resync``) is shaped to make that change additive.
+* For the cross-pod race we rely on the k8s topology split: the
+  ``blockchain`` queue runs on a dedicated single-replica deployment
+  (``celery-blockchain-worker``). When/if that constraint is relaxed,
+  swap this class out for a Redis-backed reservation — the public
+  API (``lease`` / ``commit`` / ``release`` / ``resync``) is shaped
+  to make that change additive.
 
 See ``docs/DEPLOYMENT_PR262.md`` for the operator-side guarantee
 this design depends on.
@@ -49,6 +53,10 @@ class NonceManager:
         # ``pending`` so we don't collide with unconfirmed txs we
         # broadcast in earlier iterations of the same process.
         self._next: Optional[int] = None
+        # Released nonces that haven't been recommitted yet. Tracked
+        # so we never hand the same number out twice when a caller
+        # fails mid-broadcast and we have to roll back.
+        self._released: set[int] = set()
 
     @property
     def address(self) -> str:
@@ -59,26 +67,47 @@ class NonceManager:
         self._next = self._w3.eth.get_transaction_count(
             self._address, 'pending'
         )
+        # Any cached released nonces below the new floor are obsolete.
+        self._released = {n for n in self._released if n >= self._next}
         return self._next
 
-    def reserve(self) -> int:
+    def lease(self) -> 'NonceLease':
         """
-        Return the next nonce and atomically increment the cached
-        counter. Two callers in the same process can never see the
-        same value, even across threads / Celery prefork pools.
+        Return a :class:`NonceLease` holding the next nonce. The cached
+        counter is advanced now; the lease MUST be either ``commit``-ed
+        (after a successful broadcast) or ``release``-d (on any failure
+        before broadcast) before the worker moves on. Failing to do
+        either creates a permanent in-memory gap.
         """
         with self._lock:
             if self._next is None:
                 self._refresh_locked()
-            n = self._next
-            self._next += 1
-            return n
+
+            # Prefer a previously-released slot before advancing the
+            # high-water mark — keeps the counter dense and avoids
+            # ever-growing _released sets under repeated failures.
+            if self._released:
+                n = min(self._released)
+                self._released.remove(n)
+            else:
+                n = self._next
+                self._next += 1
+            return NonceLease(self, n)
+
+    def reserve(self) -> int:
+        """
+        Back-compat alias for callers that just want a raw nonce and
+        will handle commit/release out-of-band. New code should use
+        :meth:`lease` so the manager can roll the counter back on
+        failure.
+        """
+        return self.lease().value
 
     def resync(self) -> int:
         """
         Force a re-read from chain. Call this after a broadcast fails
         with ``nonce too low`` / ``known transaction`` so the next
-        :meth:`reserve` returns a fresh number.
+        :meth:`lease` returns a fresh number.
         """
         with self._lock:
             old = self._next
@@ -89,7 +118,60 @@ class NonceManager:
             )
             return new
 
+    def _on_release(self, n: int) -> None:
+        """Internal hook used by :class:`NonceLease` on rollback."""
+        with self._lock:
+            # If the released nonce is the top of the cache, just step
+            # _next back. Otherwise stash it so the next lease can
+            # reuse it before allocating a fresh slot.
+            if self._next is not None and n == self._next - 1:
+                self._next -= 1
+            else:
+                self._released.add(n)
+            logger.debug(
+                "NonceManager.release(%s): nonce=%s, next=%s, released=%s",
+                self._address, n, self._next, sorted(self._released),
+            )
+
     def peek(self) -> Optional[int]:
         """Return the cached next-nonce without reserving it. For tests."""
         with self._lock:
             return self._next
+
+
+class NonceLease:
+    """
+    Lease handle for a single nonce reservation.
+
+    Lifecycle: ``lease()`` → either ``commit()`` (broadcast succeeded
+    and the chain consumed this nonce) or ``release()`` (broadcast
+    failed; roll the counter back). ``commit`` and ``release`` are
+    idempotent; calling either twice is a no-op.
+    """
+
+    __slots__ = ('_manager', 'value', '_settled')
+
+    def __init__(self, manager: 'NonceManager', value: int) -> None:
+        self._manager = manager
+        self.value = value
+        self._settled = False
+
+    def commit(self) -> None:
+        """Mark the leased nonce as actually consumed by chain."""
+        self._settled = True
+
+    def release(self) -> None:
+        """Roll the leased nonce back into the manager's free pool."""
+        if not self._settled:
+            self._settled = True
+            self._manager._on_release(self.value)
+
+    def __enter__(self) -> 'NonceLease':
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        # Default: if the caller exits the `with` block without
+        # explicitly committing, treat it as a failure and roll back.
+        if not self._settled:
+            self.release()
+        return False  # don't suppress exceptions

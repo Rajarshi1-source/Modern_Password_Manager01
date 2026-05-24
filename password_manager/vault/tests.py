@@ -723,6 +723,23 @@ class VaultCryptoTests(TestCase):
         envelope = encrypt_vault_item("hello world", key)
         self.assertEqual(decrypt_vault_item(envelope, key), "hello world")
 
+    def test_encrypt_roundtrip_preserves_json_shaped_strings(self):
+        """PR #272 review regression: strings that LOOK like JSON
+        (e.g. '"hunter2"', '123', '{"a":1}') must come back as strings,
+        not the JSON value they happen to encode. Previously the str
+        path encoded raw UTF-8 and decrypt's `json.loads` silently
+        converted '123' → 123 (int)."""
+        from .crypto import encrypt_vault_item, decrypt_vault_item
+        key = os.urandom(32)
+        for tricky in ('"hunter2"', '123', 'null', '[1, 2, 3]', '{"a": 1}'):
+            envelope = encrypt_vault_item(tricky, key)
+            decoded = decrypt_vault_item(envelope, key)
+            self.assertEqual(
+                decoded, tricky,
+                msg=f"round-trip failed for {tricky!r}: got {decoded!r}",
+            )
+            self.assertIsInstance(decoded, str)
+
     def test_encrypt_rejects_short_key(self):
         from .crypto import encrypt_vault_item
         with self.assertRaises(ValueError):

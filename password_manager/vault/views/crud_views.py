@@ -440,10 +440,22 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 if deleted_item_ids:
                     self.get_queryset().filter(item_id__in=deleted_item_ids).delete()
 
-                # Bump sync_version under the same lock so the next sync
-                # round-trip sees a fresh token.
-                salt_row.sync_version = (salt_row.sync_version or 0) + 1
-                salt_row.save(update_fields=['sync_version'])
+                # Bump sync_version under the same lock IFF the sync
+                # actually mutated server state.
+                #
+                # Audit-fix (PR #272 review): the previous code bumped
+                # the version on every successful sync, including pure
+                # read/poll requests. That made the token track
+                # request count rather than data version — and meant
+                # two devices doing benign background polls would
+                # 409 each other on the next mutating sync even
+                # though neither had written anything. We now only
+                # bump when there were client items to write or
+                # deletes to apply.
+                did_mutate = bool(client_items) or bool(deleted_item_ids)
+                if did_mutate:
+                    salt_row.sync_version = (salt_row.sync_version or 0) + 1
+                    salt_row.save(update_fields=['sync_version'])
 
                 # Return server-side changes
                 server_items_serializer = self.get_serializer(server_items, many=True)

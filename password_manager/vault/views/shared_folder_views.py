@@ -17,6 +17,7 @@ from vault.models import (
     SharedFolderKey,
     SharedFolderActivity
 )
+import random
 import secrets
 import time
 import uuid
@@ -39,10 +40,9 @@ def _shadow_sleep():
         hi = float(getattr(_s, 'INVITE_SHADOW_SLEEP_MAX', 0.15))
     except Exception:
         lo, hi = 0.05, 0.15
-    # secrets.SystemRandom for the jitter so a constant-rate observer
-    # can't dewindow by averaging — std lib's `random` is fine here
-    # since the value isn't security-critical, but use a uniform draw.
-    import random
+    # `random.uniform` is fine for jitter (timing observer can't see
+    # the raw values; network noise dominates). Import is at module
+    # level so this isn't paid on every call.
     time.sleep(random.uniform(lo, hi))
 
 
@@ -340,7 +340,26 @@ def invite_member(request, folder_id):
         # We now use `filter().first()` (single query for both branches)
         # and sleep a uniform jitter on the short-circuit paths so the
         # response time distribution overlaps the happy path.
-        invitee = User.objects.filter(email=email).first()
+        #
+        # Audit-fix (PR #272 review, Codex P1): if multiple users share
+        # the same email (Django's built-in `User.email` is not unique
+        # by default), `.first()` would silently pick one — granting
+        # folder membership to an arbitrary matching account. That's
+        # an authorisation bug. We now reject the invite when more
+        # than one match exists, with the same generic response shape
+        # to preserve the timing-oracle fix. Operators can resolve the
+        # duplicate before retrying.
+        candidate_qs = User.objects.filter(email=email)
+        match_count = candidate_qs.count()
+        if match_count > 1:
+            logger.error(
+                "invite_member refused: %s users share email %r; resolve "
+                "the duplicate before inviting",
+                match_count, email,
+            )
+            _shadow_sleep()
+            return generic_response
+        invitee = candidate_qs.first()
         if invitee is None:
             _shadow_sleep()
             return generic_response
