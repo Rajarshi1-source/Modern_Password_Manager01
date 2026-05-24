@@ -163,23 +163,29 @@ class BlockchainAnchorService:
         commitment_id: int,
         encrypted_data: str,
         auto_anchor: bool = True,
-    ) -> str:
+    ) -> Optional[str]:
         """
-        Add a behavioral commitment to pending batch.
+        Add a behavioral commitment to the pending batch.
 
         Args:
             user_id: User ID
             commitment_id: BehavioralCommitment ID
             encrypted_data: Encrypted embedding data
             auto_anchor: When True (default) and the batch threshold is
-                reached, trigger `anchor_pending_batch()` immediately. The
-                rehash management command passes False so it can stage all
-                new rows before any anchoring happens — otherwise the
-                anchorer can see legacy and replacement rows together and
-                anchor a mixed batch. Added per CodeRabbit review of PR #262.
+                reached, trigger ``anchor_pending_batch()`` immediately.
+                The rehash management command passes False so it can
+                stage all new rows before any anchoring happens — otherwise
+                the anchorer can see legacy and replacement rows together
+                and anchor a mixed batch.
 
         Returns:
-            Commitment hash (hex string)
+            The commitment hash (hex string) iff the PendingCommitment row
+            was successfully persisted. ``None`` if the feature is
+            disabled or the DB insert failed — previously the helper
+            returned the computed hash even on insert failure, which let
+            callers like the rehash command silently treat a failed
+            enqueue as success and delete the original row. Tightened per
+            CodeRabbit review of PR #262.
         """
         if not self.enabled:
             logger.debug("Blockchain anchoring disabled, skipping")
@@ -211,8 +217,13 @@ class BlockchainAnchorService:
             return commitment_hash
 
         except Exception as e:
-            logger.error(f"Error adding commitment to pending batch: {e}")
-            return commitment_hash
+            logger.error(
+                "Error adding commitment to pending batch: %s "
+                "(commitment_id=%s); returning None so the caller treats "
+                "this as a failed enqueue.",
+                e, commitment_id,
+            )
+            return None
     
     @transaction.atomic
     def anchor_pending_batch(self) -> Optional[str]:

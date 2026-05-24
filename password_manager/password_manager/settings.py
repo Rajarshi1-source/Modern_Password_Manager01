@@ -2068,6 +2068,27 @@ if SENTRY_DSN:
                 for frame in stacktrace.get('frames', []) or []:
                     if 'vars' in frame:
                         frame['vars'] = _scrub_mapping(frame['vars'])
+            # Logger-rendered records reach Sentry via `event["logentry"]`
+            # (see sentry_sdk.integrations.logging). Without this branch a
+            # call like `logger.error("auth failed for %s", secret)` would
+            # ship the formatted string + raw params into the event store.
+            # Scrub both the rendered text and the param mapping.
+            # Added per CodeRabbit review of PR #262.
+            logentry = event.get('logentry')
+            if isinstance(logentry, dict):
+                for key in ('message', 'formatted'):
+                    val = logentry.get(key)
+                    if isinstance(val, str):
+                        logentry[key] = _scrub_str(val)
+                params = logentry.get('params')
+                if isinstance(params, dict):
+                    logentry['params'] = _scrub_mapping(params)
+                elif isinstance(params, (list, tuple)):
+                    logentry['params'] = [
+                        _scrub_mapping(p) if isinstance(p, dict) else _scrub_str(p)
+                        for p in params
+                    ]
+                event['logentry'] = logentry
             if isinstance(event.get('message'), str):
                 event['message'] = _scrub_str(event['message'])
         except Exception:
