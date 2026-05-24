@@ -89,7 +89,32 @@ class BlockchainAnchorService:
                 "will not work until the key is configured.",
                 self.key_provider.provider_kind,
             )
-        
+
+        # PR #262 cutover safety check (runs once at singleton init):
+        # if the configured CONTRACT_ADDRESS is set but the address has
+        # no on-chain bytecode, the operator likely deployed the new
+        # Django code but forgot to redeploy the contract (or kept the
+        # pre-PR-262 address in env). Log a loud warning at boot so the
+        # ops team sees it BEFORE the first anchor batch silently fails.
+        if self.w3 and self.contract_address:
+            try:
+                code = self.w3.eth.get_code(
+                    Web3.to_checksum_address(self.contract_address)
+                )
+                if not code or len(code) <= 2:
+                    logger.error(
+                        "CommitmentRegistry address %s has NO on-chain "
+                        "bytecode. Anchoring will revert until a contract "
+                        "is deployed and the env var updated. See "
+                        "docs/DEPLOYMENT_PR262.md.",
+                        self.contract_address,
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "Skipping CommitmentRegistry bytecode preflight: %s",
+                    exc,
+                )
+
         self.pending_commitments = []
         self._initialized = True
     
