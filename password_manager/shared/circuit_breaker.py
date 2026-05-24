@@ -212,17 +212,16 @@ class CircuitBreaker:
         We import lazily so this circuit_breaker module stays free of
         a hard dependency on the blockchain app.
         """
-        # Skip increment for deterministic contract reverts.
+        # Detect deterministic contract reverts (M10 fix) — these are
+        # business-logic outcomes, not infra failures.
+        is_contract_revert = False
         try:
             from blockchain.services.exceptions import (
                 BlockchainContractRevert,
             )
-            if exc is not None and isinstance(exc, BlockchainContractRevert):
-                logger.debug(
-                    f"Circuit breaker '{self.name}': skipping increment for "
-                    f"deterministic contract revert: {exc}"
-                )
-                return
+            is_contract_revert = (
+                exc is not None and isinstance(exc, BlockchainContractRevert)
+            )
         except ImportError:
             # blockchain app not installed in this deploy → behave as
             # before (every exception counts).
@@ -231,8 +230,35 @@ class CircuitBreaker:
         state = self._get_state()
 
         if state == CircuitState.HALF_OPEN:
-            # Probe failed — re-open
+            # NB (PR #273 review, Codex P1): a probe call in HALF_OPEN
+            # has already consumed the single probe slot via
+            # `before_call()`. Returning early on contract revert
+            # WITHOUT transitioning would leave the breaker stuck in
+            # HALF_OPEN until cache TTL — a self-inflicted outage.
+            # Treat a contract revert during a probe as evidence the
+            # RPC is healthy enough to evaluate `require()` → close
+            # the breaker so traffic resumes. Real infra failures
+            # still re-open per the original logic.
+            if is_contract_revert:
+                logger.info(
+                    f"Circuit breaker '{self.name}': probe returned "
+                    f"contract revert — closing (RPC is healthy)."
+                )
+                self._transition_to_closed()
+                return
+            # Probe failed for an infra reason — re-open
             self._transition_to_open()
+            return
+
+        # CLOSED state: skip increment for deterministic contract
+        # reverts. A user trying to unlock a vault before its time
+        # should not count toward opening the breaker on everyone
+        # else's behalf.
+        if is_contract_revert:
+            logger.debug(
+                f"Circuit breaker '{self.name}': skipping increment for "
+                f"deterministic contract revert: {exc}"
+            )
             return
 
         if state == CircuitState.CLOSED:

@@ -42,8 +42,14 @@ def reverse(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
+    # NB (PR #273 review, Codex P1): chain off the last main-branch
+    # migration (`0010`) so this PR can land independent of Phase A
+    # (#272), which is the one that adds `0011_usersalt_sync_version`.
+    # When both PRs are merged Django will linearise the graph
+    # automatically: `0011` (Phase A) and `0012` (Phase B) share
+    # parent `0010` and can apply in either order.
     dependencies = [
-        ('vault', '0011_usersalt_sync_version'),
+        ('vault', '0010_backfill_user_salt_auth_hash'),
     ]
 
     operations = [

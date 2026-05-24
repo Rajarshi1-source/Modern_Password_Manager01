@@ -34,14 +34,19 @@ router.register(r'backups', BackupViewSet, basename='backup')
 def vault_root(request, format=None):
     """Entry point for vault endpoints.
 
-    Audit-fix M7 (2026-05): the `sync` entry that pointed at a stub
-    placeholder view was removed. The real sync is the
-    ``VaultItemViewSet.sync`` @action at /vault/items/sync/, exposed
-    by the router via 'vault-items-sync'.
+    Audit-fix M7 (2026-05) + PR #273 review (Codex P1): the stub
+    `sync(request)` placeholder was removed. The real sync is the
+    ``CrudVaultItemViewSet.sync`` @action — that ViewSet is registered
+    at the top of this file via ``router.register(r'vault',
+    CrudVaultItemViewSet, basename='vault')``, so the router-generated
+    name for its action is ``'vault-sync'`` (NOT ``'vault-items-sync'``
+    — the ``items`` router binds to ``ApiVaultItemViewSet`` which has
+    no sync action, so reversing ``vault-items-sync`` would raise
+    NoReverseMatch).
     """
     return Response({
         'items': reverse('vault-items-list', request=request, format=format),
-        'sync': reverse('vault-items-sync', request=request, format=format),
+        'sync': reverse('vault-sync', request=request, format=format),
         'search': reverse('vault-search', request=request, format=format),
     })
 

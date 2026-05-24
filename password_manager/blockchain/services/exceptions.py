@@ -66,12 +66,22 @@ class BlockchainContractRevert(BlockchainError):
 # Used by call sites that don't know up-front which class to raise.
 # ---------------------------------------------------------------------------
 
+# NB (PR #273 review, Codex P1): the markers below MUST be specific
+# enough to never match plain provider/auth infrastructure failures.
+# A bare ``'unauthorized'`` marker, for example, would catch the HTTP
+# 401 string that an RPC node returns when its auth token expires —
+# we'd then skip the circuit-breaker increment for a real outage and
+# hammer the failing endpoint indefinitely. Stick to phrases that
+# only appear in contract-revert `require()` messages.
 _REVERT_MARKERS = (
     'execution reverted',
     'require(...)',
     'custom error',
-    'not authorized',
-    'unauthorized',
+    # Contract-specific authorisation reverts — these strings come from
+    # `require()` messages in our Solidity, NOT from HTTP 401 / 403 etc.
+    'not authorized to unlock',
+    'unauthorized signer',
+    'unauthorized anchorer',
     'conditions not met',
     'switch not triggered',
     'already anchored',

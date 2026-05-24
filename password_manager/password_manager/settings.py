@@ -250,18 +250,17 @@ ASGI_APPLICATION = 'password_manager.asgi.application'
 # real-time breach alerts and the adversarial-AI WS channel. The
 # previous behaviour quietly fell back to in-memory when the env var
 # wasn't set, which is the exact misconfiguration this guard catches.
+#
+# NB (PR #273 review, Codex P1): the production guard itself lives at
+# the very bottom of this module, AFTER the `if TESTING:` block that
+# intentionally forces InMemoryChannelLayer for pytest. Putting the
+# guard here would fire during test bootstrap (DEBUG defaults to False
+# and pytest doesn't set USE_REDIS_CHANNELS) and break every CI run.
+# All we do at this point is pick the right CHANNEL_LAYERS dict based
+# on the env var.
 _USE_REDIS_CHANNELS = (
     os.environ.get('USE_REDIS_CHANNELS', 'False').lower() == 'true'
 )
-if not DEBUG and not _USE_REDIS_CHANNELS:
-    from django.core.exceptions import ImproperlyConfigured
-    raise ImproperlyConfigured(
-        "USE_REDIS_CHANNELS must be 'True' in production deploys "
-        "(DEBUG=False). InMemoryChannelLayer does not fan out across "
-        "Daphne pods, which silently breaks WebSocket-backed features "
-        "(breach alerts, adversarial-AI). Set USE_REDIS_CHANNELS=True "
-        "and configure REDIS_HOST / REDIS_PORT."
-    )
 
 if _USE_REDIS_CHANNELS:
     CHANNEL_LAYERS = {
@@ -2209,3 +2208,27 @@ if TESTING:
     CHANNEL_LAYERS = {
         'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}
     }
+
+
+# =============================================================================
+# Audit-fix M1: production guard on USE_REDIS_CHANNELS
+# =============================================================================
+# Runs at the very bottom of settings so the TESTING override above has
+# already had a chance to force InMemoryChannelLayer for pytest. We only
+# fail closed when:
+#   * we're not in DEBUG mode, AND
+#   * we're not running tests, AND
+#   * USE_REDIS_CHANNELS is not 'True'
+#
+# That last clause is the actual production-misconfig case the audit
+# called out: real prod deploys silently fell back to in-memory and
+# WebSockets stopped fanning out across Daphne pods.
+if not DEBUG and not TESTING and not _USE_REDIS_CHANNELS:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "USE_REDIS_CHANNELS must be 'True' in production deploys "
+        "(DEBUG=False). InMemoryChannelLayer does not fan out across "
+        "Daphne pods, which silently breaks WebSocket-backed features "
+        "(breach alerts, adversarial-AI). Set USE_REDIS_CHANNELS=True "
+        "and configure REDIS_HOST / REDIS_PORT."
+    )
