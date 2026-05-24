@@ -116,6 +116,17 @@ class BlockchainAnchorService:
                 )
 
         self.pending_commitments = []
+
+        # Audit-fix H4 + PR #272 review (CodeRabbit major): the nonce
+        # manager + its protective lock are created eagerly here so two
+        # concurrent `anchor_pending_batch` callers can't race on the
+        # lock construction itself (`hasattr` is not atomic).
+        # `__init__` runs under the singleton lock so this assignment
+        # happens exactly once for the process.
+        import threading as _threading
+        self._nonce_manager = None
+        self._nonce_manager_lock = _threading.Lock()
+
         self._initialized = True
     
     def _get_contract_abi(self) -> List[Dict]:
@@ -356,16 +367,13 @@ class BlockchainAnchorService:
                 return None
 
             # Audit-fix H4 + PR #272 review: thread-safe nonce
-            # reservation with double-checked lazy init under a
-            # dedicated lock. Before this lock, two concurrent
-            # `anchor_pending_batch` callers could both observe
-            # `_nonce_manager is None` and construct separate managers,
-            # each seeded from the same on-chain pending nonce — the
-            # exact race H4 was supposed to fix.
-            if not hasattr(self, '_nonce_manager_lock'):
-                import threading as _threading
-                self._nonce_manager_lock = _threading.Lock()
-                self._nonce_manager = getattr(self, '_nonce_manager', None)
+            # reservation with double-checked lazy init under the
+            # `_nonce_manager_lock` created in __init__. Before the
+            # lock, two concurrent `anchor_pending_batch` callers
+            # could both observe `_nonce_manager is None` and
+            # construct separate managers, each seeded from the same
+            # on-chain pending nonce — the exact race H4 was
+            # supposed to fix.
             if self._nonce_manager is None:
                 with self._nonce_manager_lock:
                     if self._nonce_manager is None:
