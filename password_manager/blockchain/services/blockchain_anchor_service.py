@@ -417,8 +417,19 @@ class BlockchainAnchorService:
                 return tx_hash_hex
             
             else:
+                # Receipt says status=0 → the tx was mined but reverted.
+                # Capture enough context for the breaker's failure log:
+                # the tx hash is the most useful pointer for after-the-
+                # fact triage. Mirrors the `on_failure(e)` call in the
+                # outer except so the breaker always sees an exception.
                 logger.error(f"Transaction failed: {receipt}")
-                blockchain_breaker.on_failure()
+                blockchain_breaker.on_failure(
+                    RuntimeError(
+                        "Anchor transaction reverted "
+                        f"(tx_hash={receipt.get('transactionHash')}, "
+                        f"block={receipt.get('blockNumber')})"
+                    )
+                )
                 return None
         
         except Exception as e:
