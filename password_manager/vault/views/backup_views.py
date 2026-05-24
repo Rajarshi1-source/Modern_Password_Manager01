@@ -472,7 +472,21 @@ class BackupViewSet(viewsets.ModelViewSet):
         # precommitment. Settings-gated for backward compat: legacy
         # clients can still upload without the precommit until
         # operators flip ``VAULT_BACKUP_REQUIRE_CONTENT_MD5=True``.
-        content_md5 = (request.data.get('content_md5') or '').strip()
+        # PR #273 review (Codex P2): validate type BEFORE .strip() so a
+        # non-string JSON value (123, [], {}, etc.) produces a 400 rather
+        # than an AttributeError → 500 (request-level DoS surface).
+        raw_md5 = request.data.get('content_md5')
+        if raw_md5 is None:
+            content_md5 = ''
+        elif isinstance(raw_md5, str):
+            content_md5 = raw_md5.strip()
+        else:
+            return error_response(
+                'content_md5 must be a string (base64-encoded MD5 digest).',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code='invalid_content_md5_type',
+                details={'received_type': type(raw_md5).__name__},
+            )
         require_md5 = bool(getattr(
             settings, 'VAULT_BACKUP_REQUIRE_CONTENT_MD5', False
         ))
@@ -602,9 +616,26 @@ class BackupViewSet(viewsets.ModelViewSet):
         #   * upstream tampering after the PUT (e.g. a rogue cron job
         #     that overwrites cloud_path with attacker bytes).
         if backup.content_md5:
-            import base64, hashlib
+            # MD5 is mandated by the S3/GCS object-storage Content-MD5
+            # contract — it is NOT used as a security primitive here.
+            # The integrity guarantee comes from the bucket-enforced
+            # precondition at PUT time; this re-check is just a
+            # defence-in-depth comparison against the value the bucket
+            # has stored. `usedforsecurity=False` tells Python (and
+            # Semgrep's `insecure-hash-algorithm-md5` rule) we know
+            # what we're doing — there is no SHA-256 alternative in
+            # the S3 `Content-MD5` API.
+            import base64
+            import hashlib
             blob_bytes = blob if isinstance(blob, bytes) else blob.encode('utf-8')
-            observed = base64.b64encode(hashlib.md5(blob_bytes).digest()).decode()
+            try:
+                md5_digest = hashlib.md5(  # noqa: S324 — see comment above
+                    blob_bytes, usedforsecurity=False,
+                ).digest()
+            except TypeError:
+                # Older Python builds without `usedforsecurity` kwarg.
+                md5_digest = hashlib.md5(blob_bytes).digest()  # noqa: S324
+            observed = base64.b64encode(md5_digest).decode()
             if observed != backup.content_md5:
                 logger.warning(
                     "complete_cloud_upload MD5 mismatch for backup %s: "
