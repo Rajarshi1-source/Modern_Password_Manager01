@@ -24,6 +24,13 @@ class VaultBackup(models.Model):
         ],
         default='pending'
     )
+    # Audit-fix M8 (2026-05): the client commits to a Content-MD5 of
+    # the bytes it's about to PUT at presign time. The presigned URL
+    # bakes the digest in as a precondition (S3 ContentMD5 / GCS
+    # Content-MD5 header), so a leaked URL alone cannot be used to
+    # corrupt the backup with attacker-chosen bytes. We persist it
+    # on the row so `complete_cloud_upload` can re-verify post-PUT.
+    content_md5 = models.CharField(max_length=32, blank=True, default='')
     created_at = models.DateTimeField(default=timezone.now)
     
     class Meta:

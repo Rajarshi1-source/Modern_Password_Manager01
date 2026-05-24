@@ -268,6 +268,31 @@ VAULT_AUDIT_LOG_ABI = [
         "stateMutability": "view",
         "type": "function",
     },
+    # Audit-fix M9 (2026-05): authorisation surface on VaultAuditLog.
+    # Exposing the view here lets `OnchainUnlockService` preflight the
+    # signer the same way blockchain_anchor_service.anchor_pending_batch
+    # already does for CommitmentRegistry.
+    {
+        "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "name": "authorizedAnchorers",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "anchorer", "type": "address"}],
+        "name": "addAuthorizedAnchorer",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "anchorer", "type": "address"}],
+        "name": "removeAuthorizedAnchorer",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
 ]
 
 

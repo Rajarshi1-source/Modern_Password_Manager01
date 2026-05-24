@@ -198,7 +198,36 @@ class CircuitBreaker:
             self._set_failure_count(0)
 
     def on_failure(self, exc: Exception = None):
-        """Record a failed call."""
+        """Record a failed call.
+
+        Audit-fix M10 (2026-05): exceptions tagged
+        ``BlockchainContractRevert`` are treated as *expected business
+        outcomes*, not breaker-tripping infra failures. A user trying
+        to unlock a vault before its time, a multi-sig short of
+        threshold, or any other deterministic ``require()`` revert is
+        not a sign the RPC node is unhealthy — it's a sign THIS
+        caller's preconditions weren't met. Opening the breaker on
+        those would DoS every other user's anchor pipeline.
+
+        We import lazily so this circuit_breaker module stays free of
+        a hard dependency on the blockchain app.
+        """
+        # Skip increment for deterministic contract reverts.
+        try:
+            from blockchain.services.exceptions import (
+                BlockchainContractRevert,
+            )
+            if exc is not None and isinstance(exc, BlockchainContractRevert):
+                logger.debug(
+                    f"Circuit breaker '{self.name}': skipping increment for "
+                    f"deterministic contract revert: {exc}"
+                )
+                return
+        except ImportError:
+            # blockchain app not installed in this deploy → behave as
+            # before (every exception counts).
+            pass
+
         state = self._get_state()
 
         if state == CircuitState.HALF_OPEN:

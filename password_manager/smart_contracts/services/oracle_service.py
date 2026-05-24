@@ -28,9 +28,18 @@ class OracleService:
         self.config = getattr(settings, 'SMART_CONTRACT_AUTOMATION', {})
         self.cache_ttl = self.config.get('ORACLE_CACHE_TTL_SECONDS', 300)
 
-    def get_eth_usd_price(self) -> Optional[float]:
+    def get_eth_usd_price(self, fresh_only: bool = False) -> Optional[float]:
         """
         Get the current ETH/USD price from Chainlink oracle.
+
+        Args:
+            fresh_only: When True, bypass the in-process cache entirely
+                and fetch a fresh quote from chain. ConditionEngine's
+                price-oracle evaluation must pass True so a vault that
+                says "unlock when ETH > $X" can never read a cached
+                stale price while the on-chain contract sees the
+                current one. Dashboards and other read-only callers
+                can leave this False to benefit from the 5-min cache.
 
         Returns:
             Price in USD as float, or None if unavailable.
@@ -40,30 +49,59 @@ class OracleService:
             logger.warning("CHAINLINK_ETH_USD_ORACLE not configured")
             return None
 
-        return self._get_price_from_oracle(oracle_address, 'ETH/USD')
+        return self._get_price_from_oracle(
+            oracle_address, 'ETH/USD', fresh_only=fresh_only
+        )
 
-    def get_price(self, oracle_address: str, pair_name: str = 'UNKNOWN') -> Optional[float]:
+    def get_price(
+        self,
+        oracle_address: str,
+        pair_name: str = 'UNKNOWN',
+        fresh_only: bool = False,
+    ) -> Optional[float]:
         """
         Get price from any Chainlink oracle address.
 
         Args:
             oracle_address: Chainlink AggregatorV3 contract address
             pair_name: Human-readable pair name for logging
+            fresh_only: see :meth:`get_eth_usd_price`.
 
         Returns:
             Price as float (8 decimals), or None if unavailable.
         """
-        return self._get_price_from_oracle(oracle_address, pair_name)
+        return self._get_price_from_oracle(
+            oracle_address, pair_name, fresh_only=fresh_only
+        )
 
-    def _get_price_from_oracle(self, oracle_address: str, pair_name: str) -> Optional[float]:
-        """Internal: fetch price with caching."""
+    def _get_price_from_oracle(
+        self,
+        oracle_address: str,
+        pair_name: str,
+        fresh_only: bool = False,
+    ) -> Optional[float]:
+        """
+        Internal: fetch price with caching.
+
+        Audit-fix M5 (2026-05): added the ``fresh_only`` parameter so
+        vault-evaluation paths can skip the 5-minute cache. Without
+        this gate, the ConditionEngine could read a cached price while
+        the on-chain TimeLockedVault's ``_checkOraclePrice`` saw the
+        current one — letting the Engine say "unlock met" up to 5
+        minutes ahead of when the contract would agree.
+        """
         cache_key = f"{ORACLE_CACHE_PREFIX}{oracle_address}"
 
-        # Check cache first
-        cached_price = cache.get(cache_key)
-        if cached_price is not None:
-            logger.debug(f"Oracle cache hit for {pair_name}: ${cached_price}")
-            return cached_price
+        if not fresh_only:
+            # Check cache first
+            cached_price = cache.get(cache_key)
+            if cached_price is not None:
+                logger.debug(f"Oracle cache hit for {pair_name}: ${cached_price}")
+                return cached_price
+        else:
+            logger.debug(
+                "Oracle fresh_only=True for %s; bypassing cache", pair_name
+            )
 
         # Fetch from blockchain
         try:

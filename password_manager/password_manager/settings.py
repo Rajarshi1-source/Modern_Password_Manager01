@@ -241,8 +241,29 @@ WSGI_APPLICATION = 'password_manager.wsgi.application'
 ASGI_APPLICATION = 'password_manager.asgi.application'
 
 # Django Channels Layer Configuration
-# Uses Redis when USE_REDIS_CHANNELS=True, otherwise In-Memory for development
-if os.environ.get('USE_REDIS_CHANNELS', 'False').lower() == 'true':
+# Uses Redis when USE_REDIS_CHANNELS=True, otherwise In-Memory for development.
+#
+# Audit-fix M1 (2026-05): production deploys MUST use the Redis layer.
+# `InMemoryChannelLayer` is per-process — with multiple Daphne pods (or
+# even multiple workers in one pod), a WebSocket connected to pod A
+# will never receive `group_send` from pod B. That silently breaks
+# real-time breach alerts and the adversarial-AI WS channel. The
+# previous behaviour quietly fell back to in-memory when the env var
+# wasn't set, which is the exact misconfiguration this guard catches.
+_USE_REDIS_CHANNELS = (
+    os.environ.get('USE_REDIS_CHANNELS', 'False').lower() == 'true'
+)
+if not DEBUG and not _USE_REDIS_CHANNELS:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "USE_REDIS_CHANNELS must be 'True' in production deploys "
+        "(DEBUG=False). InMemoryChannelLayer does not fan out across "
+        "Daphne pods, which silently breaks WebSocket-backed features "
+        "(breach alerts, adversarial-AI). Set USE_REDIS_CHANNELS=True "
+        "and configure REDIS_HOST / REDIS_PORT."
+    )
+
+if _USE_REDIS_CHANNELS:
     CHANNEL_LAYERS = {
         'default': {
             'BACKEND': 'channels_redis.core.RedisChannelLayer',

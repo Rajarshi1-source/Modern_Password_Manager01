@@ -26,16 +26,22 @@ router.register(r'backups', BackupViewSet, basename='backup')
 # Available endpoints:
 # /vault/ - List and create vault items
 # /vault/{id}/ - Retrieve, update, delete vault items
-# /vault/sync/ - Sync vault items across devices
+# /vault/items/sync/ - Sync vault items across devices (ViewSet action)
 # /api/vault/get_salt/ - Get user's encryption salt
 # /api/vault/verify_master_password/ - Verify master password
 
 @api_view(['GET'])
 def vault_root(request, format=None):
-    """Entry point for vault endpoints"""
+    """Entry point for vault endpoints.
+
+    Audit-fix M7 (2026-05): the `sync` entry that pointed at a stub
+    placeholder view was removed. The real sync is the
+    ``VaultItemViewSet.sync`` @action at /vault/items/sync/, exposed
+    by the router via 'vault-items-sync'.
+    """
     return Response({
         'items': reverse('vault-items-list', request=request, format=format),
-        'sync': reverse('vault-sync', request=request, format=format),
+        'sync': reverse('vault-items-sync', request=request, format=format),
         'search': reverse('vault-search', request=request, format=format),
     })
 
@@ -49,7 +55,12 @@ urlpatterns = [
     path('', include(router.urls)),
     
     # Custom endpoints
-    path('sync/', views.sync, name='vault-sync'),
+    # Audit-fix M7 (2026-05): the previous `path('sync/', views.sync, ...)`
+    # pointed at a stub placeholder that returned "Sync endpoint is
+    # working" but did no real work. The real sync is the
+    # `VaultItemViewSet.sync` @action at /vault/items/sync/ (registered
+    # by the router as 'vault-items-sync'). The stub function in
+    # vault/views/__init__.py has been deleted as well.
     path('search/', views.search, name='vault-search'),
     
     # Include auth URLs for browsable API (optional)

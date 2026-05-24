@@ -42,6 +42,24 @@ from password_manager.api_utils import error_response, success_response
 
 logger = logging.getLogger(__name__)
 
+
+def _looks_like_b64_md5(value: str) -> bool:
+    """
+    Audit-fix M8 helper. base64 of a 16-byte digest is exactly 24 chars
+    (incl. one '=' pad). We accept that exact shape only — looser
+    matches would let an attacker pass an arbitrary string and trick
+    the bucket signing logic into producing a presigned URL with no
+    real precondition.
+    """
+    if not isinstance(value, str) or len(value) != 24 or not value.endswith('='):
+        return False
+    try:
+        import base64
+        return len(base64.b64decode(value, validate=True)) == 16
+    except Exception:
+        return False
+
+
 # Placeholder row while payload lives only in object storage (valet-key upload flow).
 CLOUD_ONLY_PAYLOAD_META = {'cloud_only': True, 'v': 1}
 
@@ -443,6 +461,36 @@ class BackupViewSet(viewsets.ModelViewSet):
                 '(set CLOUD_STORAGE_BUCKET or AWS_STORAGE_BUCKET_NAME and credentials).',
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Audit-fix M8: require the client to commit to a Content-MD5
+        # digest of the bytes it's about to upload. We bake it into the
+        # presigned URL so S3 / GCS reject the PUT if the actual
+        # ``Content-MD5`` header doesn't match. A leaked presigned URL
+        # alone can no longer be used to corrupt the backup with
+        # attacker-chosen bytes — the attacker would also need to
+        # produce bytes whose MD5 matches the legitimate client's
+        # precommitment. Settings-gated for backward compat: legacy
+        # clients can still upload without the precommit until
+        # operators flip ``VAULT_BACKUP_REQUIRE_CONTENT_MD5=True``.
+        content_md5 = (request.data.get('content_md5') or '').strip()
+        require_md5 = bool(getattr(
+            settings, 'VAULT_BACKUP_REQUIRE_CONTENT_MD5', False
+        ))
+        if require_md5 and not content_md5:
+            return error_response(
+                'content_md5 is required: precommit to the base64-encoded '
+                'MD5 of the envelope bytes you will PUT.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code='missing_content_md5',
+            )
+        if content_md5 and not _looks_like_b64_md5(content_md5):
+            return error_response(
+                'content_md5 must be a base64-encoded 16-byte MD5 digest '
+                '(24 chars including padding).',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                code='invalid_content_md5',
+            )
+
         name = request.data.get(
             'name',
             f"Cloud backup {timezone.now().strftime('%Y-%m-%d %H:%M')}",
@@ -454,6 +502,7 @@ class BackupViewSet(viewsets.ModelViewSet):
                 encrypted_data=json.dumps(CLOUD_ONLY_PAYLOAD_META),
                 size=0,
                 cloud_sync_status='pending',
+                content_md5=content_md5,
             )
             cloud_path = f'backups/{request.user.id}/{backup.id}'
             backup.cloud_storage_path = cloud_path
@@ -462,6 +511,7 @@ class BackupViewSet(viewsets.ModelViewSet):
         presigned = cloud_service.generate_presigned_put_url(
             cloud_path,
             content_type='application/octet-stream',
+            content_md5=content_md5 or None,
         )
         if not presigned:
             backup.delete()
@@ -469,14 +519,20 @@ class BackupViewSet(viewsets.ModelViewSet):
                 'Could not generate upload URL',
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        response_headers = {'Content-Type': 'application/octet-stream'}
+        if content_md5:
+            # Client MUST set this exact header on the PUT or the
+            # bucket will reject it (S3 / GCS verify it server-side).
+            response_headers['Content-MD5'] = content_md5
         return Response({
             'backup_id': str(backup.id),
             'upload_url': presigned['url'],
             'method': 'PUT',
-            'headers': {'Content-Type': 'application/octet-stream'},
+            'headers': response_headers,
             'cloud_path': cloud_path,
             'expires_in': presigned['expires_in'],
             'backend': presigned['backend'],
+            'content_md5_required': presigned.get('content_md5_required', False),
         })
 
     @action(detail=True, methods=['post'], url_path='complete-cloud-upload')
@@ -535,6 +591,35 @@ class BackupViewSet(viewsets.ModelViewSet):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 code='cloud_object_missing',
             )
+
+        # Audit-fix M8: re-verify the precommitted Content-MD5 against
+        # the bytes the bucket actually has. S3 / GCS already enforce
+        # this server-side at PUT time when the header is present, but
+        # a defence-in-depth re-check protects against:
+        #   * a bucket misconfigured to ignore Content-MD5;
+        #   * a future code change that drops the header from the
+        #     presigned URL inadvertently;
+        #   * upstream tampering after the PUT (e.g. a rogue cron job
+        #     that overwrites cloud_path with attacker bytes).
+        if backup.content_md5:
+            import base64, hashlib
+            blob_bytes = blob if isinstance(blob, bytes) else blob.encode('utf-8')
+            observed = base64.b64encode(hashlib.md5(blob_bytes).digest()).decode()
+            if observed != backup.content_md5:
+                logger.warning(
+                    "complete_cloud_upload MD5 mismatch for backup %s: "
+                    "expected=%s observed=%s",
+                    backup.id, backup.content_md5, observed,
+                )
+                backup.cloud_sync_status = 'failed'
+                backup.save(update_fields=['cloud_sync_status'])
+                return error_response(
+                    'Uploaded blob does not match the precommitted '
+                    'Content-MD5. Backup marked failed.',
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    code='content_md5_mismatch',
+                )
+
         blob_text = blob.decode('utf-8') if isinstance(blob, bytes) else blob
 
         validation_error = _validate_cloud_blob(blob_text)

@@ -13,17 +13,13 @@ from rest_framework import status
 from django.utils import timezone
 from password_manager.api_utils import error_response, success_response
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def sync(request):
-    """
-    Synchronize vault items between devices
-    """
-    # Implementation for sync functionality
-    # This is a placeholder - implement actual sync logic based on your requirements
-    return success_response({
-        "timestamp": timezone.now()
-    }, message="Sync endpoint is working")
+# Audit-fix M7 (2026-05): the stub `sync(request)` function that
+# previously lived here returned "Sync endpoint is working" with no
+# real work — it shadowed the genuine `VaultItemViewSet.sync` @action
+# (at /vault/items/sync/) and let clients hit a happy-looking but
+# functionally-broken /vault/sync/. Deleted; the URL route was removed
+# in vault/urls.py too.
+
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
