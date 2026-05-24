@@ -344,22 +344,34 @@ def invite_member(request, folder_id):
         # Audit-fix (PR #272 review, Codex P1): if multiple users share
         # the same email (Django's built-in `User.email` is not unique
         # by default), `.first()` would silently pick one — granting
-        # folder membership to an arbitrary matching account. That's
-        # an authorisation bug. We now reject the invite when more
-        # than one match exists, with the same generic response shape
-        # to preserve the timing-oracle fix. Operators can resolve the
-        # duplicate before retrying.
-        candidate_qs = User.objects.filter(email=email)
-        match_count = candidate_qs.count()
-        if match_count > 1:
+        # folder membership to an arbitrary matching account. We
+        # therefore reject the invite when more than one match exists,
+        # using the same generic response shape to preserve the H3
+        # timing-oracle fix.
+        #
+        # Refinement (PR #272 2nd-pass review, CodeRabbit): fetch at
+        # most 2 candidates in a single bounded query. The previous
+        # two-step `count()` then `first()` had a TOCTOU window
+        # between the queries during which a concurrent transaction
+        # could create / delete a row, letting the duplicate check
+        # pass while `first()` then silently picked an arbitrary
+        # match. One query closes that window and halves DB round-
+        # trips. Also: log a SHA-256 hash prefix of the email, not
+        # the raw value, so debug logs don't carry user PII.
+        candidates = list(User.objects.filter(email=email)[:2])
+        if len(candidates) > 1:
+            import hashlib as _hashlib
+            email_fp = _hashlib.sha256(
+                email.encode('utf-8') if isinstance(email, str) else b'',
+            ).hexdigest()[:12]
             logger.error(
-                "invite_member refused: %s users share email %r; resolve "
-                "the duplicate before inviting",
-                match_count, email,
+                "invite_member refused: multiple users share email "
+                "(sha256[:12]=%s); resolve the duplicate before inviting",
+                email_fp,
             )
             _shadow_sleep()
             return generic_response
-        invitee = candidate_qs.first()
+        invitee = candidates[0] if candidates else None
         if invitee is None:
             _shadow_sleep()
             return generic_response
