@@ -588,7 +588,12 @@ spec:
         - worker
         - --loglevel=info
         - --concurrency=4
-        - --queues=default,blockchain,ml
+        # Audit-fix H4: the `blockchain` queue is intentionally NOT in
+        # this list. It runs on a dedicated single-replica deployment
+        # (`celery-blockchain-worker`, below) so the NonceManager can
+        # guarantee no two workers ever pick the same tx nonce. If you
+        # add `blockchain` back here you reintroduce the cross-pod race.
+        - --queues=default,ml
         envFrom:
         - configMapRef:
             name: app-config
@@ -606,6 +611,112 @@ spec:
           limits:
             memory: "2Gi"
             cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - celery
+            - -A
+            - password_manager
+            - inspect
+            - ping
+          initialDelaySeconds: 60
+          periodSeconds: 60
+          timeoutSeconds: 30
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        - name: app-logs
+          mountPath: /app/logs
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: app-logs
+        emptyDir: {}
+
+---
+# =============================================================================
+# Celery Blockchain Worker (Audit-fix H4)
+# =============================================================================
+# Dedicated single-replica / single-prefork deployment for the
+# `blockchain` queue. The NonceManager class serialises in-process
+# concurrent nonce reservations; this deployment guarantees there's
+# only ONE in-process to begin with. Do NOT add HPA to this deployment
+# and do NOT raise --concurrency above 1 — both reintroduce the
+# nonce race the PR fixed. See docs/DEPLOYMENT_PR262.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-blockchain-worker
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: celery-blockchain-worker
+spec:
+  replicas: 1
+  strategy:
+    # Rolling updates would create a transient second pod with its own
+    # NonceManager — recipe for nonce collisions during deploys. Force
+    # Recreate so old pod dies before new one starts.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: password-manager
+      component: celery-blockchain-worker
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: celery-blockchain-worker
+    spec:
+      serviceAccountName: password-manager-sa
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+      - name: celery-blockchain-worker
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+        imagePullPolicy: Always
+        command:
+        - celery
+        - -A
+        - password_manager
+        - worker
+        - --loglevel=info
+        # MUST stay 1. The NonceManager's threading.Lock is the
+        # in-process guard; --concurrency>1 would re-fork it across
+        # prefork processes that don't share the lock.
+        - --concurrency=1
+        - --queues=blockchain
+        envFrom:
+        - configMapRef:
+            name: app-config
+        - secretRef:
+            name: app-secrets
+        env:
+        - name: RUN_MIGRATIONS
+          value: "false"
+        - name: COLLECT_STATIC
+          value: "false"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "768Mi"
+            cpu: "500m"
         livenessProbe:
           exec:
             command:

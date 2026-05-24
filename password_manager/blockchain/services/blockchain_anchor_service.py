@@ -355,8 +355,14 @@ class BlockchainAnchorService:
                 blockchain_breaker.on_failure(e)
                 return None
 
-            # Build transaction
-            nonce = self.w3.eth.get_transaction_count(signer_address)
+            # Audit-fix H4: thread-safe nonce reservation. The previous
+            # bare `get_transaction_count` call let two concurrent workers
+            # (cross-pod with replicas=2 + --concurrency=4 = up to 8
+            # parallel callers) pick the same nonce and stomp each other.
+            if not hasattr(self, '_nonce_manager') or self._nonce_manager is None:
+                from smart_contracts.services.nonce_manager import NonceManager
+                self._nonce_manager = NonceManager(self.w3, signer_address)
+            nonce = self._nonce_manager.reserve()
 
             tx = contract.functions.anchorCommitment(
                 bytes.fromhex(merkle_root[2:]),
@@ -372,7 +378,13 @@ class BlockchainAnchorService:
             # Sign and send transaction via the KeyProvider so the raw
             # private bytes don't need to be in scope here.
             raw_tx = self.key_provider.sign_transaction(tx, self.w3)
-            tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
+            try:
+                tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
+            except Exception as send_err:
+                msg = str(send_err).lower()
+                if 'nonce' in msg or 'replacement' in msg:
+                    self._nonce_manager.resync()
+                raise
             tx_hash_hex = self.w3.to_hex(tx_hash)
             
             logger.info(f"Transaction sent: {tx_hash_hex}")

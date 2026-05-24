@@ -290,21 +290,36 @@ class SecurityMiddleware:
         if any(path.startswith(excluded) for excluded in excluded_paths):
             return
         
-        # Update device last used timestamp if it's a known device
+        # Update device last used timestamp if it's a known device.
+        # Audit-fix H5: this used to UPDATE the row on every single
+        # authenticated request. With N concurrent users that meant
+        # N writes per second to `security_userdevice` — pure
+        # contention with no observable benefit (the field only
+        # surfaces in the user-devices listing, which doesn't need
+        # sub-minute precision). Coalesce to one write per device
+        # per minute via a Redis cache gate.
         device_fingerprint = request.headers.get('X-Device-Fingerprint')
         if device_fingerprint:
             try:
                 from security.models import UserDevice
+                from django.core.cache import cache
                 from django.utils import timezone
-                
+
                 device = UserDevice.objects.filter(
                     user=request.user,
                     fingerprint=device_fingerprint
                 ).first()
-                
+
                 if device:
-                    device.last_seen = timezone.now()
-                    device.save(update_fields=['last_seen'])
+                    # `cache.add` is atomic in Redis: returns False if
+                    # the key already exists. Using add (not set) means
+                    # two parallel requests racing the same device
+                    # cannot both pass the gate — exactly one writes
+                    # and the rest skip until the TTL expires.
+                    gate_key = f'device_seen:{device.id}'
+                    if cache.add(gate_key, 1, 60):
+                        device.last_seen = timezone.now()
+                        device.save(update_fields=['last_seen'])
             except Exception as e:
                 logger.error(f"Error updating device timestamp: {e}")
     

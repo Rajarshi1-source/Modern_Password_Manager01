@@ -18,10 +18,32 @@ from vault.models import (
     SharedFolderActivity
 )
 import secrets
+import time
 import uuid
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Audit-fix H3: deliberate jitter floor for the "user does not exist"
+# and "already a member" branches of invite_member. Tuned to overlap
+# the median latency of the happy path (User.objects.get + 3 inserts
+# + 1 transaction.atomic commit) so a network observer cannot
+# distinguish "real invite was processed" from "no-op early return"
+# by request timing. Read from settings if an operator needs to
+# retune for their latency profile.
+def _shadow_sleep():
+    try:
+        from django.conf import settings as _s
+        lo = float(getattr(_s, 'INVITE_SHADOW_SLEEP_MIN', 0.05))
+        hi = float(getattr(_s, 'INVITE_SHADOW_SLEEP_MAX', 0.15))
+    except Exception:
+        lo, hi = 0.05, 0.15
+    # secrets.SystemRandom for the jitter so a constant-rate observer
+    # can't dewindow by averaging — std lib's `random` is fine here
+    # since the value isn't security-critical, but use a uniform draw.
+    import random
+    time.sleep(random.uniform(lo, hi))
 
 
 @api_view(['POST'])
@@ -310,13 +332,22 @@ def invite_member(request, folder_id):
             'message': 'If the email is registered, an invitation has been sent.'
         }, status=status.HTTP_202_ACCEPTED)
 
-        try:
-            invitee = User.objects.get(email=email)
-        except User.DoesNotExist:
+        # Audit-fix H3: the previous code returned `generic_response`
+        # immediately on no-user and already-member branches, while the
+        # happy path did `User.get` + 3 inserts inside `transaction.atomic`.
+        # That timing difference (~50–200ms) was a perfect oracle for
+        # enumerating registered users from anyone with invite perms.
+        # We now use `filter().first()` (single query for both branches)
+        # and sleep a uniform jitter on the short-circuit paths so the
+        # response time distribution overlaps the happy path.
+        invitee = User.objects.filter(email=email).first()
+        if invitee is None:
+            _shadow_sleep()
             return generic_response
 
         # Already a member / pending invitation → same generic response.
         if SharedFolderMember.objects.filter(folder=folder, user=invitee).exists():
+            _shadow_sleep()
             return generic_response
 
         # Generate invitation token

@@ -761,27 +761,115 @@ class BackupViewSet(viewsets.ModelViewSet):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _restore_from_items(self, request, backup, items):
-        """Batch-write a list of (already field-level encrypted) items."""
-        if request.data.get('clear_existing', False):
-            EncryptedVaultItem.objects.filter(user=request.user).delete()
+    # Audit-fix H2: hard ceiling on a single restore. Set high enough
+    # not to bother power users but low enough that a malicious or
+    # buggy backup with ``"items": [{}] * 10_000_000`` is rejected
+    # before any DB work happens. Configurable via settings for ops
+    # who genuinely need higher.
+    MAX_RESTORE_ITEMS = 100_000
 
-        restored_count = 0
-        for item_data in items:
-            item_id = item_data.get('item_id')
-            if not item_id:
-                continue
-            EncryptedVaultItem.objects.update_or_create(
-                user=request.user,
-                item_id=item_id,
-                defaults={
-                    'item_type': item_data.get('item_type', 'password'),
-                    'encrypted_data': item_data.get('encrypted_data', ''),
-                    'favorite': item_data.get('favorite', False),
-                    'tags': item_data.get('tags', []),
-                },
+    # Required keys on every item in the restore payload. We don't
+    # validate the SHAPE of `encrypted_data` (it's an opaque client-
+    # sealed envelope) but we DO require the field exists and that
+    # `item_id` is present so the update_or_create lookup is well-
+    # defined. Strict schema is enforced before any destructive
+    # `clear_existing` runs.
+    _RESTORE_REQUIRED_KEYS = ('item_id', 'encrypted_data')
+
+    def _validate_restore_payload(self, items):
+        """
+        Strictly validate the restore payload. Returns ``None`` on
+        success or a Response on failure. No DB writes have happened
+        at the point this is called.
+        """
+        from django.conf import settings as _settings
+        max_items = int(getattr(
+            _settings, 'VAULT_BACKUP_MAX_RESTORE_ITEMS', self.MAX_RESTORE_ITEMS
+        ))
+
+        if not isinstance(items, list):
+            return error_response(
+                message="Restore payload 'items' must be a list.",
+                code="invalid_restore_payload",
+                status_code=status.HTTP_400_BAD_REQUEST,
             )
-            restored_count += 1
+        if len(items) > max_items:
+            return error_response(
+                message=(
+                    f"Backup too large: {len(items)} items exceeds the "
+                    f"server limit of {max_items}. Split the backup or "
+                    "raise VAULT_BACKUP_MAX_RESTORE_ITEMS in settings."
+                ),
+                code="restore_too_large",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                details={'item_count': len(items), 'limit': max_items},
+            )
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                return error_response(
+                    message=f"Restore item at index {idx} is not a JSON object.",
+                    code="invalid_restore_item",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+            missing = [k for k in self._RESTORE_REQUIRED_KEYS if not item.get(k)]
+            if missing:
+                return error_response(
+                    message=(
+                        f"Restore item at index {idx} is missing required "
+                        f"fields: {', '.join(missing)}"
+                    ),
+                    code="invalid_restore_item",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    details={'index': idx, 'missing': missing},
+                )
+        return None
+
+    def _restore_from_items(self, request, backup, items):
+        """
+        Batch-write a list of (already field-level encrypted) items.
+
+        Audit-fix H2: the previous version performed ``clear_existing``
+        UP FRONT and then looped over arbitrarily-large ``items``. A
+        malicious backup with millions of entries OOM-ed the worker
+        AFTER the live vault was wiped — leaving the user with
+        nothing. We now:
+          (1) validate the entire payload (size + per-item schema)
+              before touching any DB row;
+          (2) run delete + inserts inside a single atomic transaction
+              so a mid-loop failure rolls the delete back too.
+        """
+        validation_error = self._validate_restore_payload(items)
+        if validation_error is not None:
+            return validation_error
+
+        clear_existing = bool(request.data.get('clear_existing', False))
+        restored_count = 0
+        try:
+            with transaction.atomic():
+                if clear_existing:
+                    EncryptedVaultItem.objects.filter(user=request.user).delete()
+
+                for item_data in items:
+                    item_id = item_data.get('item_id')
+                    EncryptedVaultItem.objects.update_or_create(
+                        user=request.user,
+                        item_id=item_id,
+                        defaults={
+                            'item_type': item_data.get('item_type', 'password'),
+                            'encrypted_data': item_data.get('encrypted_data', ''),
+                            'favorite': item_data.get('favorite', False),
+                            'tags': item_data.get('tags', []),
+                        },
+                    )
+                    restored_count += 1
+        except Exception as exc:
+            # Tx already rolled back by atomic() — live vault preserved.
+            logger.exception("backup restore failed mid-batch: %s", exc)
+            return error_response(
+                message="Restore failed; live vault was preserved.",
+                code="restore_failed",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         return success_response({
             'success': True,
