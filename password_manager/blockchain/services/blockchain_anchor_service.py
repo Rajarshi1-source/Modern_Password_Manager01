@@ -355,35 +355,58 @@ class BlockchainAnchorService:
                 blockchain_breaker.on_failure(e)
                 return None
 
-            # Audit-fix H4: thread-safe nonce reservation. The previous
-            # bare `get_transaction_count` call let two concurrent workers
-            # (cross-pod with replicas=2 + --concurrency=4 = up to 8
-            # parallel callers) pick the same nonce and stomp each other.
-            if not hasattr(self, '_nonce_manager') or self._nonce_manager is None:
-                from smart_contracts.services.nonce_manager import NonceManager
-                self._nonce_manager = NonceManager(self.w3, signer_address)
-            nonce = self._nonce_manager.reserve()
+            # Audit-fix H4 + PR #272 review: thread-safe nonce
+            # reservation with double-checked lazy init under a
+            # dedicated lock. Before this lock, two concurrent
+            # `anchor_pending_batch` callers could both observe
+            # `_nonce_manager is None` and construct separate managers,
+            # each seeded from the same on-chain pending nonce — the
+            # exact race H4 was supposed to fix.
+            if not hasattr(self, '_nonce_manager_lock'):
+                import threading as _threading
+                self._nonce_manager_lock = _threading.Lock()
+                self._nonce_manager = getattr(self, '_nonce_manager', None)
+            if self._nonce_manager is None:
+                with self._nonce_manager_lock:
+                    if self._nonce_manager is None:
+                        from smart_contracts.services.nonce_manager import NonceManager
+                        self._nonce_manager = NonceManager(self.w3, signer_address)
 
-            tx = contract.functions.anchorCommitment(
-                bytes.fromhex(merkle_root[2:]),
-                len(pending),
-                signature.signature
-            ).build_transaction({
-                'from': signer_address,
-                'nonce': nonce,
-                'gas': 500000,  # Estimate, will be calculated
-                'gasPrice': self.w3.eth.gas_price,
-            })
-
-            # Sign and send transaction via the KeyProvider so the raw
-            # private bytes don't need to be in scope here.
-            raw_tx = self.key_provider.sign_transaction(tx, self.w3)
+            # Lease the nonce (PR #272 review). If anything between
+            # here and a successful send_raw_transaction raises, the
+            # lease's __exit__ releases the nonce so the next batch
+            # doesn't sit behind a permanent gap.
+            lease = self._nonce_manager.lease()
             try:
-                tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
-            except Exception as send_err:
-                msg = str(send_err).lower()
-                if 'nonce' in msg or 'replacement' in msg:
-                    self._nonce_manager.resync()
+                tx = contract.functions.anchorCommitment(
+                    bytes.fromhex(merkle_root[2:]),
+                    len(pending),
+                    signature.signature
+                ).build_transaction({
+                    'from': signer_address,
+                    'nonce': lease.value,
+                    'gas': 500000,  # Estimate, will be calculated
+                    'gasPrice': self.w3.eth.gas_price,
+                })
+
+                # Sign and send transaction via the KeyProvider so the
+                # raw private bytes don't need to be in scope here.
+                raw_tx = self.key_provider.sign_transaction(tx, self.w3)
+                try:
+                    tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
+                except Exception as send_err:
+                    msg = str(send_err).lower()
+                    if 'nonce' in msg or 'replacement' in msg:
+                        self._nonce_manager.resync()
+                    raise
+                # Broadcast succeeded — chain has consumed this nonce
+                # regardless of what wait_for_receipt or DB writes do
+                # below. Commit so the lease is settled.
+                lease.commit()
+            except Exception:
+                # Release the lease back to the pool so the next batch
+                # can reuse the slot.
+                lease.release()
                 raise
             tx_hash_hex = self.w3.to_hex(tx_hash)
             

@@ -376,8 +376,14 @@ class SmartContractWeb3Bridge:
 
         # Audit-fix H4: thread-safe nonce reservation. Created lazily on
         # first build_and_send so we don't issue an RPC call at boot
-        # when the bridge might be initialised but never used.
+        # when the bridge might be initialised but never used. The
+        # `_nonce_manager_lock` (added per PR #272 review) guards the
+        # lazy-init double-check so two concurrent callers can't both
+        # observe `None` and construct separate NonceManager instances
+        # — that would let them each lease the same starting nonce.
+        import threading as _threading
         self._nonce_manager = None
+        self._nonce_manager_lock = _threading.Lock()
 
         # Load VaultAuditLog contract for the on-chain reveal anchor.
         # No fallback: prior versions defaulted to TIMELOCKED_VAULT_ADDRESS
@@ -462,7 +468,15 @@ class SmartContractWeb3Bridge:
         except Exception:
             pass
 
-        rpc_url = self.config.get('RPC_URL') or self.config.get('ARBITRUM_TESTNET_RPC_URL')
+        # Audit-fix (PR #272 review, Codex P1): the RPC URL lives in
+        # `blockchain_config` (BLOCKCHAIN_ANCHORING.RPC_URL) — the same
+        # source `__init__` reads. The previous read from `self.config`
+        # (SMART_CONTRACT_AUTOMATION) returned None in the common case
+        # and reconnect attempts silently used the wrong endpoint.
+        rpc_url = (
+            self.blockchain_config.get('RPC_URL')
+            or self.config.get('RPC_URL')
+        )
         logger.warning(
             "Web3 RPC at %s appears disconnected; attempting reconnect…",
             rpc_url,
@@ -473,10 +487,43 @@ class SmartContractWeb3Bridge:
             ok = self.w3.is_connected()
             if ok:
                 logger.warning("Web3 reconnect succeeded.")
-                # Reset the per-bridge nonce manager so the next reserve
+                # Audit-fix (PR #272 review, Codex+CodeRabbit): web3.py
+                # 7.x binds a Contract instance to the Web3 it was
+                # constructed from. Swapping `self.w3` without rebuilding
+                # leaves `self.contract` / `self.audit_contract` calling
+                # the OLD provider — so the reconnect reports success
+                # while every subsequent call still fails. Rebuild
+                # using the same addresses + ABIs the bridge was
+                # initialised with.
+                contract_address = self.config.get('TIMELOCKED_VAULT_ADDRESS', '')
+                if contract_address:
+                    try:
+                        self.contract = self.w3.eth.contract(
+                            address=Web3.to_checksum_address(contract_address),
+                            abi=TIMELOCKED_VAULT_ABI,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "Contract rebuild after reconnect failed: %s", e
+                        )
+                        self.contract = None
+                audit_address = self.config.get('VAULT_AUDIT_LOG_ADDRESS', '')
+                if audit_address:
+                    try:
+                        self.audit_contract = self.w3.eth.contract(
+                            address=Web3.to_checksum_address(audit_address),
+                            abi=VAULT_AUDIT_LOG_ABI,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "VaultAuditLog rebuild after reconnect failed: %s", e
+                        )
+                        self.audit_contract = None
+                # Reset the per-bridge nonce manager so the next lease
                 # re-syncs from chain (the old counter might be stale
                 # against the new provider's view).
-                self._nonce_manager = None
+                with self._nonce_manager_lock:
+                    self._nonce_manager = None
                 return True
             logger.error("Web3 reconnect attempt did not pass is_connected().")
             return False
@@ -616,44 +663,55 @@ class SmartContractWeb3Bridge:
             logger.info("build_and_send skipped: bridge not write-ready")
             return None
 
-        try:
-            signer_address = self.key_provider.address
-            # Audit-fix H4: serialise nonce reservation through the
-            # process-local NonceManager so two threads racing the same
-            # signer don't both pick the same nonce.
-            if self._nonce_manager is None:
-                from .nonce_manager import NonceManager
-                self._nonce_manager = NonceManager(self.w3, signer_address)
-            nonce = self._nonce_manager.reserve()
+        signer_address = self.key_provider.address
 
-            fn = getattr(contract.functions, function_name)(*args)
-            tx = fn.build_transaction({
-                'from': signer_address,
-                'nonce': nonce,
-                'gas': gas_limit or 150_000,
-                'gasPrice': self.w3.eth.gas_price,
-            })
-            # Delegate signing to the configured KeyProvider — keeps the
-            # raw private key out of this scope when KMS is in use.
-            raw = self.key_provider.sign_transaction(tx, self.w3)
+        # Audit-fix H4 + PR #272 review: double-checked lazy init under
+        # a dedicated lock so two concurrent first callers can't both
+        # see `None` and construct separate NonceManager instances
+        # (each seeded from the same on-chain pending nonce).
+        if self._nonce_manager is None:
+            with self._nonce_manager_lock:
+                if self._nonce_manager is None:
+                    from .nonce_manager import NonceManager
+                    self._nonce_manager = NonceManager(self.w3, signer_address)
+
+        # Lease-based reservation (PR #272 review): if any step between
+        # lease() and a successful send_raw_transaction() raises, the
+        # lease's __exit__ releases the nonce back into the manager's
+        # free pool so we don't leave a permanent gap on the chain.
+        with self._nonce_manager.lease() as lease:
             try:
-                tx_hash = self.w3.eth.send_raw_transaction(raw)
-            except Exception as send_err:
-                # `nonce too low` / `replacement transaction underpriced`
-                # mean another worker (or a previous tx of ours) already
-                # consumed this slot. Resync so the next reservation is
-                # correct, then re-raise so the outer except records the
-                # failure as usual.
-                msg = str(send_err).lower()
-                if 'nonce' in msg or 'replacement' in msg:
-                    self._nonce_manager.resync()
-                raise
-            tx_hash_hex = self.w3.to_hex(tx_hash)
-            logger.info(f"build_and_send {function_name}: {tx_hash_hex}")
-            return tx_hash_hex
-        except Exception as e:
-            logger.error(f"build_and_send({function_name}) failed: {e}")
-            return None
+                fn = getattr(contract.functions, function_name)(*args)
+                tx = fn.build_transaction({
+                    'from': signer_address,
+                    'nonce': lease.value,
+                    'gas': gas_limit or 150_000,
+                    'gasPrice': self.w3.eth.gas_price,
+                })
+                # Delegate signing to the configured KeyProvider — keeps
+                # the raw private key out of this scope when KMS is in use.
+                raw = self.key_provider.sign_transaction(tx, self.w3)
+                try:
+                    tx_hash = self.w3.eth.send_raw_transaction(raw)
+                except Exception as send_err:
+                    # `nonce too low` / `replacement transaction underpriced`
+                    # mean another worker (or a previous tx of ours) already
+                    # consumed this slot. Resync so the next lease is
+                    # correct; lease.__exit__ rolls our value back.
+                    msg = str(send_err).lower()
+                    if 'nonce' in msg or 'replacement' in msg:
+                        self._nonce_manager.resync()
+                    raise
+                # Reached only on a successful broadcast — commit the
+                # lease so the manager doesn't try to hand this nonce
+                # out again.
+                lease.commit()
+                tx_hash_hex = self.w3.to_hex(tx_hash)
+                logger.info(f"build_and_send {function_name}: {tx_hash_hex}")
+                return tx_hash_hex
+            except Exception as e:
+                logger.error(f"build_and_send({function_name}) failed: {e}")
+                return None
 
     def wait_for_receipt(
         self,
