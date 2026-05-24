@@ -374,6 +374,11 @@ class SmartContractWeb3Bridge:
             self.account = None
             self._private_key = None
 
+        # Audit-fix H4: thread-safe nonce reservation. Created lazily on
+        # first build_and_send so we don't issue an RPC call at boot
+        # when the bridge might be initialised but never used.
+        self._nonce_manager = None
+
         # Load VaultAuditLog contract for the on-chain reveal anchor.
         # No fallback: prior versions defaulted to TIMELOCKED_VAULT_ADDRESS
         # which has no `anchorUnlock(bytes32)` selector, so every audit
@@ -405,12 +410,86 @@ class SmartContractWeb3Bridge:
         """Check if the Web3 bridge is fully operational."""
         return self.enabled and self.w3 is not None and self.contract is not None
 
+    # ---------------------------------------------------------------------
+    # Audit-fix H9: connection liveness + auto-reconnect.
+    #
+    # The bridge is a singleton initialised at app boot. If the Arbitrum
+    # RPC drops (Sepolia is flaky; even Mainnet has periodic 5xx waves),
+    # the previous code held a dead `self.w3` forever — every subsequent
+    # call returned None from `_write_ready()` with no log explaining why.
+    # Operators saw "anchor skipped" for days without realising the RPC
+    # was unhealthy.
+    #
+    # We now run a lazy liveness check + reconnect at the top of every
+    # read/write method via `_ensure_connected()`. A Prometheus counter
+    # (`blockchain_rpc_reconnects_total`, registered lazily) tracks
+    # reconnect attempts, and the recovered logger emits at WARNING
+    # so operators see flapping in their dashboards.
+    # ---------------------------------------------------------------------
+
+    def _ensure_connected(self) -> bool:
+        """
+        Return True iff the provider is healthy. If a previously-healthy
+        connection has dropped, attempt one in-place reconnect using the
+        cached RPC URL. On failure, log + bump the metric + leave the
+        provider broken so callers fail closed.
+        """
+        if self.w3 is None:
+            return False
+        try:
+            connected = self.w3.is_connected()
+        except Exception as e:
+            logger.warning("web3 is_connected() raised %s; assuming down", e)
+            connected = False
+
+        if connected:
+            return True
+
+        # Bump metric. Lazy import so this module remains importable
+        # without prometheus_client installed (used in test env).
+        try:
+            from prometheus_client import Counter
+            global _RECONNECT_COUNTER
+            try:
+                _RECONNECT_COUNTER
+            except NameError:
+                _RECONNECT_COUNTER = Counter(
+                    'blockchain_rpc_reconnects_total',
+                    'Number of times the SmartContractWeb3Bridge has '
+                    'tried to reconnect after detecting a dropped RPC.',
+                )
+            _RECONNECT_COUNTER.inc()
+        except Exception:
+            pass
+
+        rpc_url = self.config.get('RPC_URL') or self.config.get('ARBITRUM_TESTNET_RPC_URL')
+        logger.warning(
+            "Web3 RPC at %s appears disconnected; attempting reconnect…",
+            rpc_url,
+        )
+        try:
+            from web3 import Web3
+            self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+            ok = self.w3.is_connected()
+            if ok:
+                logger.warning("Web3 reconnect succeeded.")
+                # Reset the per-bridge nonce manager so the next reserve
+                # re-syncs from chain (the old counter might be stale
+                # against the new provider's view).
+                self._nonce_manager = None
+                return True
+            logger.error("Web3 reconnect attempt did not pass is_connected().")
+            return False
+        except Exception as e:
+            logger.error("Web3 reconnect raised: %s", e)
+            return False
+
     def check_condition_onchain(self, vault_id_onchain: int) -> Optional[bool]:
         """
         Check if vault conditions are met on-chain.
         Returns None if unavailable.
         """
-        if not self.is_available():
+        if not self.is_available() or not self._ensure_connected():
             return None
         try:
             result = self.contract.functions.conditionalAccess(vault_id_onchain).call()
@@ -421,7 +500,7 @@ class SmartContractWeb3Bridge:
 
     def get_vault_onchain(self, vault_id_onchain: int) -> Optional[Dict]:
         """Fetch vault state from on-chain contract."""
-        if not self.is_available():
+        if not self.is_available() or not self._ensure_connected():
             return None
         try:
             vault_data = self.contract.functions.getVault(vault_id_onchain).call()
@@ -506,10 +585,16 @@ class SmartContractWeb3Bridge:
     # =========================================================================
 
     def _write_ready(self) -> bool:
-        """True iff we can submit transactions."""
+        """
+        True iff we can submit transactions. Includes the H9
+        ``_ensure_connected`` liveness check so a dropped RPC is
+        retried in-place instead of silently degrading every write
+        for the lifetime of the worker.
+        """
         return bool(
             self.enabled and self.w3 and self.key_provider is not None
             and self.key_provider.is_available
+            and self._ensure_connected()
         )
 
     def build_and_send(
@@ -533,8 +618,15 @@ class SmartContractWeb3Bridge:
 
         try:
             signer_address = self.key_provider.address
+            # Audit-fix H4: serialise nonce reservation through the
+            # process-local NonceManager so two threads racing the same
+            # signer don't both pick the same nonce.
+            if self._nonce_manager is None:
+                from .nonce_manager import NonceManager
+                self._nonce_manager = NonceManager(self.w3, signer_address)
+            nonce = self._nonce_manager.reserve()
+
             fn = getattr(contract.functions, function_name)(*args)
-            nonce = self.w3.eth.get_transaction_count(signer_address)
             tx = fn.build_transaction({
                 'from': signer_address,
                 'nonce': nonce,
@@ -544,7 +636,18 @@ class SmartContractWeb3Bridge:
             # Delegate signing to the configured KeyProvider — keeps the
             # raw private key out of this scope when KMS is in use.
             raw = self.key_provider.sign_transaction(tx, self.w3)
-            tx_hash = self.w3.eth.send_raw_transaction(raw)
+            try:
+                tx_hash = self.w3.eth.send_raw_transaction(raw)
+            except Exception as send_err:
+                # `nonce too low` / `replacement transaction underpriced`
+                # mean another worker (or a previous tx of ours) already
+                # consumed this slot. Resync so the next reservation is
+                # correct, then re-raise so the outer except records the
+                # failure as usual.
+                msg = str(send_err).lower()
+                if 'nonce' in msg or 'replacement' in msg:
+                    self._nonce_manager.resync()
+                raise
             tx_hash_hex = self.w3.to_hex(tx_hash)
             logger.info(f"build_and_send {function_name}: {tx_hash_hex}")
             return tx_hash_hex

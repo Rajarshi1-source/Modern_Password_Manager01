@@ -10,6 +10,7 @@ from unittest.mock import patch, Mock
 from datetime import timedelta
 import json
 import base64
+import os
 
 from .models import VaultItem, VaultBackup, UserSalt, AuditLog
 from .crypto import encrypt_vault_item, decrypt_vault_item
@@ -694,28 +695,66 @@ class UserSaltModelTests(TestCase):
 
 
 class VaultCryptoTests(TestCase):
-    """Test vault encryption/decryption functions"""
-    
-    def test_encrypt_vault_item(self):
-        """Test encrypting vault item data"""
+    """
+    Test vault encryption/decryption functions.
+
+    Audit-fix H7 regressions: these helpers are INTERNAL (production
+    items are client-encrypted) but the function contract is now:
+    requires 32 raw key bytes, returns an AES-256-GCM envelope,
+    rejects legacy Fernet ciphertext explicitly.
+    """
+
+    def test_encrypt_roundtrip_with_dict(self):
+        from .crypto import encrypt_vault_item, decrypt_vault_item
         data = {"username": "test", "password": "secret"}
-        key = b'test_encryption_key_32bytes!!'
-        
-        # This test requires the actual crypto functions
-        # If crypto.py has these functions, test them
-        # encrypted = encrypt_vault_item(data, key)
-        # self.assertIsNotNone(encrypted)
-        # self.assertNotEqual(encrypted, json.dumps(data))
-        pass
-    
-    def test_decrypt_vault_item(self):
-        """Test decrypting vault item data"""
-        # data = {"username": "test", "password": "secret"}
-        # key = b'test_encryption_key_32bytes!!'
-        # encrypted = encrypt_vault_item(data, key)
-        # decrypted = decrypt_vault_item(encrypted, key)
-        # self.assertEqual(decrypted, data)
-        pass
+        key = os.urandom(32)
+
+        envelope = encrypt_vault_item(data, key)
+        # Envelope shape: 0x01 version | 12-byte nonce | ct+tag.
+        self.assertEqual(envelope[0], 0x01)
+        self.assertGreater(len(envelope), 1 + 12 + 16)
+
+        decoded = decrypt_vault_item(envelope, key)
+        self.assertEqual(decoded, data)
+
+    def test_encrypt_roundtrip_with_string(self):
+        from .crypto import encrypt_vault_item, decrypt_vault_item
+        key = os.urandom(32)
+        envelope = encrypt_vault_item("hello world", key)
+        self.assertEqual(decrypt_vault_item(envelope, key), "hello world")
+
+    def test_encrypt_rejects_short_key(self):
+        from .crypto import encrypt_vault_item
+        with self.assertRaises(ValueError):
+            encrypt_vault_item({"x": 1}, b'too_short')
+
+    def test_encrypt_rejects_non_bytes_key(self):
+        from .crypto import encrypt_vault_item
+        with self.assertRaises(ValueError):
+            encrypt_vault_item({"x": 1}, "string-key-32-chars-not-bytes-xx")
+
+    def test_decrypt_rejects_legacy_fernet_string(self):
+        # 'gAAAA' is the standard Fernet prefix; we refuse it loudly so
+        # any caller still on the old SHA256(key) → Fernet path can be
+        # found, instead of silently producing wrong plaintext.
+        from .crypto import decrypt_vault_item
+        with self.assertRaises(ValueError):
+            decrypt_vault_item('gAAAAAB' + 'A' * 64, os.urandom(32))
+
+    def test_decrypt_rejects_unknown_version(self):
+        from .crypto import decrypt_vault_item
+        bogus = bytes([0xFE]) + os.urandom(12) + os.urandom(32)
+        with self.assertRaises(ValueError):
+            decrypt_vault_item(bogus, os.urandom(32))
+
+    def test_decrypt_rejects_tampered_ciphertext(self):
+        from .crypto import encrypt_vault_item, decrypt_vault_item
+        key = os.urandom(32)
+        envelope = bytearray(encrypt_vault_item({"x": 1}, key))
+        # Flip a byte inside the ciphertext.
+        envelope[-3] ^= 0xFF
+        with self.assertRaises(Exception):
+            decrypt_vault_item(bytes(envelope), key)
 
 
 class VaultItemViewSetTests(TestCase):
