@@ -135,16 +135,31 @@ class OnchainUnlockService:
             commitment = self.build_commitment_hash(
                 locked, user_id, nonce=nonce
             )
+            commitment_hex = '0x' + commitment.hex()
 
+            # Persist whenever EITHER the nonce was just minted OR the
+            # stored commitment is missing/stale relative to what we'll
+            # broadcast. Previously only the `fresh` branch updated the
+            # DB, which could leave a vault with a valid nonce but a
+            # blank/stale `reveal_commitment` while the tx went out with
+            # the recomputed hash — desync that an auditor couldn't
+            # reconcile. Tightened per CodeRabbit review of PR #262.
+            needs_save = False
             if fresh:
                 locked.reveal_nonce = nonce
-                locked.reveal_commitment = '0x' + commitment.hex()
+                needs_save = True
+            if locked.reveal_commitment != commitment_hex:
+                locked.reveal_commitment = commitment_hex
+                needs_save = True
+            if needs_save:
                 locked.save(update_fields=[
                     'reveal_nonce', 'reveal_commitment', 'updated_at',
                 ])
-                # Reflect the new values onto the caller's instance too.
-                vault.reveal_nonce = locked.reveal_nonce
-                vault.reveal_commitment = locked.reveal_commitment
+
+            # Reflect the persisted values onto the caller's instance so
+            # downstream code sees the same state the DB now holds.
+            vault.reveal_nonce = locked.reveal_nonce
+            vault.reveal_commitment = locked.reveal_commitment
 
         tx_hash = self.bridge.build_and_send(
             self.bridge.audit_contract,

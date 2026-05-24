@@ -110,12 +110,21 @@ class Command(BaseCommand):
             # transaction that deletes the old. If `add_commitment`
             # raises or returns None (e.g. anchoring disabled), the
             # transaction rolls back and the original survives.
+            #
+            # `auto_anchor=False` is critical here — the default path
+            # would trigger `anchor_pending_batch()` once the threshold
+            # is hit, and the stale (SHA-256) rows still exist inside
+            # this same transaction. The anchorer would then see legacy
+            # AND replacement hashes together and anchor a mixed batch,
+            # producing an on-chain root the new keccak verifier still
+            # can't reconstruct. Added per CodeRabbit review of PR #262.
             try:
                 with transaction.atomic():
                     new_hash = service.add_commitment(
                         user_id=row['user_id'],
                         commitment_id=row['commitment_id'],
                         encrypted_data=encrypted_data,
+                        auto_anchor=False,
                     )
                     if not new_hash:
                         raise RuntimeError(
@@ -144,3 +153,10 @@ class Command(BaseCommand):
             f"skipped {skipped_already_anchored} already-anchored; "
             f"failed {failed} (originals preserved)."
         ))
+        if requeued:
+            self.stdout.write(self.style.NOTICE(
+                "Auto-anchoring was suppressed during requeue to avoid mixed "
+                "batches. Trigger a fresh anchor batch via the normal Celery "
+                "schedule or call BlockchainAnchorService.anchor_pending_batch() "
+                "directly when ready."
+            ))

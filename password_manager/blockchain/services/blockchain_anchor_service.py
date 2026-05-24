@@ -157,46 +157,59 @@ class BlockchainAnchorService:
             }
         ]
     
-    def add_commitment(self, user_id: int, commitment_id: int, encrypted_data: str) -> str:
+    def add_commitment(
+        self,
+        user_id: int,
+        commitment_id: int,
+        encrypted_data: str,
+        auto_anchor: bool = True,
+    ) -> str:
         """
-        Add a behavioral commitment to pending batch
-        
+        Add a behavioral commitment to pending batch.
+
         Args:
             user_id: User ID
             commitment_id: BehavioralCommitment ID
             encrypted_data: Encrypted embedding data
-        
+            auto_anchor: When True (default) and the batch threshold is
+                reached, trigger `anchor_pending_batch()` immediately. The
+                rehash management command passes False so it can stage all
+                new rows before any anchoring happens — otherwise the
+                anchorer can see legacy and replacement rows together and
+                anchor a mixed batch. Added per CodeRabbit review of PR #262.
+
         Returns:
             Commitment hash (hex string)
         """
         if not self.enabled:
             logger.debug("Blockchain anchoring disabled, skipping")
             return None
-        
+
         # Create commitment hash
         commitment_hash = create_commitment_hash(str(commitment_id), encrypted_data)
-        
+
         # Store in pending commitments table
         try:
             from behavioral_recovery.models import BehavioralCommitment
             commitment_obj = BehavioralCommitment.objects.get(id=commitment_id)
-            
+
             pending = PendingCommitment.objects.create(
                 user_id=user_id,
                 commitment=commitment_obj,
                 commitment_hash=commitment_hash
             )
-            
+
             logger.info(f"Added commitment {commitment_hash[:10]}... to pending batch")
-            
-            # Check if we should auto-anchor
-            pending_count = PendingCommitment.objects.filter(is_anchored=False).count()
-            if pending_count >= self.batch_size:
-                logger.info(f"Batch size reached ({pending_count}), triggering anchor")
-                self.anchor_pending_batch()
-            
+
+            # Check if we should auto-anchor.
+            if auto_anchor:
+                pending_count = PendingCommitment.objects.filter(is_anchored=False).count()
+                if pending_count >= self.batch_size:
+                    logger.info(f"Batch size reached ({pending_count}), triggering anchor")
+                    self.anchor_pending_batch()
+
             return commitment_hash
-        
+
         except Exception as e:
             logger.error(f"Error adding commitment to pending batch: {e}")
             return commitment_hash
@@ -282,14 +295,19 @@ class BlockchainAnchorService:
                     )
                     return None
             except Exception as e:
-                # The view returns False on uninitialized contracts; treat
-                # any other RPC error as a transient failure (don't trip
-                # the breaker — let the retry path handle it).
-                logger.warning(
-                    "authorizedSigners preflight call failed: %s — proceeding "
-                    "anyway; the on-chain require() will catch a real mismatch.",
+                # Fail closed: if we can't verify the signer is still
+                # authorized, don't burn gas on an anchorCommitment() that
+                # might just revert (and tie up the on-chain nonce). The
+                # circuit breaker takes the failure so the retry path
+                # recovers when the read becomes healthy again. Tightened
+                # per CodeRabbit review of PR #262.
+                logger.error(
+                    "authorizedSigners preflight call failed: %s; refusing "
+                    "to broadcast until signer authorization can be confirmed.",
                     e,
                 )
+                blockchain_breaker.on_failure(e)
+                return None
 
             # Build transaction
             nonce = self.w3.eth.get_transaction_count(self.account.address)
