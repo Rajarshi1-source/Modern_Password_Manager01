@@ -228,7 +228,7 @@ rlp==4.1.0
 rsa==4.9.1
 ruamel.yaml==0.18.16
 ruamel.yaml.clib==0.2.15
-s3transfer==0.16.0
+s3transfer==0.16.1
 safetensors==0.7.0
 safety==3.7.0
 safety-schemas==0.0.16
