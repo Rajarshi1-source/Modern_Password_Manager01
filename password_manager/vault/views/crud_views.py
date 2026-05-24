@@ -346,25 +346,84 @@ class VaultItemViewSet(viewsets.ModelViewSet):
         }
         """
         serializer = SyncSerializer(data=request.data)
-        
+
         if not serializer.is_valid():
             return error_response(
                 message="Invalid sync data provided",
                 code="validation_error",
                 details=serializer.errors
             )
-        
+
+        # Audit-fix H6: serialise concurrent sync attempts per-user. The
+        # previous body read last_sync, mutated items, and returned
+        # server changes — but two devices syncing simultaneously could
+        # both pass last_sync, both write conflicting items, and the
+        # second writer would silently win, dropping the first device's
+        # edits. We now:
+        #   (1) take a row lock on the per-user UserSalt for the
+        #       duration of the transaction (serialises concurrent
+        #       sync calls within the DB);
+        #   (2) honour an optional `expected_sync_version` from the
+        #       client (optimistic concurrency). If present and it
+        #       doesn't match the locked row, return 409 Conflict so
+        #       the client can re-fetch and merge.
+        #   (3) bump UserSalt.sync_version inside the same tx so the
+        #       next sync attempt sees the new value.
+        from vault.models import UserSalt
+        expected_version = request.data.get('expected_sync_version')
+
         try:
             with transaction.atomic():
+                # SELECT FOR UPDATE — any concurrent sync for this user
+                # blocks here until our transaction commits.
+                salt_row = (
+                    UserSalt.objects
+                    .select_for_update()
+                    .filter(user=request.user)
+                    .first()
+                )
+                if salt_row is None:
+                    return error_response(
+                        message="Vault not initialized",
+                        code="vault_not_initialized",
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                # Optimistic concurrency: only check when the client
+                # actually sent a version. Legacy clients without the
+                # field still benefit from the row lock above.
+                if expected_version is not None:
+                    try:
+                        expected_version_int = int(expected_version)
+                    except (TypeError, ValueError):
+                        return error_response(
+                            message="expected_sync_version must be an integer",
+                            code="invalid_sync_version",
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                        )
+                    if salt_row.sync_version != expected_version_int:
+                        return error_response(
+                            message=(
+                                "Sync conflict: another device synced "
+                                "since your last update. Re-fetch and retry."
+                            ),
+                            code="sync_conflict",
+                            status_code=status.HTTP_409_CONFLICT,
+                            details={
+                                'expected': expected_version_int,
+                                'current': salt_row.sync_version,
+                            },
+                        )
+
                 last_sync = serializer.validated_data.get('last_sync')
                 client_items = serializer.validated_data.get('items', [])
                 deleted_item_ids = serializer.validated_data.get('deleted_items', [])
-                
+
                 # Get server-side changes since last_sync
                 server_items = self.get_queryset()
                 if last_sync:
                     server_items = server_items.filter(updated_at__gt=last_sync)
-                
+
                 # Get deleted items since last_sync
                 server_deleted = []
                 if last_sync:
@@ -372,22 +431,28 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                         user=request.user,
                         deleted_at__gt=last_sync
                     ).values_list('item_id', flat=True)
-                
+
                 # Process client-side changes
                 for item_data in client_items:
                     self._process_sync_item(item_data)
-                
+
                 # Process client-side deletions
                 if deleted_item_ids:
                     self.get_queryset().filter(item_id__in=deleted_item_ids).delete()
-                
+
+                # Bump sync_version under the same lock so the next sync
+                # round-trip sees a fresh token.
+                salt_row.sync_version = (salt_row.sync_version or 0) + 1
+                salt_row.save(update_fields=['sync_version'])
+
                 # Return server-side changes
                 server_items_serializer = self.get_serializer(server_items, many=True)
-                
+
                 return success_response({
                     'items': server_items_serializer.data,
                     'deleted_items': list(server_deleted),
-                    'sync_time': timezone.now()
+                    'sync_time': timezone.now(),
+                    'sync_version': salt_row.sync_version,
                 }, message="Sync completed successfully")
                 
         except Exception as e:

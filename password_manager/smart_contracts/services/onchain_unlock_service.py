@@ -20,7 +20,6 @@ unlock still succeeds; the vault is simply flagged ``onchain_audit_pending``.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import secrets
 import time
@@ -76,15 +75,16 @@ class OnchainUnlockService:
             vault_part = vault.id.bytes  # UUID, 16 bytes
 
         payload = vault_part + int(user_id).to_bytes(8, 'big') + nonce
-        # keccak256 via web3 when available; else sha3_256 fallback is
-        # acceptable for the *commitment* since we never compare it against
-        # EVM-computed hashes of the same preimage — the EVM only stores
-        # whatever 32 bytes we pass in.
-        try:
-            from web3 import Web3
-            return Web3.keccak(payload)
-        except Exception:
-            return hashlib.sha3_256(payload).digest()
+        # Audit-fix H1: hard-fail on keccak256 unavailability. The previous
+        # `try Web3.keccak / except sha3_256` silently changed hash
+        # function when the web3 import failed (in stripped images or
+        # broken envs), breaking cross-verifiability of every prior
+        # anchor since keccak256 and SHA3-256 use different paddings
+        # (0x01 vs 0x06). `eth_utils.keccak` is vendored by web3.py so
+        # this import either works or the whole feature is correctly
+        # disabled — no silent hash drift.
+        from eth_utils import keccak
+        return keccak(payload)
 
     def submit_unlock_anchor(
         self,

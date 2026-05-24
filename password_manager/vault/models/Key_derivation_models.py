@@ -9,14 +9,22 @@ class UserSalt(models.Model):
     salt = models.BinaryField()
     auth_hash = models.BinaryField()  # For verifying master password
     created_at = models.DateTimeField(auto_now_add=True)
-    
+    # Audit-fix H6: optimistic-concurrency token bumped on every sync.
+    # The /vault/items/sync/ endpoint takes a per-user row lock for the
+    # duration of the sync and requires the client's `expected_sync_version`
+    # to match. Two devices racing the same starting version will
+    # serialise: the first commits and bumps the version, the second
+    # sees the bump under the lock and gets 409 Conflict so the client
+    # can re-fetch and merge cleanly.
+    sync_version = models.BigIntegerField(default=0)
+
     @classmethod
     def create_for_user(cls, user, auth_hash):
         """Create a new salt for a user"""
         from .crypto import generate_salt
         salt = generate_salt()
         return cls.objects.create(user=user, salt=salt, auth_hash=auth_hash)
-    
+
     def get_salt_b64(self):
         """Get salt as base64 string for client"""
         return base64.b64encode(self.salt).decode('utf-8')
