@@ -166,8 +166,10 @@ class TestGetKeyProvider:
         # Force the import path that boto3 doesn't exist to verify the
         # error surface is friendly. We monkey-patch the local symbol.
         with mock.patch.dict('sys.modules', {'boto3': None}):
-            with pytest.raises(Exception):
-                # ImportError is wrapped into a RuntimeError by the provider.
+            # ImportError is wrapped into a RuntimeError by the provider
+            # (see KmsKeyProvider.__init__) — assert on the exact type so
+            # an unrelated exception can't accidentally pass this test.
+            with pytest.raises(RuntimeError):
                 get_key_provider()
 
     @override_settings(BLOCKCHAIN_KEY_PROVIDER='unknown_thing')

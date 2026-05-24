@@ -17,10 +17,20 @@ import { network } from "hardhat";
 // Hardhat 3 + hardhat-ethers v3 no longer exposes `hre.ethers`. Connect
 // once per file via `network.create()` and stash the ethers handle on
 // `hre` so the rest of the legacy-style test body keeps working.
+//
+// Also stash `network.provider` so the time-travel helpers below
+// (`hre.network.provider.send("evm_increaseTime", ...)` etc.) resolve.
+// `connection.ethers.provider` is the ethers wrapper around the same
+// EDR provider, which exposes the JSON-RPC `send(method, params)`
+// method that Hardhat Network's `evm_*` and `hardhat_*` testing
+// methods rely on.
 let hre;
 before(async function () {
   const connection = await network.create();
-  hre = { ethers: connection.ethers };
+  hre = {
+    ethers: connection.ethers,
+    network: { provider: connection.ethers.provider },
+  };
 });
 
 describe("TimeLockedVault", function () {

@@ -188,6 +188,12 @@ TIMELOCKED_VAULT_ABI = [
                     {"internalType": "uint256", "name": "priceThreshold", "type": "uint256"},
                     {"internalType": "bool", "name": "priceAbove", "type": "bool"},
                     {"internalType": "address", "name": "oracleAddress", "type": "address"},
+                    # Added in PR #262 (C4): per-vault oracle staleness
+                    # tolerance. Position MUST stay before `arbitrator`
+                    # because the on-chain `Vault` struct declares it
+                    # in that order — getting the order wrong shifts
+                    # every subsequent field by one slot.
+                    {"internalType": "uint256", "name": "oracleMaxStaleness", "type": "uint256"},
                     {"internalType": "address", "name": "arbitrator", "type": "address"},
                     {"internalType": "bool", "name": "exists", "type": "bool"}
                 ],
@@ -442,8 +448,12 @@ class SmartContractWeb3Bridge:
                 'price_threshold': vault_data[19],
                 'price_above': vault_data[20],
                 'oracle_address': vault_data[21],
-                'arbitrator': vault_data[22],
-                'exists': vault_data[23],
+                # Index 22 is `oracleMaxStaleness` (added in PR #262 C4).
+                # The struct's field order is normative — slot 22 holds
+                # this new field, pushing the existing ones down by one.
+                'oracle_max_staleness': vault_data[22],
+                'arbitrator': vault_data[23],
+                'exists': vault_data[24],
             }
         except Exception as e:
             logger.error(f"On-chain vault fetch failed for {vault_id_onchain}: {e}")
