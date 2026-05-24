@@ -333,18 +333,37 @@ class SmartContractWeb3Bridge:
         else:
             self.contract = None
 
-        # Load signing account
-        private_key = os.environ.get('BLOCKCHAIN_PRIVATE_KEY')
-        if private_key and self.w3:
+        # Load signing key via the KeyProvider abstraction (C7 follow-up).
+        # See blockchain/services/key_provider.py — defaults to
+        # EnvKeyProvider (BLOCKCHAIN_PRIVATE_KEY), opt into
+        # KmsKeyProvider with BLOCKCHAIN_KEY_PROVIDER='kms' +
+        # BLOCKCHAIN_KMS_KEY_ID.
+        self.key_provider = None
+        if self.w3:
             try:
-                from eth_account import Account
-                self.account = Account.from_key(private_key)
-                self._private_key = private_key
-                logger.debug(f"Smart contract deployer: {self.account.address}")
+                from blockchain.services.key_provider import get_key_provider
+                kp = get_key_provider()
+                if kp.is_available:
+                    self.key_provider = kp
+                    logger.debug(
+                        "Smart contract signer ready: address=%s, provider=%s",
+                        kp.address, kp.provider_kind,
+                    )
             except Exception as e:
-                logger.error(f"Account load error: {e}")
-                self.account = None
-                self._private_key = None
+                logger.error(f"KeyProvider load error: {e}")
+                self.key_provider = None
+
+        # Backward-compat: expose `.account` (object with `.address`) and
+        # `._private_key` (truthy/falsy) for callers that still read the
+        # legacy attributes. The latter is intentionally None when KMS is
+        # in use — the only safe value to expose.
+        class _AccountShim:
+            def __init__(self, addr): self.address = addr
+        if self.key_provider is not None:
+            self.account = _AccountShim(self.key_provider.address)
+            # Truthy sentinel only — never the actual key. `_private_key`
+            # gates `_write_ready()` which is the only consumer.
+            self._private_key = True
         else:
             self.account = None
             self._private_key = None
@@ -478,7 +497,10 @@ class SmartContractWeb3Bridge:
 
     def _write_ready(self) -> bool:
         """True iff we can submit transactions."""
-        return bool(self.enabled and self.w3 and self.account and self._private_key)
+        return bool(
+            self.enabled and self.w3 and self.key_provider is not None
+            and self.key_provider.is_available
+        )
 
     def build_and_send(
         self,
@@ -500,16 +522,18 @@ class SmartContractWeb3Bridge:
             return None
 
         try:
+            signer_address = self.key_provider.address
             fn = getattr(contract.functions, function_name)(*args)
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
+            nonce = self.w3.eth.get_transaction_count(signer_address)
             tx = fn.build_transaction({
-                'from': self.account.address,
+                'from': signer_address,
                 'nonce': nonce,
                 'gas': gas_limit or 150_000,
                 'gasPrice': self.w3.eth.gas_price,
             })
-            signed = self.w3.eth.account.sign_transaction(tx, self._private_key)
-            raw = getattr(signed, 'raw_transaction', None) or getattr(signed, 'rawTransaction', None)
+            # Delegate signing to the configured KeyProvider — keeps the
+            # raw private key out of this scope when KMS is in use.
+            raw = self.key_provider.sign_transaction(tx, self.w3)
             tx_hash = self.w3.eth.send_raw_transaction(raw)
             tx_hash_hex = self.w3.to_hex(tx_hash)
             logger.info(f"build_and_send {function_name}: {tx_hash_hex}")

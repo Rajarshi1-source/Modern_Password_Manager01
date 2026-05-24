@@ -1234,6 +1234,24 @@ SECURITY_ALERT_EMAIL = os.environ.get('SECURITY_ALERT_EMAIL', SECURITY_EMAIL)
 RECOVERY_ALERT_THRESHOLD = int(os.environ.get('RECOVERY_ALERT_THRESHOLD', '5'))
 
 # Blockchain Anchoring Configuration (Phase 2B)
+# --------------------------------------------------------------------
+# Blockchain signing key provider (C7 follow-up).
+#
+# 'env' (default): EnvKeyProvider reads BLOCKCHAIN_PRIVATE_KEY from the
+#                  environment and holds it in process memory. OK for
+#                  dev / single-tenant self-hosted / CI.
+# 'kms':           KmsKeyProvider delegates secp256k1 signing to AWS
+#                  KMS. The raw key never reaches Django. Set
+#                  BLOCKCHAIN_KMS_KEY_ID to the KMS key ARN. Requires
+#                  boto3.
+#
+# Rotating providers is a hot operation thanks to the on-chain
+# `authorizedSigners` map: have the registry owner call
+# addAuthorizedSigner(new_address) then removeAuthorizedSigner(old).
+# --------------------------------------------------------------------
+BLOCKCHAIN_KEY_PROVIDER = os.environ.get('BLOCKCHAIN_KEY_PROVIDER', 'env')
+BLOCKCHAIN_KMS_KEY_ID = os.environ.get('BLOCKCHAIN_KMS_KEY_ID', '')
+
 BLOCKCHAIN_ANCHORING = {
     'ENABLED': os.environ.get('BLOCKCHAIN_ENABLED', 'False').lower() == 'true',
     'NETWORK': os.environ.get('BLOCKCHAIN_NETWORK', 'testnet'),  # 'testnet' or 'mainnet'

@@ -15,7 +15,7 @@ export interface CommitmentRegistry$Type {
   readonly deployedLinkReferences: {};
   readonly immutableReferences: {};
   readonly inputSourceName: "project/contracts/CommitmentRegistry.sol";
-  readonly buildInfoId: "solc-0_8_28-9d626791176aaaa4e318ddcbbdd50222ded666db";
+  readonly buildInfoId: "solc-0_8_28-ae60b6a2fa5b2b3a44d6b60dcb401536b3d19cd6";
 };
 
 import "hardhat/types/artifacts";

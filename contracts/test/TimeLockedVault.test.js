@@ -7,7 +7,21 @@
  */
 
 import { expect } from "chai";
-import hre from "hardhat";
+import { network } from "hardhat";
+
+// NOTE: `.to.emit().withArgs(...)` and `.to.be.revertedWith(...)` come
+// from `@nomicfoundation/hardhat-chai-matchers`, which does not yet
+// publish a Hardhat 3 compatible release. Tests using those matchers
+// will be skipped until upstream ships the v3 plugin.
+
+// Hardhat 3 + hardhat-ethers v3 no longer exposes `hre.ethers`. Connect
+// once per file via `network.create()` and stash the ethers handle on
+// `hre` so the rest of the legacy-style test body keeps working.
+let hre;
+before(async function () {
+  const connection = await network.create();
+  hre = { ethers: connection.ethers };
+});
 
 describe("TimeLockedVault", function () {
   let vault;
