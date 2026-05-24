@@ -276,10 +276,16 @@ class VaultItemViewSet(viewsets.ModelViewSet):
             seed_auth_hash = b''
             try:
                 from auth_module.models import UserSalt as AuthSalt
-            except ImportError:
-                # auth_module not installed in this deployment; vault
-                # stays uninitialized just like before.
-                pass
+            except ModuleNotFoundError as exc:
+                # Only swallow if `auth_module` is *itself* the missing
+                # module — i.e. the app isn't installed in this deploy.
+                # If `auth_module` exists but fails to import because of
+                # a broken transitive import (circular import, missing
+                # dependency, etc.), re-raise so the real error surfaces
+                # instead of being papered over with vault_not_initialized.
+                # Tightened per CodeRabbit review of PR #262.
+                if exc.name != 'auth_module':
+                    raise
             else:
                 try:
                     seed_auth_hash = bytes(
@@ -425,20 +431,34 @@ class VaultItemViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def check_initialization(self, request):
-        """Check if vault is initialized for the current user"""
+        """Check if vault is initialized for the current user.
+
+        After audit fix C10, `verify_auth` treats an empty `auth_hash`
+        as "not initialized" and returns 400 `vault_not_initialized`.
+        This endpoint must agree: a `UserSalt` row that exists but has
+        a blank `auth_hash` is exactly the half-provisioned state the
+        attack relied on, and reporting `initialized=True` for it would
+        send clients into the unlock flow only to be rejected at
+        `verify_auth`. Tightened per CodeRabbit review of PR #262.
+        """
         try:
             from vault.models import UserSalt
-            
-            # Check if user has a salt (vault initialized)
-            has_salt = UserSalt.objects.filter(user=request.user).exists()
-            
+
+            salt_obj = UserSalt.objects.filter(user=request.user).first()
+            has_salt = salt_obj is not None
+            has_auth_hash = bool(
+                salt_obj and bytes(salt_obj.auth_hash or b'') != b''
+            )
+
             # Check if user has any vault items
             has_items = self.get_queryset().exists()
-            
+
             return success_response({
-                'initialized': has_salt,
+                # Single source of truth for "is the vault usable yet?".
+                'initialized': has_salt and has_auth_hash,
                 'has_salt': has_salt,
-                'has_items': has_items
+                'has_auth_hash': has_auth_hash,
+                'has_items': has_items,
             })
         except Exception as e:
             return error_response(

@@ -170,6 +170,41 @@ describe("CommitmentRegistry", function () {
         commitmentRegistry.connect(otherAccount).addAuthorizedSigner(otherAccount.address)
       ).to.be.revertedWithCustomError(commitmentRegistry, "OwnableUnauthorizedAccount");
     });
+
+    it("refuses to remove the last authorized signer", async function () {
+      // Constructor seeds `owner` as the only signer; removing them
+      // would brick anchoring entirely. The contract must refuse.
+      // Added per CodeRabbit review of PR #262.
+      await expect(
+        commitmentRegistry.removeAuthorizedSigner(owner.address)
+      ).to.be.revertedWith("Cannot remove last signer");
+      // The signer set must be unchanged after the failed call.
+      expect(await commitmentRegistry.authorizedSigners(owner.address)).to.be.true;
+      expect(await commitmentRegistry.authorizedSignerCount()).to.equal(1);
+    });
+
+    it("allows removing a signer once a second one exists", async function () {
+      // Confirm the guard fires on count==1 only, not always.
+      await commitmentRegistry.addAuthorizedSigner(otherAccount.address);
+      expect(await commitmentRegistry.authorizedSignerCount()).to.equal(2);
+
+      await expect(commitmentRegistry.removeAuthorizedSigner(owner.address))
+        .to.emit(commitmentRegistry, "SignerRevoked")
+        .withArgs(owner.address);
+      expect(await commitmentRegistry.authorizedSignerCount()).to.equal(1);
+      expect(await commitmentRegistry.authorizedSigners(owner.address)).to.be.false;
+      expect(await commitmentRegistry.authorizedSigners(otherAccount.address)).to.be.true;
+    });
+
+    it("disables renouncing ownership", async function () {
+      // Renouncing would orphan the authorizedSigners map (no one could
+      // ever rotate again), so the override reverts. Added per
+      // CodeRabbit review of PR #262.
+      await expect(
+        commitmentRegistry.renounceOwnership()
+      ).to.be.revertedWith("Renounce disabled");
+      expect(await commitmentRegistry.owner()).to.equal(owner.address);
+    });
   });
 
   describe("Merkle Proof Verification", function () {

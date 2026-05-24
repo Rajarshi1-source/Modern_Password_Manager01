@@ -2007,10 +2007,32 @@ if SENTRY_DSN:
         # Transactional egress secrets.
         'EMAIL_HOST_PASSWORD', 'TWILIO_AUTH_TOKEN',
     )
+
+    # Generic secret-key substrings. The named tuple above catches env
+    # vars; this catches the same secrets when they live inside nested
+    # config dicts under generic keys — e.g. `DATABASES['default']
+    # ['PASSWORD']`, `SIMPLE_JWT['SIGNING_KEY']`, OAuth provider
+    # `'client_secret'`, etc. Match is case-insensitive substring,
+    # checked against the upper-cased key. Added per CodeRabbit review.
+    _SENSITIVE_KEY_PATTERNS = (
+        'PASSWORD', 'SECRET', 'PRIVATE_KEY', 'SIGNING_KEY',
+        'CERTIFICATE_KEY', 'API_KEY', 'AUTH_TOKEN',
+        'ACCESS_TOKEN', 'REFRESH_TOKEN', 'CREDENTIALS',
+    )
+
     # Match anything that looks like an Ethereum address (40 hex) or a
     # private key / hash (64 hex). 40-char lower bound avoids false hits
     # on ordinary 32-bit hex IDs.
     _HEX_BLOB = _sentry_re.compile(r'0x[0-9a-fA-F]{40,}')
+
+    def _is_sensitive_key(key_str):
+        """Return True if the key is named like a secret-holding field."""
+        if not isinstance(key_str, str):
+            return False
+        upper = key_str.upper()
+        if upper in _SENSITIVE_ENV_NAMES:
+            return True
+        return any(pat in upper for pat in _SENSITIVE_KEY_PATTERNS)
 
     def _scrub_str(s):
         if not isinstance(s, str):
@@ -2022,7 +2044,7 @@ if SENTRY_DSN:
             return mapping
         out = {}
         for k, v in mapping.items():
-            if isinstance(k, str) and k.upper() in _SENSITIVE_ENV_NAMES:
+            if _is_sensitive_key(k):
                 out[k] = '<redacted>'
             elif isinstance(v, dict):
                 out[k] = _scrub_mapping(v)

@@ -188,16 +188,19 @@ def sign_in_challenge(request):
         {"nonce": ch.nonce, "expires_at": ch.expires_at.isoformat()}
     )
     # Cookie scope intentionally narrow: HttpOnly so JS can't read it,
-    # Secure so it never leaves TLS, SameSite=Strict so cross-site CSRF
-    # cannot replay it. Reuse the single source-of-truth TTL constant so
-    # the cookie's max_age can't drift from `ch.expires_at` if the TTL
-    # is ever retuned. Refined per CodeRabbit review.
+    # Secure ALWAYS so it never leaves TLS — matching the rest of the
+    # codebase's session/CSRF cookie posture. Local dev over HTTP must
+    # use a TLS-terminating reverse proxy (or just `runserver_plus
+    # --cert-file`) to exercise this flow. SameSite=Strict so cross-site
+    # CSRF cannot replay it. Reuse the single source-of-truth TTL
+    # constant so the cookie's max_age can't drift from
+    # `ch.expires_at`. Tightened per CodeRabbit review of PR #262.
     resp.set_cookie(
         SIGNIN_BINDING_COOKIE,
         binding_token,
         max_age=CHALLENGE_TTL_SECONDS,
         httponly=True,
-        secure=not getattr(settings, 'DEBUG', False),
+        secure=True,
         samesite='Strict',
         path='/',
     )
