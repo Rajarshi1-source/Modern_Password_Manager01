@@ -7,13 +7,13 @@ import os
 import threading
 from typing import Dict, List, Optional
 from web3 import Web3
-from eth_account import Account
 from eth_account.messages import encode_defunct
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
 
 from ..models import BlockchainAnchor, MerkleProof, PendingCommitment
+from .key_provider import get_key_provider
 from .merkle_tree_builder import MerkleTreeBuilder, create_commitment_hash
 from shared.circuit_breaker import blockchain_breaker, CircuitBreakerOpen
 
@@ -72,14 +72,23 @@ class BlockchainAnchorService:
         # Load contract ABI (simplified for now - will be loaded from file)
         self.contract_abi = self._get_contract_abi()
         
-        # Load private key for signing
-        self.private_key = os.environ.get('BLOCKCHAIN_PRIVATE_KEY')
-        if self.private_key:
-            self.account = Account.from_key(self.private_key)
-            logger.debug(f"Blockchain deployer account: {self.account.address}")
+        # Load signing key via the KeyProvider abstraction. Defaults to
+        # EnvKeyProvider (reads BLOCKCHAIN_PRIVATE_KEY); switch to
+        # KmsKeyProvider in production by setting
+        # BLOCKCHAIN_KEY_PROVIDER='kms' + BLOCKCHAIN_KMS_KEY_ID. See
+        # blockchain/services/key_provider.py for the C7 follow-up design.
+        self.key_provider = get_key_provider()
+        if self.key_provider.is_available:
+            logger.debug(
+                "Blockchain signer ready: address=%s, provider=%s",
+                self.key_provider.address, self.key_provider.provider_kind,
+            )
         else:
-            logger.warning("BLOCKCHAIN_PRIVATE_KEY not set - anchoring will not work")
-            self.account = None
+            logger.warning(
+                "Blockchain signer unavailable (provider=%s); anchoring "
+                "will not work until the key is configured.",
+                self.key_provider.provider_kind,
+            )
         
         self.pending_commitments = []
         self._initialized = True
@@ -233,9 +242,10 @@ class BlockchainAnchorService:
         Returns:
             Transaction hash or None if failed
         """
-        if not self.enabled or not self.w3 or not self.account:
+        if not self.enabled or not self.w3 or not self.key_provider.is_available:
             logger.warning("Blockchain anchoring not properly configured")
             return None
+        signer_address = self.key_provider.address
 
         try:
             blockchain_breaker.before_call()
@@ -278,7 +288,7 @@ class BlockchainAnchorService:
                 [chain_id, contract_addr, bytes.fromhex(merkle_root[2:]), len(pending)]
             )
             msg = encode_defunct(primitive=message_hash)
-            signature = self.account.sign_message(msg)
+            signature = self.key_provider.sign_message(msg)
             
             # Submit to blockchain
             contract = self.w3.eth.contract(
@@ -293,13 +303,13 @@ class BlockchainAnchorService:
             # CodeRabbit review of PR #262.
             try:
                 if not contract.functions.authorizedSigners(
-                    self.account.address
+                    signer_address
                 ).call():
                     logger.error(
                         "Blockchain signer %s is not in CommitmentRegistry."
                         "authorizedSigners; refusing to broadcast. Have the "
                         "registry owner call addAuthorizedSigner() and retry.",
-                        self.account.address,
+                        signer_address,
                     )
                     blockchain_breaker.on_failure(
                         PermissionError("unauthorized signer")
@@ -321,22 +331,23 @@ class BlockchainAnchorService:
                 return None
 
             # Build transaction
-            nonce = self.w3.eth.get_transaction_count(self.account.address)
-            
+            nonce = self.w3.eth.get_transaction_count(signer_address)
+
             tx = contract.functions.anchorCommitment(
                 bytes.fromhex(merkle_root[2:]),
                 len(pending),
                 signature.signature
             ).build_transaction({
-                'from': self.account.address,
+                'from': signer_address,
                 'nonce': nonce,
                 'gas': 500000,  # Estimate, will be calculated
                 'gasPrice': self.w3.eth.gas_price,
             })
-            
-            # Sign and send transaction
-            signed_tx = self.w3.eth.account.sign_transaction(tx, self.private_key)
-            tx_hash = self.w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+
+            # Sign and send transaction via the KeyProvider so the raw
+            # private bytes don't need to be in scope here.
+            raw_tx = self.key_provider.sign_transaction(tx, self.w3)
+            tx_hash = self.w3.eth.send_raw_transaction(raw_tx)
             tx_hash_hex = self.w3.to_hex(tx_hash)
             
             logger.info(f"Transaction sent: {tx_hash_hex}")

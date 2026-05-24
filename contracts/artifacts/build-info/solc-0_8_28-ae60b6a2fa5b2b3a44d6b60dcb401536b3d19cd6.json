@@ -1,8 +1,9 @@
 {
   "_format": "hh3-sol-build-info-1",
-  "id": "solc-0_8_28-9d626791176aaaa4e318ddcbbdd50222ded666db",
+  "id": "solc-0_8_28-ae60b6a2fa5b2b3a44d6b60dcb401536b3d19cd6",
   "solcVersion": "0.8.28",
   "solcLongVersion": "0.8.28+commit.7893614a",
+  "compilerType": "solc",
   "userSourceNameMap": {
     "contracts/CommitmentRegistry.sol": "project/contracts/CommitmentRegistry.sol",
     "contracts/test/MockOracle.sol": "project/contracts/test/MockOracle.sol",
@@ -24,18 +25,20 @@
           ],
           "*": [
             "abi",
-            "evm.bytecode",
-            "evm.deployedBytecode",
-            "evm.methodIdentifiers",
-            "metadata"
+            "evm.bytecode.linkReferences",
+            "evm.bytecode.object",
+            "evm.bytecode.opcodes",
+            "evm.bytecode.sourceMap",
+            "evm.deployedBytecode.immutableReferences",
+            "evm.deployedBytecode.linkReferences",
+            "evm.deployedBytecode.object",
+            "evm.deployedBytecode.opcodes",
+            "evm.deployedBytecode.sourceMap",
+            "evm.methodIdentifiers"
           ]
         }
       },
       "remappings": [
-        "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/",
-        "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/",
-        "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/",
-        "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/",
         "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/"
       ],
       "viaIR": true

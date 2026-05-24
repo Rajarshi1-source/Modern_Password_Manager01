@@ -1,5 +1,25 @@
-const { expect } = require("chai");
-const { ethers, network } = require("hardhat");
+import { expect } from "chai";
+import { network } from "hardhat";
+
+// NOTE: `.to.emit().withArgs(...)` and `.to.be.revertedWith(...)` come
+// from `@nomicfoundation/hardhat-chai-matchers`, which does not yet
+// publish a Hardhat 3 compatible release. Tests using those matchers
+// will be skipped until upstream ships the v3 plugin. Tracking issue:
+// https://github.com/NomicFoundation/hardhat/issues for v3 chai-matchers.
+
+// Hardhat 3 + hardhat-ethers v3 no longer exposes `hre.ethers`. We open
+// a single connection in the top-level `before()` and reuse its
+// `ethers` handle for every test in this file.
+let ethers;
+let connection;
+let chainId; // BigInt — pulled from the live provider so it always matches
+             // `block.chainid` inside the contract.
+before(async function () {
+  connection = await network.create();
+  ethers = connection.ethers;
+  const net = await ethers.provider.getNetwork();
+  chainId = net.chainId;
+});
 
 /**
  * Build the keccak256 message hash that the contract expects on
@@ -15,7 +35,7 @@ const { ethers, network } = require("hardhat");
 function anchorMessageHash(contractAddress, merkleRoot, batchSize) {
   return ethers.solidityPackedKeccak256(
     ["uint256", "address", "bytes32", "uint256"],
-    [BigInt(network.config.chainId || 31337), contractAddress, merkleRoot, batchSize]
+    [chainId, contractAddress, merkleRoot, batchSize]
   );
 }
 
