@@ -499,6 +499,142 @@ class DuressCodeAPITests(APITestCase):
         """Test listing trusted authorities"""
         response = self.client.get('/api/security/duress/authorities/')
         self.assertIn(response.status_code, [200, 404])
+
+    # -----------------------------------------------------------------
+    # Phase D / D9 (2026-05): TrustedAuthority serializer validation.
+    # -----------------------------------------------------------------
+
+    def test_create_authority_rejects_empty_trigger_threat_levels(self):
+        """Empty trigger_threat_levels would silently disable the
+        alarm. Must be rejected at the serializer."""
+        response = self.client.post(
+            '/api/security/duress/authorities/',
+            {
+                'name': 'Lawyer',
+                'authority_type': 'legal_counsel',
+                'contact_method': 'email',
+                'contact_details': {'email': 'lawyer@example.com'},
+                'trigger_threat_levels': [],  # <-- the bug
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('trigger_threat_levels', response.data.get('errors', {}))
+
+    def test_create_authority_rejects_arbitrary_contact_details_keys(self):
+        """Unknown keys in contact_details are rejected — the previous
+        free-form JSONField could carry attacker-controlled values
+        under invented keys."""
+        response = self.client.post(
+            '/api/security/duress/authorities/',
+            {
+                'name': 'Lawyer',
+                'authority_type': 'legal_counsel',
+                'contact_method': 'email',
+                'contact_details': {
+                    # No declared field → at-least-one-required rule
+                    # fires because the unknown key is dropped.
+                    'attacker_invented_key': 'https://attacker.example',
+                },
+                'trigger_threat_levels': ['high', 'critical'],
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_create_authority_rejects_invalid_threat_level(self):
+        """Threat-level strings outside the documented set are rejected."""
+        response = self.client.post(
+            '/api/security/duress/authorities/',
+            {
+                'name': 'Lawyer',
+                'authority_type': 'legal_counsel',
+                'contact_method': 'email',
+                'contact_details': {'email': 'lawyer@example.com'},
+                'trigger_threat_levels': ['nuclear'],  # not a valid level
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    # -----------------------------------------------------------------
+    # Phase D / D3 (2026-05): test_duress_activation must require the
+    # actual code string, not just the UUID.
+    # -----------------------------------------------------------------
+
+    def _create_duress_code(self, code_str='secret_panic_phrase', threat='high'):
+        """Helper — produces a real DuressCode through the service so
+        the Argon2 hash is genuine."""
+        from security.services.duress_code_service import get_duress_code_service
+        return get_duress_code_service().create_duress_code(
+            user=self.user,
+            code=code_str,
+            threat_level=threat,
+            code_hint='Test hint',
+        )
+
+    def test_duress_test_endpoint_rejects_without_code(self):
+        """Missing the ``code`` field → 400, no activation."""
+        self._create_duress_code()
+        response = self.client.post(
+            '/api/security/duress/test/',
+            {},  # no code
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_duress_test_endpoint_rejects_wrong_code(self):
+        """Wrong code string → 400 ``invalid_code`` (NOT a 404 by id,
+        not a 500). No activation happens."""
+        self._create_duress_code(code_str='right_code')
+        response = self.client.post(
+            '/api/security/duress/test/',
+            {'code': 'wrong_code'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get('error'), 'invalid_code')
+
+    def test_duress_test_endpoint_succeeds_with_correct_code(self):
+        """Correct code → test-mode activation runs."""
+        self._create_duress_code(code_str='right_code', threat='high')
+        response = self.client.post(
+            '/api/security/duress/test/',
+            {'code': 'right_code'},
+            format='json',
+        )
+        # Activation either succeeds (200/201) or returns a structured
+        # error from the service layer, but it MUST NOT be a 400 (which
+        # would mean the code check rejected it) or a 500.
+        self.assertNotIn(response.status_code, [400, 500])
+
+    def test_duress_codes_list_does_not_leak_uuid(self):
+        """The ``id`` field must NOT appear in the GET response —
+        exposing it was what made the UUID-based bypass possible."""
+        self._create_duress_code(code_str='listed_code')
+        response = self.client.get('/api/security/duress/codes/')
+        self.assertEqual(response.status_code, 200)
+        for code in response.data.get('codes', []):
+            self.assertNotIn('id', code, msg=f"UUID leaked in: {code!r}")
+
+    def test_create_authority_accepts_valid_payload(self):
+        """Happy path — well-formed payload creates the authority."""
+        response = self.client.post(
+            '/api/security/duress/authorities/',
+            {
+                'name': 'Family lawyer',
+                'authority_type': 'legal_counsel',
+                'contact_method': 'email',
+                'contact_details': {'email': 'lawyer@example.com'},
+                'trigger_threat_levels': ['high', 'critical'],
+                'delay_seconds': 30,
+                'include_location': True,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data['success'])
+        self.assertIn('id', response.data['authority'])
     
     def test_list_events(self):
         """Test listing duress events"""

@@ -741,7 +741,73 @@ class GeneticEvolutionTaskTestCase(TestCase):
         )
         
         result = cleanup_expired_genetic_trials()
-        
+
         expired_sub.refresh_from_db()
         self.assertEqual(expired_sub.status, 'expired')
         self.assertEqual(result['expired_trials_cleaned'], 1)
+
+
+# =============================================================================
+# Phase D / D4 (2026-05): DNA OAuth token encryption — HKDF + legacy fallback
+# =============================================================================
+
+
+class DNATokenEncryptionTestCase(TestCase):
+    """Confirms the HKDF-based key derivation + transparent legacy
+    fallback for OAuth tokens stored under DNA_TOKEN_ENCRYPTION_KEY."""
+
+    def test_get_fernet_raises_without_env_var(self):
+        """SECRET_KEY fallback was removed — the env var is mandatory."""
+        from django.core.exceptions import ImproperlyConfigured
+        from security.api import genetic_password_views as gpv
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('DNA_TOKEN_ENCRYPTION_KEY', None)
+            with self.assertRaises(ImproperlyConfigured):
+                gpv._get_fernet()
+
+    def test_encrypt_decrypt_roundtrip_with_hkdf_key(self):
+        """Tokens encrypted with the new HKDF derivation are decryptable
+        by the same code path."""
+        from security.api import genetic_password_views as gpv
+        with patch.dict(os.environ, {'DNA_TOKEN_ENCRYPTION_KEY': 'production-key-material'}):
+            ct = gpv.encrypt_token('access_token_xyz')
+            self.assertEqual(gpv.decrypt_token(ct), 'access_token_xyz')
+
+    def test_decrypt_falls_back_to_legacy_sha256_derivation(self):
+        """Tokens encrypted under the pre-D4 SHA-256 derivation must
+        still decrypt during the transition window — this is the whole
+        point of the transparent legacy fallback."""
+        import base64
+        import hashlib
+        from cryptography.fernet import Fernet
+        from security.api import genetic_password_views as gpv
+
+        raw_key = 'production-key-material'
+        # Encrypt with the OLD scheme (raw SHA-256, no HKDF).
+        legacy_derived = hashlib.sha256(raw_key.encode()).digest()
+        legacy = Fernet(base64.urlsafe_b64encode(legacy_derived))
+        old_ciphertext = legacy.encrypt(b'legacy_token_value')
+
+        # Now decrypt with the NEW code — must succeed via fallback.
+        with patch.dict(os.environ, {'DNA_TOKEN_ENCRYPTION_KEY': raw_key}):
+            self.assertEqual(
+                gpv.decrypt_token(old_ciphertext), 'legacy_token_value',
+            )
+
+    def test_new_ciphertext_not_decryptable_with_legacy_only(self):
+        """Sanity: the new HKDF scheme actually changes the key — the
+        legacy Fernet should NOT be able to decrypt new-scheme output."""
+        import base64
+        import hashlib
+        from cryptography.fernet import Fernet, InvalidToken
+        from security.api import genetic_password_views as gpv
+
+        raw_key = 'production-key-material'
+        with patch.dict(os.environ, {'DNA_TOKEN_ENCRYPTION_KEY': raw_key}):
+            new_ciphertext = gpv.encrypt_token('fresh_token')
+
+        legacy_derived = hashlib.sha256(raw_key.encode()).digest()
+        legacy = Fernet(base64.urlsafe_b64encode(legacy_derived))
+        with self.assertRaises(InvalidToken):
+            legacy.decrypt(new_ciphertext)

@@ -487,12 +487,81 @@ class ChemicalStorageAPITest(APITestCase):
     def test_unauthenticated_rejected(self):
         """Test endpoints require authentication."""
         client = APIClient()  # No authentication
-        
+
         response = client.post('/api/security/chemical/encode/', {
             'password': 'test',
         })
-        
+
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+# =============================================================================
+# Phase D / D5 (2026-05): Regression tests for the TimeLockCapsule filter fix.
+#
+# The endpoints previously filtered ``TimeLockCapsule.objects.get(user=...)``,
+# but the model has ``owner`` as the real FK and ``user`` as a Python
+# property — Django raised FieldError at runtime, turning every call
+# from the legitimate owner into a 500. These tests pin the working
+# behaviour so a future refactor can't regress it again.
+# =============================================================================
+
+
+class TimeLockCapsuleOwnerFilterRegressionTest(APITestCase):
+    """Confirm get_capsule_status / unlock_capsule resolve by owner."""
+
+    def setUp(self):
+        from security.models import TimeLockCapsule
+        from django.utils import timezone
+        from datetime import timedelta
+
+        self.owner = User.objects.create_user(
+            username='capsule_owner', email='owner@example.com',
+            password='ownerpass12',
+        )
+        self.other = User.objects.create_user(
+            username='other_user', email='other@example.com',
+            password='otherpass12',
+        )
+        self.capsule = TimeLockCapsule.objects.create(
+            owner=self.owner,
+            encrypted_data=b'\x00' * 32,
+            unlock_at=timezone.now() - timedelta(seconds=1),
+            mode='server',
+            status='locked',
+            time_param=1,
+        )
+        self.client = APIClient()
+
+    def test_capsule_status_returns_200_for_owner(self):
+        """Used to 500 on FieldError before the D5 fix."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.get(
+            f'/api/security/chemical/capsule-status/{self.capsule.id}/'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['success'])
+        self.assertEqual(response.data['capsule_id'], str(self.capsule.id))
+
+    def test_capsule_status_returns_404_for_non_owner(self):
+        """A different authenticated user MUST NOT see this capsule."""
+        self.client.force_authenticate(user=self.other)
+        response = self.client.get(
+            f'/api/security/chemical/capsule-status/{self.capsule.id}/'
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_unlock_capsule_resolves_by_owner(self):
+        """Endpoint reaches the unlock logic instead of FieldError-500."""
+        self.client.force_authenticate(user=self.owner)
+        response = self.client.post(
+            f'/api/security/chemical/unlock-capsule/{self.capsule.id}/'
+        )
+        # The exact response depends on capsule state, but it MUST NOT
+        # be a 500 — the FieldError pre-fix produced exactly that.
+        self.assertNotEqual(
+            response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR,
+            msg=f"unlock_capsule returned 500 with payload {response.data!r}",
+        )
 
 
 # =============================================================================

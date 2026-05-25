@@ -917,39 +917,99 @@ class HoneypotWebhookTests(APITestCase):
             service_name='Test Service'
         )
     
-    @override_settings(DEBUG=True)
+    # Helper: build a request with a correctly-signed body so the
+    # webhook signature check passes. Phase D / D6 (2026-05) removed
+    # the DEBUG bypass, so tests must exercise the real HMAC path.
+    @staticmethod
+    def _signed_post(client, url, payload_dict, *, provider='simplelogin', secret='test-webhook-secret'):
+        import hmac, hashlib, json
+        body = json.dumps(payload_dict).encode('utf-8')
+        sig = hmac.new(secret.encode('utf-8'), body, hashlib.sha256).hexdigest()
+        return client.post(
+            url, data=body,
+            content_type='application/json',
+            HTTP_X_HONEYPOT_PROVIDER=provider,
+            HTTP_X_WEBHOOK_SIGNATURE=sig,
+        )
+
+    @override_settings(SIMPLELOGIN_WEBHOOK_SECRET='test-webhook-secret')
     def test_webhook_processes_email(self):
-        """Test webhook processing incoming email."""
+        """Test webhook processing incoming email with valid signature."""
         url = reverse('honeypot-webhook')
-        
-        response = self.client.post(url, {
+        response = self._signed_post(self.client, url, {
             'recipient': 'canary@simplelogin.com',
             'sender': 'spam@attacker.com',
             'subject': 'Spam Subject',
             'is_spam': True,
-            'spam_score': 0.9
-        }, format='json')
-        
+            'spam_score': 0.9,
+        })
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data['breach_detected'])
-        
-        # Verify activity was created
         self.assertTrue(
             HoneypotActivity.objects.filter(honeypot=self.honeypot).exists()
         )
-    
-    @override_settings(DEBUG=True)
+
+    @override_settings(SIMPLELOGIN_WEBHOOK_SECRET='test-webhook-secret')
     def test_webhook_unknown_honeypot(self):
         """Test webhook with unknown honeypot address."""
         url = reverse('honeypot-webhook')
-        
-        response = self.client.post(url, {
+        response = self._signed_post(self.client, url, {
             'recipient': 'unknown@simplelogin.com',
             'sender': 'test@test.com',
-            'subject': 'Test'
-        }, format='json')
-        
+            'subject': 'Test',
+        })
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # ---------------------------------------------------------------
+    # Phase D / D6 (2026-05): signature-bypass regression tests.
+    # ---------------------------------------------------------------
+
+    @override_settings(DEBUG=True, SIMPLELOGIN_WEBHOOK_SECRET='')
+    def test_webhook_rejects_missing_secret_even_in_debug(self):
+        """Previously the view returned True when DEBUG + empty secret
+        — closed in Phase D. Must be 401 in BOTH debug and prod when
+        the per-provider secret is unset."""
+        url = reverse('honeypot-webhook')
+        response = self.client.post(
+            url,
+            data=b'{"recipient":"canary@simplelogin.com"}',
+            content_type='application/json',
+            HTTP_X_HONEYPOT_PROVIDER='simplelogin',
+            HTTP_X_WEBHOOK_SIGNATURE='deadbeef',
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @override_settings(
+        DEBUG=True,
+        SIMPLELOGIN_WEBHOOK_SECRET='test-webhook-secret',
+    )
+    def test_webhook_rejects_unknown_provider_header(self):
+        """The provider name is attacker-controlled (HTTP header).
+        Unknown values previously fell through to ``secrets.get('','')``
+        → empty → DEBUG bypass. Must now hard-reject."""
+        url = reverse('honeypot-webhook')
+        response = self.client.post(
+            url,
+            data=b'{"recipient":"canary@simplelogin.com"}',
+            content_type='application/json',
+            HTTP_X_HONEYPOT_PROVIDER='attacker-invented-provider',
+            HTTP_X_WEBHOOK_SIGNATURE='deadbeef',
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @override_settings(SIMPLELOGIN_WEBHOOK_SECRET='test-webhook-secret')
+    def test_webhook_rejects_wrong_signature(self):
+        """Sanity: even with the correct provider + secret set, a wrong
+        HMAC must be rejected."""
+        url = reverse('honeypot-webhook')
+        response = self.client.post(
+            url,
+            data=b'{"recipient":"canary@simplelogin.com"}',
+            content_type='application/json',
+            HTTP_X_HONEYPOT_PROVIDER='simplelogin',
+            HTTP_X_WEBHOOK_SIGNATURE='0' * 64,
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 # =============================================================================
