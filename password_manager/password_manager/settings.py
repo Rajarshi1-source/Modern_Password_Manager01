@@ -2218,12 +2218,39 @@ if TESTING:
 # fail closed when:
 #   * we're not in DEBUG mode, AND
 #   * we're not running tests, AND
+#   * we're not running a Django management command that just imports
+#     settings to inspect them (`check`, `migrate`, `makemigrations`,
+#     `collectstatic`, etc.), AND
 #   * USE_REDIS_CHANNELS is not 'True'
 #
-# That last clause is the actual production-misconfig case the audit
-# called out: real prod deploys silently fell back to in-memory and
-# WebSockets stopped fanning out across Daphne pods.
-if not DEBUG and not TESTING and not _USE_REDIS_CHANNELS:
+# The third clause is what fixes the CI break (PR #273 review): CI runs
+# `python manage.py check --deploy` which imports settings under
+# DEBUG=False without USE_REDIS_CHANNELS=True — neither a real prod
+# deploy nor a test invocation. The maintenance-mode bypass lets those
+# checks pass; the guard still fires on real WSGI/ASGI bootstrap
+# (gunicorn / daphne don't run via manage.py).
+_DJANGO_MAINTENANCE_COMMANDS = frozenset({
+    'check', 'migrate', 'makemigrations', 'showmigrations', 'sqlmigrate',
+    'collectstatic', 'compilemessages', 'makemessages',
+    'shell', 'shell_plus', 'dbshell',
+    'createsuperuser', 'changepassword',
+    'dumpdata', 'loaddata',
+    'diffsettings', 'inspectdb',
+    'startapp', 'startproject',
+    'verify_audit_migration', 'rehash_pending_commitments',
+})
+_IS_MAINTENANCE_INVOCATION = (
+    len(sys.argv) > 1
+    and sys.argv[0].endswith('manage.py')
+    and sys.argv[1] in _DJANGO_MAINTENANCE_COMMANDS
+)
+
+if (
+    not DEBUG
+    and not TESTING
+    and not _IS_MAINTENANCE_INVOCATION
+    and not _USE_REDIS_CHANNELS
+):
     from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured(
         "USE_REDIS_CHANNELS must be 'True' in production deploys "
