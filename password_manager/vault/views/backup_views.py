@@ -622,18 +622,24 @@ class BackupViewSet(viewsets.ModelViewSet):
             # precondition at PUT time; this re-check is just a
             # defence-in-depth comparison against the value the bucket
             # has stored. `usedforsecurity=False` tells Python (and
-            # Semgrep's `insecure-hash-algorithm-md5` rule) we know
-            # what we're doing — there is no SHA-256 alternative in
-            # the S3 `Content-MD5` API.
+            # Bandit's `S324` rule) we know what we're doing — there
+            # is no SHA-256 alternative in the S3 `Content-MD5` API.
+            #
+            # Semgrep uses its own annotation (`nosemgrep:`) rather than
+            # `noqa`, so we suppress its
+            # `insecure-hash-algorithm-md5` rule explicitly on both
+            # MD5 call sites below.
             import base64
             import hashlib
             blob_bytes = blob if isinstance(blob, bytes) else blob.encode('utf-8')
             try:
+                # nosemgrep: python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5
                 md5_digest = hashlib.md5(  # noqa: S324 — see comment above
                     blob_bytes, usedforsecurity=False,
                 ).digest()
             except TypeError:
                 # Older Python builds without `usedforsecurity` kwarg.
+                # nosemgrep: python.lang.security.insecure-hash-algorithms-md5.insecure-hash-algorithm-md5
                 md5_digest = hashlib.md5(blob_bytes).digest()  # noqa: S324
             observed = base64.b64encode(md5_digest).decode()
             if observed != backup.content_md5:
