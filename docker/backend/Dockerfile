@@ -8,7 +8,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Crypto Builder - Compile liboqs and Python crypto libraries
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS crypto-builder
+FROM python:3.14-slim-bookworm AS crypto-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -143,7 +143,7 @@ RUN pip install --no-cache-dir concrete-python==2.5.0 || echo "concrete-python i
 # -----------------------------------------------------------------------------
 # Stage 2: Dependencies Builder - Install Python dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS deps-builder
+FROM python:3.14-slim-bookworm AS deps-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -235,7 +235,7 @@ RUN PY_SITELIB=$(python -c "import sysconfig; print(sysconfig.get_path('purelib'
 # -----------------------------------------------------------------------------
 # Stage 3: Production - Final optimized image
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim-bookworm AS production
+FROM python:3.14-slim-bookworm AS production
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
