@@ -149,11 +149,17 @@ def verify_random_proofs(sample_size: int = None):
       real-time verification.
     * Each call hits the RPC: keep ``sample_size`` low to stay under any
       free-tier rate limit.
-    * Set ``verified=True/False`` + ``verified_at`` based on the on-chain
-      check. A proof that *should* verify but doesn't is a red flag —
-      either the RPC is broken, the contract was redeployed at a new
-      address, or the anchor was reverted by a chain reorg. Log loudly
-      so Sentry picks it up.
+    * Branch on ``verify_proof_on_chain_status`` (3 outcomes):
+        - 'ok'        → set ``verified=True`` + ``verified_at=now()``.
+        - 'mismatch'  → set ``verified=False`` (no timestamp bump —
+                        ``verified_at`` means "when did this proof
+                        verify", writing it on failure misleads
+                        operators). Logger.error → Sentry alert; the
+                        contract was redeployed at a new address, or
+                        the anchor was reverted by a chain reorg.
+        - 'rpc_error' → leave the proof row untouched, bump
+                        ``failed_count``. A transient outage MUST NOT
+                        be recorded as a divergence.
 
     Skipped when:
     * Blockchain anchoring is disabled in settings.
@@ -205,30 +211,61 @@ def verify_random_proofs(sample_size: int = None):
                 # Anchor never landed on-chain — cannot verify yet.
                 continue
 
+            # PR #274 review (Codex + CodeRabbit): branch on the
+            # structured status so transient RPC errors don't masquerade
+            # as data-divergence mismatch alerts. ``verify_proof_on_chain``
+            # collapses both to ``False``; the new ``_status`` variant
+            # returns 'ok' / 'mismatch' / 'rpc_error' / 'disabled'.
             try:
-                ok = service.verify_proof_on_chain(
+                status = service.verify_proof_on_chain_status(
                     proof.merkle_root,
                     proof.commitment_hash,
                     proof.proof or [],
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — last-resort safety net
+                # The status method already catches Exception internally,
+                # so this branch is defence-in-depth against future
+                # refactors. Treat as transient.
                 logger.error(
-                    "verify_random_proofs: RPC error verifying proof %s: %s",
+                    "verify_random_proofs: unexpected error verifying proof %s: %s",
                     proof.pk, exc,
                 )
                 failed_count += 1
                 continue
 
-            proof.verified = bool(ok)
-            proof.verified_at = timezone.now()
-            proof.save(update_fields=['verified', 'verified_at'])
+            if status == 'rpc_error':
+                # Transient — do NOT update verified / verified_at.
+                # ``logger.error`` above (inside the service) already
+                # surfaced the RPC failure; we just bump the counter so
+                # the task summary reflects it.
+                failed_count += 1
+                continue
 
-            if ok:
+            if status == 'disabled':
+                # Feature was checked enabled at the top of the task
+                # but flipped off mid-run, or the bridge w3 went away.
+                # Stop the loop — no point hitting the rest.
+                logger.info(
+                    "verify_random_proofs: service became disabled mid-run "
+                    "(checked %d/%d proofs)", failed_count + verified_count + mismatch_count,
+                    len(candidates),
+                )
+                break
+
+            if status == 'ok':
+                # Genuine confirmation — record verified + timestamp.
+                proof.verified = True
+                proof.verified_at = timezone.now()
+                proof.save(update_fields=['verified', 'verified_at'])
                 verified_count += 1
-            else:
-                # Loud: this proof's anchor tx exists but the contract
-                # disagrees. Sentry should fire on this — it indicates
-                # data divergence between the DB and the chain.
+            else:  # status == 'mismatch'
+                # Genuine data divergence between DB and chain. Record
+                # verified=False but do NOT bump verified_at — that
+                # field means "when did this proof successfully verify"
+                # and writing it on a failure would mislead operators
+                # triaging the alert downstream (CodeRabbit review).
+                proof.verified = False
+                proof.save(update_fields=['verified'])
                 mismatch_count += 1
                 logger.error(
                     "verify_random_proofs: MISMATCH for proof %s "
