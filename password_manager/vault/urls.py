@@ -62,10 +62,13 @@ urlpatterns = [
     # Custom endpoints
     # Audit-fix M7 (2026-05): the previous `path('sync/', views.sync, ...)`
     # pointed at a stub placeholder that returned "Sync endpoint is
-    # working" but did no real work. The real sync is the
-    # `VaultItemViewSet.sync` @action at /vault/items/sync/ (registered
-    # by the router as 'vault-items-sync'). The stub function in
-    # vault/views/__init__.py has been deleted as well.
+    # working" but did no real work. The real sync is
+    # `CrudVaultItemViewSet.sync` @action — that ViewSet is registered
+    # at the top of this file via `router.register(r'vault',
+    # CrudVaultItemViewSet, basename='vault')`, so the URL is
+    # /vault/sync/ and the router-generated reverse name is
+    # 'vault-sync'. The stub function in vault/views/__init__.py has
+    # been deleted as well.
     path('search/', views.search, name='vault-search'),
     
     # Include auth URLs for browsable API (optional)

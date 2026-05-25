@@ -86,13 +86,22 @@ class CSRFExemptAuthMiddleware:
         return self.get_response(request)
 
     def _exempt_csrf_if_auth(self, request):
-        """Mark auth requests as CSRF exempt — unless denylisted."""
+        """Mark auth requests as CSRF exempt — unless denylisted.
+
+        Audit-fix (PR #273 review, CodeRabbit): the denylist entries
+        end with `/`, but Django supports `APPEND_SLASH=False` and
+        clients can hit `/auth/oauth/callback` (no slash) directly.
+        Without normalisation that request would slip past the
+        denylist and lose CSRF protection. We compare the path with
+        AND without a trailing slash against each entry.
+        """
         path = request.path
-        # Denylist wins. A future session-cookie endpoint that someone
-        # adds under /auth/ MUST be added to CSRF_REQUIRED_PATHS or
-        # this middleware will silently disable its CSRF protection.
+        # Normalise to a single comparison shape: strip trailing slash
+        # from both the incoming path and each denylist entry.
+        path_norm = path.rstrip('/')
         if any(
-            path == p or path.startswith(p) for p in self.CSRF_REQUIRED_PATHS
+            path_norm == p.rstrip('/') or path_norm.startswith(p.rstrip('/') + '/')
+            for p in self.CSRF_REQUIRED_PATHS
         ):
             return
         if any(path.startswith(p) for p in self.EXEMPT_PREFIXES):

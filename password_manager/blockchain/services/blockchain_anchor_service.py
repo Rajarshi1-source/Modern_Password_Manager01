@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.db import transaction
 
 from ..models import BlockchainAnchor, MerkleProof, PendingCommitment
+from .exceptions import classify
 from .key_provider import get_key_provider
 from .merkle_tree_builder import MerkleTreeBuilder, create_commitment_hash
 from shared.circuit_breaker import blockchain_breaker, CircuitBreakerOpen
@@ -336,8 +337,12 @@ class BlockchainAnchorService:
                         "registry owner call addAuthorizedSigner() and retry.",
                         signer_address,
                     )
+                    # Audit-fix M10 + PR #273 review: a deterministic
+                    # "unauthorized signer" outcome is a contract-revert
+                    # equivalent, not infra. Wrap through `classify()`
+                    # so the breaker doesn't trip on it.
                     blockchain_breaker.on_failure(
-                        PermissionError("unauthorized signer")
+                        classify(PermissionError("unauthorized signer"))
                     )
                     return None
             except Exception as e:
@@ -352,7 +357,7 @@ class BlockchainAnchorService:
                     "to broadcast until signer authorization can be confirmed.",
                     e,
                 )
-                blockchain_breaker.on_failure(e)
+                blockchain_breaker.on_failure(classify(e))
                 return None
 
             # Build transaction
@@ -420,23 +425,24 @@ class BlockchainAnchorService:
                 # Receipt says status=0 → the tx was mined but reverted.
                 # Capture enough context for the breaker's failure log:
                 # the tx hash is the most useful pointer for after-the-
-                # fact triage. Mirrors the `on_failure(e)` call in the
-                # outer except so the breaker always sees an exception.
+                # fact triage. The "reverted" message routes the wrapped
+                # RuntimeError through `classify()` as
+                # `BlockchainContractRevert`, so the breaker won't trip
+                # on per-user condition mismatches (the M10 invariant).
                 logger.error(f"Transaction failed: {receipt}")
                 blockchain_breaker.on_failure(
-                    RuntimeError(
+                    classify(RuntimeError(
                         "Anchor transaction reverted "
                         f"(tx_hash={receipt.get('transactionHash')}, "
                         f"block={receipt.get('blockNumber')})"
-                    )
+                    ))
                 )
                 return None
-        
+
         except Exception as e:
             # Audit-fix M10: classify before passing to the breaker so
             # deterministic contract reverts don't count toward the
             # failure threshold.
-            from .exceptions import classify
             blockchain_breaker.on_failure(classify(e))
             logger.error(f"Error anchoring batch: {e}", exc_info=True)
             return None

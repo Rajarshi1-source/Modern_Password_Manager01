@@ -2239,9 +2239,26 @@ _DJANGO_MAINTENANCE_COMMANDS = frozenset({
     'startapp', 'startproject',
     'verify_audit_migration', 'rehash_pending_commitments',
 })
+def _is_django_entrypoint(arg0: str) -> bool:
+    """Detect Django CLI entrypoints.
+
+    Audit-trail (PR #273 review, CodeRabbit): the original check
+    only matched `manage.py`. `python -m django` (used in some CI
+    images and dev workflows) sets argv[0] to a path ending in
+    `django/__main__.py` or just `django`, so we widen the predicate.
+    """
+    import os.path
+    base = os.path.basename(arg0)
+    return (
+        arg0.endswith('manage.py')
+        or base == 'django'
+        or base == '__main__.py' and 'django' in arg0
+    )
+
+
 _IS_MAINTENANCE_INVOCATION = (
     len(sys.argv) > 1
-    and sys.argv[0].endswith('manage.py')
+    and _is_django_entrypoint(sys.argv[0])
     and sys.argv[1] in _DJANGO_MAINTENANCE_COMMANDS
 )
 

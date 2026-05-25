@@ -15,10 +15,12 @@ from password_manager.api_utils import error_response, success_response
 
 # Audit-fix M7 (2026-05): the stub `sync(request)` function that
 # previously lived here returned "Sync endpoint is working" with no
-# real work — it shadowed the genuine `VaultItemViewSet.sync` @action
-# (at /vault/items/sync/) and let clients hit a happy-looking but
-# functionally-broken /vault/sync/. Deleted; the URL route was removed
-# in vault/urls.py too.
+# real work — it shadowed the genuine `CrudVaultItemViewSet.sync`
+# @action at /vault/sync/ (registered by the router as 'vault-sync'
+# via `router.register(r'vault', CrudVaultItemViewSet, basename='vault')`
+# in vault/urls.py). The stub function has been deleted and the
+# `path('sync/', views.sync, ...)` URL route was removed in
+# vault/urls.py too.
 
 
 @api_view(['GET', 'POST'])
