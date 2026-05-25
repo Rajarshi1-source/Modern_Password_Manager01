@@ -45,11 +45,20 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
 # Build and install liboqs (Open Quantum Safe C library)
 #
 # Pinning policy (see DEPENDENCY_POLICY.md → "Post-quantum cryptography"):
-#   liboqs C library  → 0.11.0   (this stage)
-#   liboqs-python     → 0.10.0   (next stage)
+#   liboqs C library  → 0.11.0   (this stage, SHA 6f30d7ef…)
+#   liboqs-python     → 0.10.0   (next stage,  SHA 02198f9c…)
 # Drift between the two halves manifests as runtime ABI breaks (the C
 # library's symbol layout shifts and the Python wrapper's ctypes bindings
 # silently mis-cast). Both pins must move together when bumped.
+#
+# Belt-and-suspenders: we clone by tag (fast, --depth 1) AND assert the
+# commit SHA matches a known-good value before building. Git release
+# tags on this project have not been retargeted historically, but if
+# upstream ever moves a tag (or a malicious actor pushes a tag rewrite
+# to a mirror) the SHA assertion fails closed — the docker build aborts
+# rather than silently shipping a different commit. Per CodeRabbit
+# review of PR #274. SHAs verified via ``git ls-remote --tags`` against
+# the canonical github.com upstream on 2026-05-25.
 #
 # OQS_MINIMAL_BUILD limits the compiled algorithms to what the Python
 # code actually instantiates (`oqs.KeyEncapsulation("Kyber{512,768,1024}")`).
@@ -66,8 +75,16 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
 # optimisation lever; see DEPENDENCY_POLICY.md for why kernel/FPGA/GPU
 # offload is explicitly out of scope.
 # -----------------------------------------------------------------------------
+ARG LIBOQS_REF=0.11.0
+ARG LIBOQS_COMMIT=6f30d7ef49ca590979d7a085cd662f00bb6855fe
 WORKDIR /tmp
-RUN git clone --depth 1 --branch 0.11.0 https://github.com/open-quantum-safe/liboqs.git && \
+RUN git clone --depth 1 --branch ${LIBOQS_REF} https://github.com/open-quantum-safe/liboqs.git && \
+    actual=$(git -C liboqs rev-parse HEAD) && \
+    if [ "$actual" != "${LIBOQS_COMMIT}" ]; then \
+        echo "ERROR: liboqs ${LIBOQS_REF} resolved to $actual, expected ${LIBOQS_COMMIT}." >&2 ; \
+        echo "Upstream tag may have been retargeted. Refusing to build." >&2 ; \
+        exit 1 ; \
+    fi && \
     mkdir -p liboqs/build
 WORKDIR /tmp/liboqs/build
 RUN cmake -GNinja .. \
@@ -93,9 +110,21 @@ ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
 # requirements-lock.txt's `liboqs-python==0.14.1` line lied about what
 # was actually installed. The branch pin makes the Docker build and the
 # lock file agree.
+#
+# SHA assertion mirrors the liboqs stage above — clone by tag, then
+# verify the commit hash hasn't drifted (per CodeRabbit review of PR
+# #274).
 # -----------------------------------------------------------------------------
+ARG LIBOQSPY_REF=0.10.0
+ARG LIBOQSPY_COMMIT=02198f9c3366cfafdea38a7830b82b9bd78bcb32
 WORKDIR /tmp
-RUN git clone --depth 1 --branch 0.10.0 https://github.com/open-quantum-safe/liboqs-python.git
+RUN git clone --depth 1 --branch ${LIBOQSPY_REF} https://github.com/open-quantum-safe/liboqs-python.git && \
+    actual=$(git -C liboqs-python rev-parse HEAD) && \
+    if [ "$actual" != "${LIBOQSPY_COMMIT}" ]; then \
+        echo "ERROR: liboqs-python ${LIBOQSPY_REF} resolved to $actual, expected ${LIBOQSPY_COMMIT}." >&2 ; \
+        echo "Upstream tag may have been retargeted. Refusing to build." >&2 ; \
+        exit 1 ; \
+    fi
 WORKDIR /tmp/liboqs-python
 RUN pip install --no-cache-dir .
 WORKDIR /tmp

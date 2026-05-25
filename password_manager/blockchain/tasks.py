@@ -175,10 +175,30 @@ def verify_random_proofs(sample_size: int = None):
             logger.info("verify_random_proofs: blockchain anchoring disabled")
             return "disabled"
 
-        if sample_size is None:
-            sample_size = int(
-                getattr(settings, 'BLOCKCHAIN_PROOF_VERIFY_SAMPLE', 50)
+        # Sanitise + clamp sample_size from both sources (settings env or
+        # explicit task arg). Per CodeRabbit 2nd-pass review of PR #274:
+        # the settings path was already guarded in
+        # ``password_manager/settings/blockchain.py`` but a bad task arg
+        # (string, negative, None-after-deserialisation from Celery)
+        # would still slip through and either raise on the slice
+        # ``[:sample_size]`` or silently disable the check (slice with
+        # N <= 0 returns no rows). Clamp matches the settings-path
+        # bounds [1, 1000].
+        _SAMPLE_FLOOR, _SAMPLE_CEIL = 1, 1000
+        _setting_default = int(
+            getattr(settings, 'BLOCKCHAIN_PROOF_VERIFY_SAMPLE', 50)
+        )
+        _raw_sample = _setting_default if sample_size is None else sample_size
+        try:
+            sample_size = int(_raw_sample)
+        except (TypeError, ValueError):
+            logger.warning(
+                "verify_random_proofs: invalid sample_size=%r; "
+                "falling back to settings default=%d",
+                _raw_sample, _setting_default,
             )
+            sample_size = _setting_default
+        sample_size = max(_SAMPLE_FLOOR, min(sample_size, _SAMPLE_CEIL))
 
         service = BlockchainAnchorService()
         if not service.enabled:
