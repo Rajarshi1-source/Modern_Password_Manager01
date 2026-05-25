@@ -97,12 +97,19 @@ by ABI, not by semver. Both halves MUST be pinned together. Drift breaks
 at runtime, not at build time — the symptom is a `ctypes` mis-cast or a
 silently truncated buffer in production, not a CI failure.
 
-| Component | Pinned version | Pinned in |
-|---|---|---|
-| liboqs (C library) | `0.11.0` | `docker/backend/Dockerfile` (`--branch 0.11.0`) |
-| liboqs-python | `0.10.0` | `docker/backend/Dockerfile` (`--branch 0.10.0`) + `requirements-lock.txt` |
+| Component | Pinned version | Commit SHA | Pinned in |
+|---|---|---|---|
+| liboqs (C library) | `0.11.0` | `6f30d7ef49ca590979d7a085cd662f00bb6855fe` | `docker/backend/Dockerfile` (`--branch 0.11.0`, asserted via `LIBOQS_COMMIT` ARG) |
+| liboqs-python | `0.10.0` | `02198f9c3366cfafdea38a7830b82b9bd78bcb32` | `docker/backend/Dockerfile` (`--branch 0.10.0`, asserted via `LIBOQSPY_COMMIT` ARG) + `requirements-lock.txt` |
 
-When bumping either: bump both in the same PR, run the full
+The Dockerfile clones by tag (fast, `--depth 1`) AND asserts the
+resulting commit SHA matches the value above. If upstream ever
+retargets a release tag, the build aborts loudly rather than silently
+shipping a different commit.
+
+When bumping either: bump both in the same PR, refresh BOTH the tag
+**and** the SHA columns above (verify via `git ls-remote --tags`), run
+the full
 `security/services/lattice_crypto_engine.py` test suite against a freshly
 built image, and confirm `oqs.oqs_version()` and `oqs.oqs_python_version()`
 agree at container start.

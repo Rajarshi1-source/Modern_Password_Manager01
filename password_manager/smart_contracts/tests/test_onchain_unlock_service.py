@@ -126,8 +126,31 @@ class SubmitUnlockAnchorSuccessPathTest(TestCase):
         # The MagicMock sentinel is sufficient because ``build_and_send``
         # is itself mocked — the audit_contract is only forwarded as an
         # opaque first argument.
-        svc.bridge.audit_contract = mock.MagicMock(name='audit_contract')
-        svc.bridge.build_and_send = mock.MagicMock(return_value=fake_tx_hash)
+        #
+        # Use ``mock.patch.object(... create=True).start()`` rather than
+        # direct attribute assignment so the mocks are unwound after the
+        # test via ``addCleanup``. Direct assignment would persist on
+        # the singleton and taint any later test that re-uses the bridge
+        # (per CodeRabbit 2nd-pass review of PR #274). ``create=True``
+        # lets the patch invent ``audit_contract`` if the attribute
+        # genuinely doesn't exist on the singleton yet — which is the
+        # case after an ENABLED=False bridge init.
+        audit_contract_patcher = mock.patch.object(
+            svc.bridge,
+            'audit_contract',
+            mock.MagicMock(name='audit_contract'),
+            create=True,
+        )
+        build_and_send_patcher = mock.patch.object(
+            svc.bridge,
+            'build_and_send',
+            mock.MagicMock(return_value=fake_tx_hash),
+            create=True,
+        )
+        audit_contract_patcher.start()
+        build_and_send_patcher.start()
+        self.addCleanup(audit_contract_patcher.stop)
+        self.addCleanup(build_and_send_patcher.stop)
         return svc
 
     def test_submit_persists_nonce_and_commitment_and_returns_tx_hash(self):
