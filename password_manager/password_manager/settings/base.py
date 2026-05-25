@@ -22,7 +22,11 @@ from dotenv import load_dotenv
 # =============================================================================
 # Import warning suppressions for TensorFlow, Keras, Django, and other packages
 try:
-    from .warning_suppressions import *
+    # Phase C / C7: settings was split into a package
+    # (``password_manager.settings``); ``warning_suppressions`` still lives
+    # one level up at ``password_manager.warning_suppressions``. The
+    # double-dot relative import keeps the same module as before the split.
+    from ..warning_suppressions import *
 except ImportError:
     # Fallback if warning_suppressions.py doesn't exist yet
     pass
@@ -61,7 +65,14 @@ if sys.version_info >= (3, 13):
             print("Install with: pip install legacy-cgi")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Phase C / C7: the file moved one directory deeper (from
+# ``password_manager/settings.py`` to ``password_manager/settings/base.py``)
+# so we need one extra ``.parent`` to land on the same project-root
+# directory as before. Every downstream setting (STATIC_ROOT, MEDIA_ROOT,
+# the DB sqlite path, the GeoIP lookup) is anchored to this — if you
+# move base.py again, retune this constant FIRST and rerun
+# ``manage.py check`` before merging.
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 
 # Quick-start development settings - unsuitable for production

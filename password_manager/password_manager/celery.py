@@ -95,6 +95,15 @@ app.conf.update(
             'schedule': crontab(minute=0),  # Every hour
         },
 
+        # Phase C / C6: daily spot-check of a random sample of MerkleProof
+        # rows against the on-chain ``verifyCommitment`` view. Confirms
+        # the anchored Merkle roots still match the proofs we hand out
+        # — a mismatch fires a logger.error → Sentry alert.
+        'verify-random-merkle-proofs': {
+            'task': 'blockchain.tasks.verify_random_proofs',
+            'schedule': crontab(hour=4, minute=15),  # 4:15 AM daily
+        },
+
         # Phase 2b: flush pending reputation events into Merkle-rooted anchor
         # batches (every 15 minutes). If the adapter is "null" this is
         # effectively a cheap bookkeeping sweep; with "arbitrum" it submits

@@ -41,7 +41,31 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y --no-install-reco
     tar \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install liboqs (Open Quantum Safe library)
+# -----------------------------------------------------------------------------
+# Build and install liboqs (Open Quantum Safe C library)
+#
+# Pinning policy (see DEPENDENCY_POLICY.md → "Post-quantum cryptography"):
+#   liboqs C library  → 0.11.0   (this stage)
+#   liboqs-python     → 0.10.0   (next stage)
+# Drift between the two halves manifests as runtime ABI breaks (the C
+# library's symbol layout shifts and the Python wrapper's ctypes bindings
+# silently mis-cast). Both pins must move together when bumped.
+#
+# OQS_MINIMAL_BUILD limits the compiled algorithms to what the Python
+# code actually instantiates (`oqs.KeyEncapsulation("Kyber{512,768,1024}")`).
+# Saber, NTRU, and Dilithium were enabled previously but have zero call
+# sites — they bloated the .so and expanded the attack surface for no
+# functional gain. Re-enable them by extending the semicolon-separated
+# list if a future feature introduces a new algorithm.
+#
+# OQS_DIST_BUILD=ON + OQS_OPT_TARGET=auto give a "distribution build"
+# with runtime CPUID dispatch — production hosts on x86_64 with AVX2 or
+# arm64 with NEON pick up the SIMD-optimised Kyber polynomial-multiplication
+# path; hosts without those extensions transparently fall back to the
+# portable constant-time implementation. This is the user-space hot-path
+# optimisation lever; see DEPENDENCY_POLICY.md for why kernel/FPGA/GPU
+# offload is explicitly out of scope.
+# -----------------------------------------------------------------------------
 WORKDIR /tmp
 RUN git clone --depth 1 --branch 0.11.0 https://github.com/open-quantum-safe/liboqs.git && \
     mkdir -p liboqs/build
@@ -50,10 +74,9 @@ RUN cmake -GNinja .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=ON \
     -DOQS_USE_OPENSSL=ON \
-    -DOQS_ENABLE_KEM_KYBER=ON \
-    -DOQS_ENABLE_KEM_SABER=ON \
-    -DOQS_ENABLE_KEM_NTRU=ON \
-    -DOQS_ENABLE_SIG_DILITHIUM=ON \
+    -DOQS_MINIMAL_BUILD="KEM_kyber_512;KEM_kyber_768;KEM_kyber_1024" \
+    -DOQS_DIST_BUILD=ON \
+    -DOQS_OPT_TARGET=auto \
     && ninja \
     && ninja install
 
@@ -61,10 +84,18 @@ RUN cmake -GNinja .. \
 ENV LD_LIBRARY_PATH="/usr/local/lib"
 ENV PKG_CONFIG_PATH="/usr/local/lib/pkgconfig"
 
-# Install liboqs-python wrapper
-# Install liboqs-python wrapper
+# -----------------------------------------------------------------------------
+# Install liboqs-python wrapper.
+#
+# Pinned to 0.10.0 to pair with liboqs 0.11.0 above. The previous build
+# cloned `main` HEAD, which produced reproducibility drift: the same
+# Dockerfile could yield different wrapper versions across builds, and
+# requirements-lock.txt's `liboqs-python==0.14.1` line lied about what
+# was actually installed. The branch pin makes the Docker build and the
+# lock file agree.
+# -----------------------------------------------------------------------------
 WORKDIR /tmp
-RUN git clone --depth 1 https://github.com/open-quantum-safe/liboqs-python.git
+RUN git clone --depth 1 --branch 0.10.0 https://github.com/open-quantum-safe/liboqs-python.git
 WORKDIR /tmp/liboqs-python
 RUN pip install --no-cache-dir .
 WORKDIR /tmp
