@@ -559,9 +559,38 @@ class BlockchainAnchorService:
     def verify_proof_on_chain(self, merkle_root: str, leaf_hash: str, proof: list) -> bool:
         """
         Verify a Merkle proof on-chain via the smart contract.
+
+        Returns a plain bool for backward compatibility. ``False`` here
+        is OVERLOADED: it can mean "feature disabled", "genuine
+        mismatch", OR "RPC error". Callers that need to distinguish
+        those cases (e.g. the ``verify_random_proofs`` Celery task,
+        which would otherwise raise false Sentry alerts on transient
+        RPC outages) must use ``verify_proof_on_chain_status`` below.
+        """
+        return self.verify_proof_on_chain_status(
+            merkle_root, leaf_hash, proof,
+        ) == 'ok'
+
+    def verify_proof_on_chain_status(
+        self, merkle_root: str, leaf_hash: str, proof: list,
+    ) -> str:
+        """
+        Structured variant of ``verify_proof_on_chain``.
+
+        Returns one of:
+            'ok'         — contract confirmed the proof.
+            'mismatch'   — contract returned False; data divergence.
+            'rpc_error'  — RPC/transport/decoding failure; transient,
+                           do NOT treat as a mismatch alert.
+            'disabled'   — feature flag off or web3 unavailable.
+
+        Added per CodeRabbit + Codex review of PR #274: the previous
+        bool API caused the verifier Celery task to fire false
+        mismatch alerts whenever the RPC blipped, since both real
+        mismatches and connection errors collapsed to ``False``.
         """
         if not self.enabled or not self.w3:
-            return False
+            return 'disabled'
         try:
             contract = self.w3.eth.contract(
                 address=self.contract_address,
@@ -570,12 +599,17 @@ class BlockchainAnchorService:
             root_bytes = bytes.fromhex(merkle_root.replace('0x', ''))
             leaf_bytes = bytes.fromhex(leaf_hash.replace('0x', ''))
             proof_bytes = [bytes.fromhex(p.replace('0x', '')) for p in proof]
-            return contract.functions.verifyCommitment(
+            result = contract.functions.verifyCommitment(
                 root_bytes, leaf_bytes, proof_bytes
             ).call()
+            return 'ok' if bool(result) else 'mismatch'
         except Exception as e:
+            # Includes RPC connection errors, JSON-RPC decode failures,
+            # contract-not-found-at-address reverts. Callers should
+            # treat this as a transient-error retry signal, not a data
+            # divergence alert.
             logger.error(f"Error verifying proof on-chain: {e}")
-            return False
+            return 'rpc_error'
 
     def verify_anchor_on_chain(self, merkle_root: str, tx_hash: str = None) -> bool:
         """

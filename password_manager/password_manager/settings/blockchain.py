@@ -35,6 +35,26 @@ from .base import (  # noqa: F401
 
 # Phase C / C6: number of random proofs to verify per beat-task run.
 # Set via env var BLOCKCHAIN_PROOF_VERIFY_SAMPLE; default 50.
-BLOCKCHAIN_PROOF_VERIFY_SAMPLE = int(
-    os.environ.get('BLOCKCHAIN_PROOF_VERIFY_SAMPLE', '50')
+#
+# Defensive parsing per CodeRabbit review of PR #274: a malformed env
+# value would otherwise crash Django startup, and a negative value would
+# silently disable the spot-check (slice ``[:N]`` with N<=0 returns no
+# rows). The clamp also caps the upper bound so a fat-fingered
+# ``999999`` doesn't trigger one RPC round-trip per row in the table.
+_DEFAULT_PROOF_VERIFY_SAMPLE = 50
+_MAX_PROOF_VERIFY_SAMPLE = 1000
+_proof_verify_sample_raw = os.environ.get(
+    'BLOCKCHAIN_PROOF_VERIFY_SAMPLE', str(_DEFAULT_PROOF_VERIFY_SAMPLE),
+)
+try:
+    _proof_verify_sample = int(_proof_verify_sample_raw)
+except (TypeError, ValueError):
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "Invalid BLOCKCHAIN_PROOF_VERIFY_SAMPLE=%r; falling back to %d.",
+        _proof_verify_sample_raw, _DEFAULT_PROOF_VERIFY_SAMPLE,
+    )
+    _proof_verify_sample = _DEFAULT_PROOF_VERIFY_SAMPLE
+BLOCKCHAIN_PROOF_VERIFY_SAMPLE = max(
+    1, min(_proof_verify_sample, _MAX_PROOF_VERIFY_SAMPLE),
 )

@@ -117,6 +117,16 @@ class SubmitUnlockAnchorSuccessPathTest(TestCase):
         enabled_patcher.start()
         self.addCleanup(enabled_patcher.stop)
 
+        # ``SmartContractWeb3Bridge`` is a singleton — earlier tests that
+        # initialised it with ENABLED=False short-circuit __init__ before
+        # ``self.audit_contract`` is even created. Force the attribute
+        # onto the instance so ``submit_unlock_anchor`` (which reads
+        # ``self.bridge.audit_contract`` regardless of the
+        # PropertyMock-overridden ``enabled``) doesn't AttributeError.
+        # The MagicMock sentinel is sufficient because ``build_and_send``
+        # is itself mocked — the audit_contract is only forwarded as an
+        # opaque first argument.
+        svc.bridge.audit_contract = mock.MagicMock(name='audit_contract')
         svc.bridge.build_and_send = mock.MagicMock(return_value=fake_tx_hash)
         return svc
 
