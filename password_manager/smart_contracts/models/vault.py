@@ -61,10 +61,16 @@ class SmartContractVault(models.Model):
         db_index=True,
         help_text='Vault ID on the TimeLockedVault smart contract'
     )
-    password_hash = models.CharField(
-        max_length=66,
-        help_text='Keccak256 hash of the encrypted password (0x prefixed)'
-    )
+    # Phase C / C5 (2026-05): the legacy ``password_hash`` field was dead
+    # metadata — its docstring claimed verifiability ("Keccak256 hash of
+    # the encrypted password") but the server-side ``_compute_password_hash``
+    # implementation hashed with SHA-256 (not Keccak), nothing read it
+    # back to verify anything, and the on-chain ``getVault().passwordHash``
+    # slot read by ``web3_bridge.get_vault_onchain`` is on-chain metadata
+    # set by the deployer, not derived from this row. Removed in migration
+    # 0004; if a future feature wants a real client-side commitment, it
+    # should be computed in the browser/mobile client and submitted as a
+    # named, documented field.
     password_encrypted = models.TextField(
         help_text=(
             'Opaque client-encrypted ciphertext envelope. The server does '

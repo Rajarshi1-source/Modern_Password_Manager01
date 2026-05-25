@@ -48,13 +48,11 @@ class VaultService:
         Create a new smart contract vault with the specified condition type.
         """
         condition_type = data['condition_type']
-        password_hash = self._compute_password_hash(data['password_encrypted'])
 
         vault = SmartContractVault.objects.create(
             user=user,
             title=data['title'],
             description=data.get('description', ''),
-            password_hash=password_hash,
             password_encrypted=data['password_encrypted'],
             condition_type=condition_type,
             contract_address=self.config.get('TIMELOCKED_VAULT_ADDRESS', ''),
@@ -405,12 +403,6 @@ class VaultService:
     # =========================================================================
     # Utility
     # =========================================================================
-
-    def _compute_password_hash(self, encrypted_data: str) -> str:
-        """Compute keccak256-style hash of the encrypted password."""
-        import hashlib
-        h = hashlib.sha256(encrypted_data.encode()).hexdigest()
-        return f"0x{h}"
 
     def get_config(self) -> Dict[str, Any]:
         """Return feature configuration for API response."""

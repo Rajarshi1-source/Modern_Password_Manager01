@@ -20,7 +20,7 @@ class SmartContractVaultAdmin(admin.ModelAdmin):
     list_display = ['title', 'user', 'condition_type', 'status', 'network', 'created_at']
     list_filter = ['condition_type', 'status', 'network']
     search_fields = ['title', 'user__username', 'user__email']
-    readonly_fields = ['id', 'password_hash', 'created_at', 'updated_at']
+    readonly_fields = ['id', 'created_at', 'updated_at']
     inlines = [VaultConditionInline]
     date_hierarchy = 'created_at'
 

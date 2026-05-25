@@ -107,7 +107,7 @@ class SmartContractVaultDetailSerializer(SmartContractVaultSerializer):
 
     class Meta(SmartContractVaultSerializer.Meta):
         fields = SmartContractVaultSerializer.Meta.fields + [
-            'conditions', 'contract_address', 'password_hash',
+            'conditions', 'contract_address',
             'dead_mans_switch_deadline',
         ]
 
