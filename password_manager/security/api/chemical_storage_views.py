@@ -347,11 +347,18 @@ def get_capsule_status(request, capsule_id):
         }
     """
     try:
+        # Phase D / D5 (2026-05): the actual FK on TimeLockCapsule is
+        # ``owner``; ``user`` is a Python property aliasing it (see
+        # security/models/core.py:2222). Django's ORM resolves filter
+        # kwargs against model meta — properties are not in meta — so
+        # the previous ``user=request.user`` filter raised FieldError
+        # and this endpoint returned 500 for the legitimate owner.
+        # The fix routes through the real DB field.
         capsule = TimeLockCapsule.objects.get(
             id=capsule_id,
-            user=request.user
+            owner=request.user
         )
-        
+
         return Response({
             'success': True,
             'capsule_id': str(capsule.id),
@@ -362,7 +369,7 @@ def get_capsule_status(request, capsule_id):
             'mode': capsule.mode,
             'beneficiary_email': capsule.beneficiary_email,
         })
-        
+
     except TimeLockCapsule.DoesNotExist:
         return Response(
             {'success': False, 'error': 'Capsule not found'},
@@ -375,7 +382,7 @@ def get_capsule_status(request, capsule_id):
 def unlock_capsule(request, capsule_id):
     """
     Unlock a time-lock capsule and retrieve password.
-    
+
     Response:
         {
             "success": true,
@@ -383,9 +390,11 @@ def unlock_capsule(request, capsule_id):
         }
     """
     try:
+        # Phase D / D5 (2026-05): see get_capsule_status above — the FK
+        # on TimeLockCapsule is ``owner``, not ``user``.
         capsule = TimeLockCapsule.objects.get(
             id=capsule_id,
-            user=request.user
+            owner=request.user
         )
         
         if not capsule.is_unlockable():

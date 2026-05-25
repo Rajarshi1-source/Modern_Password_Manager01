@@ -101,11 +101,17 @@ def duress_codes_list(request):
     if request.method == 'GET':
         try:
             codes = service.get_user_codes(request.user)
+            # Phase D / D3 (2026-05): ``id`` (UUID) intentionally omitted.
+            # Earlier we exposed it and accepted it on the
+            # ``test_duress_activation`` endpoint, which let any actor
+            # with the user's session trigger activation without the
+            # code string. The frontend doesn't need the UUID — codes
+            # are addressed by ``code_hint`` (a user-defined label) for
+            # display, and by the code string itself for activation.
             return Response({
                 'success': True,
                 'codes': [
                     {
-                        'id': str(code.id),
                         'threat_level': code.threat_level,
                         'code_hint': code.code_hint,
                         'is_active': code.is_active,
@@ -379,23 +385,40 @@ def trusted_authorities_list(request):
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     elif request.method == 'POST':
+        # Phase D / D9 (2026-05): validate via an explicit serializer
+        # rather than passing raw user JSON into the model's JSONFields.
+        # The previous code allowed:
+        #   * trigger_threat_levels=[] → silent-alarm authority that
+        #     never fires (defeats the entire feature).
+        #   * contact_details={'webhook_url': 'https://attacker.example'}
+        #     under arbitrary keys → exfiltration vector.
+        from security.serializers.duress_serializers import (
+            TrustedAuthorityCreateSerializer,
+        )
+
+        serializer = TrustedAuthorityCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        validated = serializer.validated_data
+
         try:
-            data = request.data
-            
             authority = TrustedAuthority.objects.create(
                 user=request.user,
-                name=data.get('name'),
-                authority_type=data.get('authority_type', 'custom'),
-                contact_method=data.get('contact_method', 'email'),
-                contact_details=data.get('contact_details', {}),
-                trigger_threat_levels=data.get('trigger_threat_levels', ['high', 'critical']),
-                delay_seconds=data.get('delay_seconds', 0),
-                include_location=data.get('include_location', True),
-                include_evidence_link=data.get('include_evidence_link', False),
+                name=validated['name'],
+                authority_type=validated['authority_type'],
+                contact_method=validated.get('contact_method', 'email'),
+                contact_details=validated['contact_details'],
+                trigger_threat_levels=validated['trigger_threat_levels'],
+                delay_seconds=validated.get('delay_seconds', 0),
+                include_location=validated.get('include_location', True),
+                include_evidence_link=validated.get('include_evidence_link', False),
             )
-            
+
             # TODO: Send verification request
-            
+
             return Response({
                 'success': True,
                 'message': 'Trusted authority added',
@@ -601,26 +624,41 @@ def test_duress_activation(request):
     """
     Test duress code activation in safe mode.
     Does not send real alerts or lock vault.
+
+    Phase D / D3 (2026-05): the previous implementation accepted
+    ``code_id`` (a UUID) and looked the code up by primary key. Combined
+    with ``duress_codes_list`` exposing the UUID in its GET response,
+    that meant a user (or any actor with their valid session token)
+    could trigger activation WITHOUT knowing the actual duress code
+    string — defeating the duress code's role as a secondary
+    authenticator. This endpoint now requires the code string itself
+    and routes through the existing constant-time
+    ``verify_input_code`` helper.
     """
-    from security.models.duress_models import DuressCode
-    
     service = get_duress_code_service()
-    
+
     try:
-        code_id = request.data.get('code_id')
-        
-        if not code_id:
+        submitted_code = request.data.get('code', '')
+
+        if not submitted_code:
             return Response({
                 'success': False,
-                'error': 'code_id is required'
+                'error': 'code is required'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
-        duress_code = DuressCode.objects.get(
-            id=code_id,
-            user=request.user,
-            is_active=True
-        )
-        
+
+        # ``verify_input_code`` iterates ALL active codes for the user
+        # and uses Argon2.verify / hmac.compare_digest internally — so
+        # this is constant-time across the user's code set and across
+        # match/no-match outcomes.
+        duress_code = service.verify_input_code(request.user, submitted_code)
+        if duress_code is None or not duress_code.is_active:
+            # Same response shape for "no code submitted" (handled above)
+            # and "wrong code" — don't leak which case via response.
+            return Response({
+                'success': False,
+                'error': 'invalid_code'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         # Build request context
         request_context = {
             'ip_address': request.META.get('REMOTE_ADDR', '127.0.0.1'),  # nosec B104
@@ -629,7 +667,7 @@ def test_duress_activation(request):
             'geo_location': request.data.get('geo_location', {}),
             'behavioral_data': request.data.get('behavioral_data', {}),
         }
-        
+
         # Activate in test mode
         result = service.activate_duress_mode(
             user=request.user,

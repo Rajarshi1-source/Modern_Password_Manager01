@@ -779,6 +779,16 @@ SIMPLE_JWT = {
     #   3. Only the auth service needs the private key; all other services
     #      verify tokens with the public key alone, eliminating shared-secret risk.
     'ALGORITHM': os.environ.get('JWT_ALGORITHM', 'HS256'),
+    # Phase D / D1 (2026-05): JWT_PRIVATE_KEY falls back to SECRET_KEY
+    # ONLY so this module imports cleanly during dev/test/`manage.py check`.
+    # The real production guard lives at the bottom of this file — it
+    # raises ImproperlyConfigured when DEBUG=False + not TESTING + not
+    # a maintenance command + JWT_PRIVATE_KEY unset. The fallback here
+    # never reaches production-mode WSGI/ASGI bootstrap. Rationale: if
+    # SECRET_KEY were ever disclosed via a Django debug page, error
+    # log, or settings introspection, the attacker could forge JWTs
+    # for any user — sharing the key between session signing and JWT
+    # signing collapses two separate compromise surfaces into one.
     'SIGNING_KEY': os.environ.get('JWT_PRIVATE_KEY', SECRET_KEY),
     'VERIFYING_KEY': os.environ.get('JWT_PUBLIC_KEY', None),
     
@@ -2286,4 +2296,39 @@ if (
         "Daphne pods, which silently breaks WebSocket-backed features "
         "(breach alerts, adversarial-AI). Set USE_REDIS_CHANNELS=True "
         "and configure REDIS_HOST / REDIS_PORT."
+    )
+
+
+# =============================================================================
+# Phase D / D1 (2026-05): production guard on JWT_PRIVATE_KEY
+# =============================================================================
+# The SIMPLE_JWT block above falls back to SECRET_KEY when JWT_PRIVATE_KEY
+# is unset, but ONLY so this module imports cleanly during dev/test/CI.
+# Real production WSGI/ASGI bootstrap must NEVER reach that fallback —
+# it would collapse session-signing and JWT-signing into the same key,
+# meaning a SECRET_KEY disclosure (Django debug page, error log,
+# settings introspection) would let an attacker forge JWTs for every
+# user.
+#
+# Guard structure mirrors the USE_REDIS_CHANNELS guard above:
+#   * skip in DEBUG (dev uses the fallback)
+#   * skip during TESTING (pytest doesn't set JWT_PRIVATE_KEY)
+#   * skip during `manage.py check` / `migrate` / etc. (CI imports
+#     settings under DEBUG=False without the env var set)
+#   * fail closed otherwise.
+if (
+    not DEBUG
+    and not TESTING
+    and not _IS_MAINTENANCE_INVOCATION
+    and not os.environ.get('JWT_PRIVATE_KEY')
+):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "JWT_PRIVATE_KEY must be set explicitly in production "
+        "(DEBUG=False). The SECRET_KEY fallback is prohibited because "
+        "any SECRET_KEY disclosure (Django debug page, error log, "
+        "settings introspection) would let an attacker forge JWTs "
+        "for every user. Generate a dedicated key via "
+        "``python -c \"import secrets; print(secrets.token_urlsafe(64))\"`` "
+        "and set it in your deploy environment."
     )

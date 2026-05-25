@@ -536,33 +536,53 @@ class HoneypotWebhookView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+    # Phase D / D6 (2026-05): whitelist of provider names this view will
+    # honour as a signature-verification target. Anything outside this
+    # set is attacker-controlled (the value comes from the
+    # ``X-Honeypot-Provider`` request header), so we MUST refuse to dispatch
+    # secret-key lookup against it. Previously an unknown value fell
+    # through to ``secrets.get(provider, '')`` → empty string → DEBUG
+    # bypass → ``return True`` (no signature check). Closed below.
+    _KNOWN_WEBHOOK_PROVIDERS = frozenset({'simplelogin', 'anonaddy', 'custom'})
+
     def _verify_signature(self, payload: bytes, signature: str, provider: str) -> bool:
-        """Verify webhook signature based on provider."""
+        """Verify webhook signature for a whitelisted provider.
+
+        Fail-closed: any unknown provider, any missing per-provider secret,
+        and any signature mismatch all return False. The previous
+        implementation's DEBUG short-circuit (``if settings.DEBUG and
+        not secret: return True``) was removed — local development that
+        wants to test the webhook MUST set the corresponding
+        ``*_WEBHOOK_SECRET`` env var explicitly, so the dev and prod
+        code paths exercise the same crypto.
+        """
         from django.conf import settings
         import hashlib
         import hmac
-        
-        secrets = {
-            'simplelogin': getattr(settings, 'SIMPLELOGIN_WEBHOOK_SECRET', ''),
-            'anonaddy': getattr(settings, 'ANONADDY_WEBHOOK_SECRET', ''),
-            'custom': getattr(settings, 'CUSTOM_SMTP_WEBHOOK_SECRET', ''),
-        }
-        
-        secret = secrets.get(provider, '')
-        
-        # Skip verification in development
-        if settings.DEBUG and not secret:
-            return True
-        
-        if not secret:
+
+        if provider not in self._KNOWN_WEBHOOK_PROVIDERS:
+            # The provider name is attacker-controlled (header value);
+            # never let unknown values reach the secret lookup.
             return False
-        
+
+        per_provider_secret = {
+            'simplelogin': getattr(settings, 'SIMPLELOGIN_WEBHOOK_SECRET', ''),
+            'anonaddy':    getattr(settings, 'ANONADDY_WEBHOOK_SECRET', ''),
+            'custom':      getattr(settings, 'CUSTOM_SMTP_WEBHOOK_SECRET', ''),
+        }
+        secret = per_provider_secret[provider]
+
+        if not secret:
+            # Fail closed in both DEBUG and prod. If the operator wants
+            # to enable the webhook, they MUST set the env var.
+            return False
+
         expected = hmac.new(
-            secret.encode(),
+            secret.encode('utf-8'),
             payload,
-            hashlib.sha256
+            hashlib.sha256,
         ).hexdigest()
-        
+
         return hmac.compare_digest(expected, signature)
 
 

@@ -77,27 +77,137 @@ def get_dna_connection(user: User) -> DNAConnection:
     )
 
 
+# =============================================================================
+# Phase D / D4 (2026-05): OAuth token at-rest encryption.
+#
+# Replaced the old derivation chain:
+#   raw_key = env('DNA_TOKEN_ENCRYPTION_KEY') or settings.SECRET_KEY
+#   key     = hashlib.sha256(raw_key).digest()
+#
+# with HKDF-SHA256 over a dedicated env var. Two problems with the old code:
+#
+#   (1) SECRET_KEY fallback. Rotating SECRET_KEY (Django's documented
+#       way to invalidate all sessions) would silently corrupt every
+#       OAuth token stored under the old key — decrypts would fail and
+#       users would be force-disconnected from their DNA provider.
+#       D4 makes the encryption key independent and required.
+#
+#   (2) Raw SHA-256 KDF. No salt, no domain separation, no info label.
+#       The output is functionally fine when the input is high-entropy,
+#       but CodeQL's py/weak-sensitive-data-hashing flags it and any
+#       future contributor who copies this pattern to a low-entropy
+#       input would have a real weakness.
+#
+# Transparent rollout: ``decrypt_token`` first tries the new HKDF-derived
+# key; on InvalidToken (which is what Fernet raises when the MAC doesn't
+# verify, including across-key decrypt attempts) it falls back to the
+# legacy SHA-256-derived key. The vault's token-refresh callback
+# re-encrypts on save under the new key, so existing rows auto-upgrade
+# over their natural refresh cycle. The legacy fallback is scheduled for
+# removal in a follow-up PR ~30 days after this lands.
+# =============================================================================
+
+
+def _hkdf_fernet_key(raw_key: bytes) -> bytes:
+    """Derive a 32-byte Fernet key from raw_key via HKDF-SHA256."""
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes as crypto_hashes
+    return HKDF(
+        algorithm=crypto_hashes.SHA256(),
+        length=32,
+        # Versioned salt so the derivation is rotatable in the future
+        # without changing the env var (bump the version string and
+        # re-encrypt everything via a one-shot migration command).
+        salt=b'dna-token-encryption-v1',
+        info=b'oauth-token-fernet-key',
+    ).derive(raw_key)
+
+
 def _get_fernet():
-    """Derive a Fernet instance from the DNA_TOKEN_ENCRYPTION_KEY env var."""
+    """Return the primary Fernet instance for DNA-provider OAuth tokens.
+
+    Requires DNA_TOKEN_ENCRYPTION_KEY to be set explicitly — falling
+    back to SECRET_KEY is prohibited (D4).
+    """
+    import base64
+    from cryptography.fernet import Fernet
+    from django.core.exceptions import ImproperlyConfigured
+
+    raw_key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '').encode('utf-8')
+    if not raw_key:
+        raise ImproperlyConfigured(
+            "DNA_TOKEN_ENCRYPTION_KEY must be set explicitly. "
+            "OAuth tokens cannot be encrypted without a dedicated key. "
+            "Falling back to SECRET_KEY is prohibited because "
+            "SECRET_KEY rotation would silently corrupt all stored "
+            "OAuth tokens. See SECURITY.md for the recommended "
+            "rotation procedure."
+        )
+    derived = _hkdf_fernet_key(raw_key)
+    return Fernet(base64.urlsafe_b64encode(derived))
+
+
+def _get_legacy_fernet():
+    """Reproduce the pre-D4 SHA-256-derived key for transparent rollout.
+
+    Returns None if the operator has fully cut over to the new key
+    scheme (DNA_TOKEN_LEGACY_KEY unset). The legacy path is
+    intentionally guarded behind a separate env var so an operator
+    can disable the fallback explicitly once all stored tokens have
+    been re-encrypted on their natural refresh cycle.
+    """
     import base64
     import hashlib
     from cryptography.fernet import Fernet
-    key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '')
-    if not key:
-        from django.conf import settings
-        key = settings.SECRET_KEY
-    derived = hashlib.sha256(key.encode()).digest()
+
+    # Prefer DNA_TOKEN_LEGACY_KEY if set (lets ops rotate the new key
+    # while keeping the old one around for decrypt-only). Falls back
+    # to DNA_TOKEN_ENCRYPTION_KEY's previous value if the operator
+    # did NOT migrate the env var name during deploy.
+    legacy_raw = (
+        os.environ.get('DNA_TOKEN_LEGACY_KEY')
+        or os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '')
+    )
+    if not legacy_raw:
+        return None
+    derived = hashlib.sha256(legacy_raw.encode('utf-8')).digest()
     return Fernet(base64.urlsafe_b64encode(derived))
 
 
 def encrypt_token(token: str) -> bytes:
     """Encrypt OAuth token for storage using Fernet (AES-128-CBC + HMAC-SHA256)."""
+    # Always encrypt with the new HKDF-derived key. Existing rows
+    # under the legacy key remain decryptable via ``decrypt_token``'s
+    # fallback path and get re-encrypted on the next save.
     return _get_fernet().encrypt(token.encode('utf-8'))
 
 
 def decrypt_token(encrypted: bytes) -> str:
-    """Decrypt OAuth token."""
-    return _get_fernet().decrypt(encrypted).decode('utf-8')
+    """Decrypt OAuth token, with transparent legacy-key fallback.
+
+    Phase D / D4 (2026-05): try the new HKDF-derived key first, fall
+    back to the legacy SHA-256-derived key on ``InvalidToken``. The
+    fallback exists only so the production rollout doesn't strand
+    existing OAuth grants — schedule its removal once all rows have
+    been re-encrypted.
+    """
+    from cryptography.fernet import InvalidToken
+
+    try:
+        return _get_fernet().decrypt(encrypted).decode('utf-8')
+    except InvalidToken:
+        legacy = _get_legacy_fernet()
+        if legacy is None:
+            raise
+        # Successful legacy decrypt — emit a log line so operators
+        # can observe the rate of auto-upgrades and decide when to
+        # remove the fallback. Don't log the token itself.
+        import logging as _logging
+        _logging.getLogger(__name__).info(
+            "decrypt_token: legacy-key fallback used; row will be "
+            "re-encrypted under new HKDF key on next save."
+        )
+        return legacy.decrypt(encrypted).decode('utf-8')
 
 
 # =============================================================================
