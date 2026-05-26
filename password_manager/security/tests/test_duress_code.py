@@ -635,6 +635,88 @@ class DuressCodeAPITests(APITestCase):
         self.assertEqual(response.status_code, 201)
         self.assertTrue(response.data['success'])
         self.assertIn('id', response.data['authority'])
+
+    def test_create_authority_accepts_legacy_threat_levels_alias(self):
+        """PR #275 review: the mobile client sends ``threat_levels``,
+        not ``trigger_threat_levels``. The serializer must accept the
+        alias to avoid breaking shipped clients during rollout."""
+        response = self.client.post(
+            '/api/security/duress/authorities/',
+            {
+                'name': 'Mobile-Client Lawyer',
+                'authority_type': 'legal_counsel',
+                'contact_method': 'email',
+                'contact_details': {'email': 'mobile-lawyer@example.com'},
+                'threat_levels': ['high', 'critical'],  # <-- legacy alias
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 201)
+        # Verify the canonical name was actually written to the row.
+        from security.models.duress_models import TrustedAuthority
+        authority = TrustedAuthority.objects.get(
+            user=self.user, name='Mobile-Client Lawyer',
+        )
+        self.assertEqual(authority.trigger_threat_levels, ['high', 'critical'])
+
+    def test_update_authority_rejects_empty_trigger_threat_levels(self):
+        """PR #275 review (CodeRabbit): the PUT path previously bypassed
+        the D9 serializer by raw-copying request.data fields. Confirm
+        empty trigger_threat_levels is rejected via PUT as well."""
+        # First create a valid authority
+        create_resp = self.client.post(
+            '/api/security/duress/authorities/',
+            {
+                'name': 'Authority to-update',
+                'authority_type': 'legal_counsel',
+                'contact_method': 'email',
+                'contact_details': {'email': 'pre@example.com'},
+                'trigger_threat_levels': ['high'],
+            },
+            format='json',
+        )
+        self.assertEqual(create_resp.status_code, 201)
+        # Use the id-via-DB since the list response no longer leaks UUIDs.
+        from security.models.duress_models import TrustedAuthority
+        authority_id = TrustedAuthority.objects.get(
+            user=self.user, name='Authority to-update',
+        ).id
+
+        # PUT with the silent-disable payload.
+        put_resp = self.client.put(
+            f'/api/security/duress/authorities/{authority_id}/',
+            {'trigger_threat_levels': []},
+            format='json',
+        )
+        self.assertEqual(put_resp.status_code, 400)
+
+    def test_update_authority_partial_update_succeeds(self):
+        """PR #275 review: ``partial=True`` lets PUT update just the
+        fields the caller actually sent without re-validating untouched
+        fields."""
+        self.client.post(
+            '/api/security/duress/authorities/',
+            {
+                'name': 'Partial Update Target',
+                'authority_type': 'legal_counsel',
+                'contact_method': 'email',
+                'contact_details': {'email': 'pre@example.com'},
+                'trigger_threat_levels': ['high'],
+            },
+            format='json',
+        )
+        from security.models.duress_models import TrustedAuthority
+        authority = TrustedAuthority.objects.get(
+            user=self.user, name='Partial Update Target',
+        )
+        put_resp = self.client.put(
+            f'/api/security/duress/authorities/{authority.id}/',
+            {'delay_seconds': 60},  # only one field
+            format='json',
+        )
+        self.assertEqual(put_resp.status_code, 200)
+        authority.refresh_from_db()
+        self.assertEqual(authority.delay_seconds, 60)
     
     def test_list_events(self):
         """Test listing duress events"""

@@ -64,7 +64,28 @@ class ContactDetailsSerializer(serializers.Serializer):
 
 
 class TrustedAuthorityCreateSerializer(serializers.Serializer):
-    """Validates a ``POST /trusted-authorities`` payload."""
+    """Validates a ``POST /trusted-authorities`` payload.
+
+    Backward-compat (PR #275 review): the mobile client
+    (``mobile/src/services/DuressCodeService.js``) sends the legacy key
+    ``threat_levels`` instead of the canonical ``trigger_threat_levels``.
+    Both names are accepted on input; the canonical name is used
+    everywhere downstream. Drop the alias once every shipped client has
+    migrated.
+    """
+
+    def to_internal_value(self, data):
+        # Map ``threat_levels`` → ``trigger_threat_levels`` BEFORE
+        # field-level validation runs so both keys exercise the same
+        # ChoiceField/min_length constraints. We never mutate the
+        # caller's data dict — copy first.
+        if (
+            'trigger_threat_levels' not in data
+            and 'threat_levels' in data
+        ):
+            data = dict(data)
+            data['trigger_threat_levels'] = data.pop('threat_levels')
+        return super().to_internal_value(data)
 
     name = serializers.CharField(max_length=200, allow_blank=False)
     authority_type = serializers.ChoiceField(

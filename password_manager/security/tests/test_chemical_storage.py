@@ -522,13 +522,20 @@ class TimeLockCapsuleOwnerFilterRegressionTest(APITestCase):
             username='other_user', email='other@example.com',
             password='otherpass12',
         )
+        # PR #275 review (CodeRabbit): ``time_param`` is not a field on
+        # TimeLockCapsule, and ``encryption_key_encrypted``,
+        # ``delay_seconds``, and ``title`` are required (no defaults).
+        # Use the same shape as the existing model-level test fixture
+        # at line ~627 of this file.
         self.capsule = TimeLockCapsule.objects.create(
             owner=self.owner,
+            title='Regression capsule (D5)',
             encrypted_data=b'\x00' * 32,
+            encryption_key_encrypted=b'\x01' * 32,
             unlock_at=timezone.now() - timedelta(seconds=1),
             mode='server',
             status='locked',
-            time_param=1,
+            delay_seconds=1,
         )
         self.client = APIClient()
 

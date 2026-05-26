@@ -359,6 +359,13 @@ def get_capsule_status(request, capsule_id):
             owner=request.user
         )
 
+        # PR #275 review (CodeRabbit): ``beneficiary_email`` is NOT a
+        # field on TimeLockCapsule (only ``DNAEncodedPassword`` has
+        # something similar). Before D5 fixed the owner filter, this
+        # endpoint always 500'd at the FieldError on the .get() call,
+        # so the stale attribute reference was never exercised. With
+        # the filter fixed, dropping the reference is the second half
+        # of the D5 endpoint restoration.
         return Response({
             'success': True,
             'capsule_id': str(capsule.id),
@@ -367,7 +374,6 @@ def get_capsule_status(request, capsule_id):
             'time_remaining_seconds': capsule.time_remaining(),
             'unlock_at': capsule.unlock_at.isoformat(),
             'mode': capsule.mode,
-            'beneficiary_email': capsule.beneficiary_email,
         })
 
     except TimeLockCapsule.DoesNotExist:
@@ -417,10 +423,15 @@ def unlock_capsule(request, capsule_id):
         service = get_service_for_user(request.user)
         password = service.unlock_time_lock(server_capsule)
         
-        # Update capsule status
+        # Update capsule status. PR #275 review (CodeRabbit): the model
+        # field is ``opened_at`` (see security/models/core.py:2291), NOT
+        # ``unlocked_at``. The old write created a phantom attribute that
+        # Django silently dropped on save(), so unlocks were never
+        # timestamped. Pre-D5 this never fired because the endpoint
+        # 500'd on the .get() call upstream.
         capsule.status = 'unlocked'
-        capsule.unlocked_at = timezone.now()
-        capsule.save()
+        capsule.opened_at = timezone.now()
+        capsule.save(update_fields=['status', 'opened_at'])
         
         return Response({
             'success': True,

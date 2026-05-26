@@ -477,14 +477,37 @@ def trusted_authority_detail(request, authority_id):
         })
     
     elif request.method == 'PUT':
-        data = request.data
-        
-        for field in ['name', 'contact_method', 'contact_details', 
-                      'trigger_threat_levels', 'delay_seconds',
-                      'include_location', 'include_evidence_link']:
-            if field in data:
-                setattr(authority, field, data[field])
-        
+        # PR #275 review (CodeRabbit): the previous loop raw-copied
+        # ``trigger_threat_levels`` and ``contact_details`` from
+        # request.data, which let a client BYPASS the D9 serializer
+        # validation by going through PUT instead of POST. Now both
+        # paths share the same serializer with ``partial=True`` for
+        # the update case.
+        from security.serializers.duress_serializers import (
+            TrustedAuthorityCreateSerializer,
+        )
+        serializer = TrustedAuthorityCreateSerializer(
+            data=request.data, partial=True,
+        )
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        validated = serializer.validated_data
+
+        # Map serializer keys to model field names (identical in this
+        # serializer, but spell it out so a future field rename is
+        # caught at this seam rather than silently dropping the write).
+        _ALLOWED_UPDATE_FIELDS = (
+            'name', 'contact_method', 'contact_details',
+            'trigger_threat_levels', 'delay_seconds',
+            'include_location', 'include_evidence_link',
+        )
+        for field in _ALLOWED_UPDATE_FIELDS:
+            if field in validated:
+                setattr(authority, field, validated[field])
+
         authority.save()
         return Response({
             'success': True,
@@ -688,11 +711,11 @@ def test_duress_activation(request):
             'result': result
         })
         
-    except DuressCode.DoesNotExist:
-        return Response({
-            'success': False,
-            'error': 'Duress code not found'
-        }, status=status.HTTP_404_NOT_FOUND)
+    # PR #275 review: stale ``except DuressCode.DoesNotExist`` removed.
+    # ``test_duress_activation`` no longer imports DuressCode nor does
+    # an .objects.get() — verify_input_code returns None on mismatch,
+    # which we handle in the main branch above. Leaving the handler in
+    # place caused F821 (undefined name 'DuressCode') in CI.
     except Exception as e:
         logger.error(f"Test activation failed: {e}")
         return Response({

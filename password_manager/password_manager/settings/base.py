@@ -789,7 +789,14 @@ SIMPLE_JWT = {
     # log, or settings introspection, the attacker could forge JWTs
     # for any user — sharing the key between session signing and JWT
     # signing collapses two separate compromise surfaces into one.
-    'SIGNING_KEY': os.environ.get('JWT_PRIVATE_KEY', SECRET_KEY),
+    #
+    # PR #275 review (CodeRabbit): normalize whitespace-only values.
+    # ``os.environ.get('JWT_PRIVATE_KEY')`` returns ``"   "`` if an
+    # operator accidentally sets the env var to spaces — that would
+    # bypass the fail-closed guard below AND make ``"   "`` the live
+    # HS256 signing key. ``.strip() or None`` makes blank values
+    # behave identically to "env var missing".
+    'SIGNING_KEY': (os.environ.get('JWT_PRIVATE_KEY') or '').strip() or SECRET_KEY,
     'VERIFYING_KEY': os.environ.get('JWT_PUBLIC_KEY', None),
     
     # Audience and issuer claims for added security
@@ -2320,7 +2327,10 @@ if (
     not DEBUG
     and not TESTING
     and not _IS_MAINTENANCE_INVOCATION
-    and not os.environ.get('JWT_PRIVATE_KEY')
+    # PR #275: ``.strip()`` so whitespace-only values are treated as
+    # missing (matches the SIGNING_KEY normalisation in SIMPLE_JWT
+    # above — both halves must agree or the guard becomes bypassable).
+    and not (os.environ.get('JWT_PRIVATE_KEY') or '').strip()
 ):
     from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured(
