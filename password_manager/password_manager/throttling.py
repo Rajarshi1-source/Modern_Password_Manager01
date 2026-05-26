@@ -169,7 +169,7 @@ class DeadDropCollectThrottle(ScopedRateThrottle):
         }
 
 
-class HoneypotWebhookThrottle(ScopedRateThrottle):
+class HoneypotWebhookThrottle(SimpleRateThrottle):
     """Phase F / F4 (2026-05): per-IP rate limit on the honeypot webhook.
 
     The endpoint is intentionally public (``permission_classes = []``)
@@ -189,6 +189,16 @@ class HoneypotWebhookThrottle(ScopedRateThrottle):
     closes both. Real providers fan in from a small set of source
     IPs and rarely exceed a few req/sec; legit traffic stays well
     under the limit.
+
+    PR #277 review (Codex P1): this MUST subclass ``SimpleRateThrottle``
+    rather than ``ScopedRateThrottle``. DRF's ``ScopedRateThrottle``
+    reads its scope from the VIEW's ``throttle_scope`` attribute, not
+    from the throttle class — and the public webhook view (and every
+    other view in this codebase) doesn't set that attribute, so the
+    scoped variant short-circuits to ``allow_request → True`` and
+    the throttle is silently disabled. ``SimpleRateThrottle`` reads
+    ``self.scope`` directly from the class, which matches the
+    intended semantics.
     """
     scope = 'honeypot_webhook'
 

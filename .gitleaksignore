@@ -84,3 +84,10 @@ ebc4be373d5c16adfef7bfc63517f82250006659:tests/functional/test_vault_operations.
 4c1822a99e71781e854b17fbb704e977c52b3a27:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:84
 4c1822a99e71781e854b17fbb704e977c52b3a27:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:147
 4c1822a99e71781e854b17fbb704e977c52b3a27:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:189
+# Same content, post-merge commit hash on main (Phase E merged via
+# rebase/squash → new SHA). PR #277 (Phase F) Gitleaks scan flagged
+# the merged-into-main version of the same lines. Same rationale as
+# the 4c1822a entries above.
+faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:84
+faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:147
+faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:189
