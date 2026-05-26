@@ -41,8 +41,20 @@ def _run_settings_import_in_subprocess(env_overrides, argv0='gunicorn'):
             print('SETTINGS_FAILED:' + type(e).__name__ + ':' + str(e)[:200])
     """)
     env = os.environ.copy()
-    # Wipe the keys we control so subprocess sees only what we set
-    for k in ('DEBUG', 'JWT_PRIVATE_KEY', 'USE_REDIS_CHANNELS', 'SECRET_KEY'):
+    # Wipe the keys we control so subprocess sees only what we set.
+    # PR #276 review (CodeRabbit): include every env var any of the
+    # production guards in base.py reads, not just the ones the JWT
+    # guard cares about. Without USE_REDIS_CACHE in this list, a CI
+    # runner that exports USE_REDIS_CACHE=True at the host level
+    # would silently bypass the "USE_REDIS_CACHE unset" test case —
+    # making the guard test environment-dependent and useless.
+    for k in (
+        'DEBUG',
+        'JWT_PRIVATE_KEY',
+        'USE_REDIS_CHANNELS',
+        'USE_REDIS_CACHE',
+        'SECRET_KEY',
+    ):
         env.pop(k, None)
     env.update(env_overrides)
     cwd = os.path.join(os.path.dirname(__file__), '..', '..')
@@ -59,7 +71,7 @@ class JWTSigningKeyGuardTest(TestCase):
 
     def test_guard_fires_in_production_without_jwt_private_key(self):
         """DEBUG=False + WSGI bootstrap + no JWT_PRIVATE_KEY => fail."""
-        rc, stdout, stderr = _run_settings_import_in_subprocess({
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
             'USE_REDIS_CHANNELS': 'True',
@@ -74,7 +86,7 @@ class JWTSigningKeyGuardTest(TestCase):
         Also needs USE_REDIS_CACHE=True so the unrelated PR-#276
         ownership-cache guard doesn't intercept this test.
         """
-        rc, stdout, stderr = _run_settings_import_in_subprocess({
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
             'USE_REDIS_CHANNELS': 'True',
@@ -88,7 +100,7 @@ class JWTSigningKeyGuardTest(TestCase):
         fix relies on a shared cache backend across workers. The
         startup guard refuses to boot a non-DEBUG deployment without
         ``USE_REDIS_CACHE=True``."""
-        rc, stdout, stderr = _run_settings_import_in_subprocess({
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
             'JWT_PRIVATE_KEY': 'jwt-secret-material',
@@ -143,7 +155,7 @@ class JWTSigningKeyGuardTest(TestCase):
         trivially-guessable JWT secret. Treat whitespace-only values
         identically to "env var missing".
         """
-        rc, stdout, stderr = _run_settings_import_in_subprocess({
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
             'USE_REDIS_CHANNELS': 'True',
@@ -188,7 +200,7 @@ class JWTSigningKeyGuardTest(TestCase):
 
     def test_guard_silent_in_debug_mode(self):
         """Dev mode uses the SECRET_KEY fallback — no guard fire."""
-        rc, stdout, stderr = _run_settings_import_in_subprocess({
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
             'DEBUG': 'True',
             'SECRET_KEY': 'dev-secret',
             # JWT_PRIVATE_KEY intentionally unset — dev path
