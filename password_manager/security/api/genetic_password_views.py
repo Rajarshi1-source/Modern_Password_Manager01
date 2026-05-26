@@ -150,24 +150,26 @@ def _get_fernet():
 def _get_legacy_fernet():
     """Reproduce the pre-D4 SHA-256-derived key for transparent rollout.
 
-    Returns None if the operator has fully cut over to the new key
-    scheme (DNA_TOKEN_LEGACY_KEY unset). The legacy path is
-    intentionally guarded behind a separate env var so an operator
-    can disable the fallback explicitly once all stored tokens have
-    been re-encrypted on their natural refresh cycle.
+    Returns None when ``DNA_TOKEN_LEGACY_KEY`` is unset — that's the
+    operator's signal that all stored tokens have been re-encrypted
+    under the new HKDF scheme and the fallback path can be retired.
+
+    PR #275 review (CodeRabbit): the previous implementation fell
+    back to ``DNA_TOKEN_ENCRYPTION_KEY`` when ``DNA_TOKEN_LEGACY_KEY``
+    was missing, which meant a correctly-configured deployment always
+    returned a usable legacy Fernet — the "fully cut over" branch was
+    unreachable, and the fallback could not be disabled. The new
+    contract: ONLY ``DNA_TOKEN_LEGACY_KEY`` controls the legacy
+    decrypt path. To enable the fallback during rollout, set
+    ``DNA_TOKEN_LEGACY_KEY`` to the SAME value the old
+    ``DNA_TOKEN_ENCRYPTION_KEY`` held before the cutover. To disable
+    it (post-rollout), unset ``DNA_TOKEN_LEGACY_KEY``.
     """
     import base64
     import hashlib
     from cryptography.fernet import Fernet
 
-    # Prefer DNA_TOKEN_LEGACY_KEY if set (lets ops rotate the new key
-    # while keeping the old one around for decrypt-only). Falls back
-    # to DNA_TOKEN_ENCRYPTION_KEY's previous value if the operator
-    # did NOT migrate the env var name during deploy.
-    legacy_raw = (
-        os.environ.get('DNA_TOKEN_LEGACY_KEY')
-        or os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '')
-    )
+    legacy_raw = (os.environ.get('DNA_TOKEN_LEGACY_KEY') or '').strip()
     if not legacy_raw:
         return None
     derived = hashlib.sha256(legacy_raw.encode('utf-8')).digest()
@@ -199,15 +201,18 @@ def decrypt_token(encrypted: bytes) -> str:
         legacy = _get_legacy_fernet()
         if legacy is None:
             raise
-        # Successful legacy decrypt — emit a log line so operators
-        # can observe the rate of auto-upgrades and decide when to
-        # remove the fallback. Don't log the token itself.
+        # PR #275 review (CodeRabbit): log AFTER the legacy decrypt
+        # succeeds, not before. The previous order would count every
+        # malformed/corrupted ciphertext as a "legacy fallback used"
+        # event, skewing the metric operators use to decide when to
+        # turn the fallback off.
+        decrypted = legacy.decrypt(encrypted).decode('utf-8')
         import logging as _logging
         _logging.getLogger(__name__).info(
             "decrypt_token: legacy-key fallback used; row will be "
             "re-encrypted under new HKDF key on next save."
         )
-        return legacy.decrypt(encrypted).decode('utf-8')
+        return decrypted
 
 
 # =============================================================================

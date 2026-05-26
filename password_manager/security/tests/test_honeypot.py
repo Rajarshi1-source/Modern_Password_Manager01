@@ -1011,6 +1011,76 @@ class HoneypotWebhookTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    # -----------------------------------------------------------------
+    # PR #275 review (CodeRabbit): cover the anonaddy + custom branches.
+    # _verify_signature has three separate per-provider lookups; a typo
+    # in any of them would only surface when production traffic shows
+    # up. Tests below exercise each branch end-to-end.
+    # -----------------------------------------------------------------
+
+    @override_settings(
+        SIMPLELOGIN_WEBHOOK_SECRET='sl-secret',
+        ANONADDY_WEBHOOK_SECRET='aa-secret',
+        CUSTOM_SMTP_WEBHOOK_SECRET='custom-secret',
+    )
+    def test_webhook_accepts_each_whitelisted_provider(self):
+        """All three providers (simplelogin / anonaddy / custom) must
+        accept a correctly-signed body under their respective secret."""
+        url = reverse('honeypot-webhook')
+        payload = {
+            'recipient': 'canary@simplelogin.com',
+            'sender': 'spam@attacker.com',
+            'subject': 'Spam Subject',
+            'is_spam': True,
+            'spam_score': 0.9,
+        }
+        for provider, secret in (
+            ('simplelogin', 'sl-secret'),
+            ('anonaddy', 'aa-secret'),
+            ('custom', 'custom-secret'),
+        ):
+            with self.subTest(provider=provider):
+                response = self._signed_post(
+                    self.client, url, payload,
+                    provider=provider, secret=secret,
+                )
+                self.assertEqual(
+                    response.status_code, status.HTTP_200_OK,
+                    msg=f"{provider} branch returned {response.status_code}",
+                )
+
+    @override_settings(
+        ANONADDY_WEBHOOK_SECRET='aa-secret',
+        CUSTOM_SMTP_WEBHOOK_SECRET='custom-secret',
+    )
+    def test_webhook_rejects_wrong_signature_for_anonaddy(self):
+        """Mirror the simplelogin wrong-sig case for anonaddy."""
+        url = reverse('honeypot-webhook')
+        response = self.client.post(
+            url,
+            data=b'{"recipient":"canary@simplelogin.com"}',
+            content_type='application/json',
+            HTTP_X_HONEYPOT_PROVIDER='anonaddy',
+            HTTP_X_WEBHOOK_SIGNATURE='0' * 64,
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    @override_settings(
+        ANONADDY_WEBHOOK_SECRET='aa-secret',
+        CUSTOM_SMTP_WEBHOOK_SECRET='custom-secret',
+    )
+    def test_webhook_rejects_wrong_signature_for_custom(self):
+        """Mirror the wrong-sig case for the custom provider branch."""
+        url = reverse('honeypot-webhook')
+        response = self.client.post(
+            url,
+            data=b'{"recipient":"canary@simplelogin.com"}',
+            content_type='application/json',
+            HTTP_X_HONEYPOT_PROVIDER='custom',
+            HTTP_X_WEBHOOK_SIGNATURE='0' * 64,
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
 
 # =============================================================================
 # Celery Task Tests

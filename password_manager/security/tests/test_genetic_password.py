@@ -770,7 +770,12 @@ class DNATokenEncryptionTestCase(TestCase):
         """Tokens encrypted with the new HKDF derivation are decryptable
         by the same code path."""
         from security.api import genetic_password_views as gpv
-        with patch.dict(os.environ, {'DNA_TOKEN_ENCRYPTION_KEY': 'production-key-material'}):
+        # PR #275 review: also pop ``DNA_TOKEN_LEGACY_KEY`` so the test
+        # cannot accidentally exercise the legacy path if a CI worker
+        # has it set in its environment.
+        env = {'DNA_TOKEN_ENCRYPTION_KEY': 'production-key-material'}
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop('DNA_TOKEN_LEGACY_KEY', None)
             ct = gpv.encrypt_token('access_token_xyz')
             self.assertEqual(gpv.decrypt_token(ct), 'access_token_xyz')
 
@@ -789,11 +794,44 @@ class DNATokenEncryptionTestCase(TestCase):
         legacy = Fernet(base64.urlsafe_b64encode(legacy_derived))
         old_ciphertext = legacy.encrypt(b'legacy_token_value')
 
-        # Now decrypt with the NEW code — must succeed via fallback.
-        with patch.dict(os.environ, {'DNA_TOKEN_ENCRYPTION_KEY': raw_key}):
+        # PR #275 review (CodeRabbit): _get_legacy_fernet() now ONLY
+        # reads DNA_TOKEN_LEGACY_KEY (no DNA_TOKEN_ENCRYPTION_KEY
+        # fallback), so we must set it explicitly. Setting both env
+        # vars makes the test independent of CI shell state.
+        with patch.dict(
+            os.environ,
+            {
+                'DNA_TOKEN_ENCRYPTION_KEY': raw_key,
+                'DNA_TOKEN_LEGACY_KEY': raw_key,
+            },
+            clear=False,
+        ):
             self.assertEqual(
                 gpv.decrypt_token(old_ciphertext), 'legacy_token_value',
             )
+
+    def test_decrypt_no_legacy_fallback_when_legacy_key_unset(self):
+        """PR #275: when DNA_TOKEN_LEGACY_KEY is unset the legacy
+        fallback is disabled. Operators rely on this to mark the
+        end of the rollout window."""
+        import base64
+        import hashlib
+        from cryptography.fernet import Fernet, InvalidToken
+        from security.api import genetic_password_views as gpv
+
+        raw_key = 'production-key-material'
+        legacy_derived = hashlib.sha256(raw_key.encode()).digest()
+        legacy = Fernet(base64.urlsafe_b64encode(legacy_derived))
+        old_ciphertext = legacy.encrypt(b'legacy_token_value')
+
+        with patch.dict(
+            os.environ,
+            {'DNA_TOKEN_ENCRYPTION_KEY': raw_key},
+            clear=False,
+        ):
+            os.environ.pop('DNA_TOKEN_LEGACY_KEY', None)
+            with self.assertRaises(InvalidToken):
+                gpv.decrypt_token(old_ciphertext)
 
     def test_new_ciphertext_not_decryptable_with_legacy_only(self):
         """Sanity: the new HKDF scheme actually changes the key — the
