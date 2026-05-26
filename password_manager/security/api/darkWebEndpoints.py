@@ -92,13 +92,31 @@ class DarkWebViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
     
-    # Phase E / E2 (2026-05): cache key prefix + TTL for vault-scan
-    # task ownership. Matches Celery's default ``result_expires=86400``
-    # so a task that finishes inside that window is still attributable
-    # to its owner. If you change Celery's result_expires, change this
-    # to match.
+    # Phase E / E2 (2026-05): cache key prefix for vault-scan task
+    # ownership. The TTL is derived from Celery's ``result_expires``
+    # setting so the cache entry expires together with the underlying
+    # task result — there's no point remembering the owner of a task
+    # whose result has been purged from the Celery backend. Default
+    # is 3600s (1h) matching the project's celery.py.
+    #
+    # PR #276 review (Codex P1): the cache here is Django's default
+    # ``django.core.cache.cache``. In a multi-worker deployment this
+    # MUST be a shared backend (Redis, Memcached) — the per-process
+    # ``LocMemCache`` default would route writes in scan_vault to one
+    # worker's memory and reads in scan_status to another's, producing
+    # spurious 404s for the rightful owner. This codebase's production
+    # CACHES config sets ``USE_REDIS_CACHE=True`` which switches the
+    # default to Redis; the same env var also gates the rate-limiting
+    # cache (see settings/base.py:328-393). Local dev with a single
+    # Daphne process is fine on LocMemCache.
     _SCAN_OWNER_CACHE_PREFIX = 'scan_task_owner:'
-    _SCAN_OWNER_CACHE_TTL = 86400  # 24h
+
+    @classmethod
+    def _scan_owner_cache_ttl(cls):
+        # Read from Celery config so the two values can't drift.
+        # Falls back to 3600s matching the celery.py default.
+        from django.conf import settings as _s
+        return int(getattr(_s, 'CELERY_RESULT_EXPIRES', 3600) or 3600)
 
     @action(detail=False, methods=['post'])
     def scan_vault(self, request):
@@ -110,6 +128,9 @@ class DarkWebViewSet(viewsets.ViewSet):
         authenticated user with a leaked task_id (logs, browser
         history, frontend telemetry) could read another user's scan
         result — a classic IDOR.
+
+        See the class-level docstring on _SCAN_OWNER_CACHE_PREFIX for
+        the multi-worker cache-backend requirement.
         """
         from django.core.cache import cache
 
@@ -117,7 +138,7 @@ class DarkWebViewSet(viewsets.ViewSet):
         cache.set(
             self._SCAN_OWNER_CACHE_PREFIX + task.id,
             request.user.id,
-            timeout=self._SCAN_OWNER_CACHE_TTL,
+            timeout=self._scan_owner_cache_ttl(),
         )
 
         return Response({

@@ -78,10 +78,14 @@ class ScrubStrTests(SimpleTestCase):
 class ScrubMappingTests(SimpleTestCase):
 
     def test_redacts_sensitive_keys(self):
+        # Test fixture values are intentionally low-entropy so Gitleaks
+        # doesn't flag them as plausible real secrets in the test file.
+        # The scrubber's behaviour depends on KEY NAMES, not value
+        # contents, so a dummy literal is sufficient.
         out = scrub_mapping({
             'user_id': 7,
-            'password': 'hunter2',
-            'verification_token': 'V-12345',
+            'password': 'dummy-password-value',  # pragma: allowlist secret
+            'verification_token': 'dummy-fixture-token',  # pragma: allowlist secret
             'email': 'a@b.com',
         })
         self.assertEqual(out['user_id'], 7)
@@ -144,7 +148,9 @@ class ScrubEventBreadcrumbsTests(SimpleTestCase):
                     {
                         'category': 'log',
                         'data': {
-                            'verification_token': 'V-secret-12345',
+                            # Low-entropy fixture — see comment in
+                            # test_redacts_sensitive_keys above.
+                            'verification_token': 'dummy-fixture-token',  # pragma: allowlist secret
                             'user_id': 9,
                         },
                     },
@@ -186,7 +192,9 @@ class ScrubEventFrameLocalsTests(SimpleTestCase):
                             'function': 'notify_beneficiary',
                             'vars': {
                                 'beneficiary_id': 7,
-                                'verification_token': 'V-secret-xyz',
+                                # Low-entropy fixture — see comment in
+                                # test_redacts_sensitive_keys above.
+                                'verification_token': 'dummy-fixture-token',  # pragma: allowlist secret
                                 'message': 'Email body with the token in it',
                             },
                         }],
