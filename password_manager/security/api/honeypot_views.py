@@ -472,16 +472,42 @@ class ActivityListView(APIView):
 
 class HoneypotWebhookView(APIView):
     """Webhook endpoint for email provider callbacks."""
-    
+
     permission_classes = []  # Public endpoint with signature verification
-    
+
+    # Phase E / E5 (2026-05): restrict DRF's default parser set to JSON
+    # only. Previously this view accepted ``application/json``,
+    # ``application/x-www-form-urlencoded``, AND ``multipart/form-data``
+    # because ``parser_classes`` was unset and DRF defaults to all
+    # three. Combined with ``permission_classes = []``, that gave an
+    # unauthenticated attacker three parser surfaces to probe. Locking
+    # to JSON eliminates two of them; the surviving JSON path is
+    # already gated by the HMAC signature check in
+    # ``_verify_signature``.
+    from rest_framework.parsers import JSONParser as _JSONParser
+    parser_classes = [_JSONParser]
+
     def post(self, request):
         """Process incoming email webhook."""
+        # Phase E / E5: Content-Type guard. Real providers all send
+        # ``application/json`` per their integration docs (SimpleLogin,
+        # AnonAddy, custom SMTP relays). Reject anything else with 415
+        # so a misconfigured client gets a clear signal instead of a
+        # silent signature-failure 401. DRF would have already rejected
+        # non-JSON in the parser step above; this just produces the
+        # better HTTP status code.
+        ctype = (request.content_type or '').split(';', 1)[0].strip().lower()
+        if ctype != 'application/json':
+            return Response(
+                {'error': 'application/json required'},
+                status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            )
+
         service = get_honeypot_service()
-        
+
         # Get provider from header
         provider = request.headers.get('X-Honeypot-Provider', 'unknown')
-        
+
         # Verify webhook signature
         signature = request.headers.get('X-Webhook-Signature', '')
         if not self._verify_signature(request.body, signature, provider):

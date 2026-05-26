@@ -1081,6 +1081,53 @@ class HoneypotWebhookTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    # -----------------------------------------------------------------
+    # Phase E / E5 (2026-05): Content-Type / parser-class hardening.
+    # -----------------------------------------------------------------
+
+    @override_settings(SIMPLELOGIN_WEBHOOK_SECRET='test-webhook-secret')
+    def test_webhook_rejects_form_encoded(self):
+        """The view previously accepted form-urlencoded payloads via
+        DRF's default parser set. E5 restricts ``parser_classes`` to
+        JSON only and adds an explicit Content-Type check so a
+        form-encoded probe gets a clean 415."""
+        url = reverse('honeypot-webhook')
+        response = self.client.post(
+            url,
+            data='recipient=canary@simplelogin.com&is_spam=true',
+            content_type='application/x-www-form-urlencoded',
+            HTTP_X_HONEYPOT_PROVIDER='simplelogin',
+            HTTP_X_WEBHOOK_SIGNATURE='0' * 64,
+        )
+        self.assertEqual(
+            response.status_code, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+
+    @override_settings(SIMPLELOGIN_WEBHOOK_SECRET='test-webhook-secret')
+    def test_webhook_rejects_multipart(self):
+        """Same rationale as test_webhook_rejects_form_encoded — the
+        multipart parser surface is also locked off in E5."""
+        url = reverse('honeypot-webhook')
+        # Build a minimal multipart body manually.
+        boundary = '----testboundary'
+        body = (
+            f'--{boundary}\r\n'
+            'Content-Disposition: form-data; name="recipient"\r\n'
+            '\r\n'
+            'canary@simplelogin.com\r\n'
+            f'--{boundary}--\r\n'
+        ).encode('utf-8')
+        response = self.client.post(
+            url,
+            data=body,
+            content_type=f'multipart/form-data; boundary={boundary}',
+            HTTP_X_HONEYPOT_PROVIDER='simplelogin',
+            HTTP_X_WEBHOOK_SIGNATURE='0' * 64,
+        )
+        self.assertEqual(
+            response.status_code, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+
 
 # =============================================================================
 # Celery Task Tests
