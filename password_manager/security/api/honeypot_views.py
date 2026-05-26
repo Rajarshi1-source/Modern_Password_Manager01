@@ -14,6 +14,7 @@ import json
 import logging
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.parsers import JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -484,8 +485,9 @@ class HoneypotWebhookView(APIView):
     # to JSON eliminates two of them; the surviving JSON path is
     # already gated by the HMAC signature check in
     # ``_verify_signature``.
-    from rest_framework.parsers import JSONParser as _JSONParser
-    parser_classes = [_JSONParser]
+    # PR #276 review (CodeRabbit nit): JSONParser import is now at
+    # module level for readability.
+    parser_classes = [JSONParser]
 
     def post(self, request):
         """Process incoming email webhook."""

@@ -113,10 +113,28 @@ class DarkWebViewSet(viewsets.ViewSet):
 
     @classmethod
     def _scan_owner_cache_ttl(cls):
-        # Read from Celery config so the two values can't drift.
-        # Falls back to 3600s matching the celery.py default.
+        """Return the cache TTL in seconds, derived from Celery config.
+
+        ``CELERY_RESULT_EXPIRES`` can legally be either an ``int``
+        (seconds) or a ``datetime.timedelta`` (per Celery's config
+        contract — https://docs.celeryq.dev/en/stable/userguide/configuration.html
+        ). PR #276 review (CodeRabbit): the previous ``int(...)`` cast
+        worked for the int case but raised TypeError on a timedelta.
+        Handle both shapes; fall back to 3600s on missing / unparseable
+        values so a misconfigured setting can never crash scan_vault.
+        """
+        from datetime import timedelta
         from django.conf import settings as _s
-        return int(getattr(_s, 'CELERY_RESULT_EXPIRES', 3600) or 3600)
+
+        raw = getattr(_s, 'CELERY_RESULT_EXPIRES', 3600)
+        if raw is None:
+            return 3600
+        if isinstance(raw, timedelta):
+            return int(raw.total_seconds()) or 3600
+        try:
+            return int(raw) or 3600
+        except (TypeError, ValueError):
+            return 3600
 
     @action(detail=False, methods=['post'])
     def scan_vault(self, request):
