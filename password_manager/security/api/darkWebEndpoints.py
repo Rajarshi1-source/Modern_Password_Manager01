@@ -92,27 +92,68 @@ class DarkWebViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
     
+    # Phase E / E2 (2026-05): cache key prefix + TTL for vault-scan
+    # task ownership. Matches Celery's default ``result_expires=86400``
+    # so a task that finishes inside that window is still attributable
+    # to its owner. If you change Celery's result_expires, change this
+    # to match.
+    _SCAN_OWNER_CACHE_PREFIX = 'scan_task_owner:'
+    _SCAN_OWNER_CACHE_TTL = 86400  # 24h
+
     @action(detail=False, methods=['post'])
     def scan_vault(self, request):
-        """Trigger a scan of the user's vault for breached credentials"""
-        # Queue the task to scan user's vault
+        """Trigger a scan of the user's vault for breached credentials.
+
+        Phase E / E2 (2026-05): records ``cache['scan_task_owner:<id>']
+        = user.id`` so ``scan_status`` can verify the caller is the
+        task's owner before returning the result. Without this, an
+        authenticated user with a leaked task_id (logs, browser
+        history, frontend telemetry) could read another user's scan
+        result — a classic IDOR.
+        """
+        from django.core.cache import cache
+
         task = scan_user_vault.delay(request.user.id)
-        
+        cache.set(
+            self._SCAN_OWNER_CACHE_PREFIX + task.id,
+            request.user.id,
+            timeout=self._SCAN_OWNER_CACHE_TTL,
+        )
+
         return Response({
             'status': 'started',
             'task_id': task.id
         })
-    
+
     @action(detail=False, methods=['get'])
     def scan_status(self, request):
-        """Get the status of a vault scan task"""
+        """Get the status of a vault scan task.
+
+        Phase E / E2 (2026-05): verifies task ownership against the
+        cache before reading from Celery's result backend. Returns
+        404 (not 403) for "not yours" so an attacker can't enumerate
+        valid task_ids by treating 404 vs 403 as a side channel.
+        """
+        from django.core.cache import cache
+
         task_id = request.query_params.get('task_id')
         if not task_id:
             return Response(
                 {'error': 'Task ID required'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-            
+
+        # Phase E / E2: ownership check. Same response shape for
+        # "task not found in cache" and "task belongs to a different
+        # user" — both return 404 so an attacker can't distinguish
+        # via the response.
+        cached_owner_id = cache.get(self._SCAN_OWNER_CACHE_PREFIX + task_id)
+        if cached_owner_id is None or cached_owner_id != request.user.id:
+            return Response(
+                {'error': 'not_found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
         try:
             # Check celery task status
             task = scan_user_vault.AsyncResult(task_id)

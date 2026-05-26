@@ -842,15 +842,71 @@ ADVERSARIAL_AI_ENABLED = os.environ.get('ADVERSARIAL_AI_ENABLED', 'True').lower(
 # PKCE Configuration (OAuth2 Proof Key for Code Exchange)
 # =============================================================================
 # Required for public clients (mobile apps, browser extensions) that cannot
-# securely store a client_secret.
-# ACTION REQUIRED: Flip to 'True' (or set env var OAUTH_PKCE_REQUIRED=true)
-# before shipping mobile or browser-extension clients.  Without PKCE,
-# authorization-code flows for public clients are vulnerable to code
-# interception attacks.  See RFC 7636 for details.
+# securely store a client_secret. Without PKCE, authorization-code flows
+# for public clients are vulnerable to code interception attacks (RFC 7636).
+#
+# Rollout plan (Phase E / E4, 2026-05): warn-then-flip.
+#   * 2026-05 (this PR): default remains False, but startup emits a
+#     RuntimeWarning when not DEBUG and not OAUTH_PKCE_REQUIRED so the
+#     misconfiguration is visible in container logs.
+#   * 2026-07 cutover (60 days after this PR merges): default flips to
+#     True in a follow-up PR. Operators who still need the legacy
+#     behaviour can opt out via OAUTH_PKCE_REQUIRED=false.
+#   * 2026-10 EOL: the env override is removed. PKCE is always on.
+#
+# Hard-flipping now would 400 every authorization-code request from a
+# client that hasn't shipped PKCE yet. The warning gives operators a
+# release cycle to roll updated clients before the cutover.
 OAUTH_PKCE_REQUIRED = os.environ.get('OAUTH_PKCE_REQUIRED', 'False').lower() in ('true', '1', 'yes')
 OAUTH_PKCE_CODE_CHALLENGE_METHOD = 'S256'
 OAUTH_PKCE_CODE_VERIFIER_MIN_LENGTH = 43
 OAUTH_PKCE_CODE_VERIFIER_MAX_LENGTH = 128
+
+# Phase E / E4 (2026-05): visible warning when PKCE is disabled in
+# production. Skip during maintenance commands (manage.py check etc.)
+# and tests so they don't get noisy. ``_IS_MAINTENANCE_INVOCATION``
+# is computed at the bottom of this module — we re-derive it inline
+# here because the PKCE block runs earlier. Keep the derivation
+# minimal; the bottom-of-file definition is the canonical one.
+if not DEBUG and not OAUTH_PKCE_REQUIRED:
+    _is_maintenance = (
+        len(sys.argv) > 1
+        and (sys.argv[0].endswith('manage.py') or 'django' in sys.argv[0])
+    )
+    _is_test = 'test' in sys.argv or 'pytest' in sys.modules
+    if not _is_maintenance and not _is_test:
+        warnings.warn(
+            "OAUTH_PKCE_REQUIRED is False in a non-DEBUG deployment. "
+            "PKCE will become mandatory in the 2026-07 cutover. "
+            "Confirm your mobile / extension clients send "
+            "code_challenge + code_verifier before that date, then "
+            "set OAUTH_PKCE_REQUIRED=true to silence this warning.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+# =============================================================================
+# DNA-provider OAuth — redirect_uri allowlist (Phase E / E3, 2026-05)
+# =============================================================================
+# The genetic-password OAuth flow (security/api/genetic_password_views.py)
+# previously accepted any ``redirect_uri`` in the initiate request,
+# which is the classic open-redirect setup for an OAuth phishing
+# attack — attacker sets their own redirect_uri, sends the victim
+# through the provider's auth flow, harvests the code on their
+# domain. The allowlist below is the operator-controlled set of
+# redirect_uri values the view will accept.
+#
+# Format: comma-separated absolute URLs, e.g.
+#   GENETIC_OAUTH_REDIRECT_URIS=https://app.example.com/oauth/dna,https://mobile.example.com/oauth/dna
+#
+# Default is the empty list — which means the OAuth feature is OFF
+# until the operator configures at least one entry. That is the
+# correct fail-closed behaviour.
+GENETIC_OAUTH_REDIRECT_URIS = [
+    uri.strip() for uri in os.environ.get(
+        'GENETIC_OAUTH_REDIRECT_URIS', '',
+    ).split(',') if uri.strip()
+]
 
 # GeoIP Database Configuration
 # Download GeoLite2-City.mmdb and GeoLite2-Country.mmdb from MaxMind
@@ -2041,7 +2097,6 @@ SENTRY_TRACES_SAMPLE_RATE = float(os.environ.get('SENTRY_TRACES_SAMPLE_RATE', '0
 SENTRY_PROFILES_SAMPLE_RATE = float(os.environ.get('SENTRY_PROFILES_SAMPLE_RATE', '0.1'))
 
 if SENTRY_DSN:
-    import re as _sentry_re
     import sentry_sdk
     from sentry_sdk.integrations.django import DjangoIntegration
     from sentry_sdk.integrations.celery import CeleryIntegration
@@ -2049,118 +2104,30 @@ if SENTRY_DSN:
     from sentry_sdk.integrations.redis import RedisIntegration
 
     # ------------------------------------------------------------------
-    # Audit-fix C7 (2026-05): scrub blockchain secrets and addresses from
-    # Sentry payloads. `send_default_pii=False` blocks request PII, but
-    # transaction `from`/`to`, a leaked private key in stack frame locals,
-    # and 0x-prefixed hex blobs are not classified as PII by Sentry and
-    # would otherwise reach the event store.
+    # Audit-fix C7 (2026-05) + Phase E / E1 (2026-05): scrub blockchain
+    # secrets, addresses, and pre-error breadcrumbs from Sentry payloads.
+    # ``send_default_pii=False`` blocks request PII, but transaction
+    # ``from``/``to``, a leaked private key in stack frame locals,
+    # 0x-prefixed hex blobs, and ``logger.info`` lines captured as
+    # breadcrumbs are not classified as PII by Sentry and would
+    # otherwise reach the event store.
+    #
+    # The scrubber primitives now live in
+    # ``password_manager.sentry_scrubbing`` so they're importable
+    # without requiring SENTRY_DSN to be set — that lets unit tests
+    # exercise the redaction logic directly. Behaviour is byte-
+    # identical to the previous inline implementation, with the
+    # breadcrumbs branch added in Phase E.
     # ------------------------------------------------------------------
-    _SENSITIVE_ENV_NAMES = (
-        # Blockchain hot-key (signs anchor txs).
-        'BLOCKCHAIN_PRIVATE_KEY',
-        # JWT signing keys — JWT_PRIVATE_KEY is the asymmetric PEM body
-        # the RS256 path uses (settings.py line ~751), JWT_SECRET_KEY is
-        # the legacy HS256 secret.
-        'JWT_SECRET_KEY', 'JWT_PRIVATE_KEY',
-        # Django master secret.
-        'SECRET_KEY',
-        # Database secrets — both env names are referenced in DATABASES
-        # config (DB_PASSWORD on line ~275, DATABASE_PASSWORD elsewhere).
-        'DATABASE_PASSWORD', 'DB_PASSWORD', 'DB_REPLICA_PASSWORD',
-        'POSTGRES_PASSWORD',
-        # Cache / queue secrets.
-        'REDIS_PASSWORD',
-        # Transactional egress secrets.
-        'EMAIL_HOST_PASSWORD', 'TWILIO_AUTH_TOKEN',
-    )
-
-    # Generic secret-key substrings. The named tuple above catches env
-    # vars; this catches the same secrets when they live inside nested
-    # config dicts under generic keys — e.g. `DATABASES['default']
-    # ['PASSWORD']`, `SIMPLE_JWT['SIGNING_KEY']`, OAuth provider
-    # `'client_secret'`, etc. Match is case-insensitive substring,
-    # checked against the upper-cased key. Added per CodeRabbit review.
-    _SENSITIVE_KEY_PATTERNS = (
-        'PASSWORD', 'SECRET', 'PRIVATE_KEY', 'SIGNING_KEY',
-        'CERTIFICATE_KEY', 'API_KEY', 'AUTH_TOKEN',
-        'ACCESS_TOKEN', 'REFRESH_TOKEN', 'CREDENTIALS',
-    )
-
-    # Match anything that looks like an Ethereum address (40 hex) or a
-    # private key / hash (64 hex). 40-char lower bound avoids false hits
-    # on ordinary 32-bit hex IDs.
-    _HEX_BLOB = _sentry_re.compile(r'0x[0-9a-fA-F]{40,}')
-
-    def _is_sensitive_key(key_str):
-        """Return True if the key is named like a secret-holding field."""
-        if not isinstance(key_str, str):
-            return False
-        upper = key_str.upper()
-        if upper in _SENSITIVE_ENV_NAMES:
-            return True
-        return any(pat in upper for pat in _SENSITIVE_KEY_PATTERNS)
-
-    def _scrub_str(s):
-        if not isinstance(s, str):
-            return s
-        return _HEX_BLOB.sub('0x<redacted>', s)
-
-    def _scrub_mapping(mapping):
-        if not isinstance(mapping, dict):
-            return mapping
-        out = {}
-        for k, v in mapping.items():
-            if _is_sensitive_key(k):
-                out[k] = '<redacted>'
-            elif isinstance(v, dict):
-                out[k] = _scrub_mapping(v)
-            elif isinstance(v, list):
-                out[k] = [
-                    _scrub_mapping(x) if isinstance(x, dict) else _scrub_str(x)
-                    for x in v
-                ]
-            else:
-                out[k] = _scrub_str(v)
-        return out
+    from ..sentry_scrubbing import scrub_event as _sentry_before_send_impl
 
     def _sentry_before_send(event, hint):
-        try:
-            for bag in ('extra', 'contexts', 'tags', 'request'):
-                if bag in event:
-                    event[bag] = _scrub_mapping(event[bag])
-            # Stack-frame locals may capture the private key on init.
-            for ex in event.get('exception', {}).get('values', []) or []:
-                stacktrace = ex.get('stacktrace') or {}
-                for frame in stacktrace.get('frames', []) or []:
-                    if 'vars' in frame:
-                        frame['vars'] = _scrub_mapping(frame['vars'])
-            # Logger-rendered records reach Sentry via `event["logentry"]`
-            # (see sentry_sdk.integrations.logging). Without this branch a
-            # call like `logger.error("auth failed for %s", secret)` would
-            # ship the formatted string + raw params into the event store.
-            # Scrub both the rendered text and the param mapping.
-            # Added per CodeRabbit review of PR #262.
-            logentry = event.get('logentry')
-            if isinstance(logentry, dict):
-                for key in ('message', 'formatted'):
-                    val = logentry.get(key)
-                    if isinstance(val, str):
-                        logentry[key] = _scrub_str(val)
-                params = logentry.get('params')
-                if isinstance(params, dict):
-                    logentry['params'] = _scrub_mapping(params)
-                elif isinstance(params, (list, tuple)):
-                    logentry['params'] = [
-                        _scrub_mapping(p) if isinstance(p, dict) else _scrub_str(p)
-                        for p in params
-                    ]
-                event['logentry'] = logentry
-            if isinstance(event.get('message'), str):
-                event['message'] = _scrub_str(event['message'])
-        except Exception:
-            # NEVER let scrubbing crash event delivery — return as-is.
-            return event
-        return event
+        # Sentry passes both ``event`` and ``hint``; the scrubber only
+        # consumes ``event``. Kept as a thin wrapper rather than
+        # passing the function directly so a future need (e.g. drop
+        # events matching some hint) can be added without changing
+        # the public ``sentry_scrubbing`` API.
+        return _sentry_before_send_impl(event)
 
     sentry_sdk.init(
         dsn=SENTRY_DSN,

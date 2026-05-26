@@ -1444,23 +1444,25 @@ class EntangledDevicePair(models.Model):
             )
         ]
     
-    def save(self, *args, **kwargs):
-        from django.db import IntegrityError, transaction
-        if self.status == 'active':
-            with transaction.atomic():
-                existing = EntangledDevicePair.objects.select_for_update().filter(
-                    device_a=self.device_a,
-                    device_b=self.device_b,
-                    status='active'
-                ).exclude(pk=self.pk).exists()
-                if existing:
-                    raise IntegrityError(
-                        "An active entangled pair already exists for these devices."
-                    )
-                super().save(*args, **kwargs)
-        else:
-            super().save(*args, **kwargs)
-    
+    # Phase E / E6 (2026-05): removed the advisory ``save()`` override.
+    # The block previously here ran a SELECT FOR UPDATE on the existing
+    # active-pair rows and raised IntegrityError when one was found.
+    # That construction is a TOCTOU pattern — ``select_for_update()``
+    # locks the rows it returns but cannot lock a row that doesn't
+    # exist yet, so two concurrent INSERTs can both observe ``existing
+    # = False`` and both call ``super().save()``. The fact that
+    # duplicates never actually appeared in production is because the
+    # ``Meta.constraints`` partial UniqueConstraint defined above
+    # (``unique_active_pair``) does the real work at the DB level —
+    # Postgres rejects the second insert with IntegrityError on the
+    # partial unique index. The application-side advisory check was
+    # redundant AND misleading (anyone reading it might assume the
+    # save() block was the safety net).
+    #
+    # Callers that want a friendly error message instead of a raw
+    # IntegrityError should ``try: pair.save() / except IntegrityError``
+    # at their call site — same surface, half the code.
+
     def __str__(self):
         return f"Entangled: {self.device_a.device_name} <-> {self.device_b.device_name} ({self.status})"
     

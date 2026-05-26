@@ -251,24 +251,54 @@ def initiate_connection(request):
     try:
         provider_type = request.data.get('provider', 'sequencing')
         redirect_uri = request.data.get('redirect_uri', '')
-        
+
         if not redirect_uri:
             return Response({
                 'success': False,
                 'error': 'redirect_uri is required'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        # Phase E / E3 (2026-05): allowlist check. Without it, an
+        # attacker can craft a state with their own redirect_uri,
+        # send the victim through the provider's auth flow, and
+        # collect the auth code on attacker-controlled origin. The
+        # allowlist is operator-configured via the
+        # ``GENETIC_OAUTH_REDIRECT_URIS`` env var (comma-separated).
+        # The default empty list rejects every request — operators
+        # MUST configure at least one entry for the feature to work.
+        from django.conf import settings
+        allowed = getattr(settings, 'GENETIC_OAUTH_REDIRECT_URIS', []) or []
+        if redirect_uri not in allowed:
+            logger.warning(
+                "OAuth initiation rejected: redirect_uri=%r not in "
+                "GENETIC_OAUTH_REDIRECT_URIS allowlist (%d entries).",
+                redirect_uri, len(allowed),
+            )
+            return Response({
+                'success': False,
+                'error': 'redirect_uri_not_allowed',
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         # Get provider
         provider = get_dna_provider(provider_type)
-        
+
         # Generate state token
         state = str(uuid.uuid4())
-        
-        # Store state in session for verification
+
+        # Phase E / E3 (2026-05): persist an explicit ``expires_at``
+        # alongside the state. The state callback (oauth_callback)
+        # rejects expired states with 400 ``state_expired``. Without
+        # a TTL, an attacker who intercepted a state token could
+        # replay it indefinitely; 10 minutes matches the typical
+        # OAuth code-exchange window.
+        _STATE_TTL_MINUTES = 10
         request.session[f'genetic_oauth_state_{state}'] = {
             'provider': provider_type,
             'redirect_uri': redirect_uri,
             'created_at': timezone.now().isoformat(),
+            'expires_at': (
+                timezone.now() + timedelta(minutes=_STATE_TTL_MINUTES)
+            ).isoformat(),
         }
         
         # Get OAuth URL
@@ -330,10 +360,36 @@ def oauth_callback(request):
                 'success': False,
                 'error': 'Invalid or expired state token'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        # Phase E / E3 (2026-05): enforce the 10-minute state TTL set
+        # in initiate_connection. Old state entries (no ``expires_at``
+        # field — pre-E3 records persisted in long-lived sessions)
+        # are treated as expired and rejected too.
+        expires_at_iso = state_data.get('expires_at')
+        if not expires_at_iso:
+            del request.session[f'genetic_oauth_state_{state}']
+            return Response({
+                'success': False,
+                'error': 'state_expired'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            expires_at_dt = datetime.fromisoformat(expires_at_iso)
+        except (TypeError, ValueError):
+            del request.session[f'genetic_oauth_state_{state}']
+            return Response({
+                'success': False,
+                'error': 'state_expired'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        if timezone.now() > expires_at_dt:
+            del request.session[f'genetic_oauth_state_{state}']
+            return Response({
+                'success': False,
+                'error': 'state_expired'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         provider_type = state_data['provider']
         redirect_uri = state_data['redirect_uri']
-        
+
         # Clean up state
         del request.session[f'genetic_oauth_state_{state}']
         
