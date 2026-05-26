@@ -24,7 +24,7 @@ import secrets
 import logging
 from typing import Tuple, Optional, Dict, Any
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as _dt_timezone
 from enum import Enum
 import base64
 import json
@@ -35,6 +35,30 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_naive_now_to_match(other: datetime) -> datetime:
+    """Return a 'now' datetime whose tz-awareness matches ``other``.
+
+    Phase F / F1 (2026-05): the time-lock service historically used
+    bare ``datetime.now()`` (tz-naive) but ``capsule.unlock_at`` can
+    arrive tz-aware from Django models that default to
+    ``timezone.now()`` (Django USE_TZ=True). Comparing the two raises
+    ``TypeError: can't compare offset-naive and offset-aware
+    datetimes`` — which used to manifest as a 500 on the unlock-capsule
+    endpoint (the D5 regression test had to mock around it).
+
+    Helper produces a 'now' that matches the input's awareness so the
+    subsequent ``now < other`` / ``other - now`` arithmetic works
+    regardless of which mode the caller stored the unlock time in.
+    Does NOT change ``other`` — the caller still gets back whichever
+    awareness the model layer chose to persist.
+    """
+    if other is None:
+        return datetime.now()
+    if other.tzinfo is None:
+        return datetime.now()  # both naive
+    return datetime.now(tz=_dt_timezone.utc)  # both aware (UTC)
 
 
 # =============================================================================
@@ -230,8 +254,10 @@ class ServerTimeLockService:
         Returns:
             Status dictionary with remaining time
         """
-        now = datetime.now()
-        
+        # F1: handle both naive and TZ-aware unlock_at — see
+        # _coerce_naive_now_to_match docstring.
+        now = _coerce_naive_now_to_match(capsule.unlock_at)
+
         if capsule.status in [TimeLockStatus.CANCELLED, TimeLockStatus.EXPIRED]:
             return {
                 'status': capsule.status.value,
@@ -267,11 +293,14 @@ class ServerTimeLockService:
         Raises:
             ValueError: If capsule is still locked
         """
-        now = datetime.now()
-        
+        # F1: handle both naive and TZ-aware unlock_at — production
+        # Django models default to ``timezone.now()`` (TZ-aware),
+        # but in-process callers may still pass naive datetimes.
+        now = _coerce_naive_now_to_match(capsule.unlock_at)
+
         if capsule.status == TimeLockStatus.CANCELLED:
             raise ValueError("Capsule has been cancelled")
-        
+
         if now < capsule.unlock_at:
             remaining = int((capsule.unlock_at - now).total_seconds())
             raise ValueError(f"Capsule still locked. {remaining} seconds remaining.")

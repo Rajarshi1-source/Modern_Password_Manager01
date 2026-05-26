@@ -487,19 +487,177 @@ class EntangledDevicePairModelTests(TestCase):
     def test_get_other_device(self):
         """Test getting the other device in a pair."""
         from security.models import EntangledDevicePair
-        
+
         pair = EntangledDevicePair.objects.create(
             user=self.user,
             device_a=self.device_a,
             device_b=self.device_b,
             status='active'
         )
-        
+
         other = pair.get_other_device(str(self.device_a.device_id))
         self.assertEqual(other, self.device_b)
-        
+
         other = pair.get_other_device(str(self.device_b.device_id))
         self.assertEqual(other, self.device_a)
+
+    # -----------------------------------------------------------------
+    # Phase F / F2 (2026-05): regression tests for the partial
+    # UniqueConstraint that prevents duplicate active pairs.
+    #
+    # Phase E / E6 removed the advisory ``save()`` override that did
+    # ``select_for_update().filter().exists()`` because the override
+    # was a TOCTOU pattern (couldn't actually prevent concurrent
+    # INSERTs) and was redundant — the real defence is the partial
+    # UniqueConstraint with ``condition=Q(status='active')`` defined
+    # on the model Meta. E6's commit message claimed "duplicates never
+    # actually appeared in production is because the constraints
+    # block does the real work at the DB level" but added no test
+    # proving that claim. F2 fixes the test gap.
+    # -----------------------------------------------------------------
+
+    def test_sequential_duplicate_active_pair_raises_integrity_error(self):
+        """Inserting a second active pair for the same (device_a, device_b)
+        must raise IntegrityError. This pins the basic behaviour of the
+        partial UniqueConstraint without needing concurrency."""
+        from django.db import IntegrityError
+        from security.models import EntangledDevicePair
+
+        EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device_a,
+            device_b=self.device_b,
+            status='active',
+        )
+        with self.assertRaises(IntegrityError):
+            EntangledDevicePair.objects.create(
+                user=self.user,
+                device_a=self.device_a,
+                device_b=self.device_b,
+                status='active',
+            )
+
+    def test_duplicate_pair_allowed_when_first_is_not_active(self):
+        """The constraint is PARTIAL — gated on ``status='active'``.
+        A second pair for the same devices is allowed if the first
+        moves out of the 'active' state (e.g. revoked / suspended)."""
+        from security.models import EntangledDevicePair
+
+        first = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device_a,
+            device_b=self.device_b,
+            status='active',
+        )
+        first.status = 'revoked'
+        first.save(update_fields=['status'])
+
+        # Now a fresh 'active' pair must succeed.
+        second = EntangledDevicePair.objects.create(
+            user=self.user,
+            device_a=self.device_a,
+            device_b=self.device_b,
+            status='active',
+        )
+        self.assertNotEqual(first.pk, second.pk)
+        self.assertEqual(second.status, 'active')
+
+
+class EntangledDevicePairConcurrentInsertTests(TransactionTestCase):
+    """Phase F / F2 (2026-05): the partial UniqueConstraint must catch
+    concurrent INSERTs across worker threads, not just sequential ones.
+
+    Uses ``TransactionTestCase`` (not ``TestCase``) so each thread's
+    INSERT commits to the real DB — the regular TestCase wraps every
+    test in a single transaction that's rolled back, which would
+    serialise the threads and turn this into a sequential test.
+
+    Even with TransactionTestCase, threaded Django tests have known
+    quirks (per-thread connections, the default in-memory SQLite
+    being process-shared but connection-isolated, etc.). The test is
+    skipped on SQLite because partial unique indexes with
+    ``condition=Q(...)`` are Postgres-only at the DB level — Django
+    builds a UNIQUE index on SQLite without the partial predicate,
+    which fails the second test in this file (duplicate-allowed-when-
+    not-active) for the wrong reason.
+    """
+
+    def setUp(self):
+        from security.models import UserDevice
+        from django.contrib.auth.models import User as _User
+        self.user = _User.objects.create_user(
+            username='ctest_user', email='ctest@example.com',
+            password='ctestpass123',
+        )
+        self.device_a = UserDevice.objects.create(
+            user=self.user, device_name='Concurrent A',
+            device_type='mobile', browser='Safari',
+            os_info='iOS 17', ip_address='10.0.0.1',
+        )
+        self.device_b = UserDevice.objects.create(
+            user=self.user, device_name='Concurrent B',
+            device_type='desktop', browser='Chrome',
+            os_info='macOS 14', ip_address='10.0.0.2',
+        )
+
+    def test_concurrent_inserts_yield_exactly_one_success(self):
+        """Two threads attempting to insert the same active pair
+        simultaneously — exactly one must succeed, the other must
+        raise IntegrityError."""
+        from django.db import IntegrityError, connection, connections
+        if connection.vendor == 'sqlite':
+            self.skipTest(
+                "Partial UniqueConstraint with condition=Q(...) is "
+                "Postgres-only at the DB level. Test runs against "
+                "Postgres CI."
+            )
+
+        from security.models import EntangledDevicePair
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        start_gate = threading.Event()
+        results = {'success': 0, 'integrity_error': 0, 'other': 0}
+        results_lock = threading.Lock()
+
+        def insert_pair():
+            # Wait so both threads attempt the INSERT as close to
+            # simultaneously as possible.
+            start_gate.wait(timeout=5)
+            try:
+                EntangledDevicePair.objects.create(
+                    user=self.user,
+                    device_a=self.device_a,
+                    device_b=self.device_b,
+                    status='active',
+                )
+                with results_lock:
+                    results['success'] += 1
+            except IntegrityError:
+                with results_lock:
+                    results['integrity_error'] += 1
+            except Exception:
+                with results_lock:
+                    results['other'] += 1
+            finally:
+                # Per-thread connections leak unless closed explicitly.
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(insert_pair) for _ in range(2)]
+            start_gate.set()
+            for f in futures:
+                f.result(timeout=10)
+
+        self.assertEqual(
+            results['success'], 1,
+            msg=f"Expected exactly one success; got {results!r}",
+        )
+        self.assertEqual(
+            results['integrity_error'], 1,
+            msg=f"Expected exactly one IntegrityError; got {results!r}",
+        )
+        self.assertEqual(results['other'], 0)
 
 
 class SharedRandomnessPoolModelTests(TestCase):

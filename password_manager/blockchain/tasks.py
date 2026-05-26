@@ -287,11 +287,29 @@ def verify_random_proofs(sample_size: int = None):
                 proof.verified = False
                 proof.save(update_fields=['verified'])
                 mismatch_count += 1
+                # Phase F / F5 (2026-05): emit the mismatch with explicit
+                # ``extra`` context so Sentry's structured event has the
+                # fields an on-call engineer needs WITHOUT re-querying
+                # the DB. The Sentry scrubber (Phase E / E1) won't
+                # touch these keys — none of them match the
+                # ``TOKEN`` / ``SECRET`` / ``KEY`` patterns. The
+                # merkle_root + commitment_hash are public on-chain
+                # data; tx_hash + anchor_id let the operator pivot
+                # directly into Arbiscan / the DB without grepping logs.
                 logger.error(
                     "verify_random_proofs: MISMATCH for proof %s "
                     "(anchor tx %s, merkle_root %s) — on-chain "
                     "verifyCommitment returned False",
                     proof.pk, anchor.tx_hash, proof.merkle_root,
+                    extra={
+                        'proof_pk': str(proof.pk),
+                        'anchor_id': str(getattr(anchor, 'pk', '')),
+                        'anchor_tx_hash': anchor.tx_hash,
+                        'merkle_root': proof.merkle_root,
+                        'commitment_hash': proof.commitment_hash,
+                        'proof_leaf_index': proof.leaf_index,
+                        'verifier_event_type': 'merkle_proof_mismatch',
+                    },
                 )
 
         logger.info(

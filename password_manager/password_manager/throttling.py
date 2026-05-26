@@ -169,6 +169,37 @@ class DeadDropCollectThrottle(ScopedRateThrottle):
         }
 
 
+class HoneypotWebhookThrottle(ScopedRateThrottle):
+    """Phase F / F4 (2026-05): per-IP rate limit on the honeypot webhook.
+
+    The endpoint is intentionally public (``permission_classes = []``)
+    and gated only by an HMAC signature check. That keeps the
+    legitimate provider integrations simple but leaves the endpoint
+    exposed to two abuse patterns the signature check alone doesn't
+    address:
+
+      1. Log flooding — an attacker can hammer the endpoint with
+         wrong-signature requests; every miss writes a
+         ``logger.warning(f"Invalid webhook signature from {provider}")``
+         line and the log file grows unbounded.
+      2. Timing-oracle probing — repeated requests at varying rates
+         could be used to infer per-request handling cost.
+
+    Per-IP throttle (default 60/min via ``honeypot_webhook`` scope)
+    closes both. Real providers fan in from a small set of source
+    IPs and rarely exceed a few req/sec; legit traffic stays well
+    under the limit.
+    """
+    scope = 'honeypot_webhook'
+
+    def get_cache_key(self, request, view):
+        # Webhook is unauthenticated by design — always key by IP.
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': self.get_ident(request),
+        }
+
+
 def _coerce_uuid_str(value) -> Optional[str]:
     """Return a canonical UUID string if ``value`` parses as one, else ``None``.
 

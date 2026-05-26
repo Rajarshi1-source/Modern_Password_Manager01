@@ -197,14 +197,45 @@ class TimeLockServiceTest(TestCase):
     def test_server_capsule_unlock_after_delay(self):
         """Test capsule can be unlocked after delay."""
         data = b"UnlockedPassword"
-        
+
         # Create capsule with past unlock time (simulate delay expired)
         capsule = self.server_service.create_capsule(data, 60)
         capsule.unlock_at = datetime.now() - timedelta(seconds=1)
-        
+
         # Should be unlockable now
         result = self.server_service.unlock(capsule)
         self.assertEqual(result, data)
+
+    def test_server_capsule_unlock_with_tz_aware_unlock_at(self):
+        """Phase F / F1 (2026-05): the unlock path used to raise
+        ``TypeError: can't compare offset-naive and offset-aware
+        datetimes`` when ``capsule.unlock_at`` was tz-aware (the
+        production Django default via ``USE_TZ=True``). The D5 test in
+        TimeLockCapsuleOwnerFilterRegressionTest had to mock the
+        service to dodge this bug. F1 added a coercion helper so both
+        modes work. This test pins the fix at the service layer."""
+        from datetime import timezone as _tz
+        data = b"TZAwareUnlockedPassword"
+        capsule = self.server_service.create_capsule(data, 60)
+        # Force tz-aware unlock time matching Django's production default.
+        capsule.unlock_at = datetime.now(tz=_tz.utc) - timedelta(seconds=1)
+
+        # Pre-F1 this raised TypeError. Post-F1 it returns the data.
+        result = self.server_service.unlock(capsule)
+        self.assertEqual(result, data)
+
+    def test_server_capsule_check_status_with_tz_aware_unlock_at(self):
+        """Sister test for ``check_status`` — the same helper is wired
+        on both the unlock path and the status-check path."""
+        from datetime import timezone as _tz
+        data = b"TZAwareStatusCheck"
+        capsule = self.server_service.create_capsule(data, 60)
+        capsule.unlock_at = datetime.now(tz=_tz.utc) + timedelta(seconds=120)
+
+        # Must not raise TypeError; must report still locked.
+        status = self.server_service.check_status(capsule)
+        self.assertFalse(status['can_unlock'])
+        self.assertGreater(status['time_remaining_seconds'], 0)
     
     def test_client_puzzle_creation(self):
         """Test client-side RSA puzzle creation."""

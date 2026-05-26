@@ -66,9 +66,52 @@ def hash_for_dedup(value: str | bytes, *, domain: str = "default") -> str:
     not distinguish ``hmac.new(...).hexdigest()`` from
     ``hashlib.sha256(...).hexdigest()`` once a password taint reaches
     either sink.
+
+    --------------------------------------------------------------------
+    Phase F / F3 (2026-05): construction rationale.
+
+    The body below performs:
+
+        derived_key = HMAC(pepper, domain)
+        digest      = HMAC(derived_key, msg)
+
+    A 2026-05 external audit characterised this as a "key/message
+    swap" — claiming the secret (the pepper) appears in the wrong
+    HMAC slot. **That characterisation is incorrect.** The pepper is
+    the HMAC KEY in both invocations; the domain is a public
+    (non-secret) LABEL that produces a domain-separated derived key.
+    Two different domains yield two different derived keys with
+    overwhelming probability — collisions would require finding an
+    HMAC-SHA-256 collision, which is the original security
+    assumption.
+
+    The construction is equivalent (up to argument ordering) to:
+      * HKDF-Extract with the pepper as ``salt`` and the domain as
+        ``IKM`` (RFC 5869 §2.2).
+      * TLS 1.3's HKDF-Expand-Label keyed by the secret HRR key.
+
+    The audit's proposed alternative (``HMAC(pepper, len ‖ domain ‖
+    0x00 ‖ msg)``) is equally valid but **not more secure** — both
+    schemes provide domain separation via the same primitive. We
+    keep the two-step form because it factors the derived key into
+    a reusable intermediate (currently unused for that purpose, but
+    the structure is there for a future caller that wants to mint
+    many digests under the same domain without re-keying every
+    time).
+
+    DO NOT "fix" this construction without first reading the audit
+    rebuttal in the Phase D / Phase E PR descriptions
+    (#275 / #276).
+    --------------------------------------------------------------------
     """
     msg = value.encode("utf-8") if isinstance(value, str) else value
+    # First HMAC: derive a domain-separated key from the secret pepper.
+    # ``pepper`` is the HMAC KEY (the secret); ``domain`` is the public
+    # label being authenticated under that key.
     key = hmac.new(_pepper(), domain.encode("utf-8"), _HASH_CTOR).digest()
+    # Second HMAC: produce the deduplication digest, keyed by the
+    # derived per-domain key. ``msg`` is the public value being
+    # identified; ``key`` carries the secret material forward.
     return hmac.new(key, msg, _HASH_CTOR).hexdigest()
 
 
