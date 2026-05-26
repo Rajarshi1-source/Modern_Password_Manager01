@@ -622,8 +622,21 @@ class EntangledDevicePairConcurrentInsertTests(TransactionTestCase):
 
         def insert_pair():
             # Wait so both threads attempt the INSERT as close to
-            # simultaneously as possible.
-            start_gate.wait(timeout=5)
+            # simultaneously as possible. PR #277 review (CodeRabbit):
+            # check ``wait()``'s return value — if the gate never
+            # opens within the timeout the thread MUST NOT proceed,
+            # because the assertion below relies on both threads
+            # racing the same insert. Without this check a stuck
+            # thread could silently invalidate the concurrency test
+            # by going sequential (or appearing to "pass" by skipping
+            # one insert entirely).
+            if not start_gate.wait(timeout=5):
+                with results_lock:
+                    results['other'] += 1
+                # Record the timeout but don't try to insert — the
+                # test-level assertions will surface ``other > 0``
+                # as a failure with a clear message.
+                return
             try:
                 EntangledDevicePair.objects.create(
                     user=self.user,
