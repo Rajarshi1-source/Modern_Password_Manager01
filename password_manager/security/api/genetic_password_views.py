@@ -133,7 +133,14 @@ def _get_fernet():
     from cryptography.fernet import Fernet
     from django.core.exceptions import ImproperlyConfigured
 
-    raw_key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '').encode('utf-8')
+    # PR #275 follow-up review (CodeRabbit): ``.strip()`` so the
+    # primary path matches the legacy path's whitespace handling at
+    # _get_legacy_fernet below. Without this, an operator who pastes
+    # a key with trailing whitespace into DNA_TOKEN_ENCRYPTION_KEY
+    # would derive a DIFFERENT Fernet key than the same value pasted
+    # into DNA_TOKEN_LEGACY_KEY — silently breaking the legacy
+    # decrypt fallback during rollout.
+    raw_key = os.environ.get('DNA_TOKEN_ENCRYPTION_KEY', '').strip().encode('utf-8')
     if not raw_key:
         raise ImproperlyConfigured(
             "DNA_TOKEN_ENCRYPTION_KEY must be set explicitly. "
@@ -207,8 +214,11 @@ def decrypt_token(encrypted: bytes) -> str:
         # event, skewing the metric operators use to decide when to
         # turn the fallback off.
         decrypted = legacy.decrypt(encrypted).decode('utf-8')
-        import logging as _logging
-        _logging.getLogger(__name__).info(
+        # PR #275 follow-up: reuse the module-level ``logger`` defined
+        # at line 56 instead of re-resolving the same name via a local
+        # ``import logging`` — the previous duplication shadowed the
+        # global on every call and was a CodeRabbit nit.
+        logger.info(
             "decrypt_token: legacy-key fallback used; row will be "
             "re-encrypted under new HKDF key on next save."
         )

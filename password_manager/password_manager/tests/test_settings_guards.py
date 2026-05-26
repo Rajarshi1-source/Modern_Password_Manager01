@@ -78,6 +78,25 @@ class JWTSigningKeyGuardTest(TestCase):
         })
         self.assertIn('SETTINGS_LOADED', stdout)
 
+    def test_guard_fires_with_whitespace_only_jwt_private_key(self):
+        """PR #275 review (CodeRabbit): pin the .strip() normalization.
+
+        ``os.environ.get('JWT_PRIVATE_KEY')`` returns whitespace
+        unchanged. Without the ``(... or '').strip()`` in the guard,
+        a value of ``"   "`` would (a) bypass the fail-closed check
+        and (b) become the live HS256 signing key — three spaces is a
+        trivially-guessable JWT secret. Treat whitespace-only values
+        identically to "env var missing".
+        """
+        rc, stdout, stderr = _run_settings_import_in_subprocess({
+            'DEBUG': 'False',
+            'SECRET_KEY': 'test-secret',
+            'USE_REDIS_CHANNELS': 'True',
+            'JWT_PRIVATE_KEY': '   ',  # whitespace-only
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('JWT_PRIVATE_KEY', stdout + stderr)
+
     def test_guard_silent_during_manage_py_check(self):
         """``python manage.py check`` is exempt — settings load even
         without JWT_PRIVATE_KEY so CI's deploy-check doesn't break."""
