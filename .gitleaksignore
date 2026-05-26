@@ -72,3 +72,15 @@ ebc4be373d5c16adfef7bfc63517f82250006659:password_manager/security/tests/test_ad
 ebc4be373d5c16adfef7bfc63517f82250006659:password_manager/security/tests/test_adaptive_password.py:generic-api-key:421
 ebc4be373d5c16adfef7bfc63517f82250006659:password_manager/security/tests/test_adaptive_password.py:generic-api-key:88
 ebc4be373d5c16adfef7bfc63517f82250006659:tests/functional/test_vault_operations.py:generic-api-key:54
+
+# PR #276 (Phase E) — test fixture strings on commit 4c1822a (the
+# original Phase E commit) used ``V-secret-12345`` / ``V-secret-xyz``
+# / ``V-12345`` as ``verification_token`` fixture values. The next
+# commit (abadcf7) replaced them with low-entropy literals + pragma
+# allowlist annotations, but Gitleaks scans the full git history and
+# still flags the historical commit. Pinning the fingerprints here so
+# the alert doesn't reappear on every PR run. The CURRENT state of
+# test_sentry_scrubbing.py has no high-entropy literals.
+4c1822a99e71781e854b17fbb704e977c52b3a27:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:84
+4c1822a99e71781e854b17fbb704e977c52b3a27:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:147
+4c1822a99e71781e854b17fbb704e977c52b3a27:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:189
