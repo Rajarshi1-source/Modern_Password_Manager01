@@ -266,6 +266,31 @@ class DuressCodeService:
                 matched_code = code
 
         return matched_code
+
+    # Phase D / D3 (PR #275 CI fix): public alias of ``_check_duress_codes``.
+    # The duress-test API endpoint (``test_duress_activation``) needs to
+    # verify the submitted code string against the user's active codes
+    # WITHOUT going through ``verify_password_or_duress`` (which expects
+    # the master-password vs duress-code disambiguation). The private
+    # ``_check_duress_codes`` already does exactly the right thing —
+    # iterates all codes, constant-time across the set — but calling
+    # a private method from the view layer is a code smell. This
+    # public alias gives the API a stable contract to depend on; both
+    # paths share the same implementation so the timing guarantees
+    # carry over.
+    def verify_input_code(
+        self,
+        user: User,
+        input_code: str,
+    ) -> Optional[DuressCode]:
+        """Return the matching active DuressCode, or None.
+
+        Constant-time across the user's set of active codes (iterates
+        all and never short-circuits) and across match/no-match
+        outcomes (Argon2.verify / hmac.compare_digest are constant-
+        time per check).
+        """
+        return self._check_duress_codes(user, input_code)
     
     # =========================================================================
     # Duress Activation
