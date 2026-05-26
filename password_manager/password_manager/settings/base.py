@@ -505,6 +505,14 @@ REST_FRAMEWORK = {
         'analytics_track': '30/minute',   # Anonymous analytics submission (Item #3)
         'what_if_simulation': '10/hour',  # CPU-intensive what-if scenarios
         'deaddrop_collect': '5/minute',   # Fragment collection per IP
+        # Phase F / F4 (2026-05): per-IP throttle on the unauthenticated
+        # honeypot webhook (security/api/honeypot_views.HoneypotWebhookView).
+        # Legitimate providers (SimpleLogin, AnonAddy, custom SMTP) fan in
+        # from a small fixed set of source IPs and rarely exceed a few
+        # req/sec. The throttle closes the log-flood vector — a wrong-
+        # signature attacker can no longer pump unlimited warnings into
+        # the log file.
+        'honeypot_webhook': os.environ.get('RATE_LIMIT_HONEYPOT_WEBHOOK', '60/minute'),
         'mesh_node_ping': '60/minute',    # Mesh node heartbeat ceiling per (user, node)
         'personality_challenge': '20/hour',   # Challenge start / answer submissions
         'personality_inference': '6/hour',    # On-demand profile inference

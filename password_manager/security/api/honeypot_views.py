@@ -20,6 +20,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils import timezone
 
+# Phase F / F4 (2026-05): per-IP throttle on the public webhook view.
+from password_manager.throttling import HoneypotWebhookThrottle
+
 from ..services.honeypot_service import get_honeypot_service
 from ..models import (
     HoneypotConfiguration,
@@ -488,6 +491,14 @@ class HoneypotWebhookView(APIView):
     # PR #276 review (CodeRabbit nit): JSONParser import is now at
     # module level for readability.
     parser_classes = [JSONParser]
+
+    # Phase F / F4 (2026-05): per-IP throttle (default 60/min via the
+    # ``honeypot_webhook`` scope in settings/base.py). Closes the
+    # log-flood vector — a wrong-signature attacker can no longer
+    # write unlimited ``Invalid webhook signature from {provider}``
+    # warning lines. Real providers fan in from a small fixed IP
+    # set and stay well under the cap.
+    throttle_classes = [HoneypotWebhookThrottle]
 
     def post(self, request):
         """Process incoming email webhook."""
