@@ -558,16 +558,50 @@ class TimeLockCapsuleOwnerFilterRegressionTest(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_unlock_capsule_resolves_by_owner(self):
-        """Endpoint reaches the unlock logic instead of FieldError-500."""
+        """The D5 fix changed ``user=request.user`` to ``owner=request.user``
+        on the ORM lookup so the endpoint stops 500'ing with FieldError
+        for the legitimate owner. This test mocks the downstream
+        ChemicalStorageService so we exercise ONLY the lookup + view
+        glue — not the chemical_storage_service / time_lock_service
+        chain, which has a separate pre-existing naive-vs-aware
+        datetime bug (out of scope for D5).
+        """
+        from unittest import mock
         self.client.force_authenticate(user=self.owner)
-        response = self.client.post(
-            f'/api/security/chemical/unlock-capsule/{self.capsule.id}/'
-        )
-        # The exact response depends on capsule state, but it MUST NOT
-        # be a 500 — the FieldError pre-fix produced exactly that.
-        self.assertNotEqual(
-            response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR,
-            msg=f"unlock_capsule returned 500 with payload {response.data!r}",
+
+        # The view chain is:
+        #   get_service_for_user(user) → ChemicalStorageService(tier=...)
+        #   service.unlock_time_lock(server_capsule) → time_lock_service.unlock
+        # ``time_lock_service.unlock`` has a separate pre-existing
+        # naive-vs-aware datetime bug (out of scope for D5). Patch the
+        # factory directly so we bypass BOTH that bug and the
+        # subscription-lookup it requires. The fake service returns a
+        # known plaintext. If the D5 ORM-lookup fix is in place, the
+        # patched call is reached; if not, the view raises FieldError
+        # before getting here.
+        # ChemicalStorageService.unlock_time_lock returns ``str``
+        # (decoded plaintext), not bytes — see
+        # security/services/chemical_storage_service.py:300.
+        fake_plaintext = 'unlocked-password-plaintext'
+        fake_service = mock.MagicMock()
+        fake_service.unlock_time_lock.return_value = fake_plaintext
+        with mock.patch(
+            'security.api.chemical_storage_views.get_service_for_user',
+            return_value=fake_service,
+        ):
+            response = self.client.post(
+                f'/api/security/chemical/unlock-capsule/{self.capsule.id}/'
+            )
+
+        # With the lookup fixed AND the unlock mocked, this must succeed.
+        # Use ``getattr(response, 'data', ...)`` so the failure message
+        # is constructable even if a 500 falls through to Django's
+        # JsonResponse error handler (which exposes ``.content``, not
+        # ``.data``) — the f-string interpolation evaluates eagerly.
+        body = getattr(response, 'data', None) or getattr(response, 'content', b'')
+        self.assertEqual(
+            response.status_code, status.HTTP_200_OK,
+            msg=f"unlock_capsule status={response.status_code} body={body!r}",
         )
 
 
