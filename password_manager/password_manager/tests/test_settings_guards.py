@@ -69,14 +69,69 @@ class JWTSigningKeyGuardTest(TestCase):
         self.assertIn('JWT_PRIVATE_KEY', stdout + stderr)
 
     def test_guard_silent_when_jwt_private_key_is_set(self):
-        """DEBUG=False + JWT_PRIVATE_KEY set => settings load cleanly."""
+        """DEBUG=False + JWT_PRIVATE_KEY set => settings load cleanly.
+
+        Also needs USE_REDIS_CACHE=True so the unrelated PR-#276
+        ownership-cache guard doesn't intercept this test.
+        """
         rc, stdout, stderr = _run_settings_import_in_subprocess({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
             'USE_REDIS_CHANNELS': 'True',
+            'USE_REDIS_CACHE': 'True',
             'JWT_PRIVATE_KEY': 'real-jwt-private-key-material',
         })
         self.assertIn('SETTINGS_LOADED', stdout)
+
+    def test_guard_fires_when_use_redis_cache_unset_in_production(self):
+        """PR #276 review (Codex P1): the dark-web scan-ownership IDOR
+        fix relies on a shared cache backend across workers. The
+        startup guard refuses to boot a non-DEBUG deployment without
+        ``USE_REDIS_CACHE=True``."""
+        rc, stdout, stderr = _run_settings_import_in_subprocess({
+            'DEBUG': 'False',
+            'SECRET_KEY': 'test-secret',
+            'JWT_PRIVATE_KEY': 'jwt-secret-material',
+            'USE_REDIS_CHANNELS': 'True',
+            # USE_REDIS_CACHE intentionally unset
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('USE_REDIS_CACHE', stdout + stderr)
+
+    def test_use_redis_cache_guard_silent_during_manage_py_check(self):
+        """``manage.py check`` is exempt — same maintenance-bypass
+        clause used by every other production guard."""
+        import subprocess, textwrap
+        code = textwrap.dedent("""
+            import os, sys
+            sys.argv = ['manage.py', 'check']
+            sys.path.insert(0, os.getcwd())
+            os.environ['DJANGO_SETTINGS_MODULE'] = 'password_manager.settings'
+            try:
+                from django.conf import settings
+                _ = settings.DEBUG
+                print('SETTINGS_LOADED')
+            except Exception as e:
+                print('SETTINGS_FAILED:' + type(e).__name__ + ':' + str(e)[:200])
+        """)
+        env = os.environ.copy()
+        for k in ('DEBUG', 'JWT_PRIVATE_KEY', 'USE_REDIS_CHANNELS', 'USE_REDIS_CACHE'):
+            env.pop(k, None)
+        env.update({
+            'DEBUG': 'False',
+            'SECRET_KEY': 'test-secret',
+            'USE_REDIS_CHANNELS': 'True',
+            # USE_REDIS_CACHE still unset — maintenance bypass should let it pass
+        })
+        cwd = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', '..')
+        )
+        result = subprocess.run(
+            [sys.executable, '-c', code],
+            cwd=cwd, env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertIn('SETTINGS_LOADED', result.stdout)
 
     def test_guard_fires_with_whitespace_only_jwt_private_key(self):
         """PR #275 review (CodeRabbit): pin the .strip() normalization.

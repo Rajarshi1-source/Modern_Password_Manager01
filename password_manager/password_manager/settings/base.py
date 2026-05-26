@@ -2309,3 +2309,44 @@ if (
         "``python -c \"import secrets; print(secrets.token_urlsafe(64))\"`` "
         "and set it in your deploy environment."
     )
+
+
+# =============================================================================
+# Phase E follow-up (PR #276 review, Codex P1): production guard on USE_REDIS_CACHE
+# =============================================================================
+# DarkWebViewSet.scan_vault / scan_status (Phase E / E2) writes / reads a
+# per-task ownership record via Django's default cache. The IDOR fix
+# relies on every worker seeing the SAME cache — which requires a
+# shared backend (Redis / Memcached). LocMemCache is per-process, so a
+# task started on worker A and polled on worker B would return 404 for
+# the rightful owner.
+#
+# This guard mirrors the USE_REDIS_CHANNELS one above:
+#   * skip in DEBUG (single-process dev — LocMem is fine)
+#   * skip during TESTING (pytest uses LocMem deliberately)
+#   * skip during maintenance commands (settings is imported without
+#     a running app — no cache writes happen)
+#   * fail closed otherwise.
+#
+# To disable the guard for a single-worker prod deploy (e.g. a small
+# self-hosted instance), set ``USE_REDIS_CACHE=True`` AND configure
+# REDIS_URL — that's the supported production path.
+_USE_REDIS_CACHE = (
+    os.environ.get('USE_REDIS_CACHE', 'False').lower() == 'true'
+)
+if (
+    not DEBUG
+    and not TESTING
+    and not _IS_MAINTENANCE_INVOCATION
+    and not _USE_REDIS_CACHE
+):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "USE_REDIS_CACHE must be 'True' in production deploys "
+        "(DEBUG=False). The default LocMemCache is per-process — "
+        "scan_vault / scan_status (the dark-web IDOR fix) writes "
+        "and reads from the cache across worker boundaries and would "
+        "produce spurious 404s for the rightful task owner without "
+        "a shared backend. Set USE_REDIS_CACHE=True and configure "
+        "REDIS_URL to opt in."
+    )
