@@ -89,7 +89,8 @@
     "axios": "^1.15.2",
     "protobufjs": "^7.5.8",
     "@protobufjs/utf8": "^1.1.1",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "@babel/plugin-transform-modules-systemjs": "^7.29.4"
   },
   "scripts": {
     "dev": "vite",

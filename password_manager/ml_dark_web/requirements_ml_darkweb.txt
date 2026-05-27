@@ -68,3 +68,8 @@ django>=4.2.28 # not directly required, pinned by Snyk to avoid a vulnerability
 zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
 cryptography>=46.0.7 # not directly required, pinned by Snyk to avoid a vulnerability
 setuptools>=78.1.1 # not directly required, pinned by Snyk to avoid a vulnerability
+
+# Security overrides for transitive dependencies (Dependabot)
+nltk>=3.9.4  # GHSA-3rxw-fwf6-39xx XSS, GHSA-2gmh-jq9p-8wgp shutdown
+twisted>=26.4.0rc2  # GHSA-pq4f-jvjr-vjjq DNS compression DoS
+ujson>=5.12.1  # GHSA-h63p-26vg-23j3 memory leak in ujson.dump()
