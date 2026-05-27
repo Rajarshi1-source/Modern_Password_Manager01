@@ -189,6 +189,7 @@ anthropic>=0.40.0
 
 # Security overrides for transitive dependencies
 cbor2>=5.9.0
-nltk>=3.9.3
+nltk>=3.9.4  # GHSA-3rxw-fwf6-39xx XSS, GHSA-2gmh-jq9p-8wgp shutdown
 tornado>=6.5.5
-ujson>=5.12.0
+Twisted>=26.4.0  # GHSA-pq4f-jvjr-vjjq DNS compression DoS (transitive via daphne)
+ujson>=5.12.1  # GHSA-h63p-26vg-23j3 memory leak in ujson.dump()
