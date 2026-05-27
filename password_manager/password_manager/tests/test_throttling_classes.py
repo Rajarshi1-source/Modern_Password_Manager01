@@ -18,6 +18,8 @@ accidentally puts ``ScopedRateThrottle`` back in the parent list will
 fail here loudly.
 """
 
+import inspect
+
 from rest_framework.throttling import (
     ScopedRateThrottle,
     SimpleRateThrottle,
@@ -25,6 +27,7 @@ from rest_framework.throttling import (
 
 from django.test import SimpleTestCase
 
+from password_manager import throttling as throttling_module
 from password_manager.throttling import (
     AuthRateThrottle,
     PasswordCheckRateThrottle,
@@ -54,6 +57,40 @@ _THROTTLES_WITH_SCOPE = [
 
 class ThrottleParentClassRegressionTests(SimpleTestCase):
     """Pin the SimpleRateThrottle vs ScopedRateThrottle invariant."""
+
+    def test_no_module_class_subclasses_scoped_rate_throttle(self):
+        """PR #278 review (CodeRabbit): belt-and-suspenders module-wide
+        scan. The hand-maintained ``_THROTTLES_WITH_SCOPE`` list above
+        could miss a future class added directly to
+        ``password_manager.throttling`` — this test fails if ANY class
+        defined in that module (not imported from elsewhere) is a
+        subclass of ``ScopedRateThrottle``. Closes the "forgotten to
+        add to the list" gap that a hand-maintained allowlist always
+        has.
+        """
+        scoped_subclasses = [
+            cls.__name__
+            for _, cls in inspect.getmembers(throttling_module, inspect.isclass)
+            # Restrict to classes DEFINED in the throttling module,
+            # not re-imported from DRF — we don't care that
+            # ``rest_framework.throttling.ScopedRateThrottle`` itself
+            # is in scope, just that this codebase doesn't subclass it.
+            if cls.__module__ == throttling_module.__name__
+            and cls is not ScopedRateThrottle
+            and issubclass(cls, ScopedRateThrottle)
+        ]
+        self.assertEqual(
+            scoped_subclasses, [],
+            msg=(
+                "password_manager.throttling defines ScopedRateThrottle "
+                f"subclass(es): {scoped_subclasses!r}. These will be "
+                "silently disabled at runtime because no view in this "
+                "codebase sets ``throttle_scope``. Switch the parent "
+                "to ``SimpleRateThrottle`` (and add the class to "
+                "_THROTTLES_WITH_SCOPE below so it gets the rate/scope "
+                "checks too)."
+            ),
+        )
 
     def test_none_subclass_scoped_rate_throttle(self):
         """The regression we're guarding against: putting any of

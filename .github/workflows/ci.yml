@@ -97,9 +97,12 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.11'
-          cache: 'pip'
-          cache-dependency-path: 'password_manager/requirements.txt'
-      
+          # PR #278 review (CodeRabbit): no ``cache: 'pip'`` here —
+          # the install step below uses ``pip install --no-cache-dir``
+          # to avoid the wheel-cache disk hit (Phase G / G2), so the
+          # setup-python pip cache restore/save would be redundant
+          # overhead with no read/write benefit.
+
       - name: Free disk space on runner
         # Phase G / G2 (2026-05): Backend Tests on PR #277 (run #879)
         # failed at pip-install with "OSError: [Errno 28] No space left

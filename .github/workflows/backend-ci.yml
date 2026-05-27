@@ -141,8 +141,14 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-      
+          # PR #278 review (CodeRabbit): no ``cache: 'pip'`` here —
+          # the install step below uses ``pip install --no-cache-dir``
+          # to avoid the wheel-cache disk hit (Phase G / G2), so the
+          # setup-python pip cache restore/save would be redundant
+          # overhead with no read/write benefit. The other jobs in
+          # this workflow (lint) still cache pip because they DO use
+          # the cache.
+
       - name: Free disk space on runner
         # Phase G / G2 (2026-05): mirror the ci.yml fix — Backend
         # Tests can OOM-disk during pip install of torch / tensorflow /
