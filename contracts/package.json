@@ -24,7 +24,7 @@
     "dotenv": "^17.2.3"
   },
   "overrides": {
-    "tmp": ">=0.2.6",
+    "tmp": "^0.2.6",
     "@openzeppelin/contracts-upgradeable": "^4.9.6",
     "@arbitrum/nitro-contracts": {
       "@openzeppelin/contracts": "^4.9.6",
@@ -36,7 +36,7 @@
     }
   },
   "resolutions": {
-    "tmp": ">=0.2.6",
+    "tmp": "^0.2.6",
     "@openzeppelin/contracts-upgradeable": "^4.9.6",
     "@arbitrum/nitro-contracts/@openzeppelin/contracts": "^4.9.6",
     "@offchainlabs/upgrade-executor/@openzeppelin/contracts": "^4.9.6"
