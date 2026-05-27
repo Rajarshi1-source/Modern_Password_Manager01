@@ -143,16 +143,38 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
       
+      - name: Free disk space on runner
+        # Phase G / G2 (2026-05): mirror the ci.yml fix — Backend
+        # Tests can OOM-disk during pip install of torch / tensorflow /
+        # nvidia-cu* / mediapipe / dlib. Reclaim ~25-30 GB by deleting
+        # toolchains this job doesn't need.
+        run: |
+          set -eu
+          df -h /
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/share/boost || true
+          docker image prune -a -f || true
+          df -h /
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql-client libpq-dev
-      
+          # Phase G / G2: reclaim apt cache (~500 MB) for the pip step.
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
       - name: Install Python dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r password_manager/requirements.txt
-          pip install pytest pytest-django pytest-cov pytest-asyncio
+          # Phase G / G2: ``--no-cache-dir`` keeps pip from retaining
+          # the 3-4 GB of downloaded ML wheels (torch + tensorflow +
+          # nvidia-cu*) after install. Streams extract instead.
+          python -m pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir -r password_manager/requirements.txt
+          pip install --no-cache-dir pytest pytest-django pytest-cov pytest-asyncio
+          df -h /
       
       - name: Run Django checks
         working-directory: ./password_manager

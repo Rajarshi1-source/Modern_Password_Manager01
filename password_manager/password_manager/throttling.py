@@ -4,6 +4,40 @@ Throttling configuration for the Password Manager API.
 This module contains custom throttling classes for different types of API operations,
 ensuring rate limiting for security-sensitive operations like authentication and
 password checking.
+
+--------------------------------------------------------------------------
+Phase G / G1 (2026-05): why these classes use ``SimpleRateThrottle``, not
+``ScopedRateThrottle``.
+
+DRF's ``ScopedRateThrottle.allow_request`` reads the throttle scope from
+the **view's** ``throttle_scope`` attribute, NOT from the throttle
+class:
+
+    def allow_request(self, request, view):
+        self.scope = getattr(view, 'throttle_scope', None)
+        if not self.scope:
+            return True  # <-- short-circuits to ALLOW
+        ...
+
+No view in this codebase sets ``throttle_scope``. That means every
+``ScopedRateThrottle`` subclass that declares a class-level
+``scope = 'foo'`` was historically being silently disabled — DRF
+overwrote ``self.scope = None`` on every call, the function returned
+``True``, no rate limit ever fired.
+
+This was first surfaced by the Phase F fix for
+``HoneypotWebhookThrottle`` (Codex P1 on PR #277). Phase G is the
+cleanup pass: every previously-``ScopedRateThrottle`` class with a
+class-level ``scope`` is now a ``SimpleRateThrottle`` subclass.
+``SimpleRateThrottle.__init__`` reads ``self.scope`` directly,
+populates ``self.rate`` / ``num_requests`` / ``duration`` from
+``settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'][scope]``, and the
+throttle actually runs.
+
+The ``ScopedRateThrottle`` import is kept so future code that
+genuinely wants per-view scope assignment (via ``throttle_scope`` on
+the view) can still reach for it.
+--------------------------------------------------------------------------
 """
 
 from rest_framework.throttling import ScopedRateThrottle, AnonRateThrottle, UserRateThrottle
@@ -18,10 +52,13 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-class AuthRateThrottle(ScopedRateThrottle):
+class AuthRateThrottle(SimpleRateThrottle):
     """
     Rate throttling for authentication endpoints.
     Limits login attempts to prevent brute force attacks.
+
+    Phase G / G1: was ``ScopedRateThrottle`` (no-op without
+    ``throttle_scope`` on the view — see module docstring).
     """
     scope = 'auth'
     
@@ -40,26 +77,50 @@ class AuthRateThrottle(ScopedRateThrottle):
         }
 
 
-class PasswordCheckRateThrottle(ScopedRateThrottle):
+class _UserOrIPCacheKeyMixin:
+    """Phase G / G1: shared cache-key strategy for SimpleRateThrottle
+    subclasses migrated from ScopedRateThrottle. Key by
+    authenticated-user PK when available, fall back to client IP for
+    anonymous traffic. ScopedRateThrottle inherited a similar default;
+    SimpleRateThrottle requires the implementation to be explicit."""
+
+    def get_cache_key(self, request, view):
+        if request.user and request.user.is_authenticated:
+            ident = request.user.pk
+        else:
+            ident = self.get_ident(request)
+        return self.cache_format % {'scope': self.scope, 'ident': ident}
+
+
+class PasswordCheckRateThrottle(_UserOrIPCacheKeyMixin, SimpleRateThrottle):
     """
     Rate throttling for password checking operations.
     Limits password breach checks and validation attempts.
+
+    Phase G / G1: was ``ScopedRateThrottle`` (no-op without
+    ``throttle_scope`` on the view — see module docstring).
     """
     scope = 'password_check'
 
 
-class SecurityOperationThrottle(ScopedRateThrottle):
+class SecurityOperationThrottle(_UserOrIPCacheKeyMixin, SimpleRateThrottle):
     """
     Rate throttling for security-sensitive operations.
     Limits operations like device registration, 2FA setup, etc.
+
+    Phase G / G1: was ``ScopedRateThrottle`` (no-op without
+    ``throttle_scope`` on the view — see module docstring).
     """
     scope = 'security'
 
 
-class PasskeyThrottle(ScopedRateThrottle):
+class PasskeyThrottle(_UserOrIPCacheKeyMixin, SimpleRateThrottle):
     """
     Rate throttling for WebAuthn/passkey operations.
     Limits passkey registration and authentication attempts.
+
+    Phase G / G1: was ``ScopedRateThrottle`` (no-op without
+    ``throttle_scope`` on the view — see module docstring).
     """
     scope = 'passkey'
 
@@ -144,17 +205,34 @@ class StrictSecurityThrottle(BaseThrottle):
         return self.CACHE_TIMEOUT
 
 
-class WhatIfSimulationThrottle(ScopedRateThrottle):
+class WhatIfSimulationThrottle(SimpleRateThrottle):
     """
     Rate throttling for CPU-intensive what-if simulations.
+
+    Phase G / G1: was ``ScopedRateThrottle`` (no-op without
+    ``throttle_scope`` on the view — see module docstring).
     """
     scope = 'what_if_simulation'
 
+    def get_cache_key(self, request, view):
+        # ``SimpleRateThrottle`` requires get_cache_key to be defined
+        # explicitly (no default). Match the convention used by the
+        # other classes in this module: per-user when authenticated,
+        # per-IP otherwise.
+        if request.user and request.user.is_authenticated:
+            ident = request.user.pk
+        else:
+            ident = self.get_ident(request)
+        return self.cache_format % {'scope': self.scope, 'ident': ident}
 
-class DeadDropCollectThrottle(ScopedRateThrottle):
+
+class DeadDropCollectThrottle(SimpleRateThrottle):
     """
     Rate throttling for dead drop fragment collection.
     Limits per-IP to prevent brute-force attempts.
+
+    Phase G / G1: was ``ScopedRateThrottle`` (no-op without
+    ``throttle_scope`` on the view — see module docstring).
     """
     scope = 'deaddrop_collect'
 
@@ -450,12 +528,15 @@ class VouchAttestationThrottle(BaseThrottle):
             )
 
 
-class MeshNodePingThrottle(ScopedRateThrottle):
+class MeshNodePingThrottle(SimpleRateThrottle):
     """Throttle mesh node pings so a compromised device cannot flood the API.
 
     Keyed per ``(user, node_id)`` so a single compromised node can't bring the
     whole fleet offline, and so legitimate heartbeats from multiple devices
     are not throttled against each other.
+
+    Phase G / G1: was ``ScopedRateThrottle`` (no-op without
+    ``throttle_scope`` on the view — see module docstring).
     """
 
     scope = 'mesh_node_ping'

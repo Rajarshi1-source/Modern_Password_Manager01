@@ -100,6 +100,31 @@ jobs:
           cache: 'pip'
           cache-dependency-path: 'password_manager/requirements.txt'
       
+      - name: Free disk space on runner
+        # Phase G / G2 (2026-05): Backend Tests on PR #277 (run #879)
+        # failed at pip-install with "OSError: [Errno 28] No space left
+        # on device" partway through installing torch / tensorflow /
+        # nvidia-cu* / mediapipe / dlib / face-recognition-models —
+        # the multi-gigabyte ML dependency tree exceeded the standard
+        # Azure runner's 14 GB free-disk budget once apt-cache, pip
+        # download-cache, and pre-baked toolchains were factored in.
+        #
+        # Reclaim disk BEFORE installing so we have headroom. The
+        # paths below are all guaranteed-unused by Backend Tests:
+        # we don't compile .NET, we don't run Android emulators, we
+        # don't need GHC / Swift / Boost. Saves ~25–30 GB on the
+        # standard ubuntu-latest runner.
+        run: |
+          set -eu
+          df -h /
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/Java_*" || true
+          docker image prune -a -f || true
+          df -h /
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -107,18 +132,32 @@ jobs:
           sudo apt-get install -y software-properties-common || true
           sudo add-apt-repository -y universe || true
           sudo apt-get update
-          
+
           # Required build deps (must be installed)
           sudo apt-get install -y python3-dev build-essential || true
-          
+
           # Optional system deps: try to install, but don't fail CI if not available
           sudo apt-get install -y libgl1-mesa-glx || echo "libgl1-mesa-glx not available, skipping"
           sudo apt-get install -y liboqs-dev || echo "liboqs-dev not available, skipping"
-          
+
+          # Phase G / G2 (2026-05): reclaim the apt cache after
+          # install (~500 MB) so the pip step below has more headroom.
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
           cd password_manager
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest pytest-django pytest-cov flake8 black isort "safety==2.3.5" bandit
+          # Phase G / G2 (2026-05): ``--no-cache-dir`` so pip doesn't
+          # keep the downloaded wheels in ~/.cache/pip after extract.
+          # Torch + tensorflow + nvidia-cu* wheels alone are ~3-4 GB;
+          # cache cleanup after each install lets pip stream-extract
+          # instead of accumulating downloads. Combined with the
+          # ``Free disk space on runner`` step above, this comfortably
+          # fits the full ML dep tree in the runner's disk budget.
+          python -m pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
+          pip install --no-cache-dir pytest pytest-django pytest-cov flake8 black isort "safety==2.3.5" bandit
+          # Show what we actually used vs what's left.
+          df -h /
       
       - name: Run linting
         run: |

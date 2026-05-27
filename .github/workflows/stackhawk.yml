@@ -87,11 +87,25 @@ jobs:
           cache: 'pip'
           cache-dependency-path: 'password_manager/requirements.txt'
 
+      - name: Free disk space on runner
+        # Phase G / G2 (2026-05): see ci.yml — same disk-exhaustion
+        # risk on this runner during pip install of the ML stack.
+        run: |
+          set -eu
+          df -h /
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          docker image prune -a -f || true
+          df -h /
+
       - name: Install dependencies
         run: |
           cd password_manager
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          # Phase G / G2: ``--no-cache-dir`` per ci.yml.
+          python -m pip install --no-cache-dir --upgrade pip
+          pip install --no-cache-dir -r requirements.txt
 
       - name: Start your service
         env:
