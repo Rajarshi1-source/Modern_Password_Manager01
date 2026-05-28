@@ -454,14 +454,31 @@ class TestUserIdRoundTrip:
 
 class TestLegacyEnvelopeReadback:
     """Pre-commit-2 stored ciphertexts (email_masking provider
-    configs, etc.) must keep decrypting after the upgrade."""
+    configs, etc.) must keep decrypting after the upgrade.
+
+    The legacy code derived its AES key as ``SECRET_KEY[:32]``.
+    CI's ``SECRET_KEY`` is ``"test-secret-key-for-ci-only"`` (27
+    bytes), which is NOT a valid AES key length (16/24/32 only) —
+    so ``encrypt_aes_gcm`` returns ``(None, None)`` and the helper
+    blows up on ``nonce + None + tag``. We use pytest-django's
+    ``settings`` fixture to override ``SECRET_KEY`` to a 32-byte
+    value for the duration of each test — both the test's
+    encryption call AND ``decrypt_data``'s legacy fallback read
+    the same ``settings.SECRET_KEY``, so they stay in sync."""
+
+    # 32-byte secret. Length matters (AES-256 requires 32 bytes);
+    # the actual contents are arbitrary because the test just
+    # round-trips through itself.
+    _LEGACY_TEST_SECRET = 'x' * 32
 
     @staticmethod
     def _make_legacy_envelope(plaintext: str) -> str:
         """Hand-build the pre-commit-2 envelope shape so we can
         verify ``decrypt_data`` reads it under the legacy fallback.
         Uses ``SECRET_KEY[:32]`` as the AES key — the legacy code's
-        exact behaviour."""
+        exact behaviour. Caller MUST have already overridden
+        ``settings.SECRET_KEY`` to a length-32 value (see class
+        docstring) or ``encrypt_aes_gcm`` will reject the key."""
         secret_key = settings.SECRET_KEY.encode('utf-8')[:32]
         nonce = os.urandom(_GCM_NONCE_LEN)
         ct, tag = CryptoService.encrypt_aes_gcm(
@@ -469,15 +486,21 @@ class TestLegacyEnvelopeReadback:
         )
         return base64.b64encode(nonce + ct + tag).decode()
 
-    def test_legacy_envelope_decrypts(self):
+    def test_legacy_envelope_decrypts(self, settings):
+        # pytest-django ``settings`` fixture monkeypatches the
+        # LazySettings object for the test scope; both the helper
+        # and ``decrypt_data``'s legacy path see the same value.
+        settings.SECRET_KEY = self._LEGACY_TEST_SECRET
         legacy_b64 = self._make_legacy_envelope("legacy_api_key")
         assert CryptoService.decrypt_data(legacy_b64) == "legacy_api_key"
 
-    def test_legacy_empty_plaintext_decrypts(self):
+    def test_legacy_empty_plaintext_decrypts(self, settings):
+        settings.SECRET_KEY = self._LEGACY_TEST_SECRET
         legacy_b64 = self._make_legacy_envelope("")
         assert CryptoService.decrypt_data(legacy_b64) == ""
 
-    def test_legacy_with_random_first_byte_equal_to_v2_falls_through(self):
+    def test_legacy_with_random_first_byte_equal_to_v2_falls_through(self, settings):
+        settings.SECRET_KEY = self._LEGACY_TEST_SECRET
         # ~1/256 of legacy envelopes start with \x02 by coincidence
         # of the random nonce. ``decrypt_data`` will attempt v2
         # decrypt first (and fail), then return None — it must NOT
@@ -502,7 +525,9 @@ class TestLegacyEnvelopeReadback:
         pytest.skip("Could not generate a legacy envelope with v2-matching first byte")
 
     def test_short_legacy_envelope_returns_none(self):
-        # 27 bytes — below the legacy floor of 28.
+        # 27 bytes — below the legacy floor of 28. No SECRET_KEY
+        # override needed: the length check rejects this BEFORE
+        # any AES key is constructed.
         too_short = base64.b64encode(os.urandom(_MIN_ENVELOPE_LEN_LEGACY - 1)).decode()
         assert CryptoService.decrypt_data(too_short) is None
 
