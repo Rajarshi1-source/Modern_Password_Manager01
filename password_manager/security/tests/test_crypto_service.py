@@ -36,6 +36,7 @@ without the full project settings.
 from __future__ import annotations
 
 import base64
+import json
 import os
 
 import django
@@ -253,16 +254,26 @@ class TestCallerContractTranslation:
         """Faithful copy of the inner loop in
         ``GarlicRouter.decrypt_payload`` (services/garlic_router.py:474).
         If this test diverges from the implementation, the
-        implementation is what's broken."""
+        implementation is what's broken.
+
+        Note (CodeRabbit nitpick on PR #280): extracting a shared
+        helper from ``garlic_router`` would let test and production
+        share parsing code, but that grows the production surface
+        area for a test convenience and obscures the contract this
+        test is meant to pin (the ``except DecryptionError: raise
+        ValueError`` translation). Keep the simulation; named
+        constants below replace the magic ``28`` so the offsets
+        still self-document."""
         from security.services.crypto_service import (
             CryptoService as _CS,
             DecryptionError as _DE,
         )
-        if len(current_bytes) < 28:
+        min_len = _GCM_NONCE_LEN + _GCM_TAG_LEN
+        if len(current_bytes) < min_len:
             raise ValueError("Invalid encrypted data")
-        nonce_ = current_bytes[:12]
-        tag_ = current_bytes[12:28]
-        ciphertext_ = current_bytes[28:]
+        nonce_ = current_bytes[:_GCM_NONCE_LEN]
+        tag_ = current_bytes[_GCM_NONCE_LEN:min_len]
+        ciphertext_ = current_bytes[min_len:]
         try:
             return _CS.decrypt_aes_gcm(
                 key=layer_key, nonce=nonce_, ciphertext=ciphertext_, tag=tag_,
@@ -494,3 +505,115 @@ class TestLegacyEnvelopeReadback:
         # 27 bytes — below the legacy floor of 28.
         too_short = base64.b64encode(os.urandom(_MIN_ENVELOPE_LEN_LEGACY - 1)).decode()
         assert CryptoService.decrypt_data(too_short) is None
+
+
+# ===========================================================================
+# CodeRabbit review on PR #280 — exception normalisation regressions
+# ===========================================================================
+# Two leak paths the original commits missed:
+#   1. ``AESGCM.decrypt`` raises ``TypeError`` (not ``ValueError``) when
+#      passed a non-bytes nonce / associated_data. The CFFI buffer
+#      conversion happens BEFORE the documented crypto-level checks,
+#      so neither ``InvalidTag`` nor ``ValueError`` ever fire — the
+#      ``TypeError`` leaks past ``decrypt_aes_gcm`` and would bypass
+#      the ``except DecryptionError`` translation in
+#      ``noise_encryptor.unmask_noise`` and the two ``garlic_router``
+#      methods, breaking their documented ``ValueError`` contract.
+#   2. ``json.loads`` on bytes that start with a UTF-16 BOM but are
+#      not valid UTF-16 raises ``UnicodeDecodeError``, not the
+#      ``JSONDecodeError`` the inner except in
+#      ``parse_encrypted_vault_item`` caught. Without the catch the
+#      legacy envelope fallback never runs.
+# ---------------------------------------------------------------------------
+
+class TestDecryptAesGcmTypeErrorNormalization:
+    """All decrypt-side failures must surface as ``DecryptionError``
+    so callers' ``except DecryptionError`` patterns catch them."""
+
+    def test_non_bytes_nonce_raises_decryption_error(self):
+        key = os.urandom(32)
+        ct, tag = CryptoService.encrypt_aes_gcm(key, os.urandom(_GCM_NONCE_LEN), b"p")
+        with pytest.raises(DecryptionError):
+            CryptoService.decrypt_aes_gcm(key, "not-bytes-nonce", ct, tag)
+
+    def test_non_bytes_associated_data_raises_decryption_error(self):
+        key, nonce = os.urandom(32), os.urandom(_GCM_NONCE_LEN)
+        ct, tag = CryptoService.encrypt_aes_gcm(key, nonce, b"p", b"aad")
+        with pytest.raises(DecryptionError):
+            CryptoService.decrypt_aes_gcm(
+                key, nonce, ct, tag, associated_data="not-bytes-aad",
+            )
+
+    def test_typeerror_is_translated_not_leaked(self):
+        # The exact failure mode CodeRabbit flagged: a caller that
+        # only handles ``DecryptionError`` (because that's the
+        # documented contract) must not see a raw ``TypeError``
+        # leak through.
+        key = os.urandom(32)
+        ct, tag = CryptoService.encrypt_aes_gcm(key, os.urandom(_GCM_NONCE_LEN), b"p")
+
+        translated_to_value_error = False
+        try:
+            try:
+                CryptoService.decrypt_aes_gcm(key, "wrong-type", ct, tag)
+            except DecryptionError as e:
+                # Simulate the caller pattern in noise_encryptor /
+                # garlic_router: translate to ValueError.
+                raise ValueError("Decryption failed") from e
+        except ValueError as ve:
+            translated_to_value_error = True
+            assert str(ve) == "Decryption failed"
+
+        assert translated_to_value_error, (
+            "TypeError leaked past decrypt_aes_gcm's exception "
+            "normalisation — caller's except DecryptionError did not fire"
+        )
+
+
+class TestParseEncryptedVaultItemUnicodeFallback:
+    """Inner except in ``parse_encrypted_vault_item`` must catch
+    ``UnicodeDecodeError`` so legacy envelopes fall back instead of
+    being dropped into the outer ``except Exception: return None``."""
+
+    def test_utf16_bom_prefix_falls_back_to_legacy(self):
+        # ``\xff\xfe`` is the UTF-16-LE BOM. ``json.loads`` on bytes
+        # starting with this prefix attempts UTF-16 decode and
+        # raises ``UnicodeDecodeError`` (NOT ``JSONDecodeError``).
+        # The base64 of those bytes is what an attacker / a legacy
+        # ciphertext could plausibly produce.
+        raw = b'\xff\xfe' + os.urandom(40)
+        envelope = base64.b64encode(raw).decode()
+        parsed = CryptoService.parse_encrypted_vault_item(envelope)
+        # Before the fix this returned None (outer except). After
+        # the fix it returns the legacy-format dict.
+        assert parsed is not None, (
+            "UnicodeDecodeError leaked — parse_encrypted_vault_item "
+            "returned None instead of falling back to legacy format"
+        )
+        assert parsed["format"] == "legacy"
+        assert parsed["ciphertext"] == raw
+
+    def test_valid_json_envelope_still_parses_as_webcrypto(self):
+        # Make sure the new catch did not break the happy path —
+        # a real JSON envelope still routes to its branch.
+        envelope_bytes = json.dumps({
+            "version": "webcrypto-1",
+            "iv": base64.b64encode(b"x" * 12).decode(),
+            "data": base64.b64encode(b"y" * 32).decode(),
+        }).encode()
+        envelope = base64.b64encode(envelope_bytes).decode()
+        parsed = CryptoService.parse_encrypted_vault_item(envelope)
+        assert parsed is not None
+        assert parsed["format"] == "webcrypto"
+
+    def test_invalid_json_after_utf8_decode_still_falls_back(self):
+        # Plain valid UTF-8 but not JSON — the original
+        # ``JSONDecodeError`` path. Confirm the new catch did not
+        # accidentally widen the failure case beyond what the
+        # legacy branch can handle.
+        envelope_bytes = b"this is not json"
+        envelope = base64.b64encode(envelope_bytes).decode()
+        parsed = CryptoService.parse_encrypted_vault_item(envelope)
+        assert parsed is not None
+        assert parsed["format"] == "legacy"
+        assert parsed["ciphertext"] == envelope_bytes

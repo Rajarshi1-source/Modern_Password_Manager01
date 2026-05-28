@@ -411,6 +411,17 @@ class CryptoService:
             # site (audit finding #2).
             logger.warning('AES-GCM tag verification failed')
             raise DecryptionError('AES-GCM tag verification failed') from e
+        except TypeError as e:
+            # Non-bytes nonce / non-bytes associated_data trip the
+            # underlying CFFI buffer conversion with ``TypeError``,
+            # NOT ``ValueError``. Without this branch a caller that
+            # passes the wrong type would see a bare ``TypeError``
+            # leak past the ``except DecryptionError`` translation
+            # in ``noise_encryptor.unmask_noise`` /
+            # ``garlic_router.peel_layer`` / ``decrypt_payload``,
+            # breaking their documented ``ValueError`` contract
+            # (CodeRabbit review on PR #280).
+            raise DecryptionError(f'AES-GCM decryption failed: {e}') from e
         except ValueError as e:
             # Wrong nonce length, etc. — also a hard failure.
             raise DecryptionError(f'AES-GCM decryption failed: {e}') from e
@@ -511,8 +522,19 @@ class CryptoService:
                         'compressed': data.get('compressed', False)
                     }
 
-            except (json.JSONDecodeError, KeyError):
-                # Fall back to legacy format
+            except (json.JSONDecodeError, UnicodeDecodeError, KeyError):
+                # Fall back to legacy format.
+                #
+                # ``UnicodeDecodeError`` is critical here: ``json.loads``
+                # accepts bytes and decodes as UTF-8 (or auto-detected
+                # UTF-16 BOM), so a legacy ciphertext that happens to
+                # contain a ``\xff\xfe`` prefix lights up the UTF-16
+                # decoder and bubbles ``UnicodeDecodeError`` — NOT
+                # ``JSONDecodeError``. Without catching it, every
+                # legacy envelope whose first two bytes form a valid
+                # UTF-16 BOM would silently fall through to the outer
+                # ``except Exception: return None`` and lose the
+                # legacy fallback (CodeRabbit review on PR #280).
                 logger.warning('Could not parse as JSON, treating as legacy format')
                 return {
                     'format': 'legacy',
