@@ -471,16 +471,24 @@ class GarlicRouter:
             tag = current[12:28]
             ciphertext = current[28:]
             
-            decrypted = self.crypto_service.decrypt_aes_gcm(
-                key=layer_key,
-                nonce=nonce,
-                ciphertext=ciphertext,
-                tag=tag,
-            )
-            
-            if not decrypted:
-                raise ValueError(f"Decryption failed at layer {layer}")
-            
+            # ``decrypt_aes_gcm`` now raises ``DecryptionError`` on
+            # tag-verify failure (audit hardening, Group A / commit 1)
+            # rather than returning ``None``. Preserve the per-layer
+            # ``ValueError(f"Decryption failed at layer {layer}")``
+            # contract that this method's callers (Codex P2 review on
+            # PR #280) depend on — translate the exception, do not
+            # let it propagate as ``DecryptionError``.
+            from .crypto_service import DecryptionError
+            try:
+                decrypted = self.crypto_service.decrypt_aes_gcm(
+                    key=layer_key,
+                    nonce=nonce,
+                    ciphertext=ciphertext,
+                    tag=tag,
+                )
+            except DecryptionError as e:
+                raise ValueError(f"Decryption failed at layer {layer}") from e
+
             current = decrypted
         
         # Remove padding

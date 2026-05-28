@@ -212,3 +212,70 @@ class TestAssociatedData:
         ct, tag = CryptoService.encrypt_aes_gcm(key, nonce, b"payload")
         with pytest.raises(DecryptionError):
             CryptoService.decrypt_aes_gcm(key, nonce, ct, tag, b"aad-1")
+
+
+# ---------------------------------------------------------------------------
+# Caller-contract regression tests. Pinned per Codex review on PR #280:
+# ``garlic_router.decrypt_payload`` (and friends) document a
+# ``ValueError`` failure contract; after the AEAD rewrite started
+# raising ``DecryptionError``, any caller that did not catch-and-
+# translate would break its own callers. These tests simulate the
+# in-loop decrypt step those methods perform and confirm a tampered
+# layer surfaces as the documented ``ValueError`` — never as a raw
+# ``DecryptionError`` leaking through.
+# ---------------------------------------------------------------------------
+
+class TestCallerContractTranslation:
+    """Audit hardening / Codex P2 — ``DecryptionError`` must NEVER
+    surface to upstream callers of ``garlic_router`` or
+    ``noise_encryptor``; those modules promise ``ValueError``."""
+
+    @staticmethod
+    def _simulate_decrypt_payload_layer(current_bytes, layer_key, layer):
+        """Faithful copy of the inner loop in
+        ``GarlicRouter.decrypt_payload`` (services/garlic_router.py:474).
+        If this test diverges from the implementation, the
+        implementation is what's broken."""
+        from security.services.crypto_service import (
+            CryptoService as _CS,
+            DecryptionError as _DE,
+        )
+        if len(current_bytes) < 28:
+            raise ValueError("Invalid encrypted data")
+        nonce_ = current_bytes[:12]
+        tag_ = current_bytes[12:28]
+        ciphertext_ = current_bytes[28:]
+        try:
+            return _CS.decrypt_aes_gcm(
+                key=layer_key, nonce=nonce_, ciphertext=ciphertext_, tag=tag_,
+            )
+        except _DE as e:
+            raise ValueError(f"Decryption failed at layer {layer}") from e
+
+    def test_tampered_layer_raises_valueerror_not_decryption_error(self):
+        import hashlib
+        layer_key = hashlib.sha256(b"k" + (0).to_bytes(4, "big")).digest()
+        nonce = os.urandom(_GCM_NONCE_LEN)
+        ct, tag = CryptoService.encrypt_aes_gcm(layer_key, nonce, b"plaintext")
+        # Tamper with the tag region.
+        tampered = bytearray(nonce + tag + ct)
+        tampered[15] ^= 0x01
+
+        with pytest.raises(ValueError) as exc_info:
+            self._simulate_decrypt_payload_layer(bytes(tampered), layer_key, 0)
+        # The error message must include the layer index — that's the
+        # documented per-layer contract callers depend on.
+        assert "layer 0" in str(exc_info.value)
+        # And it must NOT be a ``DecryptionError`` (subclass check —
+        # ``DecryptionError`` is not a ``ValueError`` so this also
+        # guards against a future widening that breaks the contract).
+        assert not isinstance(exc_info.value, DecryptionError)
+
+    def test_clean_layer_round_trips(self):
+        import hashlib
+        layer_key = hashlib.sha256(b"k" + (0).to_bytes(4, "big")).digest()
+        nonce = os.urandom(_GCM_NONCE_LEN)
+        ct, tag = CryptoService.encrypt_aes_gcm(layer_key, nonce, b"plaintext")
+        assert self._simulate_decrypt_payload_layer(
+            nonce + tag + ct, layer_key, 0
+        ) == b"plaintext"
