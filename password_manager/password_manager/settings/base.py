@@ -102,6 +102,28 @@ if not SECRET_KEY:
 # value invalidates derived deduplication keys but never breaks auth.
 SENSITIVE_HASH_PEPPER = os.environ.get('SENSITIVE_HASH_PEPPER', SECRET_KEY)
 
+# Master key for CryptoService.encrypt_data / decrypt_data (audit
+# Group A / commit 2, 2026-05). Base64-encoded 32 random bytes,
+# generated once via:
+#     python -c "import secrets, base64; \
+#         print(base64.b64encode(secrets.token_bytes(32)).decode())"
+# and set in the deployment environment as DATA_ENCRYPTION_KEY.
+#
+# The actual per-record AES key is HKDF(SHA-256, master, salt, info)
+# — see security/services/crypto_service.py — so leaking one record
+# does not break the rest. This master must be rotated independently
+# of SECRET_KEY: a SECRET_KEY disclosure (Django debug page, error
+# log, settings introspection) leaks session-signing material but
+# leaves stored ciphertext intact.
+#
+# Production hard-fails at module load time if this is unset and
+# DEBUG=False (see the guard near the JWT_PRIVATE_KEY check at the
+# bottom of this file). In DEBUG / TESTING / management-command
+# invocations, ``CryptoService`` falls back to ``SECRET_KEY[:32]``
+# so dev imports keep working — the same legacy path that reads
+# pre-commit-2 stored ciphertexts.
+DATA_ENCRYPTION_KEY = (os.environ.get('DATA_ENCRYPTION_KEY') or '').strip() or None
+
 # Parse ALLOWED_HOSTS from environment variable (strip whitespace from each entry)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8000,[::1]').split(',') if h.strip()]
 
@@ -2315,6 +2337,46 @@ if (
         "settings introspection) would let an attacker forge JWTs "
         "for every user. Generate a dedicated key via "
         "``python -c \"import secrets; print(secrets.token_urlsafe(64))\"`` "
+        "and set it in your deploy environment."
+    )
+
+
+# =============================================================================
+# Audit Group A / commit 2 (2026-05): production guard on DATA_ENCRYPTION_KEY
+# =============================================================================
+# ``CryptoService.encrypt_data`` / ``decrypt_data`` (used by
+# email_masking provider configs etc.) used to truncate ``SECRET_KEY``
+# for their AES key. Audit findings #1 / #3 — a SECRET_KEY disclosure
+# leaks both session-signing AND vault-scan data under one key.
+#
+# Commit 2 replaces that with HKDF over a dedicated
+# ``DATA_ENCRYPTION_KEY`` (32 random bytes, base64). In DEBUG / tests
+# the CryptoService falls back to ``SECRET_KEY[:32]`` so dev imports
+# keep working and pre-commit-2 stored ciphertexts remain readable
+# (the legacy fallback path in ``decrypt_data``). Real production
+# WSGI/ASGI bootstrap must NEVER reach that fallback — fail closed
+# at module load just like JWT_PRIVATE_KEY above.
+#
+# Guard structure mirrors the JWT_PRIVATE_KEY one above to keep the
+# rollout-skip conditions identical: DEBUG, TESTING, and
+# ``manage.py check`` / ``migrate`` etc. are exempt so CI's
+# deploy-check doesn't break.
+if (
+    not DEBUG
+    and not TESTING
+    and not _IS_MAINTENANCE_INVOCATION
+    and not (os.environ.get('DATA_ENCRYPTION_KEY') or '').strip()
+):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "DATA_ENCRYPTION_KEY must be set explicitly in production "
+        "(DEBUG=False). The SECRET_KEY fallback is prohibited because "
+        "the previous behaviour (CryptoService.encrypt_data truncating "
+        "SECRET_KEY) collapsed session-signing and at-rest-data keys, "
+        "so any SECRET_KEY disclosure decrypted stored provider API "
+        "keys and breach-scan records. Generate a dedicated key via "
+        "``python -c \"import secrets, base64; "
+        "print(base64.b64encode(secrets.token_bytes(32)).decode())\"`` "
         "and set it in your deploy environment."
     )
 
