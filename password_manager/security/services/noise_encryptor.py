@@ -177,16 +177,21 @@ class NoiseEncryptor:
         if not secrets.compare_digest(key_hash, expected_hash):
             raise ValueError("Key verification failed")
         
-        # Decrypt
-        decrypted = self.crypto_service.decrypt_aes_gcm(
-            key=noise_key,
-            nonce=nonce,
-            ciphertext=ciphertext,
-            tag=tag,
-        )
-        
-        if not decrypted:
-            raise ValueError("Decryption failed")
+        # Decrypt. ``decrypt_aes_gcm`` now raises ``DecryptionError``
+        # on tag-verify failure (audit hardening, Group A / commit 1)
+        # rather than returning ``None`` — translate to the existing
+        # ``ValueError("Decryption failed")`` contract so this layer's
+        # callers see no behaviour change.
+        from .crypto_service import DecryptionError
+        try:
+            decrypted = self.crypto_service.decrypt_aes_gcm(
+                key=noise_key,
+                nonce=nonce,
+                ciphertext=ciphertext,
+                tag=tag,
+            )
+        except DecryptionError as e:
+            raise ValueError("Decryption failed") from e
         
         # Remove block padding
         unblocked = self._remove_block_padding(decrypted)

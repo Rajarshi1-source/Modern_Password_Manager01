@@ -366,16 +366,21 @@ class GarlicRouter:
         tag = packet_data[12:28]
         ciphertext = packet_data[28:]
         
-        # Decrypt
-        decrypted = self.crypto_service.decrypt_aes_gcm(
-            key=session_key,
-            nonce=nonce,
-            ciphertext=ciphertext,
-            tag=tag,
-        )
-        
-        if not decrypted:
-            raise ValueError("Decryption failed")
+        # Decrypt. ``decrypt_aes_gcm`` now raises ``DecryptionError``
+        # on tag-verify failure (audit hardening, Group A / commit 1)
+        # rather than returning ``None``; preserve the existing
+        # ``ValueError("Decryption failed")`` contract for upstream
+        # garlic-routing logic.
+        from .crypto_service import DecryptionError
+        try:
+            decrypted = self.crypto_service.decrypt_aes_gcm(
+                key=session_key,
+                nonce=nonce,
+                ciphertext=ciphertext,
+                tag=tag,
+            )
+        except DecryptionError as e:
+            raise ValueError("Decryption failed") from e
         
         # Parse routing info
         separator_idx = decrypted.find(b'\x00')
