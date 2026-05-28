@@ -335,7 +335,7 @@ anthropic>=0.40.0
 # ============================================================================
 cbor2>=5.9.0
 keras>=3.13.2
-nltk>=3.9.4  # GHSA-3rxw-fwf6-39xx XSS, GHSA-2gmh-jq9p-8wgp shutdown
+nltk>=3.9.4  # GHSA-gfwx-w7gr-fvh7 XSS, GHSA-jm6w-m3j8-898g unauth shutdown
 tornado>=6.5.5
-Twisted>=26.4.0  # GHSA-pq4f-jvjr-vjjq DNS compression DoS
-ujson>=5.12.1  # GHSA-h63p-26vg-23j3 memory leak in ujson.dump()
+Twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS
+ujson>=5.12.1  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump()
