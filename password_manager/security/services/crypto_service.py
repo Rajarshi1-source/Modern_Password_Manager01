@@ -606,16 +606,33 @@ class CryptoService:
                     return json.loads(decrypted.decode('utf-8'))
 
             elif parsed['format'] == 'standard':
-                # Handle standard format (likely AES-CBC from CryptoJS)
-                # This would need to be implemented based on your current encryption method
-                logger.warning('Standard format decryption not implemented yet')
-                return None
+                # Handle standard format (likely AES-CBC from CryptoJS).
+                # Audit finding #4: this branch was never implemented and
+                # silently returned ``None``. A breach-scan caller reads
+                # ``None`` as "nothing to scan / no breach", so an
+                # unimplemented format quietly skipped scanning instead of
+                # surfacing the gap. Fail loud so the missing
+                # implementation cannot masquerade as a clean result.
+                raise NotImplementedError(
+                    'standard (AES-CBC) vault format decryption is not '
+                    'implemented'
+                )
 
             elif parsed['format'] == 'legacy':
-                # Handle legacy format
-                logger.warning('Legacy format decryption not implemented yet')
-                return None
+                # Handle legacy format. Same finding #4 rationale as the
+                # ``standard`` branch above — never implemented, must not
+                # silently return ``None``.
+                raise NotImplementedError(
+                    'legacy vault format decryption is not implemented'
+                )
 
+        except NotImplementedError:
+            # Audit finding #4: a genuinely-unimplemented format is a
+            # programming/coverage gap, not a decryption failure — let it
+            # propagate instead of being flattened to ``None`` by the
+            # broad handler below (which exists to swallow malformed-input
+            # / tag-verify failures).
+            raise
         except Exception as e:
             logger.error(f'Failed to decrypt vault item for security scan: {e}')
             return None
