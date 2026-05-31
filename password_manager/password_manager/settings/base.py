@@ -146,6 +146,22 @@ if DATA_ENCRYPTION_KEY is not None:
             'DATA_ENCRYPTION_KEY must be base64 encoding exactly 32 bytes.'
         ) from _exc
 
+# HMAC secrets used to sign the "fun" generation certificates emitted by
+# the genetic / quantum password services (audit Group B, finding #3).
+# These used to default to hardcoded literals baked into the service
+# source ("genetic-cert-secret-key", "genetic-cert-secret",
+# "quantum-dice-secret") — a published constant lets anyone forge a
+# certificate, and the two genetic copies even disagreed, so a cert
+# signed by the service never verified in the view.
+#
+# Resolution mirrors the JWT_PRIVATE_KEY / DATA_ENCRYPTION_KEY pattern:
+# read a dedicated env var, fall back to SECRET_KEY only so dev / test /
+# CI imports keep working, and fail closed in production via the guard
+# near the JWT_PRIVATE_KEY check at the bottom of this file. Whitespace
+# is stripped so a "   " value reads as unset (same as the JWT guard).
+GENETIC_CERT_SECRET = (os.environ.get('GENETIC_CERT_SECRET') or '').strip() or SECRET_KEY
+QUANTUM_CERT_SECRET = (os.environ.get('QUANTUM_CERT_SECRET') or '').strip() or SECRET_KEY
+
 # Parse ALLOWED_HOSTS from environment variable (strip whitespace from each entry)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8000,[::1]').split(',') if h.strip()]
 
@@ -2442,3 +2458,40 @@ if (
         "a shared backend. Set USE_REDIS_CACHE=True and configure "
         "REDIS_URL to opt in."
     )
+
+
+# =============================================================================
+# Audit Group B (2026-05): production guard on cert-signing secrets
+# =============================================================================
+# GENETIC_CERT_SECRET / QUANTUM_CERT_SECRET sign the genetic / quantum
+# password-generation certificates (finding #3). The service code used
+# to default to hardcoded literals ("genetic-cert-secret-key",
+# "genetic-cert-secret", "quantum-dice-secret") — a published constant
+# lets anyone forge a certificate. The definitions near the top of this
+# file now fall back to SECRET_KEY so dev/test/CI import cleanly, but
+# production must set a dedicated value — otherwise a SECRET_KEY
+# disclosure (Django debug page, error log, settings introspection)
+# would let an attacker forge generation certificates.
+#
+# Placed last in the guard chain so the more critical JWT_PRIVATE_KEY /
+# DATA_ENCRYPTION_KEY / USE_REDIS_CACHE guards report first. Skip
+# conditions are identical to those guards (DEBUG / TESTING /
+# maintenance command).
+for _cert_env_name in ('GENETIC_CERT_SECRET', 'QUANTUM_CERT_SECRET'):
+    if (
+        not DEBUG
+        and not TESTING
+        and not _IS_MAINTENANCE_INVOCATION
+        and not (os.environ.get(_cert_env_name) or '').strip()
+    ):
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            f"{_cert_env_name} must be set explicitly in production "
+            "(DEBUG=False). The SECRET_KEY fallback is prohibited because "
+            "it would collapse session-signing and certificate-signing "
+            "into one key, so any SECRET_KEY disclosure would let an "
+            "attacker forge generation certificates. Generate a dedicated "
+            "secret via ``python -c \"import secrets; "
+            "print(secrets.token_urlsafe(64))\"`` and set it in your "
+            "deploy environment."
+        )

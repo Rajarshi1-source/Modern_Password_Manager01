@@ -69,6 +69,11 @@ def _run_settings_import_in_subprocess(env_overrides, argv0='gunicorn'):
         # "DATA_ENCRYPTION_KEY unset" test case — same rationale as
         # USE_REDIS_CACHE above.
         'DATA_ENCRYPTION_KEY',
+        # Audit Group B (2026-05): production guards on the cert-signing
+        # secrets — seed so a host-level export can't bypass the
+        # "cert secret unset" test cases.
+        'GENETIC_CERT_SECRET',
+        'QUANTUM_CERT_SECRET',
     ):
         env[k] = ''
     env.update(env_overrides)
@@ -99,11 +104,12 @@ class JWTSigningKeyGuardTest(TestCase):
         """DEBUG=False + JWT_PRIVATE_KEY set => settings load cleanly.
 
         Also needs USE_REDIS_CACHE=True so the unrelated PR-#276
-        ownership-cache guard doesn't intercept this test, and
+        ownership-cache guard doesn't intercept this test,
         DATA_ENCRYPTION_KEY=<anything> so the audit-Group-A guard
-        added in commit 2 doesn't either. The point of this test is
-        to confirm the JWT_PRIVATE_KEY guard alone goes quiet — so
-        every later guard must be silenced too.
+        added in commit 2 doesn't either, and the Group-B cert-signing
+        secrets so their guard (last in the chain) stays quiet. The
+        point of this test is to confirm the JWT_PRIVATE_KEY guard
+        alone goes quiet — so every later guard must be silenced too.
         """
         _rc, stdout, stderr = _run_settings_import_in_subprocess({
             'DEBUG': 'False',
@@ -112,6 +118,8 @@ class JWTSigningKeyGuardTest(TestCase):
             'USE_REDIS_CACHE': 'True',
             'JWT_PRIVATE_KEY': 'real-jwt-private-key-material',
             'DATA_ENCRYPTION_KEY': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            'GENETIC_CERT_SECRET': 'genetic-cert-secret-material',
+            'QUANTUM_CERT_SECRET': 'quantum-cert-secret-material',
         })
         self.assertIn('SETTINGS_LOADED', stdout)
 
@@ -296,6 +304,10 @@ class DataEncryptionKeyGuardTest(TestCase):
             # only checks presence — the actual decode happens in
             # crypto_service._get_master_key() at first use.
             'DATA_ENCRYPTION_KEY': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            # Group B cert-signing secrets — their guard sits last in
+            # the chain, so it must also be satisfied for a clean load.
+            'GENETIC_CERT_SECRET': 'genetic-cert-secret-material',
+            'QUANTUM_CERT_SECRET': 'quantum-cert-secret-material',
         })
         self.assertIn('SETTINGS_LOADED', stdout)
 
@@ -375,3 +387,79 @@ class DataEncryptionKeyGuardTest(TestCase):
             capture_output=True, text=True, timeout=30,
         )
         self.assertIn('SETTINGS_LOADED', result.stdout)
+
+
+class CertSigningSecretGuardTest(TestCase):
+    """Audit Group B (2026-05): production guards on the genetic /
+    quantum certificate-signing secrets (finding #3). Mirrors the
+    JWT_PRIVATE_KEY / DATA_ENCRYPTION_KEY guard pattern — fail closed
+    at module import when DEBUG=False and the env var is unset/blank,
+    exempt during DEBUG / TESTING / ``manage.py check``.
+
+    These guards sit LAST in the chain, so every earlier guard
+    (JWT_PRIVATE_KEY, DATA_ENCRYPTION_KEY, USE_REDIS_CACHE) must be
+    satisfied first or it would intercept these assertions.
+    """
+
+    # Satisfies every guard ahead of the cert-secret guards.
+    _PRECEDING_GUARDS = {
+        'DEBUG': 'False',
+        'SECRET_KEY': 'test-secret',
+        'JWT_PRIVATE_KEY': 'jwt-secret-material',
+        'USE_REDIS_CHANNELS': 'True',
+        'USE_REDIS_CACHE': 'True',
+        'DATA_ENCRYPTION_KEY': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+    }
+
+    def test_guard_fires_in_production_without_genetic_cert_secret(self):
+        """DEBUG=False + every earlier guard satisfied + no
+        GENETIC_CERT_SECRET => fail closed."""
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            'QUANTUM_CERT_SECRET': 'quantum-cert-secret-material',
+            # GENETIC_CERT_SECRET intentionally unset
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('GENETIC_CERT_SECRET', stdout + stderr)
+
+    def test_guard_fires_in_production_without_quantum_cert_secret(self):
+        """GENETIC set so the loop advances to QUANTUM_CERT_SECRET,
+        which is the one left unset."""
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            'GENETIC_CERT_SECRET': 'genetic-cert-secret-material',
+            # QUANTUM_CERT_SECRET intentionally unset
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('QUANTUM_CERT_SECRET', stdout + stderr)
+
+    def test_guard_fires_with_whitespace_only_cert_secret(self):
+        """``.strip()`` normalization — a whitespace-only value reads
+        as missing, matching the JWT_PRIVATE_KEY guard."""
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            'GENETIC_CERT_SECRET': '   ',  # whitespace-only
+            'QUANTUM_CERT_SECRET': 'quantum-cert-secret-material',
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('GENETIC_CERT_SECRET', stdout + stderr)
+
+    def test_guard_silent_when_both_cert_secrets_set(self):
+        """DEBUG=False + both cert secrets set + every other guard
+        satisfied => settings load cleanly."""
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            'GENETIC_CERT_SECRET': 'genetic-cert-secret-material',
+            'QUANTUM_CERT_SECRET': 'quantum-cert-secret-material',
+        })
+        self.assertIn('SETTINGS_LOADED', stdout)
+
+    def test_guard_silent_in_debug_mode(self):
+        """Dev mode falls back to SECRET_KEY for cert signing — no
+        guard fire even with both secrets unset."""
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            'DEBUG': 'True',
+            'SECRET_KEY': 'dev-secret',
+            # cert secrets intentionally unset — dev path
+        })
+        self.assertIn('SETTINGS_LOADED', stdout)
