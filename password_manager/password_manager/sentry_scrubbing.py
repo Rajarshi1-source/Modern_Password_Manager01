@@ -93,7 +93,11 @@ _JWT_RE = re.compile(r'eyJ[\w-]+\.[\w-]+\.[\w-]+')
 # ``_BEARER_RE`` redacts the credential after an ``Authorization:
 # Bearer <token>`` prefix (opaque tokens too, not just JWTs) while
 # keeping the ``Bearer `` prefix so the line stays diagnosable.
-_BEARER_RE = re.compile(r'(?i)(bearer\s+)([\w.\-]+)')
+# ``\S+`` (any run of non-whitespace) rather than a base64url-only
+# class so standard base64 tokens — which can contain ``+``, ``/`` and
+# ``=`` (e.g. AWS session tokens) — are redacted whole instead of
+# leaving a partial-token tail (PR #284 review, CodeRabbit).
+_BEARER_RE = re.compile(r'(?i)(bearer\s+)(\S+)')
 
 
 def is_sensitive_key(key_str) -> bool:
