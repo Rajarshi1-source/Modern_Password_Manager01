@@ -41,6 +41,13 @@ class IsSensitiveKeyTests(SimpleTestCase):
         self.assertTrue(is_sensitive_key('user_password'))
         self.assertTrue(is_sensitive_key('client_secret'))
 
+    def test_authorization_and_cookie_keys_match(self):
+        # Audit finding #5: header keys carrying credentials.
+        self.assertTrue(is_sensitive_key('Authorization'))
+        self.assertTrue(is_sensitive_key('authorization'))
+        self.assertTrue(is_sensitive_key('Cookie'))
+        self.assertTrue(is_sensitive_key('Set-Cookie'))
+
     def test_benign_keys_not_matched(self):
         self.assertFalse(is_sensitive_key('user_id'))
         self.assertFalse(is_sensitive_key('email'))
@@ -73,6 +80,38 @@ class ScrubStrTests(SimpleTestCase):
     def test_non_string_passthrough(self):
         self.assertEqual(scrub_str(42), 42)
         self.assertIsNone(scrub_str(None))
+
+    # Audit finding #5: JWT + bearer redaction in free-text strings.
+
+    def test_redacts_bare_jwt(self):
+        jwt = (
+            'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'
+            '.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ'
+            '.dummysignaturesegmentdQssw5c'
+        )
+        out = scrub_str(f'decoded token {jwt} for user')
+        self.assertEqual(out, 'decoded token <redacted> for user')
+        self.assertNotIn('eyJ', out)
+
+    def test_redacts_bearer_token_keeps_prefix(self):
+        out = scrub_str('Authorization: Bearer abc123.def-456_GHI')
+        self.assertEqual(out, 'Authorization: Bearer <redacted>')
+
+    def test_redacts_bearer_jwt_single_pass(self):
+        jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sigsegmentvalue'
+        out = scrub_str(f'header=Bearer {jwt}')
+        self.assertEqual(out, 'header=Bearer <redacted>')
+        self.assertNotIn('eyJ', out)
+
+    def test_bearer_case_insensitive(self):
+        self.assertEqual(scrub_str('bearer opaqueToken99'), 'bearer <redacted>')
+
+    def test_passthrough_dotted_identifier_not_a_jwt(self):
+        # Ordinary dotted names must NOT trip the JWT matcher (the
+        # ``eyJ`` anchor is what keeps this safe).
+        self.assertEqual(
+            scrub_str('module.submodule.attr'), 'module.submodule.attr'
+        )
 
 
 class ScrubMappingTests(SimpleTestCase):
@@ -114,6 +153,23 @@ class ScrubMappingTests(SimpleTestCase):
         for entry in out['connections']:
             self.assertEqual(entry['access_token'], '<redacted>')
             self.assertIn(entry['name'], ('svc-a', 'svc-b'))
+
+    def test_authorization_header_value_redacted_by_key(self):
+        # Audit finding #5: ``Authorization`` matched no prior pattern,
+        # so a Bearer token in a request-headers dict leaked through.
+        out = scrub_mapping({
+            'request': {
+                'headers': {
+                    'Authorization': 'Bearer secret.jwt.value',
+                    'Cookie': 'sessionid=abc; csrftoken=def',
+                    'User-Agent': 'pytest',
+                },
+            },
+        })
+        headers = out['request']['headers']
+        self.assertEqual(headers['Authorization'], '<redacted>')
+        self.assertEqual(headers['Cookie'], '<redacted>')
+        self.assertEqual(headers['User-Agent'], 'pytest')
 
     def test_passthrough_non_mapping(self):
         self.assertEqual(scrub_mapping('not a dict'), 'not a dict')
