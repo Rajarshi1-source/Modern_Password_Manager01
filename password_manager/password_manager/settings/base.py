@@ -124,6 +124,28 @@ SENSITIVE_HASH_PEPPER = os.environ.get('SENSITIVE_HASH_PEPPER', SECRET_KEY)
 # pre-commit-2 stored ciphertexts.
 DATA_ENCRYPTION_KEY = (os.environ.get('DATA_ENCRYPTION_KEY') or '').strip() or None
 
+# Fail fast on a malformed key (PR #280 review, CodeRabbit). The
+# presence guard near the JWT_PRIVATE_KEY check at the bottom of this
+# file only rejects missing/blank values — a non-empty but non-base64
+# or wrong-length value would still boot the app and shift the failure
+# to the first encrypt/decrypt path in CryptoService, weakening the
+# fail-closed startup contract. Validate the decode + 32-byte length
+# here (whenever a value IS set, in every mode) so a broken key is
+# rejected before the process serves traffic. The value stays stored
+# as the base64 string — crypto_service._get_master_key() decodes it —
+# we only assert it decodes to the 32 bytes AES-256 requires.
+if DATA_ENCRYPTION_KEY is not None:
+    import base64 as _b64
+    import binascii as _binascii
+    try:
+        if len(_b64.b64decode(DATA_ENCRYPTION_KEY, validate=True)) != 32:
+            raise ValueError('must decode to exactly 32 bytes')
+    except (_binascii.Error, ValueError) as _exc:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            'DATA_ENCRYPTION_KEY must be base64 encoding exactly 32 bytes.'
+        ) from _exc
+
 # Parse ALLOWED_HOSTS from environment variable (strip whitespace from each entry)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,127.0.0.1:8000,[::1]').split(',') if h.strip()]
 

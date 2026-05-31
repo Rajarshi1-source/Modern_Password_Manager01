@@ -41,13 +41,22 @@ def _run_settings_import_in_subprocess(env_overrides, argv0='gunicorn'):
             print('SETTINGS_FAILED:' + type(e).__name__ + ':' + str(e)[:200])
     """)
     env = os.environ.copy()
-    # Wipe the keys we control so subprocess sees only what we set.
+    # Seed the keys we control to empty strings so the subprocess sees
+    # only what ``env_overrides`` sets.
     # PR #276 review (CodeRabbit): include every env var any of the
     # production guards in base.py reads, not just the ones the JWT
     # guard cares about. Without USE_REDIS_CACHE in this list, a CI
     # runner that exports USE_REDIS_CACHE=True at the host level
     # would silently bypass the "USE_REDIS_CACHE unset" test case —
     # making the guard test environment-dependent and useless.
+    # PR #280 review (CodeRabbit): seed empty strings rather than
+    # ``pop``-ing. base.py calls ``load_dotenv()`` at import, which
+    # populates any var *absent* from the environment from a repo or
+    # local ``.env`` file — so a popped key could be silently
+    # repopulated, making these subprocess assertions depend on
+    # filesystem state. ``load_dotenv`` does not override a var that
+    # is already present (even when empty), and every guard normalises
+    # via ``(... or '').strip()``, so an empty string reads as "unset".
     for k in (
         'DEBUG',
         'JWT_PRIVATE_KEY',
@@ -55,13 +64,13 @@ def _run_settings_import_in_subprocess(env_overrides, argv0='gunicorn'):
         'USE_REDIS_CACHE',
         'SECRET_KEY',
         # Audit Group A / commit 2 (2026-05): new production guard
-        # on DATA_ENCRYPTION_KEY. Wipe so a CI runner that exports
+        # on DATA_ENCRYPTION_KEY. Seed so a CI runner that exports
         # the env var at the host level doesn't silently bypass the
         # "DATA_ENCRYPTION_KEY unset" test case — same rationale as
         # USE_REDIS_CACHE above.
         'DATA_ENCRYPTION_KEY',
     ):
-        env.pop(k, None)
+        env[k] = ''
     env.update(env_overrides)
     cwd = os.path.join(os.path.dirname(__file__), '..', '..')
     cwd = os.path.abspath(cwd)
@@ -144,8 +153,10 @@ class JWTSigningKeyGuardTest(TestCase):
                 print('SETTINGS_FAILED:' + type(e).__name__ + ':' + str(e)[:200])
         """)
         env = os.environ.copy()
+        # Seed empty (not ``pop``) so load_dotenv can't repopulate from
+        # a repo/local .env — see _run_settings_import_in_subprocess.
         for k in ('DEBUG', 'JWT_PRIVATE_KEY', 'USE_REDIS_CHANNELS', 'USE_REDIS_CACHE', 'DATA_ENCRYPTION_KEY'):
-            env.pop(k, None)
+            env[k] = ''
         env.update({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
@@ -199,8 +210,10 @@ class JWTSigningKeyGuardTest(TestCase):
                 print('SETTINGS_FAILED:' + type(e).__name__ + ':' + str(e)[:200])
         """)
         env = os.environ.copy()
+        # Seed empty (not ``pop``) so load_dotenv can't repopulate from
+        # a repo/local .env — see _run_settings_import_in_subprocess.
         for k in ('DEBUG', 'JWT_PRIVATE_KEY', 'USE_REDIS_CHANNELS', 'DATA_ENCRYPTION_KEY'):
-            env.pop(k, None)
+            env[k] = ''
         env.update({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
@@ -295,6 +308,33 @@ class DataEncryptionKeyGuardTest(TestCase):
         })
         self.assertIn('SETTINGS_LOADED', stdout)
 
+    def test_malformed_data_encryption_key_fails_fast_at_startup(self):
+        """PR #280 review (CodeRabbit): a non-empty but malformed
+        DATA_ENCRYPTION_KEY (bad base64 / wrong decoded length) must
+        fail at module load, not boot the app and defer the error to
+        the first encrypt/decrypt. This validation runs in *every*
+        mode when the key is set — so DEBUG=True here isolates it from
+        the DEBUG-gated presence guard at the bottom of base.py."""
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            'DEBUG': 'True',
+            'SECRET_KEY': 'dev-secret',
+            'DATA_ENCRYPTION_KEY': 'not-valid-base64!!!',
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('DATA_ENCRYPTION_KEY', stdout + stderr)
+
+    def test_short_data_encryption_key_fails_fast_at_startup(self):
+        """Valid base64 that decodes to the wrong length (16 bytes,
+        not the 32 AES-256 needs) is also rejected at startup."""
+        import base64 as _b64
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            'DEBUG': 'True',
+            'SECRET_KEY': 'dev-secret',
+            'DATA_ENCRYPTION_KEY': _b64.b64encode(b'A' * 16).decode(),
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('DATA_ENCRYPTION_KEY', stdout + stderr)
+
     def test_guard_silent_during_manage_py_check(self):
         """``python manage.py check`` is exempt — same maintenance
         bypass as JWT_PRIVATE_KEY / USE_REDIS_CACHE. Without this,
@@ -313,11 +353,13 @@ class DataEncryptionKeyGuardTest(TestCase):
                 print('SETTINGS_FAILED:' + type(e).__name__ + ':' + str(e)[:200])
         """)
         env = os.environ.copy()
+        # Seed empty (not ``pop``) so load_dotenv can't repopulate from
+        # a repo/local .env — see _run_settings_import_in_subprocess.
         for k in (
             'DEBUG', 'JWT_PRIVATE_KEY', 'USE_REDIS_CHANNELS',
             'USE_REDIS_CACHE', 'DATA_ENCRYPTION_KEY',
         ):
-            env.pop(k, None)
+            env[k] = ''
         env.update({
             'DEBUG': 'False',
             'SECRET_KEY': 'test-secret',
