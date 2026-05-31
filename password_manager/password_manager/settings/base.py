@@ -2325,6 +2325,22 @@ _IS_MAINTENANCE_INVOCATION = (
     and sys.argv[1] in _DJANGO_MAINTENANCE_COMMANDS
 )
 
+# Audit finding #7: LatticeCryptoEngine fails closed when liboqs is
+# missing unless QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True. The base
+# value (set where QUANTUM_CRYPTO is defined) is just ``DEBUG``, but
+# the engine is also constructed during pytest and during management
+# commands (`migrate`, `check`, …) where liboqs is typically not
+# installed and failing closed would be wrong — those contexts do not
+# serve traffic. Widen ALLOW_SIMULATION to those non-serving contexts
+# here (now that TESTING / _IS_MAINTENANCE_INVOCATION are known) so the
+# fail-closed guard only bites a real WSGI/ASGI process serving
+# requests, mirroring the JWT_PRIVATE_KEY / DATA_ENCRYPTION_KEY guards.
+QUANTUM_CRYPTO['ALLOW_SIMULATION'] = (
+    QUANTUM_CRYPTO['ALLOW_SIMULATION']
+    or TESTING
+    or _IS_MAINTENANCE_INVOCATION
+)
+
 if (
     not DEBUG
     and not TESTING
