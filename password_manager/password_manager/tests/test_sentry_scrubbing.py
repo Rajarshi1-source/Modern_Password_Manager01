@@ -106,6 +106,18 @@ class ScrubStrTests(SimpleTestCase):
     def test_bearer_case_insensitive(self):
         self.assertEqual(scrub_str('bearer opaqueToken99'), 'bearer <redacted>')
 
+    def test_redacts_bearer_base64_token_with_special_chars(self):
+        # Standard base64 (not base64url) tokens contain +, /, = — the
+        # whole token must be redacted, not just the [\w.-] prefix.
+        out = scrub_str('Authorization: Bearer abc+def/ghi=jkl==')
+        self.assertEqual(out, 'Authorization: Bearer <redacted>')
+
+    def test_bearer_redaction_stops_at_whitespace(self):
+        # \S+ is greedy but bounded by whitespace, so trailing context
+        # after the token survives.
+        out = scrub_str('Bearer tok+en/value= and more text')
+        self.assertEqual(out, 'Bearer <redacted> and more text')
+
     def test_passthrough_dotted_identifier_not_a_jwt(self):
         # Ordinary dotted names must NOT trip the JWT matcher (the
         # ``eyJ`` anchor is what keeps this safe).
