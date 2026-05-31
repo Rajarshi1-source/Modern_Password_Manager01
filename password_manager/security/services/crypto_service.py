@@ -55,6 +55,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from django.core.exceptions import ImproperlyConfigured
 import os
 import base64
 import json
@@ -145,14 +146,22 @@ def _get_master_key():
     from django.conf import settings
     raw = getattr(settings, 'DATA_ENCRYPTION_KEY', None)
     if raw:
+        # A malformed key is a deployment misconfiguration, not a
+        # decryption failure — raise ``ImproperlyConfigured`` (which the
+        # public entrypoints deliberately re-raise instead of swallowing)
+        # so a broken production key fails closed and loud rather than
+        # masquerading as an ordinary "decrypt returned None". PR #280
+        # review (CodeRabbit). settings/base.py also validates this at
+        # startup; this is the defence-in-depth catch for paths that
+        # configure settings directly (e.g. tests).
         try:
             key = base64.b64decode(raw, validate=True)
         except Exception as e:
-            raise DecryptionError(
+            raise ImproperlyConfigured(
                 f'DATA_ENCRYPTION_KEY is not valid base64: {e}'
             ) from e
         if len(key) != 32:
-            raise DecryptionError(
+            raise ImproperlyConfigured(
                 f'DATA_ENCRYPTION_KEY must decode to 32 bytes, got {len(key)}'
             )
         return key
@@ -284,6 +293,12 @@ class CryptoService:
             envelope = _ENVELOPE_V2 + salt + nonce + ciphertext + tag
             return base64.b64encode(envelope).decode('utf-8')
 
+        except ImproperlyConfigured:
+            # A broken DATA_ENCRYPTION_KEY is a deployment error, not a
+            # routine encrypt failure — let it propagate so it fails
+            # closed instead of looking like "encryption returned None"
+            # (PR #280 review, CodeRabbit).
+            raise
         except Exception as e:
             logger.error(f'Data encryption failed: {e}')
             return None
@@ -361,6 +376,12 @@ class CryptoService:
                 return None
             return plaintext_bytes.decode('utf-8')
 
+        except ImproperlyConfigured:
+            # A broken DATA_ENCRYPTION_KEY is a deployment error, not a
+            # tag-verify failure — let it propagate so it fails closed
+            # instead of masquerading as an ordinary "decrypt returned
+            # None" (PR #280 review, CodeRabbit).
+            raise
         except Exception as e:
             logger.error(f'Data decryption failed: {e}')
             return None

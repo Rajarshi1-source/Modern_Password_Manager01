@@ -137,8 +137,14 @@ class TestDecryptDataTagVerification:
     def test_tampered_ciphertext_returns_none(self):
         ct_b64 = CryptoService.encrypt_data("secret")
         raw = bytearray(base64.b64decode(ct_b64))
-        # Flip a byte in the ciphertext region (between nonce and tag).
-        raw[_GCM_NONCE_LEN] ^= 0x01
+        # Flip a byte in the ciphertext region. In the v2 envelope
+        # (version(1) || salt(16) || nonce(12) || ct || tag(16)) the
+        # ciphertext starts after the version, salt and nonce — so
+        # ``raw[_GCM_NONCE_LEN]`` would land inside the salt, not the
+        # ciphertext (salt tamper is covered separately by
+        # TestV2EnvelopeAADBinding.test_flipping_salt_byte_fails).
+        ciphertext_start = 1 + _HKDF_SALT_LEN + _GCM_NONCE_LEN
+        raw[ciphertext_start] ^= 0x01
         tampered = base64.b64encode(bytes(raw)).decode()
         # ``decrypt_data`` swallows ``DecryptionError`` to keep its
         # ``None``-on-failure public API; the warning is logged.
@@ -472,15 +478,19 @@ class TestLegacyEnvelopeReadback:
     _LEGACY_TEST_SECRET = 'x' * 32
 
     @staticmethod
-    def _make_legacy_envelope(plaintext: str) -> str:
+    def _make_legacy_envelope(plaintext: str, nonce: bytes | None = None) -> str:
         """Hand-build the pre-commit-2 envelope shape so we can
         verify ``decrypt_data`` reads it under the legacy fallback.
         Uses ``SECRET_KEY[:32]`` as the AES key — the legacy code's
         exact behaviour. Caller MUST have already overridden
         ``settings.SECRET_KEY`` to a length-32 value (see class
-        docstring) or ``encrypt_aes_gcm`` will reject the key."""
+        docstring) or ``encrypt_aes_gcm`` will reject the key.
+
+        ``nonce`` may be injected to make the first envelope byte
+        deterministic (the downgrade test below needs a \\x02 first
+        byte); it defaults to a fresh random 12-byte nonce."""
         secret_key = settings.SECRET_KEY.encode('utf-8')[:32]
-        nonce = os.urandom(_GCM_NONCE_LEN)
+        nonce = nonce or os.urandom(_GCM_NONCE_LEN)
         ct, tag = CryptoService.encrypt_aes_gcm(
             secret_key, nonce, plaintext.encode('utf-8'),
         )
@@ -502,27 +512,33 @@ class TestLegacyEnvelopeReadback:
     def test_legacy_with_random_first_byte_equal_to_v2_falls_through(self, settings):
         settings.SECRET_KEY = self._LEGACY_TEST_SECRET
         # ~1/256 of legacy envelopes start with \x02 by coincidence
-        # of the random nonce. ``decrypt_data`` will attempt v2
-        # decrypt first (and fail), then return None — it must NOT
-        # retry as legacy because that would defeat the v2 path's
+        # of the random nonce. ``decrypt_data`` attempts a v2 decrypt
+        # first (and fails), then returns None — it must NOT retry as
+        # legacy because that would defeat the v2 path's
         # downgrade-resistance guard.
         #
-        # Force the first byte by retrying until we get one — keeps
-        # the test deterministic without exposing internal state.
-        for _ in range(2000):  # ~99.9% chance of finding one in 2000 tries
-            legacy_b64 = self._make_legacy_envelope("ambiguous")
-            raw = base64.b64decode(legacy_b64)
-            if raw[0:1] == _ENVELOPE_V2:
-                # Found one — confirm it does NOT decrypt through
-                # decrypt_data even though the legacy fallback would
-                # succeed. This is the intentional trade-off
-                # documented in the v2 path's DecryptionError handler.
-                assert CryptoService.decrypt_data(legacy_b64) is None
-                # And confirm the raw legacy decrypt would have
-                # succeeded — proving the failure is intentional.
-                assert _decrypt_legacy(raw) == b"ambiguous"
-                return
-        pytest.skip("Could not generate a legacy envelope with v2-matching first byte")
+        # Two conditions are required to actually exercise that guard:
+        #   1. The first byte equals \x02 — forced via an injected
+        #      nonce so the test is deterministic (no flaky retry loop
+        #      that could silently skip the assertion).
+        #   2. The envelope is at least ``_MIN_ENVELOPE_LEN_V2`` bytes,
+        #      otherwise ``decrypt_data``'s v2 branch is skipped on the
+        #      length check alone and the legacy read path handles it
+        #      normally. A legacy envelope is ``nonce(12) || ct || tag(16)``
+        #      so the plaintext must be long enough to clear 45 bytes.
+        forced_nonce = _ENVELOPE_V2 + os.urandom(_GCM_NONCE_LEN - 1)
+        plaintext = "ambiguous-payload-long-enough-to-look-like-v2"
+        legacy_b64 = self._make_legacy_envelope(plaintext, nonce=forced_nonce)
+        raw = base64.b64decode(legacy_b64)
+        assert raw[0:1] == _ENVELOPE_V2
+        assert len(raw) >= _MIN_ENVELOPE_LEN_V2
+        # decrypt_data must fail closed even though the legacy fallback
+        # would succeed — this is the intentional downgrade-resistance
+        # trade-off documented in the v2 path's DecryptionError handler.
+        assert CryptoService.decrypt_data(legacy_b64) is None
+        # And confirm the raw legacy decrypt would have succeeded —
+        # proving the None above is intentional, not a corrupt envelope.
+        assert _decrypt_legacy(raw) == plaintext.encode('utf-8')
 
     def test_short_legacy_envelope_returns_none(self):
         # 27 bytes — below the legacy floor of 28. No SECRET_KEY
