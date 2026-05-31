@@ -728,8 +728,15 @@ def generate_genetic_password(request):
             'generation_timestamp': timezone.now().isoformat(),
         }
         
-        # Create signature
-        cert_secret = os.environ.get('GENETIC_CERT_SECRET', 'genetic-cert-secret')
+        # Create signature.
+        # Audit Group B (#3): use the dedicated cert-signing secret from
+        # settings (env var, SECRET_KEY fallback gated to dev/test by the
+        # production guard in settings/base.py). The previous hardcoded
+        # 'genetic-cert-secret' default was forgeable AND disagreed with
+        # the service's 'genetic-cert-secret-key', so a cert signed here
+        # never matched one signed by GeneticPasswordGenerator.
+        from django.conf import settings
+        cert_secret = settings.GENETIC_CERT_SECRET
         sig_data = f"{password_hash[:16]}:{connection.genetic_hash_prefix[:16]}:{connection.evolution_generation}"
         signature = hmac.new(
             cert_secret.encode(),

@@ -24,6 +24,8 @@ import hmac
 import os
 import logging
 
+from django.conf import settings
+
 from security.utils.sensitive_hash import hash_for_dedup
 from datetime import datetime
 from typing import Tuple, Optional, List, Dict, Any
@@ -458,7 +460,12 @@ class GeneticPasswordGenerator:
         self.seed_generator = seed_generator or GeneticSeedGenerator()
         self.evolution_engine = evolution_engine
         self.quantum_generator = quantum_generator
-        self._cert_secret = os.environ.get("GENETIC_CERT_SECRET", "genetic-cert-secret-key")
+        # Audit Group B (#3): dedicated cert-signing secret resolved in
+        # settings (env var, with a SECRET_KEY fallback gated to
+        # dev/test by the production guard in settings/base.py). The
+        # previous hardcoded "genetic-cert-secret-key" default let
+        # anyone forge a certificate.
+        self._cert_secret = settings.GENETIC_CERT_SECRET
     
     async def generate_genetic_password(
         self,

@@ -701,8 +701,13 @@ class QuantumEntropyPool:
                 source = p.get_quantum_source()
                 break
         
-        # Create signature
-        secret_key = os.environ.get("QUANTUM_CERT_SECRET", "quantum-dice-secret")
+        # Create signature.
+        # Audit Group B (#3): dedicated cert-signing secret from settings
+        # (env var, SECRET_KEY fallback gated to dev/test by the
+        # production guard in settings/base.py). The previous hardcoded
+        # "quantum-dice-secret" default let anyone forge a certificate.
+        from django.conf import settings
+        secret_key = settings.QUANTUM_CERT_SECRET
         message = f"{certificate_id}:{password_hash[:16]}:{provider_value}:{entropy_bits}"
         signature = hmac.new(
             secret_key.encode(),
