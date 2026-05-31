@@ -14,7 +14,6 @@ from typing import Dict, List, Any, Optional
 from security.utils.sensitive_hash import short_hash_id
 from datetime import datetime, timedelta
 import uuid
-import os
 
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -410,14 +409,19 @@ class DecoyVaultService:
         templates = {
             'WiFi Passwords': 'Home WiFi: FakePassword123\nOffice: WorkWifi456',
             'Server Access': 'SSH: fake.server.com\nUser: admin\nPort: 22',
-            # Placeholders below intentionally do NOT match Stripe's
+            # Audit finding #6: these values MUST be hardcoded fakes —
+            # never read from the environment. The decoy vault is shown
+            # to an attacker after a duress-code trigger, so reading
+            # ``STRIPE_API_KEY`` / ``STRIPE_STAGING_KEY`` from the env
+            # would hand the real production keys to the attacker on the
+            # exact screen designed to deceive them.
+            #
+            # Placeholders intentionally do NOT match Stripe's
             # `sk_test_*` / `sk_live_*` token shape — Gitleaks's
             # `stripe-access-token` rule pattern-matches that literal
             # prefix and was failing CI on the earlier `sk_test_fake123`
-            # values. These decoy notes are also never sent off-device
-            # in the real flow; they are inserted into the fake vault
-            # the attacker sees after a duress-code trigger.
-            'API Keys': f"Production: {os.getenv('STRIPE_API_KEY', 'STRIPE-PLACEHOLDER-PROD-1')}\\nStaging: {os.getenv('STRIPE_STAGING_KEY', 'STRIPE-PLACEHOLDER-STAGING-1')}",  # pragma: allowlist secret  # gitleaks:allow
+            # values.
+            'API Keys': "Production: STRIPE-PLACEHOLDER-PROD-1\\nStaging: STRIPE-PLACEHOLDER-STAGING-1",  # pragma: allowlist secret  # gitleaks:allow
             'Recovery Codes': '1234-5678-9012\n2345-6789-0123\n3456-7890-1234',
             'License Keys': 'XXXX-YYYY-ZZZZ-1234',
             'Meeting Notes': 'Weekly standup notes...',
