@@ -63,9 +63,33 @@ class LatticeCryptoEngineUnitTests(TestCase):
     def test_engine_invalid_algorithm_raises(self):
         """Test that invalid algorithm raises ValueError."""
         from security.services.lattice_crypto_engine import LatticeCryptoEngine
-        
+
         with self.assertRaises(ValueError):
             LatticeCryptoEngine(algorithm='invalid-algo')
+
+    @override_settings(QUANTUM_CRYPTO={'ALLOW_SIMULATION': False})
+    def test_engine_fails_closed_when_liboqs_missing_and_simulation_disabled(self):
+        """Audit finding #7: the simulated lattice backend is NOT
+        quantum-resistant. When liboqs is unavailable AND
+        QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False (real production
+        serving), construction must fail closed instead of silently
+        falling back to simulation."""
+        from django.core.exceptions import ImproperlyConfigured
+        import security.services.lattice_crypto_engine as lce
+
+        with patch.object(lce, 'LIBOQS_AVAILABLE', False):
+            with self.assertRaises(ImproperlyConfigured):
+                lce.LatticeCryptoEngine()
+
+    @override_settings(QUANTUM_CRYPTO={'ALLOW_SIMULATION': True})
+    def test_engine_allows_simulation_when_explicitly_enabled(self):
+        """With ALLOW_SIMULATION=True the simulated backend is permitted
+        (dev / test / maintenance contexts)."""
+        import security.services.lattice_crypto_engine as lce
+
+        with patch.object(lce, 'LIBOQS_AVAILABLE', False):
+            engine = lce.LatticeCryptoEngine()
+            self.assertFalse(engine.liboqs_available)
     
     def test_generate_keypair_returns_correct_type(self):
         """Test keypair generation returns LatticeKeyPair."""

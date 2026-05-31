@@ -176,10 +176,34 @@ class LatticeCryptoEngine:
         """
         self.algorithm = algorithm or self.DEFAULT_ALGORITHM
         self.liboqs_available = LIBOQS_AVAILABLE
-        
+
+        # Audit finding #7: fail closed when the real post-quantum
+        # backend (liboqs) is missing. The simulated fallback is NOT
+        # quantum-resistant — it only mimics the Kyber API surface — so
+        # silently using it in production would advertise PQ protection
+        # that does not exist. ``QUANTUM_CRYPTO['ALLOW_SIMULATION']``
+        # (settings/base.py) is True for DEBUG / TESTING / maintenance
+        # commands and False for real WSGI/ASGI serving, so this only
+        # blocks a production process that is actually serving traffic.
+        if not self.liboqs_available:
+            from django.conf import settings
+            allow_simulation = getattr(
+                settings, 'QUANTUM_CRYPTO', {}
+            ).get('ALLOW_SIMULATION', False)
+            if not allow_simulation:
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured(
+                    "liboqs is not available and QUANTUM_CRYPTO"
+                    "['ALLOW_SIMULATION'] is False. The simulated lattice "
+                    "backend is NOT quantum-resistant and must never serve "
+                    "production traffic. Install liboqs-python (the real "
+                    "Kyber implementation) or, for a non-production "
+                    "context, set QUANTUM_CRYPTO['ALLOW_SIMULATION']=True."
+                )
+
         if self.algorithm not in self.SUPPORTED_ALGORITHMS:
             raise ValueError(f"Unsupported algorithm: {self.algorithm}")
-        
+
         logger.info(f"LatticeCryptoEngine initialized with {self.algorithm}")
     
     def generate_lattice_keypair(self, algorithm: str = None) -> LatticeKeyPair:
