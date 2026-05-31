@@ -152,7 +152,7 @@ ml_dtypes==0.5.4
 mozilla-django-oidc==4.0.1
 mpmath==1.3.0
 msgpack==1.1.2
-multidict==6.7.0
+multidict==6.7.1
 murmurhash==1.0.15
 namex==0.1.0
 networkx==3.5
