@@ -20,7 +20,9 @@ What gets scrubbed:
   * Top-level ``event['extra' | 'contexts' | 'tags' | 'request']``
     dicts — keys matching ``SENSITIVE_KEY_PATTERNS`` are replaced
     with ``<redacted>``; 40+ hex-char ``0x...`` blobs are replaced
-    with ``0x<redacted>``.
+    with ``0x<redacted>``; JWTs (``eyJ...`` three-segment) and
+    ``Bearer <token>`` values are redacted out of any string
+    (audit finding #5 — the hex matcher missed both).
   * ``event['exception']['values'][*]['stacktrace']['frames'][*]['vars']``
     — Python frame locals captured by Sentry on exception.
   * ``event['logentry']['message' | 'formatted']`` and ``params`` —
@@ -58,11 +60,17 @@ SENSITIVE_ENV_NAMES = (
 # Substring patterns matched case-insensitively against any dict key.
 # Phase E / E1: added ``TOKEN`` + ``VERIFICATION`` for catch-all
 # coverage of verification_token / id_token / session_token / etc.
+# Audit finding #5: added ``AUTHORIZATION`` + ``COOKIE`` so request
+# headers carrying credentials (``Authorization``, ``Cookie``,
+# ``Set-Cookie``) are redacted by key name. ``Authorization`` matched
+# none of the prior patterns; ``Set-Cookie`` is covered because it
+# contains ``COOKIE``.
 SENSITIVE_KEY_PATTERNS = (
     'PASSWORD', 'SECRET', 'PRIVATE_KEY', 'SIGNING_KEY',
     'CERTIFICATE_KEY', 'API_KEY', 'AUTH_TOKEN',
     'ACCESS_TOKEN', 'REFRESH_TOKEN', 'CREDENTIALS',
     'TOKEN', 'VERIFICATION',
+    'AUTHORIZATION', 'COOKIE',
 )
 
 
@@ -70,6 +78,22 @@ SENSITIVE_KEY_PATTERNS = (
 # private key / hash (64 hex). 40-char lower bound avoids false hits
 # on ordinary 32-bit hex IDs.
 _HEX_BLOB = re.compile(r'0x[0-9a-fA-F]{40,}')
+
+# Audit finding #5: a JWT can land in a free-text log line, an
+# exception message, or a breadcrumb without ever sitting under a
+# sensitive *key* — so the key-name matcher never sees it. Redact the
+# token value itself out of any string.
+#
+# ``_JWT_RE`` matches the three base64url segments of a compact JWS
+# (``header.payload.signature``); the ``eyJ`` anchor is the base64url
+# encoding of the literal ``{"`` that opens every JWT header, which
+# keeps this from firing on arbitrary dotted identifiers.
+_JWT_RE = re.compile(r'eyJ[\w-]+\.[\w-]+\.[\w-]+')
+
+# ``_BEARER_RE`` redacts the credential after an ``Authorization:
+# Bearer <token>`` prefix (opaque tokens too, not just JWTs) while
+# keeping the ``Bearer `` prefix so the line stays diagnosable.
+_BEARER_RE = re.compile(r'(?i)(bearer\s+)([\w.\-]+)')
 
 
 def is_sensitive_key(key_str) -> bool:
@@ -83,10 +107,19 @@ def is_sensitive_key(key_str) -> bool:
 
 
 def scrub_str(s):
-    """Redact 0x-prefixed hex blobs from a string. Passthrough otherwise."""
+    """Redact secrets embedded in a string. Passthrough otherwise.
+
+    Order matters: redact ``Bearer <token>`` first (keeping the prefix),
+    then any bare JWT, then 0x-prefixed hex blobs. Running bearer before
+    JWT means a ``Bearer eyJ...`` value collapses to ``Bearer <redacted>``
+    rather than ``Bearer <redacted>`` only after a second pass.
+    """
     if not isinstance(s, str):
         return s
-    return _HEX_BLOB.sub('0x<redacted>', s)
+    s = _BEARER_RE.sub(r'\1<redacted>', s)
+    s = _JWT_RE.sub('<redacted>', s)
+    s = _HEX_BLOB.sub('0x<redacted>', s)
+    return s
 
 
 def scrub_mapping(mapping):
