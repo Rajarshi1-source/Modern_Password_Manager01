@@ -494,10 +494,22 @@ class ClientTimeLockService:
         return estimates
     
     def _generate_safe_primes(self) -> Tuple[int, int]:
-        """Generate two safe primes for RSA modulus."""
-        # For production, use proper safe prime generation
-        # This is a simplified version
-        from random import getrandbits
+        """Generate two primes for the RSA modulus.
+
+        Audit finding #8: the candidate bits MUST come from a CSPRNG.
+        The previous ``from random import getrandbits`` used Python's
+        Mersenne-Twister PRNG, whose internal state is recoverable from
+        a handful of outputs — so an attacker could reconstruct the
+        primes (and thus factor the modulus) of a time-lock puzzle.
+        ``secrets.randbits`` draws from the OS CSPRNG instead.
+
+        Note: this still generates ordinary (not Sophie-Germain "safe")
+        primes — true safe-prime generation is prohibitively slow at the
+        2048-bit production modulus (minutes per key). The CSPRNG source
+        is the security-relevant fix; safe-prime hardening is tracked
+        separately.
+        """
+        from secrets import randbits as getrandbits
         
         def is_prime(n, k=10):
             """Miller-Rabin primality test."""
