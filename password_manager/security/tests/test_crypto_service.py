@@ -658,3 +658,40 @@ class TestParseEncryptedVaultItemUnicodeFallback:
         assert parsed is not None
         assert parsed["format"] == "legacy"
         assert parsed["ciphertext"] == envelope_bytes
+
+
+class TestDecryptVaultItemUnimplementedFormats:
+    """Audit finding #4: the ``standard`` / ``legacy`` branches in
+    ``decrypt_vault_item_for_security_scan`` were never implemented and
+    silently returned ``None``. A breach-scan caller reads ``None`` as
+    "nothing to scan", so the gap masqueraded as a clean result. They
+    must now raise ``NotImplementedError`` (propagating past the broad
+    ``except Exception: return None`` handler)."""
+
+    def test_legacy_format_raises_not_implemented(self):
+        # Any base64 that is not JSON parses as the legacy format.
+        envelope = base64.b64encode(b'\x00\x01 not json bytes').decode()
+        with pytest.raises(NotImplementedError):
+            CryptoService.decrypt_vault_item_for_security_scan(
+                envelope, b'k' * 32,
+            )
+
+    def test_standard_format_raises_not_implemented(self):
+        # JSON with iv+data but no ``webcrypto-1`` version → standard.
+        envelope_bytes = json.dumps({
+            "iv": base64.b64encode(b"i" * 12).decode(),
+            "data": base64.b64encode(b"d" * 16).decode(),
+        }).encode()
+        envelope = base64.b64encode(envelope_bytes).decode()
+        with pytest.raises(NotImplementedError):
+            CryptoService.decrypt_vault_item_for_security_scan(
+                envelope, b'k' * 32,
+            )
+
+    def test_unparseable_input_still_returns_none(self):
+        # A genuinely malformed envelope (parse returns None) must keep
+        # the None-on-failure contract — only *unimplemented formats*
+        # raise, not parse failures.
+        assert CryptoService.decrypt_vault_item_for_security_scan(
+            "not-valid-base64!@#", b'k' * 32,
+        ) is None
