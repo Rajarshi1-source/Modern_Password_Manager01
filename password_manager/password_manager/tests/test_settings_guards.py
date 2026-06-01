@@ -18,20 +18,58 @@ import subprocess
 import sys
 import textwrap
 
-from django.conf import settings
-from django.test import SimpleTestCase, TestCase
+from django.test import TestCase
 
 
-class PkceDefaultTests(SimpleTestCase):
+def _read_pkce_required_in_subprocess(env_value):
+    """Import settings in a fresh subprocess with OAUTH_PKCE_REQUIRED set
+    to ``env_value`` (or removed entirely when ``env_value`` is None) and
+    return the resulting bool. Runs in DEBUG so the production guards stay
+    quiet. Deterministic regardless of the host process env / .env."""
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import os, sys
+        sys.argv = ['gunicorn', 'password_manager.wsgi:application']
+        sys.path.insert(0, os.getcwd())
+        os.environ['DJANGO_SETTINGS_MODULE'] = 'password_manager.settings'
+        from django.conf import settings
+        print('PKCE=' + str(settings.OAUTH_PKCE_REQUIRED))
+    """)
+    env = os.environ.copy()
+    env.pop('OAUTH_PKCE_REQUIRED', None)
+    env.update({'DEBUG': 'True', 'SECRET_KEY': 'test-secret'})
+    if env_value is not None:
+        env['OAUTH_PKCE_REQUIRED'] = env_value
+    cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        cwd=cwd, env=env, capture_output=True, text=True, timeout=30,
+    )
+    return result.stdout, result.stderr
+
+
+class PkceDefaultTests(TestCase):
     """Audit Group D / #10: OAUTH_PKCE_REQUIRED now defaults to True
     (the 2026-07 cutover). Public clients are protected against
     authorization-code interception unless an operator explicitly opts
     out via OAUTH_PKCE_REQUIRED=false."""
 
-    def test_pkce_required_defaults_true(self):
-        if 'OAUTH_PKCE_REQUIRED' in os.environ:
-            self.skipTest('OAUTH_PKCE_REQUIRED explicitly set in environment')
-        self.assertTrue(settings.OAUTH_PKCE_REQUIRED)
+    def test_pkce_required_defaults_true_when_unset(self):
+        stdout, stderr = _read_pkce_required_in_subprocess(None)
+        self.assertIn('PKCE=True', stdout, msg=stderr)
+
+    def test_pkce_required_blank_value_stays_true(self):
+        # PR #286 review (CodeRabbit): a blank value must NOT silently
+        # disable PKCE — it reads as "unset" → secure default True.
+        stdout, stderr = _read_pkce_required_in_subprocess('   ')
+        self.assertIn('PKCE=True', stdout, msg=stderr)
+
+    def test_pkce_required_explicit_false_is_honored(self):
+        stdout, stderr = _read_pkce_required_in_subprocess('false')
+        self.assertIn('PKCE=False', stdout, msg=stderr)
 
 
 def _run_settings_import_in_subprocess(env_overrides, argv0='gunicorn'):

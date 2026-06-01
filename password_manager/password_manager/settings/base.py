@@ -924,7 +924,13 @@ ADVERSARIAL_AI_ENABLED = os.environ.get('ADVERSARIAL_AI_ENABLED', 'True').lower(
 #     (which now trips the warning below instead — opting out is the
 #     misconfiguration the rollout was designed to flush out).
 #   * 2026-10 EOL: the env override is removed. PKCE is always on.
-OAUTH_PKCE_REQUIRED = os.environ.get('OAUTH_PKCE_REQUIRED', 'True').lower() in ('true', '1', 'yes')
+# A blank / whitespace-only value reads as "unset" so the secure default
+# (True) holds — never let OAUTH_PKCE_REQUIRED="" (or "   ") silently
+# disable PKCE (PR #286 review). Strip FIRST, then fall back to 'True':
+# a whitespace-only value is truthy, so ``value or 'True'`` alone would
+# strip down to '' and wrongly read as False.
+_pkce_raw = (os.environ.get('OAUTH_PKCE_REQUIRED') or '').strip()
+OAUTH_PKCE_REQUIRED = (_pkce_raw or 'True').lower() in ('true', '1', 'yes')
 OAUTH_PKCE_CODE_CHALLENGE_METHOD = 'S256'
 OAUTH_PKCE_CODE_VERIFIER_MIN_LENGTH = 43
 OAUTH_PKCE_CODE_VERIFIER_MAX_LENGTH = 128

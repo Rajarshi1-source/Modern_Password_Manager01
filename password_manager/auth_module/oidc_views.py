@@ -75,9 +75,19 @@ def oidc_discovery(request):
             'sub', 'iss', 'aud', 'exp', 'iat', 'nonce',
             'email', 'email_verified', 'name', 'picture', 'locale'
         ],
-        'code_challenge_methods_supported': ['S256', 'plain'],
+        # Audit #10 (PR #286 review): wire OAUTH_PKCE_REQUIRED into the
+        # advertised challenge methods. When PKCE is required we advertise
+        # S256 only — never the downgrade-prone 'plain' method (RFC 7636
+        # §7.2). Full server-side enforcement of code_challenge /
+        # code_verifier is tracked separately: this service currently acts
+        # as an OIDC Relying Party and has no authorization-code-issuing
+        # endpoint to enforce against.
+        'code_challenge_methods_supported': (
+            ['S256'] if getattr(settings, 'OAUTH_PKCE_REQUIRED', True)
+            else ['S256', 'plain']
+        ),
     }
-    
+
     return Response(discovery_config)
 
 
