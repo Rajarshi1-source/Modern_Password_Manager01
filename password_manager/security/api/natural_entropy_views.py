@@ -8,6 +8,7 @@ Combines Ocean Wave, Lightning, Seismic, and Solar Wind sources.
 
 import hashlib
 import logging
+import secrets
 import time
 import uuid
 
@@ -176,7 +177,17 @@ def generate_natural_password(request: Request) -> Response:
                 'error': 'No entropy sources available',
                 'details': entropy_result['errors'],
             }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        
+
+        # Audit finding #14: the natural sources (lightning / seismic /
+        # solar) are "fun" entropy — the lightning provider, for one,
+        # fabricates its data with the non-cryptographic ``random``
+        # module. They must never be the SOLE entropy behind a password.
+        # Fold in a fresh CSPRNG block so the XOR-based mixer's output is
+        # ALWAYS at least as unpredictable as os.urandom, no matter which
+        # (or how few) natural sources the caller selected. The natural
+        # entropy stays additive / decorative on top of this floor.
+        entropy_result['entropy_blocks'].append(secrets.token_bytes(64))
+
         # Mix entropy from all sources
         mixed_entropy = NaturalEntropyMixer.mix_entropy_blocks(
             entropy_result['entropy_blocks'],
