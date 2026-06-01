@@ -364,10 +364,73 @@ class GeneticCertificateTestCase(TestCase):
         _, certificate = self.generator.generate_password_with_certificate(
             self.sample_seed
         )
-        
+
         # Should be prefix, not full hash
         self.assertLessEqual(len(certificate.password_hash_prefix), 64)
         self.assertLessEqual(len(certificate.genetic_hash_prefix), 64)
+
+    # Audit finding #15: canonical-JSON signing + version-gated verify.
+
+    def test_certificate_is_canonical_v2(self):
+        """New certificates carry the canonical (v2) signature format."""
+        _, certificate = self.generator.generate_password_with_certificate(
+            self.sample_seed
+        )
+        self.assertEqual(certificate.cert_version, 2)
+
+    def test_certificate_round_trip_verifies(self):
+        """A freshly issued certificate verifies under verify_certificate."""
+        _, certificate = self.generator.generate_password_with_certificate(
+            self.sample_seed
+        )
+        self.assertTrue(self.generator.verify_certificate(certificate))
+
+    def test_tampered_certificate_fails_verification(self):
+        """Mutating any signed field breaks verification (no fragile
+        display-prefix slicing to sidestep)."""
+        _, certificate = self.generator.generate_password_with_certificate(
+            self.sample_seed
+        )
+        certificate.evolution_generation += 1
+        self.assertFalse(self.generator.verify_certificate(certificate))
+
+    def test_legacy_v1_certificate_still_verifies(self):
+        """A pre-rollout v1 certificate (slice-based f-string signature)
+        still verifies through the version-gated fallback."""
+        import hashlib
+        import hmac
+        from security.services.genetic_password_service import GeneticCertificate
+
+        secret = self.generator._cert_secret
+        pw_prefix = "sha256:abcdef0123456789..."
+        gen_prefix = "sha256:1111222233334444..."
+        v1_sig_data = (
+            f"cid-legacy-1:"
+            f"{pw_prefix[7:23]}:"
+            f"{gen_prefix[7:23]}:"
+            f"2:"
+            f"True"
+        )
+        signature = hmac.new(
+            secret.encode(), v1_sig_data.encode(), hashlib.sha256
+        ).hexdigest()
+        legacy = GeneticCertificate(
+            certificate_id="cid-legacy-1",
+            password_hash_prefix=pw_prefix,
+            genetic_hash_prefix=gen_prefix,
+            provider="test",
+            snp_markers_used=10,
+            epigenetic_age=None,
+            generation_timestamp=datetime.now(),
+            evolution_generation=2,
+            combined_with_quantum=True,
+            quantum_certificate_id=None,
+            password_length=24,
+            entropy_bits=128,
+            signature=signature,
+            cert_version=1,
+        )
+        self.assertTrue(self.generator.verify_certificate(legacy))
 
 
 # =============================================================================
