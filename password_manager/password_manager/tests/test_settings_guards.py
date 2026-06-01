@@ -39,7 +39,10 @@ def _read_pkce_required_in_subprocess(env_value):
         print('PKCE=' + str(settings.OAUTH_PKCE_REQUIRED))
     """)
     env = os.environ.copy()
-    env.pop('OAUTH_PKCE_REQUIRED', None)
+    # Seed empty (not ``pop``) so base.py's load_dotenv() can't
+    # repopulate it from a repo/local .env and break determinism — the
+    # strip-first normalization reads '' as "unset" → secure default.
+    env['OAUTH_PKCE_REQUIRED'] = ''
     env.update({'DEBUG': 'True', 'SECRET_KEY': 'test-secret'})
     if env_value is not None:
         env['OAUTH_PKCE_REQUIRED'] = env_value
