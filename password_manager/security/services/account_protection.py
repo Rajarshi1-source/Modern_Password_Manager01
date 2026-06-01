@@ -16,6 +16,7 @@ import user_agents
 import geoip2.database
 import hashlib
 import hmac
+import ipaddress
 
 logger = logging.getLogger(__name__)
 
@@ -439,17 +440,51 @@ class AccountProtectionService:
         }
     
     def generate_device_id(self, device_info, request):
-        """Generate a unique device ID"""
+        """Generate a unique device ID.
+
+        Audit finding #12: keyed with SENSITIVE_HASH_PEPPER instead of a
+        bare SHA-256. The device fingerprint is built entirely from
+        client-controlled, spoofable headers (User-Agent + IP +
+        browser/os), so a plain hash is reproducible by anyone who knows
+        the victim's headers — they could forge a "trusted device" id.
+        HMAC under a server-side secret means the id cannot be computed
+        off-server.
+
+        Note: this changes the derived id, so existing UserDevice rows no
+        longer match — every user's next login is treated as a new device
+        once (a one-time "new device" notification). Accepted trade-off:
+        the device id is used for new-device detection/trust tracking, not
+        as a hard auth gate.
+        """
         user_agent = request.META.get('HTTP_USER_AGENT', '')
         ip_address = device_info.get('ip_address', '')
-        
+
         # Create a hash based on user agent and other factors
         device_string = f"{user_agent}_{ip_address}_{device_info.get('browser', '')}_{device_info.get('os', '')}"
-        return hashlib.sha256(device_string.encode()).hexdigest()[:32]
-    
+        return hmac.new(
+            settings.SENSITIVE_HASH_PEPPER.encode(),
+            device_string.encode(),
+            hashlib.sha256,
+        ).hexdigest()[:32]
+
     def is_ip_blacklisted(self, ip_address):
-        """Check if IP is blacklisted"""
-        return ip_address in getattr(settings, 'BLACKLISTED_IPS', set())
+        """Check if IP is blacklisted (supports CIDR ranges).
+
+        Audit finding #13: BLACKLISTED_IPS used to be an exact-string
+        set, so a range like ``10.0.0.0/8`` never matched any real
+        client IP. ``settings.BLACKLISTED_IP_NETS`` (built once at
+        startup) holds parsed ``ip_network`` objects; a single IP parses
+        as a /32 (or /128), so this subsumes the old exact-match
+        behaviour.
+        """
+        nets = getattr(settings, 'BLACKLISTED_IP_NETS', [])
+        if not nets:
+            return False
+        try:
+            addr = ipaddress.ip_address(ip_address)
+        except ValueError:
+            return False
+        return any(addr in net for net in nets)
     
     def unlock_social_accounts(self, user, platforms=None):
         """Manually unlock social media accounts"""
