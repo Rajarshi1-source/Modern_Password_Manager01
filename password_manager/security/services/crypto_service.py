@@ -577,7 +577,15 @@ class CryptoService:
             user_key (bytes): User's derived encryption key
 
         Returns:
-            dict: Decrypted vault item data or None if decryption failed
+            dict: Decrypted vault item data, or None if the envelope was
+                malformed or the tag did not verify.
+
+        Raises:
+            NotImplementedError: If the envelope parses to the
+                ``standard`` (AES-CBC) or ``legacy`` format — recognized
+                but not yet implemented (audit finding #4). Raised rather
+                than returned as None so an unimplemented format cannot
+                masquerade as a clean breach-scan result.
         """
         try:
             parsed = CryptoService.parse_encrypted_vault_item(encrypted_data)

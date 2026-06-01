@@ -421,7 +421,7 @@ class DecoyVaultService:
             # `stripe-access-token` rule pattern-matches that literal
             # prefix and was failing CI on the earlier `sk_test_fake123`
             # values.
-            'API Keys': "Production: STRIPE-PLACEHOLDER-PROD-1\\nStaging: STRIPE-PLACEHOLDER-STAGING-1",  # pragma: allowlist secret  # gitleaks:allow
+            'API Keys': "Production: STRIPE-PLACEHOLDER-PROD-1\nStaging: STRIPE-PLACEHOLDER-STAGING-1",  # pragma: allowlist secret  # gitleaks:allow
             'Recovery Codes': '1234-5678-9012\n2345-6789-0123\n3456-7890-1234',
             'License Keys': 'XXXX-YYYY-ZZZZ-1234',
             'Meeting Notes': 'Weekly standup notes...',
