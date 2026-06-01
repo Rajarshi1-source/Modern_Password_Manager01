@@ -67,13 +67,13 @@ class LatticeCryptoEngineUnitTests(TestCase):
         with self.assertRaises(ValueError):
             LatticeCryptoEngine(algorithm='invalid-algo')
 
-    @override_settings(QUANTUM_CRYPTO={'ALLOW_SIMULATION': False})
+    @override_settings(QUANTUM_CRYPTO={'ENABLED': True, 'ALLOW_SIMULATION': False})
     def test_engine_fails_closed_when_liboqs_missing_and_simulation_disabled(self):
         """Audit finding #7: the simulated lattice backend is NOT
-        quantum-resistant. When liboqs is unavailable AND
-        QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False (real production
-        serving), construction must fail closed instead of silently
-        falling back to simulation."""
+        quantum-resistant. When the feature is ENABLED, liboqs is
+        unavailable AND QUANTUM_CRYPTO['ALLOW_SIMULATION'] is False (real
+        production serving), construction must fail closed instead of
+        silently falling back to simulation."""
         from django.core.exceptions import ImproperlyConfigured
         import security.services.lattice_crypto_engine as lce
 
@@ -84,7 +84,20 @@ class LatticeCryptoEngineUnitTests(TestCase):
     @override_settings(QUANTUM_CRYPTO={'ALLOW_SIMULATION': True})
     def test_engine_allows_simulation_when_explicitly_enabled(self):
         """With ALLOW_SIMULATION=True the simulated backend is permitted
-        (dev / test / maintenance contexts)."""
+        (dev / test / passive-maintenance contexts)."""
+        import security.services.lattice_crypto_engine as lce
+
+        with patch.object(lce, 'LIBOQS_AVAILABLE', False):
+            engine = lce.LatticeCryptoEngine()
+            self.assertFalse(engine.liboqs_available)
+
+    @override_settings(QUANTUM_CRYPTO={'ENABLED': False, 'ALLOW_SIMULATION': False})
+    def test_engine_does_not_fail_closed_when_feature_disabled(self):
+        """PR #285 review (Codex P2): when QUANTUM_CRYPTO_ENABLED=False
+        the feature is explicitly off, so the engine (still imported via
+        the entanglement URLconf) must NOT crash at construction even
+        with liboqs missing and simulation disabled — there is no PQ
+        protection to fail closed for."""
         import security.services.lattice_crypto_engine as lce
 
         with patch.object(lce, 'LIBOQS_AVAILABLE', False):

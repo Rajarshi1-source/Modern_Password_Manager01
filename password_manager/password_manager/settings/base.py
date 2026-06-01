@@ -2309,12 +2309,18 @@ def _is_django_entrypoint(arg0: str) -> bool:
     only matched `manage.py`. `python -m django` (used in some CI
     images and dev workflows) sets argv[0] to a path ending in
     `django/__main__.py` or just `django`, so we widen the predicate.
+
+    PR #285 review (Codex P2): also recognize the ``django-admin``
+    console script (the documented entrypoint used by e.g.
+    ``django-admin check --deploy`` / ``django-admin migrate`` in
+    production-like CI), which was previously missed.
     """
     import os.path
     base = os.path.basename(arg0)
     return (
         arg0.endswith('manage.py')
         or base == 'django'
+        or base in ('django-admin', 'django-admin.py')
         or base == '__main__.py' and 'django' in arg0
     )
 
@@ -2327,18 +2333,34 @@ _IS_MAINTENANCE_INVOCATION = (
 
 # Audit finding #7: LatticeCryptoEngine fails closed when liboqs is
 # missing unless QUANTUM_CRYPTO['ALLOW_SIMULATION'] is True. The base
-# value (set where QUANTUM_CRYPTO is defined) is just ``DEBUG``, but
-# the engine is also constructed during pytest and during management
-# commands (`migrate`, `check`, …) where liboqs is typically not
-# installed and failing closed would be wrong — those contexts do not
-# serve traffic. Widen ALLOW_SIMULATION to those non-serving contexts
-# here (now that TESTING / _IS_MAINTENANCE_INVOCATION are known) so the
-# fail-closed guard only bites a real WSGI/ASGI process serving
-# requests, mirroring the JWT_PRIVATE_KEY / DATA_ENCRYPTION_KEY guards.
+# value (set where QUANTUM_CRYPTO is defined) is just ``DEBUG``, but the
+# engine is also constructed during pytest and during management
+# commands (the entanglement URLconf imports the module-level engine
+# singleton) where liboqs is typically not installed and failing closed
+# would be wrong. Widen ALLOW_SIMULATION to those non-serving contexts.
+#
+# PR #285 review (Codex P2): only widen for PASSIVE commands that merely
+# import/inspect the app and never invoke lattice crypto. The full
+# _DJANGO_MAINTENANCE_COMMANDS set includes interactive / data commands
+# (shell, shell_plus, dbshell, createsuperuser, changepassword,
+# dumpdata, loaddata) where an operator in a DEBUG=False production
+# shell could call QuantumEntanglementService.initiate_pairing() and
+# silently persist simulated (non-PQ) pairing material instead of
+# failing closed — so those are deliberately excluded here.
+_QUANTUM_SIM_PASSIVE_COMMANDS = frozenset({
+    'check', 'migrate', 'makemigrations', 'showmigrations', 'sqlmigrate',
+    'collectstatic', 'compilemessages', 'makemessages',
+    'diffsettings', 'inspectdb', 'startapp', 'startproject',
+})
+_IS_PASSIVE_MAINTENANCE = (
+    len(sys.argv) > 1
+    and _is_django_entrypoint(sys.argv[0])
+    and sys.argv[1] in _QUANTUM_SIM_PASSIVE_COMMANDS
+)
 QUANTUM_CRYPTO['ALLOW_SIMULATION'] = (
     QUANTUM_CRYPTO['ALLOW_SIMULATION']
     or TESTING
-    or _IS_MAINTENANCE_INVOCATION
+    or _IS_PASSIVE_MAINTENANCE
 )
 
 if (
