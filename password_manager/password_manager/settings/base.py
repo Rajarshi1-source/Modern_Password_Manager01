@@ -1022,6 +1022,7 @@ for _bl_entry in BLACKLISTED_IPS:
         _warnings.warn(
             f"Ignoring invalid BLACKLISTED_IPS entry: {_bl_entry!r}",
             RuntimeWarning,
+            stacklevel=2,
         )
 
 # IP Whitelisting (Enterprise Feature - Optional)

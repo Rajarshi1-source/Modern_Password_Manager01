@@ -79,6 +79,13 @@ class BlacklistCidrTests(TestCase):
             self.assertTrue(self.service.is_ip_blacklisted('192.168.1.5'))
             self.assertFalse(self.service.is_ip_blacklisted('192.168.1.6'))
 
+    def test_ipv6_cidr_range_matches_member_ip(self):
+        import ipaddress
+        nets = [ipaddress.ip_network('2001:db8::/32')]
+        with override_settings(BLACKLISTED_IP_NETS=nets):
+            self.assertTrue(self.service.is_ip_blacklisted('2001:db8::1234'))
+            self.assertFalse(self.service.is_ip_blacklisted('2001:db9::1'))
+
     def test_malformed_ip_returns_false(self):
         import ipaddress
         nets = [ipaddress.ip_network('10.0.0.0/8')]

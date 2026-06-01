@@ -5,6 +5,7 @@ from django.contrib.auth.models import User
 from django.db.models import Q, Count
 from django.db import transaction
 import requests
+import ipaddress
 import json
 import logging
 from datetime import timedelta
@@ -602,11 +603,22 @@ class SecurityService:
         return True
     
     def _is_ip_blacklisted(self, ip_address):
-        """Check if IP is blacklisted"""
-        # Implement IP reputation checking
-        # Could integrate with threat intelligence feeds
-        blacklisted_ips = getattr(settings, 'BLACKLISTED_IPS', set())
-        return ip_address in blacklisted_ips
+        """Check if IP is blacklisted (supports CIDR ranges).
+
+        Audit finding #13 (PR #286 review): this second blacklist path
+        (suspicious-login scoring) previously did exact-string matching
+        against BLACKLISTED_IPS, so CIDR ranges like ``10.0.0.0/8`` never
+        matched. Mirror AccountProtectionService.is_ip_blacklisted and
+        match against the pre-parsed ``BLACKLISTED_IP_NETS`` networks.
+        """
+        nets = getattr(settings, 'BLACKLISTED_IP_NETS', [])
+        if not nets:
+            return False
+        try:
+            addr = ipaddress.ip_address(ip_address)
+        except ValueError:
+            return False
+        return any(addr in net for net in nets)
 
 
 class NotificationService:
