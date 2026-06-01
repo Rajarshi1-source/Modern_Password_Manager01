@@ -18,7 +18,20 @@ import subprocess
 import sys
 import textwrap
 
-from django.test import TestCase
+from django.conf import settings
+from django.test import SimpleTestCase, TestCase
+
+
+class PkceDefaultTests(SimpleTestCase):
+    """Audit Group D / #10: OAUTH_PKCE_REQUIRED now defaults to True
+    (the 2026-07 cutover). Public clients are protected against
+    authorization-code interception unless an operator explicitly opts
+    out via OAUTH_PKCE_REQUIRED=false."""
+
+    def test_pkce_required_defaults_true(self):
+        if 'OAUTH_PKCE_REQUIRED' in os.environ:
+            self.skipTest('OAUTH_PKCE_REQUIRED explicitly set in environment')
+        self.assertTrue(settings.OAUTH_PKCE_REQUIRED)
 
 
 def _run_settings_import_in_subprocess(env_overrides, argv0='gunicorn'):
