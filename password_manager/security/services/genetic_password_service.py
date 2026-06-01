@@ -124,17 +124,42 @@ def canonical_cert_sig_payload(
     genetic_hash_prefix,
     evolution_generation,
     combined_with_quantum,
+    provider,
+    snp_markers_used,
+    epigenetic_age,
+    quantum_certificate_id,
+    password_length,
+    entropy_bits,
 ) -> str:
     """Return the canonical (order-stable) signing input for a genetic
-    certificate (audit finding #15). Computed over the certificate's
-    stored fields so create-time and verify-time inputs are byte-identical."""
+    certificate (audit finding #15).
+
+    Covers every persisted certificate field so none can be altered
+    without breaking the signature (PR #286 review). Values are
+    normalized (ids/uuids to ``str``, numbers to ``int``/``float``,
+    flag to ``bool``) so the create-time and verify-time payloads are
+    byte-identical regardless of whether the source is the
+    ``GeneticCertificate`` dataclass or the ``GeneticPasswordCertificate``
+    model.
+
+    ``generation_timestamp`` is intentionally excluded: the model assigns
+    it via ``auto_now_add`` at save time, so it is not known when the
+    signature is computed (and the service path would otherwise sign a
+    value the model path cannot reproduce).
+    """
     return json.dumps(
         {
             "cid": str(certificate_id),
             "pw": password_hash_prefix,
             "gen": genetic_hash_prefix,
-            "ev": evolution_generation,
+            "ev": int(evolution_generation),
             "qc": bool(combined_with_quantum),
+            "prov": provider,
+            "snp": None if snp_markers_used is None else int(snp_markers_used),
+            "epi": None if epigenetic_age is None else float(epigenetic_age),
+            "qcid": None if quantum_certificate_id is None else str(quantum_certificate_id),
+            "plen": None if password_length is None else int(password_length),
+            "ebits": None if entropy_bits is None else int(entropy_bits),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -726,14 +751,22 @@ class GeneticPasswordGenerator:
         # fragile slicing.
         password_hash_prefix = f"sha256:{password_hash[:16]}..."
         genetic_hash_prefix = f"sha256:{genetic_hash[:16]}..."
+        epigenetic_age = epigenetic_factor * 50 if epigenetic_factor else None
 
-        # Build canonical (v2) signature data and HMAC-sign it.
+        # Build canonical (v2) signature data over every persisted field
+        # and HMAC-sign it.
         sig_data = canonical_cert_sig_payload(
             certificate_id=certificate_id,
             password_hash_prefix=password_hash_prefix,
             genetic_hash_prefix=genetic_hash_prefix,
             evolution_generation=seed.evolution_generation,
             combined_with_quantum=combined_with_quantum,
+            provider=seed.provider,
+            snp_markers_used=seed.snp_count,
+            epigenetic_age=epigenetic_age,
+            quantum_certificate_id=quantum_cert_id,
+            password_length=length,
+            entropy_bits=entropy_bits,
         )
         signature = hmac.new(
             self._cert_secret.encode(),
@@ -747,7 +780,7 @@ class GeneticPasswordGenerator:
             genetic_hash_prefix=genetic_hash_prefix,
             provider=seed.provider,
             snp_markers_used=seed.snp_count,
-            epigenetic_age=epigenetic_factor * 50 if epigenetic_factor else None,
+            epigenetic_age=epigenetic_age,
             generation_timestamp=datetime.now(),
             evolution_generation=seed.evolution_generation,
             combined_with_quantum=combined_with_quantum,
@@ -873,6 +906,12 @@ class GeneticPasswordGenerator:
                 genetic_hash_prefix=certificate.genetic_hash_prefix,
                 evolution_generation=certificate.evolution_generation,
                 combined_with_quantum=certificate.combined_with_quantum,
+                provider=certificate.provider,
+                snp_markers_used=certificate.snp_markers_used,
+                epigenetic_age=certificate.epigenetic_age,
+                quantum_certificate_id=certificate.quantum_certificate_id,
+                password_length=certificate.password_length,
+                entropy_bits=certificate.entropy_bits,
             )
         else:
             # Legacy v1 format (verify-only): recovers the 16 hex chars

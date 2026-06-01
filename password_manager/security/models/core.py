@@ -582,10 +582,11 @@ class GeneticPasswordCertificate(models.Model):
     # Timestamps and signature
     generation_timestamp = models.DateTimeField(auto_now_add=True)
     signature = models.CharField(max_length=256)
-    # Audit finding #15: signature-format version. Default 1 so rows
-    # written before the canonical-JSON rollout are treated as legacy;
-    # the genetic_password view stamps new rows with 2.
-    cert_version = models.IntegerField(default=1,
+    # Audit finding #15: signature-format version. Defaults to 2 (the
+    # current canonical-JSON format) so any new write is signed/verified
+    # on the v2 path even if a caller forgets to pass it explicitly. The
+    # 0018 migration backfills pre-existing rows as 1 (legacy).
+    cert_version = models.IntegerField(default=2,
         help_text="Certificate signature format version (1=legacy, 2=canonical JSON)")
 
     # Optional link to vault item
