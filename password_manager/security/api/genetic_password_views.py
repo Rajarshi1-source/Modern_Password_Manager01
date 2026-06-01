@@ -712,8 +712,16 @@ def generate_genetic_password(request):
         import math
         entropy_bits = int(math.log2(len(charset)) * length)
         
-        password_hash = hash_for_dedup(generated_password, domain="genetic-views-cert")
-        
+        # PR #286 review (#15): use the same password-hash domain as the
+        # service's _create_certificate so the password_hash_prefix
+        # convention matches across both issue paths.
+        password_hash = hash_for_dedup(generated_password, domain="genetic-cert-pw")
+
+        # Normalize quantum_certificate_id to the exact value stored on
+        # the model so the signature recomputes byte-identically at verify
+        # time (model stores it as a UUID; sign over its canonical str).
+        quantum_uuid = uuid.UUID(quantum_cert_id) if quantum_cert_id else None
+
         cert_data = {
             'password_hash_prefix': f"sha256:{password_hash[:16]}...",
             'genetic_hash_prefix': connection.genetic_hash_prefix[:20] + '...',
@@ -727,7 +735,7 @@ def generate_genetic_password(request):
             'entropy_bits': entropy_bits,
             'generation_timestamp': timezone.now().isoformat(),
         }
-        
+
         # Create signature.
         # Audit Group B (#3): use the dedicated cert-signing secret from
         # settings (env var, SECRET_KEY fallback gated to dev/test by the
@@ -735,8 +743,8 @@ def generate_genetic_password(request):
         # 'genetic-cert-secret' default was forgeable.
         #
         # Audit Group D (#15): sign the SAME canonical-JSON payload (v2)
-        # the service uses, over this certificate's stored fields, so a
-        # cert issued here verifies under
+        # the service uses, over this certificate's full set of stored
+        # fields, so a cert issued here verifies under
         # GeneticPasswordGenerator.verify_certificate(). The id signed as
         # ``cid`` is the certificate's own UUID, reused as the model PK so
         # the persisted row and the signature stay consistent.
@@ -753,6 +761,12 @@ def generate_genetic_password(request):
             genetic_hash_prefix=cert_data['genetic_hash_prefix'],
             evolution_generation=connection.evolution_generation,
             combined_with_quantum=combine_with_quantum,
+            provider=connection.provider,
+            snp_markers_used=connection.snp_count,
+            epigenetic_age=connection.last_biological_age,
+            quantum_certificate_id=quantum_uuid,
+            password_length=length,
+            entropy_bits=entropy_bits,
         )
         signature = hmac.new(
             cert_secret.encode(),
@@ -776,7 +790,7 @@ def generate_genetic_password(request):
                 epigenetic_age=connection.last_biological_age,
                 evolution_generation=connection.evolution_generation,
                 combined_with_quantum=combine_with_quantum,
-                quantum_certificate_id=uuid.UUID(quantum_cert_id) if quantum_cert_id else None,
+                quantum_certificate_id=quantum_uuid,
                 password_length=length,
                 entropy_bits=entropy_bits,
                 signature=signature,
