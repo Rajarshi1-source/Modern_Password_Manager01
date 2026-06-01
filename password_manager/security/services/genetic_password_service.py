@@ -751,7 +751,11 @@ class GeneticPasswordGenerator:
         # fragile slicing.
         password_hash_prefix = f"sha256:{password_hash[:16]}..."
         genetic_hash_prefix = f"sha256:{genetic_hash[:16]}..."
-        epigenetic_age = epigenetic_factor * 50 if epigenetic_factor else None
+        # Use ``is not None`` so an explicit epigenetic_factor of 0.0 is
+        # preserved as 0.0 rather than collapsed to None (PR #286 review).
+        epigenetic_age = (
+            epigenetic_factor * 50 if epigenetic_factor is not None else None
+        )
 
         # Build canonical (v2) signature data over every persisted field
         # and HMAC-sign it.
