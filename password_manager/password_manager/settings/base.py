@@ -914,28 +914,30 @@ ADVERSARIAL_AI_ENABLED = os.environ.get('ADVERSARIAL_AI_ENABLED', 'True').lower(
 # for public clients are vulnerable to code interception attacks (RFC 7636).
 #
 # Rollout plan (Phase E / E4, 2026-05): warn-then-flip.
-#   * 2026-05 (this PR): default remains False, but startup emits a
+#   * 2026-05 (Phase E/E4): default remained False, startup emitted a
 #     RuntimeWarning when not DEBUG and not OAUTH_PKCE_REQUIRED so the
-#     misconfiguration is visible in container logs.
-#   * 2026-07 cutover (60 days after this PR merges): default flips to
-#     True in a follow-up PR. Operators who still need the legacy
-#     behaviour can opt out via OAUTH_PKCE_REQUIRED=false.
+#     misconfiguration was visible in container logs.
+#   * 2026-07 cutover (THIS change, audit Group D / #15): the default
+#     now flips to True. The 2026-05 warning gave operators a release
+#     cycle to roll PKCE-capable clients. Operators who still need the
+#     legacy behaviour can opt out for now via OAUTH_PKCE_REQUIRED=false
+#     (which now trips the warning below instead — opting out is the
+#     misconfiguration the rollout was designed to flush out).
 #   * 2026-10 EOL: the env override is removed. PKCE is always on.
-#
-# Hard-flipping now would 400 every authorization-code request from a
-# client that hasn't shipped PKCE yet. The warning gives operators a
-# release cycle to roll updated clients before the cutover.
-OAUTH_PKCE_REQUIRED = os.environ.get('OAUTH_PKCE_REQUIRED', 'False').lower() in ('true', '1', 'yes')
+OAUTH_PKCE_REQUIRED = os.environ.get('OAUTH_PKCE_REQUIRED', 'True').lower() in ('true', '1', 'yes')
 OAUTH_PKCE_CODE_CHALLENGE_METHOD = 'S256'
 OAUTH_PKCE_CODE_VERIFIER_MIN_LENGTH = 43
 OAUTH_PKCE_CODE_VERIFIER_MAX_LENGTH = 128
 
-# Phase E / E4 (2026-05): visible warning when PKCE is disabled in
-# production. Skip during maintenance commands (manage.py check etc.)
-# and tests so they don't get noisy. ``_IS_MAINTENANCE_INVOCATION``
-# is computed at the bottom of this module — we re-derive it inline
-# here because the PKCE block runs earlier. Keep the derivation
-# minimal; the bottom-of-file definition is the canonical one.
+# Audit Group D / #10: visible warning when PKCE has been explicitly
+# disabled in production. Post-cutover the default is True, so reaching
+# here means an operator set OAUTH_PKCE_REQUIRED=false — re-opening the
+# RFC 7636 code-interception hole for public clients. Skip during
+# maintenance commands (manage.py check etc.) and tests so they don't
+# get noisy. ``_IS_MAINTENANCE_INVOCATION`` is computed at the bottom of
+# this module — we re-derive it inline here because the PKCE block runs
+# earlier. Keep the derivation minimal; the bottom-of-file definition is
+# the canonical one.
 if not DEBUG and not OAUTH_PKCE_REQUIRED:
     _is_maintenance = (
         len(sys.argv) > 1
@@ -944,11 +946,12 @@ if not DEBUG and not OAUTH_PKCE_REQUIRED:
     _is_test = 'test' in sys.argv or 'pytest' in sys.modules
     if not _is_maintenance and not _is_test:
         warnings.warn(
-            "OAUTH_PKCE_REQUIRED is False in a non-DEBUG deployment. "
-            "PKCE will become mandatory in the 2026-07 cutover. "
-            "Confirm your mobile / extension clients send "
-            "code_challenge + code_verifier before that date, then "
-            "set OAUTH_PKCE_REQUIRED=true to silence this warning.",
+            "OAUTH_PKCE_REQUIRED has been explicitly set to False in a "
+            "non-DEBUG deployment. PKCE is on by default as of the "
+            "2026-07 cutover; disabling it re-exposes public clients "
+            "(mobile apps, browser extensions) to authorization-code "
+            "interception (RFC 7636). Remove the override / set "
+            "OAUTH_PKCE_REQUIRED=true unless you have a specific reason.",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -999,6 +1002,27 @@ LOCKOUT_DURATION_MINUTES = 30
 SUSPICIOUS_THRESHOLD = 3
 _blacklisted = os.environ.get('BLACKLISTED_IPS', '')
 BLACKLISTED_IPS = set(_blacklisted.split(',')) if _blacklisted else set()
+
+# Audit finding #13: parse BLACKLISTED_IPS into network objects once at
+# startup so AccountProtectionService.is_ip_blacklisted supports CIDR
+# ranges (e.g. 10.0.0.0/8), not just exact-string matches. ``strict=
+# False`` lets a host-with-prefix entry (10.1.2.3/8) parse as its
+# network; a bare address parses as a /32 (or /128). Invalid entries are
+# skipped with a warning rather than crashing startup.
+import ipaddress as _ipaddress
+BLACKLISTED_IP_NETS = []
+for _bl_entry in BLACKLISTED_IPS:
+    _bl_entry = _bl_entry.strip()
+    if not _bl_entry:
+        continue
+    try:
+        BLACKLISTED_IP_NETS.append(_ipaddress.ip_network(_bl_entry, strict=False))
+    except ValueError:
+        import warnings as _warnings
+        _warnings.warn(
+            f"Ignoring invalid BLACKLISTED_IPS entry: {_bl_entry!r}",
+            RuntimeWarning,
+        )
 
 # IP Whitelisting (Enterprise Feature - Optional)
 # Set ALLOWED_IP_RANGES in .env for IP restriction
