@@ -224,7 +224,10 @@ def generate_natural_password(request: Request) -> Response:
             lightning_details=entropy_result['source_info'].get('lightning', {}),
             seismic_details=entropy_result['source_info'].get('seismic', {}),
             solar_details=entropy_result['source_info'].get('solar', {}),
-            mixing_algorithm='XOR + SHA3-512 + SHAKE256',
+            # Records the CSPRNG floor (#14) so the certificate's
+            # provenance reflects that os.urandom material participated
+            # alongside the user-selected natural sources.
+            mixing_algorithm='XOR + SHA3-512 + SHAKE256 + CSPRNG floor (secrets.token_bytes)',
             total_entropy_bits=len(mixed_entropy) * 8,
             password_length=length,
             charset_used=charset_name,
