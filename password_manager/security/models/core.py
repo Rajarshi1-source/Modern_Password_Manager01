@@ -582,10 +582,24 @@ class GeneticPasswordCertificate(models.Model):
     # Timestamps and signature
     generation_timestamp = models.DateTimeField(auto_now_add=True)
     signature = models.CharField(max_length=256)
-    
+    # Audit finding #15: signature-format version. Default 1 so rows
+    # written before the canonical-JSON rollout are treated as legacy;
+    # the genetic_password view stamps new rows with 2.
+    cert_version = models.IntegerField(default=1,
+        help_text="Certificate signature format version (1=legacy, 2=canonical JSON)")
+
     # Optional link to vault item
     vault_item_id = models.CharField(max_length=100, null=True, blank=True)
-    
+
+    @property
+    def certificate_id(self):
+        """Logical certificate id (the model's UUID PK as a string).
+
+        Lets GeneticPasswordGenerator.verify_certificate() consume a
+        persisted model instance with the same attribute surface as the
+        in-memory GeneticCertificate dataclass (audit finding #15)."""
+        return str(self.id)
+
     class Meta:
         db_table = 'genetic_password_certificate'
         verbose_name = 'Genetic Password Certificate'
@@ -616,6 +630,7 @@ class GeneticPasswordCertificate(models.Model):
             'entropy_bits': self.entropy_bits,
             'generation_timestamp': self.generation_timestamp.isoformat(),
             'signature': self.signature,
+            'cert_version': self.cert_version,
         }
 
 

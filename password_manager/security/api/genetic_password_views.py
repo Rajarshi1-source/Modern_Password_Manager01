@@ -732,24 +732,42 @@ def generate_genetic_password(request):
         # Audit Group B (#3): use the dedicated cert-signing secret from
         # settings (env var, SECRET_KEY fallback gated to dev/test by the
         # production guard in settings/base.py). The previous hardcoded
-        # 'genetic-cert-secret' default was forgeable AND disagreed with
-        # the service's 'genetic-cert-secret-key', so a cert signed here
-        # never matched one signed by GeneticPasswordGenerator.
+        # 'genetic-cert-secret' default was forgeable.
+        #
+        # Audit Group D (#15): sign the SAME canonical-JSON payload (v2)
+        # the service uses, over this certificate's stored fields, so a
+        # cert issued here verifies under
+        # GeneticPasswordGenerator.verify_certificate(). The id signed as
+        # ``cid`` is the certificate's own UUID, reused as the model PK so
+        # the persisted row and the signature stay consistent.
         from django.conf import settings
+        from security.services.genetic_password_service import (
+            canonical_cert_sig_payload,
+            _CERT_SIG_VERSION,
+        )
         cert_secret = settings.GENETIC_CERT_SECRET
-        sig_data = f"{password_hash[:16]}:{connection.genetic_hash_prefix[:16]}:{connection.evolution_generation}"
+        cert_uuid = uuid.uuid4()
+        sig_data = canonical_cert_sig_payload(
+            certificate_id=cert_uuid,
+            password_hash_prefix=cert_data['password_hash_prefix'],
+            genetic_hash_prefix=cert_data['genetic_hash_prefix'],
+            evolution_generation=connection.evolution_generation,
+            combined_with_quantum=combine_with_quantum,
+        )
         signature = hmac.new(
             cert_secret.encode(),
             sig_data.encode(),
             hashlib.sha256
         ).hexdigest()
-        
+
         cert_data['signature'] = signature
-        cert_data['certificate_id'] = str(uuid.uuid4())
-        
+        cert_data['certificate_id'] = str(cert_uuid)
+        cert_data['cert_version'] = _CERT_SIG_VERSION
+
         # Save certificate if requested
         if save_certificate:
             GeneticPasswordCertificate.objects.create(
+                id=cert_uuid,
                 user=request.user,
                 password_hash_prefix=cert_data['password_hash_prefix'],
                 genetic_hash_prefix=cert_data['genetic_hash_prefix'],
@@ -762,6 +780,7 @@ def generate_genetic_password(request):
                 password_length=length,
                 entropy_bits=entropy_bits,
                 signature=signature,
+                cert_version=_CERT_SIG_VERSION,
             )
         
         # Update subscription counter

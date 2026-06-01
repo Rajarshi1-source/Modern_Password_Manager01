@@ -21,6 +21,7 @@ Created: 2026-01-16
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -102,6 +103,44 @@ class GeneticSeed:
     evolution_generation: int = 1
 
 
+# Audit finding #15: certificate-signing format.
+#   v1 (legacy): an ad-hoc ``:``-joined f-string whose hash fields were
+#       recovered at verify time by slicing the *display* prefix
+#       (``password_hash_prefix[7:23]``) — fragile, silently breaking if
+#       the display format ever changed.
+#   v2 (current): a canonical JSON object over the certificate's own
+#       stored fields (stable key order + compact separators), so
+#       signing and verifying read identical data and no string slicing
+#       is involved. The SAME helper is used by the genetic_password
+#       view, so a certificate issued by either path verifies under
+#       ``verify_certificate``.
+_CERT_SIG_VERSION = 2
+
+
+def canonical_cert_sig_payload(
+    *,
+    certificate_id,
+    password_hash_prefix,
+    genetic_hash_prefix,
+    evolution_generation,
+    combined_with_quantum,
+) -> str:
+    """Return the canonical (order-stable) signing input for a genetic
+    certificate (audit finding #15). Computed over the certificate's
+    stored fields so create-time and verify-time inputs are byte-identical."""
+    return json.dumps(
+        {
+            "cid": str(certificate_id),
+            "pw": password_hash_prefix,
+            "gen": genetic_hash_prefix,
+            "ev": evolution_generation,
+            "qc": bool(combined_with_quantum),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 @dataclass
 class GeneticCertificate:
     """Proof of genetic origin for a password."""
@@ -118,7 +157,9 @@ class GeneticCertificate:
     password_length: int
     entropy_bits: int
     signature: str
-    
+    # Audit finding #15: signature-format version (see _CERT_SIG_VERSION).
+    cert_version: int = _CERT_SIG_VERSION
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
@@ -135,6 +176,7 @@ class GeneticCertificate:
             'password_length': self.password_length,
             'entropy_bits': self.entropy_bits,
             'signature': self.signature,
+            'cert_version': self.cert_version,
         }
 
 
@@ -677,27 +719,32 @@ class GeneticPasswordGenerator:
         genetic_hash = hashlib.sha256(seed.seed_bytes).hexdigest()
         
         certificate_id = str(uuid.uuid4())
-        
-        # Build signature data
-        sig_data = (
-            f"{certificate_id}:"
-            f"{password_hash[:16]}:"
-            f"{genetic_hash[:16]}:"
-            f"{seed.evolution_generation}:"
-            f"{combined_with_quantum}"
+
+        # Display prefixes are the values actually stored on the
+        # certificate; sign over them directly (audit finding #15) so
+        # verify_certificate recomputes from identical fields with no
+        # fragile slicing.
+        password_hash_prefix = f"sha256:{password_hash[:16]}..."
+        genetic_hash_prefix = f"sha256:{genetic_hash[:16]}..."
+
+        # Build canonical (v2) signature data and HMAC-sign it.
+        sig_data = canonical_cert_sig_payload(
+            certificate_id=certificate_id,
+            password_hash_prefix=password_hash_prefix,
+            genetic_hash_prefix=genetic_hash_prefix,
+            evolution_generation=seed.evolution_generation,
+            combined_with_quantum=combined_with_quantum,
         )
-        
-        # Create HMAC signature
         signature = hmac.new(
             self._cert_secret.encode(),
             sig_data.encode(),
             hashlib.sha256
         ).hexdigest()
-        
+
         return GeneticCertificate(
             certificate_id=certificate_id,
-            password_hash_prefix=f"sha256:{password_hash[:16]}...",
-            genetic_hash_prefix=f"sha256:{genetic_hash[:16]}...",
+            password_hash_prefix=password_hash_prefix,
+            genetic_hash_prefix=genetic_hash_prefix,
             provider=seed.provider,
             snp_markers_used=seed.snp_count,
             epigenetic_age=epigenetic_factor * 50 if epigenetic_factor else None,
@@ -803,26 +850,47 @@ class GeneticPasswordGenerator:
 
         return self._generate_from_seed(combined_seed, charset, length)
 
-    def verify_certificate(self, certificate: GeneticCertificate) -> bool:
+    def verify_certificate(self, certificate) -> bool:
         """
         Verify the authenticity of a genetic certificate.
-        
+
+        Audit finding #15: version-aware. ``cert_version`` 2 (current)
+        recomputes the canonical-JSON signing payload over the
+        certificate's stored fields; version 1 (or a certificate with no
+        ``cert_version`` attribute) falls back to the legacy slice-based
+        f-string so pre-existing certificates still verify. Accepts any
+        object exposing the certificate fields (the GeneticCertificate
+        dataclass or the GeneticPasswordCertificate model).
+
         Returns True if the signature is valid.
         """
-        sig_data = (
-            f"{certificate.certificate_id}:"
-            f"{certificate.password_hash_prefix[7:23]}:"  # Extract hash portion
-            f"{certificate.genetic_hash_prefix[7:23]}:"
-            f"{certificate.evolution_generation}:"
-            f"{certificate.combined_with_quantum}"
-        )
-        
+        version = getattr(certificate, 'cert_version', 1) or 1
+
+        if version >= 2:
+            sig_data = canonical_cert_sig_payload(
+                certificate_id=certificate.certificate_id,
+                password_hash_prefix=certificate.password_hash_prefix,
+                genetic_hash_prefix=certificate.genetic_hash_prefix,
+                evolution_generation=certificate.evolution_generation,
+                combined_with_quantum=certificate.combined_with_quantum,
+            )
+        else:
+            # Legacy v1 format (verify-only): recovers the 16 hex chars
+            # by slicing past the "sha256:" display prefix.
+            sig_data = (
+                f"{certificate.certificate_id}:"
+                f"{certificate.password_hash_prefix[7:23]}:"
+                f"{certificate.genetic_hash_prefix[7:23]}:"
+                f"{certificate.evolution_generation}:"
+                f"{certificate.combined_with_quantum}"
+            )
+
         expected_sig = hmac.new(
             self._cert_secret.encode(),
             sig_data.encode(),
             hashlib.sha256
         ).hexdigest()
-        
+
         return hmac.compare_digest(expected_sig, certificate.signature)
 
 
