@@ -669,6 +669,11 @@ def generate_genetic_password(request):
         
         # Optionally combine with quantum entropy
         quantum_cert_id = None
+        # Track whether quantum bytes were ACTUALLY mixed in, rather than
+        # trusting the request flag — if the fetch fails we fall back to
+        # the genetic seed only, and the certificate must attest to what
+        # really happened (PR #286 review).
+        quantum_mixed = False
         if combine_with_quantum:
             try:
                 from ..services.quantum_rng_service import get_quantum_generator
@@ -679,6 +684,7 @@ def generate_genetic_password(request):
                     # Combine seeds
                     combined = bytes(a ^ b for a, b in zip(base_seed[:32], quantum_bytes[:32]))
                     base_seed = hashlib.sha3_512(combined + base_seed[32:]).digest()
+                    quantum_mixed = True
                     # Get quantum cert id if available
                     if len(quantum_result) > 1 and hasattr(quantum_result[1], 'id'):
                         quantum_cert_id = str(quantum_result[1].id)
@@ -729,7 +735,7 @@ def generate_genetic_password(request):
             'snp_markers_used': connection.snp_count,
             'epigenetic_age': connection.last_biological_age,
             'evolution_generation': connection.evolution_generation,
-            'combined_with_quantum': combine_with_quantum,
+            'combined_with_quantum': quantum_mixed,
             'quantum_certificate_id': quantum_cert_id,
             'password_length': length,
             'entropy_bits': entropy_bits,
@@ -760,7 +766,7 @@ def generate_genetic_password(request):
             password_hash_prefix=cert_data['password_hash_prefix'],
             genetic_hash_prefix=cert_data['genetic_hash_prefix'],
             evolution_generation=connection.evolution_generation,
-            combined_with_quantum=combine_with_quantum,
+            combined_with_quantum=quantum_mixed,
             provider=connection.provider,
             snp_markers_used=connection.snp_count,
             epigenetic_age=connection.last_biological_age,
@@ -789,7 +795,7 @@ def generate_genetic_password(request):
                 snp_markers_used=connection.snp_count,
                 epigenetic_age=connection.last_biological_age,
                 evolution_generation=connection.evolution_generation,
-                combined_with_quantum=combine_with_quantum,
+                combined_with_quantum=quantum_mixed,
                 quantum_certificate_id=quantum_uuid,
                 password_length=length,
                 entropy_bits=entropy_bits,
