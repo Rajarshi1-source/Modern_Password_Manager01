@@ -433,6 +433,79 @@ class GeneticCertificateTestCase(TestCase):
         self.assertTrue(self.generator.verify_certificate(legacy))
 
 
+class GeneticCertificateModelPersistenceTestCase(TestCase):
+    """PR #286 review (#15): a certificate issued the way the
+    genetic_password view does — a persisted GeneticPasswordCertificate
+    model row signed with the shared canonical helper — must verify under
+    GeneticPasswordGenerator.verify_certificate(), exercising the model's
+    certificate_id property + DB round-trip rather than only the in-memory
+    dataclass path."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='certuser', email='cert@example.com', password='pw12345!'
+        )
+        self.generator = GeneticPasswordGenerator()
+
+    def _make_model_cert(self):
+        import uuid
+        import hmac
+        import hashlib
+        from django.conf import settings
+        from ..services.genetic_password_service import (
+            canonical_cert_sig_payload, _CERT_SIG_VERSION,
+        )
+        cert_uuid = uuid.uuid4()
+        quantum_uuid = uuid.uuid4()
+        fields = dict(
+            password_hash_prefix='sha256:abcdef0123456789...',
+            genetic_hash_prefix='genprefix0123456789...',
+            provider='23andme',
+            snp_markers_used=42,
+            epigenetic_age=37.5,
+            evolution_generation=3,
+            combined_with_quantum=True,
+            password_length=24,
+            entropy_bits=128,
+        )
+        sig_data = canonical_cert_sig_payload(
+            certificate_id=cert_uuid,
+            password_hash_prefix=fields['password_hash_prefix'],
+            genetic_hash_prefix=fields['genetic_hash_prefix'],
+            evolution_generation=fields['evolution_generation'],
+            combined_with_quantum=fields['combined_with_quantum'],
+            provider=fields['provider'],
+            snp_markers_used=fields['snp_markers_used'],
+            epigenetic_age=fields['epigenetic_age'],
+            quantum_certificate_id=quantum_uuid,
+            password_length=fields['password_length'],
+            entropy_bits=fields['entropy_bits'],
+        )
+        signature = hmac.new(
+            settings.GENETIC_CERT_SECRET.encode(), sig_data.encode(), hashlib.sha256
+        ).hexdigest()
+        return GeneticPasswordCertificate.objects.create(
+            id=cert_uuid,
+            user=self.user,
+            quantum_certificate_id=quantum_uuid,
+            signature=signature,
+            cert_version=_CERT_SIG_VERSION,
+            **fields,
+        )
+
+    def test_persisted_model_certificate_verifies(self):
+        self._make_model_cert()
+        reloaded = GeneticPasswordCertificate.objects.get(user=self.user)
+        self.assertTrue(self.generator.verify_certificate(reloaded))
+
+    def test_tampered_persisted_certificate_fails(self):
+        cert = self._make_model_cert()
+        cert.provider = 'tampered-provider'
+        cert.save(update_fields=['provider'])
+        reloaded = GeneticPasswordCertificate.objects.get(pk=cert.pk)
+        self.assertFalse(self.generator.verify_certificate(reloaded))
+
+
 # =============================================================================
 # Model Tests
 # =============================================================================

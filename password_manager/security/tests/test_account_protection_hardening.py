@@ -14,6 +14,7 @@ from unittest import mock
 from django.test import TestCase, override_settings
 
 from security.services.account_protection import AccountProtectionService
+from security.services.security_service import SecurityService
 
 
 class _FakeRequest:
@@ -85,6 +86,18 @@ class BlacklistCidrTests(TestCase):
         with override_settings(BLACKLISTED_IP_NETS=nets):
             self.assertTrue(self.service.is_ip_blacklisted('2001:db8::1234'))
             self.assertFalse(self.service.is_ip_blacklisted('2001:db9::1'))
+
+    def test_security_service_path_is_cidr_aware_too(self):
+        # PR #286 review: SecurityService._is_ip_blacklisted (the
+        # suspicious-login scoring path) must honor CIDR the same way, so
+        # the two implementations don't drift apart again.
+        import ipaddress
+        sec = SecurityService()
+        nets = [ipaddress.ip_network('10.0.0.0/8')]
+        with override_settings(BLACKLISTED_IP_NETS=nets):
+            self.assertTrue(sec._is_ip_blacklisted('10.5.6.7'))
+            self.assertFalse(sec._is_ip_blacklisted('11.0.0.1'))
+            self.assertFalse(sec._is_ip_blacklisted('not-an-ip'))
 
     def test_malformed_ip_returns_false(self):
         import ipaddress
