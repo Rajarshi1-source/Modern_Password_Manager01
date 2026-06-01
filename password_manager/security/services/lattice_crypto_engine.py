@@ -182,23 +182,31 @@ class LatticeCryptoEngine:
         # quantum-resistant — it only mimics the Kyber API surface — so
         # silently using it in production would advertise PQ protection
         # that does not exist. ``QUANTUM_CRYPTO['ALLOW_SIMULATION']``
-        # (settings/base.py) is True for DEBUG / TESTING / maintenance
-        # commands and False for real WSGI/ASGI serving, so this only
-        # blocks a production process that is actually serving traffic.
+        # (settings/base.py) is True for DEBUG / TESTING / passive
+        # management commands and False for real WSGI/ASGI serving, so
+        # this only blocks a production process that serves traffic.
         if not self.liboqs_available:
             from django.conf import settings
-            allow_simulation = getattr(
-                settings, 'QUANTUM_CRYPTO', {}
-            ).get('ALLOW_SIMULATION', False)
-            if not allow_simulation:
+            qc = getattr(settings, 'QUANTUM_CRYPTO', {})
+            # PR #285 review (Codex P2): honor an explicit feature
+            # disable. The engine is imported via the entanglement
+            # URLconf even when the feature is off, so a deploy that set
+            # ``QUANTUM_CRYPTO_ENABLED=False`` (with no liboqs) must not
+            # crash at import — there is no PQ protection to fail closed
+            # *for* when the operator has turned the feature off.
+            feature_enabled = qc.get('ENABLED', True)
+            allow_simulation = qc.get('ALLOW_SIMULATION', False)
+            if feature_enabled and not allow_simulation:
                 from django.core.exceptions import ImproperlyConfigured
                 raise ImproperlyConfigured(
                     "liboqs is not available and QUANTUM_CRYPTO"
                     "['ALLOW_SIMULATION'] is False. The simulated lattice "
                     "backend is NOT quantum-resistant and must never serve "
                     "production traffic. Install liboqs-python (the real "
-                    "Kyber implementation) or, for a non-production "
-                    "context, set QUANTUM_CRYPTO['ALLOW_SIMULATION']=True."
+                    "Kyber implementation), set QUANTUM_CRYPTO"
+                    "['ALLOW_SIMULATION']=True for a non-production "
+                    "context, or set QUANTUM_CRYPTO_ENABLED=False to turn "
+                    "the feature off entirely."
                 )
 
         if self.algorithm not in self.SUPPORTED_ALGORITHMS:
