@@ -317,7 +317,35 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      
+
+      - name: Free disk space on runner
+        # The backend image is built for BOTH linux/amd64 and linux/arm64
+        # on a single ubuntu-latest runner (arm64 via QEMU). Both platform
+        # builds install the full dependency tree concurrently into the
+        # buildx container, and the amd64 ML layer alone (torch /
+        # tensorflow / mediapipe / dlib / face-recognition-models) is
+        # multiple GB. On run #913 the arm64 *core* layer aborted with
+        # "OSError: [Errno 28] No space left on device" — the standard
+        # runner's ~14 GB free-disk budget was exhausted before the
+        # required core deps finished installing.
+        #
+        # Mirror the reclaim step the backend-test job already uses: drop
+        # the pre-baked toolchains this job never touches (.NET, Android,
+        # GHC, CodeQL, Boost, bundled JDKs) to recover ~25–30 GB of
+        # headroom before buildx runs. These paths are all unused by a
+        # Docker image build.
+        run: |
+          set -eu
+          df -h /
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/local/share/boost || true
+          sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache}/Java_*" || true
+          docker image prune -a -f || true
+          df -h /
+
       - name: Set up QEMU (multi-arch emulation)
         uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
