@@ -330,12 +330,28 @@ def oidc_callback(request):
         
         logger.info(f"User {user.email} authenticated via OIDC provider {provider_name}")
         
-        # Build redirect URL with tokens
-        redirect_params = f"token={jwt_tokens['access']}&refresh={jwt_tokens['refresh']}&provider={provider_name}"
+        # Validate the stored redirect_uri against the same allow-list used by
+        # the error paths. redirect_uri originates from client input at
+        # /oidc/authorize and is cached unvalidated, so without this an attacker
+        # could have the success redirect (which carries the freshly-minted JWT
+        # tokens) sent to an arbitrary host — i.e. token theft. Fall back to the
+        # validated frontend callback if it doesn't pass.
+        if not url_has_allowed_host_and_scheme(
+            redirect_uri, allowed_hosts=allowed_hosts, require_https=request.is_secure()
+        ):
+            logger.warning("OIDC redirect_uri failed host validation; using default callback")
+            redirect_uri = callback_url
+
+        # Build redirect URL with tokens (urlencode escapes token/state values)
+        redirect_params = {
+            'token': jwt_tokens['access'],
+            'refresh': jwt_tokens['refresh'],
+            'provider': provider_name,
+        }
         if client_state:
-            redirect_params += f"&state={client_state}"
-        
-        return redirect(f"{redirect_uri}?{redirect_params}")
+            redirect_params['state'] = client_state
+
+        return redirect(f"{redirect_uri}?{urlencode(redirect_params)}")
         
     except OIDCValidationError as e:
         logger.error(f"OIDC token validation error: {e}")
