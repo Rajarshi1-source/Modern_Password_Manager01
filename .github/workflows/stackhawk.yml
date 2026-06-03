@@ -130,7 +130,7 @@ jobs:
           sleep 5
 
       - name: Run HawkScan
-        uses: stackhawk/hawkscan-action@f7ffbb7de5fc4d9af16ca226fa2ce46a4dda2a0c
+        uses: stackhawk/hawkscan-action@f7ffbb7de5fc4d9af16ca226fa2ce46a4dda2a0c # v2.5.0
         continue-on-error: true
         with:
           apiKey: ${{ secrets.HAWK_API_KEY }}
