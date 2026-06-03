@@ -441,9 +441,14 @@ jobs:
           format: 'sarif'
           output: 'trivy-backend.sarif'
           severity: 'CRITICAL,HIGH'
-          # Apply the maintained .trivyignore (via trivy.yaml -> ignorefile) so the
-          # documented, accepted CVEs (ncurses/curl/libssh2/sqlite/libgcrypt/...)
-          # and the autobahn example-key secret no longer surface in Code Scanning.
+          # Scope this image scan to OS packages only. Python/library advisories
+          # in the bundled venv are covered (without ignore-unfixed) by the
+          # filesystem SCA scanners — Grype `dir:.`, Trivy fs, Safety, pip-audit —
+          # so they are still surfaced for triage rather than hidden here.
+          vuln-type: 'os'
+          # Apply the maintained .trivyignore (via trivy.yaml -> ignorefile). Its
+          # threat assessments are written against THIS backend Debian image
+          # (ncurses/curl/libssh2/sqlite/libgcrypt/...) + the autobahn secret.
           trivy-config: trivy.yaml
           # OS-package CVEs with no upstream Debian fix (e.g. the perl CRITICALs
           # CVE-2026-42496 / CVE-2026-8376) are unactionable — the Dockerfile already
@@ -464,9 +469,14 @@ jobs:
           format: 'sarif'
           output: 'trivy-frontend.sarif'
           severity: 'CRITICAL,HIGH'
-          # Same policy as the backend image scan above: honour .trivyignore and
-          # drop unfixable OS-package CVEs (no upstream patch available).
-          trivy-config: trivy.yaml
+          # OS packages only (libraries handled by the filesystem SCA scanners).
+          vuln-type: 'os'
+          # NOTE: deliberately does NOT load trivy.yaml/.trivyignore. The ignore
+          # entries are written against the backend's python:3.11-slim-bookworm
+          # image (e.g. the curl CVEs are justified by "no curl binary; healthcheck
+          # uses urllib"). The frontend is nginx:alpine and DOES install + use curl
+          # in its HEALTHCHECK (docker/frontend/Dockerfile), so reusing those
+          # backend-only justifications would wrongly hide real frontend curl CVEs.
           ignore-unfixed: true
 
       - name: Upload Trivy scan results (Frontend)
