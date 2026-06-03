@@ -258,7 +258,10 @@ def oidc_callback(request):
         callback_url = "/auth/callback"
 
     def _callback_redirect(error_code, message):
-        return redirect(f"{callback_url}?{urlencode({'error': error_code, 'message': message})}")
+        # The SPA callback reads `error_description`; keep `message` too for
+        # backward compatibility with any older client builds.
+        params = {'error': error_code, 'error_description': message, 'message': message}
+        return redirect(f"{callback_url}?{urlencode(params)}")
 
     if error:
         error_description = request.GET.get('error_description', 'Authentication failed')
@@ -406,12 +409,26 @@ def oidc_token(request):
         
         return Response(tokens)
         
-    except OIDCError as e:
-        logger.warning(f"OIDC token exchange failed: {e}")
+    except OIDCProviderError as e:
+        # Upstream/provider outage — a transient server-side failure, not a
+        # client error. Must not be reported as invalid_grant.
+        logger.warning(f"OIDC provider token exchange failed: {e}")
+        return Response({
+            'error': 'temporarily_unavailable',
+            'error_description': 'Token exchange is temporarily unavailable.',
+        }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    except OIDCValidationError as e:
+        logger.warning(f"OIDC token validation failed: {e}")
         return Response({
             'error': 'invalid_grant',
             'error_description': 'Token exchange failed.',
         }, status=status.HTTP_400_BAD_REQUEST)
+    except OIDCError as e:
+        logger.exception(f"Unexpected OIDC token error: {e}")
+        return Response({
+            'error': 'server_error',
+            'error_description': 'Token exchange failed.',
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])

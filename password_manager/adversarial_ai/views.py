@@ -78,8 +78,8 @@ def _get_engine_or_503():
     try:
         engine = get_game_engine()
         return engine, None
-    except Exception as e:
-        logger.error(f"Failed to initialize GameEngine: {e}")
+    except Exception:
+        logger.exception("Failed to initialize GameEngine:")
         return None, Response(
             {'error': 'Adversarial AI engine is temporarily unavailable.'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE
@@ -206,8 +206,8 @@ def analyze_password(request):
                 'analysis': analysis
             })
     
-    except Exception as e:
-        logger.error(f"Error analyzing password: {e}")
+    except Exception:
+        logger.exception("Error analyzing password:")
         return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -300,8 +300,8 @@ def analyze_raw_password(request):
                 'analysis': analysis
             })
     
-    except Exception as e:
-        logger.error(f"Error analyzing raw password: {e}")
+    except Exception:
+        logger.exception("Error analyzing raw password:")
         return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -400,8 +400,8 @@ def _save_battle_result(user, features, result):
         
         return battle
         
-    except Exception as e:
-        logger.error(f"Error saving battle result: {e}")
+    except Exception:
+        logger.exception("Error saving battle result:")
         return None
 
 
@@ -456,8 +456,8 @@ def get_recommendations(request):
             ]
         })
     
-    except Exception as e:
-        logger.error(f"Error getting recommendations: {e}")
+    except Exception:
+        logger.exception("Error getting recommendations:")
         return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -505,8 +505,8 @@ def update_recommendation_status(request, recommendation_id):
             'new_status': new_status
         })
     
-    except Exception as e:
-        logger.error(f"Error updating recommendation: {e}")
+    except Exception:
+        logger.exception("Error updating recommendation:")
         return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -574,8 +574,8 @@ def get_battle_history(request):
             }
         })
     
-    except Exception as e:
-        logger.error(f"Error getting battle history: {e}")
+    except Exception:
+        logger.exception("Error getting battle history:")
         return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -624,8 +624,8 @@ def get_trending_attacks(request):
             'insights': insights
         })
     
-    except Exception as e:
-        logger.error(f"Error getting trending attacks: {e}")
+    except Exception:
+        logger.exception("Error getting trending attacks:")
         return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -671,6 +671,6 @@ def get_defense_profile(request):
             'is_new': created
         })
     
-    except Exception as e:
-        logger.error(f"Error getting defense profile: {e}")
+    except Exception:
+        logger.exception("Error getting defense profile:")
         return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -294,7 +294,7 @@ def security_dashboard(request):
         
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to load security dashboard.")
+        return error_response("Failed to load security dashboard.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -376,7 +376,7 @@ def security_score(request):
         
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to calculate security score.")
+        return error_response("Failed to calculate security score.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -390,7 +390,7 @@ def devices_list(request):
         
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to get devices.")
+        return error_response("Failed to get devices.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
@@ -427,7 +427,7 @@ def device_detail(request, device_id):
         return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to manage device.")
+        return error_response("Failed to manage device.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -446,7 +446,7 @@ def device_trust(request, device_id):
         return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to trust device.")
+        return error_response("Failed to trust device.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -465,7 +465,7 @@ def device_untrust(request, device_id):
         return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to untrust device.")
+        return error_response("Failed to untrust device.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -496,7 +496,7 @@ def social_account_lock(request, account_id):
         return error_response("Account not found.", status_code=status.HTTP_404_NOT_FOUND)
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to lock account.")
+        return error_response("Failed to lock account.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -526,4 +526,4 @@ def social_account_unlock(request, account_id):
         return error_response("Account not found.", status_code=status.HTTP_404_NOT_FOUND)
     except Exception:
         logger.exception("Unhandled error in account/security endpoint")
-        return error_response("Failed to unlock account.")
+        return error_response("Failed to unlock account.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)

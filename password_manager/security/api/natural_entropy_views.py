@@ -291,7 +291,8 @@ def get_global_entropy_status(request: Request) -> Response:
                 'name': 'Ocean Waves',
                 'description': 'NOAA Pacific Ocean buoy network',
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("ocean entropy source status check failed")
             status_data['sources']['ocean'] = {
                 'available': False,
                 'error': 'An unexpected error occurred.',
@@ -310,7 +311,8 @@ def get_global_entropy_status(request: Request) -> Response:
                 'name': 'Lightning',
                 'description': 'NOAA GOES satellite lightning detection',
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("lightning entropy source status check failed")
             status_data['sources']['lightning'] = {
                 'available': False,
                 'error': 'An unexpected error occurred.',
@@ -329,7 +331,8 @@ def get_global_entropy_status(request: Request) -> Response:
                 'name': 'Seismic',
                 'description': 'USGS global earthquake network',
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("seismic entropy source status check failed")
             status_data['sources']['seismic'] = {
                 'available': False,
                 'error': 'An unexpected error occurred.',
@@ -348,7 +351,8 @@ def get_global_entropy_status(request: Request) -> Response:
                 'name': 'Solar Wind',
                 'description': 'NOAA DSCOVR spacecraft at L1 point',
             }
-        except Exception as e:
+        except Exception:
+            logger.exception("solar entropy source status check failed")
             status_data['sources']['solar'] = {
                 'available': False,
                 'error': 'An unexpected error occurred.',

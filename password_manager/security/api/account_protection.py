@@ -80,7 +80,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to load security dashboard.")
+            return error_response("Failed to load security dashboard.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get', 'post'])
     def social_accounts(self, request):
@@ -152,7 +152,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to lock accounts.")
+            return error_response("Failed to lock accounts.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'])
     def unlock_accounts(self, request):
@@ -199,7 +199,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to unlock accounts.")
+            return error_response("Failed to unlock accounts.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def login_attempts(self, request):
@@ -220,7 +220,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to get login attempts.")
+            return error_response("Failed to get login attempts.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def security_alerts(self, request):
@@ -242,7 +242,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to get security alerts.")
+            return error_response("Failed to get security alerts.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'])
     def resolve_alert(self, request):
@@ -265,7 +265,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             return error_response("Alert not found.", status_code=status.HTTP_404_NOT_FOUND)
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to resolve alert.")
+            return error_response("Failed to resolve alert.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get', 'put'])
     def notification_settings(self, request):
@@ -303,7 +303,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to get devices.")
+            return error_response("Failed to get devices.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'])
     def trust_device(self, request):
@@ -325,7 +325,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to trust device.")
+            return error_response("Failed to trust device.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['post'])
     def untrust_device(self, request):
@@ -347,7 +347,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to untrust device.")
+            return error_response("Failed to untrust device.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
     @action(detail=False, methods=['get'])
     def lock_events(self, request):
@@ -365,7 +365,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
-            return error_response("Failed to get lock events.")
+            return error_response("Failed to get lock events.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class SocialMediaAccountViewSet(viewsets.ModelViewSet):
     """CRUD operations for social media accounts"""
