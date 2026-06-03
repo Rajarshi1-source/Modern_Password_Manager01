@@ -667,7 +667,8 @@ class BulkCreateHoneypotsView(APIView):
                     'honeypot_id': str(honeypot.id),
                     'honeypot_address': honeypot.honeypot_address,
                 })
-            except Exception as e:
+            except Exception:
+                logger.exception("Honeypot creation failed for service %s", service_name)
                 results['failed'].append({
                     'service_name': service_name,
                     'error': 'An unexpected error occurred.',
