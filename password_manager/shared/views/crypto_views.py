@@ -111,7 +111,7 @@ def derive_key(request):
     except Exception as e:
         logger.error(f"Key derivation failed: {e}")
         return Response({
-            'error': f'Failed to derive key: {str(e)}'
+            'error': 'Failed to derive key.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

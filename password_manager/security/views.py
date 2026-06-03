@@ -201,7 +201,7 @@ def check_password_breach(request):
             'count': count
         })
     except Exception as e:
-        return error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -220,7 +220,7 @@ def check_email_breach(request):
             'breaches': breaches
         })
     except Exception as e:
-        return error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -286,7 +286,7 @@ def security_dashboard(request):
         return success_response(data)
         
     except Exception as e:
-        return error_response(f"Failed to load security dashboard: {str(e)}")
+        return error_response("Failed to load security dashboard.")
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -367,7 +367,7 @@ def security_score(request):
         })
         
     except Exception as e:
-        return error_response(f"Failed to calculate security score: {str(e)}")
+        return error_response("Failed to calculate security score.")
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -380,7 +380,7 @@ def devices_list(request):
         })
         
     except Exception as e:
-        return error_response(f"Failed to get devices: {str(e)}")
+        return error_response("Failed to get devices.")
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
@@ -414,7 +414,7 @@ def device_detail(request, device_id):
             )
         
     except Exception as e:
-        return error_response(f"Failed to manage device: {str(e)}")
+        return error_response("Failed to manage device.")
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -430,7 +430,7 @@ def device_trust(request, device_id):
         })
         
     except Exception as e:
-        return error_response(f"Failed to trust device: {str(e)}")
+        return error_response("Failed to trust device.")
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -446,7 +446,7 @@ def device_untrust(request, device_id):
         })
         
     except Exception as e:
-        return error_response(f"Failed to untrust device: {str(e)}")
+        return error_response("Failed to untrust device.")
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -474,7 +474,7 @@ def social_account_lock(request, account_id):
         })
         
     except Exception as e:
-        return error_response(f"Failed to lock account: {str(e)}")
+        return error_response("Failed to lock account.")
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -501,4 +501,4 @@ def social_account_unlock(request, account_id):
         })
         
     except Exception as e:
-        return error_response(f"Failed to unlock account: {str(e)}")
+        return error_response("Failed to unlock account.")

@@ -74,7 +74,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to load security dashboard: {str(e)}")
+            return error_response("Failed to load security dashboard.")
     
     @action(detail=False, methods=['get', 'post'])
     def social_accounts(self, request):
@@ -145,7 +145,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to lock accounts: {str(e)}")
+            return error_response("Failed to lock accounts.")
     
     @action(detail=False, methods=['post'])
     def unlock_accounts(self, request):
@@ -191,7 +191,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to unlock accounts: {str(e)}")
+            return error_response("Failed to unlock accounts.")
     
     @action(detail=False, methods=['get'])
     def login_attempts(self, request):
@@ -211,7 +211,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to get login attempts: {str(e)}")
+            return error_response("Failed to get login attempts.")
     
     @action(detail=False, methods=['get'])
     def security_alerts(self, request):
@@ -232,7 +232,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to get security alerts: {str(e)}")
+            return error_response("Failed to get security alerts.")
     
     @action(detail=False, methods=['post'])
     def resolve_alert(self, request):
@@ -252,7 +252,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to resolve alert: {str(e)}")
+            return error_response("Failed to resolve alert.")
     
     @action(detail=False, methods=['get', 'put'])
     def notification_settings(self, request):
@@ -289,7 +289,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to get devices: {str(e)}")
+            return error_response("Failed to get devices.")
     
     @action(detail=False, methods=['post'])
     def trust_device(self, request):
@@ -308,7 +308,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to trust device: {str(e)}")
+            return error_response("Failed to trust device.")
     
     @action(detail=False, methods=['post'])
     def untrust_device(self, request):
@@ -327,7 +327,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to untrust device: {str(e)}")
+            return error_response("Failed to untrust device.")
     
     @action(detail=False, methods=['get'])
     def lock_events(self, request):
@@ -344,7 +344,7 @@ class AccountProtectionViewSet(viewsets.ViewSet):
             })
             
         except Exception as e:
-            return error_response(f"Failed to get lock events: {str(e)}")
+            return error_response("Failed to get lock events.")
 
 class SocialMediaAccountViewSet(viewsets.ModelViewSet):
     """CRUD operations for social media accounts"""

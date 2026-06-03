@@ -208,7 +208,7 @@ def analyze_password(request):
     
     except Exception as e:
         logger.error(f"Error analyzing password: {e}")
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -302,7 +302,7 @@ def analyze_raw_password(request):
     
     except Exception as e:
         logger.error(f"Error analyzing raw password: {e}")
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 def _extract_features_manually(password: str) -> dict:
@@ -458,7 +458,7 @@ def get_recommendations(request):
     
     except Exception as e:
         logger.error(f"Error getting recommendations: {e}")
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['POST'])
@@ -507,7 +507,7 @@ def update_recommendation_status(request, recommendation_id):
     
     except Exception as e:
         logger.error(f"Error updating recommendation: {e}")
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # =============================================================================
@@ -576,7 +576,7 @@ def get_battle_history(request):
     
     except Exception as e:
         logger.error(f"Error getting battle history: {e}")
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # =============================================================================
@@ -626,7 +626,7 @@ def get_trending_attacks(request):
     
     except Exception as e:
         logger.error(f"Error getting trending attacks: {e}")
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # =============================================================================
@@ -673,4 +673,4 @@ def get_defense_profile(request):
     
     except Exception as e:
         logger.error(f"Error getting defense profile: {e}")
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status.HTTP_500_INTERNAL_SERVER_ERROR)

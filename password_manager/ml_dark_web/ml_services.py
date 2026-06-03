@@ -148,7 +148,7 @@ class BreachClassifierService:
                 'severity': 'LOW',
                 'confidence': 0.0,
                 'probabilities': {},
-                'error': str(e)
+                'error': 'Classification failed.'
             }
     
     def batch_classify(self, texts: List[str]) -> List[Dict]:

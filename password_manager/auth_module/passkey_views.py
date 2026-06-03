@@ -165,7 +165,7 @@ def webauthn_begin_registration(request):
         return success_response(registration_options_dict)
         
     except Exception as e:
-        return error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @throttle_classes([PasskeyThrottle])
@@ -322,7 +322,7 @@ def webauthn_begin_authentication(request):
         return success_response(auth_options_dict)
         
     except Exception as e:
-        return error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @throttle_classes([PasskeyThrottle])

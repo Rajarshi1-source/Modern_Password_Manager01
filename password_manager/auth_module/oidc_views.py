@@ -11,6 +11,7 @@ Provides REST API endpoints for OIDC authentication:
 import logging
 import os
 from typing import Optional
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -243,7 +244,10 @@ def oidc_callback(request):
     if error:
         error_description = request.GET.get('error_description', 'Authentication failed')
         logger.error(f"OIDC callback error: {error} - {error_description}")
-        return redirect(f"{frontend_url}/auth/callback?error={error}&message={error_description}")
+        # URL-encode the reflected provider-supplied params before redirecting
+        # (prevents query/redirect injection from remote-controlled input).
+        params = urlencode({'error': error, 'message': error_description})
+        return redirect(f"{frontend_url}/auth/callback?{params}")
     
     if not code or not state:
         return redirect(f"{frontend_url}/auth/callback?error=invalid_request&message=Missing code or state")
@@ -319,10 +323,10 @@ def oidc_callback(request):
         
     except OIDCValidationError as e:
         logger.error(f"OIDC token validation error: {e}")
-        return redirect(f"{frontend_url}/auth/callback?error=validation_failed&message={str(e)}")
+        return redirect(f"{frontend_url}/auth/callback?error=validation_failed")
     except OIDCError as e:
         logger.error(f"OIDC callback error: {e}")
-        return redirect(f"{frontend_url}/auth/callback?error=oidc_error&message={str(e)}")
+        return redirect(f"{frontend_url}/auth/callback?error=oidc_error")
     except Exception as e:
         logger.exception(f"Unexpected OIDC callback error: {e}")
         return redirect(f"{frontend_url}/auth/callback?error=server_error")
@@ -371,9 +375,10 @@ def oidc_token(request):
         return Response(tokens)
         
     except OIDCError as e:
+        logger.warning(f"OIDC token exchange failed: {e}")
         return Response({
             'error': 'invalid_grant',
-            'error_description': str(e),
+            'error_description': 'Token exchange failed.',
         }, status=status.HTTP_400_BAD_REQUEST)
 
 

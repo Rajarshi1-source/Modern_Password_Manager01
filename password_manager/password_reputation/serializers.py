@@ -28,7 +28,7 @@ class Base64BytesField(serializers.Field):
         try:
             return base64.b64decode(s + "=" * pad, validate=True)
         except (ValueError, base64.binascii.Error) as exc:
-            raise serializers.ValidationError(f"Invalid base64: {exc}") from exc
+            raise serializers.ValidationError("Invalid base64 encoding.") from exc
 
 
 class ReputationProofSubmitSerializer(serializers.Serializer):

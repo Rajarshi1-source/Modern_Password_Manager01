@@ -83,7 +83,7 @@ def _get_entropy_from_sources(
             quality_scores['ocean'] = 0.85  # Ocean has good entropy quality
         except Exception as e:
             logger.warning(f"Ocean entropy unavailable: {e}")
-            errors.append(f"ocean: {str(e)}")
+            errors.append("ocean: unavailable")
     
     # Lightning
     if 'lightning' in sources:
@@ -95,7 +95,7 @@ def _get_entropy_from_sources(
             quality_scores['lightning'] = source_info['lightning'].get('quality_score', 0.8)
         except EntropyUnavailable as e:
             logger.warning(f"Lightning entropy unavailable: {e}")
-            errors.append(f"lightning: {str(e)}")
+            errors.append("lightning: unavailable")
     
     # Seismic
     if 'seismic' in sources:
@@ -107,7 +107,7 @@ def _get_entropy_from_sources(
             quality_scores['seismic'] = source_info['seismic'].get('quality_score', 0.75)
         except EntropyUnavailable as e:
             logger.warning(f"Seismic entropy unavailable: {e}")
-            errors.append(f"seismic: {str(e)}")
+            errors.append("seismic: unavailable")
     
     # Solar Wind
     if 'solar' in sources:
@@ -119,7 +119,7 @@ def _get_entropy_from_sources(
             quality_scores['solar'] = source_info['solar'].get('quality_score', 0.7)
         except EntropyUnavailable as e:
             logger.warning(f"Solar entropy unavailable: {e}")
-            errors.append(f"solar: {str(e)}")
+            errors.append("solar: unavailable")
     
     return {
         'entropy_blocks': entropy_blocks,
@@ -294,7 +294,7 @@ def get_global_entropy_status(request: Request) -> Response:
         except Exception as e:
             status_data['sources']['ocean'] = {
                 'available': False,
-                'error': str(e),
+                'error': 'An unexpected error occurred.',
                 'icon': '🌊',
                 'name': 'Ocean Waves',
             }
@@ -313,7 +313,7 @@ def get_global_entropy_status(request: Request) -> Response:
         except Exception as e:
             status_data['sources']['lightning'] = {
                 'available': False,
-                'error': str(e),
+                'error': 'An unexpected error occurred.',
                 'icon': '⚡',
                 'name': 'Lightning',
             }
@@ -332,7 +332,7 @@ def get_global_entropy_status(request: Request) -> Response:
         except Exception as e:
             status_data['sources']['seismic'] = {
                 'available': False,
-                'error': str(e),
+                'error': 'An unexpected error occurred.',
                 'icon': '🌍',
                 'name': 'Seismic',
             }
@@ -351,7 +351,7 @@ def get_global_entropy_status(request: Request) -> Response:
         except Exception as e:
             status_data['sources']['solar'] = {
                 'available': False,
-                'error': str(e),
+                'error': 'An unexpected error occurred.',
                 'icon': '☀️',
                 'name': 'Solar Wind',
             }

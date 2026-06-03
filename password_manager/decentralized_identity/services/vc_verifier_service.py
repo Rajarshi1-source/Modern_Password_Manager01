@@ -80,7 +80,8 @@ def verify_vc_jwt(token: str) -> Tuple[bool, Dict, List[str]]:
     try:
         header, payload, signature, signing_input = _split_jws(token)
     except ValueError as exc:
-        return False, {}, [str(exc)]
+        logger.warning("JWS split failed during VC verification: %s", exc)
+        return False, {}, ["Malformed credential token."]
 
     alg = header.get("alg")
     if alg != "EdDSA":
@@ -129,7 +130,8 @@ def verify_presentation(
     try:
         header, payload, signature, signing_input = _split_jws(vp_jwt)
     except ValueError as exc:
-        return False, {}, [str(exc)]
+        logger.warning("JWS split failed during VP verification: %s", exc)
+        return False, {}, ["Malformed presentation token."]
 
     holder = payload.get("iss")
     if not holder:

@@ -307,8 +307,9 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 'is_new': created
             })
         except Exception as e:
+            _hp_logger.error("Failed to retrieve salt: %s", e)
             return error_response(
-                message=f"Failed to retrieve salt: {str(e)}",
+                message="Failed to retrieve salt.",
                 code="salt_retrieval_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -405,8 +406,9 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 )
 
         except Exception as e:
+            _hp_logger.error("Auth verification failed: %s", e)
             return error_response(
-                message=f"Auth verification failed: {str(e)}",
+                message="Authentication verification failed.",
                 code="verification_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -423,8 +425,9 @@ class VaultItemViewSet(viewsets.ModelViewSet):
             stats = VaultQueryOptimizer.get_user_statistics(request.user)
             return success_response(data=stats)
         except Exception as e:
+            _hp_logger.error("Failed to get statistics: %s", e)
             return error_response(
-                message=f"Failed to get statistics: {str(e)}",
+                message="Failed to get statistics.",
                 code="stats_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -461,8 +464,9 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 'has_items': has_items,
             })
         except Exception as e:
+            _hp_logger.error("Failed to check initialization: %s", e)
             return error_response(
-                message=f"Failed to check initialization: {str(e)}",
+                message="Failed to check initialization status.",
                 code="initialization_check_error",
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

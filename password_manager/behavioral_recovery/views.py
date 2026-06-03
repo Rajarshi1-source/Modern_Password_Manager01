@@ -720,8 +720,7 @@ def create_recovery_experiments(request):
         
     except Exception as e:
         logger.error(f"Error creating experiments: {e}", exc_info=True)
-        return error_response(
-            f"Failed to create experiments: {str(e)}",
+        return error_response("Failed to create experiments.",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

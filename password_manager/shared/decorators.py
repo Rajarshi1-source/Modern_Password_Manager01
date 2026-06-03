@@ -295,7 +295,7 @@ def handle_exceptions(default_message="An error occurred"):
             except ValueError as e:
                 logger.warning(f"ValueError in {view_func.__name__}: {str(e)}")
                 return JsonResponse({
-                    'error': str(e),
+                    'error': 'Invalid request.',
                     'code': 'validation_error'
                 }, status=400)
             except PermissionError as e:
