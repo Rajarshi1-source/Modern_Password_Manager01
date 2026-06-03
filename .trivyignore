@@ -9,6 +9,15 @@
 # OPA policy. This entry is a belt-and-suspenders fallback.
 KSV0125
 
+# KSV0020 / KSV0021 — "Runs with UID/GID <= 10000" on the monitoring stack
+# (k8s/monitoring/grafana-deployment.yaml runAsUser 472, prometheus/alertmanager
+# similar). These are the UIDs/GIDs the upstream vendor images are built around
+# and chown their data volumes to; forcing UID/GID > 10000 would break their
+# persistent-volume permissions. Containers still run as non-root
+# (runAsNonRoot: true). Accepted for the vendored monitoring images only.
+KSV0020
+KSV0021
+
 # =============================================================================
 # Upstream Debian CVEs with NO fixed version available
 # =============================================================================
@@ -71,6 +80,22 @@ CVE-2026-6276 exp:2026-07-25
 # libcurl4 — wrong SMB connection reuse
 # We do not initiate SMB transfers anywhere in the codebase.
 CVE-2026-5773 exp:2026-07-25
+
+# perl-base — Archive::Tar symlink traversal on extract (CVE-2026-42496, CRITICAL)
+# perl-base ships in the python:3.11-slim-bookworm base image as an apt
+# dependency; the application is pure Python/Django and never invokes perl,
+# let alone Archive::Tar. There is no fixed bookworm version published, so
+# `apt-get -y upgrade` cannot remediate. The image scan now also runs with
+# `ignore-unfixed: true`, so this entry is belt-and-suspenders documentation
+# of an explicitly-reviewed CRITICAL.
+CVE-2026-42496 exp:2026-08-02
+
+# perl-base — heap buffer overflow compiling regexes on 32-bit builds
+# (CVE-2026-8376, CRITICAL). The overflow is specific to 32-bit perl builds
+# (mincount * l overflowing SSize_t); our runtime image is amd64 (64-bit), so
+# the vulnerable code path is not reachable on this architecture. perl is also
+# never invoked by the app. No fixed bookworm version published.
+CVE-2026-8376 exp:2026-08-02
 
 # =============================================================================
 # Bundled-library false positives (third-party docs / fixtures)

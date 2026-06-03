@@ -441,6 +441,14 @@ jobs:
           format: 'sarif'
           output: 'trivy-backend.sarif'
           severity: 'CRITICAL,HIGH'
+          # Apply the maintained .trivyignore (via trivy.yaml -> ignorefile) so the
+          # documented, accepted CVEs (ncurses/curl/libssh2/sqlite/libgcrypt/...)
+          # and the autobahn example-key secret no longer surface in Code Scanning.
+          trivy-config: trivy.yaml
+          # OS-package CVEs with no upstream Debian fix (e.g. the perl CRITICALs
+          # CVE-2026-42496 / CVE-2026-8376) are unactionable — the Dockerfile already
+          # runs `apt-get -y upgrade`, so anything fixable is pulled at build time.
+          ignore-unfixed: true
 
       - name: Upload Trivy scan results (Backend)
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
@@ -456,6 +464,10 @@ jobs:
           format: 'sarif'
           output: 'trivy-frontend.sarif'
           severity: 'CRITICAL,HIGH'
+          # Same policy as the backend image scan above: honour .trivyignore and
+          # drop unfixable OS-package CVEs (no upstream patch available).
+          trivy-config: trivy.yaml
+          ignore-unfixed: true
 
       - name: Upload Trivy scan results (Frontend)
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba # v4.35.5
