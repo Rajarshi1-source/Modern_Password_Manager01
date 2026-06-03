@@ -1,3 +1,4 @@
+import logging
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action, api_view, permission_classes
@@ -6,6 +7,7 @@ from vault.models import EncryptedVaultItem, AuditLog
 import json
 import re
 from django.utils import timezone
+from django.http import Http404
 from django.shortcuts import render, get_object_or_404
 from rest_framework.views import APIView
 from django.contrib.auth.models import User
@@ -27,6 +29,9 @@ from vault.serializer import VaultItemSerializer
 from password_manager.api_utils import error_response, success_response
 
 # Create your views here.
+
+logger = logging.getLogger(__name__)
+
 
 class SecurityViewSet(viewsets.ViewSet):
     """Security-related endpoints for password health and monitoring"""
@@ -200,7 +205,8 @@ def check_password_breach(request):
             'is_breached': is_breached,
             'count': count
         })
-    except Exception as e:
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
@@ -219,7 +225,8 @@ def check_email_breach(request):
             'is_breached': len(breaches) > 0,
             'breaches': breaches
         })
-    except Exception as e:
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("An unexpected error occurred.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
@@ -285,7 +292,8 @@ def security_dashboard(request):
         
         return success_response(data)
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to load security dashboard.")
 
 @api_view(['GET'])
@@ -366,7 +374,8 @@ def security_score(request):
             }
         })
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to calculate security score.")
 
 @api_view(['GET'])
@@ -379,7 +388,8 @@ def devices_list(request):
             'devices': UserDeviceSerializer(devices, many=True).data
         })
         
-    except Exception as e:
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to get devices.")
 
 @api_view(['GET', 'PATCH', 'DELETE'])
@@ -413,7 +423,10 @@ def device_detail(request, device_id):
                 status_code=status.HTTP_204_NO_CONTENT
             )
         
-    except Exception as e:
+    except Http404:
+        return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to manage device.")
 
 @api_view(['POST'])
@@ -429,7 +442,10 @@ def device_trust(request, device_id):
             'message': 'Device marked as trusted'
         })
         
-    except Exception as e:
+    except Http404:
+        return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to trust device.")
 
 @api_view(['POST'])
@@ -445,7 +461,10 @@ def device_untrust(request, device_id):
             'message': 'Device trust removed'
         })
         
-    except Exception as e:
+    except Http404:
+        return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to untrust device.")
 
 @api_view(['POST'])
@@ -473,7 +492,10 @@ def social_account_lock(request, account_id):
             'message': 'Account locked successfully'
         })
         
-    except Exception as e:
+    except Http404:
+        return error_response("Account not found.", status_code=status.HTTP_404_NOT_FOUND)
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to lock account.")
 
 @api_view(['POST'])
@@ -500,5 +522,8 @@ def social_account_unlock(request, account_id):
             'message': 'Account unlocked successfully'
         })
         
-    except Exception as e:
+    except Http404:
+        return error_response("Account not found.", status_code=status.HTTP_404_NOT_FOUND)
+    except Exception:
+        logger.exception("Unhandled error in account/security endpoint")
         return error_response("Failed to unlock account.")

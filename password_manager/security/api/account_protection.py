@@ -1,7 +1,9 @@
+import logging
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
 from django.utils import timezone
@@ -18,6 +20,9 @@ from ..serializers import (
 )
 from ..services.account_protection import account_protection_service
 from password_manager.api_utils import error_response, success_response
+
+logger = logging.getLogger(__name__)
+
 
 class AccountProtectionViewSet(viewsets.ViewSet):
     """API endpoints for account protection and security monitoring"""
@@ -73,7 +78,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'social_accounts': SocialMediaAccountSerializer(social_accounts, many=True).data
             })
             
-        except Exception as e:
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to load security dashboard.")
     
     @action(detail=False, methods=['get', 'post'])
@@ -144,7 +150,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'message': f'Successfully locked {locked_count} account(s)'
             })
             
-        except Exception as e:
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to lock accounts.")
     
     @action(detail=False, methods=['post'])
@@ -190,7 +197,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'message': f'Successfully unlocked {unlocked_count} account(s)'
             })
             
-        except Exception as e:
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to unlock accounts.")
     
     @action(detail=False, methods=['get'])
@@ -210,7 +218,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'total_count': attempts.count()
             })
             
-        except Exception as e:
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to get login attempts.")
     
     @action(detail=False, methods=['get'])
@@ -231,7 +240,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'alerts': SecurityAlertSerializer(alerts, many=True).data
             })
             
-        except Exception as e:
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to get security alerts.")
     
     @action(detail=False, methods=['post'])
@@ -251,7 +261,10 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'message': 'Alert resolved successfully'
             })
             
-        except Exception as e:
+        except Http404:
+            return error_response("Alert not found.", status_code=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to resolve alert.")
     
     @action(detail=False, methods=['get', 'put'])
@@ -288,7 +301,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'devices': UserDeviceSerializer(devices, many=True).data
             })
             
-        except Exception as e:
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to get devices.")
     
     @action(detail=False, methods=['post'])
@@ -307,7 +321,10 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'message': 'Device marked as trusted'
             })
             
-        except Exception as e:
+        except Http404:
+            return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to trust device.")
     
     @action(detail=False, methods=['post'])
@@ -326,7 +343,10 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'message': 'Device trust removed'
             })
             
-        except Exception as e:
+        except Http404:
+            return error_response("Device not found.", status_code=status.HTTP_404_NOT_FOUND)
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to untrust device.")
     
     @action(detail=False, methods=['get'])
@@ -343,7 +363,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'events': AccountLockEventSerializer(events, many=True).data
             })
             
-        except Exception as e:
+        except Exception:
+            logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to get lock events.")
 
 class SocialMediaAccountViewSet(viewsets.ModelViewSet):

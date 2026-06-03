@@ -11,12 +11,13 @@ Provides REST API endpoints for OIDC authentication:
 import logging
 import os
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.http import JsonResponse
 from django.shortcuts import redirect
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -240,24 +241,39 @@ def oidc_callback(request):
     error = request.GET.get('error') or request.data.get('error')
     
     frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-    
+
+    # Build a validated callback base. FRONTEND_URL is operator-configured, but
+    # we still allow-list its host (defense-in-depth against open redirection)
+    # and fall back to a same-origin relative path if it doesn't validate.
+    # Provider-supplied error text is NEVER reflected into the redirect — only
+    # fixed, non-sensitive codes/messages are sent to the SPA.
+    callback_url = f"{frontend_url}/auth/callback"
+    allowed_hosts = {request.get_host()}
+    frontend_host = urlparse(frontend_url).netloc
+    if frontend_host:
+        allowed_hosts.add(frontend_host)
+    if not url_has_allowed_host_and_scheme(
+        callback_url, allowed_hosts=allowed_hosts, require_https=request.is_secure()
+    ):
+        callback_url = "/auth/callback"
+
+    def _callback_redirect(error_code, message):
+        return redirect(f"{callback_url}?{urlencode({'error': error_code, 'message': message})}")
+
     if error:
         error_description = request.GET.get('error_description', 'Authentication failed')
         logger.error(f"OIDC callback error: {error} - {error_description}")
-        # URL-encode the reflected provider-supplied params before redirecting
-        # (prevents query/redirect injection from remote-controlled input).
-        params = urlencode({'error': error, 'message': error_description})
-        return redirect(f"{frontend_url}/auth/callback?{params}")
-    
+        return _callback_redirect('oidc_error', 'Authentication failed')
+
     if not code or not state:
-        return redirect(f"{frontend_url}/auth/callback?error=invalid_request&message=Missing code or state")
+        return _callback_redirect('invalid_request', 'Missing code or state')
     
     # Retrieve stored state data
     from django.core.cache import cache
     state_data = cache.get(f'oidc_state_{state}')
     
     if not state_data:
-        return redirect(f"{frontend_url}/auth/callback?error=invalid_state&message=State expired or invalid")
+        return _callback_redirect('invalid_state', 'State expired or invalid')
     
     # Clear state from cache
     cache.delete(f'oidc_state_{state}')
@@ -307,7 +323,7 @@ def oidc_callback(request):
         user = _get_or_create_user(user_info, provider_name)
         
         if not user:
-            return redirect(f"{frontend_url}/auth/callback?error=user_creation_failed")
+            return _callback_redirect('user_creation_failed', 'Account creation failed')
         
         # Generate JWT tokens for the user
         jwt_tokens = get_tokens_for_user(user)
@@ -323,13 +339,13 @@ def oidc_callback(request):
         
     except OIDCValidationError as e:
         logger.error(f"OIDC token validation error: {e}")
-        return redirect(f"{frontend_url}/auth/callback?error=validation_failed")
+        return _callback_redirect('validation_failed', 'Validation failed')
     except OIDCError as e:
         logger.error(f"OIDC callback error: {e}")
-        return redirect(f"{frontend_url}/auth/callback?error=oidc_error")
+        return _callback_redirect('oidc_error', 'Authentication failed')
     except Exception as e:
         logger.exception(f"Unexpected OIDC callback error: {e}")
-        return redirect(f"{frontend_url}/auth/callback?error=server_error")
+        return _callback_redirect('server_error', 'Server error')
 
 
 @api_view(['POST'])
