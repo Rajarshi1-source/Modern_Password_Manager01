@@ -306,7 +306,8 @@ def authenticate_biometric(request):
                     'message': 'Invalid biometric type'
                 }, status=status.HTTP_400_BAD_REQUEST)
         
-        except Exception as e:
+        except Exception:
+            logger.exception("Biometric processing failed for user %s", username)
             return Response({
                 'authenticated': False,
                 'message': 'Processing failed. Please try again later.'

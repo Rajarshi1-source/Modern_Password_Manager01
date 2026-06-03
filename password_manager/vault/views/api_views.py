@@ -306,8 +306,8 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 'salt': salt_obj.get_salt_b64(),
                 'is_new': created
             })
-        except Exception as e:
-            _hp_logger.error("Failed to retrieve salt: %s", e)
+        except Exception:
+            _hp_logger.exception("Failed to retrieve salt")
             return error_response(
                 message="Failed to retrieve salt.",
                 code="salt_retrieval_error",
@@ -405,8 +405,8 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                     status_code=status.HTTP_401_UNAUTHORIZED
                 )
 
-        except Exception as e:
-            _hp_logger.error("Auth verification failed: %s", e)
+        except Exception:
+            _hp_logger.exception("Auth verification failed")
             return error_response(
                 message="Authentication verification failed.",
                 code="verification_error",
@@ -424,8 +424,8 @@ class VaultItemViewSet(viewsets.ModelViewSet):
         try:
             stats = VaultQueryOptimizer.get_user_statistics(request.user)
             return success_response(data=stats)
-        except Exception as e:
-            _hp_logger.error("Failed to get statistics: %s", e)
+        except Exception:
+            _hp_logger.exception("Failed to get statistics")
             return error_response(
                 message="Failed to get statistics.",
                 code="stats_error",
@@ -463,8 +463,8 @@ class VaultItemViewSet(viewsets.ModelViewSet):
                 'has_auth_hash': has_auth_hash,
                 'has_items': has_items,
             })
-        except Exception as e:
-            _hp_logger.error("Failed to check initialization: %s", e)
+        except Exception:
+            _hp_logger.exception("Failed to check initialization")
             return error_response(
                 message="Failed to check initialization status.",
                 code="initialization_check_error",
