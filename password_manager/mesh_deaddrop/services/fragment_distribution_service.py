@@ -17,9 +17,12 @@ Strategies:
 @created 2026-01-22
 """
 
+import logging
 import random
 from typing import List, Dict, Optional, Set
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 from enum import Enum
 
 from django.db import models, transaction
@@ -249,7 +252,8 @@ class FragmentDistributionService:
                     result.node_assignments[str(fragment.id)] = str(target_node.id)
                 except Exception as e:
                     result.fragments_failed += 1
-                    result.errors.append(f"Failed to assign fragment {i}: {e}")
+                    logger.warning("Failed to assign fragment %s: %s", i, e)
+                    result.errors.append(f"Failed to assign fragment {i}.")
             else:
                 # Store locally as fallback
                 fragment.storage_type = 'self'
@@ -403,7 +407,8 @@ class FragmentDistributionService:
                 result.fragments_collected += 1
                 
             except Exception as e:
-                result.errors.append(f"Failed to collect fragment {fragment.fragment_index}: {e}")
+                logger.warning("Failed to collect fragment %s: %s", fragment.fragment_index, e)
+                result.errors.append(f"Failed to collect fragment {fragment.fragment_index}.")
         
         # Check if we have enough fragments
         if result.fragments_collected >= dead_drop.required_fragments:
@@ -420,7 +425,8 @@ class FragmentDistributionService:
                 dead_drop.mark_collected(accessor)
                 
             except Exception as e:
-                result.errors.append(f"Reconstruction failed: {e}")
+                logger.warning("Fragment reconstruction failed: %s", e)
+                result.errors.append("Reconstruction failed.")
         else:
             result.errors.append(
                 f"Insufficient fragments: {result.fragments_collected}/{dead_drop.required_fragments}"

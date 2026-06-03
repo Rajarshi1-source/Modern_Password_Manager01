@@ -333,7 +333,7 @@ class EpigeneticEvolutionManager:
             
         except Exception as e:
             logger.error(f"Failed to fetch biological age: {e}")
-            return False, f"Failed to fetch epigenetic data: {str(e)}"
+            return False, "Failed to fetch epigenetic data."
         
         # Check if evolution threshold is met
         last_bio_age = dna_connection.last_biological_age or current_bio_age

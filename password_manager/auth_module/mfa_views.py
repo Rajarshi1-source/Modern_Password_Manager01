@@ -121,7 +121,7 @@ def register_face(request):
         except Exception as e:
             return Response({
                 'success': False,
-                'message': f'Invalid image data: {str(e)}'
+                'message': 'Invalid image data provided.'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Register face with ML model
@@ -171,7 +171,7 @@ def register_face(request):
         logger.error(f"Face registration error: {e}")
         return Response({
             'success': False,
-            'message': f'Registration error: {str(e)}'
+            'message': 'Registration failed. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -205,7 +205,7 @@ def register_voice(request):
         except Exception as e:
             return Response({
                 'success': False,
-                'message': f'Invalid audio data: {str(e)}'
+                'message': 'Invalid audio data provided.'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Register voice with ML model
@@ -253,7 +253,7 @@ def register_voice(request):
         logger.error(f"Voice registration error: {e}")
         return Response({
             'success': False,
-            'message': f'Registration error: {str(e)}'
+            'message': 'Registration failed. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -309,7 +309,7 @@ def authenticate_biometric(request):
         except Exception as e:
             return Response({
                 'authenticated': False,
-                'message': f'Processing error: {str(e)}'
+                'message': 'Processing failed. Please try again later.'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         # Log authentication attempt
@@ -343,7 +343,7 @@ def authenticate_biometric(request):
         logger.error(f"Biometric authentication error: {e}")
         return Response({
             'authenticated': False,
-            'message': f'Authentication error: {str(e)}'
+            'message': 'Authentication failed. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -398,7 +398,7 @@ def start_continuous_auth(request):
         logger.error(f"Continuous auth start error: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -498,7 +498,7 @@ def update_continuous_auth(request):
         logger.error(f"Continuous auth update error: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -636,7 +636,7 @@ def assess_mfa_risk(request):
         logger.error(f"Risk assessment error: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -672,7 +672,7 @@ def get_mfa_factors(request):
         logger.error(f"Error fetching MFA factors: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -726,7 +726,7 @@ def mfa_policy(request):
         logger.error(f"MFA policy error: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -761,7 +761,7 @@ def auth_attempts_history(request):
         logger.error(f"Error fetching auth attempts: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -819,7 +819,7 @@ def verify_integrated_mfa(request):
         logger.error(f"MFA verification error: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -866,6 +866,6 @@ def get_mfa_requirements(request):
         logger.error(f"Error getting MFA requirements: {e}")
         return Response({
             'success': False,
-            'message': f'Error: {str(e)}'
+            'message': 'An unexpected error occurred. Please try again later.'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

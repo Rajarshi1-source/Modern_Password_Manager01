@@ -670,7 +670,7 @@ class BulkCreateHoneypotsView(APIView):
             except Exception as e:
                 results['failed'].append({
                     'service_name': service_name,
-                    'error': str(e),
+                    'error': 'An unexpected error occurred.',
                 })
         
         return Response({

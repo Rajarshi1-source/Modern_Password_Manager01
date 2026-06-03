@@ -320,7 +320,7 @@ class BiometricAuthenticator:
             logger.error(f"Error registering face: {e}")
             return {
                 'success': False,
-                'message': f'Face registration failed: {str(e)}'
+                'message': 'Face registration failed. Please try again later.'
             }
     
     def authenticate_face(self, user_id: str, face_image: np.ndarray) -> Dict:
@@ -373,7 +373,7 @@ class BiometricAuthenticator:
             logger.error(f"Error during face authentication: {e}")
             return {
                 'authenticated': False,
-                'message': f'Authentication error: {str(e)}'
+                'message': 'Authentication failed. Please try again later.'
             }
     
     def register_voice(self, user_id: str, voice_features: np.ndarray) -> Dict:
@@ -410,7 +410,7 @@ class BiometricAuthenticator:
             logger.error(f"Error registering voice: {e}")
             return {
                 'success': False,
-                'message': f'Voice registration failed: {str(e)}'
+                'message': 'Voice registration failed. Please try again later.'
             }
     
     def authenticate_voice(self, user_id: str, voice_features: np.ndarray) -> Dict:
@@ -452,7 +452,7 @@ class BiometricAuthenticator:
             logger.error(f"Error during voice authentication: {e}")
             return {
                 'authenticated': False,
-                'message': f'Authentication error: {str(e)}'
+                'message': 'Authentication failed. Please try again later.'
             }
     
     def continuous_authenticate(
@@ -521,7 +521,7 @@ class BiometricAuthenticator:
             logger.error(f"Error during continuous authentication: {e}")
             return {
                 'authenticated': False,
-                'message': f'Authentication error: {str(e)}'
+                'message': 'Authentication failed. Please try again later.'
             }
     
     def _encode_face(self, face_image: np.ndarray) -> np.ndarray:
