@@ -1,0 +1,19 @@
+# Grype configuration
+# Grype auto-loads this file from the working directory of `grype dir:.`
+# (see .github/workflows/security-multi-scanner.yml).
+#
+# Mirrors the curated, per-advisory discipline of .trivyignore: only advisories
+# with NO upstream fix and a documented threat assessment are ignored here.
+# Anything with an available fixed version must be remediated via a dependency
+# bump (requirements-*.txt / lockfiles), NOT suppressed.
+
+ignore:
+  # ecdsa — Minerva timing side-channel (GHSA-wj6h-64fc-37mp / CVE-2024-23342).
+  # The python `ecdsa` maintainers have stated they will NOT fix the timing
+  # side-channel in the pure-Python implementation — there is no fixed version.
+  # `ecdsa` is a transitive dependency (pulled via python-jose / web3 tooling);
+  # the application's own signing/verification uses `cryptography` (OpenSSL),
+  # not `ecdsa`, and no attacker-timed ECDSA operation is exposed. Re-evaluate
+  # if a fixed release ships or if `ecdsa` becomes a direct signing dependency.
+  - vulnerability: GHSA-wj6h-64fc-37mp
+  - vulnerability: CVE-2024-23342
