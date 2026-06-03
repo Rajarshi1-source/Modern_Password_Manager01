@@ -183,19 +183,23 @@ permissions:
   it** (see §0), so they re-surface.
 
 ### Fix (two parts)
-1. **Keystone:** add `trivy-config: trivy.yaml` to both ci.yml Trivy steps:
+1. **Keystone:** scope both ci.yml Trivy image scans to OS packages and apply the
+   ignore policy. Per PR-1 review (Codex/CodeRabbit), the two images get *different*
+   treatment because their threat models differ:
    ```yaml
-   - name: Run Trivy vulnerability scanner (Backend)
-     uses: aquasecurity/trivy-action@…
-     with:
-       image-ref: ${{ needs.setup.outputs.backend_image }}:latest
-       format: 'sarif'
-       output: 'trivy-backend.sarif'
+   # Backend (python:3.11-slim-bookworm):
        severity: 'CRITICAL,HIGH'
-       trivy-config: trivy.yaml      # <-- add (loads .trivyignore)
+       vuln-type: 'os'             # libraries handled by the SCA scanners
+       trivy-config: trivy.yaml    # loads .trivyignore (its justifications are backend-specific)
+       ignore-unfixed: true        # no-fix Debian OS tail
    ```
-   (same for the Frontend step). This clears all already-listed CVEs from Code
-   Scanning.
+   The **Frontend (nginx:alpine)** scan uses `vuln-type: 'os'` + `ignore-unfixed: true`
+   but **does NOT load `trivy.yaml`/.trivyignore** — the backend ignore justifications
+   (e.g. curl CVEs justified by "no curl binary; healthcheck uses urllib") are false
+   for the frontend, which installs and uses curl in its HEALTHCHECK. `vuln-type: 'os'`
+   keeps Python/library advisories visible via the filesystem SCA scanners (Grype/
+   Trivy-fs/Safety/pip-audit) instead of letting `ignore-unfixed` silently drop them.
+   This clears the already-listed backend CVEs from Code Scanning.
 2. **New no-fix entries in `.trivyignore`** — only after verifying each on
    https://security-tracker.debian.org shows no fixed bookworm version. Add with
    the existing format (`<CVE> exp:<YYYY-MM-DD> # threat assessment`):
@@ -285,15 +289,16 @@ Medium risk → isolate in its own commit.
 
 ### Verified
 `k8s/monitoring/grafana-deployment.yaml` uses `runAsUser: 472` (grafana's vendor
-UID); prometheus/alertmanager similar. KSV020/KSV021 want UID/GID > 10000.
+UID); prometheus/alertmanager similar. AVD-KSV-0020/AVD-KSV-0021 want UID/GID > 10000.
 Changing grafana's UID risks volume-permission breakage.
 
 ### Minimal fix (lowest risk)
-Add the KSV checks to `.trivyignore` with justification (mirrors the existing
-`KSV0125` entry) rather than re-UID vendor images:
+Add the checks to `.trivyignore` with justification rather than re-UID vendor
+images. Use the **canonical AVD IDs** (the short `KSV020`/`KSV0020` aliases stop
+matching in newer Trivy — aquasecurity/trivy#8853):
 ```
-KSV020   # vendored monitoring images (grafana 472, …) require their fixed UID
-KSV021   # same — GID fixed by upstream image; volumes chowned to it
+AVD-KSV-0020   # vendored monitoring images (grafana 472, …) require their fixed UID
+AVD-KSV-0021   # same — GID fixed by upstream image; volumes chowned to it
 ```
 (Alternatively, if a security policy mandates high UIDs, set `runAsUser/runAsGroup`
 > 10000 *and* an `initContainer` to chown the data dir — higher effort/risk.)
