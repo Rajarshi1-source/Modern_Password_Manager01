@@ -331,8 +331,8 @@ class EpigeneticEvolutionManager:
             if current_bio_age is None:
                 return False, "No biological age data available"
             
-        except Exception as e:
-            logger.error(f"Failed to fetch biological age: {e}")
+        except Exception:
+            logger.exception("Failed to fetch biological age")
             return False, "Failed to fetch epigenetic data."
         
         # Check if evolution threshold is met

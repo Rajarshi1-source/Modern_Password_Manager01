@@ -250,9 +250,9 @@ class FragmentDistributionService:
                     self._assign_fragment_to_node(fragment, target_node)
                     result.fragments_distributed += 1
                     result.node_assignments[str(fragment.id)] = str(target_node.id)
-                except Exception as e:
+                except Exception:
                     result.fragments_failed += 1
-                    logger.warning("Failed to assign fragment %s: %s", i, e)
+                    logger.exception("Failed to assign fragment %s", i)
                     result.errors.append(f"Failed to assign fragment {i}.")
             else:
                 # Store locally as fallback
@@ -406,8 +406,8 @@ class FragmentDistributionService:
                 
                 result.fragments_collected += 1
                 
-            except Exception as e:
-                logger.warning("Failed to collect fragment %s: %s", fragment.fragment_index, e)
+            except Exception:
+                logger.exception("Failed to collect fragment %s", fragment.fragment_index)
                 result.errors.append(f"Failed to collect fragment {fragment.fragment_index}.")
         
         # Check if we have enough fragments
@@ -424,8 +424,8 @@ class FragmentDistributionService:
                 # Mark dead drop as collected
                 dead_drop.mark_collected(accessor)
                 
-            except Exception as e:
-                logger.warning("Fragment reconstruction failed: %s", e)
+            except Exception:
+                logger.exception("Fragment reconstruction failed")
                 result.errors.append("Reconstruction failed.")
         else:
             result.errors.append(

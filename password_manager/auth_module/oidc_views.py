@@ -189,7 +189,7 @@ def oidc_authorize(request):
         }, status=status.HTTP_400_BAD_REQUEST)
     
     if not redirect_uri:
-        redirect_uri = os.environ.get('FRONTEND_URL', 'http://localhost:3000') + '/auth/callback'
+        redirect_uri = settings.FRONTEND_URL + '/auth/callback'
     
     oidc_service = get_oidc_service()
     
@@ -217,12 +217,14 @@ def oidc_authorize(request):
         })
         
     except OIDCError as e:
-        logger.error(f"OIDC authorize error: {e}")
+        # Building the authorization URL failed (discovery/provider/config) —
+        # a server-side problem, not a client error.
+        logger.exception(f"OIDC authorize error: {e}")
         return Response({
             'success': False,
-            'message': 'internal_error',
+            'message': 'Authorization failed',
             'code': 'oidc_error',
-        }, status=status.HTTP_400_BAD_REQUEST)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET', 'POST'])
@@ -240,7 +242,11 @@ def oidc_callback(request):
     state = request.GET.get('state') or request.data.get('state')
     error = request.GET.get('error') or request.data.get('error')
     
-    frontend_url = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+    # Use the configured frontend origin (settings.FRONTEND_URL) so the
+    # allow-list matches what the SPA actually sends as redirect_uri. Using a
+    # view-local default here previously diverged from settings and rejected
+    # legitimate callbacks.
+    frontend_url = settings.FRONTEND_URL
 
     # Build a validated callback base. FRONTEND_URL is operator-configured, but
     # we still allow-list its host (defense-in-depth against open redirection)
@@ -415,9 +421,16 @@ def oidc_token(request):
         return Response(tokens)
         
     except OIDCProviderError as e:
-        # Upstream/provider outage — a transient server-side failure, not a
-        # client error. Must not be reported as invalid_grant.
-        logger.warning(f"OIDC provider token exchange failed: {e}")
+        # A provider 4xx (e.g. invalid_grant for an expired/reused code or a
+        # redirect mismatch) is a non-retryable client error -> 400. Only a 5xx
+        # or network failure (no upstream status) is a transient outage -> 503.
+        if e.status_code is not None and 400 <= e.status_code < 500:
+            logger.warning(f"OIDC provider rejected token exchange ({e.status_code}): {e}")
+            return Response({
+                'error': 'invalid_grant',
+                'error_description': 'Token exchange failed.',
+            }, status=status.HTTP_400_BAD_REQUEST)
+        logger.warning(f"OIDC provider token exchange unavailable: {e}")
         return Response({
             'error': 'temporarily_unavailable',
             'error_description': 'Token exchange is temporarily unavailable.',

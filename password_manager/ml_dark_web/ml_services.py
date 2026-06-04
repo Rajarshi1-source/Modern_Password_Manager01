@@ -141,8 +141,8 @@ class BreachClassifierService:
                 'predicted_class': predicted_class
             }
             
-        except Exception as e:
-            logger.error(f"Error classifying breach: {e}")
+        except Exception:
+            logger.exception("Error classifying breach")
             return {
                 'is_breach': False,
                 'severity': 'LOW',
