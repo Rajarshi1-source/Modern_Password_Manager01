@@ -44,8 +44,17 @@ class OIDCValidationError(OIDCError):
 
 
 class OIDCProviderError(OIDCError):
-    """Raised when provider communication fails"""
-    pass
+    """Raised when provider communication fails.
+
+    ``status_code`` holds the upstream HTTP status when the failure was an HTTP
+    error response (vs. a network/timeout error). This lets callers separate a
+    provider-side *client* error (4xx, e.g. invalid_grant for an expired/reused
+    authorization code) from a transient *outage* (5xx / connection failure).
+    """
+
+    def __init__(self, *args, status_code=None):
+        super().__init__(*args)
+        self.status_code = status_code
 
 
 class OIDCProvider:
@@ -422,7 +431,14 @@ class OIDCService:
             )
             response.raise_for_status()
             return response.json()
+        except requests.HTTPError as e:
+            # Provider returned an HTTP error. 4xx (e.g. invalid_grant) is a
+            # client error; 5xx is an outage. Preserve the status for the caller.
+            upstream_status = e.response.status_code if e.response is not None else None
+            logger.error(f"Token exchange failed for {provider_name}: {e}")
+            raise OIDCProviderError(f"Token exchange failed: {e}", status_code=upstream_status)
         except requests.RequestException as e:
+            # Network/timeout failure — no HTTP status, treated as transient.
             logger.error(f"Token exchange failed for {provider_name}: {e}")
             raise OIDCProviderError(f"Token exchange failed: {e}")
     

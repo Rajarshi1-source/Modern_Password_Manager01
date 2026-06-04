@@ -118,7 +118,8 @@ def register_face(request):
         try:
             image_data = base64.b64decode(face_image_b64)
             face_image = decode_face_image(image_data)
-        except Exception as e:
+        except Exception:
+            logger.exception("Face image decode failed for user %s", user.username)
             return Response({
                 'success': False,
                 'message': 'Invalid image data provided.'
@@ -202,7 +203,8 @@ def register_voice(request):
         try:
             audio_data = base64.b64decode(voice_audio_b64)
             voice_features = decode_voice_audio(audio_data)
-        except Exception as e:
+        except Exception:
+            logger.exception("Voice audio decode failed for user %s", user.username)
             return Response({
                 'success': False,
                 'message': 'Invalid audio data provided.'
@@ -306,8 +308,8 @@ def authenticate_biometric(request):
                     'authenticated': False,
                     'message': 'Invalid biometric type'
                 }, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            logger.warning("Biometric decode failed for user %s: %s", username, e)
+        except Exception:
+            logger.exception("Biometric decode failed for user %s", username)
             return Response({
                 'authenticated': False,
                 'message': 'Invalid biometric data provided.'
