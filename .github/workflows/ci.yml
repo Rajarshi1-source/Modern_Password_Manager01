@@ -25,6 +25,12 @@ on:
           - staging
           - production
 
+# Least-privilege default token for every job. Jobs that need more (e.g.
+# packages: write, security-events: write, id-token: write) declare their own
+# `permissions:` block, which overrides this top-level default.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
