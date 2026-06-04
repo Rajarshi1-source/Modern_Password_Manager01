@@ -290,29 +290,36 @@ def authenticate_biometric(request):
                 'message': 'User not found'
             }, status=status.HTTP_404_NOT_FOUND)
         
-        # Decode biometric data
+        # Decode biometric data. Decode/validation failures are client-input
+        # errors -> HTTP 400. ML inference is performed AFTER this block so its
+        # exceptions propagate to the outer handler (HTTP 500) instead of being
+        # masked as a 400.
         try:
             data = base64.b64decode(biometric_data_b64)
-            
+
             if biometric_type == 'face':
                 biometric_features = decode_face_image(data)
-                result = _get_biometric_auth().authenticate_face(str(user.id), biometric_features)
             elif biometric_type == 'voice':
                 biometric_features = decode_voice_audio(data)
-                result = _get_biometric_auth().authenticate_voice(str(user.id), biometric_features)
             else:
                 return Response({
                     'authenticated': False,
                     'message': 'Invalid biometric type'
                 }, status=status.HTTP_400_BAD_REQUEST)
-        
-        except Exception:
-            logger.exception("Biometric processing failed for user %s", username)
+        except Exception as e:
+            logger.warning("Biometric decode failed for user %s: %s", username, e)
             return Response({
                 'authenticated': False,
-                'message': 'Processing failed. Please try again later.'
+                'message': 'Invalid biometric data provided.'
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
+        # ML authentication (server-side). Any failure here bubbles up to the
+        # outer `except` below, which returns HTTP 500.
+        if biometric_type == 'face':
+            result = _get_biometric_auth().authenticate_face(str(user.id), biometric_features)
+        else:  # 'voice' — only face/voice reach here (others returned above)
+            result = _get_biometric_auth().authenticate_voice(str(user.id), biometric_features)
+
         # Log authentication attempt
         AuthenticationAttempt.objects.create(
             user=user,

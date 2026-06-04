@@ -271,8 +271,8 @@ class BiometricAuthenticator:
                     self.user_biometrics = json.load(f)
                 logger.info("User biometrics database loaded successfully")
         
-        except Exception as e:
-            logger.error(f"Error loading biometric models: {e}")
+        except Exception:
+            logger.exception("Error loading biometric models")
             raise
     
     def register_face(self, user_id: str, face_image: np.ndarray) -> Dict:
@@ -316,8 +316,8 @@ class BiometricAuthenticator:
                 'liveness_score': float(liveness_score)
             }
         
-        except Exception as e:
-            logger.error(f"Error registering face: {e}")
+        except Exception:
+            logger.exception("Error registering face")
             return {
                 'success': False,
                 'message': 'Face registration failed. Please try again later.'
@@ -369,8 +369,8 @@ class BiometricAuthenticator:
                 'message': 'Face authentication successful' if authenticated else 'Face not recognized'
             }
         
-        except Exception as e:
-            logger.error(f"Error during face authentication: {e}")
+        except Exception:
+            logger.exception("Error during face authentication")
             return {
                 'authenticated': False,
                 'message': 'Authentication failed. Please try again later.'
@@ -406,8 +406,8 @@ class BiometricAuthenticator:
                 'message': 'Voice registered successfully'
             }
         
-        except Exception as e:
-            logger.error(f"Error registering voice: {e}")
+        except Exception:
+            logger.exception("Error registering voice")
             return {
                 'success': False,
                 'message': 'Voice registration failed. Please try again later.'
@@ -448,8 +448,8 @@ class BiometricAuthenticator:
                 'message': 'Voice authentication successful' if authenticated else 'Voice not recognized'
             }
         
-        except Exception as e:
-            logger.error(f"Error during voice authentication: {e}")
+        except Exception:
+            logger.exception("Error during voice authentication")
             return {
                 'authenticated': False,
                 'message': 'Authentication failed. Please try again later.'
@@ -517,8 +517,8 @@ class BiometricAuthenticator:
                 'message': 'Continuous authentication successful' if authenticated else 'Authentication failed'
             }
         
-        except Exception as e:
-            logger.error(f"Error during continuous authentication: {e}")
+        except Exception:
+            logger.exception("Error during continuous authentication")
             return {
                 'authenticated': False,
                 'message': 'Authentication failed. Please try again later.'
@@ -601,8 +601,8 @@ class BiometricAuthenticator:
             
             logger.info("User biometrics database saved successfully")
         
-        except Exception as e:
-            logger.error(f"Error saving biometrics database: {e}")
+        except Exception:
+            logger.exception("Error saving biometrics database")
     
     def extract_mfcc_features(self, audio_data: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
         """

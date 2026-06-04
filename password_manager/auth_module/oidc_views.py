@@ -273,14 +273,19 @@ def oidc_callback(request):
     
     # Retrieve stored state data
     from django.core.cache import cache
-    state_data = cache.get(f'oidc_state_{state}')
-    
+    state_key = f'oidc_state_{state}'
+    state_data = cache.get(state_key)
+
     if not state_data:
         return _callback_redirect('invalid_state', 'State expired or invalid')
-    
-    # Clear state from cache
-    cache.delete(f'oidc_state_{state}')
-    
+
+    # Atomically consume the state. cache.delete() returns True only for the
+    # caller that actually removed the key, so if two requests race with the
+    # same state, only one proceeds and the replay is rejected here (closes the
+    # get()/delete() TOCTOU window for authorization-code replay).
+    if not cache.delete(state_key):
+        return _callback_redirect('invalid_state', 'State already used')
+
     provider_name = state_data['provider']
     redirect_uri = state_data['redirect_uri']
     nonce = state_data['nonce']
