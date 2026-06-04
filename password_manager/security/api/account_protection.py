@@ -218,6 +218,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'total_count': attempts.count()
             })
             
+        except (TypeError, ValueError):
+            return error_response("Invalid numeric query parameter.", status_code=status.HTTP_400_BAD_REQUEST)
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to get login attempts.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -240,6 +242,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'alerts': SecurityAlertSerializer(alerts, many=True).data
             })
             
+        except (TypeError, ValueError):
+            return error_response("Invalid numeric query parameter.", status_code=status.HTTP_400_BAD_REQUEST)
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to get security alerts.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -363,6 +367,8 @@ class AccountProtectionViewSet(viewsets.ViewSet):
                 'events': AccountLockEventSerializer(events, many=True).data
             })
             
+        except (TypeError, ValueError):
+            return error_response("Invalid numeric query parameter.", status_code=status.HTTP_400_BAD_REQUEST)
         except Exception:
             logger.exception("Unhandled error in account/security endpoint")
             return error_response("Failed to get lock events.", status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
