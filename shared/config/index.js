@@ -280,16 +280,17 @@ export class Config {
   set(key, value) {
     const keys = key.split('.');
 
-    // Reject prototype-poisoning path components. Without this guard,
-    // `set('__proto__.isAdmin', true)` would walk through the
-    // prototype chain and pollute Object.prototype globally.
-    const FORBIDDEN = new Set(['__proto__', 'constructor', 'prototype']);
-    if (keys.some((k) => FORBIDDEN.has(k))) return;
-
     let current = this._config;
 
     for (let i = 0; i < keys.length - 1; i++) {
       const k = keys[i];
+      // Reject prototype-poisoning path components. Guarding each key inline
+      // (rather than once over the whole array) keeps the barrier directly on
+      // the property name used in the bracket access below, so a path like
+      // `__proto__.isAdmin` cannot walk the prototype chain.
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') {
+        return;
+      }
       if (!Object.prototype.hasOwnProperty.call(current, k)
           || typeof current[k] !== 'object'
           || current[k] === null) {
@@ -298,7 +299,11 @@ export class Config {
       current = current[k];
     }
 
-    current[keys[keys.length - 1]] = value;
+    const lastKey = keys[keys.length - 1];
+    if (lastKey === '__proto__' || lastKey === 'constructor' || lastKey === 'prototype') {
+      return;
+    }
+    current[lastKey] = value;
   }
 
   getAll() {
