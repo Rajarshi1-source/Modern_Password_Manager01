@@ -26,6 +26,11 @@ export default defineConfig({
       '@services': resolve(__dirname, 'src/services'),
       '@contexts': resolve(__dirname, 'src/contexts'),
       '@utils': resolve(__dirname, 'src/utils'),
+      // `pqc-kyber` ships no resolvable entry point (no main/module/exports), so
+      // Vite cannot resolve the dynamic import('pqc-kyber') inside kyberService
+      // and those test files fail to collect. Alias it to a functional KEM stub
+      // for tests only (the production build uses vite.config.js + manualChunks).
+      'pqc-kyber': resolve(__dirname, 'src/test/stubs/pqc-kyber.js'),
     }
   }
 })

@@ -5,6 +5,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+// NOTE: `pqc-kyber` is aliased to a functional test stub via `vitest.config.js`
+// (`src/test/stubs/pqc-kyber.js`). The real package ships no resolvable entry
+// point, so Vite cannot resolve the dynamic `import('pqc-kyber')` inside
+// kyberService and this file would otherwise fail to collect.
 import { kyberService, KyberService, KyberError, KYBER_CONSTANTS } from './kyberService';
 
 describe('KyberService', () => {
