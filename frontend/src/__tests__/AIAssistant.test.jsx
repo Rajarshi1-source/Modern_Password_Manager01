@@ -24,6 +24,12 @@ describe('aiAssistantService', () => {
   let mockApi;
 
   beforeEach(async () => {
+    // Reset the module registry so each test re-evaluates the service against a
+    // fresh doMock binding. Without this, only the first dynamic import binds
+    // the mocked api; later tests get the cached service still closed over the
+    // first mockApi, so api.post/get/delete return undefined.
+    vi.resetModules();
+
     // Mock the api module before importing the service
     mockApi = {
       get: vi.fn(),

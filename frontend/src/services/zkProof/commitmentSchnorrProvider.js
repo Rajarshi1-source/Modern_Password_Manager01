@@ -127,8 +127,8 @@ const G = () => Point.BASE;
 // Point (de)serialisation — SEC1 compressed 33 bytes
 // ---------------------------------------------------------------------------
 
-const encodePoint = (point) => point.toRawBytes(true);
-const decodePoint = (bytes) => Point.fromHex(bytes);
+export const encodePoint = (point) => point.toRawBytes(true);
+export const decodePoint = (bytes) => Point.fromHex(bytes);
 
 // ---------------------------------------------------------------------------
 // Fiat-Shamir challenge — identical transcript to the Python verifier:

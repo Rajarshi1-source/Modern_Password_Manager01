@@ -10,7 +10,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import styled, { keyframes } from 'styled-components';
+import styled, { keyframes, css } from 'styled-components';
 import geneticService from '../../services/geneticService';
 
 // =============================================================================
@@ -55,7 +55,7 @@ const Icon = styled.div`
   font-size: 64px;
   margin-bottom: 24px;
   
-  ${props => props.$loading && `
+  ${props => props.$loading && css`
     animation: ${helixRotate} 2s linear infinite;
   `}
 `;
@@ -91,7 +91,7 @@ const StatusMessage = styled.div`
     color: #EF4444;
   `}
   
-  ${props => props.$type === 'loading' && `
+  ${props => props.$type === 'loading' && css`
     background: rgba(59, 130, 246, 0.1);
     border: 1px solid rgba(59, 130, 246, 0.3);
     color: #3B82F6;

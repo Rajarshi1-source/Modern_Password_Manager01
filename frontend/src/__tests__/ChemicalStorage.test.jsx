@@ -31,7 +31,7 @@ vi.mock('../services/chemicalStorageService', () => ({
         getSubscription: vi.fn(),
         listCertificates: vi.fn(),
         orderSynthesis: vi.fn(),
-        listProviders: vi.fn(),
+        getProviders: vi.fn(),
     }
 }));
 
@@ -234,7 +234,7 @@ describe('ChemicalStorageModal', () => {
             certificates: []
         });
 
-        chemicalStorageService.listProviders.mockResolvedValue({
+        chemicalStorageService.getProviders.mockResolvedValue({
             success: true,
             providers: [
                 { id: 'mock', name: 'Demo Mode', cost_per_bp: 0 }
