@@ -8,6 +8,16 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/setupTests.js'],
+    // Unit tests only. Playwright e2e specs (src/tests/e2e/**, *.e2e.*) define
+    // test.describe() at import time and must not be collected by vitest.
+    include: ['src/**/*.{test,spec}.{js,jsx,ts,tsx}'],
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/e2e/**',
+      '**/*.e2e.*',
+      'e2e/**',
+    ],
   },
   resolve: {
     alias: {

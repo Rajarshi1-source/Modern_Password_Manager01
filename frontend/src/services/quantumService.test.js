@@ -12,7 +12,7 @@ import axios from 'axios';
 vi.mock('axios');
 
 // Import service after mocking
-import quantumService from '../quantumService';
+import quantumService from './quantumService';
 
 describe('QuantumService', () => {
   beforeEach(() => {
