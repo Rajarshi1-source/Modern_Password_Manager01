@@ -9,8 +9,9 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import EntropyHistoryChart from '../EntropyHistoryChart';
 
-// Mock Chart.js to avoid canvas issues in tests
-jest.mock('react-chartjs-2', () => ({
+// Mock Chart.js to avoid canvas issues in tests. Use vi.mock so Vitest hoists
+// it above the import of EntropyHistoryChart; the jest alias is not hoisted.
+vi.mock('react-chartjs-2', () => ({
     Line: () => <div data-testid="mock-chart">Chart Component</div>,
 }));
 
