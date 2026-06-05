@@ -94,7 +94,7 @@ Originates from `App.test.js` (see B1) — resolved together with it.
 ## 3. Bucket B — Syntax / wrong-import in test files (targeted, 0 prod code)
 
 ### B1. `src/App.test.js` — RollupError: Parse failure at 5:9
-It's a **`.js` file containing JSX** (`render(<App />)`) — the react plugin only
+It's a **`.js` file containing JSX** (`render(<App />)`) — the React plugin only
 applies the JSX loader to `.jsx`/`.tsx`, so `.js` JSX fails to parse. It's also
 the **stale Create-React-App template** (`getByText(/learn react/i)`), which the
 app has never rendered. **Fix:** rename `App.test.js` → `App.test.jsx` **and**

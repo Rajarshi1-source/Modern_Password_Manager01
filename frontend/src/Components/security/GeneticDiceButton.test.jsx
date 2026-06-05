@@ -4,9 +4,11 @@ import '@testing-library/jest-dom';
 import GeneticDiceButton from './GeneticDiceButton';
 import geneticService from '../../services/geneticService';
 
-// Mock dependencies
-jest.mock('../../services/geneticService');
-jest.mock('framer-motion', () => ({
+// Mock dependencies. Use vi.mock (not the jest alias) so Vitest hoists these
+// above the imports above — jest.mock is only a runtime alias here and would
+// not replace the already-loaded modules.
+vi.mock('../../services/geneticService');
+vi.mock('framer-motion', () => ({
     motion: {
         div: ({ children, ...props }) => <div {...props}>{children}</div>,
         button: ({ children, ...props }) => <button {...props}>{children}</button>,
