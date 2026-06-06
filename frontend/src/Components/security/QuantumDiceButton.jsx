@@ -186,6 +186,17 @@ const CertificateBanner = styled(motion.div)`
   color: #8b5cf6;
 `;
 
+const ErrorMessage = styled.div`
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+  font-size: 12px;
+  text-align: center;
+  max-width: 240px;
+`;
+
 const QuantumDiceButton = ({
     onGenerate,
     length = 16,
@@ -199,18 +210,31 @@ const QuantumDiceButton = ({
     const [poolStatus, setPoolStatus] = useState(null);
     const [lastCertificate, setLastCertificate] = useState(null);
     const [lastProvider, setLastProvider] = useState(null);
+    const [error, setError] = useState(null);
 
     // Fetch pool status on mount — only when it will actually be shown, so a
     // hidden status indicator doesn't trigger an unused network call.
     useEffect(() => {
-        if (!showStatus) return;
+        if (!showStatus) return undefined;
+        let cancelled = false;
         const fetchStatus = async () => {
-            const status = await quantumService.getPoolStatus();
-            if (status.success) {
-                setPoolStatus(status);
+            try {
+                const status = await quantumService.getPoolStatus();
+                if (!cancelled && status.success) {
+                    setPoolStatus(status);
+                }
+            } catch (err) {
+                // Don't let a rejected request become an unhandled rejection, and
+                // don't touch state after unmount.
+                if (!cancelled) {
+                    console.error('Failed to fetch quantum pool status:', err);
+                }
             }
         };
         fetchStatus();
+        return () => {
+            cancelled = true;
+        };
     }, [showStatus]);
 
     // Generate quantum particles animation
@@ -236,6 +260,7 @@ const QuantumDiceButton = ({
         if (isGenerating || disabled) return;
 
         setIsGenerating(true);
+        setError(null);
         spawnParticles();
 
         try {
@@ -248,14 +273,23 @@ const QuantumDiceButton = ({
                 setLastCertificate(result.certificate);
                 setLastProvider(result.certificate?.provider);
 
-                if (onGenerate) {
-                    onGenerate({
-                        password: result.password,
-                        certificate: result.certificate,
-                        quantumCertified: result.quantumCertified,
-                    });
-                }
+                // Contract: onGenerate always receives a discriminated object with a
+                // `success` flag so the parent can branch reliably.
+                onGenerate?.({
+                    success: true,
+                    password: result.password,
+                    certificate: result.certificate,
+                    quantumCertified: result.quantumCertified,
+                });
+            } else {
+                const message = result.error || 'Quantum generation failed';
+                setError(message);
+                onGenerate?.({ success: false, error: message });
             }
+        } catch (err) {
+            const message = err?.message || 'Quantum generation failed';
+            setError(message);
+            onGenerate?.({ success: false, error: message });
         } finally {
             setIsGenerating(false);
         }
@@ -307,6 +341,12 @@ const QuantumDiceButton = ({
                         </ProviderBadge>
                     )}
                 </StatusBar>
+            )}
+
+            {error && (
+                <ErrorMessage role="alert">
+                    ⚠️ {error}
+                </ErrorMessage>
             )}
 
             {showCertificate && lastCertificate && (

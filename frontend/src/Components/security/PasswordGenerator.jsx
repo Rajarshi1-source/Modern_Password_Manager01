@@ -249,6 +249,10 @@ const PasswordGenerator = ({ onSelect }) => {
   };
 
   const handleQuantumGenerate = (result) => {
+    // Failures surface in the QuantumDiceButton's own error UI; ignore them here
+    // so a failed result doesn't wipe the current password/certificate.
+    if (!result?.success) return;
+
     setPassword(result.password);
     setQuantumCertificate(result.certificate);
     setGeneticCertificate(null); // Clear genetic cert

@@ -212,6 +212,10 @@ describe('EntropyHistoryChart Component', () => {
         // each value to its labelled stat card.
         const warningCard = document.querySelector('.stat-card.stat-warning');
         const criticalCard = document.querySelector('.stat-card.stat-critical');
+        // Assert the cards exist first so a missing card fails clearly instead of
+        // throwing a TypeError from within(null).
+        expect(warningCard).not.toBeNull();
+        expect(criticalCard).not.toBeNull();
         expect(within(warningCard).getByText('2')).toBeInTheDocument();
         expect(within(criticalCard).getByText('1')).toBeInTheDocument();
     });
