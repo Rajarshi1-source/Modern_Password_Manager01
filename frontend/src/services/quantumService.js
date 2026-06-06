@@ -176,9 +176,13 @@ class QuantumService {
     
     // Check if any true quantum provider is available
     const providers = status.providers;
-    return providers?.anu_qrng?.available || 
-           providers?.ibm_quantum?.available ||
-           providers?.ionq_quantum?.available;
+    // Coerce to a strict boolean: a missing provider key would otherwise make
+    // this resolve to `undefined` instead of `false`.
+    return Boolean(
+      providers?.anu_qrng?.available ||
+      providers?.ibm_quantum?.available ||
+      providers?.ionq_quantum?.available
+    );
   }
 
   /**
