@@ -546,6 +546,7 @@ export class KyberService {
     
     // Validate input
     if (!publicKey || !(publicKey instanceof Uint8Array)) {
+      this.metrics.errors++;
       throw new KyberError(
         'Invalid public key: must be Uint8Array',
         'INVALID_PUBLIC_KEY'
@@ -769,13 +770,15 @@ export class KyberService {
     
     // Validate inputs
     if (!ciphertext || !(ciphertext instanceof Uint8Array)) {
+      this.metrics.errors++;
       throw new KyberError(
         'Invalid ciphertext: must be Uint8Array',
         'INVALID_CIPHERTEXT'
       );
     }
-    
+
     if (!privateKey || !(privateKey instanceof Uint8Array)) {
+      this.metrics.errors++;
       throw new KyberError(
         'Invalid private key: must be Uint8Array',
         'INVALID_PRIVATE_KEY'
@@ -1091,8 +1094,10 @@ export class KyberService {
         return btoa(binary);
       }
       
-      // Use chunked approach for larger buffers to avoid stack overflow
-      const chunkSize = 8192;
+      // Use chunked approach for larger buffers to avoid stack overflow.
+      // chunkSize must be a multiple of 3 so btoa only emits '=' padding on
+      // the final chunk; otherwise concatenated padded segments are undecodable.
+      const chunkSize = 8190;
       let result = '';
       
       for (let i = 0; i < bytes.length; i += chunkSize) {
