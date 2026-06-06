@@ -200,8 +200,10 @@ const QuantumDiceButton = ({
     const [lastCertificate, setLastCertificate] = useState(null);
     const [lastProvider, setLastProvider] = useState(null);
 
-    // Fetch pool status on mount
+    // Fetch pool status on mount — only when it will actually be shown, so a
+    // hidden status indicator doesn't trigger an unused network call.
     useEffect(() => {
+        if (!showStatus) return;
         const fetchStatus = async () => {
             const status = await quantumService.getPoolStatus();
             if (status.success) {
@@ -209,7 +211,7 @@ const QuantumDiceButton = ({
             }
         };
         fetchStatus();
-    }, []);
+    }, [showStatus]);
 
     // Generate quantum particles animation
     const spawnParticles = () => {
