@@ -31,9 +31,9 @@ describe('GeneticDiceButton Component', () => {
 
         render(<GeneticDiceButton onGenerate={mockOnGenerate} />);
 
-        // Check for initial loading/status check
+        // Disconnected state renders the "Connect DNA" prompt (no "Initialize" label).
         await waitFor(() => {
-            expect(screen.getByText(/Initialize Genetic/i)).toBeInTheDocument();
+            expect(screen.getByText(/Connect DNA/i)).toBeInTheDocument();
         });
     });
 
@@ -44,38 +44,38 @@ describe('GeneticDiceButton Component', () => {
             connection: {
                 provider: 'sequencing',
                 snp_count: 500000,
-                evolution_generation: 1
+                evolution_generation: 2
             }
         });
 
-        render(<GeneticDiceButton onGenerate={mockOnGenerate} />);
+        render(<GeneticDiceButton onPasswordGenerated={mockOnGenerate} />);
 
         await waitFor(() => {
             expect(screen.getByText(/Generate Genetic/i)).toBeInTheDocument();
-            expect(screen.getByText(/Gen 1/i)).toBeInTheDocument();
+            // The evolution badge ("Gen N") only renders once generation > 1.
+            expect(screen.getByText(/Gen 2/i)).toBeInTheDocument();
         });
     });
 
-    test('opens connection modal when clicked while disconnected', async () => {
+    test('requests connection when clicked while disconnected', async () => {
         geneticService.getConnectionStatus.mockResolvedValue({
             success: true,
             connected: false
         });
+        const onConnectRequest = jest.fn();
 
-        render(<GeneticDiceButton onGenerate={mockOnGenerate} />);
+        render(<GeneticDiceButton onConnectRequest={onConnectRequest} />);
 
-        await waitFor(() => expect(screen.getByText(/Initialize Genetic/i)).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/Connect DNA/i)).toBeInTheDocument());
 
-        const button = screen.getByRole('button');
-        fireEvent.click(button);
+        // The disconnected prompt delegates to onConnectRequest rather than
+        // opening an internal modal.
+        fireEvent.click(screen.getByRole('button', { name: /Connect DNA/i }));
 
-        // Should see text indicating modal opening or connection prompt
-        // Note: Since modal is internal state, we check if the button text triggers modal logic
-        // In a real integration test we'd check for the modal itself
-        expect(screen.queryByText(/Connect DNA/i)).toBeInTheDocument();
+        expect(onConnectRequest).toHaveBeenCalled();
     });
 
-    test('calls onGenerate when clicked while connected', async () => {
+    test('calls onPasswordGenerated when clicked while connected', async () => {
         geneticService.getConnectionStatus.mockResolvedValue({
             success: true,
             connected: true,
@@ -88,7 +88,7 @@ describe('GeneticDiceButton Component', () => {
             certificate: { id: 'cert-123' }
         });
 
-        render(<GeneticDiceButton onGenerate={mockOnGenerate} />);
+        render(<GeneticDiceButton onPasswordGenerated={mockOnGenerate} />);
 
         await waitFor(() => expect(screen.getByText(/Generate Genetic/i)).toBeInTheDocument());
 
@@ -97,6 +97,7 @@ describe('GeneticDiceButton Component', () => {
 
         await waitFor(() => {
             expect(geneticService.generateGeneticPassword).toHaveBeenCalled();
+            // The component reports results via onPasswordGenerated(password, certificate).
             expect(mockOnGenerate).toHaveBeenCalledWith(
                 'genetic-password-123',
                 expect.objectContaining({ id: 'cert-123' })
@@ -104,28 +105,19 @@ describe('GeneticDiceButton Component', () => {
         });
     });
 
-    test('handles evolution trigger correctly', async () => {
-        // Mock evolution status check
+    test('shows the evolution generation badge when evolved', async () => {
         geneticService.getConnectionStatus.mockResolvedValue({
             success: true,
             connected: true,
-            connection: { evolution_generation: 1 }
+            connection: { provider: 'sequencing', evolution_generation: 3 }
         });
 
-        geneticService.getEvolutionStatus.mockResolvedValue({
-            success: true,
-            evolution: {
-                can_use_epigenetic: true,
-                evolution_ready: true,
-                last_biological_age: 35.5
-            }
-        });
+        render(<GeneticDiceButton onPasswordGenerated={mockOnGenerate} showEvolution={true} />);
 
-        render(<GeneticDiceButton onGenerate={mockOnGenerate} showEvolution={true} />);
-
-        // Should show evolution indicator
+        // The evolution indicator is the "Gen N" badge (shown when generation > 1);
+        // there is no separate "Evolve" control in the component.
         await waitFor(() => {
-            expect(screen.getByText(/Evolve/i)).toBeInTheDocument();
+            expect(screen.getByText(/Gen 3/i)).toBeInTheDocument();
         });
     });
 });
