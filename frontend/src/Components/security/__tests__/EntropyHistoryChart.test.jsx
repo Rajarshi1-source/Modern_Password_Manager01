@@ -5,7 +5,7 @@
  */
 
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import EntropyHistoryChart from '../EntropyHistoryChart';
 
@@ -206,9 +206,14 @@ describe('EntropyHistoryChart Component', () => {
 
         await waitFor(() => {
             expect(screen.getByText('7.8500')).toBeInTheDocument();
-            expect(screen.getByText('2')).toBeInTheDocument();
-            expect(screen.getByText('1')).toBeInTheDocument();
         });
+
+        // "2" renders for both Measurements (total_count) and Warnings, so scope
+        // each value to its labelled stat card.
+        const warningCard = document.querySelector('.stat-card.stat-warning');
+        const criticalCard = document.querySelector('.stat-card.stat-critical');
+        expect(within(warningCard).getByText('2')).toBeInTheDocument();
+        expect(within(criticalCard).getByText('1')).toBeInTheDocument();
     });
 
     test('calls onError callback on fetch failure', async () => {

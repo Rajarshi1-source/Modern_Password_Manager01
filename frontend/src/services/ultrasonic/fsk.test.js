@@ -57,10 +57,27 @@ describe('FSK PCM round-trip', () => {
     const bits = buildFrameBits(payload);
     const sampleRate = 48000;
     const pcm = encodeFrameToPcm(bits, sampleRate);
-    const noisy = new Float32Array(pcm.length);
-    for (let i = 0; i < pcm.length; i += 1) {
-      noisy[i] = pcm[i] + (Math.random() - 0.5) * 0.05;
+
+    // Pad with lead/trail silence (as a real mic capture would) so the
+    // sliding-window decoder has the timing slack it requires; an unpadded
+    // buffer is exactly `need` samples and is rejected before any decode.
+    const lead = Math.floor(sampleRate * 0.1);
+    const padded = new Float32Array(pcm.length + lead * 2);
+    padded.set(pcm, lead);
+
+    // Deterministic xorshift32 noise — reproducible, no Math.random() flake.
+    let seed = 0x12345678;
+    const noise = () => {
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      return ((seed >>> 0) / 0xffffffff - 0.5) * 0.05;
+    };
+    const noisy = new Float32Array(padded.length);
+    for (let i = 0; i < padded.length; i += 1) {
+      noisy[i] = padded[i] + noise();
     }
+
     const decoded = decodeFrameFromPcm(noisy, sampleRate, payload.length * 8);
     expect(decoded).not.toBeNull();
     expect(Array.from(decoded.payload)).toEqual(Array.from(payload));

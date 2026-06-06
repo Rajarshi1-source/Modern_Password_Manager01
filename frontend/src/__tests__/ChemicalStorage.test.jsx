@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // Component imports (adjust paths as needed)
@@ -32,6 +32,7 @@ vi.mock('../services/chemicalStorageService', () => ({
         listCertificates: vi.fn(),
         orderSynthesis: vi.fn(),
         getProviders: vi.fn(),
+        estimateCost: vi.fn(),
     }
 }));
 
@@ -62,20 +63,18 @@ describe('DNASequenceVisualizer', () => {
     it('applies correct colors to nucleotides', () => {
         render(<DNASequenceVisualizer {...mockProps} />);
 
-        // A = green, T = red, C = blue, G = yellow (typical DNA coloring)
-        // The actual colors depend on implementation
-        const container = screen.getByTestId ?
-            screen.getByTestId('dna-sequence') :
-            document.querySelector('.dna-sequence');
-
-        expect(container).toBeTruthy();
+        // Colored view renders each base as a .nucleotide span with an inline
+        // background-color from the A/T/G/C palette. Assert the coloring applied.
+        const nucleotides = document.querySelectorAll('.colored-sequence .nucleotide');
+        expect(nucleotides.length).toBeGreaterThan(0);
+        expect(nucleotides[0].style.backgroundColor).toBeTruthy();
     });
 
     it('displays GC content percentage', () => {
         render(<DNASequenceVisualizer {...mockProps} />);
 
-        // Should show 50% GC content
-        expect(screen.getByText(/50%/i)).toBeInTheDocument();
+        // GC content is computed from the sequence and shown to 1 decimal ("50.0%")
+        expect(screen.getByText(/50(\.\d)?%/)).toBeInTheDocument();
     });
 
     it('shows sequence length', () => {
@@ -85,11 +84,13 @@ describe('DNASequenceVisualizer', () => {
         expect(screen.getByText(/16/)).toBeInTheDocument();
     });
 
-    it('indicates error correction status', () => {
-        render(<DNASequenceVisualizer {...mockProps} />);
+    it('displays integrity checksum when provided', () => {
+        // The visualizer surfaces integrity via an optional checksum (not an ECC
+        // flag); when a checksum is passed it renders a labelled, truncated value.
+        render(<DNASequenceVisualizer {...mockProps} checksum="a1b2c3d4e5f6" />);
 
-        // Should show ECC indicator
-        expect(screen.getByText(/error correction/i)).toBeInTheDocument();
+        expect(screen.getByText(/checksum/i)).toBeInTheDocument();
+        expect(screen.getByText('a1b2c3d4')).toBeInTheDocument();
     });
 
     it('handles empty sequence gracefully', () => {
@@ -140,44 +141,44 @@ describe('TimeLockCountdown', () => {
         expect(screen.getByText(/\d+:\d+:\d+/)).toBeInTheDocument();
     });
 
-    it('shows locked status when time remains', () => {
+    it('shows the locked countdown while time remains', () => {
         const futureTime = new Date(Date.now() + 3600000).toISOString();
 
         render(<TimeLockCountdown
             unlockAt={futureTime}
-            status="locked"
-            onUnlock={() => { }}
+            onUnlocked={() => { }}
         />);
 
-        expect(screen.getByText(/locked/i)).toBeInTheDocument();
+        // While locked the component renders the Time-Lock badge + countdown,
+        // not the "Capsule Unlocked!" state.
+        expect(screen.getByText(/time-lock/i)).toBeInTheDocument();
+        expect(screen.queryByText(/unlocked/i)).not.toBeInTheDocument();
     });
 
-    it('shows unlockable when time expires', () => {
+    it('shows unlocked state when time has expired', () => {
         const pastTime = new Date(Date.now() - 1000).toISOString();
 
         render(<TimeLockCountdown
             unlockAt={pastTime}
-            status="locked"
-            onUnlock={() => { }}
+            onUnlocked={() => { }}
         />);
 
-        // Should be unlockable
-        expect(screen.getByRole('button')).not.toBeDisabled();
+        // Expiry auto-transitions to the unlocked view (no manual unlock button).
+        expect(screen.getByText(/unlocked/i)).toBeInTheDocument();
     });
 
-    it('calls onUnlock when button clicked', async () => {
+    it('fires onUnlocked automatically when time has expired', () => {
         const pastTime = new Date(Date.now() - 1000).toISOString();
-        const onUnlock = vi.fn();
+        const onUnlocked = vi.fn();
 
         render(<TimeLockCountdown
             unlockAt={pastTime}
-            onUnlock={onUnlock}
+            onUnlocked={onUnlocked}
         />);
 
-        const unlockButton = screen.getByRole('button');
-        await userEvent.click(unlockButton);
-
-        expect(onUnlock).toHaveBeenCalled();
+        // Unlock is time-driven, not click-driven: the callback fires on mount
+        // once the unlock timestamp is already in the past.
+        expect(onUnlocked).toHaveBeenCalled();
     });
 
     it('updates countdown every second', () => {
@@ -199,17 +200,16 @@ describe('TimeLockCountdown', () => {
         // Note: This depends on implementation details
     });
 
-    it('disables unlock button while locked', () => {
+    it('renders no unlock control while locked', () => {
         const futureTime = new Date(Date.now() + 3600000).toISOString();
 
         render(<TimeLockCountdown
             unlockAt={futureTime}
-            status="locked"
-            onUnlock={() => { }}
+            onUnlocked={() => { }}
         />);
 
-        const button = screen.getByRole('button');
-        expect(button).toBeDisabled();
+        // Locked capsules cannot be unlocked early, so no unlock button is shown.
+        expect(screen.queryByRole('button')).not.toBeInTheDocument();
     });
 });
 
@@ -240,14 +240,23 @@ describe('ChemicalStorageModal', () => {
                 { id: 'mock', name: 'Demo Mode', cost_per_bp: 0 }
             ]
         });
+
+        // estimateCost is a synchronous helper the modal calls to render the
+        // cost panel once a sequence exists; seed a known total ($75.50).
+        chemicalStorageService.estimateCost.mockReturnValue({
+            provider: 'mock', sequenceLength: 8, perBpUsd: 0.07,
+            synthesisUsd: 25.50, handlingUsd: 55.00, totalUsd: 75.50, estimatedDays: 0,
+        });
     });
 
     it('renders modal with tabs', () => {
-        render(<ChemicalStorageModal isOpen={true} onClose={() => { }} />);
+        const { container } = render(<ChemicalStorageModal isOpen={true} onClose={() => { }} />);
 
-        // Should have tabs for encode, time-lock, storage, certificates
-        expect(screen.getByText(/encode/i)).toBeInTheDocument();
-        expect(screen.getByText(/time-lock/i)).toBeInTheDocument();
+        // Scope to the tab strip — the primary "Encode to DNA" action button also
+        // matches /encode/i, so an unscoped query would be ambiguous.
+        const tabs = within(container.querySelector('.tabs'));
+        expect(tabs.getByText(/encode/i)).toBeInTheDocument();
+        expect(tabs.getByText(/time-lock/i)).toBeInTheDocument();
     });
 
     it('shows subscription tier', async () => {
@@ -276,14 +285,14 @@ describe('ChemicalStorageModal', () => {
         const passwordInput = screen.getByPlaceholderText(/password/i);
         await userEvent.type(passwordInput, 'TestPassword123!');
 
-        // Click encode button
-        const encodeButton = screen.getByText(/encode/i);
+        // Click the encode action button (distinct from the Encode tab)
+        const encodeButton = screen.getByRole('button', { name: /encode to dna/i });
         await userEvent.click(encodeButton);
 
         await waitFor(() => {
+            // The modal calls encodePassword(password) with a single argument.
             expect(chemicalStorageService.encodePassword).toHaveBeenCalledWith(
-                'TestPassword123!',
-                expect.any(Object)
+                'TestPassword123!'
             );
         });
     });
@@ -299,7 +308,7 @@ describe('ChemicalStorageModal', () => {
         const passwordInput = screen.getByPlaceholderText(/password/i);
         await userEvent.type(passwordInput, 'test');
 
-        const encodeButton = screen.getByText(/encode/i);
+        const encodeButton = screen.getByRole('button', { name: /encode to dna/i });
         await userEvent.click(encodeButton);
 
         await waitFor(() => {
@@ -329,17 +338,12 @@ describe('ChemicalStorageModal', () => {
         expect(onClose).toHaveBeenCalled();
     });
 
-    it('validates password before encoding', async () => {
+    it('disables encoding until a password is entered', () => {
         render(<ChemicalStorageModal isOpen={true} onClose={() => { }} />);
 
-        // Click encode without entering password
-        const encodeButton = screen.getByText(/encode/i);
-        await userEvent.click(encodeButton);
-
-        // Should show validation error
-        await waitFor(() => {
-            expect(screen.getByText(/please enter/i)).toBeInTheDocument();
-        });
+        // The component guards empty submission by disabling the button; the
+        // inline "Please enter a password" branch is unreachable via the UI.
+        expect(screen.getByRole('button', { name: /encode to dna/i })).toBeDisabled();
     });
 
     it('creates time-lock with specified delay', async () => {
@@ -386,12 +390,13 @@ describe('ChemicalStorageModal', () => {
         const passwordInput = screen.getByPlaceholderText(/password/i);
         await userEvent.type(passwordInput, 'DisplayTest');
 
-        const encodeButton = screen.getByText(/encode/i);
+        const encodeButton = screen.getByRole('button', { name: /encode to dna/i });
         await userEvent.click(encodeButton);
 
         await waitFor(() => {
-            // Should display the sequence
-            expect(screen.getByText(/ATCG/)).toBeInTheDocument();
+            // Colored view splits the sequence into per-nucleotide spans, so assert
+            // the visualizer mounted via its stable "GC Content" label.
+            expect(screen.getByText(/GC Content/i)).toBeInTheDocument();
         });
     });
 
@@ -408,10 +413,11 @@ describe('ChemicalStorageModal', () => {
         const passwordInput = screen.getByPlaceholderText(/password/i);
         await userEvent.type(passwordInput, 'CostTest');
 
-        const encodeButton = screen.getByText(/encode/i);
+        const encodeButton = screen.getByRole('button', { name: /encode to dna/i });
         await userEvent.click(encodeButton);
 
         await waitFor(() => {
+            // Displayed cost comes from estimateCost(...).totalUsd (mocked to 75.50).
             expect(screen.getByText(/\$75/)).toBeInTheDocument();
         });
     });
@@ -445,11 +451,12 @@ describe('Chemical Storage Integration', () => {
         const passwordInput = screen.getByPlaceholderText(/password/i);
         await userEvent.type(passwordInput, 'IntegrationTest!');
 
-        const encodeButton = screen.getByText(/encode/i);
+        const encodeButton = screen.getByRole('button', { name: /encode to dna/i });
         await userEvent.click(encodeButton);
 
         await waitFor(() => {
-            expect(screen.getByText(/ATCG/)).toBeInTheDocument();
+            // Visualizer mounts after encoding (per-nucleotide spans in colored view).
+            expect(screen.getByText(/GC Content/i)).toBeInTheDocument();
         });
 
         // The component should show the encoded sequence

@@ -67,7 +67,7 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            expect(screen.queryByText('Quantum Certificate')).not.toBeInTheDocument();
+            expect(screen.queryByText('Quantum Certified')).not.toBeInTheDocument();
         });
 
         it('should render when isOpen is true', () => {
@@ -79,7 +79,7 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            expect(screen.getByText('Quantum Certificate')).toBeInTheDocument();
+            expect(screen.getByText('Quantum Certified')).toBeInTheDocument();
         });
 
         it('should not render when certificate is null', () => {
@@ -91,7 +91,7 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            expect(screen.queryByText('Quantum Certificate')).not.toBeInTheDocument();
+            expect(screen.queryByText('Quantum Certified')).not.toBeInTheDocument();
         });
     });
 
@@ -129,7 +129,8 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            expect(screen.getByText('128')).toBeInTheDocument();
+            // Entropy renders as "<bits> bits" in a single value cell.
+            expect(screen.getByText(/128 bits/i)).toBeInTheDocument();
         });
 
         it('should display quantum source', () => {
@@ -204,7 +205,9 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            expect(screen.getByText(/IBM/i)).toBeInTheDocument();
+            // /IBM/i alone is ambiguous (also matches the "ibm-job-abc123" circuit
+            // ID); scope to the provider badge name.
+            expect(screen.getByText(/IBM Quantum/i)).toBeInTheDocument();
         });
 
         it('should display IonQ provider styling', () => {
@@ -238,9 +241,9 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            // Find and click close button (typically has × character)
-            const closeButton = screen.getByRole('button', { name: /close|×/i }) ||
-                screen.getAllByRole('button')[0];
+            // Both the "×" icon button and the primary "Close" button match
+            // /close|×/i, so target the icon button by its exact name.
+            const closeButton = screen.getByRole('button', { name: '×' });
             fireEvent.click(closeButton);
 
             expect(onClose).toHaveBeenCalled();
@@ -249,7 +252,7 @@ describe('QuantumCertificateModal', () => {
         it('should call onClose when backdrop clicked', () => {
             const onClose = vi.fn();
 
-            renderWithTheme(
+            const { container } = renderWithTheme(
                 <QuantumCertificateModal
                     certificate={mockCertificate}
                     isOpen={true}
@@ -257,13 +260,12 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            // Click on the backdrop/overlay
-            const backdrop = document.querySelector('[class*="Overlay"]') ||
-                screen.getByRole('dialog')?.parentElement;
+            // The outermost Overlay closes the modal; the inner Modal stops
+            // propagation. There is no role="dialog", so click the overlay element.
+            const overlay = container.firstChild;
+            fireEvent.click(overlay);
 
-            if (backdrop) {
-                fireEvent.click(backdrop);
-            }
+            expect(onClose).toHaveBeenCalled();
         });
 
         it('should have download button', () => {
@@ -280,15 +282,13 @@ describe('QuantumCertificateModal', () => {
         });
 
         it('should trigger download when download button clicked', () => {
-            // Mock document.createElement for anchor
-            const mockAnchor = {
-                href: '',
-                download: '',
-                click: vi.fn()
-            };
-            const createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(mockAnchor);
-            const appendChildSpy = vi.spyOn(document.body, 'appendChild').mockImplementation(() => { });
-            const removeChildSpy = vi.spyOn(document.body, 'removeChild').mockImplementation(() => { });
+            // Intercept only the anchor the download handler creates; fall through
+            // for every other tag so React/RTL can still build the DOM container.
+            // (A blanket mockReturnValue here breaks render with a createRoot error.)
+            const mockAnchor = { href: '', download: '', click: vi.fn() };
+            const realCreateElement = document.createElement.bind(document);
+            const createElementSpy = vi.spyOn(document, 'createElement')
+                .mockImplementation((tag) => (tag === 'a' ? mockAnchor : realCreateElement(tag)));
 
             renderWithTheme(
                 <QuantumCertificateModal
@@ -304,8 +304,6 @@ describe('QuantumCertificateModal', () => {
             expect(mockAnchor.click).toHaveBeenCalled();
 
             createElementSpy.mockRestore();
-            appendChildSpy.mockRestore();
-            removeChildSpy.mockRestore();
         });
     });
 
@@ -320,7 +318,7 @@ describe('QuantumCertificateModal', () => {
             );
 
             // Modal content should be present
-            expect(screen.getByText('Quantum Certificate')).toBeInTheDocument();
+            expect(screen.getByText('Quantum Certified')).toBeInTheDocument();
         });
 
         it('should have accessible provider badges', () => {
@@ -332,8 +330,9 @@ describe('QuantumCertificateModal', () => {
                 />
             );
 
-            // Provider info should be visible
-            expect(screen.getByText(/quantum/i)).toBeInTheDocument();
+            // /quantum/i is ambiguous (title, "Quantum Source" label, subtitle);
+            // assert the provider badge name specifically.
+            expect(screen.getByText(/ANU Quantum RNG/i)).toBeInTheDocument();
         });
     });
 });
