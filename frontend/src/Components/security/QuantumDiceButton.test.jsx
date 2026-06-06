@@ -138,10 +138,11 @@ describe('QuantumDiceButton', () => {
             });
 
             await waitFor(() => {
-                // onGenerate receives the projected result (password / certificate /
-                // quantumCertified), not the raw service response.
+                // onGenerate receives the projected result (success / password /
+                // certificate / quantumCertified), not the raw service response.
                 expect(onGenerate).toHaveBeenCalledWith(
                     expect.objectContaining({
+                        success: true,
                         password: 'testPassword123',
                         quantumCertified: true,
                         certificate: expect.objectContaining({ certificate_id: 'cert-123' }),
@@ -176,7 +177,7 @@ describe('QuantumDiceButton', () => {
             expect(button).toBeDisabled();
         });
 
-        it('does not notify onGenerate when generation fails', async () => {
+        it('surfaces an error and notifies onGenerate when generation fails', async () => {
             quantumService.generateQuantumPassword.mockResolvedValue({
                 success: false,
                 error: 'Generation failed'
@@ -196,11 +197,46 @@ describe('QuantumDiceButton', () => {
             const button = screen.getByRole('button');
             fireEvent.click(button);
 
-            // The component only invokes onGenerate on success; a failed result is
-            // currently swallowed (no callback, no error UI) — tracked as follow-up.
             await waitFor(() => expect(quantumService.generateQuantumPassword).toHaveBeenCalled());
+
+            // The failure is surfaced in the button's own error UI...
+            await waitFor(() => {
+                expect(screen.getByRole('alert')).toHaveTextContent('Generation failed');
+            });
+
+            // ...and the parent is notified with the discriminated failure shape.
+            expect(onGenerate).toHaveBeenCalledWith(
+                expect.objectContaining({ success: false, error: 'Generation failed' })
+            );
+
+            // Button re-enables so the user can retry.
             await waitFor(() => expect(button).not.toBeDisabled());
-            expect(onGenerate).not.toHaveBeenCalled();
+        });
+
+        it('surfaces an error when generation throws', async () => {
+            quantumService.generateQuantumPassword.mockRejectedValue(
+                new Error('Network down')
+            );
+            quantumService.getPoolStatus.mockResolvedValue({
+                success: true,
+                pool: { health: 'good' },
+                providers: {}
+            });
+
+            const onGenerate = vi.fn();
+
+            renderWithTheme(
+                <QuantumDiceButton onGenerate={onGenerate} />
+            );
+
+            fireEvent.click(screen.getByRole('button'));
+
+            await waitFor(() => {
+                expect(screen.getByRole('alert')).toHaveTextContent('Network down');
+            });
+            expect(onGenerate).toHaveBeenCalledWith(
+                expect.objectContaining({ success: false, error: 'Network down' })
+            );
         });
     });
 
