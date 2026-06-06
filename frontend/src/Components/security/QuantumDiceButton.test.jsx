@@ -238,6 +238,37 @@ describe('QuantumDiceButton', () => {
                 expect.objectContaining({ success: false, error: 'Network down' })
             );
         });
+
+        it('clears a prior certificate banner when a later generation fails', async () => {
+            quantumService.getPoolStatus.mockResolvedValue({
+                success: true,
+                pool: { health: 'good' },
+                providers: {}
+            });
+            quantumService.generateQuantumPassword
+                .mockResolvedValueOnce({
+                    success: true,
+                    password: 'ok',
+                    certificate: { certificate_id: 'c1', provider: 'anu_qrng', entropy_bits: 128 },
+                    quantumCertified: true
+                })
+                .mockResolvedValueOnce({ success: false, error: 'Generation failed' });
+
+            renderWithTheme(
+                <QuantumDiceButton onGenerate={() => { }} />
+            );
+            const button = screen.getByRole('button');
+
+            // First generation succeeds → certificate banner appears.
+            fireEvent.click(button);
+            await waitFor(() => expect(screen.getByText(/Quantum Certified/i)).toBeInTheDocument());
+
+            // Second generation fails → error banner replaces the stale certificate.
+            await waitFor(() => expect(button).not.toBeDisabled());
+            fireEvent.click(button);
+            await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Generation failed'));
+            expect(screen.queryByText(/Quantum Certified/i)).not.toBeInTheDocument();
+        });
     });
 
     describe('Options', () => {

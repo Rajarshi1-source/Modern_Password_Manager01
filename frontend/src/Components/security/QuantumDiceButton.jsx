@@ -284,11 +284,15 @@ const QuantumDiceButton = ({
             } else {
                 const message = result.error || 'Quantum generation failed';
                 setError(message);
+                // Clear any prior success so the error banner isn't shown next to
+                // a stale certificate banner.
+                setLastCertificate(null);
                 onGenerate?.({ success: false, error: message });
             }
         } catch (err) {
             const message = err?.message || 'Quantum generation failed';
             setError(message);
+            setLastCertificate(null);
             onGenerate?.({ success: false, error: message });
         } finally {
             setIsGenerating(false);
