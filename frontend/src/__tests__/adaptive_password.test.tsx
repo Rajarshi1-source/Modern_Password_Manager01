@@ -25,7 +25,7 @@ import axios from 'axios';
 vi.mock('axios');
 
 // Some code paths may also use fetch.
-global.fetch = jest.fn();
+global.fetch = vi.fn();
 
 // =============================================================================
 // useTypingPatternCapture Hook Tests
@@ -33,7 +33,7 @@ global.fetch = jest.fn();
 
 describe('useTypingPatternCapture Hook', () => {
     beforeEach(() => {
-        jest.clearAllMocks();
+        vi.clearAllMocks();
     });
 
     test('initializes with default state', async () => {
@@ -111,7 +111,7 @@ describe('useTypingPatternCapture Hook', () => {
     test('endCapture returns pattern data', async () => {
         const { useTypingPatternCapture } = await import('../hooks/useTypingPatternCapture');
 
-        const mockCallback = jest.fn();
+        const mockCallback = vi.fn();
         const { result } = renderHook(() => useTypingPatternCapture({
             inputElement: null,
             enabled: true,
@@ -190,7 +190,7 @@ describe('useTypingPatternCapture Hook', () => {
 
 describe.skip('TypingPatternCapture Component (headless — visible UI not implemented)', () => {
     beforeEach(() => {
-        jest.clearAllMocks();
+        vi.clearAllMocks();
     });
 
     test('renders input field', async () => {
@@ -198,7 +198,7 @@ describe.skip('TypingPatternCapture Component (headless — visible UI not imple
 
         render(
             <TypingPatternCapture
-                onPasswordChange={jest.fn()}
+                onPasswordChange={vi.fn()}
                 sessionType="login"
             />
         );
@@ -211,7 +211,7 @@ describe.skip('TypingPatternCapture Component (headless — visible UI not imple
 
         render(
             <TypingPatternCapture
-                onPasswordChange={jest.fn()}
+                onPasswordChange={vi.fn()}
                 sessionType="login"
             />
         );
@@ -222,7 +222,7 @@ describe.skip('TypingPatternCapture Component (headless — visible UI not imple
     test('calls onPasswordChange when typing', async () => {
         const { default: TypingPatternCapture } = await import('../Components/security/TypingPatternCapture');
 
-        const mockOnChange = jest.fn();
+        const mockOnChange = vi.fn();
         render(
             <TypingPatternCapture
                 onPasswordChange={mockOnChange}
@@ -262,8 +262,8 @@ describe('AdaptivePasswordSuggestion Component', () => {
         render(
             <AdaptivePasswordSuggestion
                 suggestion={mockSuggestion}
-                onAccept={jest.fn()}
-                onReject={jest.fn()}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
             />
         );
 
@@ -278,8 +278,8 @@ describe('AdaptivePasswordSuggestion Component', () => {
         render(
             <AdaptivePasswordSuggestion
                 suggestion={mockSuggestion}
-                onAccept={jest.fn()}
-                onReject={jest.fn()}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
             />
         );
 
@@ -290,12 +290,12 @@ describe('AdaptivePasswordSuggestion Component', () => {
     test('accept button works', async () => {
         const { default: AdaptivePasswordSuggestion } = await import('../Components/security/AdaptivePasswordSuggestion');
 
-        const mockAccept = jest.fn();
+        const mockAccept = vi.fn();
         render(
             <AdaptivePasswordSuggestion
                 suggestion={mockSuggestion}
                 onAccept={mockAccept}
-                onReject={jest.fn()}
+                onReject={vi.fn()}
             />
         );
 
@@ -308,11 +308,11 @@ describe('AdaptivePasswordSuggestion Component', () => {
     test('reject button works', async () => {
         const { default: AdaptivePasswordSuggestion } = await import('../Components/security/AdaptivePasswordSuggestion');
 
-        const mockReject = jest.fn();
+        const mockReject = vi.fn();
         render(
             <AdaptivePasswordSuggestion
                 suggestion={mockSuggestion}
-                onAccept={jest.fn()}
+                onAccept={vi.fn()}
                 onReject={mockReject}
             />
         );
@@ -329,8 +329,8 @@ describe('AdaptivePasswordSuggestion Component', () => {
         render(
             <AdaptivePasswordSuggestion
                 suggestion={mockSuggestion}
-                onAccept={jest.fn()}
-                onReject={jest.fn()}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
             />
         );
 
@@ -359,7 +359,7 @@ describe('TypingProfileCard Component', () => {
     };
 
     beforeEach(() => {
-        jest.clearAllMocks();
+        vi.clearAllMocks();
         vi.mocked(axios.get).mockImplementation((url: string) => {
             if (url.includes('/config/')) return Promise.resolve({ data: { enabled: true } });
             if (url.includes('/profile/')) return Promise.resolve({ data: profileData });
@@ -418,7 +418,7 @@ describe('TypingProfileCard Component', () => {
 
 describe('Adaptive Password API Service', () => {
     beforeEach(() => {
-        jest.clearAllMocks();
+        vi.clearAllMocks();
     });
 
     test('enable sends correct request', async () => {
@@ -481,7 +481,7 @@ describe('Component Accessibility', () => {
 
         render(
             <TypingPatternCapture
-                onPasswordChange={jest.fn()}
+                onPasswordChange={vi.fn()}
                 sessionType="login"
             />
         );
@@ -501,8 +501,8 @@ describe('Component Accessibility', () => {
                     memorability_improvement: 0.15,
                     substitutions: [],
                 }}
-                onAccept={jest.fn()}
-                onReject={jest.fn()}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
             />
         );
 

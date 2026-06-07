@@ -263,6 +263,7 @@ const DevicePairingFlow = ({ onComplete, onCancel }) => {
                                             code: verificationCode,
                                         })}
                                         size={150}
+                                        level="H"
                                     />
                                 </div>
                             </div>
