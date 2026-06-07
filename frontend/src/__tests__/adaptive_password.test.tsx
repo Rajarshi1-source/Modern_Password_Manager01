@@ -16,7 +16,7 @@
  */
 
 import React from 'react';
-import { render, screen, act, renderHook } from '@testing-library/react';
+import { render, screen, act, renderHook, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import axios from 'axios';
 
@@ -184,56 +184,89 @@ describe('useTypingPatternCapture Hook', () => {
 // =============================================================================
 //
 // The implemented `TypingPatternCapture` is a *headless* component: it renders
-// `null` and wires keystroke capture to an input element via a ref. The visible
-// password input / privacy indicator / aria-labels these tests assert were never
-// built, so they're skipped rather than asserting non-existent UI.
+// `null` and wires keystroke capture onto a password input via a ref. These
+// tests assert that real contract — no visible UI, ref wiring, and capture that
+// reports timings (never the raw password) + auto-submits to the API.
 
-describe.skip('TypingPatternCapture Component (headless — visible UI not implemented)', () => {
+describe('TypingPatternCapture Component (headless)', () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });
 
-    test('renders input field', async () => {
+    test('renders no visible output (headless)', async () => {
         const { default: TypingPatternCapture } = await import('../Components/security/TypingPatternCapture');
 
-        render(
-            <TypingPatternCapture
-                onPasswordChange={vi.fn()}
-                sessionType="login"
-            />
+        const { container } = render(
+            <TypingPatternCapture inputRef={{ current: null }} enabled={false} />
         );
 
-        expect(screen.getByRole('password') || screen.getByPlaceholderText(/password/i)).toBeInTheDocument();
+        // The component returns null — it contributes no DOM.
+        expect(container.firstChild).toBeNull();
     });
 
-    test('shows privacy indicator', async () => {
+    test('exposes capture controls on the input ref', async () => {
         const { default: TypingPatternCapture } = await import('../Components/security/TypingPatternCapture');
 
-        render(
-            <TypingPatternCapture
-                onPasswordChange={vi.fn()}
-                sessionType="login"
-            />
-        );
+        const input = document.createElement('input');
+        input.type = 'password';
+        const inputRef = { current: input };
 
-        expect(screen.getByText(/privacy/i)).toBeInTheDocument();
+        render(<TypingPatternCapture inputRef={inputRef} enabled />);
+
+        // On mount the component attaches its capture/reset helpers to the input.
+        expect(typeof inputRef.current.captureTypingPattern).toBe('function');
+        expect(typeof inputRef.current.resetTypingSession).toBe('function');
     });
 
-    test('calls onPasswordChange when typing', async () => {
+    test('captures keystroke timings and reports/submits the pattern', async () => {
         const { default: TypingPatternCapture } = await import('../Components/security/TypingPatternCapture');
 
-        const mockOnChange = vi.fn();
+        vi.mocked(axios.post).mockResolvedValue({ data: { recorded: true } });
+
+        const input = document.createElement('input');
+        input.type = 'password';
+        const inputRef = { current: input };
+        const onPatternCaptured = vi.fn();
+        const onSessionRecorded = vi.fn();
+
         render(
             <TypingPatternCapture
-                onPasswordChange={mockOnChange}
-                sessionType="login"
+                inputRef={inputRef}
+                enabled
+                onPatternCaptured={onPatternCaptured}
+                onSessionRecorded={onSessionRecorded}
             />
         );
 
-        const input = screen.getByRole('password') || screen.getByPlaceholderText(/password/i);
-        await userEvent.type(input, 'test');
+        // The first keydown only sets the timing baseline; the second records a
+        // (bucketized) inter-key timing.
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
 
-        expect(mockOnChange).toHaveBeenCalled();
+        await act(async () => {
+            await inputRef.current.captureTypingPattern('testpass');
+        });
+
+        // The pattern (timings only — never the raw password) is reported.
+        expect(onPatternCaptured).toHaveBeenCalledWith(
+            expect.objectContaining({
+                keystroke_timings: expect.any(Array),
+                backspace_positions: expect.any(Array),
+                device_type: expect.any(String),
+            })
+        );
+
+        // ...and auto-submitted to the record-session endpoint.
+        await waitFor(() => {
+            expect(axios.post).toHaveBeenCalledWith(
+                expect.stringContaining('/adaptive/record-session/'),
+                expect.objectContaining({ keystroke_timings: expect.any(Array) }),
+                expect.any(Object)
+            );
+        });
+        await waitFor(() => {
+            expect(onSessionRecorded).toHaveBeenCalledWith({ recorded: true });
+        });
     });
 });
 
@@ -475,19 +508,15 @@ describe('Adaptive Password API Service', () => {
 // =============================================================================
 
 describe('Component Accessibility', () => {
-    // Headless component — see the skipped TypingPatternCapture block above.
-    test.skip('TypingPatternCapture has proper labels (headless — no visible input)', async () => {
+    test('TypingPatternCapture is invisible to assistive tech (no a11y surface)', async () => {
         const { default: TypingPatternCapture } = await import('../Components/security/TypingPatternCapture');
 
-        render(
-            <TypingPatternCapture
-                onPasswordChange={vi.fn()}
-                sessionType="login"
-            />
-        );
+        const inputRef = { current: document.createElement('input') };
+        const { container } = render(<TypingPatternCapture inputRef={inputRef} enabled />);
 
-        const input = screen.getByRole('password') || screen.getByPlaceholderText(/password/i);
-        expect(input).toHaveAttribute('aria-label');
+        // A headless capture wrapper must not inject focusable/labelled nodes.
+        expect(container.firstChild).toBeNull();
+        expect(container.querySelector('input, button, [role], [aria-label], [tabindex]')).toBeNull();
     });
 
     test('buttons have accessible names', async () => {
