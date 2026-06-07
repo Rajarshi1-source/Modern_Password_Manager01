@@ -124,7 +124,7 @@ httpx==0.28.1
 huggingface-hub==0.36.0
 humanize==4.15.0
 hyper==0.7.0
-hyperframe==3.2.0
+hyperframe==6.1.0
 hyperlink==21.0.0
 idna==3.15
 incremental==24.7.2
