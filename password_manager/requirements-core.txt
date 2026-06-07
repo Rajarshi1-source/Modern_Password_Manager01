@@ -95,7 +95,7 @@ wcwidth==0.2.13
 
 # Data Processing
 python-dateutil==2.9.0.post0
-python-crontab==3.2.0
+python-crontab==3.3.0
 cron-descriptor==1.4.5
 pytz==2025.2
 tzdata==2025.2
