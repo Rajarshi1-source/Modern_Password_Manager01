@@ -13,15 +13,17 @@
  */
 
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 
-// Mock components (will import real ones when running)
-jest.mock('./EntangledDeviceManager', () => require('./EntangledDeviceManager').default);
-jest.mock('./DevicePairingFlow', () => require('./DevicePairingFlow').default);
-jest.mock('./EntropyHealthCard', () => require('./EntropyHealthCard').default);
-jest.mock('./InstantRevokeModal', () => require('./InstantRevokeModal').default);
+// Components live in the parent security/ directory; this spec is under
+// __tests__/, so they're imported directly via '../'. No module mocks are
+// needed — the real components run.
+import EntropyHealthCard from '../EntropyHealthCard';
+import InstantRevokeModal from '../InstantRevokeModal';
+import DevicePairingFlow from '../DevicePairingFlow';
+import EntangledDeviceManager from '../EntangledDeviceManager';
 
 // Mock fetch globally
 global.fetch = jest.fn();
@@ -40,8 +42,6 @@ Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 // =============================================================================
 
 describe('EntropyHealthCard', () => {
-    const EntropyHealthCard = require('./EntropyHealthCard').default;
-
     describe('Compact Mode', () => {
         it('renders compact view correctly', () => {
             render(
@@ -192,7 +192,6 @@ describe('EntropyHealthCard', () => {
 // =============================================================================
 
 describe('InstantRevokeModal', () => {
-    const InstantRevokeModal = require('./InstantRevokeModal').default;
 
     const mockPair = {
         pair_id: '123e4567-e89b-12d3-a456-426614174000',
@@ -245,7 +244,9 @@ describe('InstantRevokeModal', () => {
         const phoneItem = screen.getByText('iPhone 15').closest('.device-item');
         await userEvent.click(phoneItem);
 
-        expect(screen.getByText(/Compromised/i)).toBeInTheDocument();
+        // "Compromised" appears in both the device badge and the summary label;
+        // scope to the clicked device's badge.
+        expect(phoneItem.querySelector('.compromised-badge')).toBeInTheDocument();
     });
 
     it('calls onCancel when cancel clicked', async () => {
@@ -335,7 +336,6 @@ describe('InstantRevokeModal', () => {
 // =============================================================================
 
 describe('DevicePairingFlow', () => {
-    const DevicePairingFlow = require('./DevicePairingFlow').default;
 
     const mockDevices = [
         { device_id: 'dev-1', device_name: 'iPhone', device_type: 'mobile' },
@@ -369,11 +369,11 @@ describe('DevicePairingFlow', () => {
     it('loads and displays devices', async () => {
         render(<DevicePairingFlow onComplete={() => { }} onCancel={() => { }} />);
 
-        await waitFor(() => {
-            expect(screen.getByText('iPhone')).toBeInTheDocument();
-            expect(screen.getByText('MacBook')).toBeInTheDocument();
-            expect(screen.getByText('iPad')).toBeInTheDocument();
-        });
+        // Each device renders in both the "device A" and "device B" columns,
+        // so the names intentionally appear more than once.
+        expect((await screen.findAllByText('iPhone')).length).toBeGreaterThan(0);
+        expect(screen.getAllByText('MacBook').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('iPad').length).toBeGreaterThan(0);
     });
 
     it('disables continue until both devices selected', async () => {
@@ -388,7 +388,7 @@ describe('DevicePairingFlow', () => {
     it('enables continue after selecting both devices', async () => {
         render(<DevicePairingFlow onComplete={() => { }} onCancel={() => { }} />);
 
-        await waitFor(() => screen.getByText('iPhone'));
+        await screen.findAllByText('iPhone');
 
         // Select first device
         const deviceAButtons = screen.getAllByText('iPhone');
@@ -405,7 +405,7 @@ describe('DevicePairingFlow', () => {
     it('prevents selecting same device twice', async () => {
         render(<DevicePairingFlow onComplete={() => { }} onCancel={() => { }} />);
 
-        await waitFor(() => screen.getByText('iPhone'));
+        await screen.findAllByText('iPhone');
 
         // Select iPhone as device A
         const deviceButtons = screen.getAllByText('iPhone');
@@ -453,7 +453,7 @@ describe('DevicePairingFlow', () => {
 
         render(<DevicePairingFlow onComplete={() => { }} onCancel={() => { }} />);
 
-        await waitFor(() => screen.getByText('iPhone'));
+        await screen.findAllByText('iPhone');
 
         // Select devices
         await userEvent.click(screen.getAllByText('iPhone')[0]);
@@ -484,7 +484,6 @@ describe('DevicePairingFlow', () => {
 // =============================================================================
 
 describe('EntangledDeviceManager', () => {
-    const EntangledDeviceManager = require('./EntangledDeviceManager').default;
 
     const mockPairs = [
         {
@@ -661,7 +660,6 @@ describe('EntangledDeviceManager', () => {
 
 describe('Component Integration', () => {
     it('EntropyHealthCard integrates with manager card', async () => {
-        const EntangledDeviceManager = require('./EntangledDeviceManager').default;
 
         global.fetch.mockResolvedValue({
             ok: true,
@@ -696,7 +694,6 @@ describe('Component Integration', () => {
 
 describe('Accessibility', () => {
     it('buttons are keyboard accessible', async () => {
-        const EntropyHealthCard = require('./EntropyHealthCard').default;
         const onRotate = jest.fn();
 
         render(
@@ -711,13 +708,14 @@ describe('Accessibility', () => {
         const rotateButton = screen.getByText('Rotate Keys');
         rotateButton.focus();
 
-        fireEvent.keyDown(rotateButton, { key: 'Enter' });
+        // jsdom doesn't synthesize a click from Enter; userEvent simulates the
+        // real "focused button activates on Enter" keyboard behaviour.
+        await userEvent.keyboard('{Enter}');
 
         expect(onRotate).toHaveBeenCalled();
     });
 
     it('modal can be closed with escape key', async () => {
-        const InstantRevokeModal = require('./InstantRevokeModal').default;
         const onCancel = jest.fn();
 
         render(
@@ -735,7 +733,6 @@ describe('Accessibility', () => {
     });
 
     it('modal has proper ARIA attributes', () => {
-        const InstantRevokeModal = require('./InstantRevokeModal').default;
 
         const { container } = render(
             <InstantRevokeModal
@@ -758,7 +755,6 @@ describe('Accessibility', () => {
 
 describe('Performance', () => {
     it('does not re-render unnecessarily', () => {
-        const EntropyHealthCard = require('./EntropyHealthCard').default;
         const renderSpy = jest.fn();
 
         // Create wrapper to count renders
