@@ -201,7 +201,120 @@ export class CryptoService {
       return key.toString(CryptoJS.enc.Base64);
     }
   }
-  
+
+  // ===========================================================================
+  // Adaptive-password zero-knowledge fingerprint (PR-1)
+  // ===========================================================================
+  //
+  // The adaptive-password feature must never send the raw password to the
+  // server (see docs/adaptive-password-zk-remediation-plan.md). Instead the
+  // client computes a *keyed* fingerprint: HMAC-SHA256 over the password under
+  // a key derived from the master password. Because the server never holds the
+  // key, the fingerprint is opaque to it (it cannot be reversed or offline-
+  // guessed) yet is deterministic, so the server can still correlate/dedup
+  // "the same password" across sessions. This is strictly stronger than a bare
+  // SHA-256 of the password, which is offline-guessable.
+
+  /**
+   * Derive (and cache) the HMAC fingerprint key from the master password.
+   *
+   * The key is memory-hard (Argon2id, PBKDF2 fallback), never leaves the
+   * client, and is domain-separated from the vault encryption key via the
+   * ":adaptive-fp" salt suffix so the two key streams cannot be correlated.
+   *
+   * @param {string} perUserSalt - Non-secret, stable per-user salt (seeds the
+   *   KDF; useless without the master password).
+   * @returns {Promise<CryptoKey>} A non-extractable HMAC-SHA256 signing key.
+   */
+  async deriveFingerprintKey(perUserSalt) {
+    if (!perUserSalt) {
+      throw new Error('deriveFingerprintKey requires a per-user salt');
+    }
+    if (this._fpKeyCache && this._fpKeyCache.salt === perUserSalt) {
+      return this._fpKeyCache.key;
+    }
+
+    const keyBits = await this._deriveFingerprintKeyBits(perUserSalt);
+    const key = await this.subtle.importKey(
+      'raw',
+      keyBits,
+      { name: 'HMAC', hash: 'SHA-256' },
+      false, // non-extractable
+      ['sign']
+    );
+
+    this._fpKeyCache = { salt: perUserSalt, key };
+    return key;
+  }
+
+  /**
+   * Derive 256 bits of fingerprint-key material from the master password.
+   * Prefers Argon2id (matching the vault KDF); falls back to WebCrypto PBKDF2.
+   * @private
+   */
+  async _deriveFingerprintKeyBits(perUserSalt) {
+    const domainSalt = `${perUserSalt}:adaptive-fp`;
+    try {
+      const result = await argon2.hash({
+        pass: this.masterPassword,
+        salt: domainSalt,
+        time: 3,
+        mem: 65536, // 64 MB
+        hashLen: 32,
+        parallelism: 1,
+        type: argon2.ArgonType.Argon2id,
+      });
+      return result.hash instanceof Uint8Array
+        ? result.hash
+        : Uint8Array.from(result.hash);
+    } catch (error) {
+      console.error('Argon2 fingerprint-key derivation failed, falling back to PBKDF2:', error);
+      const enc = new TextEncoder();
+      const keyMaterial = await this.subtle.importKey(
+        'raw',
+        enc.encode(this.masterPassword),
+        { name: 'PBKDF2' },
+        false,
+        ['deriveBits']
+      );
+      const bits = await this.subtle.deriveBits(
+        { name: 'PBKDF2', salt: enc.encode(domainSalt), iterations: 600000, hash: 'SHA-256' },
+        keyMaterial,
+        256
+      );
+      return new Uint8Array(bits);
+    }
+  }
+
+  /**
+   * Compute the keyed, deterministic, non-reversible fingerprint of a password.
+   *
+   * @param {string} password - The plaintext password (never leaves the client).
+   * @param {string} perUserSalt - The per-user salt (see deriveFingerprintKey).
+   * @returns {Promise<string>} A 24-char base64url fingerprint (144 bits).
+   */
+  async passwordFingerprint(password, perUserSalt) {
+    if (typeof password !== 'string' || password.length === 0) {
+      throw new Error('passwordFingerprint requires a non-empty password');
+    }
+    const key = await this.deriveFingerprintKey(perUserSalt);
+    const message = new TextEncoder().encode(`adaptive-pw|${password}`);
+    const signature = await this.subtle.sign('HMAC', key, message);
+    return this._toBase64Url(new Uint8Array(signature)).slice(0, 24);
+  }
+
+  /**
+   * Encode a byte array as unpadded base64url.
+   * @private
+   */
+  _toBase64Url(bytes) {
+    const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join('');
+    return btoa(binary)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  }
+
   // Encrypt data with AES-256.
   //
   // NOTE: `key` here is the *already-derived* key from deriveKey()
