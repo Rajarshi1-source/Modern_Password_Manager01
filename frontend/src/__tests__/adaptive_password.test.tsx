@@ -247,9 +247,13 @@ describe('TypingPatternCapture Component (headless)', () => {
             await inputRef.current.captureTypingPattern('testpass');
         });
 
-        // The pattern (timings only — never the raw password) is reported.
+        // The pattern reports the timing fields plus `password`: the backend's
+        // record-session endpoint *requires* it (TypingSessionInputSerializer,
+        // write_only) and uses it "for hashing only, never stored" server-side
+        // (see record_typing_session) — so it is intentionally part of the payload.
         expect(onPatternCaptured).toHaveBeenCalledWith(
             expect.objectContaining({
+                password: 'testpass',
                 keystroke_timings: expect.any(Array),
                 backspace_positions: expect.any(Array),
                 device_type: expect.any(String),
