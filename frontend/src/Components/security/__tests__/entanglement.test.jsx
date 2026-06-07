@@ -13,7 +13,7 @@
  */
 
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 
@@ -712,7 +712,7 @@ describe('Accessibility', () => {
         // real "focused button activates on Enter" keyboard behaviour.
         await userEvent.keyboard('{Enter}');
 
-        expect(onRotate).toHaveBeenCalled();
+        expect(onRotate).toHaveBeenCalledTimes(1);
     });
 
     it('modal can be closed with escape key', async () => {
@@ -726,7 +726,7 @@ describe('Accessibility', () => {
             />
         );
 
-        fireEvent.keyDown(document, { key: 'Escape' });
+        await userEvent.keyboard('{Escape}');
 
         // Note: This would require implementing Escape key handler in the component
         // The test documents expected behavior
