@@ -108,6 +108,26 @@ describe('cryptoService password fingerprint (ZK)', () => {
     expect(argon2.hash).toHaveBeenCalledTimes(2);
   });
 
+  it('cannot fingerprint after clearKeys(), until the master password is re-established', async () => {
+    const svc = new CryptoService('master-password');
+    await svc.passwordFingerprint('password-one', SALT);
+    expect(argon2.hash).toHaveBeenCalledTimes(1);
+
+    svc.clearKeys();
+
+    // The cached signing key is gone and the master password is wiped, so a
+    // subsequent call must reject without re-deriving (no stale-key reuse).
+    await expect(svc.passwordFingerprint('password-two', SALT))
+      .rejects.toThrow(/unlocked master password/);
+    expect(argon2.hash).toHaveBeenCalledTimes(1);
+
+    // Fingerprinting works again only with a freshly unlocked master password,
+    // which forces re-derivation.
+    const fresh = new CryptoService('master-password');
+    await fresh.passwordFingerprint('password-two', SALT);
+    expect(argon2.hash).toHaveBeenCalledTimes(2);
+  });
+
   it('never leaks the raw password through the fingerprint value', async () => {
     const svc = new CryptoService('master-password');
     const secret = 'Sup3rSecret-Passw0rd!';
