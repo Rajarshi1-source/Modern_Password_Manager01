@@ -14,6 +14,7 @@ Covers the v2 backend surface from docs/adaptive-password-zk-remediation-plan.md
 
 from django.test import TestCase, override_settings
 from django.contrib.auth.models import User
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
@@ -133,6 +134,39 @@ class V2FieldValidationTests(TestCase):
         })
         self.assertFalse(serializer.is_valid())
 
+    def test_apply_rejects_extra_substitution_field(self):
+        # Position/char metadata could reveal the password — reject extra keys.
+        serializer = ApplyAdaptationV2Serializer(data={
+            'schema_version': 2,
+            'original_fingerprint': FP_ORIGINAL,
+            'adapted_fingerprint': FP_ADAPTED,
+            'substitutions': [{'from': 'o', 'to': '0', 'position': 3}],
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('substitutions', serializer.errors)
+
+    def test_apply_rejects_plaintext_preview(self):
+        # A "preview" with no mask character is plaintext — reject it.
+        serializer = ApplyAdaptationV2Serializer(data={
+            'schema_version': 2,
+            'original_fingerprint': FP_ORIGINAL,
+            'adapted_fingerprint': FP_ADAPTED,
+            'substitutions': [{'from': 'o', 'to': '0'}],
+            'previews': {'original_masked': 'password', 'adapted_masked': 'passw0rd'},
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('previews', serializer.errors)
+
+    def test_apply_accepts_masked_preview(self):
+        serializer = ApplyAdaptationV2Serializer(data={
+            'schema_version': 2,
+            'original_fingerprint': FP_ORIGINAL,
+            'adapted_fingerprint': FP_ADAPTED,
+            'substitutions': [{'from': 'o', 'to': '0'}],
+            'previews': {'original_masked': 'pa***rd', 'adapted_masked': 'pa***rd'},
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
 
 # =============================================================================
 # Service: preference-model export + v2 record/apply
@@ -218,6 +252,46 @@ class PreferenceModelServiceTests(TestCase):
         )
         self.assertEqual(second['generation'], 2)
         self.assertTrue(second['can_rollback'])
+
+    def test_unique_active_adapted_fingerprint_enforced(self):
+        """The DB rejects a second ACTIVE adaptation for the same fingerprint."""
+        from security.models import PasswordAdaptation
+
+        PasswordAdaptation.objects.create(
+            user=self.user,
+            original_fingerprint=FP_ORIGINAL,
+            adapted_fingerprint=FP_ADAPTED,
+            adaptation_type='substitution',
+            confidence_score=0.8,
+            status='active',
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                PasswordAdaptation.objects.create(
+                    user=self.user,
+                    original_fingerprint='OtherFp0123456789-_xYz',
+                    adapted_fingerprint=FP_ADAPTED,  # same active fingerprint → clash
+                    adaptation_type='substitution',
+                    confidence_score=0.8,
+                    status='active',
+                )
+
+    def test_legacy_empty_fingerprint_rows_are_not_constrained(self):
+        """Multiple active legacy rows (empty fingerprint) must still coexist."""
+        from security.models import PasswordAdaptation
+
+        for prefix in ('aaaa111122223333', 'bbbb444455556666'):
+            PasswordAdaptation.objects.create(
+                user=self.user,
+                password_hash_prefix=prefix,
+                adapted_hash_prefix=prefix,
+                adaptation_type='substitution',
+                confidence_score=0.8,
+                status='active',  # adapted_fingerprint defaults to '' → excluded
+            )
+        self.assertEqual(
+            PasswordAdaptation.objects.filter(user=self.user, status='active').count(), 2
+        )
 
 
 # =============================================================================
