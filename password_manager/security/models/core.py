@@ -1048,12 +1048,22 @@ class TypingSession(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE,
                              related_name='typing_sessions')
     
-    # Password reference (hash prefix only, never actual password)
-    password_hash_prefix = models.CharField(max_length=32,
-        help_text="First 16 chars of password hash for correlation")
-    password_length = models.IntegerField(
-        help_text="Length of password (for position normalization)")
-    
+    # Password reference (hash prefix only, never actual password).
+    # LEGACY (v1): a server-side keyed hash prefix. Retained, but relaxed to
+    # optional so zero-knowledge v2 records (which never derive anything from a
+    # raw password server-side) can omit it. Removed entirely in PR-5.
+    password_hash_prefix = models.CharField(max_length=32, blank=True, default='',
+        help_text="LEGACY v1 only. Hash prefix for correlation (unused in ZK v2)")
+    password_length = models.IntegerField(null=True, blank=True,
+        help_text="LEGACY v1 only. Exact length (ZK v2 stores length_bucket instead)")
+
+    # ZK v2: client-computed, keyed fingerprint (opaque to the server) +
+    # coarse length bucket. See docs/adaptive-password-zk-remediation-plan.md.
+    password_fingerprint = models.CharField(max_length=64, blank=True, default='',
+        help_text="Client-keyed HMAC fingerprint (base64url); opaque to server")
+    length_bucket = models.PositiveIntegerField(null=True, blank=True,
+        help_text="Coarse length bucket = floor(len/4) (never the exact length)")
+
     # Session outcome
     success = models.BooleanField(
         help_text="Whether password was entered correctly")
@@ -1092,8 +1102,9 @@ class TypingSession(models.Model):
         indexes = [
             models.Index(fields=['user', '-created_at']),
             models.Index(fields=['password_hash_prefix', '-created_at']),
+            models.Index(fields=['user', 'password_fingerprint']),
         ]
-    
+
     def __str__(self):
         status = "✓" if self.success else "✗"
         return f"{status} Session for {self.user.username} @ {self.created_at}"
@@ -1126,12 +1137,25 @@ class PasswordAdaptation(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE,
                              related_name='password_adaptations')
     
-    # Password reference
-    password_hash_prefix = models.CharField(max_length=32,
-        help_text="Hash prefix of ORIGINAL password")
-    adapted_hash_prefix = models.CharField(max_length=32,
-        help_text="Hash prefix of ADAPTED password")
-    
+    # Password reference.
+    # LEGACY (v1): server-side keyed hash prefixes. Relaxed to optional for ZK
+    # v2 (which carries client-computed fingerprints instead). Removed in PR-5.
+    password_hash_prefix = models.CharField(max_length=32, blank=True, default='',
+        help_text="LEGACY v1 only. Hash prefix of ORIGINAL password")
+    adapted_hash_prefix = models.CharField(max_length=32, blank=True, default='',
+        help_text="LEGACY v1 only. Hash prefix of ADAPTED password")
+
+    # ZK v2: client-computed, keyed fingerprints (opaque to the server) and
+    # masked previews only (never the full password). See remediation plan §6.
+    original_fingerprint = models.CharField(max_length=64, blank=True, default='',
+        help_text="Client-keyed fingerprint of the ORIGINAL password (opaque)")
+    adapted_fingerprint = models.CharField(max_length=64, blank=True, default='',
+        help_text="Client-keyed fingerprint of the ADAPTED password (opaque)")
+    original_masked = models.CharField(max_length=64, blank=True, default='',
+        help_text="Masked preview of the original password (e.g. ab***yz)")
+    adapted_masked = models.CharField(max_length=64, blank=True, default='',
+        help_text="Masked preview of the adapted password (e.g. a0***yz)")
+
     # Linked list for rollback
     previous_adaptation = models.ForeignKey(
         'self',
@@ -1176,6 +1200,7 @@ class PasswordAdaptation(models.Model):
         indexes = [
             models.Index(fields=['user', 'status']),
             models.Index(fields=['password_hash_prefix']),
+            models.Index(fields=['user', 'original_fingerprint']),
         ]
     
     def __str__(self):

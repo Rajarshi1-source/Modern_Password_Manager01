@@ -173,6 +173,8 @@ urlpatterns = [
     
     # Adaptation Suggestions
     path('adaptive/suggest/', adaptive_password_views.suggest_adaptation, name='adaptive-suggest'),
+    # Zero-knowledge v2: client pulls the preference model and ranks locally.
+    path('adaptive/preference-model/', adaptive_password_views.preference_model, name='adaptive-preference-model'),
     path('adaptive/apply/', adaptive_password_views.apply_adaptation, name='adaptive-apply'),
     path('adaptive/rollback/', adaptive_password_views.rollback_adaptation, name='adaptive-rollback'),
     

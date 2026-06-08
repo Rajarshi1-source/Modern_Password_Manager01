@@ -1206,7 +1206,131 @@ class AdaptivePasswordService:
             'success': pattern.success,
             'error_count': len(pattern.error_positions),
         }
-    
+
+    def record_typing_session_v2(
+        self,
+        password_fingerprint: str,
+        length_bucket: int,
+        keystroke_timings: List[int],
+        backspace_positions: List[int] = None,
+        device_type: str = 'desktop',
+        input_method: str = 'keyboard',
+        substitution_classes_used: Optional[List[Dict]] = None,
+    ) -> Dict[str, Any]:
+        """Record a typing session under the zero-knowledge v2 contract.
+
+        The client supplies a *keyed fingerprint* (opaque to the server) and a
+        coarse length bucket — never the raw password. The aggregate learning
+        signals (errors, timing, WPM) are updated exactly as in the legacy
+        path; only the password-derived ingestion is gone.
+
+        Args:
+            password_fingerprint: Client-keyed HMAC fingerprint (base64url).
+            length_bucket: Coarse length bucket = floor(len / 4).
+            keystroke_timings: Inter-key delays in ms.
+            backspace_positions: Positions where backspaces occurred.
+            device_type: desktop, mobile, tablet.
+            input_method: keyboard, touchscreen, voice.
+            substitution_classes_used: Optional consented substitution-class
+                usage, e.g. ``[{"from": "o", "to": "0"}]`` (no positions/chars
+                of the password).
+
+        Returns:
+            Session summary (carries ``schema_version: 2``).
+        """
+        from ..models import TypingSession, AdaptivePasswordConfig
+
+        backspace_positions = list(backspace_positions or [])
+
+        # Opt-in / consent gate (identical to the v1 path).
+        try:
+            config = AdaptivePasswordConfig.objects.get(user=self.user)
+            if not config.is_enabled:
+                return {'error': 'Adaptive passwords not enabled'}
+        except AdaptivePasswordConfig.DoesNotExist:
+            return {'error': 'Adaptive passwords not configured'}
+
+        success = len(backspace_positions) == 0
+        timing_buckets = {
+            i: self.privacy_guard.anonymize_timing(t)
+            for i, t in enumerate(keystroke_timings)
+        }
+
+        # Build a privacy-safe pattern for profile aggregation. We never had the
+        # password, so exact length is unknown — approximate it from the bucket
+        # purely for the WPM heuristic (the stored column keeps only the bucket).
+        approx_length = max(0, int(length_bucket) * 4)
+        pattern = TypingPattern(
+            password_hash_prefix='',  # ZK v2: no server-side password hash
+            password_length=approx_length,
+            error_positions=backspace_positions,
+            timing_buckets=timing_buckets,
+            total_time_ms=sum(keystroke_timings) if keystroke_timings else 0,
+            success=success,
+            device_type=device_type,
+            input_method=input_method,
+        )
+        pattern = self.privacy_guard.sanitize_pattern(pattern)
+
+        session = TypingSession.objects.create(
+            user=self.user,
+            password_fingerprint=password_fingerprint,
+            length_bucket=length_bucket,
+            password_hash_prefix='',
+            password_length=None,
+            success=success,
+            error_positions=pattern.error_positions,
+            error_count=len(pattern.error_positions),
+            timing_profile=pattern.timing_buckets,
+            total_time_ms=pattern.total_time_ms,
+            device_type=device_type,
+            input_method=input_method,
+        )
+
+        # Update aggregate profile, then fold in any consented substitution-class
+        # usage the client reported (used to learn per-class preferences).
+        self._update_typing_profile(pattern)
+        if substitution_classes_used:
+            self._record_substitution_classes(substitution_classes_used)
+
+        return {
+            'schema_version': 2,
+            'session_id': str(session.id),
+            'success': success,
+            'error_count': len(pattern.error_positions),
+        }
+
+    def _record_substitution_classes(self, classes: List[Dict]):
+        """Fold consented substitution-class usage into the aggregate profile.
+
+        Stores only ``from->to`` *classes* (e.g. the user tends to map o→0),
+        never anything tied to the password's contents or positions.
+        """
+        from ..models import UserTypingProfile
+
+        profile, _ = UserTypingProfile.objects.get_or_create(
+            user=self.user,
+            defaults={
+                'preferred_substitutions': {},
+                'substitution_confidence': {},
+                'error_prone_positions': {},
+            },
+        )
+        changed = False
+        for entry in classes:
+            from_char = entry.get('from')
+            to_char = entry.get('to')
+            if not from_char or not to_char:
+                continue
+            key = f"{from_char}->{to_char}"
+            current = profile.substitution_confidence.get(key, 0.0)
+            # Exponential moving average toward 1.0 (capped).
+            profile.substitution_confidence[key] = min(1.0, current * 0.8 + 0.2)
+            profile.preferred_substitutions[from_char] = to_char
+            changed = True
+        if changed:
+            profile.save()
+
     def _update_typing_profile(self, pattern: TypingPattern):
         """Update user's aggregated typing profile."""
         from ..models import UserTypingProfile
@@ -1416,7 +1540,169 @@ class AdaptivePasswordService:
             'memorability_after': adapted_score,
             'can_rollback': previous is not None,
         }
-    
+
+    def export_preference_model(self) -> Dict[str, Any]:
+        """Export the per-user preference model for client-side suggestion ranking.
+
+        This is the zero-knowledge replacement for the server-side ``/suggest/``
+        path: the client downloads this model and ranks locally-generated
+        candidates against it (remediation plan §4). It contains only aggregate,
+        non-reversible signals — substitution-class weights + memorability
+        params — and never any password-derived data.
+
+        Returns:
+            ``{model_version, substitution_weights, memorability_params}``.
+        """
+        from ..models import UserTypingProfile
+
+        # Baseline weights from the shared leetspeak map (primary > secondary).
+        substitution_weights: Dict[str, Dict[str, float]] = {}
+        for char, subs in COMMON_SUBSTITUTIONS.items():
+            substitution_weights[char] = {
+                sub: (0.6 if idx == 0 else 0.4) for idx, sub in enumerate(subs)
+            }
+
+        model_version = 0
+        try:
+            profile = UserTypingProfile.objects.get(user=self.user)
+        except UserTypingProfile.DoesNotExist:
+            profile = None
+
+        if profile is not None:
+            # Monotonic-ish version so the client can cache/invalidate.
+            model_version = profile.total_sessions
+
+            # Learned per-class confidence overrides the baseline.
+            for key, confidence in (profile.substitution_confidence or {}).items():
+                if '->' not in key:
+                    continue
+                from_char, to_char = key.split('->', 1)
+                if not from_char or not to_char:
+                    continue
+                try:
+                    conf = float(confidence)
+                except (TypeError, ValueError):
+                    continue
+                substitution_weights.setdefault(from_char, {})[to_char] = max(
+                    0.0, min(1.0, conf)
+                )
+
+            # Explicit preferences get a strong confidence so the client ranks
+            # them first.
+            for from_char, to_char in (profile.preferred_substitutions or {}).items():
+                if not isinstance(from_char, str) or not isinstance(to_char, str):
+                    continue
+                row = substitution_weights.setdefault(from_char, {})
+                row[to_char] = max(row.get(to_char, 0.0), 0.9)
+
+        memorability_params = {
+            'optimal_length_min': 12,
+            'optimal_length_max': 16,
+            'weights': {
+                'length': 0.2,
+                'patterns': 0.3,
+                'variety': 0.2,
+                'pronounceable': 0.3,
+            },
+        }
+
+        return {
+            'model_version': model_version,
+            'substitution_weights': substitution_weights,
+            'memorability_params': memorability_params,
+        }
+
+    def apply_adaptation_v2(
+        self,
+        original_fingerprint: str,
+        adapted_fingerprint: str,
+        substitution_classes: List[Dict],
+        previews: Optional[Dict[str, str]] = None,
+        memorability_improvement: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Apply/record an adaptation under the zero-knowledge v2 contract.
+
+        Stores only fingerprints, masked previews, and substitution *classes* —
+        never raw passwords. The rollback chain is keyed by fingerprint.
+
+        Args:
+            original_fingerprint: Fingerprint of the original password.
+            adapted_fingerprint: Fingerprint of the adapted password.
+            substitution_classes: ``[{"from": "o", "to": "0", "confidence"?: …}]``.
+            previews: Optional ``{original_masked, adapted_masked}`` (client-masked).
+            memorability_improvement: Optional client-computed Δ (informational).
+
+        Returns:
+            Adaptation record summary (carries ``schema_version: 2``).
+        """
+        from ..models import PasswordAdaptation, AdaptivePasswordConfig
+
+        previews = previews or {}
+        substitution_classes = list(substitution_classes or [])
+
+        # Chain by fingerprint: a previous *active* adaptation whose adapted
+        # fingerprint equals this original is the parent in the rollback chain.
+        previous = PasswordAdaptation.objects.filter(
+            user=self.user,
+            adapted_fingerprint=original_fingerprint,
+            status='active',
+        ).first()
+        generation = (previous.adaptation_generation + 1) if previous else 1
+
+        confidences = [
+            float(c['confidence'])
+            for c in substitution_classes
+            if isinstance(c.get('confidence'), (int, float))
+        ]
+        confidence_score = (sum(confidences) / len(confidences)) if confidences else 0.8
+
+        substitutions_applied = {
+            str(i): {'from': c.get('from'), 'to': c.get('to')}
+            for i, c in enumerate(substitution_classes)
+        }
+
+        reason = f"User-approved ZK adaptation (gen {generation})"
+        if memorability_improvement is not None:
+            reason += f"; client-reported memorability Δ={memorability_improvement:+.2f}"
+
+        adaptation = PasswordAdaptation.objects.create(
+            user=self.user,
+            original_fingerprint=original_fingerprint,
+            adapted_fingerprint=adapted_fingerprint,
+            original_masked=previews.get('original_masked', ''),
+            adapted_masked=previews.get('adapted_masked', ''),
+            password_hash_prefix='',
+            adapted_hash_prefix='',
+            previous_adaptation=previous,
+            adaptation_generation=generation,
+            adaptation_type='substitution',
+            substitutions_applied=substitutions_applied,
+            confidence_score=confidence_score,
+            memorability_score_before=None,
+            memorability_score_after=None,
+            status='active',
+            decided_at=timezone.now(),
+            reason=reason,
+        )
+
+        if previous:
+            previous.status = 'rolled_back'
+            previous.save(update_fields=['status'])
+
+        try:
+            config = AdaptivePasswordConfig.objects.get(user=self.user)
+            config.last_suggestion_at = timezone.now()
+            config.save(update_fields=['last_suggestion_at'])
+        except AdaptivePasswordConfig.DoesNotExist:
+            pass
+
+        return {
+            'schema_version': 2,
+            'adaptation_id': str(adaptation.id),
+            'generation': generation,
+            'can_rollback': previous is not None,
+        }
+
     def rollback_adaptation(
         self,
         adaptation_id: str,
