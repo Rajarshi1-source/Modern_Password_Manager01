@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 from security.utils.sensitive_hash import short_hash_id
 
 from django.contrib.auth.models import User
+from django.db import transaction, IntegrityError
 from django.utils import timezone
 from django.conf import settings
 
@@ -1640,15 +1641,6 @@ class AdaptivePasswordService:
         previews = previews or {}
         substitution_classes = list(substitution_classes or [])
 
-        # Chain by fingerprint: a previous *active* adaptation whose adapted
-        # fingerprint equals this original is the parent in the rollback chain.
-        previous = PasswordAdaptation.objects.filter(
-            user=self.user,
-            adapted_fingerprint=original_fingerprint,
-            status='active',
-        ).first()
-        generation = (previous.adaptation_generation + 1) if previous else 1
-
         confidences = [
             float(c['confidence'])
             for c in substitution_classes
@@ -1661,33 +1653,69 @@ class AdaptivePasswordService:
             for i, c in enumerate(substitution_classes)
         }
 
-        reason = f"User-approved ZK adaptation (gen {generation})"
-        if memorability_improvement is not None:
-            reason += f"; client-reported memorability Δ={memorability_improvement:+.2f}"
+        # Atomic + row-locked chain mutation. The parent lookup, the new active
+        # row, and the parent's rollback are committed together, so a retried or
+        # concurrent /apply/ cannot fork the rollback chain. The
+        # ``uniq_active_adapted_fp_per_user`` partial-unique constraint is the
+        # DB-level backstop (at most one active row per adapted_fingerprint).
+        try:
+            with transaction.atomic():
+                # Chain by fingerprint: the previous *active* adaptation whose
+                # adapted fingerprint equals this original is the parent.
+                previous = (
+                    PasswordAdaptation.objects.select_for_update()
+                    .filter(
+                        user=self.user,
+                        adapted_fingerprint=original_fingerprint,
+                        status='active',
+                    )
+                    .order_by('-suggested_at')
+                    .first()
+                )
+                generation = (previous.adaptation_generation + 1) if previous else 1
 
-        adaptation = PasswordAdaptation.objects.create(
-            user=self.user,
-            original_fingerprint=original_fingerprint,
-            adapted_fingerprint=adapted_fingerprint,
-            original_masked=previews.get('original_masked', ''),
-            adapted_masked=previews.get('adapted_masked', ''),
-            password_hash_prefix='',
-            adapted_hash_prefix='',
-            previous_adaptation=previous,
-            adaptation_generation=generation,
-            adaptation_type='substitution',
-            substitutions_applied=substitutions_applied,
-            confidence_score=confidence_score,
-            memorability_score_before=None,
-            memorability_score_after=None,
-            status='active',
-            decided_at=timezone.now(),
-            reason=reason,
-        )
+                reason = f"User-approved ZK adaptation (gen {generation})"
+                if memorability_improvement is not None:
+                    reason += (
+                        f"; client-reported memorability Δ={memorability_improvement:+.2f}"
+                    )
 
-        if previous:
-            previous.status = 'rolled_back'
-            previous.save(update_fields=['status'])
+                # Free the parent's unique (adapted_fingerprint, active) slot
+                # before inserting the child to avoid a self-collision when a
+                # password is adapted back to a prior fingerprint.
+                if previous:
+                    previous.status = 'rolled_back'
+                    previous.rolled_back_at = timezone.now()
+                    previous.save(update_fields=['status', 'rolled_back_at'])
+
+                adaptation = PasswordAdaptation.objects.create(
+                    user=self.user,
+                    original_fingerprint=original_fingerprint,
+                    adapted_fingerprint=adapted_fingerprint,
+                    original_masked=previews.get('original_masked', ''),
+                    adapted_masked=previews.get('adapted_masked', ''),
+                    password_hash_prefix='',
+                    adapted_hash_prefix='',
+                    previous_adaptation=previous,
+                    adaptation_generation=generation,
+                    adaptation_type='substitution',
+                    substitutions_applied=substitutions_applied,
+                    confidence_score=confidence_score,
+                    memorability_score_before=None,
+                    memorability_score_after=None,
+                    status='active',
+                    decided_at=timezone.now(),
+                    reason=reason,
+                )
+        except IntegrityError:
+            # Another concurrent apply already created the active row for this
+            # adapted_fingerprint. Surface a deterministic, retryable error
+            # instead of leaving a forked chain.
+            logger.warning(
+                'Concurrent ZK adaptation rejected for user %s (adapted_fingerprint clash)',
+                self.user.id,
+            )
+            return {'error': 'An active adaptation for this fingerprint already exists.'}
 
         try:
             config = AdaptivePasswordConfig.objects.get(user=self.user)

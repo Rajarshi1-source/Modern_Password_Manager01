@@ -133,4 +133,19 @@ class Migration(migrations.Migration):
                 name="typing_sess_user_id_a86413_idx",
             ),
         ),
+        migrations.AddIndex(
+            model_name="passwordadaptation",
+            index=models.Index(
+                fields=["user", "adapted_fingerprint", "status"],
+                name="pwad_user_adaptfp_status_idx",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="passwordadaptation",
+            constraint=models.UniqueConstraint(
+                fields=["user", "adapted_fingerprint"],
+                condition=models.Q(status="active") & ~models.Q(adapted_fingerprint=""),
+                name="uniq_active_adapted_fp_per_user",
+            ),
+        ),
     ]

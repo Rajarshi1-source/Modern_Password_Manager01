@@ -450,10 +450,18 @@ def _validate_substitution_classes(value):
     """
     if not isinstance(value, list):
         raise serializers.ValidationError('Expected a list of substitution classes.')
+    allowed_keys = {'from', 'to', 'confidence'}
     cleaned = []
     for item in value:
         if not isinstance(item, Mapping):
             raise serializers.ValidationError('Each substitution must be an object.')
+        # Fail closed on any field outside the class-level contract, so no
+        # position/char metadata that could reveal the password slips through.
+        extra = set(item.keys()) - allowed_keys
+        if extra:
+            raise serializers.ValidationError(
+                f"Unexpected substitution field(s): {', '.join(sorted(extra))}."
+            )
         from_char = item.get('from')
         to_char = item.get('to')
         if not isinstance(from_char, str) or len(from_char) != 1:
@@ -465,7 +473,7 @@ def _validate_substitution_classes(value):
             try:
                 conf = float(item['confidence'])
             except (TypeError, ValueError):
-                raise serializers.ValidationError("'confidence' must be a number.")
+                raise serializers.ValidationError("'confidence' must be a number.") from None
             if not 0.0 <= conf <= 1.0:
                 raise serializers.ValidationError("'confidence' must be in [0, 1].")
             entry['confidence'] = conf
@@ -568,8 +576,14 @@ class ApplyAdaptationV2Serializer(
                 f'Unexpected preview field(s): {", ".join(sorted(extra))}.'
             )
         for key, masked in value.items():
-            if not isinstance(masked, str) or len(masked) > 64:
+            if not isinstance(masked, str) or not 0 < len(masked) <= 64:
                 raise serializers.ValidationError(f'{key} must be a short masked string.')
+            # Must actually be masked — a mask character is required so plaintext
+            # can never be persisted as a "preview" (zero-knowledge guarantee).
+            if '*' not in masked:
+                raise serializers.ValidationError(
+                    f'{key} must be a masked preview (contain "*"), not plaintext.'
+                )
         return value
 
     def validate(self, data):

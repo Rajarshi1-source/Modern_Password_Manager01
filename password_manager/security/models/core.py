@@ -1201,8 +1201,22 @@ class PasswordAdaptation(models.Model):
             models.Index(fields=['user', 'status']),
             models.Index(fields=['password_hash_prefix']),
             models.Index(fields=['user', 'original_fingerprint']),
+            # Covers the ZK v2 rollback-chain lookup (apply_adaptation_v2):
+            # (user, adapted_fingerprint, status='active').
+            models.Index(fields=['user', 'adapted_fingerprint', 'status'],
+                         name='pwad_user_adaptfp_status_idx'),
         ]
-    
+        constraints = [
+            # At most one ACTIVE adaptation per (user, adapted_fingerprint) in the
+            # ZK v2 chain, so a retried/concurrent /apply/ can't fork the rollback
+            # chain. Legacy v1 rows (empty fingerprint) are excluded.
+            models.UniqueConstraint(
+                fields=['user', 'adapted_fingerprint'],
+                condition=models.Q(status='active') & ~models.Q(adapted_fingerprint=''),
+                name='uniq_active_adapted_fp_per_user',
+            ),
+        ]
+
     def __str__(self):
         return f"Adaptation gen{self.adaptation_generation} ({self.status}) - {self.user.username}"
     
