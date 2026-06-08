@@ -227,6 +227,9 @@ export class CryptoService {
    * @returns {Promise<CryptoKey>} A non-extractable HMAC-SHA256 signing key.
    */
   async deriveFingerprintKey(perUserSalt) {
+    if (typeof this.masterPassword !== 'string' || this.masterPassword.length === 0) {
+      throw new Error('deriveFingerprintKey requires an unlocked master password');
+    }
     if (!perUserSalt) {
       throw new Error('deriveFingerprintKey requires a per-user salt');
     }
@@ -553,6 +556,8 @@ export class CryptoService {
     // SECURITY NOTE: Securely clear sensitive data from memory when no longer needed
     this.masterPassword = null;
     this.encryptionKey = null;
+    // Drop the cached HMAC fingerprint key so it can't be reused after clearing.
+    this._fpKeyCache = null;
     // Overwrite memory with random data
     const buf = new Uint8Array(1024);
     crypto.getRandomValues(buf);

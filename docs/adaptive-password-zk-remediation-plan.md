@@ -125,7 +125,7 @@ length_bucket}`, never the password; use only if local ranking proves insufficie
 
 **`src/services/cryptoService.js`** — add:
 - `deriveFingerprintKey(perUserSalt)` → Argon2id, cached on the instance.
-- `passwordFingerprint(password)` → WebCrypto `importKey('raw', fpKey, {name:'HMAC',hash:'SHA-256'})` + `sign` → base64url prefix.
+- `passwordFingerprint(password, perUserSalt)` → derive/load the cached fp key, then WebCrypto `importKey('raw', fpKey, {name:'HMAC',hash:'SHA-256'})` + `sign` → base64url prefix.
 
 **`src/services/adaptive/adaptiveFeatures.js`** (new, pure, unit-testable):
 - `extractFeatures(password)` → `{ length_bucket, char_classes }` (no raw chars).
