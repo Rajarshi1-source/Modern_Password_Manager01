@@ -54,7 +54,18 @@ const DevicePairingFlow = ({ onComplete, onCancel }) => {
                 });
                 if (response.ok) {
                     const data = await response.json();
-                    setDevices(data.devices || data || []);
+                    // Normalize to an array: the endpoint may return a bare list,
+                    // a {devices: [...]} envelope, or a paginated {results: [...]}.
+                    // Anything else (e.g. {}) must not become non-iterable state,
+                    // or the device-list step crashes with "devices.map is not a function".
+                    const deviceList = Array.isArray(data)
+                        ? data
+                        : Array.isArray(data?.devices)
+                            ? data.devices
+                            : Array.isArray(data?.results)
+                                ? data.results
+                                : [];
+                    setDevices(deviceList);
                 }
             } catch (err) {
                 setError('Failed to load devices');
