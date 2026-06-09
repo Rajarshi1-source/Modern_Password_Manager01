@@ -8,6 +8,13 @@
 # testing
 /coverage
 
+# Playwright e2e artifacts (HTML report, traces, blob reports, caches)
+/e2e-report
+/playwright-report
+/test-results
+/blob-report
+/playwright/.cache
+
 # production
 /build
 
