@@ -705,8 +705,11 @@ class AdaptivePasswordService:
             )
             return {'error': 'An active adaptation for this fingerprint already exists.'}
 
-        config.last_suggestion_at = timezone.now()
-        config.save(update_fields=['last_suggestion_at'])
+        # Atomic single-column UPDATE: avoids writing back a possibly-stale
+        # config instance fetched before the transaction above.
+        AdaptivePasswordConfig.objects.filter(user=self.user).update(
+            last_suggestion_at=timezone.now()
+        )
 
         return {
             'schema_version': 2,
