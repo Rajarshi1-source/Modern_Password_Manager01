@@ -81,9 +81,17 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
 
   it('applyAdaptation posts only fingerprints, masked previews, and classes', async () => {
     const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET);
-    await adaptivePasswordService.applyAdaptation(SECRET, suggestion.substitutions, { fingerprint });
+    const result = await adaptivePasswordService.applyAdaptation(
+      SECRET, suggestion.substitutions, { fingerprint }
+    );
 
     const body = vi.mocked(axios.post).mock.calls[0][1];
+
+    // The adapted password is returned to the caller (to update the stored
+    // credential) but must never be transmitted — only its fingerprint is.
+    expect(typeof result.adaptedPassword).toBe('string');
+    expect(result.adaptedPassword).not.toBe(SECRET);
+    expect(JSON.stringify(body)).not.toContain(result.adaptedPassword);
     expect(body).toMatchObject({
       schema_version: 2,
       original_fingerprint: expect.any(String),

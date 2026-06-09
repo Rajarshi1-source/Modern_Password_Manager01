@@ -65,6 +65,25 @@ function attachNoPlaintextGuard(page: Page, secret: string): { assertClean: () =
     };
 }
 
+// Shared zero-knowledge v2 preference model + stub. The client GETs this and
+// generates the suggestion locally; centralized so the v2 contract lives in one
+// place across the suggestion and accessibility tests.
+const PREFERENCE_MODEL = {
+    model_version: 5,
+    substitution_weights: { e: { '3': 0.9 }, o: { '0': 0.8 }, a: { '@': 0.8 } },
+    memorability_params: {},
+};
+
+async function routePreferenceModel(page: Page): Promise<void> {
+    await page.route(`${API_URL}/security/adaptive/preference-model/`, async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify(PREFERENCE_MODEL),
+        });
+    });
+}
+
 // =============================================================================
 // Feature Flag Tests
 // =============================================================================
@@ -193,24 +212,9 @@ test.describe('Typing Pattern Capture', () => {
 // =============================================================================
 
 test.describe('Adaptation Suggestions', () => {
-    // Zero-knowledge v2: the client GETs the learned preference model and
-    // generates + ranks the suggestion locally (it never POSTs the password to
-    // /suggest/, which is now deprecated/410). These tests mock the model pull.
-    const PREFERENCE_MODEL = {
-        model_version: 5,
-        substitution_weights: { e: { '3': 0.9 }, o: { '0': 0.8 }, a: { '@': 0.8 } },
-        memorability_params: {},
-    };
-
-    async function routePreferenceModel(page: Page) {
-        await page.route(`${API_URL}/security/adaptive/preference-model/`, async (route) => {
-            await route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify(PREFERENCE_MODEL),
-            });
-        });
-    }
+    // Zero-knowledge v2: the client GETs the learned preference model (see the
+    // shared routePreferenceModel helper above) and generates + ranks the
+    // suggestion locally — it never POSTs the password to /suggest/ (410).
 
     test('shows suggestion modal when available', async ({ page }) => {
         await routePreferenceModel(page);
@@ -451,17 +455,7 @@ test.describe('Adaptation Feedback', () => {
 test.describe('Accessibility', () => {
     test('suggestion modal is accessible', async ({ page }) => {
         // v2: suggestion is generated client-side from the preference model.
-        await page.route(`${API_URL}/security/adaptive/preference-model/`, async (route) => {
-            await route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify({
-                    model_version: 5,
-                    substitution_weights: { e: { '3': 0.9 }, o: { '0': 0.8 } },
-                    memorability_params: {},
-                }),
-            });
-        });
+        await routePreferenceModel(page);
 
         await loginUser(page);
         await page.goto(`${BASE_URL}/dashboard`);

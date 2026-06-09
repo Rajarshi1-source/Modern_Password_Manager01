@@ -422,7 +422,10 @@ export const adaptivePasswordService = {
                 ? { memorability_improvement: memorabilityImprovement }
                 : {}),
         });
-        return response.data;
+        // Return the locally-computed adapted password alongside the server
+        // record so the caller can update the stored credential. It is held in
+        // memory only — never sent to the server (only fingerprints are).
+        return { ...response.data, adaptedPassword };
     },
 
     /**
