@@ -20,6 +20,13 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import axios from 'axios';
+import {
+    extractFeatures,
+    generateCandidates,
+    rankSuggestions,
+    applySubstitutions,
+    maskPreview,
+} from '../../services/adaptive/adaptiveFeatures';
 
 // =============================================================================
 // Constants
@@ -43,18 +50,10 @@ const bucketizeTiming = (ms) => {
     return TIMING_BUCKET_THRESHOLDS[TIMING_BUCKET_THRESHOLDS.length - 1];
 };
 
-/**
- * Calculate SHA-256 hash prefix of password.
- * Only sends first 16 chars of hash for privacy.
- */
-const getPasswordHashPrefix = async (password) => {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return hashHex.substring(0, 16);
-};
+// NOTE: the legacy bare-SHA-256 `getPasswordHashPrefix` was removed in the
+// zero-knowledge v2 cutover. A bare hash of the password is offline-guessable;
+// the client now computes a *keyed* fingerprint via cryptoService and injects
+// it through the `fingerprint` option below (see remediation plan §1, §5).
 
 /**
  * Detect device type from user agent.
@@ -99,6 +98,7 @@ export const useTypingPattern = ({
     enabled = false,
     onPatternCaptured,
     onError,
+    fingerprint,
 }) => {
     // Refs for tracking state
     const keystrokeTimings = useRef([]);
@@ -146,19 +146,27 @@ export const useTypingPattern = ({
         }
     }, [enabled]);
 
-    // Handle form submission or blur
-    const capturePattern = useCallback(async (password, success = true) => {
+    // Handle form submission or blur.
+    // Zero-knowledge v2: emit a keyed fingerprint + coarse length bucket — the
+    // raw password is used only to compute these locally and is NEVER included
+    // in the pattern object (and so never reaches the server).
+    const capturePattern = useCallback(async (password) => {
         if (!enabled || keystrokeTimings.current.length === 0) {
             return null;
         }
 
         try {
-            const totalTime = sessionStartTime.current
-                ? Math.round(performance.now() - sessionStartTime.current)
-                : 0;
+            if (typeof fingerprint !== 'function') {
+                throw new Error(
+                    'capturePattern requires a fingerprint() function (zero-knowledge v2).'
+                );
+            }
 
+            const { length_bucket } = extractFeatures(password);
             const pattern = {
-                password, // Will be hashed before sending
+                schema_version: 2,
+                password_fingerprint: await fingerprint(password),
+                length_bucket,
                 keystroke_timings: keystrokeTimings.current,
                 backspace_positions: backspacePositions.current,
                 device_type: detectDeviceType(),
@@ -182,7 +190,7 @@ export const useTypingPattern = ({
             resetSession();
             return null;
         }
-    }, [enabled, onPatternCaptured, onError, resetSession]);
+    }, [enabled, fingerprint, onPatternCaptured, onError, resetSession]);
 
     // Attach event listeners
     useEffect(() => {
@@ -224,6 +232,7 @@ const TypingPatternCapture = ({
     onSessionRecorded,
     autoSubmit = true,
     apiEndpoint = '/api/security/adaptive/record-session/',
+    fingerprint,
 }) => {
     const [isRecording, setIsRecording] = useState(false);
     const [error, setError] = useState(null);
@@ -232,6 +241,7 @@ const TypingPatternCapture = ({
     const { capturePattern, resetSession } = useTypingPattern({
         inputElement: inputRef?.current,
         enabled,
+        fingerprint,
         onPatternCaptured: async (pattern) => {
             if (onPatternCaptured) {
                 onPatternCaptured(pattern);
@@ -316,24 +326,101 @@ export const adaptivePasswordService = {
     },
 
     /**
-     * Get adaptation suggestion for a password.
+     * Record a captured typing session (zero-knowledge v2 payload).
+     * The pattern carries a keyed fingerprint + coarse features only.
      */
-    async suggestAdaptation(password, force = false) {
-        const response = await axios.post('/api/security/adaptive/suggest/', {
-            password,
-            force,
-        });
+    async record(pattern) {
+        const response = await axios.post('/api/security/adaptive/record-session/', pattern);
         return response.data;
     },
 
     /**
-     * Apply a password adaptation.
+     * Generate an adaptation suggestion entirely client-side (zero-knowledge v2).
+     *
+     * Fetches the learned preference model, then generates + ranks substitution
+     * candidates locally and builds masked previews. The password NEVER leaves
+     * the device (no POST of the password). Returns the same shape the
+     * AdaptivePasswordSuggestion modal consumes.
      */
-    async applyAdaptation(originalPassword, adaptedPassword, substitutions) {
-        const response = await axios.post('/api/security/adaptive/apply/', {
-            original_password: originalPassword,
-            adapted_password: adaptedPassword,
+    async suggestAdaptation(password) {
+        const { data: model } = await axios.get('/api/security/adaptive/preference-model/');
+        const substitutions = rankSuggestions(generateCandidates(password), model);
+
+        if (substitutions.length === 0) {
+            return {
+                has_suggestion: false,
+                reason: 'No memorability-improving substitutions found.',
+            };
+        }
+
+        const adapted = applySubstitutions(password, substitutions);
+        const confidence_score =
+            substitutions.reduce((sum, s) => sum + s.confidence, 0) / substitutions.length;
+        // Local, transparent estimate — the server no longer scores the password.
+        const memorability_improvement = Math.min(
+            0.3,
+            Number((confidence_score * 0.15 + substitutions.length * 0.03).toFixed(2))
+        );
+
+        return {
+            has_suggestion: true,
             substitutions,
+            original_preview: maskPreview(password),
+            adapted_preview: maskPreview(adapted),
+            confidence_score,
+            memorability_improvement,
+            adaptation_type: 'substitution',
+            reason: `Based on your learned preference model (v${model.model_version}).`,
+            model_version: model.model_version,
+        };
+    },
+
+    /**
+     * Apply a password adaptation (zero-knowledge v2).
+     *
+     * Computes the adapted password locally, then POSTs only the original/adapted
+     * *fingerprints*, the substitution *classes* (from→to), and masked previews —
+     * never the raw passwords.
+     *
+     * @param {string} originalPassword - The current password (stays on device).
+     * @param {Array} substitutions - Ranked subs from {@link suggestAdaptation}.
+     * @param {Object} opts
+     * @param {(pw: string) => Promise<string>} opts.fingerprint - Keyed fingerprint fn.
+     * @param {number} [opts.memorabilityImprovement] - Optional client estimate.
+     */
+    async applyAdaptation(originalPassword, substitutions, { fingerprint, memorabilityImprovement } = {}) {
+        if (typeof fingerprint !== 'function') {
+            throw new Error('applyAdaptation requires a fingerprint() function (zero-knowledge v2).');
+        }
+
+        const adaptedPassword = applySubstitutions(originalPassword, substitutions);
+        const [original_fingerprint, adapted_fingerprint] = await Promise.all([
+            fingerprint(originalPassword),
+            fingerprint(adaptedPassword),
+        ]);
+
+        // Class-level substitutions only ({from, to, confidence}) — no positions
+        // or password characters, matching the v2 serializer's strict contract.
+        const classes = substitutions
+            .map((s) => ({
+                from: s.original_char ?? s.from,
+                to: s.suggested_char ?? s.to,
+                ...(typeof s.confidence === 'number' ? { confidence: s.confidence } : {}),
+            }))
+            .filter((c) => c.from && c.to);
+
+        const response = await axios.post('/api/security/adaptive/apply/', {
+            schema_version: 2,
+            original_fingerprint,
+            adapted_fingerprint,
+            substitutions: classes,
+            previews: {
+                original_masked: maskPreview(originalPassword),
+                adapted_masked: maskPreview(adaptedPassword),
+            },
+            ...(typeof memorabilityImprovement === 'number'
+                ? { memorability_improvement: memorabilityImprovement }
+                : {}),
         });
         return response.data;
     },

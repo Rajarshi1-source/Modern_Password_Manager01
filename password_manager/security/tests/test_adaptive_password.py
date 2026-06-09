@@ -523,14 +523,18 @@ class AdaptivePasswordAPITests(APITestCase):
         response = self.client.post('/api/security/adaptive/record-session/', {})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
     
-    def test_suggest_adaptation_endpoint(self):
-        """Test adaptation suggestion endpoint."""
+    @override_settings(ADAPTIVE_ZK_V2=True)
+    def test_suggest_adaptation_endpoint_deprecated_under_zk_v2(self):
+        """Under the default ZK v2 contract, server-side /suggest/ is deprecated.
+
+        Suggestions are now generated client-side from the preference model, so
+        POSTing a password returns 410 Gone (and never accepts the plaintext).
+        """
         response = self.client.post('/api/security/adaptive/suggest/', {
             'password': 'testpassword123',
         })
-        
-        # Should return 200 even without suggestions
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
+        self.assertIn('preference-model', str(response.data))
     
     def test_get_profile_endpoint(self):
         """Test profile endpoint."""

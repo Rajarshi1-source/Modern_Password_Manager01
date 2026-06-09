@@ -393,8 +393,10 @@ class ZKV2APITests(APITestCase):
         response = self.client.get('/api/security/adaptive/preference-model/')
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_suggest_still_works_when_flag_off(self):
-        # Default (flag off): legacy server-side path responds 200, not 410.
+    @override_settings(ADAPTIVE_ZK_V2=False)
+    def test_suggest_legacy_path_when_flag_explicitly_off(self):
+        # With the flag explicitly disabled (rollback), the legacy server-side
+        # path still responds 200 rather than 410.
         response = self.client.post('/api/security/adaptive/suggest/', {
             'password': 'testpassword123',
         }, format='json')
