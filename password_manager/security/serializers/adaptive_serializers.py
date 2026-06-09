@@ -112,7 +112,7 @@ class TypingSessionSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'username',
-            'password_length',
+            'length_bucket',
             'success',
             'error_count',
             'total_time_ms',
@@ -130,44 +130,16 @@ class TypingSessionSerializer(serializers.ModelSerializer):
         return 0
 
 
-class TypingSessionInputSerializer(serializers.Serializer):
-    """Serializer for recording a typing session."""
-    
-    password = serializers.CharField(write_only=True, required=True)
-    keystroke_timings = serializers.ListField(
-        child=serializers.IntegerField(min_value=0, max_value=10000),
-        allow_empty=True
-    )
-    backspace_positions = serializers.ListField(
-        child=serializers.IntegerField(min_value=0),
-        allow_empty=True,
-        required=False
-    )
-    device_type = serializers.ChoiceField(
-        choices=['desktop', 'mobile', 'tablet'],
-        default='desktop'
-    )
-    input_method = serializers.ChoiceField(
-        choices=['keyboard', 'touchscreen', 'voice'],
-        default='keyboard'
-    )
-
-
 # =============================================================================
 # Password Adaptation Serializers
 # =============================================================================
-
-class SubstitutionSerializer(serializers.Serializer):
-    """Serializer for a single substitution."""
-    
-    position = serializers.IntegerField(min_value=0)
-    original_char = serializers.CharField(max_length=1, required=False)
-    suggested_char = serializers.CharField(max_length=1, required=False)
-    from_char = serializers.CharField(max_length=1, source='original_char', required=False)
-    to_char = serializers.CharField(max_length=1, source='suggested_char', required=False)
-    confidence = serializers.FloatField(min_value=0, max_value=1, required=False)
-    reason = serializers.CharField(required=False)
-
+#
+# NOTE: the legacy v1 input serializers (TypingSessionInputSerializer,
+# SubstitutionSerializer, AdaptationSuggestionSerializer, ApplyAdaptationSerializer)
+# were removed in the zero-knowledge v2 cleanup — they accepted/echoed raw
+# passwords and class-level substitutions with positions. The v2 serializers
+# (TypingSessionInputV2Serializer / ApplyAdaptationV2Serializer) are the only
+# inputs now.
 
 class PasswordAdaptationSerializer(serializers.ModelSerializer):
     """Serializer for password adaptations."""
@@ -214,37 +186,6 @@ class PasswordAdaptationSerializer(serializers.ModelSerializer):
     def get_rollback_chain_length(self, obj):
         """Get length of rollback chain."""
         return len(obj.get_rollback_chain())
-
-
-class AdaptationSuggestionSerializer(serializers.Serializer):
-    """Serializer for adaptation suggestions (output)."""
-    
-    has_suggestion = serializers.BooleanField()
-    substitutions = SubstitutionSerializer(many=True, required=False)
-    original_preview = serializers.CharField(required=False)
-    adapted_preview = serializers.CharField(required=False)
-    confidence_score = serializers.FloatField(required=False)
-    memorability_improvement = serializers.FloatField(required=False)
-    adaptation_type = serializers.CharField(required=False)
-    reason = serializers.CharField(required=False)
-
-
-class ApplyAdaptationSerializer(serializers.Serializer):
-    """Serializer for applying an adaptation."""
-    
-    original_password = serializers.CharField(write_only=True, required=True)
-    adapted_password = serializers.CharField(write_only=True, required=True)
-    substitutions = serializers.ListField(
-        child=serializers.DictField(),
-        required=True
-    )
-    
-    def validate(self, data):
-        if data['original_password'] == data['adapted_password']:
-            raise serializers.ValidationError(
-                "Adapted password must be different from original."
-            )
-        return data
 
 
 class RollbackAdaptationSerializer(serializers.Serializer):
@@ -545,6 +486,10 @@ class TypingSessionInputV2Serializer(
     substitution_classes_used = serializers.ListField(
         child=serializers.DictField(), required=False, default=list
     )
+    # Explicit session outcome (was the password ultimately entered correctly?).
+    # Optional for backward-compat; when omitted the service falls back to a
+    # "no backspaces" heuristic.
+    success = serializers.BooleanField(required=False, allow_null=True)
 
     def validate_substitution_classes_used(self, value):
         return _validate_substitution_classes(value)

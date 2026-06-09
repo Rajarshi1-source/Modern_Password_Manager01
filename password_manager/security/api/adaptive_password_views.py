@@ -20,7 +20,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.utils import timezone
-from django.conf import settings
 
 import logging
 
@@ -38,11 +37,6 @@ from ..serializers.adaptive_serializers import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _zk_v2_enabled():
-    """Whether the zero-knowledge v2 adaptive contract is active (see settings)."""
-    return getattr(settings, 'ADAPTIVE_ZK_V2', False)
 
 
 # =============================================================================
@@ -173,13 +167,11 @@ def get_adaptive_config(request):
 @permission_classes([IsAuthenticated])
 def record_typing_session(request):
     """
-    Record a typing session for pattern learning.
-    
-    PRIVACY: Only records timing patterns and error positions,
-    never raw keystrokes or actual password.
+    Record a typing session for pattern learning (zero-knowledge).
 
-    Zero-knowledge v2 (ADAPTIVE_ZK_V2): the client sends a keyed fingerprint and
-    coarse features — never the password. Raw-password fields are rejected (422).
+    PRIVACY: Only records timing patterns and error positions — never raw
+    keystrokes or the actual password. The client sends a keyed fingerprint and
+    coarse features; raw-password fields are rejected (422).
     {
         "schema_version": 2,
         "password_fingerprint": "…",       // client-keyed, opaque to server
@@ -193,53 +185,23 @@ def record_typing_session(request):
     """
     user = request.user
 
-    if _zk_v2_enabled():
-        serializer = TypingSessionInputV2Serializer(data=request.data)
-        # PlaintextRejected → 422; bad/missing schema_version or fields → 400.
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-        service = AdaptivePasswordService(user)
-        result = service.record_typing_session_v2(
-            password_fingerprint=data['password_fingerprint'],
-            length_bucket=data['length_bucket'],
-            keystroke_timings=data['keystroke_timings'],
-            backspace_positions=data.get('backspace_positions', []),
-            device_type=data.get('device_type', 'desktop'),
-            input_method=data.get('input_method', 'keyboard'),
-            substitution_classes_used=data.get('substitution_classes_used') or [],
-        )
-        if 'error' in result:
-            return Response(result, status=status.HTTP_400_BAD_REQUEST)
-        return Response(result)
-
-    # --- Legacy v1 path (raw password; retained until PR-4 flips the flag) ---
-    data = request.data
-
-    if 'password' not in data:
-        return Response(
-            {'error': 'Password required for session recording'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if 'keystroke_timings' not in data:
-        return Response(
-            {'error': 'Keystroke timings required'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
+    serializer = TypingSessionInputV2Serializer(data=request.data)
+    # PlaintextRejected → 422; bad/missing schema_version or fields → 400.
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
     service = AdaptivePasswordService(user)
-
-    result = service.record_typing_session(
-        password=data['password'],
+    result = service.record_typing_session_v2(
+        password_fingerprint=data['password_fingerprint'],
+        length_bucket=data['length_bucket'],
         keystroke_timings=data['keystroke_timings'],
         backspace_positions=data.get('backspace_positions', []),
         device_type=data.get('device_type', 'desktop'),
         input_method=data.get('input_method', 'keyboard'),
+        substitution_classes_used=data.get('substitution_classes_used') or [],
+        success=data.get('success'),
     )
-
     if 'error' in result:
         return Response(result, status=status.HTTP_400_BAD_REQUEST)
-
     return Response(result)
 
 
@@ -251,89 +213,33 @@ def record_typing_session(request):
 @permission_classes([IsAuthenticated])
 def suggest_adaptation(request):
     """
-    Get password adaptation suggestion.
-    
-    Request body:
-    {
-        "password": "current_password",
-        "force": false  // Force suggestion even if timing criteria not met
-    }
+    Deprecated under zero-knowledge v2 (HTTP 410).
 
-    Zero-knowledge v2: this server-scored path is deprecated (410). The client
-    instead pulls GET /api/security/adaptive/preference-model/ and generates +
-    ranks suggestions locally, so the password never leaves the device.
+    Server-side suggestion (which required the raw password) has been removed.
+    The client instead pulls GET /api/security/adaptive/preference-model/ and
+    generates + ranks suggestions locally, so the password never leaves the
+    device.
     """
-    user = request.user
-    data = request.data
-
-    if _zk_v2_enabled():
-        return Response(
-            {
-                'error': 'Server-side suggestion is disabled under zero-knowledge '
-                         'v2. Fetch the preference model and generate suggestions '
-                         'client-side.',
-                'code': 'endpoint_deprecated',
-                'preference_model': '/api/security/adaptive/preference-model/',
-            },
-            status=status.HTTP_410_GONE,
-        )
-
-    if 'password' not in data:
-        return Response(
-            {'error': 'Password required for adaptation suggestion'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-    
-    service = AdaptivePasswordService(user)
-    suggestion = service.suggest_adaptation(
-        password=data['password'],
-        force=data.get('force', False),
+    return Response(
+        {
+            'error': 'Server-side suggestion is disabled under zero-knowledge v2. '
+                     'Fetch the preference model and generate suggestions '
+                     'client-side.',
+            'code': 'endpoint_deprecated',
+            'preference_model': '/api/security/adaptive/preference-model/',
+        },
+        status=status.HTTP_410_GONE,
     )
-    
-    if suggestion is None:
-        return Response({
-            'has_suggestion': False,
-            'reason': 'No improvement found or insufficient data',
-        })
-    
-    return Response({
-        'has_suggestion': True,
-        'substitutions': [
-            {
-                'position': s.position,
-                'original_char': s.original_char,
-                'suggested_char': s.suggested_char,
-                'confidence': s.confidence,
-                'reason': s.reason,
-            }
-            for s in suggestion.substitutions
-        ],
-        'original_preview': suggestion.original_password_preview,
-        'adapted_preview': suggestion.adapted_password_preview,
-        'confidence_score': suggestion.confidence_score,
-        'memorability_improvement': suggestion.memorability_improvement,
-        'adaptation_type': suggestion.adaptation_type,
-        'reason': suggestion.reason,
-    })
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def apply_adaptation(request):
     """
-    Apply a password adaptation.
-    
-    Request body:
-    {
-        "original_password": "old_password",
-        "adapted_password": "new_password",
-        "substitutions": [
-            {"position": 3, "from": "o", "to": "0", "confidence": 0.85}
-        ]
-    }
+    Apply a password adaptation (zero-knowledge).
 
-    Zero-knowledge v2 (ADAPTIVE_ZK_V2): fingerprints + class-level substitutions
-    + masked previews only — raw passwords are rejected (422).
+    Fingerprints + class-level substitutions + masked previews only — raw
+    passwords are rejected (422).
     {
         "schema_version": 2,
         "original_fingerprint": "…",
@@ -345,43 +251,19 @@ def apply_adaptation(request):
     """
     user = request.user
 
-    if _zk_v2_enabled():
-        serializer = ApplyAdaptationV2Serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-        service = AdaptivePasswordService(user)
-        result = service.apply_adaptation_v2(
-            original_fingerprint=data['original_fingerprint'],
-            adapted_fingerprint=data['adapted_fingerprint'],
-            substitution_classes=data['substitutions'],
-            previews=data.get('previews'),
-            memorability_improvement=data.get('memorability_improvement'),
-        )
-        if 'error' in result:
-            return Response(result, status=status.HTTP_400_BAD_REQUEST)
-        return Response(result)
-
-    # --- Legacy v1 path (raw passwords; retained until PR-4 flips the flag) ---
-    data = request.data
-
-    required_fields = ['original_password', 'adapted_password', 'substitutions']
-    for field in required_fields:
-        if field not in data:
-            return Response(
-                {'error': f'{field} is required'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
+    serializer = ApplyAdaptationV2Serializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
     service = AdaptivePasswordService(user)
-    result = service.apply_adaptation(
-        original_password=data['original_password'],
-        adapted_password=data['adapted_password'],
-        substitutions=data['substitutions'],
+    result = service.apply_adaptation_v2(
+        original_fingerprint=data['original_fingerprint'],
+        adapted_fingerprint=data['adapted_fingerprint'],
+        substitution_classes=data['substitutions'],
+        previews=data.get('previews'),
+        memorability_improvement=data.get('memorability_improvement'),
     )
-
     if 'error' in result:
         return Response(result, status=status.HTTP_400_BAD_REQUEST)
-
     return Response(result)
 
 

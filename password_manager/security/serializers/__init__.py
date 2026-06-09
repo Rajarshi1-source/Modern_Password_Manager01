@@ -154,10 +154,7 @@ try:
         AdaptivePasswordConfigSerializer,
         EnableAdaptivePasswordSerializer,
         TypingSessionSerializer,
-        TypingSessionInputSerializer,
         PasswordAdaptationSerializer,
-        AdaptationSuggestionSerializer,
-        ApplyAdaptationSerializer,
         RollbackAdaptationSerializer,
         UserTypingProfileSerializer,
         TypingProfileSummarySerializer,
@@ -165,6 +162,10 @@ try:
         SubmitFeedbackSerializer,
         EvolutionStatsSerializer,
         DataExportSerializer,
+        # Zero-knowledge v2 input/output serializers
+        TypingSessionInputV2Serializer,
+        ApplyAdaptationV2Serializer,
+        PreferenceModelSerializer,
     )
     ADAPTIVE_AVAILABLE = True
 except ImportError as e:
@@ -190,10 +191,7 @@ if ADAPTIVE_AVAILABLE:
         'AdaptivePasswordConfigSerializer',
         'EnableAdaptivePasswordSerializer',
         'TypingSessionSerializer',
-        'TypingSessionInputSerializer',
         'PasswordAdaptationSerializer',
-        'AdaptationSuggestionSerializer',
-        'ApplyAdaptationSerializer',
         'RollbackAdaptationSerializer',
         'UserTypingProfileSerializer',
         'TypingProfileSummarySerializer',
@@ -201,4 +199,7 @@ if ADAPTIVE_AVAILABLE:
         'SubmitFeedbackSerializer',
         'EvolutionStatsSerializer',
         'DataExportSerializer',
+        'TypingSessionInputV2Serializer',
+        'ApplyAdaptationV2Serializer',
+        'PreferenceModelSerializer',
     ])

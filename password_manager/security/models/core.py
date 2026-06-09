@@ -1048,17 +1048,10 @@ class TypingSession(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE,
                              related_name='typing_sessions')
     
-    # Password reference (hash prefix only, never actual password).
-    # LEGACY (v1): a server-side keyed hash prefix. Retained, but relaxed to
-    # optional so zero-knowledge v2 records (which never derive anything from a
-    # raw password server-side) can omit it. Removed entirely in PR-5.
-    password_hash_prefix = models.CharField(max_length=32, blank=True, default='',
-        help_text="LEGACY v1 only. Hash prefix for correlation (unused in ZK v2)")
-    password_length = models.IntegerField(null=True, blank=True,
-        help_text="LEGACY v1 only. Exact length (ZK v2 stores length_bucket instead)")
-
-    # ZK v2: client-computed, keyed fingerprint (opaque to the server) +
-    # coarse length bucket. See docs/adaptive-password-zk-remediation-plan.md.
+    # Zero-knowledge: the server only ever sees a client-computed, keyed
+    # fingerprint (opaque) + a coarse length bucket — never a raw or
+    # server-hashed-from-raw password. See
+    # docs/adaptive-password-zk-remediation-plan.md.
     password_fingerprint = models.CharField(max_length=64, blank=True, default='',
         help_text="Client-keyed HMAC fingerprint (base64url); opaque to server")
     length_bucket = models.PositiveIntegerField(null=True, blank=True,
@@ -1101,7 +1094,6 @@ class TypingSession(models.Model):
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['user', '-created_at']),
-            models.Index(fields=['password_hash_prefix', '-created_at']),
             models.Index(fields=['user', 'password_fingerprint']),
         ]
 
@@ -1137,16 +1129,9 @@ class PasswordAdaptation(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE,
                              related_name='password_adaptations')
     
-    # Password reference.
-    # LEGACY (v1): server-side keyed hash prefixes. Relaxed to optional for ZK
-    # v2 (which carries client-computed fingerprints instead). Removed in PR-5.
-    password_hash_prefix = models.CharField(max_length=32, blank=True, default='',
-        help_text="LEGACY v1 only. Hash prefix of ORIGINAL password")
-    adapted_hash_prefix = models.CharField(max_length=32, blank=True, default='',
-        help_text="LEGACY v1 only. Hash prefix of ADAPTED password")
-
-    # ZK v2: client-computed, keyed fingerprints (opaque to the server) and
-    # masked previews only (never the full password). See remediation plan §6.
+    # Zero-knowledge: client-computed, keyed fingerprints (opaque to the server)
+    # and masked previews only — never a raw or server-hashed-from-raw password.
+    # See docs/adaptive-password-zk-remediation-plan.md (§6).
     original_fingerprint = models.CharField(max_length=64, blank=True, default='',
         help_text="Client-keyed fingerprint of the ORIGINAL password (opaque)")
     adapted_fingerprint = models.CharField(max_length=64, blank=True, default='',
@@ -1199,7 +1184,6 @@ class PasswordAdaptation(models.Model):
         ordering = ['-suggested_at']
         indexes = [
             models.Index(fields=['user', 'status']),
-            models.Index(fields=['password_hash_prefix']),
             models.Index(fields=['user', 'original_fingerprint']),
             # Covers the ZK v2 rollback-chain lookup (apply_adaptation_v2):
             # (user, adapted_fingerprint, status='active').
@@ -1208,12 +1192,21 @@ class PasswordAdaptation(models.Model):
         ]
         constraints = [
             # At most one ACTIVE adaptation per (user, adapted_fingerprint) in the
-            # ZK v2 chain, so a retried/concurrent /apply/ can't fork the rollback
-            # chain. Legacy v1 rows (empty fingerprint) are excluded.
+            # ZK v2 chain — prevents duplicate active heads for the same target.
             models.UniqueConstraint(
                 fields=['user', 'adapted_fingerprint'],
                 condition=models.Q(status='active') & ~models.Q(adapted_fingerprint=''),
                 name='uniq_active_adapted_fp_per_user',
+            ),
+            # At most one ACTIVE adaptation per (user, original_fingerprint) too,
+            # so two concurrent /apply/ calls from the same current head (to
+            # different targets) can't both commit and fork the rollback chain;
+            # the second insert hits this constraint and is rejected. Empty
+            # fingerprints (placeholder/pending rows) are excluded.
+            models.UniqueConstraint(
+                fields=['user', 'original_fingerprint'],
+                condition=models.Q(status='active') & ~models.Q(original_fingerprint=''),
+                name='uniq_active_original_fp_per_user',
             ),
         ]
 
