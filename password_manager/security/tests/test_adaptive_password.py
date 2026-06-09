@@ -1,16 +1,14 @@
 """
-Adaptive Password Service Tests
-===============================
+Adaptive Password Service Tests (zero-knowledge)
+================================================
 
-Comprehensive unit tests for the adaptive password feature.
-
-Tests cover:
-- Typing pattern collection (privacy)
-- Substitution learning
-- Memorability scoring
-- Contextual bandit adaptation
-- API endpoints
-- Django models
+Unit/integration tests for the surviving adaptive-password surface after the
+zero-knowledge v2 cleanup. The v2 wire contract + serializers are covered in
+test_adaptive_zk_v2.py; this module covers:
+- the privacy guard (timing buckets, differential-privacy noise)
+- Django models (config, fingerprint-keyed sessions/adaptations, rollback chain)
+- the v2 service (fingerprint record, preference-model export, apply)
+- API endpoints, celery tasks, and end-to-end flows
 """
 
 import pytest
@@ -19,11 +17,17 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 import json
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.contrib.auth.models import User
 from django.utils import timezone
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
+
+# A low-entropy, obviously-fake stand-in for a client fingerprint. Referenced by
+# name (not inlined next to ``password_fingerprint``) so secret scanners don't
+# mistake a base64url-looking literal for a real credential. The real value is a
+# client-computed HMAC fingerprint (see cryptoService.passwordFingerprint).
+FP_STUB = 'fp-not-a-real-fingerprint'
 
 
 # =============================================================================
@@ -34,6 +38,7 @@ class PrivacyGuardTests(TestCase):
     """Test privacy protection mechanisms."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         from security.services.adaptive_password_service import PrivacyGuard
         self.guard = PrivacyGuard(epsilon=0.5)
     
@@ -45,28 +50,6 @@ class PrivacyGuardTests(TestCase):
         self.assertEqual(self.guard.anonymize_timing(150), 150)
         self.assertEqual(self.guard.anonymize_timing(1500), 2000)
         self.assertEqual(self.guard.anonymize_timing(5000), 2000)  # Caps at max
-    
-    def test_hash_password_prefix(self):
-        """Test password hashing returns only prefix."""
-        prefix = self.guard.hash_password_prefix("testpassword123")
-        
-        # Should be exactly 16 characters
-        self.assertEqual(len(prefix), 16)
-        
-        # Should be hexadecimal
-        self.assertTrue(all(c in '0123456789abcdef' for c in prefix))
-        
-        # Same password should give same prefix
-        self.assertEqual(
-            self.guard.hash_password_prefix("testpassword123"),
-            prefix
-        )
-        
-        # Different password should give different prefix
-        self.assertNotEqual(
-            self.guard.hash_password_prefix("differentpassword"),
-            prefix
-        )
     
     def test_differential_privacy_noise(self):
         """Test DP noise is added correctly."""
@@ -103,209 +86,6 @@ class PrivacyGuardTests(TestCase):
 
 
 # =============================================================================
-# Typing Pattern Collector Tests
-# =============================================================================
-
-class TypingPatternCollectorTests(TestCase):
-    """Test typing pattern collection."""
-    
-    def setUp(self):
-        from security.services.adaptive_password_service import (
-            TypingPatternCollector, PrivacyGuard
-        )
-        self.collector = TypingPatternCollector(PrivacyGuard(epsilon=0.5))
-    
-    def test_process_keystroke_data(self):
-        """Test converting raw keystroke data to pattern."""
-        pattern = self.collector.process_keystroke_data(
-            password="testpass123",
-            keystroke_timings=[100, 120, 80, 150, 200, 90, 110, 130, 140, 160],
-            backspace_positions=[3, 7],
-        )
-        
-        # Check pattern structure
-        self.assertEqual(len(pattern.password_hash_prefix), 16)
-        self.assertEqual(pattern.password_length, 11)
-        self.assertEqual(len(pattern.error_positions), 2)
-        self.assertFalse(pattern.success)  # Has backspaces = errors
-    
-    def test_no_raw_keystrokes_stored(self):
-        """Verify raw keystrokes are never stored."""
-        pattern = self.collector.process_keystroke_data(
-            password="secretpassword",
-            keystroke_timings=[100] * 14,
-            backspace_positions=[],
-        )
-        
-        # Pattern should not contain the password
-        pattern_dict = vars(pattern)
-        for value in pattern_dict.values():
-            if isinstance(value, str):
-                self.assertNotIn("secretpassword", value)
-                self.assertNotIn("secret", value)
-    
-    def test_detect_error_types(self):
-        """Test error type detection."""
-        password_length = 20
-        
-        # Errors at beginning
-        errors = self.collector.detect_error_types([0, 1, 2], password_length)
-        self.assertGreater(errors.get('beginning', 0), 0)
-        
-        # Errors at end
-        errors = self.collector.detect_error_types([17, 18, 19], password_length)
-        self.assertGreater(errors.get('end', 0), 0)
-        
-        # Repeated errors
-        errors = self.collector.detect_error_types([5, 5, 5], password_length)
-        self.assertGreater(errors.get('repeated', 0), 0)
-
-
-# =============================================================================
-# Substitution Learner Tests
-# =============================================================================
-
-class SubstitutionLearnerTests(TestCase):
-    """Test substitution learning."""
-    
-    def setUp(self):
-        from security.services.adaptive_password_service import SubstitutionLearner
-        self.learner = SubstitutionLearner()
-    
-    def test_suggest_substitutions(self):
-        """Test substitution suggestion generation."""
-        suggestions = self.learner.suggest_substitutions(
-            password="password123",
-            error_prone_positions={4: 0.8, 6: 0.6},  # 'w' and 'r' positions
-            user_preferences={'o': '0'},
-            n_suggestions=2,
-        )
-        
-        # Should return suggestions
-        self.assertLessEqual(len(suggestions), 2)
-        
-        # Each suggestion should have required fields
-        for sub in suggestions:
-            self.assertIsNotNone(sub.position)
-            self.assertIsNotNone(sub.original_char)
-            self.assertIsNotNone(sub.suggested_char)
-            self.assertGreater(sub.confidence, 0)
-    
-    def test_user_preferences_respected(self):
-        """Test that user preferences are used in suggestions."""
-        suggestions = self.learner.suggest_substitutions(
-            password="hello",
-            error_prone_positions={4: 0.9},  # 'o' position
-            user_preferences={'o': '0'},  # User prefers o->0
-            n_suggestions=1,
-        )
-        
-        if suggestions and suggestions[0].position == 4:
-            self.assertEqual(suggestions[0].suggested_char, '0')
-
-
-# =============================================================================
-# Memorability Scorer Tests
-# =============================================================================
-
-class MemorabilityScorerTests(TestCase):
-    """Test memorability scoring."""
-    
-    def setUp(self):
-        from security.services.adaptive_password_service import MemorabilityScorer
-        self.scorer = MemorabilityScorer()
-    
-    def test_score_range(self):
-        """Test scores are in valid range."""
-        passwords = [
-            "a",
-            "password",
-            "Password123!",
-            "qwerty123",
-            "xK9$mZp@vL2#nQ",
-        ]
-        
-        for password in passwords:
-            score = self.scorer.calculate_score(password)
-            self.assertGreaterEqual(score, 0.0)
-            self.assertLessEqual(score, 1.0)
-    
-    def test_pronounceable_scores_higher(self):
-        """Test pronounceable passwords score higher."""
-        pronounceable = self.scorer.calculate_score("beautiful")
-        random_chars = self.scorer.calculate_score("xqzjkwvbm")
-        
-        self.assertGreater(pronounceable, random_chars)
-    
-    def test_optimal_length_scores_higher(self):
-        """Test optimal length (12-16) scores well."""
-        optimal = self.scorer.calculate_score("Password1234")
-        too_short = self.scorer.calculate_score("Pass1")
-        too_long = self.scorer.calculate_score("PasswordPasswordPassword123!")
-        
-        self.assertGreater(optimal, too_short)
-        self.assertGreater(optimal, too_long)
-    
-    def test_compare_passwords(self):
-        """Test password comparison."""
-        original, adapted, improvement = self.scorer.compare_passwords(
-            "passw0rd",
-            "passw@rd"
-        )
-        
-        self.assertIsInstance(original, float)
-        self.assertIsInstance(adapted, float)
-        self.assertIsInstance(improvement, float)
-
-
-# =============================================================================
-# Contextual Bandit Tests
-# =============================================================================
-
-class AdaptationBanditTests(TestCase):
-    """Test contextual bandit for adaptation selection."""
-    
-    def setUp(self):
-        from security.services.adaptive_password_service import AdaptationBandit
-        self.bandit = AdaptationBandit()
-    
-    def test_select_strategy(self):
-        """Test strategy selection."""
-        strategy = self.bandit.select_strategy({
-            'error_rate': 0.2,
-            'typing_speed': 'normal',
-        })
-        
-        self.assertIn(strategy, [
-            'aggressive', 'conservative', 'error_focused', 'rhythm_focused'
-        ])
-    
-    def test_update_arm(self):
-        """Test arm update with reward."""
-        initial_alpha = self.bandit.arms['error_focused']['alpha']
-        
-        self.bandit.update('error_focused', 0.8)  # Good reward
-        
-        # Alpha should increase
-        self.assertGreater(
-            self.bandit.arms['error_focused']['alpha'],
-            initial_alpha
-        )
-    
-    def test_context_influences_selection(self):
-        """Test context affects strategy selection."""
-        # Run many selections with high error context
-        high_error_selections = []
-        for _ in range(100):
-            strategy = self.bandit.select_strategy({'error_rate': 0.5})
-            high_error_selections.append(strategy)
-        
-        # error_focused should appear more often
-        error_count = high_error_selections.count('error_focused')
-        self.assertGreater(error_count, 10)  # Should appear reasonably often
-
-
-# =============================================================================
 # Adaptive Password Service Tests
 # =============================================================================
 
@@ -313,54 +93,34 @@ class AdaptivePasswordServiceTests(TestCase):
     """Test main adaptive password service."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='testuser',
             password='testpass123'
         )
     
     def test_service_initialization(self):
-        """Test service initializes correctly."""
+        """Test service initializes correctly (zero-knowledge: privacy guard only)."""
         from security.services.adaptive_password_service import AdaptivePasswordService
-        
+
         service = AdaptivePasswordService(self.user)
         self.assertIsNotNone(service.privacy_guard)
-        self.assertIsNotNone(service.pattern_collector)
-        self.assertIsNotNone(service.substitution_learner)
-        self.assertIsNotNone(service.memorability_scorer)
-    
+
     def test_record_session_requires_consent(self):
-        """Test session recording requires consent."""
+        """Test session recording requires consent (v2 fingerprint path)."""
         from security.services.adaptive_password_service import AdaptivePasswordService
-        
+
         service = AdaptivePasswordService(self.user)
-        result = service.record_typing_session(
-            password="test123",
+        result = service.record_typing_session_v2(
+            password_fingerprint=FP_STUB,
+            length_bucket=2,
             keystroke_timings=[100] * 7,
             backspace_positions=[],
         )
-        
+
         # Should fail without config
         self.assertIn('error', result)
     
-    def test_suggest_adaptation_requires_data(self):
-        """Test suggestion requires sufficient data."""
-        from security.services.adaptive_password_service import AdaptivePasswordService
-        from security.models import AdaptivePasswordConfig
-        
-        # Create config
-        AdaptivePasswordConfig.objects.create(
-            user=self.user,
-            is_enabled=True,
-            consent_given_at=timezone.now(),
-        )
-        
-        service = AdaptivePasswordService(self.user)
-        suggestion = service.suggest_adaptation("password123")
-        
-        # Should return None due to insufficient data
-        self.assertIsNone(suggestion)
-
-
 # =============================================================================
 # Model Tests
 # =============================================================================
@@ -369,6 +129,7 @@ class AdaptivePasswordModelsTests(TestCase):
     """Test Django models for adaptive passwords."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='testuser',
             password='testpass123'
@@ -401,13 +162,13 @@ class AdaptivePasswordModelsTests(TestCase):
         
         session = TypingSession.objects.create(
             user=self.user,
-            password_hash_prefix="testprefix123456",  # pragma: allowlist secret
-            password_length=12,
+            password_fingerprint=FP_STUB,
+            length_bucket=3,
             success=True,
             error_positions=[],
             timing_profile={'0': 100, '1': 150},
         )
-        
+
         self.assertEqual(session.error_count, 0)
         self.assertTrue(session.success)
     
@@ -418,19 +179,19 @@ class AdaptivePasswordModelsTests(TestCase):
         # Create first adaptation
         first = PasswordAdaptation.objects.create(
             user=self.user,
-            password_hash_prefix="testorig123456",  # pragma: allowlist secret
-            adapted_hash_prefix="testadapt123456",  # pragma: allowlist secret
+            original_fingerprint='Orig0123456789-_aAbBcCdD',
+            adapted_fingerprint='Adpt0123456789-_aAbBcCdD',
             adaptation_generation=1,
             adaptation_type='substitution',
             confidence_score=0.85,
             status='rolled_back',
         )
-        
+
         # Create second adaptation linked to first
         second = PasswordAdaptation.objects.create(
             user=self.user,
-            password_hash_prefix="testadapt123456",  # pragma: allowlist secret
-            adapted_hash_prefix="testadapt234567",  # pragma: allowlist secret
+            original_fingerprint='Adpt0123456789-_aAbBcCdD',
+            adapted_fingerprint='Adp20123456789-_aAbBcCdD',
             previous_adaptation=first,
             adaptation_generation=2,
             adaptation_type='substitution',
@@ -474,6 +235,7 @@ class AdaptivePasswordAPITests(APITestCase):
     """Test API endpoints."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='testuser',
             password='testpass123'
@@ -523,9 +285,8 @@ class AdaptivePasswordAPITests(APITestCase):
         response = self.client.post('/api/security/adaptive/record-session/', {})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
     
-    @override_settings(ADAPTIVE_ZK_V2=True)
     def test_suggest_adaptation_endpoint_deprecated_under_zk_v2(self):
-        """Under the default ZK v2 contract, server-side /suggest/ is deprecated.
+        """Server-side /suggest/ is unconditionally deprecated (410).
 
         Suggestions are now generated client-side from the preference model, so
         POSTing a password returns 410 Gone (and never accepts the plaintext).
@@ -580,57 +341,58 @@ class AdaptivePasswordIntegrationTests(TestCase):
     """Integration tests for full workflow."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='testuser',
             password='testpass123'
         )
     
     def test_full_workflow(self):
-        """Test complete user workflow."""
+        """Test complete zero-knowledge workflow (model export → apply)."""
         from security.models import (
-            AdaptivePasswordConfig, TypingSession, 
-            UserTypingProfile, PasswordAdaptation
+            AdaptivePasswordConfig, UserTypingProfile
         )
         from security.services.adaptive_password_service import AdaptivePasswordService
-        
+
         # 1. Enable adaptive passwords
-        config = AdaptivePasswordConfig.objects.create(
+        AdaptivePasswordConfig.objects.create(
             user=self.user,
             is_enabled=True,
             consent_given_at=timezone.now(),
         )
-        
-        # 2. Create typing profile with sufficient data
-        profile = UserTypingProfile.objects.create(
+
+        # 2. Create typing profile with sufficient data + learned preferences
+        UserTypingProfile.objects.create(
             user=self.user,
             total_sessions=20,
             successful_sessions=15,
             success_rate=0.75,
             preferred_substitutions={'o': '0', 'a': '@'},
+            substitution_confidence={'o->0': 0.9},
             error_prone_positions={'3': 0.4, '7': 0.3},
             profile_confidence=0.8,
         )
-        
-        # 3. Get suggestion
+
         service = AdaptivePasswordService(self.user)
-        suggestion = service.suggest_adaptation("password123", force=True)
-        
-        # Should get a suggestion
-        self.assertIsNotNone(suggestion)
-        
-        # 4. Apply adaptation
-        if suggestion:
-            result = service.apply_adaptation(
-                original_password="password123",
-                adapted_password="p@ssw0rd123",
-                substitutions=[
-                    {'position': 1, 'from': 'a', 'to': '@'},
-                    {'position': 5, 'from': 'o', 'to': '0'},
-                ],
-            )
-            
-            self.assertIn('adaptation_id', result)
-            self.assertEqual(result['generation'], 1)
+
+        # 3. Export the preference model (client ranks suggestions locally).
+        model = service.export_preference_model()
+        self.assertEqual(model['model_version'], 20)
+        self.assertAlmostEqual(model['substitution_weights']['o']['0'], 0.9)
+
+        # 4. Apply an adaptation by fingerprints only (no raw passwords).
+        result = service.apply_adaptation_v2(
+            original_fingerprint='Orig0123456789-_aAbBcCdD',
+            adapted_fingerprint='Adpt0123456789-_aAbBcCdD',
+            substitution_classes=[
+                {'from': 'a', 'to': '@', 'confidence': 0.8},
+                {'from': 'o', 'to': '0', 'confidence': 0.9},
+            ],
+            previews={'original_masked': 'pa***23', 'adapted_masked': 'p@***23'},
+        )
+
+        self.assertIn('adaptation_id', result)
+        self.assertEqual(result['generation'], 1)
 
 
 # =============================================================================
@@ -724,6 +486,7 @@ class AdvancedPrivacyEngineTests(TestCase):
     """Test advanced differential privacy with pydp."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         from security.services.adaptive_password_service import PrivacyGuard
         self.guard = PrivacyGuard(epsilon=0.5, delta=1e-5)
     
@@ -804,93 +567,6 @@ class AdvancedPrivacyEngineTests(TestCase):
 
 
 # =============================================================================
-# LSTM Memorability Model Tests
-# =============================================================================
-
-class MemorabilityLSTMTests(TestCase):
-    """Test LSTM-based memorability prediction."""
-    
-    def setUp(self):
-        from security.services.adaptive_password_service import MemorabilityLSTM
-        self.lstm = MemorabilityLSTM(input_dim=50, hidden_dim=128)
-    
-    def test_initialization(self):
-        """Test LSTM model initializes correctly."""
-        self.assertIsNotNone(self.lstm)
-        self.assertEqual(self.lstm.input_dim, 50)
-        self.assertEqual(self.lstm.hidden_dim, 128)
-    
-    def test_extract_features_length(self):
-        """Test feature extraction produces correct dimensions."""
-        features = self.lstm.extract_features("TestPassword123!")
-        
-        self.assertEqual(len(features), 50)
-        self.assertTrue(all(isinstance(f, float) for f in features))
-    
-    def test_extract_features_with_profile(self):
-        """Test feature extraction with typing profile."""
-        profile = {
-            'avg_inter_keystroke_time': 120.0,
-            'typing_speed_wpm': 45.0,
-            'success_rate': 0.85,
-            'profile_confidence': 0.7,
-            'error_prone_positions': {'3': 0.4, '7': 0.3},
-            'preferred_substitutions': {'o': '0'},
-            'total_sessions': 25,
-        }
-        
-        features = self.lstm.extract_features("TestPassword123!", profile)
-        
-        self.assertEqual(len(features), 50)
-        # Profile features should be included (not all zeros).
-        # Profile block lives at indices 25:35 after the 10 structure + 5
-        # entropy + 10 pattern features.
-        self.assertTrue(any(f > 0 for f in features[25:35]))
-    
-    def test_predict_returns_valid_score(self):
-        """Test prediction returns score in valid range."""
-        score = self.lstm.predict("TestPassword123!")
-        
-        self.assertGreaterEqual(score, 0.0)
-        self.assertLessEqual(score, 1.0)
-    
-    def test_predict_different_passwords(self):
-        """Test predictions differ for different passwords."""
-        score1 = self.lstm.predict("SimplePass123")
-        score2 = self.lstm.predict("xK9$mZp@vL2#nQ")
-        
-        # Scores should be different (very unlikely to be exactly equal)
-        self.assertIsInstance(score1, float)
-        self.assertIsInstance(score2, float)
-    
-    def test_compare_passwords(self):
-        """Test password comparison functionality."""
-        orig, adapted, improvement = self.lstm.compare_passwords(
-            "password123",
-            "p@ssw0rd123"
-        )
-        
-        self.assertIsInstance(orig, float)
-        self.assertIsInstance(adapted, float)
-        self.assertIsInstance(improvement, float)
-        self.assertAlmostEqual(improvement, adapted - orig, places=5)
-    
-    def test_feature_extraction_edge_cases(self):
-        """Test feature extraction handles edge cases."""
-        # Empty password
-        features = self.lstm.extract_features("")
-        self.assertEqual(len(features), 50)
-        
-        # Single character
-        features = self.lstm.extract_features("a")
-        self.assertEqual(len(features), 50)
-        
-        # Very long password
-        features = self.lstm.extract_features("a" * 100)
-        self.assertEqual(len(features), 50)
-
-
-# =============================================================================
 # End-to-End Tests
 # =============================================================================
 
@@ -898,6 +574,7 @@ class AdaptivePasswordE2ETests(TestCase):
     """End-to-end tests for complete user journeys."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='e2euser',
             email='e2e@example.com',
@@ -906,20 +583,18 @@ class AdaptivePasswordE2ETests(TestCase):
     
     def test_complete_opt_in_to_adaptation_flow(self):
         """
-        Test complete flow:
+        Test the complete zero-knowledge flow:
         1. User opts in
-        2. Typing sessions are recorded
+        2. Typing sessions are recorded by fingerprint (no password)
         3. Profile is built
-        4. Suggestion is generated
-        5. User accepts suggestion
-        6. Rollback is available
+        4. An adaptation is applied by fingerprint
+        5. A follow-up adaptation chains for rollback
         """
         from security.models import (
-            AdaptivePasswordConfig, TypingSession, 
-            UserTypingProfile, PasswordAdaptation
+            AdaptivePasswordConfig, TypingSession, UserTypingProfile
         )
         from security.services.adaptive_password_service import AdaptivePasswordService
-        
+
         # Step 1: Opt in
         config = AdaptivePasswordConfig.objects.create(
             user=self.user,
@@ -927,124 +602,109 @@ class AdaptivePasswordE2ETests(TestCase):
             consent_given_at=timezone.now(),
         )
         self.assertTrue(config.is_enabled)
-        
-        # Step 2: Record typing sessions
-        for i in range(15):
-            TypingSession.objects.create(
-                user=self.user,
-                password_hash_prefix=f"hash{i:012d}1234",
-                password_length=12,
-                success=i % 3 != 0,  # 66% success
-                error_positions=[3, 7] if i % 3 == 0 else [],
-                timing_profile={'0': 100, '1': 120},
-            )
-        
-        # Step 3: Create profile
-        profile = UserTypingProfile.objects.create(
-            user=self.user,
-            total_sessions=15,
-            successful_sessions=10,
-            success_rate=0.67,
-            average_wpm=45.0,
-            preferred_substitutions={'o': '0'},
-            error_prone_positions={'3': 0.4, '7': 0.3},
-            profile_confidence=0.75,
-        )
-        self.assertTrue(profile.has_sufficient_data())
-        
-        # Step 4: Get suggestion
+
+        # Step 2: Record typing sessions (keyed fingerprint + coarse features).
         service = AdaptivePasswordService(self.user)
-        suggestion = service.suggest_adaptation("password123", force=True)
-        
-        # Step 5: Apply adaptation (simulate)
-        if suggestion:
-            adaptation = PasswordAdaptation.objects.create(
-                user=self.user,
-                password_hash_prefix="original123456",
-                adapted_hash_prefix="adapted1234567",
-                adaptation_generation=1,
-                adaptation_type='substitution',
-                confidence_score=suggestion.confidence_score,
-                status='active',
+        for i in range(15):
+            service.record_typing_session_v2(
+                password_fingerprint=FP_STUB,
+                length_bucket=3,
+                keystroke_timings=[100, 120, 90, 110],
+                backspace_positions=[3, 7] if i % 3 == 0 else [],
             )
-            
-            # Step 6: Verify rollback available
-            second_adaptation = PasswordAdaptation.objects.create(
-                user=self.user,
-                password_hash_prefix="adapted1234567",
-                adapted_hash_prefix="adapted2345678",
-                previous_adaptation=adaptation,
-                adaptation_generation=2,
-                adaptation_type='substitution',
-                confidence_score=0.9,
-                status='active',
-            )
-            
-            self.assertTrue(second_adaptation.can_rollback())
-            chain = second_adaptation.get_rollback_chain()
-            self.assertEqual(len(chain), 2)
-    
+
+        # Step 3: Profile is built from the aggregate signals.
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertEqual(profile.total_sessions, 15)
+        self.assertTrue(profile.has_sufficient_data())
+        self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 15)
+
+        # Step 4 + 5: Apply an adaptation, then a follow-up that chains for rollback.
+        first = service.apply_adaptation_v2(
+            original_fingerprint='Orig0123456789-_aAbBcCdD',
+            adapted_fingerprint='Adpt0123456789-_aAbBcCdD',
+            substitution_classes=[{'from': 'o', 'to': '0', 'confidence': 0.9}],
+        )
+        self.assertEqual(first['generation'], 1)
+
+        second = service.apply_adaptation_v2(
+            original_fingerprint='Adpt0123456789-_aAbBcCdD',
+            adapted_fingerprint='Adp20123456789-_aAbBcCdD',
+            substitution_classes=[{'from': 'a', 'to': '@', 'confidence': 0.8}],
+        )
+        self.assertEqual(second['generation'], 2)
+        self.assertTrue(second['can_rollback'])
+
     def test_gdpr_data_lifecycle(self):
         """Test GDPR compliance: export and deletion."""
         from security.models import (
             AdaptivePasswordConfig, TypingSession, UserTypingProfile
         )
-        
+
         # Create data
         AdaptivePasswordConfig.objects.create(
             user=self.user,
             is_enabled=True,
             consent_given_at=timezone.now(),
         )
-        
+
         UserTypingProfile.objects.create(
             user=self.user,
             total_sessions=10,
         )
-        
+
         TypingSession.objects.create(
             user=self.user,
-            password_hash_prefix="testhash12345678",
-            password_length=12,
+            password_fingerprint=FP_STUB,
+            length_bucket=3,
             success=True,
         )
-        
+
         # Verify data exists
         self.assertEqual(AdaptivePasswordConfig.objects.filter(user=self.user).count(), 1)
         self.assertEqual(UserTypingProfile.objects.filter(user=self.user).count(), 1)
         self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 1)
-        
+
         # Delete all data (GDPR)
         AdaptivePasswordConfig.objects.filter(user=self.user).delete()
         UserTypingProfile.objects.filter(user=self.user).delete()
         TypingSession.objects.filter(user=self.user).delete()
-        
+
         # Verify deletion
         self.assertEqual(AdaptivePasswordConfig.objects.filter(user=self.user).count(), 0)
         self.assertEqual(UserTypingProfile.objects.filter(user=self.user).count(), 0)
         self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 0)
-    
+
     def test_privacy_preserved_throughout_flow(self):
-        """Verify no raw passwords are stored at any point."""
-        from security.models import TypingSession, PasswordAdaptation, UserTypingProfile
+        """Verify no raw password is stored — only the keyed fingerprint."""
+        from security.models import AdaptivePasswordConfig, TypingSession
         from security.services.adaptive_password_service import AdaptivePasswordService
-        
+
         password = "MySecretPassword123!"
-        
-        # Create session with pattern
+        # In production the fingerprint is computed client-side; here we just use
+        # an opaque token to prove the server stores no password-derived material.
+        fingerprint = 'Zk0paqueFingerprint-_1234'
+
+        AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, consent_given_at=timezone.now()
+        )
         service = AdaptivePasswordService(self.user)
-        pattern = service.pattern_collector.process_keystroke_data(
-            password=password,
-            keystroke_timings=[100] * len(password),
+        result = service.record_typing_session_v2(
+            password_fingerprint=fingerprint,
+            length_bucket=len(password) // 4,
+            keystroke_timings=[100] * 6,
             backspace_positions=[],
         )
-        
-        # Verify pattern doesn't contain password
-        self.assertNotIn(password, str(vars(pattern)))
-        self.assertNotIn("MySecret", str(vars(pattern)))
-        
-        # Verify hash prefix is only 16 chars
-        self.assertEqual(len(pattern.password_hash_prefix), 16)
+
+        session = TypingSession.objects.get(id=result['session_id'])
+        # The stored row contains the opaque fingerprint, never the password.
+        self.assertEqual(session.password_fingerprint, fingerprint)
+        serialized = str([
+            session.password_fingerprint, session.length_bucket,
+            session.timing_profile, session.error_positions,
+        ])
+        self.assertNotIn(password, serialized)
+        self.assertNotIn("MySecret", serialized)
 
 
 # =============================================================================
@@ -1055,6 +715,7 @@ class AdaptivePasswordFunctionalTests(TestCase):
     """Functional tests for business logic."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='funcuser',
             password='testpass123'
@@ -1136,13 +797,13 @@ class AdaptivePasswordFunctionalTests(TestCase):
             'MAX_ROLLBACK_DEPTH', 10
         )
         
-        # Create chain of adaptations
+        # Create chain of adaptations (keyed by fingerprint).
         prev = None
         for i in range(15):
             adaptation = PasswordAdaptation.objects.create(
                 user=self.user,
-                password_hash_prefix=f"hash{i:014d}12",
-                adapted_hash_prefix=f"hash{i+1:014d}12",
+                original_fingerprint=f"Fp{i:020d}ab",
+                adapted_fingerprint=f"Fp{i + 1:020d}ab",
                 previous_adaptation=prev,
                 adaptation_generation=i + 1,
                 adaptation_type='substitution',
@@ -1189,7 +850,7 @@ class FrontendComponentTests(TestCase):
             'errors': [3, 7],           # Error positions
             'backspace_count': 2,
             'total_time_ms': 5000,
-            'password_length': 12,
+            'length_bucket': 3,         # coarse bucket (ZK v2), not exact length
             'session_type': 'login',
         }
         
@@ -1255,17 +916,11 @@ class CeleryTaskTests(TestCase):
     """Test Celery async tasks."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='celeryuser',
             password='testpass123'
         )
-    
-    def test_generate_suggestion_task_structure(self):
-        """Test suggestion generation task structure."""
-        from security.tasks.adaptive_tasks import generate_adaptation_suggestion
-        
-        # Verify task is callable
-        self.assertTrue(callable(generate_adaptation_suggestion))
     
     def test_cleanup_expired_adaptations_structure(self):
         """Test cleanup task structure."""
@@ -1294,6 +949,7 @@ class FeedbackAPITests(APITestCase):
     """Test feedback submission API."""
     
     def setUp(self):
+        """Set up the test user/fixtures."""
         self.user = User.objects.create_user(
             username='feedbackuser',
             password='testpass123'
@@ -1314,14 +970,14 @@ class FeedbackAPITests(APITestCase):
         
         adaptation = PasswordAdaptation.objects.create(
             user=self.user,
-            password_hash_prefix="feedback12345678",
-            adapted_hash_prefix="adapted123456789",
+            original_fingerprint='Fb0123456789-_aAbBcCdDeE',
+            adapted_fingerprint='Fb1123456789-_aAbBcCdDeE',
             adaptation_generation=1,
             adaptation_type='substitution',
             confidence_score=0.85,
             status='active',
         )
-        
+
         # Submit feedback
         response = self.client.post('/api/security/adaptive/feedback/', {
             'adaptation_id': str(adaptation.id),
@@ -1339,14 +995,14 @@ class FeedbackAPITests(APITestCase):
         
         adaptation = PasswordAdaptation.objects.create(
             user=self.user,
-            password_hash_prefix="getfeedback12345",
-            adapted_hash_prefix="adapted12345678",
+            original_fingerprint='Gf0123456789-_aAbBcCdDeE',
+            adapted_fingerprint='Gf1123456789-_aAbBcCdDeE',
             adaptation_generation=1,
             adaptation_type='substitution',
             confidence_score=0.85,
             status='active',
         )
-        
+
         response = self.client.get(f'/api/security/adaptive/feedback/{adaptation.id}/')
         
         self.assertEqual(response.status_code, status.HTTP_200_OK)

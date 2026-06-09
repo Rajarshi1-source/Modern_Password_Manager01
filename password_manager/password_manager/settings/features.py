@@ -31,6 +31,4 @@ from .base import (  # noqa: F401
     # Personality-based authentication
     PERSONALITY_AUTH_ENABLED,
     PERSONALITY_AUTH_USE_PRESIDIO,
-    # Adaptive password zero-knowledge v2 cutover
-    ADAPTIVE_ZK_V2,
 )

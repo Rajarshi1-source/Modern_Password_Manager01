@@ -1717,17 +1717,6 @@ ADAPTIVE_PASSWORD = {
     'TIMING_BUCKET_COUNT': 9,  # Number of timing buckets
 }
 
-# ---------------------------------------------------------------------------
-# Adaptive Password — Zero-Knowledge v2 cutover flag
-# ---------------------------------------------------------------------------
-# When True, the adaptive endpoints speak the v2 (zero-knowledge) wire
-# contract: they accept a client-computed keyed *fingerprint* + coarse features
-# and REJECT any raw password material (see
-# docs/adaptive-password-zk-remediation-plan.md). Default ON as of PR-4 (the
-# frontend now sends v2 payloads); set ADAPTIVE_ZK_V2=false to roll back to the
-# legacy v1 behaviour cleanly.
-ADAPTIVE_ZK_V2 = os.environ.get('ADAPTIVE_ZK_V2', 'True').lower() == 'true'
-
 # ==============================================================================
 # QUANTUM ENTANGLEMENT-INSPIRED KEY DISTRIBUTION CONFIGURATION
 # ==============================================================================

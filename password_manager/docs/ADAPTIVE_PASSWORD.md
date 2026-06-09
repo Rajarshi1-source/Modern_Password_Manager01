@@ -8,6 +8,8 @@ The Epigenetic Password Adaptation feature uses reinforcement learning and behav
 
 | Guarantee | Description |
 |-----------|-------------|
+| **Zero-knowledge (v2)** | The raw password never leaves the device. The client sends only a keyed HMAC fingerprint + coarse features (length bucket, bucketized timings) and masked previews; the server rejects any plaintext field (HTTP 422). |
+| **Client-side suggestions** | Suggestions are generated in the browser from a downloaded preference model — the server never scores a raw password. |
 | **No raw keystrokes stored** | Only aggregated timing metrics |
 | **Differential privacy** | All metrics have ε-DP protection (ε=0.5) |
 | **Opt-in by default** | Feature must be explicitly enabled |
@@ -39,6 +41,9 @@ import { TypingPatternCapture } from './Components/security/TypingPatternCapture
   inputRef={passwordInputRef}
   enabled={userHasConsented}
   onPatternCaptured={handlePattern}
+  // Zero-knowledge v2: inject a keyed-fingerprint fn; the raw password is used
+  // only locally to derive the fingerprint and is never transmitted.
+  fingerprint={(pw) => cryptoService.passwordFingerprint(pw, perUserSalt)}
 />
 ```
 
@@ -68,14 +73,15 @@ After 10+ typing sessions, the system will suggest adaptations:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/adaptive/record-session/` | POST | Record typing session |
+| `/adaptive/record-session/` | POST | Record typing session (v2: keyed fingerprint + coarse features; raw password rejected) |
 
 ### Adaptation
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/adaptive/suggest/` | POST | Get suggestion |
-| `/adaptive/apply/` | POST | Apply adaptation |
+| `/adaptive/preference-model/` | GET | Download the learned preference model (client generates suggestions locally) |
+| `/adaptive/suggest/` | POST | **Deprecated (HTTP 410)** — server-side suggestion removed; use the preference-model pull instead |
+| `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + substitution classes + masked previews; raw passwords rejected) |
 | `/adaptive/rollback/` | POST | Rollback to previous |
 
 ### Profile & History

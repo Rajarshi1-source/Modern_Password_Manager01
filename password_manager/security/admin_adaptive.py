@@ -113,7 +113,7 @@ class TypingSessionAdmin(admin.ModelAdmin):
     
     list_display = (
         'user',
-        'password_length',
+        'length_bucket',
         'success_badge',
         'error_count',
         'total_time_display',
@@ -125,8 +125,8 @@ class TypingSessionAdmin(admin.ModelAdmin):
     readonly_fields = (
         'id',
         'user',
-        'password_hash_prefix',
-        'password_length',
+        'password_fingerprint',
+        'length_bucket',
         'success',
         'error_positions',
         'error_count',
@@ -186,8 +186,10 @@ class PasswordAdaptationAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email')
     readonly_fields = (
         'id',
-        'password_hash_prefix',
-        'adapted_hash_prefix',
+        'original_fingerprint',
+        'adapted_fingerprint',
+        'original_masked',
+        'adapted_masked',
         'suggested_at',
         'decided_at',
         'rolled_back_at',
@@ -198,8 +200,13 @@ class PasswordAdaptationAdmin(admin.ModelAdmin):
         ('Basic Information', {
             'fields': ('id', 'user', 'status', 'adaptation_type')
         }),
-        ('Password Hashes (Privacy-Safe)', {
-            'fields': ('password_hash_prefix', 'adapted_hash_prefix'),
+        ('Fingerprints & Masked Previews (Zero-Knowledge)', {
+            'fields': (
+                'original_fingerprint',
+                'adapted_fingerprint',
+                'original_masked',
+                'adapted_masked',
+            ),
             'classes': ('collapse',)
         }),
         ('Adaptation Details', {

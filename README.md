@@ -1203,6 +1203,7 @@ SecureVault implements a **true zero-knowledge architecture** where sensitive da
 | **Client-Side Decryption** | All decryption happens in browser memory only |
 | **Session Auto-Lock** | Automatic key clearing after configurable timeout |
 | **Secure Memory Clearing** | Keys wiped from memory on lock/logout |
+| **Adaptive Password is Zero-Knowledge** | The adaptive/typing-pattern feature sends only a client-keyed HMAC fingerprint + coarse features (length bucket, timings) and masked previews; the raw password never leaves the device, and the server rejects any plaintext field. Suggestions are generated client-side from a downloaded preference model. |
 
 ### Authentication Flow (Zero-Knowledge)
 
