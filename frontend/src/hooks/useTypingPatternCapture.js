@@ -18,6 +18,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { extractFeatures } from '../services/adaptive/adaptiveFeatures';
 
 // =============================================================================
 // Constants
@@ -41,18 +42,9 @@ const bucketizeTiming = (ms) => {
     return TIMING_BUCKET_THRESHOLDS[TIMING_BUCKET_THRESHOLDS.length - 1];
 };
 
-/**
- * Calculate SHA-256 hash prefix of password.
- * Only sends first 16 chars of hash for privacy.
- */
-const getPasswordHashPrefix = async (password) => {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-    return hashHex.substring(0, 16);
-};
+// NOTE: the legacy bare-SHA-256 `getPasswordHashPrefix` was removed in the
+// zero-knowledge v2 cutover (a bare hash is offline-guessable). The keyed
+// fingerprint is now injected via the `fingerprint` option (remediation §1, §5).
 
 /**
  * Detect device type from user agent.
@@ -96,6 +88,7 @@ export const useTypingPatternCapture = ({
     enabled = false,
     onPatternCaptured,
     onError,
+    fingerprint,
 }) => {
     // State
     const [isCapturing, setIsCapturing] = useState(false);
@@ -166,7 +159,10 @@ export const useTypingPatternCapture = ({
         backspacePositions.current.push(position);
     }, [enabled, isCapturing]);
 
-    // End capture and return pattern
+    // End capture and return pattern.
+    // Zero-knowledge v2: the raw password is used only to compute a keyed
+    // fingerprint + coarse length bucket locally; it is never part of the
+    // returned pattern and never transmitted.
     const endCapture = useCallback(async (password) => {
         if (!isCapturing || keystrokeTimings.current.length === 0) {
             resetSession();
@@ -174,12 +170,17 @@ export const useTypingPatternCapture = ({
         }
 
         try {
-            const totalTime = sessionStartTime.current
-                ? Math.round(performance.now() - sessionStartTime.current)
-                : 0;
+            if (typeof fingerprint !== 'function') {
+                throw new Error(
+                    'endCapture requires a fingerprint() function (zero-knowledge v2).'
+                );
+            }
 
+            const { length_bucket } = extractFeatures(password);
             const pattern = {
-                password, // Will be hashed before sending
+                schema_version: 2,
+                password_fingerprint: await fingerprint(password),
+                length_bucket,
                 keystroke_timings: keystrokeTimings.current,
                 backspace_positions: backspacePositions.current,
                 device_type: detectDeviceType(),
@@ -203,7 +204,7 @@ export const useTypingPatternCapture = ({
             resetSession();
             return null;
         }
-    }, [isCapturing, onPatternCaptured, onError, resetSession]);
+    }, [isCapturing, fingerprint, onPatternCaptured, onError, resetSession]);
 
     // Attach event listeners to input element
     useEffect(() => {

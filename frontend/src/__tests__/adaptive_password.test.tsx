@@ -27,6 +27,12 @@ vi.mock('axios');
 // Some code paths may also use fetch.
 global.fetch = vi.fn();
 
+// A low-entropy, obviously-fake stand-in for a client fingerprint. Referenced by
+// name (not inlined next to `password_fingerprint`) so secret scanners don't
+// mistake a base64url-looking literal for a real credential. The real value is
+// produced by cryptoService.passwordFingerprint at runtime.
+const FINGERPRINT_STUB = 'fp-not-a-real-fingerprint';
+
 // =============================================================================
 // useTypingPatternCapture Hook Tests
 // =============================================================================
@@ -112,9 +118,13 @@ describe('useTypingPatternCapture Hook', () => {
         const { useTypingPatternCapture } = await import('../hooks/useTypingPatternCapture');
 
         const mockCallback = vi.fn();
+        // Zero-knowledge v2: a keyed-fingerprint fn is injected; endCapture emits
+        // a fingerprint, not the raw password.
+        const fingerprint = vi.fn(async () => FINGERPRINT_STUB);
         const { result } = renderHook(() => useTypingPatternCapture({
             inputElement: null,
             enabled: true,
+            fingerprint,
             onPatternCaptured: mockCallback,
         }));
 
@@ -137,11 +147,14 @@ describe('useTypingPatternCapture Hook', () => {
             patternData = await result.current.endCapture('testpass');
         });
 
-        // Should return pattern with expected structure
+        // Should return a v2 pattern: timing fields + keyed fingerprint, no password.
         expect(patternData).toBeDefined();
         expect(patternData).toHaveProperty('keystroke_timings');
         expect(patternData).toHaveProperty('backspace_positions');
         expect(patternData).toHaveProperty('device_type');
+        expect(patternData).toHaveProperty('password_fingerprint');
+        expect(patternData).not.toHaveProperty('password');
+        expect(JSON.stringify(patternData)).not.toContain('testpass');
     });
 
     test('resetSession clears all data', async () => {
@@ -218,7 +231,7 @@ describe('TypingPatternCapture Component (headless)', () => {
         expect(typeof inputRef.current.resetTypingSession).toBe('function');
     });
 
-    test('captures keystroke timings and reports/submits the pattern', async () => {
+    test('captures a zero-knowledge v2 pattern (keyed fingerprint, never the password)', async () => {
         const { default: TypingPatternCapture } = await import('../Components/security/TypingPatternCapture');
 
         vi.mocked(axios.post).mockResolvedValue({ data: { recorded: true } });
@@ -228,11 +241,14 @@ describe('TypingPatternCapture Component (headless)', () => {
         const inputRef = { current: input };
         const onPatternCaptured = vi.fn();
         const onSessionRecorded = vi.fn();
+        // Injected keyed-fingerprint fn (in the app: cryptoService.passwordFingerprint).
+        const fingerprint = vi.fn(async () => FINGERPRINT_STUB);
 
         render(
             <TypingPatternCapture
                 inputRef={inputRef}
                 enabled
+                fingerprint={fingerprint}
                 onPatternCaptured={onPatternCaptured}
                 onSessionRecorded={onSessionRecorded}
             />
@@ -247,27 +263,35 @@ describe('TypingPatternCapture Component (headless)', () => {
             await inputRef.current.captureTypingPattern('testpass');
         });
 
-        // The pattern reports the timing fields plus `password`: the backend's
-        // record-session endpoint *requires* it (TypingSessionInputSerializer,
-        // write_only) and uses it "for hashing only, never stored" server-side
-        // (see record_typing_session) — so it is intentionally part of the payload.
-        expect(onPatternCaptured).toHaveBeenCalledWith(
-            expect.objectContaining({
-                password: 'testpass',
-                keystroke_timings: expect.any(Array),
-                backspace_positions: expect.any(Array),
-                device_type: expect.any(String),
-            })
-        );
+        // The fingerprint is computed from the password locally...
+        expect(fingerprint).toHaveBeenCalledWith('testpass');
 
-        // ...and auto-submitted to the record-session endpoint.
+        // ...and the reported pattern carries the v2 fields — and crucially NOT
+        // the raw password.
+        const pattern = onPatternCaptured.mock.calls[0][0];
+        expect(pattern).toMatchObject({
+            schema_version: 2,
+            password_fingerprint: FINGERPRINT_STUB,
+            length_bucket: expect.any(Number),
+            keystroke_timings: expect.any(Array),
+            backspace_positions: expect.any(Array),
+            device_type: expect.any(String),
+        });
+        expect(pattern).not.toHaveProperty('password');
+        expect(JSON.stringify(pattern)).not.toContain('testpass');
+
+        // ...and auto-submitted to record-session with no plaintext in the body.
         await waitFor(() => {
             expect(axios.post).toHaveBeenCalledWith(
                 expect.stringContaining('/adaptive/record-session/'),
-                expect.objectContaining({ keystroke_timings: expect.any(Array) }),
+                expect.objectContaining({ schema_version: 2, password_fingerprint: expect.any(String) }),
                 expect.any(Object)
             );
         });
+        const postBody = vi.mocked(axios.post).mock.calls[0][1];
+        expect(JSON.stringify(postBody)).not.toContain('testpass');
+        expect(postBody).not.toHaveProperty('password');
+
         await waitFor(() => {
             expect(onSessionRecorded).toHaveBeenCalledWith({ recorded: true });
         });
@@ -471,19 +495,32 @@ describe('Adaptive Password API Service', () => {
         );
     });
 
-    test('suggestAdaptation requests a suggestion for the password', async () => {
+    test('suggestAdaptation generates the suggestion client-side (no password POST)', async () => {
         const { adaptivePasswordService } = await import('../Components/security/TypingPatternCapture');
 
-        const mockSuggestion = { has_suggestion: true, suggestion: { confidence_score: 0.85 } };
-        vi.mocked(axios.post).mockResolvedValueOnce({ data: mockSuggestion });
+        // v2: the client pulls the learned preference model and ranks locally.
+        vi.mocked(axios.get).mockResolvedValueOnce({
+            data: {
+                model_version: 3,
+                substitution_weights: { o: { '0': 0.9 }, e: { '3': 0.7 }, a: { '@': 0.8 } },
+                memorability_params: {},
+            },
+        });
 
-        const result = await adaptivePasswordService.suggestAdaptation('password123');
+        const result = await adaptivePasswordService.suggestAdaptation('MySecret123!');
 
-        expect(axios.post).toHaveBeenCalledWith(
-            expect.stringContaining('/adaptive/suggest/'),
-            expect.objectContaining({ password: 'password123' })
+        // Fetched the preference model; never POSTed the password anywhere.
+        expect(axios.get).toHaveBeenCalledWith(
+            expect.stringContaining('/adaptive/preference-model/')
         );
-        expect(result).toEqual(mockSuggestion);
+        expect(axios.post).not.toHaveBeenCalled();
+
+        // Returns the shape the suggestion modal consumes, with masked previews.
+        expect(result.has_suggestion).toBe(true);
+        expect(result.substitutions.length).toBeGreaterThan(0);
+        expect(result.original_preview).toMatch(/\*/);
+        // The raw password never appears anywhere in the suggestion object.
+        expect(JSON.stringify(result)).not.toContain('MySecret123!');
     });
 
     test('getProfile returns profile data', async () => {

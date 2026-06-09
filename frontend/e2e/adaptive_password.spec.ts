@@ -36,6 +36,35 @@ async function navigateToAdaptiveSettings(page: Page): Promise<void> {
     await page.click('[data-testid="adaptive-password-tab"]');
 }
 
+/**
+ * Zero-knowledge wire guard: fail the test if ANY request to an adaptive
+ * endpoint carries the raw password (or a forbidden plaintext field) in its
+ * body. This is the e2e half of the leak test (remediation plan §8).
+ */
+function attachNoPlaintextGuard(page: Page, secret: string): { assertClean: () => void } {
+    const violations: string[] = [];
+    page.on('request', (request) => {
+        const url = request.url();
+        if (!url.includes('/adaptive/')) return;
+        const body = request.postData() || '';
+        // Match both the raw secret and its JSON-escaped form: quotes/backslashes
+        // in a password are escaped inside a JSON request body (e.g. Test"Pass →
+        // Test\"Pass), which a naive raw-string search would miss.
+        const jsonEscaped = JSON.stringify(secret).slice(1, -1);
+        if (body.includes(secret) || body.includes(jsonEscaped)) {
+            violations.push(`raw password in ${request.method()} ${url}`);
+        }
+        for (const field of ['"password"', '"original_password"', '"adapted_password"']) {
+            if (body.includes(field)) {
+                violations.push(`forbidden field ${field} in ${request.method()} ${url}`);
+            }
+        }
+    });
+    return {
+        assertClean: () => expect(violations, violations.join('; ')).toHaveLength(0),
+    };
+}
+
 // =============================================================================
 // Feature Flag Tests
 // =============================================================================
@@ -109,7 +138,7 @@ test.describe('Adaptive Password Opt-In', () => {
 // =============================================================================
 
 test.describe('Typing Pattern Capture', () => {
-    test('captures typing patterns on login', async ({ page }) => {
+    test('captures typing patterns on login without sending the password', async ({ page }) => {
         // First enable adaptive passwords
         await loginUser(page);
         await navigateToAdaptiveSettings(page);
@@ -120,7 +149,10 @@ test.describe('Typing Pattern Capture', () => {
         // Logout
         await page.click('[data-testid="logout-button"]');
 
-        // Login again - pattern should be captured
+        // Login again - pattern should be captured. Guard the wire: under ZK v2
+        // the record-session call must carry only a fingerprint, never the password.
+        const guard = attachNoPlaintextGuard(page, TEST_USER.password);
+
         await page.goto(`${BASE_URL}/login`);
         await page.fill('[data-testid="email-input"]', TEST_USER.email);
 
@@ -133,8 +165,8 @@ test.describe('Typing Pattern Capture', () => {
         await page.click('[data-testid="login-button"]');
         await page.waitForURL('**/dashboard**');
 
-        // Check typing session was recorded (via API response or notification)
-        // Note: Actual verification would require checking API or database
+        // No adaptive request may have carried the raw password.
+        guard.assertClean();
     });
 
     test('shows capture indicator when enabled', async ({ page }) => {
@@ -161,49 +193,37 @@ test.describe('Typing Pattern Capture', () => {
 // =============================================================================
 
 test.describe('Adaptation Suggestions', () => {
-    test('shows suggestion modal when available', async ({ page }) => {
-        // Mock API to return a suggestion
-        await page.route(`${API_URL}/security/adaptive/suggest/`, async (route) => {
+    // Zero-knowledge v2: the client GETs the learned preference model and
+    // generates + ranks the suggestion locally (it never POSTs the password to
+    // /suggest/, which is now deprecated/410). These tests mock the model pull.
+    const PREFERENCE_MODEL = {
+        model_version: 5,
+        substitution_weights: { e: { '3': 0.9 }, o: { '0': 0.8 }, a: { '@': 0.8 } },
+        memorability_params: {},
+    };
+
+    async function routePreferenceModel(page: Page) {
+        await page.route(`${API_URL}/security/adaptive/preference-model/`, async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
-                body: JSON.stringify({
-                    has_suggestion: true,
-                    suggestion: {
-                        original_preview: 'te***23',
-                        adapted_preview: 't3***23',
-                        substitutions: [{ position: 1, from: 'e', to: '3' }],
-                        confidence_score: 0.85,
-                        memorability_improvement: 0.15,
-                    },
-                }),
+                body: JSON.stringify(PREFERENCE_MODEL),
             });
         });
+    }
+
+    test('shows suggestion modal when available', async ({ page }) => {
+        await routePreferenceModel(page);
 
         await loginUser(page);
-
-        // Trigger suggestion check
         await page.goto(`${BASE_URL}/dashboard`);
 
-        // Wait for suggestion modal
         const modal = page.locator('[data-testid="adaptation-suggestion-modal"]');
         await expect(modal).toBeVisible({ timeout: 5000 });
     });
 
-    test('displays memorability improvement', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/suggest/`, async (route) => {
-            await route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify({
-                    has_suggestion: true,
-                    suggestion: {
-                        memorability_improvement: 0.15,
-                        confidence_score: 0.85,
-                    },
-                }),
-            });
-        });
+    test('displays a memorability improvement', async ({ page }) => {
+        await routePreferenceModel(page);
 
         await loginUser(page);
         await page.goto(`${BASE_URL}/dashboard`);
@@ -211,30 +231,18 @@ test.describe('Adaptation Suggestions', () => {
         const modal = page.locator('[data-testid="adaptation-suggestion-modal"]');
         await modal.waitFor({ state: 'visible', timeout: 5000 });
 
-        // Check memorability improvement is displayed
-        await expect(page.locator('text=+15%')).toBeVisible();
+        // The improvement is now computed client-side; assert a percentage shows.
+        await expect(page.getByText(/\+\d+% easier/i)).toBeVisible();
     });
 
-    test('can accept suggestion', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/suggest/`, async (route) => {
-            await route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify({
-                    has_suggestion: true,
-                    suggestion: {
-                        adaptation_id: 'test-uuid',
-                        memorability_improvement: 0.15,
-                    },
-                }),
-            });
-        });
-
+    test('can accept suggestion without sending the password', async ({ page }) => {
+        const guard = attachNoPlaintextGuard(page, TEST_USER.password);
+        await routePreferenceModel(page);
         await page.route(`${API_URL}/security/adaptive/apply/`, async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
-                body: JSON.stringify({ success: true }),
+                body: JSON.stringify({ schema_version: 2, adaptation_id: 'test-uuid', generation: 1 }),
             });
         });
 
@@ -246,21 +254,13 @@ test.describe('Adaptation Suggestions', () => {
 
         await page.click('[data-testid="accept-suggestion-button"]');
 
-        // Success message should appear
+        // Success message should appear, and apply must not have leaked plaintext.
         await expect(page.locator('text=Password updated')).toBeVisible();
+        guard.assertClean();
     });
 
     test('can reject suggestion', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/suggest/`, async (route) => {
-            await route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify({
-                    has_suggestion: true,
-                    suggestion: { adaptation_id: 'test-uuid' },
-                }),
-            });
-        });
+        await routePreferenceModel(page);
 
         await loginUser(page);
         await page.goto(`${BASE_URL}/dashboard`);
@@ -450,13 +450,15 @@ test.describe('Adaptation Feedback', () => {
 
 test.describe('Accessibility', () => {
     test('suggestion modal is accessible', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/suggest/`, async (route) => {
+        // v2: suggestion is generated client-side from the preference model.
+        await page.route(`${API_URL}/security/adaptive/preference-model/`, async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
                 body: JSON.stringify({
-                    has_suggestion: true,
-                    suggestion: { adaptation_id: 'test' },
+                    model_version: 5,
+                    substitution_weights: { e: { '3': 0.9 }, o: { '0': 0.8 } },
+                    memorability_params: {},
                 }),
             });
         });

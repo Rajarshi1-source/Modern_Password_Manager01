@@ -1723,10 +1723,10 @@ ADAPTIVE_PASSWORD = {
 # When True, the adaptive endpoints speak the v2 (zero-knowledge) wire
 # contract: they accept a client-computed keyed *fingerprint* + coarse features
 # and REJECT any raw password material (see
-# docs/adaptive-password-zk-remediation-plan.md). When False (default), the
-# legacy v1 behaviour is preserved so the cutover can be rolled out — and rolled
-# back — cleanly. PR-4 flips this on once the frontend sends v2 payloads.
-ADAPTIVE_ZK_V2 = os.environ.get('ADAPTIVE_ZK_V2', 'False').lower() == 'true'
+# docs/adaptive-password-zk-remediation-plan.md). Default ON as of PR-4 (the
+# frontend now sends v2 payloads); set ADAPTIVE_ZK_V2=false to roll back to the
+# legacy v1 behaviour cleanly.
+ADAPTIVE_ZK_V2 = os.environ.get('ADAPTIVE_ZK_V2', 'True').lower() == 'true'
 
 # ==============================================================================
 # QUANTUM ENTANGLEMENT-INSPIRED KEY DISTRIBUTION CONFIGURATION
