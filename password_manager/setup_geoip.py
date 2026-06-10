@@ -88,6 +88,7 @@ def download_with_license_key():
         
         try:
             # Download the tar.gz file
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- url is a hardcoded HTTPS MaxMind template formatted with a license key, not user input; setup-only script
             urllib.request.urlretrieve(url, tar_path)  # nosec B310 — URL is an HTTPS MaxMind endpoint constructed from a license key, not user-supplied
             print(f"✓ Downloaded {tar_filename}")
             

@@ -3,7 +3,6 @@ import base64
 import secrets
 import logging
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.models import User
 from django.contrib.auth import login
 from django.utils import timezone
@@ -500,7 +499,6 @@ def list_passkeys(request):
             'error': 'Failed to retrieve passkeys'
         }, status=500)
 
-@csrf_exempt
 @login_required
 def delete_passkey(request, passkey_id):
     """Delete a passkey for the logged-in user"""
@@ -552,7 +550,6 @@ def get_passkey_status(request):
         'latest_device': latest_passkey.device_type if latest_passkey else None
     })
 
-@csrf_exempt
 @login_required
 def rename_passkey(request, passkey_id):
     """Rename a passkey (update device_type field)"""

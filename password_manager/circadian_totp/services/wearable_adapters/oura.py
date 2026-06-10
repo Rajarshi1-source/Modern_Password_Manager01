@@ -68,7 +68,7 @@ class OuraAdapter(BaseAdapter):
             timeout=15,
         )
         if resp.status_code >= 400:
-            logger.warning("Oura token exchange failed: %s", resp.text)
+            logger.warning("Oura OAuth exchange failed (status %s)", resp.status_code)
             raise ValueError("Oura token exchange failed")
         payload = resp.json()
         expires_at = djtz.now() + timedelta(seconds=int(payload.get("expires_in", 0)))

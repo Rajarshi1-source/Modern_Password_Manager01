@@ -410,7 +410,7 @@ def enroll_device(
         access = str(refresh.access_token)
         refresh_str = str(refresh)
     except Exception as exc:  # pragma: no cover - depends on auth app config
-        logger.warning('simplejwt unavailable; returning opaque device token: %s', exc)
+        logger.warning('simplejwt unavailable; using opaque fallback (%s)', exc)
         access = secrets.token_urlsafe(32)
         refresh_str = ''
 

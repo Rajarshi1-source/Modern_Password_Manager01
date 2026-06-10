@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BleManager } from 'react-native-ble-plx';
 import Geolocation from '@react-native-community/geolocation';
 
-const API_BASE = 'http://your-api-url/api/mesh';
+const API_BASE = 'https://your-api-url/api/mesh';
 
 // BLE Service UUID for mesh protocol
 const MESH_SERVICE_UUID = '0000dead-0000-1000-8000-00805f9b34fb';

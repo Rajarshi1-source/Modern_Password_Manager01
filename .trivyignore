@@ -104,15 +104,19 @@ CVE-2026-8376 exp:2026-08-02
 # Bundled-library false positives (third-party docs / fixtures)
 # =============================================================================
 
-# autobahn.wamp.cryptosign:165 — documentation-purpose Ed25519 key
-# The autobahn library bundles an example Ed25519 keypair as a docstring
-# fixture demonstrating WAMP's cryptosign auth method. We do not use WAMP
-# (Channels uses ASGI dispatch directly), so the entire ``autobahn/wamp``
-# package is dead code. The Dockerfile now deletes it during build via
-# ``find /opt/venv -type d -path "*/autobahn/wamp" -prune -exec rm -rf``.
-# Keeping this entry as a belt-and-suspenders against forward layers that
-# might re-include autobahn before the strip step runs.
-autobahn-wamp-example-key
+# autobahn.wamp.cryptosign:165 — documentation-purpose Ed25519 key (#1559/#1560)
+# The autobahn library bundles an example Ed25519 keypair as a docstring fixture
+# demonstrating WAMP's cryptosign auth method. We do not use WAMP (Channels uses
+# ASGI dispatch directly), so the entire ``autobahn/wamp`` package is dead code
+# and ``docker/backend/Dockerfile`` deletes it (with a fail-build guard) so the
+# shipped image is clean.
+#
+# NOTE: the previous ``autobahn-wamp-example-key`` line that sat here was a no-op
+# — Trivy's secret rule id is ``private-key``, not that custom string, so it never
+# suppressed anything. The correct, path-scoped suppression now lives in
+# ``trivy-secret.yaml`` (auto-loaded secret-scan config), which excludes vendored
+# third-party keys under ``site-packages`` from the secret scanner without hiding
+# real first-party keys. No entry is needed in this file for the autobahn key.
 
 # =============================================================================
 # Re-evaluation policy

@@ -71,7 +71,7 @@ class GoogleFitAdapter(BaseAdapter):
             timeout=15,
         )
         if resp.status_code >= 400:
-            logger.warning("Google Fit token exchange failed: %s", resp.text)
+            logger.warning("Google Fit OAuth exchange failed (status %s)", resp.status_code)
             raise ValueError("Google Fit token exchange failed")
         payload = resp.json()
         expires_at = djtz.now() + timedelta(seconds=int(payload.get("expires_in", 0)))
