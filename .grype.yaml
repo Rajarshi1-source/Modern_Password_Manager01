@@ -18,15 +18,22 @@ ignore:
   - vulnerability: GHSA-wj6h-64fc-37mp
   - vulnerability: CVE-2024-23342
 
-  # scrapy — FilesPipeline/ImagesPipeline memory-exhaustion DoS
-  # (GHSA-h7wm-ph43-c39p / CVE-2017-14158). Per OSV every release 0.7…2.15.2 is
-  # affected with NO fixed version, and Grype empirically flags both our pins
-  # (2.14.2 and ml_dark_web's 2.15.0) — a bump cannot clear it. The vulnerable
-  # path is the media (Files/Images) pipeline; this codebase uses Scrapy ONLY for
-  # the ml_dark_web spiders (scrapy.Request/Spider, optional `try: import scrapy`)
-  # and configures NO media pipeline anywhere (no FilesPipeline/ImagesPipeline/
-  # MediaPipeline), so the DoS path is not reachable. Re-evaluate if a fixed
-  # Scrapy ships or if a media pipeline is ever added.
+  # scrapy — memory-exhaustion DoS in the media pipeline / S3FilesStore
+  # (GHSA-h7wm-ph43-c39p / CVE-2017-14158). Upstream treats this as a
+  # design-level limitation mitigated through configuration (DOWNLOAD_MAXSIZE,
+  # CONCURRENT_REQUESTS) rather than a code patch tied to a specific release
+  # (see scrapy/scrapy#482), so secret/SCA scanners flag it regardless of the
+  # installed version and a version bump does not clear it.
+  #
+  # Reachability in THIS repo: `scrapy` is imported/used only by the
+  # `ml_dark_web` spiders (scrapy.Request / scrapy.Spider, behind an optional
+  # `try: import scrapy` guard). Tracked code configures NO media pipeline and
+  # no media-storage settings — there is no FilesPipeline/ImagesPipeline/
+  # MediaPipeline and no ITEM_PIPELINES/FILES_STORE/IMAGES_STORE — so the
+  # vulnerable download-buffering path is not exercised.
+  #
+  # Re-evaluate this suppression if a media pipeline or media-storage setting is
+  # introduced, or if upstream/OSV publishes a definitive fixed version.
   - vulnerability: GHSA-h7wm-ph43-c39p
     package:
       name: scrapy

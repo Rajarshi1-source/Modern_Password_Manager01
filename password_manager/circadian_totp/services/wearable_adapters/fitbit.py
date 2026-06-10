@@ -118,7 +118,7 @@ class FitbitAdapter(BaseAdapter):
             timeout=15,
         )
         if resp.status_code >= 400:
-            logger.warning("Fitbit refresh failed: %s", resp.text)
+            logger.warning("Fitbit refresh failed (status %s)", resp.status_code)
             raise ValueError("Fitbit token refresh failed")
         payload = resp.json()
         expires_at = djtz.now() + timedelta(seconds=int(payload.get("expires_in", 0)))
@@ -152,7 +152,7 @@ class FitbitAdapter(BaseAdapter):
         if resp.status_code == 401:
             raise ValueError("Fitbit access token expired")
         if resp.status_code >= 400:
-            logger.warning("Fitbit sleep fetch failed: %s", resp.text)
+            logger.warning("Fitbit sleep fetch failed (status %s)", resp.status_code)
             raise ValueError("Fitbit sleep fetch failed")
         data = resp.json().get("sleep", []) or []
         out: List[Dict] = []
