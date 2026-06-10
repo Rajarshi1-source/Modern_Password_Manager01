@@ -73,8 +73,9 @@ RUN addgroup -g 1000 -S nginx-app && \
 # Remove default nginx config
 RUN rm -rf /etc/nginx/conf.d/default.conf /usr/share/nginx/html/*
 
-# Copy custom nginx configuration
+# Copy custom nginx configuration (+ shared security-headers snippet it includes)
 COPY docker/frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/frontend/security-headers.conf /etc/nginx/security-headers.conf
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html

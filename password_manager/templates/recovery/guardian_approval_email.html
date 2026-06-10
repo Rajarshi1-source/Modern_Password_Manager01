@@ -78,6 +78,7 @@
         
         <p><strong>Important:</strong> Only approve if you've verified this request is legitimate and you've personally confirmed with {{ user_email }} that they initiated this recovery.</p>
         
+        {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- approval_url is server-built from settings.FRONTEND_URL + the approval token (notification_service.py), never user-controlled #}
         <a href="{{ approval_url }}" class="button">Review & Approve</a>
         
         <div class="warning">

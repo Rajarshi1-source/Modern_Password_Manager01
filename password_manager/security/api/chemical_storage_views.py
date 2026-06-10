@@ -742,7 +742,13 @@ def store_password_chemically(request):
     try:
         password = request.data.get('password')
         raw_etl = request.data.get('enable_time_lock', False)
-        enable_time_lock = bool(raw_etl) if not isinstance(raw_etl, str) else raw_etl.lower() not in ('false', '0', '')
+        # Parse the flag without ``bool()`` on tainted input: ``bool()`` of a
+        # float NaN/Inf (Semgrep nan-injection) is truthy, and ``bool("false")``
+        # would wrongly be True. Accept only explicit truthy tokens / a real bool.
+        if isinstance(raw_etl, str):
+            enable_time_lock = raw_etl.strip().lower() in ('true', '1', 'yes', 'on')
+        else:
+            enable_time_lock = raw_etl is True
         time_lock_hours = int(request.data.get('time_lock_hours', 72))
         order_synthesis = request.data.get('order_synthesis', False)
         

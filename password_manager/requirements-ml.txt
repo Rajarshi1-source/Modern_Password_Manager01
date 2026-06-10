@@ -30,7 +30,7 @@ qiskit>=1.0.0
 qiskit-ibm-runtime>=0.20.0
 
 # DNA file parsing (23andMe, AncestryDNA, VCF formats)
-biopython>=1.85
+biopython>=1.87
 
 # Reinforcement Learning
 gymnasium>=0.29.0

@@ -634,6 +634,7 @@ class PasswordResetTest(TestCase):
         token = default_token_generator.make_token(self.user)
         
         # Modify user to invalidate token
+        # nosemgrep: python.django.security.audit.unvalidated-password.unvalidated-password -- test-only: asserts that changing the password invalidates a previously issued reset token
         self.user.set_password('newpassword')
         self.user.save()
         

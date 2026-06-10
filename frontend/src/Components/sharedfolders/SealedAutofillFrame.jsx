@@ -168,6 +168,7 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
   }, [secondsLeft, onDismiss]);
 
   const doCopy = () => {
+    // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration -- target is a sandbox="allow-scripts" opaque-origin iframe (no allow-same-origin), so a concrete targetOrigin is impossible; payload is a nonce-gated command and carries no secret (the password lives inside the iframe)
     iframeRef.current?.contentWindow?.postMessage({ type: 'copy', nonce }, '*');
   };
   const openSite = () => {
@@ -175,6 +176,7 @@ export default function SealedAutofillFrame({ domain, password, tokenMetadata, o
     window.open(url, '_blank', 'noopener,noreferrer');
   };
   const dismiss = () => {
+    // nosemgrep: javascript.browser.security.wildcard-postmessage-configuration.wildcard-postmessage-configuration -- target is a sandbox="allow-scripts" opaque-origin iframe (no allow-same-origin), so a concrete targetOrigin is impossible; payload is a nonce-gated command and carries no secret (the password lives inside the iframe)
     iframeRef.current?.contentWindow?.postMessage({ type: 'destroy', nonce }, '*');
     onDismiss?.();
   };

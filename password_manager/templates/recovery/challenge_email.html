@@ -71,6 +71,7 @@
         
         <p>Click the button below to submit your answer:</p>
         
+        {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- challenge_url is server-built from settings.FRONTEND_URL + the challenge id (notification_service.py), never user-controlled #}
         <a href="{{ challenge_url }}" class="button">Answer Challenge</a>
         
         <p class="expires">⏰ This challenge expires at: {{ expires_at|date:"F j, Y, g:i a" }}</p>

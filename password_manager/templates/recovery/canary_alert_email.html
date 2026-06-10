@@ -84,6 +84,7 @@
         </div>
         
         <div style="text-align: center;">
+            {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href -- cancel_url is server-built from settings.FRONTEND_URL + the attempt id (notification_service.py), never user-controlled #}
             <a href="{{ cancel_url }}" class="button-danger">🚫 CANCEL RECOVERY NOW</a>
         </div>
         

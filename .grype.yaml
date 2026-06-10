@@ -17,3 +17,19 @@ ignore:
   # if a fixed release ships or if `ecdsa` becomes a direct signing dependency.
   - vulnerability: GHSA-wj6h-64fc-37mp
   - vulnerability: CVE-2024-23342
+
+  # scrapy — FilesPipeline/ImagesPipeline memory-exhaustion DoS
+  # (GHSA-h7wm-ph43-c39p / CVE-2017-14158). Per OSV every release 0.7…2.15.2 is
+  # affected with NO fixed version, and Grype empirically flags both our pins
+  # (2.14.2 and ml_dark_web's 2.15.0) — a bump cannot clear it. The vulnerable
+  # path is the media (Files/Images) pipeline; this codebase uses Scrapy ONLY for
+  # the ml_dark_web spiders (scrapy.Request/Spider, optional `try: import scrapy`)
+  # and configures NO media pipeline anywhere (no FilesPipeline/ImagesPipeline/
+  # MediaPipeline), so the DoS path is not reachable. Re-evaluate if a fixed
+  # Scrapy ships or if a media pipeline is ever added.
+  - vulnerability: GHSA-h7wm-ph43-c39p
+    package:
+      name: scrapy
+  - vulnerability: CVE-2017-14158
+    package:
+      name: scrapy
