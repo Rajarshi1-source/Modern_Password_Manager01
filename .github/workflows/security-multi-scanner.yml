@@ -43,10 +43,32 @@ jobs:
         with:
           fetch-depth: 0  # Full history for gitleaks
       
-      # FIX: Use docker run to generate SARIF report directly
+      # Use docker run to generate the SARIF report directly.
+      # Pull from GHCR first: it is co-located with the Actions runner network
+      # and avoids Docker Hub anonymous-pull rate limits / timeouts (the earlier
+      # job failed with a Docker Hub "context deadline exceeded"). Fall back to
+      # Docker Hub, each registry with a short retry to ride out transient
+      # hiccups. The scan itself still fails the job on real findings
+      # (--exit-code=1); only registry/network errors are retried.
       - name: Run Gitleaks
         run: |
-          docker run --rm -v ${PWD}:/path zricethezav/gitleaks:v8.30.1 detect \
+          GHCR_IMAGE="ghcr.io/gitleaks/gitleaks:v8.30.1"
+          HUB_IMAGE="zricethezav/gitleaks:v8.30.1"
+          pull() {
+            for attempt in 1 2 3; do
+              docker pull "$1" && return 0
+              echo "::warning::docker pull $1 failed (attempt $attempt/3); retrying in 15s"
+              sleep 15
+            done
+            return 1
+          }
+          IMAGE="$GHCR_IMAGE"
+          pull "$IMAGE" || {
+            echo "::warning::GHCR pull failed; falling back to Docker Hub"
+            IMAGE="$HUB_IMAGE"
+            pull "$IMAGE" || { echo "::error::could not pull gitleaks image from GHCR or Docker Hub"; exit 1; }
+          }
+          docker run --rm -v "${PWD}:/path" "$IMAGE" detect \
             --source="/path" \
             --report-format=sarif \
             --report-path=/path/gitleaks-results.sarif \
@@ -55,7 +77,7 @@ jobs:
             --exit-code=1
       
       - name: Upload Gitleaks SARIF
-        if: always()
+        if: always() && hashFiles('gitleaks-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         with:
           sarif_file: gitleaks-results.sarif
