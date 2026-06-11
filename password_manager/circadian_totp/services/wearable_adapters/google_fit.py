@@ -109,6 +109,7 @@ class GoogleFitAdapter(BaseAdapter):
             url, headers={"Authorization": f"Bearer {access}"}, timeout=15
         )
         if resp.status_code >= 400:
+            logger.warning("Google Fit sleep fetch failed (status %s)", resp.status_code)
             raise ValueError("Google Fit sleep fetch failed")
         out: List[Dict] = []
         for session in resp.json().get("session", []) or []:
