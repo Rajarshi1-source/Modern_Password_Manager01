@@ -30,10 +30,13 @@ GFIT_SCOPES = (
 
 
 class GoogleFitAdapter(BaseAdapter):
+    """Adapter for the Google Fit API (OAuth2 token exchange + sleep sessions)."""
+
     provider_key = "google_fit"
     requires_oauth = True
 
     def _config(self) -> Tuple[str, str, str]:
+        """Return ``(client_id, client_secret, redirect_uri)``; raise if OAuth is unconfigured."""
         client_id = getattr(settings, "GOOGLE_FIT_CLIENT_ID", "")
         client_secret = getattr(settings, "GOOGLE_FIT_CLIENT_SECRET", "")
         redirect_uri = getattr(settings, "GOOGLE_FIT_REDIRECT_URI", "")
@@ -42,6 +45,7 @@ class GoogleFitAdapter(BaseAdapter):
         return client_id, client_secret, redirect_uri
 
     def authorize_url(self, user):
+        """Build the Google Fit OAuth authorize URL; return ``(url, state)``."""
         client_id, _, redirect_uri = self._config()
         state = self.generate_state()
         params = {
@@ -56,6 +60,7 @@ class GoogleFitAdapter(BaseAdapter):
         return f"{GFIT_AUTH_URL}?{urlencode(params)}", state
 
     def exchange_code(self, user, code: str, state: str) -> Dict:
+        """Exchange an OAuth ``code`` for tokens; return the normalized token dict."""
         import requests
 
         client_id, client_secret, redirect_uri = self._config()
@@ -84,6 +89,7 @@ class GoogleFitAdapter(BaseAdapter):
         }
 
     def fetch_sleep(self, link, start: datetime, end: datetime) -> List[Dict]:
+        """Fetch Google Fit sleep sessions in ``[start, end]`` as normalized dicts."""
         import requests
 
         from ...crypto_utils import decrypt_string

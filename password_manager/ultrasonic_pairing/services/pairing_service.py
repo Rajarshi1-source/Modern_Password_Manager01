@@ -54,16 +54,19 @@ class PairingError(Exception):
         message: str = '',
         http_status_code: int = http_status.HTTP_400_BAD_REQUEST,
     ) -> None:
+        """Build a PairingError with a stable ``code`` and an HTTP status."""
         super().__init__(message or code)
         self.code = code
         self.http_status = http_status_code
 
 
 def b64(data: bytes) -> str:
+    """Return the base64 (ASCII) encoding of ``data``."""
     return base64.b64encode(data).decode('ascii')
 
 
 def _b64decode(data: Optional[str], *, field: str) -> bytes:
+    """Strictly base64-decode ``data``, raising ``PairingError`` if missing/invalid."""
     if not data:
         raise PairingError('missing_' + field, f'missing {field}')
     try:
@@ -73,11 +76,13 @@ def _b64decode(data: Optional[str], *, field: str) -> bytes:
 
 
 def _ttl_seconds() -> int:
+    """Return the configured pairing-session TTL in seconds (default 120)."""
     return int(getattr(settings, 'PAIRING_SESSION_TTL_SECONDS', 120))
 
 
 def _log(session: PairingSession, kind: str, *, actor=None, ip=None,
          user_agent: str = '', detail: str = '') -> None:
+    """Append an audit ``PairingEvent`` for ``session``; never raises."""
     try:
         PairingEvent.objects.create(
             session=session,
@@ -93,6 +98,8 @@ def _log(session: PairingSession, kind: str, *, actor=None, ip=None,
 
 @dataclass
 class InitiateResult:
+    """Result of :func:`initiate`: the new session and its nonce (base64)."""
+
     session: PairingSession
     nonce_b64: str
 
@@ -105,6 +112,7 @@ def initiate(
     ip=None,
     user_agent: str = '',
 ) -> Tuple[PairingSession, str]:
+    """Start a pairing session for ``user``; return ``(session, nonce_b64)``."""
     if purpose not in PairingPurpose.values:
         raise PairingError('invalid_purpose', f'unknown purpose: {purpose}')
 
@@ -155,6 +163,7 @@ def claim(
     ip=None,
     user_agent: str = '',
 ) -> PairingSession:
+    """Claim an initiated session by nonce as the responder; return the session."""
     nonce = _b64decode(nonce_b64, field='nonce')
     if len(nonce) != NONCE_LENGTH:
         raise PairingError('invalid_nonce', 'nonce must be 6 bytes')
@@ -228,6 +237,7 @@ def confirm(
     ip=None,
     user_agent: str = '',
 ) -> PairingSession:
+    """Confirm the short-authentication-string (SAS) match; return the session."""
     sas = _b64decode(sas_hmac_b64, field='sas_hmac')
     if len(sas) != EXPECTED_SAS_LENGTH:
         raise PairingError('invalid_sas', 'sas_hmac must be 32 bytes')
@@ -319,6 +329,7 @@ def attach_share_payload(
     ip=None,
     user_agent: str = '',
 ) -> None:
+    """Attach the encrypted share payload (ciphertext + nonce) to the session."""
     ct = _b64decode(ciphertext_b64, field='ciphertext')
     nonce = _b64decode(nonce_b64, field='nonce')
     if not (8 <= len(nonce) <= 24):
@@ -352,6 +363,7 @@ def fetch_share_payload(
     ip=None,
     user_agent: str = '',
 ) -> dict:
+    """Fetch and mark-delivered the encrypted share payload for the responder."""
     session = _load_for_terminal(
         session_id=session_id, required_role='responder', user=user,
     )
@@ -390,6 +402,7 @@ def enroll_device(
     ip=None,
     user_agent: str = '',
 ) -> dict:
+    """Mint device credentials for a completed device-enrollment pairing session."""
     session = _load_for_terminal(
         session_id=session_id, required_role='responder', user=user,
     )
