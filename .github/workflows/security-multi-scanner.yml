@@ -76,8 +76,22 @@ jobs:
             --redact \
             --exit-code=1
       
+      # hashFiles() returns a hash for any existing file, even an empty one, so
+      # use an explicit ``-s`` test to require the SARIF exists AND is non-empty
+      # (mirrors the Trivy "Ensure ... SARIF" guard below).
+      - name: Check for Gitleaks SARIF
+        id: gitleaks_sarif
+        if: always()
+        run: |
+          if [ -s gitleaks-results.sarif ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::gitleaks-results.sarif not produced or empty — skipping SARIF upload."
+          fi
+
       - name: Upload Gitleaks SARIF
-        if: always() && hashFiles('gitleaks-results.sarif') != ''
+        if: always() && steps.gitleaks_sarif.outputs.exists == 'true'
         uses: github/codeql-action/upload-sarif@9e0d7b8d25671d64c341c19c0152d693099fb5ba  # v4.35.5
         with:
           sarif_file: gitleaks-results.sarif

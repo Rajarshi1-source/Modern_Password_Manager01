@@ -37,7 +37,14 @@ PYSEC-2024-277 exp:2026-08-01
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the
 # model as already-validated tensors via ml_dark_web/ml_services.py,
-# never as torch.jit scripts or pt2 binaries. Eleven IDs total.
+# never as torch.jit scripts or pt2 binaries. Twelve IDs total.
+#
+# CVE-2025-3000 (GHSA-rrmf-rvhw-rf47) is the torch.jit.script memory-corruption
+# disclosed 2026-06; it has NO upstream fix (fix_versions: []) and matches the
+# assessment above exactly — the codebase imports torch.nn for inference and
+# never calls torch.jit.script/.trace on any input (grep: no jit.script call
+# sites). Re-evaluate when PyTorch ships a fixed release.
+CVE-2025-3000 exp:2026-08-10
 PYSEC-2025-189 exp:2026-08-10
 PYSEC-2025-190 exp:2026-08-10
 PYSEC-2025-191 exp:2026-08-10

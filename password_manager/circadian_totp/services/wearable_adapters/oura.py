@@ -103,6 +103,7 @@ class OuraAdapter(BaseAdapter):
             url, headers={"Authorization": f"Bearer {access}"}, timeout=15
         )
         if resp.status_code >= 400:
+            logger.warning("Oura sleep fetch failed (status %s)", resp.status_code)
             raise ValueError("Oura sleep fetch failed")
         out: List[Dict] = []
         for e in resp.json().get("data", []) or []:
