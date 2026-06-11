@@ -28,12 +28,15 @@ FITBIT_SCOPES = "sleep profile"
 
 
 class FitbitAdapter(BaseAdapter):
+    """Adapter for the Fitbit Web API (OAuth2 token exchange + sleep pull)."""
+
     provider_key = "fitbit"
     requires_oauth = True
 
     # ---- Helpers ----------------------------------------------------------
 
     def _config(self) -> Tuple[str, str, str]:
+        """Return ``(client_id, client_secret, redirect_uri)``; raise if OAuth is unconfigured."""
         client_id = getattr(settings, "FITBIT_CLIENT_ID", "")
         client_secret = getattr(settings, "FITBIT_CLIENT_SECRET", "")
         redirect_uri = getattr(settings, "FITBIT_REDIRECT_URI", "")
@@ -45,6 +48,7 @@ class FitbitAdapter(BaseAdapter):
         return client_id, client_secret, redirect_uri
 
     def _basic_auth_header(self) -> str:
+        """Return the HTTP Basic ``Authorization`` header value for the token endpoint."""
         client_id, client_secret, _ = self._config()
         token = base64.b64encode(
             f"{client_id}:{client_secret}".encode("utf-8")
@@ -54,6 +58,7 @@ class FitbitAdapter(BaseAdapter):
     # ---- OAuth ------------------------------------------------------------
 
     def authorize_url(self, user):
+        """Build the Fitbit OAuth authorize URL; return ``(url, state)``."""
         client_id, _, redirect_uri = self._config()
         state = self.generate_state()
         params = {
@@ -67,6 +72,7 @@ class FitbitAdapter(BaseAdapter):
         return f"{FITBIT_AUTH_URL}?{urlencode(params)}", state
 
     def exchange_code(self, user, code: str, state: str) -> Dict:
+        """Exchange an OAuth ``code`` for tokens; return the normalized token dict."""
         import requests  # deferred import so the module remains import-safe
 
         _, _, redirect_uri = self._config()
@@ -98,6 +104,7 @@ class FitbitAdapter(BaseAdapter):
         }
 
     def refresh(self, link) -> Dict:
+        """Refresh the stored OAuth tokens for ``link``; return the normalized token dict."""
         import requests
 
         from ...crypto_utils import decrypt_string
@@ -133,6 +140,7 @@ class FitbitAdapter(BaseAdapter):
     # ---- Data pull --------------------------------------------------------
 
     def fetch_sleep(self, link, start: datetime, end: datetime) -> List[Dict]:
+        """Fetch Fitbit sleep records in ``[start, end]`` as normalized dicts."""
         import requests
 
         from ...crypto_utils import decrypt_string
