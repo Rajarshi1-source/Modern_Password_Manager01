@@ -228,13 +228,40 @@ jobs:
           print(f"::notice::pip-audit suppressions OK ({len(ignores)} entries, none expired)")
           PY
 
+      # pip-audit queries the live PyPI/OSV API once per dependency, so a
+      # transient upstream 5xx/timeout makes it raise ServiceError and exit
+      # non-zero (e.g. "503 Server Error: Backend is unhealthy" from pypi.org).
+      # Retry those transient errors so an upstream hiccup doesn't fail the
+      # build — but still fail immediately on a real vulnerability finding,
+      # which produces a JSON report (not a ServiceError/HTTPError traceback).
       - name: Run pip-audit
         run: |
           cd password_manager
-          pip-audit -r requirements.txt --desc --format json \
-            ${{ steps.pip_audit_ignores.outputs.flags }} \
-            > pip-audit-report.json
-          cat pip-audit-report.json
+          FLAGS="${{ steps.pip_audit_ignores.outputs.flags }}"
+          attempts=4
+          for i in $(seq 1 "$attempts"); do
+            if pip-audit -r requirements.txt --desc --format json $FLAGS \
+                 > pip-audit-report.json 2> pip-audit-err.txt; then
+              cat pip-audit-report.json
+              echo "::notice::pip-audit completed cleanly (attempt $i/$attempts)."
+              exit 0
+            fi
+            rc=$?
+            if grep -qiE 'ServiceError|HTTPError|ConnectionError|ReadTimeout|Read timed out|Max retries|Temporary failure|NewConnectionError|raise_for_status' pip-audit-err.txt; then
+              echo "::warning::pip-audit hit a transient PyPI/network error (attempt $i/$attempts); retrying in 20s"
+              tail -n 8 pip-audit-err.txt || true
+              sleep 20
+              continue
+            fi
+            # Non-transient failure: a real vulnerability finding (or hard error).
+            echo "::error::pip-audit reported vulnerabilities or a non-transient error."
+            cat pip-audit-report.json 2>/dev/null || true
+            cat pip-audit-err.txt 2>/dev/null || true
+            exit "$rc"
+          done
+          echo "::error::pip-audit still failing after $attempts attempts due to transient PyPI/network errors."
+          cat pip-audit-err.txt 2>/dev/null || true
+          exit 1
       
       - name: Upload scan results
         if: always()
