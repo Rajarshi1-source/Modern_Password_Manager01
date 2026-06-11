@@ -65,7 +65,7 @@ factory-boy>=3.2.0
 # huggingface-hub>=0.15.0  # For model management
 
 django>=4.2.28 # not directly required, pinned by Snyk to avoid a vulnerability
-zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
+zipp>=3.23.1 # not directly required, pinned by Snyk to avoid a vulnerability
 cryptography>=46.0.7 # not directly required, pinned by Snyk to avoid a vulnerability
 setuptools>=78.1.1 # not directly required, pinned by Snyk to avoid a vulnerability
 
