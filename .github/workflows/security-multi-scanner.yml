@@ -39,7 +39,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           fetch-depth: 0  # Full history for gitleaks
       
@@ -112,7 +112,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       
       # FIX #2: Pinned to commit hash
       - name: Set up Python
@@ -293,7 +293,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       
       # =====================================================================
       # Scanner 1: Trivy (Filesystem Scan)
@@ -395,7 +395,7 @@ jobs:
     steps:
       # FIX #2: Pinned to commit hash
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
       
       # FIX #2: Pinned to commit hash
       - name: Download All Scan Results
