@@ -159,7 +159,7 @@ django-health-check>=3.18.0
 django-silk>=5.0.4
 
 # Security Auditing (Development/CI)
-safety>=2.3.0
+safety>=3.8.1
 pip-audit>=2.6.0
 
 # Testing (required in CI/CD)

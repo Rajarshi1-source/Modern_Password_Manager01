@@ -228,7 +228,7 @@ ruamel.yaml==0.18.16
 ruamel.yaml.clib==0.2.15
 s3transfer==0.16.1
 safetensors==0.7.0
-safety==3.7.0
+safety==3.8.1
 safety-schemas==0.0.16
 scikit-learn==1.7.2
 scipy==1.16.3
