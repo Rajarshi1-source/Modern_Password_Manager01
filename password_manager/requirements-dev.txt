@@ -9,7 +9,7 @@ factory-boy>=3.3.0
 
 # Security Audits
 pip-audit>=2.10.0
-safety>=3.7.0
+safety>=3.8.1
 
 # Profiling & Debugging
 django-silk>=5.4.3
