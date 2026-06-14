@@ -23,7 +23,7 @@ psycopg[binary]==3.2.4
 
 # Channels / WebSockets
 channels==4.2.2
-channels-redis==4.2.1
+channels-redis==4.3.0
 daphne==4.2.1
 
 # Cloud & Notifications
