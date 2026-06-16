@@ -29,8 +29,10 @@ requests-oauthlib==2.0.0
 mozilla-django-oidc>=4.0.0
 
 # Cryptography & Security
-# 48.0.1: GHSA-537c-gmf6-5ccf — wheels bundle OpenSSL; <48.0.1 is vulnerable
-# to the 2026-06-09 OpenSSL advisory. Capped <49 by pyOpenSSL 26.2.0.
+# Pin 48.0.1 to fix GHSA-537c-gmf6-5ccf (the PyPI wheels bundle OpenSSL; <48.0.1
+# ships the build hit by the 2026-06-09 advisory). Stay on 48.x, not 49.x:
+# pyOpenSSL 26.x requires cryptography<49. The exact pin below is what enforces
+# this — the pyOpenSSL>=26.0.0 floor does not cap cryptography on its own.
 cryptography==48.0.1
 argon2-cffi==21.3.0
 argon2-cffi-bindings==25.1.0
