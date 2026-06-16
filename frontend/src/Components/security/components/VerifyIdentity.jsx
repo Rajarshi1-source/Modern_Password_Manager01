@@ -1,7 +1,273 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import styled, { keyframes } from 'styled-components';
+import { FaExclamationTriangle, FaArrowLeft, FaPaperPlane, FaRedo, FaCheckCircle } from 'react-icons/fa';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
+
+// Animations
+const fadeIn = keyframes`
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+`;
+
+const spin = keyframes`
+  to { transform: rotate(360deg); }
+`;
+
+// Colors matching vault page
+const colors = {
+  primary: '#7B68EE',
+  primaryDark: '#6B58DE',
+  primaryLight: '#9B8BFF',
+  success: '#10b981',
+  successDark: '#059669',
+  warning: '#f59e0b',
+  danger: '#ef4444',
+  background: '#f8f9ff',
+  backgroundSecondary: '#ffffff',
+  cardBg: '#ffffff',
+  text: '#1a1a2e',
+  textSecondary: '#6b7280',
+  border: '#e8e4ff',
+  borderLight: '#d4ccff'
+};
+
+const Page = styled.div`
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 24px;
+  min-height: 100vh;
+  background: linear-gradient(180deg, ${colors.background} 0%, #f0f2ff 100%);
+`;
+
+const Card = styled.div`
+  width: 100%;
+  max-width: 480px;
+  background: linear-gradient(135deg, ${colors.cardBg} 0%, ${colors.background} 100%);
+  border-radius: 20px;
+  border: 1px solid ${colors.border};
+  box-shadow: 0 12px 40px rgba(123, 104, 238, 0.12);
+  padding: 32px;
+  animation: ${fadeIn} 0.4s ease-out;
+`;
+
+const Header = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+`;
+
+const HeaderIcon = styled.div`
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, ${colors.warning}25 0%, ${colors.warning}15 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+
+  svg {
+    font-size: 24px;
+    color: ${colors.warning};
+  }
+`;
+
+const Title = styled.h3`
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: ${colors.text};
+  line-height: 1.3;
+`;
+
+const InfoBanner = styled.div`
+  background: linear-gradient(135deg, ${colors.warning}12 0%, ${colors.warning}06 100%);
+  border: 1px solid ${colors.warning}30;
+  border-left: 4px solid ${colors.warning};
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 24px;
+`;
+
+const BannerText = styled.p`
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: ${colors.textSecondary};
+`;
+
+const BannerReason = styled.p`
+  margin: 6px 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: ${colors.text};
+`;
+
+const Intro = styled.p`
+  font-size: 14px;
+  color: ${colors.textSecondary};
+  line-height: 1.6;
+  text-align: center;
+  margin: 0 0 20px 0;
+`;
+
+const PrimaryButton = styled.button`
+  width: 100%;
+  padding: 16px;
+  background: linear-gradient(135deg, ${colors.primary} 0%, ${colors.primaryDark} 100%);
+  color: white;
+  border: none;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 14px ${colors.primary}40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+
+  &:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px ${colors.primary}50;
+  }
+
+  &:disabled {
+    background: ${colors.textSecondary};
+    cursor: not-allowed;
+    box-shadow: none;
+    opacity: 0.6;
+  }
+`;
+
+const VerifyButton = styled(PrimaryButton)`
+  background: linear-gradient(135deg, ${colors.success} 0%, ${colors.successDark} 100%);
+  box-shadow: 0 4px 14px ${colors.success}40;
+  margin-bottom: 16px;
+
+  &:hover:not(:disabled) {
+    box-shadow: 0 6px 20px ${colors.success}50;
+  }
+`;
+
+const FieldGroup = styled.div`
+  margin-bottom: 20px;
+`;
+
+const Label = styled.label`
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: ${colors.text};
+  margin-bottom: 10px;
+`;
+
+const CodeInput = styled.input`
+  width: 100%;
+  padding: 16px;
+  border-radius: 12px;
+  border: 2px solid ${colors.border};
+  background: ${colors.backgroundSecondary};
+  color: ${colors.text};
+  font-size: 22px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 8px;
+  box-sizing: border-box;
+  transition: all 0.25s ease;
+
+  &:focus {
+    outline: none;
+    border-color: ${colors.primary};
+    background: ${colors.background};
+    box-shadow: 0 0 0 4px ${colors.primary}15;
+  }
+
+  &::placeholder {
+    color: ${colors.textSecondary};
+    font-weight: 400;
+    font-size: 15px;
+    letter-spacing: normal;
+  }
+`;
+
+const Countdown = styled.p`
+  text-align: center;
+  font-size: 14px;
+  color: ${colors.textSecondary};
+  margin: 0;
+`;
+
+const LinkButton = styled.button`
+  background: none;
+  border: none;
+  color: ${colors.primary};
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.2s ease;
+
+  &:hover:not(:disabled) {
+    color: ${colors.primaryDark};
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+`;
+
+const CenterRow = styled.div`
+  text-align: center;
+`;
+
+const Footer = styled.div`
+  border-top: 1px solid ${colors.border};
+  margin-top: 24px;
+  padding-top: 20px;
+  text-align: center;
+`;
+
+const BackLink = styled.button`
+  background: none;
+  border: none;
+  color: ${colors.textSecondary};
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.2s ease;
+
+  &:hover {
+    color: ${colors.text};
+  }
+`;
+
+const LoadingContainer = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 64px 0;
+`;
+
+const Spinner = styled.div`
+  width: 48px;
+  height: 48px;
+  border: 4px solid ${colors.border};
+  border-top-color: ${colors.primary};
+  border-radius: 50%;
+  animation: ${spin} 0.8s linear infinite;
+`;
 
 const VerifyIdentity = () => {
   const { socialAccountId } = useParams();
@@ -50,7 +316,7 @@ const VerifyIdentity = () => {
           'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
         }
       });
-      
+
       toast.success('Verification code sent to your email and phone');
       setCodeRequested(true);
       setCountdown(60); // 60-second countdown before requesting a new code
@@ -66,7 +332,7 @@ const VerifyIdentity = () => {
   const handleVerify = async (e) => {
     e.preventDefault();
     setLoading(true);
-    
+
     try {
       const response = await axios.post(
         `/api/social-accounts/${socialAccountId}/unlock_account/`,
@@ -77,7 +343,7 @@ const VerifyIdentity = () => {
           }
         }
       );
-      
+
       if (response.data.account_unlocked) {
         toast.success('Account successfully unlocked');
         navigate('/security/account-protection');
@@ -94,116 +360,86 @@ const VerifyIdentity = () => {
 
   if (!accountDetails) {
     return (
-      <div className="flex justify-center items-center py-8">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-      </div>
+      <Page>
+        <LoadingContainer>
+          <Spinner />
+        </LoadingContainer>
+      </Page>
     );
   }
 
   return (
-    <div className="max-w-md mx-auto mt-8 p-6 bg-white rounded-lg shadow-lg">
-      <div className="mb-6">
-        <div className="flex items-center mb-4">
-          <div className="bg-orange-100 p-2 rounded-full mr-3">
-            <svg className="w-6 h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-            </svg>
-          </div>
-          <h3 className="text-xl font-semibold text-gray-900">Account Locked - Verify Your Identity</h3>
-        </div>
-        
-        <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
-          <div className="flex">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <p className="text-sm text-blue-700">
-                Your {accountDetails.platform} account has been locked due to suspicious activity:
-              </p>
-              <p className="text-sm font-medium text-blue-800 mt-1">
-                {accountDetails.lock_reason || 'Unauthorized access attempt'}
-              </p>
-              <p className="text-sm text-blue-700 mt-1">
-                Please verify your identity to unlock your account.
-              </p>
-            </div>
-          </div>
-        </div>
-        
+    <Page>
+      <Card>
+        <Header>
+          <HeaderIcon>
+            <FaExclamationTriangle />
+          </HeaderIcon>
+          <Title>Account Locked &mdash; Verify Your Identity</Title>
+        </Header>
+
+        <InfoBanner>
+          <BannerText>
+            Your {accountDetails.platform} account has been locked due to suspicious activity:
+          </BannerText>
+          <BannerReason>
+            {accountDetails.lock_reason || 'Unauthorized access attempt'}
+          </BannerReason>
+          <BannerText>
+            Please verify your identity to unlock your account.
+          </BannerText>
+        </InfoBanner>
+
         {!codeRequested ? (
-          <div className="text-center mb-6">
-            <p className="text-gray-600 mb-4">
-              We'll send a verification code to your registered email and phone.
-            </p>
-            <button 
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
-              onClick={handleRequestCode}
-              disabled={loading}
-            >
+          <>
+            <Intro>
+              We&apos;ll send a verification code to your registered email and phone.
+            </Intro>
+            <PrimaryButton onClick={handleRequestCode} disabled={loading}>
+              <FaPaperPlane />
               {loading ? 'Sending...' : 'Send Verification Code'}
-            </button>
-          </div>
+            </PrimaryButton>
+          </>
         ) : (
           <form onSubmit={handleVerify}>
-            <div className="mb-4">
-              <label htmlFor="verificationCode" className="block text-sm font-medium text-gray-700 mb-2">
-                Enter Verification Code
-              </label>
-              <input
+            <FieldGroup>
+              <Label htmlFor="verificationCode">Enter Verification Code</Label>
+              <CodeInput
                 type="text"
                 id="verificationCode"
-                className="w-full px-3 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg text-center"
                 value={verificationCode}
                 onChange={(e) => setVerificationCode(e.target.value)}
                 placeholder="Enter the 6-digit code"
                 maxLength={6}
                 required
               />
-            </div>
-            
-            <div className="text-center">
-              <button 
-                type="submit" 
-                className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50 mb-4"
-                disabled={loading || !verificationCode}
-              >
-                {loading ? 'Verifying...' : 'Verify and Unlock Account'}
-              </button>
-              
+            </FieldGroup>
+
+            <VerifyButton type="submit" disabled={loading || !verificationCode}>
+              <FaCheckCircle />
+              {loading ? 'Verifying...' : 'Verify and Unlock Account'}
+            </VerifyButton>
+
+            <CenterRow>
               {countdown > 0 ? (
-                <p className="text-sm text-gray-500">
-                  Request new code in {countdown} seconds
-                </p>
+                <Countdown>Request new code in {countdown} seconds</Countdown>
               ) : (
-                <button
-                  type="button"
-                  className="text-sm text-blue-600 hover:text-blue-500"
-                  onClick={handleRequestCode}
-                  disabled={loading}
-                >
-                  Request New Code
-                </button>
+                <LinkButton type="button" onClick={handleRequestCode} disabled={loading}>
+                  <FaRedo /> Request New Code
+                </LinkButton>
               )}
-            </div>
+            </CenterRow>
           </form>
         )}
-      </div>
-      
-      <div className="border-t pt-4">
-        <div className="text-center">
-          <button
-            className="text-sm text-gray-500 hover:text-gray-700"
-            onClick={() => navigate('/security/account-protection')}
-          >
-            Back to Account Protection
-          </button>
-        </div>
-      </div>
-    </div>
+
+        <Footer>
+          <BackLink onClick={() => navigate('/security/account-protection')}>
+            <FaArrowLeft /> Back to Account Protection
+          </BackLink>
+        </Footer>
+      </Card>
+    </Page>
   );
 };
 
-export default VerifyIdentity; 
+export default VerifyIdentity;
