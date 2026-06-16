@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import { FaExclamationTriangle, FaArrowLeft, FaPaperPlane, FaRedo, FaCheckCircle } from 'react-icons/fa';
@@ -275,29 +275,32 @@ const VerifyIdentity = () => {
   const [verificationCode, setVerificationCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [accountDetails, setAccountDetails] = useState(null);
+  const [accountError, setAccountError] = useState(false);
   const [codeRequested, setCodeRequested] = useState(false);
   const [countdown, setCountdown] = useState(0);
 
-  useEffect(() => {
-    // Fetch account details
-    const fetchAccountDetails = async () => {
-      try {
-        const response = await axios.get(`/api/social-accounts/${socialAccountId}/`, {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
-          }
-        });
-        setAccountDetails(response.data);
-      } catch (error) {
-        toast.error('Failed to fetch account details');
-        console.error('Error fetching account:', error);
-      }
-    };
+  // Fetch account details
+  const fetchAccountDetails = useCallback(async () => {
+    try {
+      setAccountError(false);
+      const response = await axios.get(`/api/social-accounts/${socialAccountId}/`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+        }
+      });
+      setAccountDetails(response.data);
+    } catch (error) {
+      setAccountError(true);
+      toast.error('Failed to fetch account details');
+      console.error('Error fetching account:', error);
+    }
+  }, [socialAccountId]);
 
+  useEffect(() => {
     if (socialAccountId) {
       fetchAccountDetails();
     }
-  }, [socialAccountId]);
+  }, [socialAccountId, fetchAccountDetails]);
 
   // Countdown timer for verification code
   useEffect(() => {
@@ -357,6 +360,34 @@ const VerifyIdentity = () => {
       setLoading(false);
     }
   };
+
+  if (accountError && !accountDetails) {
+    return (
+      <Page>
+        <Card>
+          <Header>
+            <HeaderIcon>
+              <FaExclamationTriangle />
+            </HeaderIcon>
+            <Title>Unable to Load Account</Title>
+          </Header>
+          <InfoBanner>
+            <BannerText>
+              We couldn&apos;t load your account details. Please check your connection and try again.
+            </BannerText>
+          </InfoBanner>
+          <PrimaryButton onClick={fetchAccountDetails}>
+            <FaRedo /> Retry
+          </PrimaryButton>
+          <Footer>
+            <BackLink onClick={() => navigate('/security/account-protection')}>
+              <FaArrowLeft /> Back to Account Protection
+            </BackLink>
+          </Footer>
+        </Card>
+      </Page>
+    );
+  }
 
   if (!accountDetails) {
     return (

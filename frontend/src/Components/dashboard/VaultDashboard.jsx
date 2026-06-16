@@ -267,12 +267,12 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
   const filterItems = () => {
     let filtered = [...items];
 
-    // Filter by tab
+    // Filter by tab (items may use `type` or `item_type`)
     if (activeTab !== 'all') {
       if (activeTab === 'favorites') {
         filtered = filtered.filter(item => item.favorite);
       } else {
-        filtered = filtered.filter(item => item.type === activeTab);
+        filtered = filtered.filter(item => (item.type || item.item_type) === activeTab);
       }
     }
 
@@ -280,20 +280,23 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(item => {
+        const type = item.type || item.item_type;
+        const data = item.data || {};
+
         // Search in item name/title
-        const nameMatch = (item.data.name || item.data.title || '').toLowerCase().includes(query);
+        const nameMatch = (data.name || data.title || '').toLowerCase().includes(query);
 
         // Search in username/email for passwords
-        const usernameMatch = item.type === 'password' &&
-          ((item.data.username || '').toLowerCase().includes(query) ||
-           (item.data.email || '').toLowerCase().includes(query));
+        const usernameMatch = type === 'password' &&
+          ((data.username || '').toLowerCase().includes(query) ||
+           (data.email || '').toLowerCase().includes(query));
 
         // Search in URL for passwords
-        const urlMatch = item.type === 'password' &&
-          (item.data.url || '').toLowerCase().includes(query);
+        const urlMatch = type === 'password' &&
+          (data.url || '').toLowerCase().includes(query);
 
         // Search in notes
-        const notesMatch = (item.data.notes || item.data.note || '').toLowerCase().includes(query);
+        const notesMatch = (data.notes || data.note || '').toLowerCase().includes(query);
 
         return nameMatch || usernameMatch || urlMatch || notesMatch;
       });
@@ -303,7 +306,7 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
   };
 
   const getItemCountByType = (type) => {
-    return items.filter(item => item.type === type).length;
+    return items.filter(item => (item.type || item.item_type) === type).length;
   };
 
   const getFavoritesCount = () => {
