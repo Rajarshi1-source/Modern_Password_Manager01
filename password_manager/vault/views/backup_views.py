@@ -592,7 +592,7 @@ class BackupViewSet(viewsets.ModelViewSet):
             backup.cloud_sync_status = 'failed'
             backup.save(update_fields=['cloud_sync_status'])
             return error_response(
-                f'Failed to validate uploaded blob: {exc}',
+                'Failed to validate uploaded blob.',
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 code='cloud_download_failed',
             )
