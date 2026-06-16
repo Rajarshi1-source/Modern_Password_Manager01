@@ -175,7 +175,6 @@ const StatItem = styled.div`
 
 const BehavioralRecoveryStatus = () => {
   const {
-    isCapturing,
     profileStats,
     profileCompleteness,
     profileAge,
