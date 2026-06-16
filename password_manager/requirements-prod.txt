@@ -6,7 +6,7 @@ djangorestframework-simplejwt==5.5.1
 # Auth & Security
 django-allauth==65.14.1
 dj-rest-auth==7.0.1
-cryptography==48.0.1  # GHSA-537c-gmf6-5ccf (bundled OpenSSL); <49 cap from pyOpenSSL 26.2.0
+cryptography==48.0.1  # fix GHSA-537c-gmf6-5ccf (bundled OpenSSL); exact pin keeps it <49 (pyOpenSSL 26.x needs cryptography<49)
 argon2-cffi==21.3.0
 pycryptodome>=3.20.0
 PyJWT==2.13.0
