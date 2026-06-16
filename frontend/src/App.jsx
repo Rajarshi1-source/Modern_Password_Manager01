@@ -3,7 +3,7 @@ import axios from 'axios';
 import './App.css';
 import { AccessibilityProvider } from './contexts/AccessibilityContext';
 import { BehavioralProvider } from './contexts/BehavioralContext';
-import { VaultProvider } from './contexts/VaultContext';
+import { VaultProvider, useVault } from './contexts/VaultContext';
 import { createGlobalStyle } from 'styled-components';
 import { Routes, Route, Navigate, Link, useNavigate, useLocation } from 'react-router-dom';
 import { FaExclamationCircle, FaLock, FaRegEye, FaRegEyeSlash, FaUnlock } from 'react-icons/fa';
@@ -59,6 +59,21 @@ const SettingsPage = lazy(() => import('./Components/settings/SettingsPage'));
 const EmailMaskingDashboard = lazy(() => import('./Components/emailmasking/EmailMaskingDashboard'));
 const SharedFoldersDashboard = lazy(() => import('./Components/sharedfolders/SharedFoldersDashboard'));
 const RecoveryDashboard = lazy(() => import('./Components/admin/RecoveryDashboard'));
+// Dashboard views
+const VaultDashboard = lazy(() => import('./Components/dashboard/VaultDashboard'));
+const BehavioralRecoveryStatus = lazy(() => import('./Components/dashboard/BehavioralRecoveryStatus'));
+
+// Route wrapper: feeds the styled VaultDashboard with live vault items and
+// routes selection/add back to the canonical /vault page. Cards render
+// read-only here, so this overview performs no vault mutations.
+const VaultDashboardRoute = () => {
+  const { items } = useVault();
+  const navigate = useNavigate();
+  const goToVault = () => navigate('/vault');
+  return (
+    <VaultDashboard items={items || []} onSelectItem={goToVault} onAddItem={goToVault} />
+  );
+};
 // Primary Passkey Recovery components
 const PasskeyPrimaryRecoverySetup = lazy(() => import('./Components/auth/PasskeyPrimaryRecoverySetup'));
 const PasskeyPrimaryRecoveryInitiate = lazy(() => import('./Components/auth/PasskeyPrimaryRecoveryInitiate'));
@@ -1922,6 +1937,9 @@ function App() {
                 <Route path="/login" element={isAuthenticated ? <Navigate to="/" /> : mainContent} />
                 <Route path="/signup" element={isAuthenticated ? <Navigate to="/" /> : mainContent} />
                 <Route path="/vault" element={!isAuthenticated ? <Navigate to="/" /> : mainContent} />
+                <Route path="/vault/dashboard" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <VaultDashboardRoute />
+                } />
                 <Route path="/auth/callback" element={<OAuthCallback />} />
                 <Route path="/password-recovery" element={
                   isAuthenticated ? <Navigate to="/" /> : <PasswordRecoveryPage />
@@ -1993,6 +2011,13 @@ function App() {
                 } />
                 <Route path="/security/dashboard" element={
                   !isAuthenticated ? <Navigate to="/" /> : <SecurityDashboard />
+                } />
+                <Route path="/security/behavioral-recovery" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <div style={{ maxWidth: '640px', margin: '0 auto', padding: '32px 24px' }}>
+                      <BehavioralRecoveryStatus />
+                    </div>
+                  )
                 } />
                 <Route path="/auth/social-login/:socialAccountId" element={
                   !isAuthenticated ? <Navigate to="/" /> : <SocialMediaLogin />

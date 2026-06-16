@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { FaSearch, FaPlus, FaLock, FaCreditCard, FaIdCard, FaStickyNote, FaStar } from 'react-icons/fa';
 import VaultItemCard from '../vault/VaultItemCard';
@@ -255,16 +255,12 @@ const EmptyAction = styled.button`
   }
 `;
 
-const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) => {
+const VaultDashboard = ({ items, onSelectItem, onAddItem }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all');
   const [filteredItems, setFilteredItems] = useState([]);
 
-  useEffect(() => {
-    filterItems();
-  }, [items, searchQuery, activeTab]);
-
-  const filterItems = () => {
+  const filterItems = useCallback(() => {
     let filtered = [...items];
 
     // Filter by tab (items may use `type` or `item_type`)
@@ -303,7 +299,11 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
     }
 
     setFilteredItems(filtered);
-  };
+  }, [items, searchQuery, activeTab]);
+
+  useEffect(() => {
+    filterItems();
+  }, [filterItems]);
 
   const getItemCountByType = (type) => {
     return items.filter(item => (item.type || item.item_type) === type).length;
@@ -391,8 +391,8 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
             <VaultItemCard
               key={item.id}
               item={item}
-              onToggleFavorite={onToggleFavorite}
-              onSelect={onSelectItem}
+              onClick={onSelectItem}
+              readOnly
             />
           ))}
         </ItemsGrid>
