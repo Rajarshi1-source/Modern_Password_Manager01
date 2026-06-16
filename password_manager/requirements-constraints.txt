@@ -14,8 +14,11 @@ requests==2.33.0
 pyasn1==0.6.3
 pyasn1-modules==0.4.2
 
-# hyper / h2 / hyperframe family — keep versions compatible with apns2 & hyper
-hyper==0.7.0
+# Modern HTTP/2 stack (used by httpx[http2]). h2 4.3.0 requires hyperframe>=6.1
+# and hpack>=4.1, so keep these three aligned. NOTE: the legacy apns2/hyper 0.7.0
+# stack (hyperframe<4, h2<3) is intentionally NOT pinned here — it is incompatible
+# with h2 4.3.0 and is not pulled by any declared dependency (django-push-notifications
+# is installed without the [apns] extra).
 h2==4.3.0
 hyperframe==6.1.0
 hpack==4.1.0
