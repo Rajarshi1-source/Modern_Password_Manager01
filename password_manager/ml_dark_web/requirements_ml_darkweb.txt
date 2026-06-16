@@ -66,7 +66,7 @@ factory-boy>=3.2.0
 
 django>=4.2.28 # not directly required, pinned by Snyk to avoid a vulnerability
 zipp>=3.23.1 # not directly required, pinned by Snyk to avoid a vulnerability
-cryptography>=46.0.7 # not directly required, pinned by Snyk to avoid a vulnerability
+cryptography>=48.0.1 # not directly required, pinned to avoid GHSA-537c-gmf6-5ccf (bundled OpenSSL)
 setuptools>=78.1.1 # not directly required, pinned by Snyk to avoid a vulnerability
 
 # Security overrides for transitive dependencies (Dependabot)
