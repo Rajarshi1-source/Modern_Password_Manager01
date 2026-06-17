@@ -42,6 +42,7 @@ export const VaultProvider = ({ children }) => {
   const broadcastChannelRef = useRef(null);
   const lastActivityRef = useRef(Date.now());
   const isMountedRef = useRef(true); // Fix #6: Track component mount state
+  const favoriteInFlightRef = useRef(new Set()); // Serialize favorite toggles per item id
 
   // Clean up mounted ref on unmount
   useEffect(() => {
@@ -678,11 +679,18 @@ export const VaultProvider = ({ children }) => {
   // for a snappy UI and rolled back if the request fails. It is intentionally
   // NOT added to pendingChanges, since it is persisted immediately.
   const toggleFavorite = useCallback(async (id) => {
+    // Serialize toggles per item: ignore a new toggle while one is already
+    // in flight for the same id, so out-of-order PATCH responses can't
+    // persist stale state.
+    if (favoriteInFlightRef.current.has(id)) return;
+
     const target = items.find(i => i.id === id);
     if (!target) return;
 
     const previousFavorite = target.favorite;
     const nextFavorite = !previousFavorite;
+
+    favoriteInFlightRef.current.add(id);
 
     // Optimistic update
     setItems(prevItems =>
@@ -702,6 +710,8 @@ export const VaultProvider = ({ children }) => {
         setError(error.message || 'Failed to update favorite');
       }
       throw error;
+    } finally {
+      favoriteInFlightRef.current.delete(id);
     }
   }, [items, vaultService]);
 
