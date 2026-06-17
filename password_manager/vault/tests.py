@@ -4,6 +4,7 @@ Tests vault models, encryption, and vault operations
 """
 
 from django.test import TestCase, RequestFactory
+from rest_framework.test import APIClient
 from django.contrib.auth.models import User
 from django.utils import timezone
 from unittest.mock import patch, Mock
@@ -821,9 +822,88 @@ class VaultItemViewSetTests(TestCase):
         
         cards = VaultItem.objects.filter(user=self.user, item_type='card')
         self.assertEqual(cards.count(), 1)
-        
+
         passwords = VaultItem.objects.filter(user=self.user, item_type='password')
         self.assertEqual(passwords.count(), 3)
+
+
+class VaultFavoritePatchTests(TestCase):
+    """PR A: the `favorite` flag is writable via a metadata-only PATCH on
+    /api/vault/{id}/ (served by ApiVaultItemViewSet) without touching the
+    encrypted payload."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='favuser',
+            email='fav@example.com',
+            password='testpass123',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.item = VaultItem.objects.create(
+            user=self.user,
+            item_id='fav_item_1',
+            item_type='password',
+            encrypted_data='cipher-blob',
+            favorite=False,
+        )
+
+    def test_patch_sets_favorite_without_touching_ciphertext(self):
+        """A PATCH with only {favorite} persists and leaves encrypted_data intact."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'favorite': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertTrue(self.item.favorite)
+        # The metadata-only PATCH must not require or alter the ciphertext.
+        self.assertEqual(self.item.encrypted_data, 'cipher-blob')
+
+    def test_patch_can_clear_favorite(self):
+        self.item.favorite = True
+        self.item.save(update_fields=['favorite'])
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'favorite': False},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertFalse(self.item.favorite)
+
+    def test_favorite_is_serialized_in_response(self):
+        """`favorite` is now part of the serializer output."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'favorite': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('favorite', resp.data)
+        self.assertTrue(resp.data['favorite'])
+
+    def test_patch_rejects_other_users_item(self):
+        """Scoped queryset: a user cannot favorite someone else's item."""
+        other = User.objects.create_user(
+            username='other', email='other@example.com', password='testpass123'
+        )
+        other_item = VaultItem.objects.create(
+            user=other,
+            item_id='other_item_1',
+            item_type='password',
+            encrypted_data='other-blob',
+            favorite=False,
+        )
+        resp = self.client.patch(
+            f'/api/vault/{other_item.id}/',
+            {'favorite': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 404)
+        other_item.refresh_from_db()
+        self.assertFalse(other_item.favorite)
 
 
 class AuditLogTests(TestCase):

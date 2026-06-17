@@ -669,6 +669,42 @@ export const VaultProvider = ({ children }) => {
     }
   }, [vaultService, syncVault]);
 
+  // Toggle the favorite flag on a vault item.
+  //
+  // Favorite is non-secret metadata, so this deliberately does NOT go through
+  // updateItem/saveVaultItem (which re-encrypt the whole item and require the
+  // decrypted payload — wrong and risky for a lazy-loaded item). Instead it
+  // issues a lightweight metadata-only PATCH. The flag is flipped optimistically
+  // for a snappy UI and rolled back if the request fails. It is intentionally
+  // NOT added to pendingChanges, since it is persisted immediately.
+  const toggleFavorite = useCallback(async (id) => {
+    const target = items.find(i => i.id === id);
+    if (!target) return;
+
+    const previousFavorite = target.favorite;
+    const nextFavorite = !previousFavorite;
+
+    // Optimistic update
+    setItems(prevItems =>
+      prevItems.map(i => (i.id === id ? { ...i, favorite: nextFavorite } : i))
+    );
+
+    try {
+      await vaultService.toggleFavorite(id, nextFavorite);
+      // Keep other tabs in sync
+      broadcastVaultUpdate();
+    } catch (error) {
+      // Roll back the optimistic flip
+      if (isMountedRef.current) {
+        setItems(prevItems =>
+          prevItems.map(i => (i.id === id ? { ...i, favorite: previousFavorite } : i))
+        );
+        setError(error.message || 'Failed to update favorite');
+      }
+      throw error;
+    }
+  }, [items, vaultService]);
+
   const updateAutoLockTimeout = (minutes) => {
     setAutoLockTimeout(minutes);
     localStorage.setItem('autoLockTimeout', minutes.toString());
@@ -759,6 +795,7 @@ export const VaultProvider = ({ children }) => {
     addItem,
     updateItem,
     deleteItem,
+    toggleFavorite,  // New: metadata-only favorite toggle
     generatePassword,
     updateAutoLockTimeout,
     createBackup,
@@ -774,7 +811,7 @@ export const VaultProvider = ({ children }) => {
   }), [
     isInitialized, isUnlocked, items, loading, error, autoLockTimeout,
     syncStatus, pendingChanges, lastSyncTime, lazyLoadEnabled,
-    unlockVault, lockVault, addItem, updateItem, deleteItem,
+    unlockVault, lockVault, addItem, updateItem, deleteItem, toggleFavorite,
     syncVault, decryptItem
   ]);
 
