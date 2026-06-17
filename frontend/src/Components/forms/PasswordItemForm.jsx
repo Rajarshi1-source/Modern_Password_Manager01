@@ -394,8 +394,8 @@ const PasswordItemForm = ({ initialValues = {}, onSubmit, onCancel }) => {
                   <ModalClose onClick={() => setShowGenerator(false)}>
                     <FaTimes />
                   </ModalClose>
-                  <PasswordGenerator 
-                    onSelectPassword={(password) => handlePasswordSelect(password, formikProps)} 
+                  <PasswordGenerator
+                    onSelect={(password) => handlePasswordSelect(password, formikProps)}
                   />
                 </ModalContent>
               </ModalOverlay>

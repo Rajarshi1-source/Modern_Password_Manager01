@@ -540,7 +540,9 @@ const VaultDashboard = ({
   };
 
   const handleDeleteRequest = (id) => {
-    const item = items.find(i => i.id === id);
+    // Items carry a DB `id` (used by context.deleteItem); fall back to
+    // item_id defensively in case a variant lacks it.
+    const item = items.find(i => (i.id ?? i.item_id) === id);
     if (item) setDeletingItem(item);
   };
 
@@ -548,7 +550,7 @@ const VaultDashboard = ({
     if (!deletingItem || !onDeleteItem) return;
     setIsDeleting(true);
     try {
-      await onDeleteItem(deletingItem.id);
+      await onDeleteItem(deletingItem.id ?? deletingItem.item_id);
       toast.success('Item deleted.');
       setDeletingItem(null);
     } catch {
@@ -637,7 +639,7 @@ const VaultDashboard = ({
         <ItemsGrid>
           {filteredItems.map(item => (
             <VaultItemCard
-              key={item.id}
+              key={item.id ?? item.item_id}
               item={item}
               onClick={handleEditRequest}
               onToggleFavorite={handleToggleFavorite}
@@ -684,7 +686,7 @@ const VaultDashboard = ({
               <FaTimes />
             </ModalClose>
             <PasswordItemForm
-              initialValues={{ ...editingItem.data, id: editingItem.id }}
+              initialValues={{ ...editingItem.data, id: editingItem.id ?? editingItem.item_id }}
               onSubmit={handleEditSubmit}
               onCancel={() => setEditingItem(null)}
             />
