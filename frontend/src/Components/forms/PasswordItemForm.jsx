@@ -190,6 +190,25 @@ const SubmitButton = styled.button`
   }
 `;
 
+const CancelButton = styled.button`
+  width: 100%;
+  padding: 14px;
+  background: ${colors.background};
+  color: ${colors.textSecondary};
+  border: 1px solid ${colors.border};
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 10px;
+
+  &:hover {
+    background: ${colors.border};
+    color: ${colors.text};
+  }
+`;
+
 const ModalOverlay = styled.div`
   position: fixed;
   top: 0;
@@ -387,7 +406,13 @@ const PasswordItemForm = ({ initialValues = {}, onSubmit, onCancel }) => {
             <SubmitButton type="submit" disabled={formikProps.isSubmitting}>
               {initialValues.id ? '💾 Update Password' : '💾 Save Password'}
             </SubmitButton>
-            
+
+            {onCancel && (
+              <CancelButton type="button" onClick={onCancel} disabled={formikProps.isSubmitting}>
+                Cancel
+              </CancelButton>
+            )}
+
             {showGenerator && (
               <ModalOverlay onClick={() => setShowGenerator(false)}>
                 <ModalContent onClick={e => e.stopPropagation()}>
