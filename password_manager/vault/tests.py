@@ -834,6 +834,7 @@ class VaultFavoritePatchTests(TestCase):
     encrypted payload."""
 
     def setUp(self):
+        """Create an authenticated user with one un-favorited vault item."""
         self.client = APIClient()
         self.user = User.objects.create_user(
             username='favuser',
@@ -863,6 +864,7 @@ class VaultFavoritePatchTests(TestCase):
         self.assertEqual(self.item.encrypted_data, 'cipher-blob')
 
     def test_patch_can_clear_favorite(self):
+        """A PATCH with {favorite: False} clears a previously-set favorite."""
         self.item.favorite = True
         self.item.save(update_fields=['favorite'])
         resp = self.client.patch(
