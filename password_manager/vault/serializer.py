@@ -9,7 +9,12 @@ class EncryptedVaultItemSerializer(serializers.ModelSerializer):
     """Serializer for encrypted vault items API"""
     class Meta:
         model = EncryptedVaultItem
-        fields = ['id', 'item_id', 'encrypted_data', 'item_type', 'created_at', 'updated_at', 'user']
+        # ``favorite`` is non-secret metadata. Exposing it here lets clients
+        # read it and update it via a lightweight (partial) PATCH on
+        # /api/vault/{id}/ WITHOUT round-tripping the encrypted payload.
+        # It has a model default of False, so adding it stays backward
+        # compatible (not required on create/update).
+        fields = ['id', 'item_id', 'encrypted_data', 'item_type', 'favorite', 'created_at', 'updated_at', 'user']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 class FolderSerializer(serializers.ModelSerializer):

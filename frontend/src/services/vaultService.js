@@ -321,7 +321,35 @@ export class VaultService {
       throw contextError;
     }
   }
-  
+
+  /**
+   * Toggle the favorite flag on a vault item.
+   *
+   * `favorite` is non-secret metadata, so this is a lightweight PATCH that
+   * updates ONLY that field — it never decrypts or re-encrypts the item
+   * payload (unlike {@link saveVaultItem}). The backend serializer exposes
+   * `favorite` and the ViewSet's partial update applies it without requiring
+   * `encrypted_data`.
+   *
+   * @param {string|number} id - Database id of the vault item
+   * @param {boolean} favorite - Desired favorite state
+   * @returns {Promise<Object>} API response
+   * @throws {Error} If the update fails
+   */
+  async toggleFavorite(id, favorite) {
+    try {
+      return await this.api.patch(`/vault/${id}/`, { favorite });
+    } catch (error) {
+      const contextError = new Error(`Failed to update favorite: ${error.message}`);
+      contextError.errorData = error.errorData || {
+        code: 'favorite_update_failed',
+        status: error.errorData?.status || 500,
+        details: { originalError: error.message, id }
+      };
+      throw contextError;
+    }
+  }
+
   /**
    * Helper to generate a random UUID
    * @returns {string} Random UUID
