@@ -507,7 +507,7 @@ const LoginForm = memo(function LoginForm({ onLogin, onForgotPassword, toggleAut
       />
 
       <p className="auth-switch">
-        Don't have an account? <button onClick={toggleAuthMode} className="text-btn">Sign up now</button>
+        Don&apos;t have an account? <button onClick={toggleAuthMode} className="text-btn">Sign up now</button>
       </p>
     </div>
   );
@@ -760,7 +760,7 @@ const SignupForm = memo(function SignupForm({ onSignup, toggleAuthMode, error })
           />
           {signupData.confirmPassword && signupData.password !== signupData.confirmPassword && (
             <small style={{ color: 'var(--danger)', marginTop: '4px', display: 'block' }}>
-              Passwords don't match
+              Passwords don&apos;t match
             </small>
           )}
         </div>
@@ -1553,7 +1553,7 @@ function App() {
     }
   }, [setError, handleLogin]);
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     setIsLoggingOut(true);
 
     try {
@@ -1598,7 +1598,7 @@ function App() {
     } finally {
       setIsLoggingOut(false);
     }
-  };
+  }, [authLogout, navigate]);
 
   const toggleAuthMode = useCallback(() => {
     setIsLoginMode(prev => !prev);
@@ -1677,7 +1677,7 @@ function App() {
           >
             <p>
               If you were redirected to the Help Center after selecting Forgot password,
-              you haven't generated an account recovery key. You won't be able to use this
+              you haven&apos;t generated an account recovery key. You won&apos;t be able to use this
               option to regain access to your account.
             </p>
             <p style={{ marginTop: '16px' }}>
