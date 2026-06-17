@@ -64,14 +64,24 @@ const VaultDashboard = lazy(() => import('./Components/dashboard/VaultDashboard'
 const BehavioralRecoveryStatus = lazy(() => import('./Components/dashboard/BehavioralRecoveryStatus'));
 
 // Route wrapper: feeds the styled VaultDashboard with live vault items and
-// routes selection/add back to the canonical /vault page. Cards render
-// read-only here, so this overview performs no vault mutations.
+// the VaultContext mutations (PR B — read-write). Favorite toggles are
+// metadata-only (never re-encrypt); edit re-encrypts via updateItem and so
+// requires an unlocked vault (canEdit); delete is confirmed in the dashboard.
+// Adding new items still routes to the canonical /vault page.
 const VaultDashboardRoute = () => {
-  const { items } = useVault();
+  const { items, toggleFavorite, updateItem, deleteItem, decryptItem, isUnlocked } = useVault();
   const navigate = useNavigate();
   const goToVault = () => navigate('/vault');
   return (
-    <VaultDashboard items={items || []} onSelectItem={goToVault} onAddItem={goToVault} />
+    <VaultDashboard
+      items={items || []}
+      onToggleFavorite={toggleFavorite}
+      onUpdateItem={updateItem}
+      onDeleteItem={deleteItem}
+      onDecryptItem={decryptItem}
+      onAddItem={goToVault}
+      canEdit={isUnlocked}
+    />
   );
 };
 // Primary Passkey Recovery components

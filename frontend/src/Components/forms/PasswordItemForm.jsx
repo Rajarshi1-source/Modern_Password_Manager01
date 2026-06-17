@@ -3,7 +3,7 @@ import styled, { keyframes } from 'styled-components';
 import { Formik, Form, Field, ErrorMessage } from 'formik';
 import * as Yup from 'yup';
 import { FaEye, FaEyeSlash, FaRandom, FaLock, FaGlobe, FaUser, FaEnvelope, FaStickyNote, FaTimes } from 'react-icons/fa';
-import PasswordGenerator from '../PasswordGenerator';
+import PasswordGenerator from '../security/PasswordGenerator';
 
 // Animations
 const fadeIn = keyframes`
