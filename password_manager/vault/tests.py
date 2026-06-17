@@ -827,6 +827,7 @@ class VaultItemViewSetTests(TestCase):
         self.assertEqual(passwords.count(), 3)
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, DEBUG=True)
 class VaultFavoritePatchTests(TestCase):
     """PR A: the `favorite` flag is writable via a metadata-only PATCH on
     /api/vault/{id}/ (served by ApiVaultItemViewSet) without touching the
