@@ -33,7 +33,7 @@ export const VaultProvider = ({ children }) => {
   const [lastSyncTime, setLastSyncTime] = useState(localStorage.getItem('lastSyncTime') || new Date().toISOString());
   const [decryptedItems, setDecryptedItems] = useState(new Map());
   const [lazyLoadEnabled, setLazyLoadEnabled] = useState(true);
-  const { isAuthenticated } = useAuth(); // Get auth status
+  const { isAuthenticated, user } = useAuth(); // Get auth status + identity
 
   // Fix #8: Use useMemo for vaultService
   const vaultService = useMemo(() => new VaultService(), []);
@@ -101,6 +101,25 @@ export const VaultProvider = ({ children }) => {
       console.error('Failed to refresh vault items', error);
     }
   }, [vaultService]);
+
+  // VaultContext is the single source of truth for the vault item list (PR C).
+  // Load the (lazy/ciphertext) list whenever the authenticated identity
+  // changes, clear it on logout, and refresh on demand when another part of
+  // the app (e.g. the /vault add flow) signals a change via 'vault:updated'.
+  // This loads only metadata/ciphertext, so it needs no decryption key —
+  // decryption stays with the views' sessionVaultCrypto.
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setItems([]);
+      return undefined;
+    }
+    refreshItems();
+    const onVaultUpdated = () => refreshItems();
+    window.addEventListener('vault:updated', onVaultUpdated);
+    return () => window.removeEventListener('vault:updated', onVaultUpdated);
+    // user id/email keep this isolated per-account: switching users refetches
+    // instead of showing the previous account's vault.
+  }, [isAuthenticated, user?.id, user?.email, refreshItems]);
 
   const broadcastVaultUpdate = () => {
     if (broadcastChannelRef.current) {
@@ -805,6 +824,7 @@ export const VaultProvider = ({ children }) => {
     addItem,
     updateItem,
     deleteItem,
+    refreshItems,  // New: reload the canonical item list (single source of truth)
     toggleFavorite,  // New: metadata-only favorite toggle
     generatePassword,
     updateAutoLockTimeout,
@@ -821,7 +841,7 @@ export const VaultProvider = ({ children }) => {
   }), [
     isInitialized, isUnlocked, items, loading, error, autoLockTimeout,
     syncStatus, pendingChanges, lastSyncTime, lazyLoadEnabled,
-    unlockVault, lockVault, addItem, updateItem, deleteItem, toggleFavorite,
+    unlockVault, lockVault, addItem, updateItem, deleteItem, refreshItems, toggleFavorite,
     syncVault, decryptItem
   ]);
 
