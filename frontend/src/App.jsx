@@ -90,7 +90,7 @@ const VaultDashboardRoute = () => {
 // the same list the dashboard uses. Decryption stays client-side via
 // sessionVaultCrypto (v2) with a v3 fallback for migrated/freshly-written rows.
 const VaultItemsSection = () => {
-  const { items, loading } = useVault();
+  const { items, loading, error } = useVault();
   const [decryptedItems, setDecryptedItems] = useState({});
 
   useEffect(() => {
@@ -134,6 +134,8 @@ const VaultItemsSection = () => {
       </span>
       {loading ? (
         <p>Loading your passwords...</p>
+      ) : error ? (
+        <p data-testid="vault-error" style={{ color: 'var(--danger)' }}>{error}</p>
       ) : (
         <div className="password-grid">
           {items.length === 0 ? (
