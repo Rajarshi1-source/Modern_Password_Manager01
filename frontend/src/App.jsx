@@ -1,4 +1,4 @@
-import React, { useState, useEffect, memo, useMemo, Suspense, lazy, useCallback, useRef } from 'react';
+import React, { useState, useEffect, memo, useMemo, Suspense, lazy, useCallback } from 'react';
 import axios from 'axios';
 import './App.css';
 import { AccessibilityProvider } from './contexts/AccessibilityContext';
@@ -82,6 +82,102 @@ const VaultDashboardRoute = () => {
       onAddItem={goToVault}
       canEdit={isUnlocked}
     />
+  );
+};
+
+// Authenticated "Your Passwords" list for the main /vault page. Renders inside
+// VaultProvider, so it reads the single source of truth (useVault().items) —
+// the same list the dashboard uses. Decryption stays client-side via
+// sessionVaultCrypto (v2) with a v3 fallback for migrated/freshly-written rows.
+const VaultItemsSection = () => {
+  const { items, loading } = useVault();
+  const [decryptedItems, setDecryptedItems] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const next = {};
+      for (const item of items) {
+        if (!item || !item.item_id) continue;
+        // Try v2 first; it flags envelopes it doesn't own (incl. v3
+        // svc-gcm-2) as {_legacyPlaintext:true}, so fall back to v3 then.
+        try {
+          const v2Result = await sessionVaultCrypto.decryptItem(item.encrypted_data);
+          if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
+            try {
+              next[item.item_id] = await sessionVaultCryptoV3.decryptItem(item.encrypted_data);
+            } catch (v3Err) {
+              console.warn(
+                'v3 fallback failed; falling back to v2 legacy-plaintext result',
+                item.item_id, v3Err,
+              );
+              next[item.item_id] = v2Result;
+            }
+          } else {
+            next[item.item_id] = v2Result;
+          }
+        } catch (err) {
+          console.error('Failed to decrypt vault item', item.item_id, err);
+          next[item.item_id] = { _decryptError: true };
+        }
+      }
+      if (!cancelled) setDecryptedItems(next);
+    })();
+    return () => { cancelled = true; };
+  }, [items]);
+
+  return (
+    <section className="password-list" data-testid="vault-section">
+      <h2>Your Passwords</h2>
+      <span className="sr-only" data-testid="vault-status">
+        {!loading && 'Decrypted Vault Data Visible'}
+      </span>
+      {loading ? (
+        <p>Loading your passwords...</p>
+      ) : (
+        <div className="password-grid">
+          {items.length === 0 ? (
+            <p data-testid="empty-vault">No passwords saved yet. Add one above!</p>
+          ) : (
+            <>
+              <span className="sr-only" data-testid="decryption-status">
+                Vault item decrypted successfully
+              </span>
+              {items.map(item => {
+                const itemData = decryptedItems[item.item_id] || {};
+                const isDecrypting = !(item.item_id in decryptedItems);
+                const decryptError = itemData._decryptError;
+
+                return (
+                  <div key={item.item_id} className="password-card" data-testid="vault-item">
+                    <h3>{itemData.name || (decryptError ? 'Decryption failed' : (isDecrypting ? 'Decrypting…' : 'Untitled'))}</h3>
+                    {itemData._legacyPlaintext && (
+                      <p className="website" style={{ color: 'var(--danger)' }}>
+                        ⚠ Legacy plaintext entry — re-save to encrypt
+                      </p>
+                    )}
+                    {itemData.website && (
+                      <p className="website">{itemData.website}</p>
+                    )}
+                    <p className="username">
+                      <strong>Username:</strong> {itemData.username || ''}
+                    </p>
+                    <p className="password">
+                      <strong>Password:</strong> •••••••••••
+                    </p>
+                    <div className="card-actions">
+                      <button className="action-btn">View</button>
+                      <button className="action-btn">Edit</button>
+                      <button className="action-btn delete">Delete</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+    </section>
   );
 };
 // Primary Passkey Recovery components
@@ -829,13 +925,9 @@ function App() {
   // JWT Authentication Hook
   const { user, isAuthenticated, isLoading: authLoading, login, logout: authLogout } = useAuth();
 
-  // State for storing vault items and form data
-  const [vaultItems, setVaultItems] = useState([]);
-  // Decrypted view of `vaultItems`. Keyed by `item_id` so updates stay stable
-  // across re-renders. The ciphertext stays in `vaultItems`; we never persist
-  // the decrypted map.
-  const [decryptedItems, setDecryptedItems] = useState({});
-  const [loading, setLoading] = useState(true);
+  // The vault item list now lives in VaultContext (single source of truth);
+  // the /vault list is rendered by <VaultItemsSection/>. This component keeps
+  // only form/error state and signals changes via the 'vault:updated' event.
   const [error, setError] = useState(null);
   const [appInitialized, setAppInitialized] = useState(false);
 
@@ -938,7 +1030,6 @@ function App() {
       } finally {
         if (isMounted) {
           setAppInitialized(true);
-          setLoading(false);
         }
       }
     };
@@ -990,118 +1081,13 @@ function App() {
   // Memoized so effects that depend on it don't capture a stale closure.
   // Declared BEFORE the effect that references it so the effect's dep array
   // (evaluated during render) doesn't hit the TDZ.
-  const fetchVaultItems = useCallback(async ({ silent = false } = {}) => {
-    // `silent` skips the loading-spinner state change so a
-    // post-migration refetch doesn't flash the "Loading your
-    // passwords…" placeholder after the vault has already
-    // rendered. The auth-change useEffect calls this with default
-    // (non-silent) semantics on the initial login fetch; the
-    // post-migration refetch in handleLogin's sweep branches
-    // passes `{ silent: true }`.
-    try {
-      if (!silent) setLoading(true);
-      const response = await axios.get('/api/vault/');
-      // Ensure vaultItems is always an array
-      const items = response.data?.results || response.data || [];
-      setVaultItems(Array.isArray(items) ? items : []);
-      setError(null);
-    } catch (err) {
-      console.error('Error fetching vault items:', err);
-      // Don't show error for 401s as useAuth handles redirect
-      if (err.response?.status !== 401) {
-        setError('Failed to load your password vault. Please try again.');
-      }
-      setVaultItems([]); // Reset to empty array on error
-    } finally {
-      if (!silent) setLoading(false);
-    }
+  // Vault items now load through VaultContext (the single source of truth).
+  // This thin shim preserves the existing call sites in the login/migration
+  // flow: it signals VaultContext to refresh the canonical list. The optional
+  // `silent` argument is accepted (and ignored) for call-site compatibility.
+  const fetchVaultItems = useCallback(async () => {
+    window.dispatchEvent(new CustomEvent('vault:updated'));
   }, []);
-
-  // Fetch vault items from API. The ref guard is keyed to the current user
-  // identity so that an identity change (token refresh returning a different
-  // user, or OAuth-over-existing-session) forces a clean refetch instead of
-  // showing the previous account's vault — a critical isolation requirement
-  // for a password manager.
-  const vaultFetchedRef = useRef({ fetched: false, identity: null });
-
-  useEffect(() => {
-    const identity = user?.id ?? user?.email ?? null;
-    if (isAuthenticated) {
-      if (!vaultFetchedRef.current.fetched || vaultFetchedRef.current.identity !== identity) {
-        setVaultItems([]);
-        fetchVaultItems();
-        vaultFetchedRef.current = { fetched: true, identity };
-      }
-    } else {
-      vaultFetchedRef.current = { fetched: false, identity: null };
-      setVaultItems([]);
-      setDecryptedItems({});
-    }
-    // `fetchVaultItems` is memoized with a stable identity (useCallback with
-    // empty deps), but we still list it so the exhaustive-deps rule is happy
-    // and a future change to the callback won't silently leave this effect
-    // bound to a stale closure.
-  }, [isAuthenticated, user?.id, user?.email, fetchVaultItems]);
-
-  // Decrypt vault items asynchronously whenever the ciphertext list changes.
-  // Kept separate from fetch so re-renders don't re-run the KDF, and so we
-  // can gracefully show legacy plaintext rows with a warning flag.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const next = {};
-      for (const item of vaultItems) {
-        if (!item || !item.item_id) continue;
-        // Try v2 first. v2 returns ``{_legacyPlaintext: true}`` for
-        // any payload it doesn't recognise as its own ``svc-gcm-1``
-        // shape — including v3 ``svc-gcm-2`` envelopes. After the
-        // legacy-to-v3 migration (Unit 15) the server holds v3
-        // ciphertext, so v2 will (correctly) refuse it; we fall
-        // back to v3's decryptor in that case. Order is v2-first
-        // so legacy items decrypt without an extra round trip
-        // through v3 KDF; the v3 fallback only fires for migrated
-        // and freshly-written rows.
-        try {
-          const v2Result = await sessionVaultCrypto.decryptItem(item.encrypted_data);
-          if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
-            // v2 didn't recognise this envelope — most likely a v3
-            // ``svc-gcm-2`` row. Try v3 before surfacing the
-            // "Legacy plaintext" warning.
-            //
-            // CRITICAL on the failure path: do NOT overwrite v2Result
-            // with `{_decryptError: true}`. v2Result already holds
-            // the decoded fields of any *genuine* legacy-plaintext
-            // row (the v2 decryptor flags those with
-            // ``_legacyPlaintext: true`` after extracting the
-            // visible name / username / website fields). If v3
-            // also throws, the envelope is either a real legacy
-            // plaintext blob or a payload we genuinely can't
-            // decrypt — falling back to v2Result keeps the visible
-            // fields plus the "⚠ Legacy plaintext entry — re-save
-            // to encrypt" warning intact, which is strictly better
-            // UX than collapsing to a hard decrypt error that
-            // hides the row entirely until next refetch.
-            try {
-              next[item.item_id] = await sessionVaultCryptoV3.decryptItem(item.encrypted_data);
-            } catch (v3Err) {
-              console.warn(
-                'v3 fallback failed; falling back to v2 legacy-plaintext result',
-                item.item_id, v3Err,
-              );
-              next[item.item_id] = v2Result;
-            }
-          } else {
-            next[item.item_id] = v2Result;
-          }
-        } catch (err) {
-          console.error('Failed to decrypt vault item', item.item_id, err);
-          next[item.item_id] = { _decryptError: true };
-        }
-      }
-      if (!cancelled) setDecryptedItems(next);
-    })();
-    return () => { cancelled = true; };
-  }, [vaultItems]);
 
   // Handle body and html class for particle background visibility
   useEffect(() => {
@@ -1185,8 +1171,9 @@ function App() {
       // Send data to API
       const response = await axios.post('/api/vault/', itemData);
 
-      // Update vault items with new item
-      setVaultItems(prev => [...prev, response.data]);
+      // Refresh the canonical list in VaultContext (single source of truth)
+      // so both the /vault list and the dashboard reflect the new item.
+      window.dispatchEvent(new CustomEvent('vault:updated'));
 
       // Register a zero-knowledge commitment of the saved password under the
       // vault_item scope. This lets the user later prove "backup matches
@@ -1602,8 +1589,8 @@ function App() {
         );
       }
 
-      // Clear vault items
-      setVaultItems([]);
+      // Vault items are cleared by VaultContext when auth drops (it owns the
+      // canonical list now), so there is nothing to clear here.
       navigate('/');
     } finally {
       setIsLoggingOut(false);
@@ -1814,62 +1801,12 @@ function App() {
               </form>
             </section>
 
-            <section className="password-list" data-testid="vault-section">
-              <h2>Your Passwords</h2>
-              <span className="sr-only" data-testid="vault-status">
-                {!loading && 'Decrypted Vault Data Visible'}
-              </span>
-              {loading ? (
-                <p>Loading your passwords...</p>
-              ) : (
-                <div className="password-grid">
-                  {vaultItems.length === 0 ? (
-                    <p data-testid="empty-vault">No passwords saved yet. Add one above!</p>
-                  ) : (
-                    <>
-                      <span className="sr-only" data-testid="decryption-status">
-                        Vault item decrypted successfully
-                      </span>
-                      {vaultItems.map(item => {
-                        const itemData = decryptedItems[item.item_id] || {};
-                        const isDecrypting = !(item.item_id in decryptedItems);
-                        const decryptError = itemData._decryptError;
-
-                        return (
-                          <div key={item.item_id} className="password-card" data-testid="vault-item">
-                            <h3>{itemData.name || (decryptError ? 'Decryption failed' : (isDecrypting ? 'Decrypting…' : 'Untitled'))}</h3>
-                            {itemData._legacyPlaintext && (
-                              <p className="website" style={{ color: 'var(--danger)' }}>
-                                ⚠ Legacy plaintext entry — re-save to encrypt
-                              </p>
-                            )}
-                            {itemData.website && (
-                              <p className="website">{itemData.website}</p>
-                            )}
-                            <p className="username">
-                              <strong>Username:</strong> {itemData.username || ''}
-                            </p>
-                            <p className="password">
-                              <strong>Password:</strong> •••••••••••
-                            </p>
-                            <div className="card-actions">
-                              <button className="action-btn">View</button>
-                              <button className="action-btn">Edit</button>
-                              <button className="action-btn delete">Delete</button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </>
-                  )}
-                </div>
-              )}
-            </section>
+            <VaultItemsSection />
           </main>
         </div>
       </div>
     );
-  }, [isAuthenticated, authContent, showHelpCenter, handleLogout, isLoggingOut, pqCryptoInitialized, fheReady, error, handleSubmit, formData, handleInputChange, loading, vaultItems, decryptedItems]);
+  }, [isAuthenticated, authContent, showHelpCenter, handleLogout, isLoggingOut, pqCryptoInitialized, fheReady, error, handleSubmit, formData, handleInputChange]);
 
   // Show loading screen while auth is initializing (after all hooks are called)
   if (authLoading && !appInitialized) {
