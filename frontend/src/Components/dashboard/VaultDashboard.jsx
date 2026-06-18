@@ -504,30 +504,42 @@ const VaultDashboard = ({
     }
 
     // Decrypt lazy-loaded items before editing so the form is pre-filled.
+    let toEdit = item;
     if (!item.data && onDecryptItem && item.item_id) {
       setOpeningEditor(true);
       try {
-        const decrypted = await onDecryptItem(item.item_id);
-        setEditingItem(decrypted);
+        toEdit = await onDecryptItem(item.item_id);
       } catch {
         toast.error('Failed to decrypt this item.');
         return;
       } finally {
         setOpeningEditor(false);
       }
-    } else {
-      setEditingItem(item);
     }
+
+    // Never open the editor on a decryption-failure placeholder or a payload
+    // without usable data — re-encrypting it on submit would corrupt the item.
+    if (!toEdit || toEdit._decryptionFailed || !toEdit.data ||
+        typeof toEdit.data !== 'object' || toEdit.data.error) {
+      toast.error('This item can’t be opened for editing.');
+      return;
+    }
+
+    setEditingItem(toEdit);
   };
 
   const handleEditSubmit = async (values, formikHelpers) => {
     if (!editingItem || !onUpdateItem) return;
+    // `id` is injected into the form only to drive the submit-button label;
+    // strip it so UI metadata is never persisted inside the encrypted payload.
+    const secretValues = { ...values };
+    delete secretValues.id;
     try {
       // Preserve any unknown fields already on the item; form values win.
       const updated = {
         ...editingItem,
         type: 'password',
-        data: { ...(editingItem.data || {}), ...values }
+        data: { ...(editingItem.data || {}), ...secretValues }
       };
       await onUpdateItem(updated);
       toast.success('Item updated.');
