@@ -104,18 +104,29 @@ export const VaultProvider = ({ children }) => {
       // payload yields [] instead of throwing on .map.
       const response = await axios.get('/api/vault/');
       const data = response?.data;
-      const list = Array.isArray(data?.items)
+      const rawList = Array.isArray(data?.items)
         ? data.items
         : Array.isArray(data?.results)
           ? data.results
           : Array.isArray(data)
             ? data
             : [];
+      // These rows are ciphertext (encrypted_data, no decrypted `data`).
+      // Tag them as lazy so consumers that render items directly (e.g. the
+      // dashboard's VaultItemCard) treat them as encrypted/lazy rather than
+      // dereferencing a missing `data` object. Decryption happens on demand.
+      const list = rawList.map(row => ({ ...row, _lazyLoaded: true, _decrypted: false }));
       if (isMountedRef.current) {
         setItems(list);
+        setError(null);
       }
-    } catch (error) {
-      console.error('Failed to refresh vault items', error);
+    } catch (err) {
+      console.error('Failed to refresh vault items', err);
+      // Surface the failure so the vault view can show an error instead of a
+      // misleading "no passwords saved" empty state after items were cleared.
+      if (isMountedRef.current) {
+        setError('Failed to load your password vault. Please try again.');
+      }
     }
   }, []);
 
@@ -128,13 +139,19 @@ export const VaultProvider = ({ children }) => {
   useEffect(() => {
     if (!isAuthenticated) {
       setItems([]);
+      // Drop any cached decrypted plaintext on logout so it can never be
+      // served (decryptItem reads this cache by item_id before the list).
+      setDecryptedItems(new Map());
       return undefined;
     }
     // Clear any previous account's items BEFORE refetching so a session or
     // identity change never shows the prior user's vault while the refresh is
     // in flight (or indefinitely if it fails) — matching the old App-level
-    // clear-before-refetch isolation guard.
+    // clear-before-refetch isolation guard. Also drop the decrypted cache so a
+    // colliding item_id from the new account can't return the prior account's
+    // plaintext.
     setItems([]);
+    setDecryptedItems(new Map());
     refreshItems();
     const onVaultUpdated = () => refreshItems();
     window.addEventListener('vault:updated', onVaultUpdated);
