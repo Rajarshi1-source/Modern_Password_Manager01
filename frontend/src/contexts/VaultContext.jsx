@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import axios from 'axios';
 import { VaultService } from '../services/vaultService';
 import firebaseService from '../services/firebaseService';
 import api from '../services/api';
@@ -93,14 +94,30 @@ export const VaultProvider = ({ children }) => {
 
   const refreshItems = useCallback(async () => {
     try {
-      const items = await vaultService.getVaultItems();
+      // Load the canonical item list the same way the /vault page always has:
+      // via the default JWT-authenticated axios client (auth is attached by the
+      // useAuth request interceptor / axios defaults). We deliberately do NOT
+      // route through VaultService.getVaultItems here — that uses a private,
+      // unauthenticated axios instance and builds previews via cryptoService,
+      // which is never initialised in the live (sessionVaultCrypto) flow.
+      // Parse defensively: only an array is a valid item list, so a non-list
+      // payload yields [] instead of throwing on .map.
+      const response = await axios.get('/api/vault/');
+      const data = response?.data;
+      const list = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.results)
+          ? data.results
+          : Array.isArray(data)
+            ? data
+            : [];
       if (isMountedRef.current) {
-        setItems(items);
+        setItems(list);
       }
     } catch (error) {
       console.error('Failed to refresh vault items', error);
     }
-  }, [vaultService]);
+  }, []);
 
   // VaultContext is the single source of truth for the vault item list (PR C).
   // Load the (lazy/ciphertext) list whenever the authenticated identity
@@ -113,6 +130,11 @@ export const VaultProvider = ({ children }) => {
       setItems([]);
       return undefined;
     }
+    // Clear any previous account's items BEFORE refetching so a session or
+    // identity change never shows the prior user's vault while the refresh is
+    // in flight (or indefinitely if it fails) — matching the old App-level
+    // clear-before-refetch isolation guard.
+    setItems([]);
     refreshItems();
     const onVaultUpdated = () => refreshItems();
     window.addEventListener('vault:updated', onVaultUpdated);
