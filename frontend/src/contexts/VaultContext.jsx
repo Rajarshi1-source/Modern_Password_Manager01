@@ -44,6 +44,7 @@ export const VaultProvider = ({ children }) => {
   const lastActivityRef = useRef(Date.now());
   const isMountedRef = useRef(true); // Fix #6: Track component mount state
   const favoriteInFlightRef = useRef(new Set()); // Serialize favorite toggles per item id
+  const refreshAbortRef = useRef(null); // Cancels a superseded in-flight item refresh
 
   // Clean up mounted ref on unmount
   useEffect(() => {
@@ -93,6 +94,14 @@ export const VaultProvider = ({ children }) => {
   }, [checkIfInitialized, isAuthenticated]);
 
   const refreshItems = useCallback(async () => {
+    // Cancel any in-flight refresh so a slower earlier response (e.g. from a
+    // rapid identity change or a burst of vault:updated events) can't overwrite
+    // a newer one with stale items.
+    if (refreshAbortRef.current) {
+      refreshAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    refreshAbortRef.current = controller;
     try {
       // Load the canonical item list the same way the /vault page always has:
       // via the default JWT-authenticated axios client (auth is attached by the
@@ -102,7 +111,7 @@ export const VaultProvider = ({ children }) => {
       // which is never initialised in the live (sessionVaultCrypto) flow.
       // Parse defensively: only an array is a valid item list, so a non-list
       // payload yields [] instead of throwing on .map.
-      const response = await axios.get('/api/vault/');
+      const response = await axios.get('/api/vault/', { signal: controller.signal });
       const data = response?.data;
       const rawList = Array.isArray(data?.items)
         ? data.items
@@ -116,11 +125,15 @@ export const VaultProvider = ({ children }) => {
       // dashboard's VaultItemCard) treat them as encrypted/lazy rather than
       // dereferencing a missing `data` object. Decryption happens on demand.
       const list = rawList.map(row => ({ ...row, _lazyLoaded: true, _decrypted: false }));
-      if (isMountedRef.current) {
+      if (isMountedRef.current && !controller.signal.aborted) {
         setItems(list);
         setError(null);
       }
     } catch (err) {
+      // A superseded request was aborted on purpose — leave state to the newer one.
+      if (err?.name === 'CanceledError' || err?.name === 'AbortError' || axios.isCancel?.(err)) {
+        return;
+      }
       console.error('Failed to refresh vault items', err);
       // Surface the failure so the vault view can show an error instead of a
       // misleading "no passwords saved" empty state after items were cleared.

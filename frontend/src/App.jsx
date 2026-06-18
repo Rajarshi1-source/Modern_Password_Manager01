@@ -95,33 +95,34 @@ const VaultItemsSection = () => {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const next = {};
-      for (const item of items) {
-        if (!item || !item.item_id) continue;
-        // Try v2 first; it flags envelopes it doesn't own (incl. v3
-        // svc-gcm-2) as {_legacyPlaintext:true}, so fall back to v3 then.
-        try {
-          const v2Result = await sessionVaultCrypto.decryptItem(item.encrypted_data);
-          if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
-            try {
-              next[item.item_id] = await sessionVaultCryptoV3.decryptItem(item.encrypted_data);
-            } catch (v3Err) {
-              console.warn(
-                'v3 fallback failed; falling back to v2 legacy-plaintext result',
-                item.item_id, v3Err,
-              );
-              next[item.item_id] = v2Result;
-            }
-          } else {
-            next[item.item_id] = v2Result;
+    // Decrypt rows in parallel (faster initial render for large vaults). Each
+    // resolves to an [item_id, data] entry. v2 is tried first; it flags
+    // envelopes it doesn't own (incl. v3 svc-gcm-2) as {_legacyPlaintext:true},
+    // in which case we fall back to v3.
+    const decryptOne = async (item) => {
+      if (!item || !item.item_id) return null;
+      try {
+        const v2Result = await sessionVaultCrypto.decryptItem(item.encrypted_data);
+        if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
+          try {
+            return [item.item_id, await sessionVaultCryptoV3.decryptItem(item.encrypted_data)];
+          } catch (v3Err) {
+            console.warn(
+              'v3 fallback failed; falling back to v2 legacy-plaintext result',
+              item.item_id, v3Err,
+            );
+            return [item.item_id, v2Result];
           }
-        } catch (err) {
-          console.error('Failed to decrypt vault item', item.item_id, err);
-          next[item.item_id] = { _decryptError: true };
         }
+        return [item.item_id, v2Result];
+      } catch (err) {
+        console.error('Failed to decrypt vault item', item.item_id, err);
+        return [item.item_id, { _decryptError: true }];
       }
-      if (!cancelled) setDecryptedItems(next);
+    };
+    (async () => {
+      const entries = (await Promise.all(items.map(decryptOne))).filter(Boolean);
+      if (!cancelled) setDecryptedItems(Object.fromEntries(entries));
     })();
     return () => { cancelled = true; };
   }, [items]);
@@ -168,9 +169,11 @@ const VaultItemsSection = () => {
                       <strong>Password:</strong> •••••••••••
                     </p>
                     <div className="card-actions">
-                      <button className="action-btn">View</button>
-                      <button className="action-btn">Edit</button>
-                      <button className="action-btn delete">Delete</button>
+                      {/* TODO: wire these to view/edit/delete. Disabled for now —
+                          the functional read-write vault UI lives at /vault/dashboard. */}
+                      <button className="action-btn" disabled>View</button>
+                      <button className="action-btn" disabled>Edit</button>
+                      <button className="action-btn delete" disabled>Delete</button>
                     </div>
                   </div>
                 );
