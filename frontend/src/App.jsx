@@ -24,6 +24,7 @@ import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
 import sessionVaultCrypto from './services/sessionVaultCrypto';
 import sessionVaultCryptoV3 from './services/sessionVaultCryptoV3';
+import { decryptEnvelope } from './services/vaultEnvelope';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
 
@@ -96,25 +97,12 @@ const VaultItemsSection = () => {
   useEffect(() => {
     let cancelled = false;
     // Decrypt rows in parallel (faster initial render for large vaults). Each
-    // resolves to an [item_id, data] entry. v2 is tried first; it flags
-    // envelopes it doesn't own (incl. v3 svc-gcm-2) as {_legacyPlaintext:true},
-    // in which case we fall back to v3.
+    // resolves to an [item_id, data] entry. The v2→v3 envelope logic lives in
+    // the shared services/vaultEnvelope helper (single source of crypto truth).
     const decryptOne = async (item) => {
       if (!item || !item.item_id) return null;
       try {
-        const v2Result = await sessionVaultCrypto.decryptItem(item.encrypted_data);
-        if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
-          try {
-            return [item.item_id, await sessionVaultCryptoV3.decryptItem(item.encrypted_data)];
-          } catch (v3Err) {
-            console.warn(
-              'v3 fallback failed; falling back to v2 legacy-plaintext result',
-              item.item_id, v3Err,
-            );
-            return [item.item_id, v2Result];
-          }
-        }
-        return [item.item_id, v2Result];
+        return [item.item_id, await decryptEnvelope(item.encrypted_data)];
       } catch (err) {
         console.error('Failed to decrypt vault item', item.item_id, err);
         return [item.item_id, { _decryptError: true }];
