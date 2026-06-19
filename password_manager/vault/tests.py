@@ -1150,9 +1150,15 @@ class VaultUrlconfRoutingTests(TestCase):
     """
 
     def setUp(self):
+        """Two scoped users (one authenticated) each owning one vault item.
+
+        Passwords are intentionally omitted: the suite authenticates via
+        ``force_authenticate`` and never logs in, so a literal password would
+        only add a Ruff S106 hardcoded-credential warning with no test value.
+        """
         self.client = APIClient()
         self.user = User.objects.create_user(
-            username='urluser', email='url@example.com', password='testpass123',
+            username='urluser', email='url@example.com',
         )
         self.client.force_authenticate(user=self.user)
         self.item = VaultItem.objects.create(
@@ -1161,7 +1167,7 @@ class VaultUrlconfRoutingTests(TestCase):
         )
         # A second user's item — must never leak into self.user's list.
         self.other = User.objects.create_user(
-            username='urlother', email='urlother@example.com', password='testpass123',
+            username='urlother', email='urlother@example.com',
         )
         self.other_item = VaultItem.objects.create(
             user=self.other, item_id='other_url_item', item_type='password',
@@ -1171,42 +1177,49 @@ class VaultUrlconfRoutingTests(TestCase):
     # --- resolve() matrix -------------------------------------------------
 
     def test_root_resolves_to_list_not_info_view(self):
+        """GET /api/vault/ reaches the list/create view, not vault_root."""
         match = _resolve('/api/vault/')
         self.assertIs(match.func.cls, _ApiVaultItemViewSet)
         self.assertEqual(match.func.actions.get('get'), 'list')
         self.assertEqual(match.func.actions.get('post'), 'create')
 
     def test_folders_resolves_to_folder_list(self):
+        """/api/vault/folders/ reaches FolderViewSet.list, not the catch-all."""
         match = _resolve('/api/vault/folders/')
         self.assertEqual(match.func.cls.__name__, 'FolderViewSet')
         self.assertEqual(match.func.actions.get('get'), 'list')
         self.assertNotIn('pk', match.kwargs)  # not the detail catch-all
 
     def test_backups_resolves_to_backup_list(self):
+        """/api/vault/backups/ reaches BackupViewSet.list, not the catch-all."""
         match = _resolve('/api/vault/backups/')
         self.assertEqual(match.func.cls.__name__, 'BackupViewSet')
         self.assertEqual(match.func.actions.get('get'), 'list')
         self.assertNotIn('pk', match.kwargs)
 
     def test_items_resolves_to_list(self):
+        """/api/vault/items/ reaches the items list, not the detail catch-all."""
         match = _resolve('/api/vault/items/')
         self.assertIs(match.func.cls, _ApiVaultItemViewSet)
         self.assertEqual(match.func.actions.get('get'), 'list')
         self.assertNotIn('pk', match.kwargs)
 
     def test_sync_resolves_to_crud_sync_action(self):
+        """/api/vault/sync/ POST reaches CrudVaultItemViewSet.sync."""
         match = _resolve('/api/vault/sync/')
         self.assertIs(match.func.cls, _CrudVaultItemViewSet)
         self.assertEqual(match.func.actions.get('post'), 'sync')
         self.assertNotIn('pk', match.kwargs)
 
     def test_detail_still_resolves_to_api_detail(self):
+        """/api/vault/{id}/ still resolves to the item detail (favorite PATCH)."""
         match = _resolve(f'/api/vault/{self.item.id}/')
         self.assertIs(match.func.cls, _ApiVaultItemViewSet)
         self.assertEqual(match.func.actions.get('patch'), 'partial_update')
         self.assertEqual(str(match.kwargs.get('pk')), str(self.item.id))
 
     def test_list_level_actions_still_resolve(self):
+        """The detail=False @actions resolve to their action, not detail(pk=...)."""
         for path_, expected_action in [
             ('/api/vault/get_salt/', 'get_salt'),
             ('/api/vault/verify_auth/', 'verify_auth'),
@@ -1219,6 +1232,7 @@ class VaultUrlconfRoutingTests(TestCase):
             self.assertNotIn('pk', match.kwargs, path_)
 
     def test_reverse_names_point_at_canonical_urls(self):
+        """Named routes reverse to their canonical post-fix URLs."""
         self.assertEqual(_reverse('vault-root'), '/api/vault/meta/')
         self.assertEqual(_reverse('vault-items-list'), '/api/vault/items/')
         self.assertEqual(_reverse('vault-sync'), '/api/vault/sync/')
@@ -1227,6 +1241,7 @@ class VaultUrlconfRoutingTests(TestCase):
     # --- end-to-end behavior ---------------------------------------------
 
     def test_get_root_returns_user_items_as_list(self):
+        """GET /api/vault/ returns the caller's items as a list, scoped per user."""
         resp = self.client.get('/api/vault/')
         self.assertEqual(resp.status_code, 200, resp.content)
         # Regression: before the fix this was the vault_root info view, whose
@@ -1237,6 +1252,7 @@ class VaultUrlconfRoutingTests(TestCase):
         self.assertNotIn('other_url_item', returned_ids)  # scoped to the user
 
     def test_favorite_patch_on_detail_still_works(self):
+        """The metadata-only favorite PATCH persists without touching ciphertext."""
         resp = self.client.patch(
             f'/api/vault/{self.item.id}/', {'favorite': True}, format='json',
         )
@@ -1247,14 +1263,17 @@ class VaultUrlconfRoutingTests(TestCase):
         self.assertEqual(self.item.encrypted_data, 'cipher-blob')
 
     def test_folders_list_is_reachable(self):
+        """GET /api/vault/folders/ returns 200 (no longer shadowed -> 404)."""
         resp = self.client.get('/api/vault/folders/')
         self.assertEqual(resp.status_code, 200, resp.content)
 
     def test_backups_list_is_reachable(self):
+        """GET /api/vault/backups/ returns 200 (no longer shadowed -> 404)."""
         resp = self.client.get('/api/vault/backups/')
         self.assertEqual(resp.status_code, 200, resp.content)
 
     def test_sync_post_reaches_sync_action_not_405(self):
+        """POST /api/vault/sync/ reaches the sync action, not the 405 catch-all."""
         # Before the fix POST /api/vault/sync/ hit the detail catch-all (which
         # has no POST handler) -> 405. Now it reaches CrudVaultItemViewSet.sync,
         # which with no UserSalt row returns 400 vault_not_initialized.
