@@ -443,9 +443,10 @@ const VaultDashboard = ({
           ((data.username || '').toLowerCase().includes(query) ||
            (data.email || '').toLowerCase().includes(query));
 
-        // Search in URL for passwords
+        // Search in URL for passwords. Items use `website` (the add flow + the
+        // edit normalization below) or legacy `url`, so match either.
         const urlMatch = type === 'password' &&
-          (data.url || '').toLowerCase().includes(query);
+          (data.url || data.website || '').toLowerCase().includes(query);
 
         // Search in notes
         const notesMatch = (data.notes || data.note || '').toLowerCase().includes(query);
