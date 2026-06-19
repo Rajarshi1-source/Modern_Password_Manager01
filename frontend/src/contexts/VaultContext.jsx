@@ -4,6 +4,8 @@ import { VaultService } from '../services/vaultService';
 import firebaseService from '../services/firebaseService';
 import api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
+import sessionVaultCrypto from '../services/sessionVaultCrypto';
+import { decryptEnvelope, encryptEnvelope } from '../services/vaultEnvelope';
 
 const VaultContext = createContext();
 
@@ -34,6 +36,13 @@ export const VaultProvider = ({ children }) => {
   const [lastSyncTime, setLastSyncTime] = useState(localStorage.getItem('lastSyncTime') || new Date().toISOString());
   const [decryptedItems, setDecryptedItems] = useState(new Map());
   const [lazyLoadEnabled, setLazyLoadEnabled] = useState(true);
+  // PR F: the dashboard's edit gate (canEdit). Editing re-encrypts the secret,
+  // so it requires a live session key. The authoritative crypto unlock is
+  // sessionVaultCrypto (v2) — set during login and cleared on logout — NOT the
+  // never-initialised vaultService.encryptionKey the old `isUnlocked` tracked.
+  // Recomputed on auth change and on 'vault:updated' (which the login flow now
+  // dispatches once the session key is established).
+  const [sessionUnlocked, setSessionUnlocked] = useState(() => sessionVaultCrypto.hasSessionKey());
   const { isAuthenticated, user } = useAuth(); // Get auth status + identity
 
   // Fix #8: Use useMemo for vaultService
@@ -155,6 +164,7 @@ export const VaultProvider = ({ children }) => {
       // Drop any cached decrypted plaintext on logout so it can never be
       // served (decryptItem reads this cache by item_id before the list).
       setDecryptedItems(new Map());
+      setSessionUnlocked(false);
       return undefined;
     }
     // Clear any previous account's items BEFORE refetching so a session or
@@ -165,8 +175,14 @@ export const VaultProvider = ({ children }) => {
     // plaintext.
     setItems([]);
     setDecryptedItems(new Map());
+    setSessionUnlocked(sessionVaultCrypto.hasSessionKey());
     refreshItems();
-    const onVaultUpdated = () => refreshItems();
+    // 'vault:updated' fires from the add/edit write paths AND from the login
+    // flow once the session key is established — recompute canEdit on each.
+    const onVaultUpdated = () => {
+      refreshItems();
+      setSessionUnlocked(sessionVaultCrypto.hasSessionKey());
+    };
     window.addEventListener('vault:updated', onVaultUpdated);
     return () => window.removeEventListener('vault:updated', onVaultUpdated);
     // user id/email keep this isolated per-account: switching users refetches
@@ -241,8 +257,21 @@ export const VaultProvider = ({ children }) => {
 
     try {
       console.time(`on-demand-decrypt-${itemId}`);
-      const decryptedItem = await vaultService.decryptItemOnDemand(item);
+      // PR F: decrypt via the shared sessionVaultCrypto (v2→v3) envelope helper
+      // — the same proven path the /vault list uses — instead of the
+      // never-initialised vaultService.cryptoService.
+      const data = await decryptEnvelope(item.encrypted_data);
       console.timeEnd(`on-demand-decrypt-${itemId}`);
+
+      // A `_legacyPlaintext` marker (or any payload with no usable object)
+      // is NOT editable: re-encrypting an empty form over it would corrupt the
+      // item. Surface a failure placeholder the dashboard refuses to open, and
+      // don't cache it so a later attempt (after a proper unlock) can retry.
+      if (!data || data._legacyPlaintext) {
+        return { ...item, _decryptionFailed: true };
+      }
+
+      const decryptedItem = { ...item, data, _decrypted: true, _lazyLoaded: false };
 
       // Cache the decrypted item
       setDecryptedItems(prev => new Map(prev).set(itemId, decryptedItem));
@@ -257,7 +286,7 @@ export const VaultProvider = ({ children }) => {
       console.error('On-demand decryption failed:', error);
       throw error;
     }
-  }, [items, decryptedItems, vaultService]);
+  }, [items, decryptedItems]);
 
   const handleLockVault = useCallback((broadcast = true) => {
     setIsUnlocked(false);
@@ -653,38 +682,54 @@ export const VaultProvider = ({ children }) => {
     }
   }, [vaultService, firebaseInitialized, syncVault]);
 
+  // PR F: edit re-encrypts the secret and persists it via the proven detail
+  // route (/api/vault/{id}/). Crypto goes through sessionVaultCrypto (v2) via
+  // encryptEnvelope — the same key the /vault add flow and list use — NOT the
+  // never-initialised vaultService.cryptoService. Gated on a live session key;
+  // only the ciphertext (never the plaintext `data`) is sent to the server.
+  //
+  // PATCH, not PUT: EncryptedVaultItemSerializer exposes `user` as a writable
+  // (non-read-only) field, so a full PUT would require `user` in the body and
+  // 400. A partial PATCH of just `encrypted_data` is also safer — it never
+  // touches `favorite` (owned by the metadata-only toggleFavorite PATCH) or
+  // `item_type`, so an edit can't clobber a concurrent favorite change.
   const updateItem = useCallback(async (item) => {
+    if (!sessionVaultCrypto.hasSessionKey()) {
+      const lockedErr = new Error('Unlock your vault to edit items.');
+      if (isMountedRef.current) setError(lockedErr.message);
+      throw lockedErr;
+    }
     try {
       setLoading(true);
       setError(null);
 
-      await vaultService.saveVaultItem(item);
+      const encrypted_data = await encryptEnvelope(item.data);
+      const response = await axios.patch(`/api/vault/${item.id}/`, { encrypted_data });
 
       if (!isMountedRef.current) return;
 
-      // Update item in state
+      const updatedAt = response?.data?.updated_at || new Date().toISOString();
+      // Replace the row with the freshly-encrypted ciphertext, keeping the
+      // in-memory plaintext usable for this session.
       setItems(prevItems =>
-        prevItems.map(i => i.id === item.id ? { ...i, ...item, updated_at: new Date().toISOString() } : i)
+        prevItems.map(i =>
+          i.id === item.id
+            ? { ...i, ...item, encrypted_data, updated_at: updatedAt }
+            : i
+        )
       );
 
-      // Broadcast update to other tabs
-      broadcastVaultUpdate();
-
-      // Fix #5: Limit pendingChanges size
-      setPendingChanges(prev => {
-        const updated = [...prev, {
-          operation: 'update',
-          item
-        }];
-
-        // Auto-sync if too many pending changes
-        if (updated.length > MAX_PENDING_CHANGES) {
-          setTimeout(() => syncVault(), 0);
-          return updated.slice(0, MAX_PENDING_CHANGES);
-        }
-
-        return updated;
+      // Invalidate the cached plaintext for this item so a re-open re-decrypts
+      // the new ciphertext rather than serving the pre-edit snapshot.
+      setDecryptedItems(prev => {
+        if (!prev.has(item.item_id)) return prev;
+        const next = new Map(prev);
+        next.delete(item.item_id);
+        return next;
       });
+
+      // Keep other tabs / the /vault list in sync.
+      broadcastVaultUpdate();
 
       return item;
     } catch (error) {
@@ -697,7 +742,7 @@ export const VaultProvider = ({ children }) => {
         setLoading(false);
       }
     }
-  }, [vaultService, syncVault]);
+  }, []);
 
   const deleteItem = useCallback(async (itemId) => {
     try {
@@ -867,6 +912,7 @@ export const VaultProvider = ({ children }) => {
   const value = useMemo(() => ({
     isInitialized,
     isUnlocked,
+    canEdit: sessionUnlocked,  // PR F: reactive session-key gate for the dashboard
     items,
     loading,
     error,
@@ -891,7 +937,7 @@ export const VaultProvider = ({ children }) => {
     lazyLoadEnabled,  // New: lazy load setting
     setLazyLoadEnabled  // New: toggle lazy loading
   }), [
-    isInitialized, isUnlocked, items, loading, error, autoLockTimeout,
+    isInitialized, isUnlocked, sessionUnlocked, items, loading, error, autoLockTimeout,
     syncStatus, pendingChanges, lastSyncTime, lazyLoadEnabled,
     unlockVault, lockVault, addItem, updateItem, deleteItem, refreshItems, toggleFavorite,
     syncVault, decryptItem

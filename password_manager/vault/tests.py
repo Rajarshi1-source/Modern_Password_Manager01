@@ -1282,3 +1282,75 @@ class VaultUrlconfRoutingTests(TestCase):
         self.assertNotEqual(resp.status_code, 404, resp.content)
         self.assertEqual(resp.status_code, 400, resp.content)
         self.assertEqual(resp.json().get('code'), 'vault_not_initialized')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False, DEBUG=True)
+class VaultEncryptedDataPatchTests(TestCase):
+    """PR F: the dashboard edit re-encrypts a vault item and persists the new
+    ciphertext via a partial PATCH of ONLY ``encrypted_data`` on
+    /api/vault/{id}/ (served by ApiVaultItemViewSet).
+
+    A partial PATCH is required: ``EncryptedVaultItemSerializer`` exposes
+    ``user`` as a writable field, so a full PUT would demand ``user`` in the
+    body and 400. These tests pin that contract — the frontend
+    VaultContext.updateItem depends on it.
+    """
+
+    def setUp(self):
+        """One authenticated user with a single encrypted item (no login needed)."""
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='patchuser', email='patch@example.com',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.item = VaultItem.objects.create(
+            user=self.user,
+            item_id='enc_item_1',
+            item_type='password',
+            encrypted_data='old-cipher-blob',
+            favorite=True,
+        )
+
+    def test_patch_updates_ciphertext_without_user_in_body(self):
+        """PATCH {encrypted_data} → 200 and the new ciphertext is persisted."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'encrypted_data': 'new-cipher-blob'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.encrypted_data, 'new-cipher-blob')
+
+    def test_patch_encrypted_data_leaves_favorite_untouched(self):
+        """A ciphertext-only PATCH must not disturb the favorite flag."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'encrypted_data': 'another-blob'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.item.refresh_from_db()
+        # favorite was True at setUp and is owned by the metadata-only toggle.
+        self.assertTrue(self.item.favorite)
+
+    def test_patch_rejects_other_users_item(self):
+        """Scoped queryset: a user cannot rewrite another user's ciphertext."""
+        other = User.objects.create_user(
+            username='patchother', email='patchother@example.com',
+        )
+        other_item = VaultItem.objects.create(
+            user=other,
+            item_id='other_enc_item',
+            item_type='password',
+            encrypted_data='other-cipher',
+            favorite=False,
+        )
+        resp = self.client.patch(
+            f'/api/vault/{other_item.id}/',
+            {'encrypted_data': 'attacker-blob'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 404)
+        other_item.refresh_from_db()
+        self.assertEqual(other_item.encrypted_data, 'other-cipher')

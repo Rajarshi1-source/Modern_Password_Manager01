@@ -534,6 +534,13 @@ const VaultDashboard = ({
     // strip it so UI metadata is never persisted inside the encrypted payload.
     const secretValues = { ...values };
     delete secretValues.id;
+    // Reconcile the form's `url` field back onto the stored `website` shape
+    // (the /vault add flow and list use `website`), so a round-tripped edit
+    // doesn't leave a stray duplicate key on the item.
+    if ('url' in secretValues) {
+      secretValues.website = secretValues.url;
+      delete secretValues.url;
+    }
     try {
       // Preserve any unknown fields already on the item; form values win.
       const updated = {
@@ -698,7 +705,13 @@ const VaultDashboard = ({
               <FaTimes />
             </ModalClose>
             <PasswordItemForm
-              initialValues={{ ...editingItem.data, id: editingItem.id ?? editingItem.item_id }}
+              initialValues={{
+                ...editingItem.data,
+                // The form uses `url`; the vault stores `website`. Map it so
+                // the Website field pre-fills on edit.
+                url: editingItem.data?.url ?? editingItem.data?.website ?? '',
+                id: editingItem.id ?? editingItem.item_id,
+              }}
               onSubmit={handleEditSubmit}
               onCancel={() => setEditingItem(null)}
             />

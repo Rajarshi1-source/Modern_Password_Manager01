@@ -70,7 +70,10 @@ const BehavioralRecoveryStatus = lazy(() => import('./Components/dashboard/Behav
 // requires an unlocked vault (canEdit); delete is confirmed in the dashboard.
 // Adding new items still routes to the canonical /vault page.
 const VaultDashboardRoute = () => {
-  const { items, toggleFavorite, updateItem, deleteItem, decryptItem, isUnlocked } = useVault();
+  // PR F: `canEdit` is the reactive session-key gate (sessionVaultCrypto), not
+  // the legacy `isUnlocked` (which tracked the never-initialised vaultService
+  // key and so was permanently false in the live flow).
+  const { items, toggleFavorite, updateItem, deleteItem, decryptItem, canEdit } = useVault();
   const navigate = useNavigate();
   const goToVault = () => navigate('/vault');
   return (
@@ -81,7 +84,7 @@ const VaultDashboardRoute = () => {
       onDeleteItem={deleteItem}
       onDecryptItem={decryptItem}
       onAddItem={goToVault}
-      canEdit={isUnlocked}
+      canEdit={canEdit}
     />
   );
 };
@@ -1329,6 +1332,13 @@ function App() {
           console.warn('v3 wrapped-DEK unlock failed:', v3Err);
         }
       }
+
+      // PR F: the session vault key is now established (v2 above, plus v3 when
+      // available). Signal VaultContext so its dashboard edit gate (canEdit,
+      // derived from sessionVaultCrypto.hasSessionKey()) flips to unlocked and
+      // it refetches the canonical list. Without this the context only
+      // recomputes canEdit on auth change, which can race ahead of the key.
+      window.dispatchEvent(new CustomEvent('vault:updated'));
 
       // Opportunistic retry of un-migrated v2 items. Fire-and-forget:
       // the sweep is idempotent and single-flight, so blocking login on
