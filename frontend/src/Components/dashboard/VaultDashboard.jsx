@@ -544,10 +544,14 @@ const VaultDashboard = ({
     }
     try {
       // Preserve any unknown fields already on the item; form values win.
+      // Drop any stale `url` already on the stored data so the normalization
+      // above leaves a single canonical `website` key (no legacy duplicate).
+      const baseData = { ...(editingItem.data || {}) };
+      delete baseData.url;
       const updated = {
         ...editingItem,
         type: 'password',
-        data: { ...(editingItem.data || {}), ...secretValues }
+        data: { ...baseData, ...secretValues }
       };
       await onUpdateItem(updated);
       toast.success('Item updated.');
