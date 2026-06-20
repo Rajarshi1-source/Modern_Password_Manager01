@@ -114,10 +114,9 @@ export const VaultProvider = ({ children }) => {
     try {
       // Load the canonical item list the same way the /vault page always has:
       // via the default JWT-authenticated axios client (auth is attached by the
-      // useAuth request interceptor / axios defaults). We deliberately do NOT
-      // route through VaultService.getVaultItems here — that uses a private,
-      // unauthenticated axios instance and builds previews via cryptoService,
-      // which is never initialised in the live (sessionVaultCrypto) flow.
+      // useAuth request interceptor / axios defaults). This loads ciphertext
+      // only; decryption happens on demand via the shared sessionVaultCrypto
+      // (vaultEnvelope) helper — never the removed vaultService crypto path.
       // Parse defensively: only an array is a valid item list, so a non-list
       // payload yields [] instead of throwing on .map.
       const response = await axios.get('/api/vault/', { signal: controller.signal });
@@ -202,39 +201,6 @@ export const VaultProvider = ({ children }) => {
       broadcastChannelRef.current.postMessage({ type: 'LOCK_VAULT' });
     } else {
       localStorage.setItem('vaultLockState', 'locked');
-    }
-  };
-
-  const unlockVault = async (masterPassword) => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      // Initialize crypto service with master password
-      const result = await vaultService.initialize(masterPassword);
-
-      if (!isMountedRef.current) return;
-
-      if (result.is_valid || result.status === 'setup_complete') {
-        setIsUnlocked(true);
-
-        // Load vault items with lazy decryption enabled
-        console.time('vault-unlock');
-        const items = await vaultService.getVaultItems(lazyLoadEnabled);
-        console.timeEnd('vault-unlock');
-
-        setItems(items);
-      } else {
-        setError('Invalid master password');
-      }
-    } catch (error) {
-      if (isMountedRef.current) {
-        setError(error.message || 'Failed to unlock vault');
-      }
-    } finally {
-      if (isMountedRef.current) {
-        setLoading(false);
-      }
     }
   };
 
@@ -413,7 +379,7 @@ export const VaultProvider = ({ children }) => {
 
           if (localItemIndex === -1) {
             // New item from another device - decrypt it first
-            const decryptedData = await vaultService.decryptItem(fbItem.encrypted_data);
+            const decryptedData = await decryptEnvelope(fbItem.encrypted_data);
 
             processedItems.push({
               ...fbItem,
@@ -428,7 +394,7 @@ export const VaultProvider = ({ children }) => {
 
             if (fbTimestamp > localTimestamp) {
               // Firebase has newer version - decrypt it
-              const decryptedData = await vaultService.decryptItem(fbItem.encrypted_data);
+              const decryptedData = await decryptEnvelope(fbItem.encrypted_data);
 
               // Update the item in current items array
               currentItems[localItemIndex] = {
@@ -460,7 +426,7 @@ export const VaultProvider = ({ children }) => {
     } catch (error) {
       console.error("Error processing Firebase updates:", error);
     }
-  }, [isUnlocked, vaultService, items]);
+  }, [isUnlocked, items]);
 
   // Fix #9: Add firebaseInitialized to dependency array
   useEffect(() => {
@@ -560,7 +526,7 @@ export const VaultProvider = ({ children }) => {
               serverItems.map(async (serverItem) => {
                 try {
                   // Convert from backend format to frontend format
-                  const decryptedData = await vaultService.decryptItem(serverItem.encrypted_data);
+                  const decryptedData = await decryptEnvelope(serverItem.encrypted_data);
                   return {
                     id: serverItem.id,
                     item_id: serverItem.item_id,
@@ -620,26 +586,42 @@ export const VaultProvider = ({ children }) => {
     }
   }, [lastSyncTime, vaultService]);
 
-  // Update addItem to sync with Firebase and limit pending changes
+  // Add a new item. Mirrors the proven /vault add flow (App.handleSubmit):
+  // encrypt via sessionVaultCrypto (encryptEnvelope) and POST to the detail
+  // route — NOT the never-initialised vaultService.cryptoService. Gated on a
+  // live session key; only ciphertext (never the plaintext `data`) is sent.
   const addItem = useCallback(async (item) => {
+    if (!sessionVaultCrypto.hasSessionKey()) {
+      const lockedErr = new Error('Unlock your vault to add items.');
+      if (isMountedRef.current) setError(lockedErr.message);
+      throw lockedErr;
+    }
     try {
       setLoading(true);
       setError(null);
 
-      const response = await vaultService.saveVaultItem(item);
+      const encrypted_data = await encryptEnvelope(item.data);
+      const item_id = item.item_id || `item_${Date.now()}`;
+      const response = await axios.post('/api/vault/', {
+        item_type: item.type || item.item_type || 'password',
+        item_id,
+        encrypted_data,
+        favorite: item.favorite || false,
+      });
 
       if (!isMountedRef.current) return;
 
       // Add new item to state
+      const created = response?.data || {};
       const newItem = {
-        id: response.data.id,
-        item_id: response.data.item_id,
+        id: created.id,
+        item_id: created.item_id || item_id,
         type: item.type,
         data: item.data,
-        favorite: false,
-        created_at: response.data.created_at,
-        updated_at: response.data.updated_at,
-        encrypted_data: response.data.encrypted_data
+        favorite: created.favorite || false,
+        created_at: created.created_at,
+        updated_at: created.updated_at,
+        encrypted_data,
       };
 
       setItems(prevItems => [...prevItems, newItem]);
@@ -680,7 +662,7 @@ export const VaultProvider = ({ children }) => {
         setLoading(false);
       }
     }
-  }, [vaultService, firebaseInitialized, syncVault]);
+  }, [firebaseInitialized, syncVault]);
 
   // PR F: edit re-encrypts the secret and persists it via the proven detail
   // route (/api/vault/{id}/). Crypto goes through sessionVaultCrypto (v2) via
@@ -789,9 +771,9 @@ export const VaultProvider = ({ children }) => {
   // Toggle the favorite flag on a vault item.
   //
   // Favorite is non-secret metadata, so this deliberately does NOT go through
-  // updateItem/saveVaultItem (which re-encrypt the whole item and require the
-  // decrypted payload — wrong and risky for a lazy-loaded item). Instead it
-  // issues a lightweight metadata-only PATCH. The flag is flipped optimistically
+  // updateItem (which re-encrypts the whole item and requires the decrypted
+  // payload — wrong and risky for a lazy-loaded item). Instead it issues a
+  // lightweight metadata-only PATCH. The flag is flipped optimistically
   // for a snappy UI and rolled back if the request fails. It is intentionally
   // NOT added to pendingChanges, since it is persisted immediately.
   const toggleFavorite = useCallback(async (id) => {
@@ -841,10 +823,6 @@ export const VaultProvider = ({ children }) => {
         handleLockVault(true);
       }, minutes * 60 * 1000);
     }
-  };
-
-  const generatePassword = (options) => {
-    return vaultService.cryptoService?.generatePassword(options);
   };
 
   // Add these new methods for backup/restore
@@ -917,14 +895,12 @@ export const VaultProvider = ({ children }) => {
     loading,
     error,
     autoLockTimeout,
-    unlockVault,
     lockVault,
     addItem,
     updateItem,
     deleteItem,
     refreshItems,  // New: reload the canonical item list (single source of truth)
     toggleFavorite,  // New: metadata-only favorite toggle
-    generatePassword,
     updateAutoLockTimeout,
     createBackup,
     getBackups,
@@ -939,7 +915,7 @@ export const VaultProvider = ({ children }) => {
   }), [
     isInitialized, isUnlocked, sessionUnlocked, items, loading, error, autoLockTimeout,
     syncStatus, pendingChanges, lastSyncTime, lazyLoadEnabled,
-    unlockVault, lockVault, addItem, updateItem, deleteItem, refreshItems, toggleFavorite,
+    lockVault, addItem, updateItem, deleteItem, refreshItems, toggleFavorite,
     syncVault, decryptItem
   ]);
 
