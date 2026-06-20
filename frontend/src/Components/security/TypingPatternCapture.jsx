@@ -219,11 +219,12 @@ export const useTypingPattern = ({
  * 
  * @param {Object} props
  * @param {React.RefObject} props.inputRef - Ref to password input
- * @param {boolean} props.enabled - Whether capture is enabled
- * @param {Function} props.onPatternCaptured - Callback with pattern data
- * @param {Function} props.onSessionRecorded - Callback after API recording
- * @param {boolean} props.autoSubmit - Auto-submit pattern to API
- * @param {string} props.apiEndpoint - API endpoint for recording
+ * @param {boolean} [props.enabled] - Whether capture is enabled
+ * @param {Function} [props.onPatternCaptured] - Callback with pattern data
+ * @param {Function} [props.onSessionRecorded] - Callback after API recording
+ * @param {boolean} [props.autoSubmit] - Auto-submit pattern to API (defaults to true)
+ * @param {string} [props.apiEndpoint] - API endpoint for recording
+ * @param {Function} [props.fingerprint] - Keyed password-fingerprint function
  */
 const TypingPatternCapture = ({
     inputRef,

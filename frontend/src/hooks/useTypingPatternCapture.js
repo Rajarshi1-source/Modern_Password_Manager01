@@ -78,10 +78,11 @@ const detectInputMethod = () => {
  * Hook to capture typing patterns from a password input.
  * 
  * @param {Object} options
- * @param {HTMLInputElement} options.inputElement - The password input element
- * @param {boolean} options.enabled - Whether to capture patterns
- * @param {Function} options.onPatternCaptured - Callback with captured pattern
- * @param {Function} options.onError - Error callback
+ * @param {HTMLInputElement | null} [options.inputElement] - The password input element (the hook no-ops until one is attached)
+ * @param {boolean} [options.enabled] - Whether to capture patterns
+ * @param {Function} [options.onPatternCaptured] - Callback with captured pattern
+ * @param {Function} [options.onError] - Error callback
+ * @param {Function} [options.fingerprint] - Keyed password-fingerprint function
  */
 export const useTypingPatternCapture = ({
     inputElement,
