@@ -33,6 +33,14 @@ global.fetch = vi.fn();
 // produced by cryptoService.passwordFingerprint at runtime.
 const FINGERPRINT_STUB = 'fp-not-a-real-fingerprint';
 
+// The headless TypingPatternCapture attaches its capture/reset helpers directly
+// onto the password input DOM node at mount, so tests that drive capture read
+// them off `inputRef.current`. Model that augmented shape for type-check.
+type CaptureCapableInput = HTMLInputElement & {
+    captureTypingPattern: (password: string) => Promise<void>;
+    resetTypingSession: () => void;
+};
+
 // =============================================================================
 // useTypingPatternCapture Hook Tests
 // =============================================================================
@@ -222,7 +230,7 @@ describe('TypingPatternCapture Component (headless)', () => {
 
         const input = document.createElement('input');
         input.type = 'password';
-        const inputRef = { current: input };
+        const inputRef = { current: input as CaptureCapableInput };
 
         render(<TypingPatternCapture inputRef={inputRef} enabled />);
 
@@ -238,7 +246,7 @@ describe('TypingPatternCapture Component (headless)', () => {
 
         const input = document.createElement('input');
         input.type = 'password';
-        const inputRef = { current: input };
+        const inputRef = { current: input as CaptureCapableInput };
         const onPatternCaptured = vi.fn();
         const onSessionRecorded = vi.fn();
         // Injected keyed-fingerprint fn (in the app: cryptoService.passwordFingerprint).
@@ -517,7 +525,7 @@ describe('Adaptive Password API Service', () => {
 
         // Returns the shape the suggestion modal consumes, with masked previews.
         expect(result.has_suggestion).toBe(true);
-        expect(result.substitutions.length).toBeGreaterThan(0);
+        expect(result.substitutions?.length).toBeGreaterThan(0);
         expect(result.original_preview).toMatch(/\*/);
         // The raw password never appears anywhere in the suggestion object.
         expect(JSON.stringify(result)).not.toContain('MySecret123!');

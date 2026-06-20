@@ -368,7 +368,7 @@ const EmptySubtext = styled.p`
 // Component
 // =============================================================================
 
-const TypingProfileCard = ({ onSettingsClick }) => {
+const TypingProfileCard = ({ onSettingsClick = () => {} }) => {
     const [config, setConfig] = useState(null);
     const [profile, setProfile] = useState(null);
     const [history, setHistory] = useState([]);

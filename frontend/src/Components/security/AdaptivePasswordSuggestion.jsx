@@ -419,7 +419,7 @@ const AdaptivePasswordSuggestion = ({
     suggestion,
     onAccept,
     onReject,
-    onClose,
+    onClose = () => {},
     isLoading = false,
 }) => {
     const [showPassword, setShowPassword] = useState(false);
