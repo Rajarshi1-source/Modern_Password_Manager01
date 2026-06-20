@@ -3,7 +3,7 @@ import styled, { keyframes } from 'styled-components';
 import { Formik, Form, Field, ErrorMessage } from 'formik';
 import * as Yup from 'yup';
 import { FaEye, FaEyeSlash, FaRandom, FaLock, FaGlobe, FaUser, FaEnvelope, FaStickyNote, FaTimes } from 'react-icons/fa';
-import PasswordGenerator from '../PasswordGenerator';
+import PasswordGenerator from '../security/PasswordGenerator';
 
 // Animations
 const fadeIn = keyframes`
@@ -187,6 +187,25 @@ const SubmitButton = styled.button`
     cursor: not-allowed;
     box-shadow: none;
     opacity: 0.6;
+  }
+`;
+
+const CancelButton = styled.button`
+  width: 100%;
+  padding: 14px;
+  background: ${colors.background};
+  color: ${colors.textSecondary};
+  border: 1px solid ${colors.border};
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 10px;
+
+  &:hover {
+    background: ${colors.border};
+    color: ${colors.text};
   }
 `;
 
@@ -387,15 +406,21 @@ const PasswordItemForm = ({ initialValues = {}, onSubmit, onCancel }) => {
             <SubmitButton type="submit" disabled={formikProps.isSubmitting}>
               {initialValues.id ? '💾 Update Password' : '💾 Save Password'}
             </SubmitButton>
-            
+
+            {onCancel && (
+              <CancelButton type="button" onClick={onCancel} disabled={formikProps.isSubmitting}>
+                Cancel
+              </CancelButton>
+            )}
+
             {showGenerator && (
               <ModalOverlay onClick={() => setShowGenerator(false)}>
                 <ModalContent onClick={e => e.stopPropagation()}>
                   <ModalClose onClick={() => setShowGenerator(false)}>
                     <FaTimes />
                   </ModalClose>
-                  <PasswordGenerator 
-                    onSelectPassword={(password) => handlePasswordSelect(password, formikProps)} 
+                  <PasswordGenerator
+                    onSelect={(password) => handlePasswordSelect(password, formikProps)}
                   />
                 </ModalContent>
               </ModalOverlay>

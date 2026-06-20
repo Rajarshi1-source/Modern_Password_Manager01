@@ -4,6 +4,7 @@ Tests vault models, encryption, and vault operations
 """
 
 from django.test import TestCase, RequestFactory
+from rest_framework.test import APIClient
 from django.contrib.auth.models import User
 from django.utils import timezone
 from unittest.mock import patch, Mock
@@ -821,9 +822,91 @@ class VaultItemViewSetTests(TestCase):
         
         cards = VaultItem.objects.filter(user=self.user, item_type='card')
         self.assertEqual(cards.count(), 1)
-        
+
         passwords = VaultItem.objects.filter(user=self.user, item_type='password')
         self.assertEqual(passwords.count(), 3)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False, DEBUG=True)
+class VaultFavoritePatchTests(TestCase):
+    """PR A: the `favorite` flag is writable via a metadata-only PATCH on
+    /api/vault/{id}/ (served by ApiVaultItemViewSet) without touching the
+    encrypted payload."""
+
+    def setUp(self):
+        """Create an authenticated user with one un-favorited vault item."""
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='favuser',
+            email='fav@example.com',
+            password='testpass123',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.item = VaultItem.objects.create(
+            user=self.user,
+            item_id='fav_item_1',
+            item_type='password',
+            encrypted_data='cipher-blob',
+            favorite=False,
+        )
+
+    def test_patch_sets_favorite_without_touching_ciphertext(self):
+        """A PATCH with only {favorite} persists and leaves encrypted_data intact."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'favorite': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertTrue(self.item.favorite)
+        # The metadata-only PATCH must not require or alter the ciphertext.
+        self.assertEqual(self.item.encrypted_data, 'cipher-blob')
+
+    def test_patch_can_clear_favorite(self):
+        """A PATCH with {favorite: False} clears a previously-set favorite."""
+        self.item.favorite = True
+        self.item.save(update_fields=['favorite'])
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'favorite': False},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.item.refresh_from_db()
+        self.assertFalse(self.item.favorite)
+
+    def test_favorite_is_serialized_in_response(self):
+        """`favorite` is now part of the serializer output."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'favorite': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('favorite', resp.data)
+        self.assertTrue(resp.data['favorite'])
+
+    def test_patch_rejects_other_users_item(self):
+        """Scoped queryset: a user cannot favorite someone else's item."""
+        other = User.objects.create_user(
+            username='other', email='other@example.com', password='testpass123'
+        )
+        other_item = VaultItem.objects.create(
+            user=other,
+            item_id='other_item_1',
+            item_type='password',
+            encrypted_data='other-blob',
+            favorite=False,
+        )
+        resp = self.client.patch(
+            f'/api/vault/{other_item.id}/',
+            {'favorite': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 404)
+        other_item.refresh_from_db()
+        self.assertFalse(other_item.favorite)
 
 
 class AuditLogTests(TestCase):
@@ -1038,3 +1121,236 @@ class VerifyAuthC10Tests(TestCase):
         self.assertEqual(body.get('code'), 'vault_not_initialized')
         refreshed = UserSalt.objects.get(user=self.user)
         self.assertEqual(bytes(refreshed.auth_hash or b''), b'')
+
+
+# ---------------------------------------------------------------------------
+# PR D regression: vault URLconf shadowing
+# ---------------------------------------------------------------------------
+
+from django.urls import resolve as _resolve, reverse as _reverse
+from vault.views.api_views import VaultItemViewSet as _ApiVaultItemViewSet
+from vault.views.crud_views import VaultItemViewSet as _CrudVaultItemViewSet
+
+
+@override_settings(SECURE_SSL_REDIRECT=False, DEBUG=True)
+class VaultUrlconfRoutingTests(TestCase):
+    """PR D: the empty-prefix ``r''`` ModelViewSet detail route
+    ``^(?P<pk>[^/.]+)/$`` is a greedy single-segment catch-all. Registered
+    before its siblings (and with ``vault_root`` parked at ``^$``) it used to
+    shadow:
+
+      * ``GET /api/vault/``     -> the ``vault_root`` info view (not the list)
+      * ``/api/vault/folders/`` -> ``api-vault-detail`` (pk='folders')
+      * ``/api/vault/backups/`` -> ``api-vault-detail`` (pk='backups')
+      * ``/api/vault/items/``   -> ``api-vault-detail`` (pk='items')
+      * ``/api/vault/sync/``    -> ``api-vault-detail`` (POST -> 405)
+
+    These tests pin both the ``resolve()`` matrix and the end-to-end behavior
+    so the shadowing cannot silently regress.
+    """
+
+    def setUp(self):
+        """Two scoped users (one authenticated) each owning one vault item.
+
+        Passwords are intentionally omitted: the suite authenticates via
+        ``force_authenticate`` and never logs in, so a literal password would
+        only add a Ruff S106 hardcoded-credential warning with no test value.
+        """
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='urluser', email='url@example.com',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.item = VaultItem.objects.create(
+            user=self.user, item_id='url_item_1', item_type='password',
+            encrypted_data='cipher-blob', favorite=False,
+        )
+        # A second user's item — must never leak into self.user's list.
+        self.other = User.objects.create_user(
+            username='urlother', email='urlother@example.com',
+        )
+        self.other_item = VaultItem.objects.create(
+            user=self.other, item_id='other_url_item', item_type='password',
+            encrypted_data='other-blob', favorite=False,
+        )
+
+    # --- resolve() matrix -------------------------------------------------
+
+    def test_root_resolves_to_list_not_info_view(self):
+        """GET /api/vault/ reaches the list/create view, not vault_root."""
+        match = _resolve('/api/vault/')
+        self.assertIs(match.func.cls, _ApiVaultItemViewSet)
+        self.assertEqual(match.func.actions.get('get'), 'list')
+        self.assertEqual(match.func.actions.get('post'), 'create')
+
+    def test_folders_resolves_to_folder_list(self):
+        """/api/vault/folders/ reaches FolderViewSet.list, not the catch-all."""
+        match = _resolve('/api/vault/folders/')
+        self.assertEqual(match.func.cls.__name__, 'FolderViewSet')
+        self.assertEqual(match.func.actions.get('get'), 'list')
+        self.assertNotIn('pk', match.kwargs)  # not the detail catch-all
+
+    def test_backups_resolves_to_backup_list(self):
+        """/api/vault/backups/ reaches BackupViewSet.list, not the catch-all."""
+        match = _resolve('/api/vault/backups/')
+        self.assertEqual(match.func.cls.__name__, 'BackupViewSet')
+        self.assertEqual(match.func.actions.get('get'), 'list')
+        self.assertNotIn('pk', match.kwargs)
+
+    def test_items_resolves_to_list(self):
+        """/api/vault/items/ reaches the items list, not the detail catch-all."""
+        match = _resolve('/api/vault/items/')
+        self.assertIs(match.func.cls, _ApiVaultItemViewSet)
+        self.assertEqual(match.func.actions.get('get'), 'list')
+        self.assertNotIn('pk', match.kwargs)
+
+    def test_sync_resolves_to_crud_sync_action(self):
+        """/api/vault/sync/ POST reaches CrudVaultItemViewSet.sync."""
+        match = _resolve('/api/vault/sync/')
+        self.assertIs(match.func.cls, _CrudVaultItemViewSet)
+        self.assertEqual(match.func.actions.get('post'), 'sync')
+        self.assertNotIn('pk', match.kwargs)
+
+    def test_detail_still_resolves_to_api_detail(self):
+        """/api/vault/{id}/ still resolves to the item detail (favorite PATCH)."""
+        match = _resolve(f'/api/vault/{self.item.id}/')
+        self.assertIs(match.func.cls, _ApiVaultItemViewSet)
+        self.assertEqual(match.func.actions.get('patch'), 'partial_update')
+        self.assertEqual(str(match.kwargs.get('pk')), str(self.item.id))
+
+    def test_list_level_actions_still_resolve(self):
+        """The detail=False @actions resolve to their action, not detail(pk=...)."""
+        for path_, expected_action in [
+            ('/api/vault/get_salt/', 'get_salt'),
+            ('/api/vault/verify_auth/', 'verify_auth'),
+            ('/api/vault/statistics/', 'statistics'),
+            ('/api/vault/check_initialization/', 'check_initialization'),
+        ]:
+            match = _resolve(path_)
+            self.assertIs(match.func.cls, _ApiVaultItemViewSet, path_)
+            self.assertIn(expected_action, match.func.actions.values(), path_)
+            self.assertNotIn('pk', match.kwargs, path_)
+
+    def test_reverse_names_point_at_canonical_urls(self):
+        """Named routes reverse to their canonical post-fix URLs."""
+        self.assertEqual(_reverse('vault-root'), '/api/vault/meta/')
+        self.assertEqual(_reverse('vault-items-list'), '/api/vault/items/')
+        self.assertEqual(_reverse('vault-sync'), '/api/vault/sync/')
+        self.assertEqual(_reverse('vault-search'), '/api/vault/search/')
+
+    # --- end-to-end behavior ---------------------------------------------
+
+    def test_get_root_returns_user_items_as_list(self):
+        """GET /api/vault/ returns the caller's items as a list, scoped per user."""
+        resp = self.client.get('/api/vault/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        # Regression: before the fix this was the vault_root info view, whose
+        # ``items`` was a URL *string*, not the item list.
+        self.assertIsInstance(resp.data.get('items'), list)
+        returned_ids = {i['item_id'] for i in resp.data['items'] if 'item_id' in i}
+        self.assertIn('url_item_1', returned_ids)
+        self.assertNotIn('other_url_item', returned_ids)  # scoped to the user
+
+    def test_favorite_patch_on_detail_still_works(self):
+        """The metadata-only favorite PATCH persists without touching ciphertext."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/', {'favorite': True}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.item.refresh_from_db()
+        self.assertTrue(self.item.favorite)
+        # Metadata-only PATCH must not disturb the ciphertext.
+        self.assertEqual(self.item.encrypted_data, 'cipher-blob')
+
+    def test_folders_list_is_reachable(self):
+        """GET /api/vault/folders/ returns 200 (no longer shadowed -> 404)."""
+        resp = self.client.get('/api/vault/folders/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_backups_list_is_reachable(self):
+        """GET /api/vault/backups/ returns 200 (no longer shadowed -> 404)."""
+        resp = self.client.get('/api/vault/backups/')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_sync_post_reaches_sync_action_not_405(self):
+        """POST /api/vault/sync/ reaches the sync action, not the 405 catch-all."""
+        # Before the fix POST /api/vault/sync/ hit the detail catch-all (which
+        # has no POST handler) -> 405. Now it reaches CrudVaultItemViewSet.sync,
+        # which with no UserSalt row returns 400 vault_not_initialized.
+        resp = self.client.post('/api/vault/sync/', {}, format='json')
+        self.assertNotEqual(resp.status_code, 405, resp.content)
+        self.assertNotEqual(resp.status_code, 404, resp.content)
+        self.assertEqual(resp.status_code, 400, resp.content)
+        self.assertEqual(resp.json().get('code'), 'vault_not_initialized')
+
+
+@override_settings(SECURE_SSL_REDIRECT=False, DEBUG=True)
+class VaultEncryptedDataPatchTests(TestCase):
+    """PR F: the dashboard edit re-encrypts a vault item and persists the new
+    ciphertext via a partial PATCH of ONLY ``encrypted_data`` on
+    /api/vault/{id}/ (served by ApiVaultItemViewSet).
+
+    A partial PATCH is required: ``EncryptedVaultItemSerializer`` exposes
+    ``user`` as a writable field, so a full PUT would demand ``user`` in the
+    body and 400. These tests pin that contract — the frontend
+    VaultContext.updateItem depends on it.
+    """
+
+    def setUp(self):
+        """One authenticated user with a single encrypted item (no login needed)."""
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='patchuser', email='patch@example.com',
+        )
+        self.client.force_authenticate(user=self.user)
+        self.item = VaultItem.objects.create(
+            user=self.user,
+            item_id='enc_item_1',
+            item_type='password',
+            encrypted_data='old-cipher-blob',
+            favorite=True,
+        )
+
+    def test_patch_updates_ciphertext_without_user_in_body(self):
+        """PATCH {encrypted_data} → 200 and the new ciphertext is persisted."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'encrypted_data': 'new-cipher-blob'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.encrypted_data, 'new-cipher-blob')
+
+    def test_patch_encrypted_data_leaves_favorite_untouched(self):
+        """A ciphertext-only PATCH must not disturb the favorite flag."""
+        resp = self.client.patch(
+            f'/api/vault/{self.item.id}/',
+            {'encrypted_data': 'another-blob'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.item.refresh_from_db()
+        # favorite was True at setUp and is owned by the metadata-only toggle.
+        self.assertTrue(self.item.favorite)
+
+    def test_patch_rejects_other_users_item(self):
+        """Scoped queryset: a user cannot rewrite another user's ciphertext."""
+        other = User.objects.create_user(
+            username='patchother', email='patchother@example.com',
+        )
+        other_item = VaultItem.objects.create(
+            user=other,
+            item_id='other_enc_item',
+            item_type='password',
+            encrypted_data='other-cipher',
+            favorite=False,
+        )
+        resp = self.client.patch(
+            f'/api/vault/{other_item.id}/',
+            {'encrypted_data': 'attacker-blob'},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 404)
+        other_item.refresh_from_db()
+        self.assertEqual(other_item.encrypted_data, 'other-cipher')

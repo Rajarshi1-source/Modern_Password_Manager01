@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import styled, { keyframes } from 'styled-components';
-import { FaSearch, FaPlus, FaLock, FaCreditCard, FaIdCard, FaStickyNote, FaStar } from 'react-icons/fa';
+import { toast } from 'react-hot-toast';
+import { FaSearch, FaPlus, FaLock, FaCreditCard, FaIdCard, FaStickyNote, FaStar, FaTimes, FaTrash, FaExclamationTriangle } from 'react-icons/fa';
 import VaultItemCard from '../vault/VaultItemCard';
+import PasswordItemForm from '../forms/PasswordItemForm';
 
 // Animations
 const fadeIn = keyframes`
@@ -255,16 +257,166 @@ const EmptyAction = styled.button`
   }
 `;
 
-const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) => {
+const ModalOverlay = styled.div`
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+  animation: ${fadeIn} 0.2s ease-out;
+`;
+
+const ModalContent = styled.div`
+  background: ${colors.backgroundSecondary};
+  border-radius: 20px;
+  padding: 28px;
+  max-width: 560px;
+  width: 100%;
+  max-height: 86vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  position: relative;
+`;
+
+const ModalClose = styled.button`
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: ${colors.background};
+  border: 1px solid ${colors.border};
+  color: ${colors.textSecondary};
+  cursor: pointer;
+  padding: 10px;
+  border-radius: 10px;
+  display: flex;
+  transition: all 0.2s ease;
+
+  &:hover {
+    color: ${colors.danger};
+    background: ${colors.danger}15;
+    border-color: ${colors.danger}40;
+  }
+`;
+
+const ConfirmCard = styled(ModalContent)`
+  max-width: 420px;
+  text-align: center;
+`;
+
+const ConfirmIcon = styled.div`
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: ${colors.danger}15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 18px;
+
+  svg {
+    font-size: 28px;
+    color: ${colors.danger};
+  }
+`;
+
+const ConfirmTitle = styled.h3`
+  margin: 0 0 10px 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: ${colors.text};
+`;
+
+const ConfirmText = styled.p`
+  margin: 0 0 24px 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: ${colors.textSecondary};
+
+  strong {
+    color: ${colors.text};
+  }
+`;
+
+const ConfirmActions = styled.div`
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+`;
+
+const CancelButton = styled.button`
+  padding: 12px 24px;
+  background: ${colors.background};
+  color: ${colors.textSecondary};
+  border: 1px solid ${colors.border};
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover:not(:disabled) {
+    background: ${colors.border};
+    color: ${colors.text};
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+`;
+
+const DangerButton = styled.button`
+  padding: 12px 24px;
+  background: linear-gradient(135deg, ${colors.danger} 0%, #dc2626 100%);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 14px ${colors.danger}40;
+  transition: all 0.2s ease;
+
+  &:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px ${colors.danger}50;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+  }
+`;
+
+const VaultDashboard = ({
+  items,
+  onToggleFavorite,
+  onUpdateItem,
+  onDeleteItem,
+  onDecryptItem,
+  onAddItem,
+  canEdit = false
+}) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('all');
   const [filteredItems, setFilteredItems] = useState([]);
 
-  useEffect(() => {
-    filterItems();
-  }, [items, searchQuery, activeTab]);
+  // Read-write state
+  const [editingItem, setEditingItem] = useState(null); // decrypted item being edited
+  const [openingEditor, setOpeningEditor] = useState(false); // decrypting before edit
+  const [deletingItem, setDeletingItem] = useState(null); // item pending delete confirmation
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const filterItems = () => {
+  const filterItems = useCallback(() => {
     let filtered = [...items];
 
     // Filter by tab (items may use `type` or `item_type`)
@@ -291,9 +443,10 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
           ((data.username || '').toLowerCase().includes(query) ||
            (data.email || '').toLowerCase().includes(query));
 
-        // Search in URL for passwords
+        // Search in URL for passwords. Items use `website` (the add flow + the
+        // edit normalization below) or legacy `url`, so match either.
         const urlMatch = type === 'password' &&
-          (data.url || '').toLowerCase().includes(query);
+          (data.url || data.website || '').toLowerCase().includes(query);
 
         // Search in notes
         const notesMatch = (data.notes || data.note || '').toLowerCase().includes(query);
@@ -303,7 +456,11 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
     }
 
     setFilteredItems(filtered);
-  };
+  }, [items, searchQuery, activeTab]);
+
+  useEffect(() => {
+    filterItems();
+  }, [filterItems]);
 
   const getItemCountByType = (type) => {
     return items.filter(item => (item.type || item.item_type) === type).length;
@@ -312,6 +469,123 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
   const getFavoritesCount = () => {
     return items.filter(item => item.favorite).length;
   };
+
+  // --- Read-write handlers ---------------------------------------------------
+
+  // Favorite is metadata-only (PR A): never re-encrypts. Optimistic update +
+  // rollback live in the context; here we just surface failures.
+  const handleToggleFavorite = async (id) => {
+    if (!onToggleFavorite) return;
+    try {
+      await onToggleFavorite(id);
+    } catch {
+      toast.error('Could not update favorite. Please try again.');
+    }
+  };
+
+  // Open the editor for an item. Editing re-encrypts the secret, so it requires
+  // an unlocked vault; PasswordItemForm only covers password-type items, and
+  // lazy-loaded items must be decrypted first.
+  const handleEditRequest = async (item) => {
+    if (!item) return;
+    const type = item.type || item.item_type;
+
+    if (type !== 'password') {
+      // No inline editor for cards/identities/notes — send the user to the
+      // full vault where those types are managed.
+      toast('Open the main vault to edit this item type.');
+      if (onAddItem) onAddItem();
+      return;
+    }
+
+    if (!canEdit) {
+      toast.error('Unlock your vault to edit items.');
+      if (onAddItem) onAddItem();
+      return;
+    }
+
+    // Decrypt lazy-loaded items before editing so the form is pre-filled.
+    let toEdit = item;
+    if (!item.data && onDecryptItem && item.item_id) {
+      setOpeningEditor(true);
+      try {
+        toEdit = await onDecryptItem(item.item_id);
+      } catch {
+        toast.error('Failed to decrypt this item.');
+        return;
+      } finally {
+        setOpeningEditor(false);
+      }
+    }
+
+    // Never open the editor on a decryption-failure placeholder or a payload
+    // without usable data — re-encrypting it on submit would corrupt the item.
+    if (!toEdit || toEdit._decryptionFailed || !toEdit.data ||
+        typeof toEdit.data !== 'object' || toEdit.data.error) {
+      toast.error('This item can’t be opened for editing.');
+      return;
+    }
+
+    setEditingItem(toEdit);
+  };
+
+  const handleEditSubmit = async (values, formikHelpers) => {
+    if (!editingItem || !onUpdateItem) return;
+    // `id` is injected into the form only to drive the submit-button label;
+    // strip it so UI metadata is never persisted inside the encrypted payload.
+    const secretValues = { ...values };
+    delete secretValues.id;
+    // Reconcile the form's `url` field back onto the stored `website` shape
+    // (the /vault add flow and list use `website`), so a round-tripped edit
+    // doesn't leave a stray duplicate key on the item.
+    if ('url' in secretValues) {
+      secretValues.website = secretValues.url;
+      delete secretValues.url;
+    }
+    try {
+      // Preserve any unknown fields already on the item; form values win.
+      // Drop any stale `url` already on the stored data so the normalization
+      // above leaves a single canonical `website` key (no legacy duplicate).
+      const baseData = { ...(editingItem.data || {}) };
+      delete baseData.url;
+      const updated = {
+        ...editingItem,
+        type: 'password',
+        data: { ...baseData, ...secretValues }
+      };
+      await onUpdateItem(updated);
+      toast.success('Item updated.');
+      setEditingItem(null);
+    } catch {
+      toast.error('Failed to save changes. Please try again.');
+    } finally {
+      formikHelpers?.setSubmitting?.(false);
+    }
+  };
+
+  const handleDeleteRequest = (id) => {
+    // Items carry a DB `id` (used by context.deleteItem); fall back to
+    // item_id defensively in case a variant lacks it.
+    const item = items.find(i => (i.id ?? i.item_id) === id);
+    if (item) setDeletingItem(item);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deletingItem || !onDeleteItem) return;
+    setIsDeleting(true);
+    try {
+      await onDeleteItem(deletingItem.id ?? deletingItem.item_id);
+      toast.success('Item deleted.');
+      setDeletingItem(null);
+    } catch {
+      toast.error('Failed to delete item. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const editTitle = (item) =>
+    (item?.data?.name || item?.preview?.title || item?.data?.title || 'this item');
 
   return (
     <Container>
@@ -389,10 +663,13 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
         <ItemsGrid>
           {filteredItems.map(item => (
             <VaultItemCard
-              key={item.id}
+              key={item.id ?? item.item_id}
               item={item}
-              onToggleFavorite={onToggleFavorite}
-              onSelect={onSelectItem}
+              onClick={handleEditRequest}
+              onToggleFavorite={handleToggleFavorite}
+              onEdit={handleEditRequest}
+              onDelete={handleDeleteRequest}
+              readOnly={false}
             />
           ))}
         </ItemsGrid>
@@ -413,6 +690,62 @@ const VaultDashboard = ({ items, onToggleFavorite, onSelectItem, onAddItem }) =>
             {searchQuery ? 'Clear search' : 'Add item'}
           </EmptyAction>
         </EmptyState>
+      )}
+
+      {/* Decrypting a lazy-loaded item before opening the editor */}
+      {openingEditor && (
+        <ModalOverlay>
+          <ConfirmCard>
+            <ConfirmTitle>Decrypting…</ConfirmTitle>
+            <ConfirmText>Preparing this item for editing.</ConfirmText>
+          </ConfirmCard>
+        </ModalOverlay>
+      )}
+
+      {/* Edit modal — re-encrypts via the existing updateItem path on submit */}
+      {editingItem && (
+        <ModalOverlay onClick={() => setEditingItem(null)}>
+          <ModalContent onClick={e => e.stopPropagation()}>
+            <ModalClose onClick={() => setEditingItem(null)} aria-label="Close editor">
+              <FaTimes />
+            </ModalClose>
+            <PasswordItemForm
+              initialValues={{
+                ...editingItem.data,
+                // The form uses `url`; the vault stores `website`. Map it so
+                // the Website field pre-fills on edit.
+                url: editingItem.data?.url ?? editingItem.data?.website ?? '',
+                id: editingItem.id ?? editingItem.item_id,
+              }}
+              onSubmit={handleEditSubmit}
+              onCancel={() => setEditingItem(null)}
+            />
+          </ModalContent>
+        </ModalOverlay>
+      )}
+
+      {/* Delete confirmation */}
+      {deletingItem && (
+        <ModalOverlay onClick={() => !isDeleting && setDeletingItem(null)}>
+          <ConfirmCard onClick={e => e.stopPropagation()}>
+            <ConfirmIcon>
+              <FaExclamationTriangle />
+            </ConfirmIcon>
+            <ConfirmTitle>Delete this item?</ConfirmTitle>
+            <ConfirmText>
+              <strong>{editTitle(deletingItem)}</strong> will be permanently removed
+              from your vault. This action cannot be undone.
+            </ConfirmText>
+            <ConfirmActions>
+              <CancelButton onClick={() => setDeletingItem(null)} disabled={isDeleting}>
+                Cancel
+              </CancelButton>
+              <DangerButton onClick={handleDeleteConfirm} disabled={isDeleting}>
+                <FaTrash /> {isDeleting ? 'Deleting...' : 'Delete'}
+              </DangerButton>
+            </ConfirmActions>
+          </ConfirmCard>
+        </ModalOverlay>
       )}
     </Container>
   );
