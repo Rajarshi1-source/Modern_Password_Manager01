@@ -410,12 +410,16 @@ const ExportVault = ({ onClose }) => {
           try {
             const data = await decryptEnvelope(item.encrypted_data);
             allDecryptedItems.push({ ...item, data, _decrypted: true, _lazyLoaded: false });
+            // Count only successfully decrypted items (the UI labels this
+            // "Decrypting items… (N)"); failures are skipped, not counted.
+            setExportedCount(prev => prev + 1);
           } catch (decryptErr) {
             console.error('Failed to decrypt item during export', item.item_id, decryptErr);
           }
+          // Progress advances for every item so the bar still reaches 100%
+          // even when some rows fail to decrypt.
           done += 1;
           setProgress(Math.round((done / itemsToDecrypt.length) * 100));
-          setExportedCount(prev => prev + 1);
         }
       } else {
         setProgress(100);

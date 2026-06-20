@@ -5,6 +5,7 @@ import firebaseService from '../services/firebaseService';
 import api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import sessionVaultCrypto from '../services/sessionVaultCrypto';
+import sessionVaultCryptoV3 from '../services/sessionVaultCryptoV3';
 import { decryptEnvelope, encryptEnvelope } from '../services/vaultEnvelope';
 
 const VaultContext = createContext();
@@ -256,9 +257,23 @@ export const VaultProvider = ({ children }) => {
 
   const handleLockVault = useCallback((broadcast = true) => {
     setIsUnlocked(false);
+    // Lock the dashboard edit gate (canEdit) — the session key is about to go.
+    setSessionUnlocked(false);
     setItems([]);
-    // Clear crypto service
-    vaultService.clearKeys();
+
+    // Drop the in-memory vault session keys (v2 + v3) so they cannot be reused
+    // after a manual or cross-tab lock — matching the logout path in App.jsx.
+    // (vaultService.clearKeys() is now a no-op; the live keys live in
+    // sessionVaultCrypto/V3, so clearing them here is what actually locks the
+    // vault rather than just hiding the items.)
+    sessionVaultCrypto.clearSessionKey();
+    try {
+      sessionVaultCryptoV3.clearSessionKey();
+    } catch (clearErr) {
+      // Defensive: a throw means an in-memory DEK survived the lock — log it
+      // rather than swallow, mirroring the logout handler.
+      console.warn('Failed to clear v3 vault session key on lock:', clearErr);
+    }
 
     // Reset last activity timestamp
     lastActivityRef.current = Date.now();
@@ -270,7 +285,7 @@ export const VaultProvider = ({ children }) => {
     if (broadcast) {
       broadcastVaultLock();
     }
-  }, [vaultService]);
+  }, []);
 
   // For backward compatibility
   const lockVault = () => handleLockVault(true);
