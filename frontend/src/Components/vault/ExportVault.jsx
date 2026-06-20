@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { FaDownload, FaLock, FaCheckCircle, FaExclamationTriangle, FaFileExport, FaFileCode, FaFileAlt, FaFileCsv } from 'react-icons/fa';
 import { useVault } from '../../contexts/VaultContext';
-import { VaultService } from '../../services/vaultService';
+import { decryptEnvelope } from '../../services/vaultEnvelope';
 
 // Animations
 const fadeIn = keyframes`
@@ -387,7 +387,6 @@ const ExportVault = ({ onClose }) => {
   const [status, setStatus] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [exportedCount, setExportedCount] = useState(0);
-  const [vaultService] = useState(() => new VaultService());
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -397,27 +396,27 @@ const ExportVault = ({ onClose }) => {
     setErrorMessage('');
 
     try {
-      const masterPassword = localStorage.getItem('masterPasswordHash');
-      
-      if (!vaultService.cryptoService) {
-        // Initialization would happen here
-      }
-
       const itemsToDecrypt = items.filter(item => item._lazyLoaded && !item._decrypted);
       const alreadyDecrypted = items.filter(item => item._decrypted);
 
       let allDecryptedItems = [...alreadyDecrypted];
 
       if (itemsToDecrypt.length > 0) {
-        const decryptedItems = await vaultService.bulkDecryptItems(
-          itemsToDecrypt,
-          (progressPercent, decryptedItem) => {
-            setProgress(progressPercent);
-            setExportedCount(prev => prev + 1);
+        // Decrypt on-demand via the shared sessionVaultCrypto (v2→v3) helper —
+        // the same live path the vault list/dashboard use. Failed items are
+        // skipped so one bad row doesn't abort the whole export.
+        let done = 0;
+        for (const item of itemsToDecrypt) {
+          try {
+            const data = await decryptEnvelope(item.encrypted_data);
+            allDecryptedItems.push({ ...item, data, _decrypted: true, _lazyLoaded: false });
+          } catch (decryptErr) {
+            console.error('Failed to decrypt item during export', item.item_id, decryptErr);
           }
-        );
-
-        allDecryptedItems = [...allDecryptedItems, ...decryptedItems];
+          done += 1;
+          setProgress(Math.round((done / itemsToDecrypt.length) * 100));
+          setExportedCount(prev => prev + 1);
+        }
       } else {
         setProgress(100);
       }

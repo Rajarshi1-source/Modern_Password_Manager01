@@ -1,9 +1,14 @@
 import axios from 'axios';
-import { CryptoService } from './cryptoService';
 
 /**
- * VaultService - Handles all vault-related operations
- * This service communicates with the vault API endpoints and manages encryption/decryption
+ * VaultService - vault API operations (metadata / CRUD / sync).
+ *
+ * End-to-end encryption is NOT handled here. As of the vault crypto
+ * unification (PRs E/F/G) all encrypt/decrypt goes through
+ * `sessionVaultCrypto` (v2) + `sessionVaultCryptoV3` (v3) via the shared
+ * `services/vaultEnvelope` helper. The legacy `cryptoService` /
+ * `encryptionKey` path that used to live here was dead (never initialised in
+ * the live flow) and has been removed to avoid future confusion.
  */
 export class VaultService {
   constructor() {
@@ -25,22 +30,20 @@ export class VaultService {
           details: error.response?.data?.details || {},
           originalError: error
         };
-        
+
         // Log all API errors for debugging
         console.error('Vault API Error:', errorData);
-        
+
         // Throw standardized error for consistent handling in UI
         const enhancedError = new Error(errorData.message);
         enhancedError.errorData = errorData;
         throw enhancedError;
       }
     );
-    
-    this.cryptoService = null;
-    this.encryptionKey = null;
+
     this.sessionTimeout = null;
   }
-  
+
   /**
    * Check if vault is initialized for the current user
    * @returns {Promise<Object>} Initialization status
@@ -63,273 +66,14 @@ export class VaultService {
       };
     }
   }
-  
-  /**
-   * Initialize encryption with master password
-   * @param {string} masterPassword - User's master password
-   * @returns {Promise<Object>} Verification result
-   * @throws {Error} If initialization fails
-   */
-  async initialize(masterPassword) {
-    try {
-      this.cryptoService = new CryptoService(masterPassword);
-      
-      // Get user's salt from server
-      const response = await this.api.get('/vault/get_salt/');
-      const salt = response.data.salt;
-      
-      // Derive encryption key from master password and salt
-      this.encryptionKey = await this.cryptoService.deriveKey(salt);
-      
-      // Verify master password
-      return this.verifyMasterPassword(masterPassword);
-    } catch (error) {
-      // Add context to the error
-      const contextError = new Error('Failed to initialize vault: ' + error.message);
-      contextError.errorData = error.errorData || {
-        code: 'initialization_failed',
-        status: 500,
-        details: { originalError: error.message }
-      };
-      throw contextError;
-    }
-  }
-  
-  /**
-   * Verify master password with server
-   * @param {string} masterPassword - User's master password
-   * @returns {Promise<Object>} Verification result
-   * @throws {Error} If verification fails
-   */
-  async verifyMasterPassword(masterPassword) {
-    try {
-      const response = await this.api.post('/vault/verify_master_password/', {
-        master_password: masterPassword
-      });
-      return response.data;
-    } catch (error) {
-      // Add context to the error
-      const contextError = new Error('Password verification failed: ' + error.message);
-      contextError.errorData = error.errorData || {
-        code: 'password_verification_failed',
-        status: error.errorData?.status || 400,
-        details: { originalError: error.message }
-      };
-      
-      throw contextError;
-    }
-  }
-  
-  /**
-   * Get all vault items for the authenticated user with optional lazy loading
-   * @param {boolean} lazyLoad - If true, don't decrypt immediately (default: true)
-   * @returns {Promise<Array>} Vault items (decrypted or with lazy-load flags)
-   * @throws {Error} If retrieval fails
-   */
-  async getVaultItems(lazyLoad = true) {
-    try {
-      // Fetch items from backend with metadata_only flag if lazy loading
-      const response = await this.api.get('/vault/', {
-        params: { metadata_only: lazyLoad }
-      });
-      
-      const items = response.data.items || response.data || [];
-      
-      if (lazyLoad) {
-        // Return items with lazy decryption flag
-        return items.map(item => ({
-          ...item,
-          _lazyLoaded: true,
-          _decrypted: false,
-          preview: {
-            title: this.cryptoService.extractPreviewTitle(item.item_type),
-            type: item.item_type,
-            favorite: item.favorite,
-            lastModified: item.updated_at
-          }
-        }));
-      }
-      
-      // Full decryption (original behavior)
-      const decryptedItems = await Promise.all(items.map(async (item) => {
-        try {
-          return await this.decryptItemFull(item);
-        } catch (decryptError) {
-          console.error(`Failed to decrypt item ${item.id}:`, decryptError);
-          // Return item with placeholder data to prevent entire list from failing
-          return {
-            id: item.id,
-            item_id: item.item_id,
-            type: item.item_type,
-            data: { error: 'This item could not be decrypted' },
-            created_at: item.created_at,
-            updated_at: item.updated_at,
-            favorite: item.favorite || false,
-            _decryptionFailed: true
-          };
-        }
-      }));
-      
-      return decryptedItems;
-    } catch (error) {
-      const contextError = new Error('Failed to load vault items: ' + error.message);
-      contextError.errorData = error.errorData || {
-        code: 'items_retrieval_failed',
-        status: error.errorData?.status || 500,
-        details: { originalError: error.message }
-      };
-      throw contextError;
-    }
-  }
-  
-  /**
-   * Decrypt a single item on-demand
-   * @param {Object} item - The item to decrypt
-   * @returns {Promise<Object>} Decrypted item
-   * @throws {Error} If decryption fails
-   */
-  async decryptItemOnDemand(item) {
-    // If already decrypted, return as-is
-    if (item._decrypted) {
-      return item;
-    }
-    
-    try {
-      console.time(`decrypt-item-${item.item_id}`);
-      
-      // Decrypt the item data
-      const decryptedData = await this.cryptoService.decrypt(
-        item.encrypted_data,
-        this.encryptionKey
-      );
-      
-      console.timeEnd(`decrypt-item-${item.item_id}`);
-      
-      // Return fully decrypted item
-      return {
-        ...item,
-        data: decryptedData,
-        _decrypted: true,
-        _lazyLoaded: false
-      };
-      
-    } catch (error) {
-      console.error(`Failed to decrypt item ${item.item_id}:`, error);
-      throw new Error('Failed to decrypt item: ' + error.message);
-    }
-  }
-  
-  /**
-   * Bulk decrypt multiple items (for export, search, etc.)
-   * @param {Array} items - Items to decrypt
-   * @param {Function} onProgress - Progress callback (optional)
-   * @returns {Promise<Array>} Decrypted items
-   */
-  async bulkDecryptItems(items, onProgress = null) {
-    const decrypted = [];
-    
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      
-      try {
-        const decryptedItem = await this.decryptItemOnDemand(item);
-        decrypted.push(decryptedItem);
-        
-        if (onProgress) {
-          onProgress((i + 1) / items.length * 100, decryptedItem);
-        }
-      } catch (error) {
-        console.error(`Failed to decrypt item ${i}:`, error);
-        // Continue with other items
-      }
-    }
-    
-    return decrypted;
-  }
-  
-  /**
-   * Full decryption (original method for backward compatibility)
-   * @param {Object} item - The item to decrypt
-   * @returns {Promise<Object>} Decrypted item
-   */
-  async decryptItemFull(item) {
-    const decryptedData = await this.cryptoService.decrypt(
-      item.encrypted_data,
-      this.encryptionKey
-    );
-    
-    return {
-      id: item.id,
-      item_id: item.item_id,
-      type: item.item_type,
-      data: decryptedData,
-      favorite: item.favorite || false,
-      created_at: item.created_at,
-      updated_at: item.updated_at,
-      _decrypted: true,
-      _lazyLoaded: false
-    };
-  }
-  
-  /**
-   * Save a vault item (create or update)
-   * @param {Object} item - The item to save
-   * @returns {Promise<Object>} API response data
-   * @throws {Error} If saving fails
-   */
-  async saveVaultItem(item) {
-    try {
-      // Generate random item ID if new
-      const itemId = item.item_id || this.generateRandomId();
-      
-      // Encrypt item data
-      const encryptedData = await this.cryptoService.encrypt(
-        item.data,
-        this.encryptionKey
-      );
-      
-      // Send to server
-      const payload = {
-        item_id: itemId,
-        item_type: item.type, // Frontend uses 'type', backend uses 'item_type'
-        encrypted_data: encryptedData,
-        favorite: item.favorite || false
-      };
-      
-      let response;
-      
-      if (item.id) {
-        // Update existing item
-        response = await this.api.put(`/vault/${item.id}/`, payload);
-      } else {
-        // Create new item
-        response = await this.api.post('/vault/', payload);
-      }
-      
-      return response;
-    } catch (error) {
-      const action = item.id ? 'update' : 'create';
-      const contextError = new Error(`Failed to ${action} vault item: ${error.message}`);
-      contextError.errorData = error.errorData || {
-        code: `item_${action}_failed`,
-        status: error.errorData?.status || 500,
-        details: { 
-          originalError: error.message,
-          itemId: item.item_id
-        }
-      };
-      throw contextError;
-    }
-  }
 
   /**
    * Toggle the favorite flag on a vault item.
    *
    * `favorite` is non-secret metadata, so this is a lightweight PATCH that
    * updates ONLY that field — it never decrypts or re-encrypts the item
-   * payload (unlike {@link saveVaultItem}). The backend serializer exposes
-   * `favorite` and the ViewSet's partial update applies it without requiring
-   * `encrypted_data`.
+   * payload. The backend serializer exposes `favorite` and the ViewSet's
+   * partial update applies it without requiring `encrypted_data`.
    *
    * @param {string|number} id - Database id of the vault item
    * @param {boolean} favorite - Desired favorite state
@@ -359,22 +103,16 @@ export class VaultService {
       (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16)
     );
   }
-  
+
   /**
    * Log out and clear sensitive data
    * @returns {Promise<Object>} API response
    */
   async logout() {
     try {
-      // Clear sensitive data
-      if (this.cryptoService) {
-        this.cryptoService.clearKeys();
-      }
-      this.encryptionKey = null;
-      
       // Clear any session storage
       sessionStorage.removeItem('vaultSession');
-      
+
       // Return to login page
       return await this.api.post('/auth/logout/');
     } catch (error) {
@@ -383,7 +121,7 @@ export class VaultService {
       return { success: true };
     }
   }
-  
+
   /**
    * Initialize session timeout for auto-lock
    * @param {number} timeoutMinutes - Minutes until auto-lock
@@ -393,7 +131,7 @@ export class VaultService {
     if (this.sessionTimeout) {
       clearTimeout(this.sessionTimeout);
     }
-    
+
     // Set new timeout
     this.sessionTimeout = setTimeout(() => {
       this.clearKeys();
@@ -401,7 +139,7 @@ export class VaultService {
       window.dispatchEvent(new CustomEvent('vault:session-expired'));
     }, timeoutMinutes * 60 * 1000);
   }
-  
+
   /**
    * Reset timeout on user activity
    */
@@ -411,17 +149,14 @@ export class VaultService {
       this.initSessionTimeout();
     }
   }
-  
+
   /**
-   * Clear sensitive key data
+   * No-op retained for callers (e.g. VaultContext.handleLockVault and the
+   * session-timeout). Session-key lifecycle now lives in
+   * sessionVaultCrypto.clearSessionKey(); this service holds no key to clear.
    */
-  clearKeys() {
-    if (this.cryptoService) {
-      this.cryptoService.clearKeys();
-    }
-    this.encryptionKey = null;
-  }
-  
+  clearKeys() {}
+
   /**
    * Delete a vault item
    * @param {string} itemId - ID of the item to delete
@@ -436,7 +171,7 @@ export class VaultService {
       contextError.errorData = error.errorData || {
         code: 'item_deletion_failed',
         status: error.errorData?.status || 500,
-        details: { 
+        details: {
           originalError: error.message,
           itemId
         }
@@ -444,27 +179,7 @@ export class VaultService {
       throw contextError;
     }
   }
-  
-  /**
-   * Decrypt a single item (used by sync functions)
-   * @param {string} encryptedData - Encrypted item data
-   * @returns {Promise<Object>} Decrypted data
-   * @throws {Error} If decryption fails
-   */
-  async decryptItem(encryptedData) {
-    try {
-      return await this.cryptoService.decrypt(encryptedData, this.encryptionKey);
-    } catch (error) {
-      const contextError = new Error('Failed to decrypt item: ' + error.message);
-      contextError.errorData = {
-        code: 'decryption_failed',
-        status: 400,
-        details: { originalError: error.message }
-      };
-      throw contextError;
-    }
-  }
-  
+
   /**
    * Synchronize vault with server
    * @param {Object} syncData - Data to synchronize
