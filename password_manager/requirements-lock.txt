@@ -241,7 +241,7 @@ PyJWT==2.13.0
 pylsl==1.18.1
 pymongo==4.6.3
 pyOpenSSL==26.0.0
-pyotp==2.9.0
+pyotp==2.10.0
 pyparsing==3.2.5
 PySocks==1.7.1
 pyspnego==0.12.0
