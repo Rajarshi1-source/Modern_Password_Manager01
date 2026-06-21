@@ -106,7 +106,7 @@ Farama-Notifications==0.0.4
 fido2==2.0.0
 filelock==3.21.2
 firebase-admin==5.3.0
-flatbuffers==25.9.23
+flatbuffers==25.12.19
 flower==2.0.1
 fonttools==4.61.1
 fqdn==1.5.1
