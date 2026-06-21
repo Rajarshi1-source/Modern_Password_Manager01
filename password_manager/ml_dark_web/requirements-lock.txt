@@ -88,7 +88,7 @@ Faker==39.0.0
 fido2==2.0.0
 filelock==3.20.3
 firebase-admin==5.3.0
-flatbuffers==25.9.23
+flatbuffers==25.12.19
 flower==2.0.1
 frozenlist==1.8.0
 fsspec==2025.9.0
