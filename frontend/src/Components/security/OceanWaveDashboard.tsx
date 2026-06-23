@@ -18,6 +18,13 @@ import axios from 'axios';
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+// Bundle Leaflet's default marker images from the installed package (Vite
+// fingerprints and serves them locally) instead of fetching from an external
+// cdnjs URL. This removes the third-party network dependency / CSP exposure and
+// keeps the icons in lockstep with the installed leaflet version.
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import './OceanWaveDashboard.css';
 import StormChaseCard from './StormChaseCard';
 
@@ -25,9 +32,9 @@ import StormChaseCard from './StormChaseCard';
 try {
     delete (L.Icon.Default.prototype as any)._getIconUrl;
     L.Icon.Default.mergeOptions({
-        iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
-        iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
-        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+        iconRetinaUrl: markerIcon2x,
+        iconUrl: markerIcon,
+        shadowUrl: markerShadow,
     });
 } catch (e) {
     console.warn('Leaflet not initialized:', e);
@@ -630,7 +637,7 @@ export const OceanWaveDashboard: React.FC = () => {
 
             {/* Footer */}
             <footer className="dashboard-footer">
-                <p>🌊 <em>Powered by the ocean's chaos</em></p>
+                <p>🌊 <em>Powered by the ocean&apos;s chaos</em></p>
                 <p className="footer-note">
                     Data sourced from NOAA National Data Buoy Center
                 </p>
