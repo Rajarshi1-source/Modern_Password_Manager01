@@ -2303,6 +2303,18 @@ if TESTING:
         'default': {'BACKEND': 'channels.layers.InMemoryChannelLayer'}
     }
 
+    # Celery: never touch the Redis broker during tests. Without this, every
+    # task .delay()/.apply_async() blocks ~4.2s on a broker connect before
+    # OperationalError (Redis is absent in dev/CI). 'memory://' enqueues
+    # in-process and returns instantly; with no worker the task body does not
+    # run — matching existing behaviour (tasks never executed in tests), but fast.
+    # Tests that must run a task use .apply() or @override_settings(
+    # CELERY_TASK_ALWAYS_EAGER=True) locally.
+    CELERY_BROKER_URL = 'memory://'
+    CELERY_RESULT_BACKEND = 'cache+memory://'
+    CELERY_TASK_ALWAYS_EAGER = False
+    CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = False
+
 
 # =============================================================================
 # Audit-fix M1: production guard on USE_REDIS_CHANNELS

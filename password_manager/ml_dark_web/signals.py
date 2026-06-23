@@ -21,6 +21,8 @@ _celery_check_cache = {'available': False, 'last_check': 0}
 
 def _is_celery_available():
     """Check if Celery/Redis is available before queueing tasks (cached 60s)"""
+    if getattr(settings, 'TESTING', False):
+        return False          # never probe Redis or queue monitoring during tests
     if not settings.DEBUG:
         return True
 
