@@ -185,6 +185,8 @@ const QuantumRecoverySetup = lazy(() => import('./Components/auth/QuantumRecover
 const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCallback'));
 // Natural Entropy Dashboard
 const UltimateEntropyDashboard = lazy(() => import('./Components/security/UltimateEntropyDashboard'));
+// Ocean Wave Entropy Dashboard (buoy map + storm chase)
+const OceanWaveDashboard = lazy(() => import('./Components/security/OceanWaveDashboard'));
 
 // Military-Grade Duress Code Components
 const DuressCodeSetup = lazy(() => import('./Components/security/DuressCodeSetup'));
@@ -1703,6 +1705,7 @@ function App() {
               <Link to="/security/reputation" className="nav-link">Reputation</Link>
               <Link to="/security/ambient" className="nav-link">Ambient</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
+              <Link to="/security/ocean-entropy" className="nav-link">🌊 Ocean Waves</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
               <Link to="/settings" className="nav-link">Settings</Link>
@@ -2107,6 +2110,14 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Cosmic Ray Dashboard">
                       <CosmicRayEntropyDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Ocean Wave Entropy - Buoy map + Storm Chase Mode */}
+                <Route path="/security/ocean-entropy" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Ocean Wave Dashboard">
+                      <OceanWaveDashboard />
                     </ErrorBoundary>
                   )
                 } />

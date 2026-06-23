@@ -15,9 +15,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
-// @ts-ignore - Install with: npm install leaflet react-leaflet @types/leaflet
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
-// @ts-ignore - Install with: npm install leaflet react-leaflet @types/leaflet
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './OceanWaveDashboard.css';
