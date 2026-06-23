@@ -171,6 +171,42 @@ still slow after Changes 1–2. Keep minimal.
 
 ---
 
+## Results (measured — Changes 1 + 2 applied, `canny` venv)
+
+Changes 1 + 2 implemented and committed (`fix/redis-test-timeout`). Change 3 was **not** needed.
+
+| Selection | BEFORE (in-test) | AFTER (in-test) | Speedup |
+|---|---|---|---|
+| `vault` subset — `VaultItemViewSetTests` + `VaultSyncTests` (5 tests) | **682.5s** | **0.65s** | ~1050× |
+| full `vault` module (72 tests) | **~3409s** (PR D) | **5.83s** | ~585× |
+| `ml_dark_web` (20 tests, **pytest**) | **255.7s** | **168.8s** | ~1.5× |
+
+Notes:
+- `ml_dark_web` tests are **pytest-style** (`class TestCheckCompromisedPasswords:`, no `TestCase`
+  base) so `manage.py test ml_dark_web` collects **0** tests — they must run under `pytest`. Under
+  pytest `TESTING` is still `True` (`'pytest' in sys.modules`), so the fix applies. Its residual
+  ~169s is **ML breach-classifier loading**, not Redis — confirming why eager would have been worse
+  here (it would run those task bodies inline).
+- Single `.delay()` micro-benchmark (broker down): **4.21s → 0.12s** (`memory://`); `.apply()`
+  unaffected at 0.077s.
+
+### Regression sweep — full `vault`: 71 pass / 1 **pre-existing** fail
+The lone failure, `VerifyAuthC10Tests.test_empty_auth_hash_is_rejected` (`AssertionError: 301 != 400`),
+is **not caused by this change** — it fails identically with and without it (proven by stashing the two
+edits):
+
+| | result | time |
+|---|---|---|
+| without Changes 1+2 (stashed) | `301 != 400` FAIL | 112.0s |
+| with Changes 1+2 | `301 != 400` FAIL | 0.155s |
+
+A Celery/signal change cannot produce an SSL 301. Root cause: `VerifyAuthC10Tests` (vault/tests.py
+~line 1089) is missing the `@override_settings(SECURE_SSL_REDIRECT=False, DEBUG=True)` decorator its
+sibling classes carry, so `SECURE_SSL_REDIRECT=True` 301-redirects the POST before it reaches the
+view. **Out of scope for this plan** (unrelated to Redis); tracked as a separate one-line follow-up.
+
+---
+
 ## Appendix — assessment of the original suggestions
 
 | Suggestion | Verdict |
