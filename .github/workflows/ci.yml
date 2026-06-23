@@ -385,7 +385,13 @@ jobs:
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # ignore-error=true: the GitHub Actions cache backend intermittently
+          # 404s ("BlobNotFound") while *exporting* layers, and buildx treats a
+          # failed cache export as a fatal build error even though the image
+          # itself built fine. This flag makes a failed cache export non-fatal
+          # so transient cache-service hiccups can't red the build gate; cache
+          # is still written/read normally when the backend is healthy.
+          cache-to: type=gha,mode=max,ignore-error=true
           platforms: linux/amd64,linux/arm64
       
       # Frontend Image
@@ -412,7 +418,13 @@ jobs:
             VITE_WS_URL=${{ secrets.VITE_WS_URL }}
             VITE_BLOCKCHAIN_ENABLED=${{ secrets.VITE_BLOCKCHAIN_ENABLED }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # ignore-error=true: the GitHub Actions cache backend intermittently
+          # 404s ("BlobNotFound") while *exporting* layers, and buildx treats a
+          # failed cache export as a fatal build error even though the image
+          # itself built fine. This flag makes a failed cache export non-fatal
+          # so transient cache-service hiccups can't red the build gate; cache
+          # is still written/read normally when the backend is healthy.
+          cache-to: type=gha,mode=max,ignore-error=true
           platforms: linux/amd64,linux/arm64
 
   # ===========================================================================
