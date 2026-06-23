@@ -52,7 +52,7 @@ The `TESTING` block omits Celery. Measured in test mode (`TESTING=True`):
 On this box a failed loopback connect **hangs for the full timeout** rather than fast-refusing, and
 `localhost` costs ~2× because it tries IPv6 `::1` *and* IPv4 `127.0.0.1`:
 
-```
+```text
 redis ping socket_connect_timeout=1, 127.0.0.1  -> TimeoutError after 1.00s
 redis ping socket_connect_timeout=1, localhost  -> TimeoutError after 2.09s
 debug_task.delay() against down broker           -> OperationalError after 4.21s
@@ -73,7 +73,7 @@ r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=1); r.ping()
 ```
 
 Measured:
-```
+```text
 _is_celery_available() DEBUG=False -> True in 0.000s   (=> .delay() fires -> ~4.2s broker hang)
 _is_celery_available() DEBUG=True  -> False in 2.21s   (redis ping; result cached 60s)
 ```
@@ -160,7 +160,7 @@ still slow after Changes 1–2. Keep minimal.
 
 ## Risks & mitigations
 - **Low risk.** `memory://` preserves "tasks don't run in tests" while removing the hang; pure
-  test-config change, trivially revertable.
+  test-config change, trivially revertible.
 - Change 2 only alters the `TESTING` branch of a signal → **zero production behavior change**.
 - The regression sweep is the gate for any test that depended on the old enqueue-failure path.
 
