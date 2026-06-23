@@ -1086,6 +1086,7 @@ class VaultTestHelpers:
 from rest_framework.test import APIClient
 
 
+@override_settings(SECURE_SSL_REDIRECT=False, DEBUG=True)
 class VerifyAuthC10Tests(TestCase):
     """
     The pre-fix `verify_auth` view would write whatever auth_hash a JWT-
