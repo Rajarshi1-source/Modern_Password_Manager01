@@ -222,8 +222,8 @@ const SynestheticSignature = ({ password = '', showAudio = true }) => {
     <Container
       as={motion.div}
       {...motionProps}
-      role="img"
-      aria-label="Synesthetic signature: a colour-and-shape memory aid for the password shown above"
+      role="group"
+      aria-label="Synesthetic password signature"
     >
       <Header>
         <Title>🎨 Synesthetic Signature</Title>
@@ -234,7 +234,10 @@ const SynestheticSignature = ({ password = '', showAudio = true }) => {
         )}
       </Header>
 
-      <Body>
+      <Body
+        role="img"
+        aria-label="Synesthetic signature: a colour-and-shape memory aid for the password shown above"
+      >
         <Identicon signature={sensory.signature} />
         <GlyphRow>
           {sensory.chars.map((c) => (
