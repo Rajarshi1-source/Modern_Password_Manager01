@@ -108,7 +108,11 @@ const DEFAULT_PREFERENCES = {
     
     // Breach monitoring
     breachMonitoring: true,
-    darkWebMonitoring: true
+    darkWebMonitoring: true,
+
+    // Synesthetic password visualization (Phase 2)
+    synestheticSignature: true, // show the colour/shape signature in the generator
+    synestheticAudio: false // melody playback opt-in; audio stays off by default
   },
   
   // Privacy preferences

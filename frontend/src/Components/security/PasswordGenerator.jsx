@@ -3,6 +3,7 @@ import styled from 'styled-components';
 import { FaDice, FaCopy, FaCheck } from 'react-icons/fa';
 import { motion } from 'framer-motion';
 import { copyToClipboard } from '../../utils/clipboard';
+import usePreference from '../../hooks/usePreference';
 import PasswordStrengthMeter from './PasswordStrengthMeter';
 import SynestheticSignature from './SynestheticSignature';
 import QuantumDiceButton from './QuantumDiceButton';
@@ -197,6 +198,10 @@ const PasswordGenerator = ({ onSelect }) => {
   });
   const [copied, setCopied] = useState(false);
 
+  // Synesthetic visualization preferences (Phase 2) — backed by preferencesService.
+  const [synEnabled] = usePreference('security.synestheticSignature', true);
+  const [synAudio] = usePreference('security.synestheticAudio', false);
+
   // Mode: 'standard' | 'quantum' | 'genetic'
   const [mode, setMode] = useState('standard');
 
@@ -334,7 +339,7 @@ const PasswordGenerator = ({ onSelect }) => {
 
       <PasswordStrengthMeter password={password} />
 
-      <SynestheticSignature password={password} />
+      {synEnabled && <SynestheticSignature password={password} showAudio={synAudio} />}
 
       <ButtonsContainer>
         {mode === 'standard' && (

@@ -187,6 +187,8 @@ const GeneticOAuthCallback = lazy(() => import('./Components/auth/GeneticOAuthCa
 const UltimateEntropyDashboard = lazy(() => import('./Components/security/UltimateEntropyDashboard'));
 // Ocean Wave Entropy Dashboard (buoy map + storm chase)
 const OceanWaveDashboard = lazy(() => import('./Components/security/OceanWaveDashboard'));
+// Synesthetic Password Visualization (standalone surface)
+const SynestheticDashboard = lazy(() => import('./Components/security/SynestheticDashboard'));
 
 // Military-Grade Duress Code Components
 const DuressCodeSetup = lazy(() => import('./Components/security/DuressCodeSetup'));
@@ -1706,6 +1708,7 @@ function App() {
               <Link to="/security/ambient" className="nav-link">Ambient</Link>
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/security/ocean-entropy" className="nav-link">🌊 Ocean Waves</Link>
+              <Link to="/security/synesthetic" className="nav-link">🎨 Synesthetic</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
               <Link to="/settings" className="nav-link">Settings</Link>
@@ -2118,6 +2121,14 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Ocean Wave Dashboard">
                       <OceanWaveDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Synesthetic Password Visualization - standalone surface */}
+                <Route path="/security/synesthetic" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Synesthetic Dashboard">
+                      <SynestheticDashboard />
                     </ErrorBoundary>
                   )
                 } />

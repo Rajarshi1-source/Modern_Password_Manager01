@@ -18,3 +18,20 @@ if (typeof globalThis.jest === 'undefined') {
 if (typeof HTMLCanvasElement !== 'undefined') {
   HTMLCanvasElement.prototype.getContext = () => null;
 }
+
+// jsdom does not implement matchMedia. preferencesService.applyTheme() (on
+// import) and anything reading prefers-color-scheme / prefers-reduced-motion
+// (e.g. framer-motion's useReducedMotion) call it; provide a minimal stub so
+// those modules load and render in tests.
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  });
+}
