@@ -51,4 +51,23 @@ describe('usePreference', () => {
 
     expect(result.current[0]).toBe(42);
   });
+
+  it('returns the new key value immediately when path changes', () => {
+    preferencesService.set('test.pathA', 'A');
+    preferencesService.set('test.pathB', 'B');
+    try {
+      const { result, rerender } = renderHook(({ p }) => usePreference(p, 'fallback'), {
+        initialProps: { p: 'test.pathA' },
+      });
+      expect(result.current[0]).toBe('A');
+
+      rerender({ p: 'test.pathB' });
+
+      // No stale snapshot: the new key's value is returned on this render.
+      expect(result.current[0]).toBe('B');
+    } finally {
+      preferencesService.reset('test.pathA');
+      preferencesService.reset('test.pathB');
+    }
+  });
 });
