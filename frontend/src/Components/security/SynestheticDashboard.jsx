@@ -66,6 +66,11 @@ const DemoSection = styled.div`
   }
 `;
 
+/**
+ * Standalone page for the Synesthetic Password Visualization feature: a short
+ * explainer, the preferencesService-backed display/audio toggles, and a live
+ * demo (the password generator) that reflects those toggles.
+ */
 const SynestheticDashboard = () => {
   const [enabled, setEnabled] = usePreference('security.synestheticSignature', true);
   const [audio, setAudio] = usePreference('security.synestheticAudio', false);
@@ -124,8 +129,10 @@ const SynestheticDashboard = () => {
       <DemoSection>
         <h2>Try it</h2>
         <p>
-          Generate a password to see its signature{audio ? ' and hear its melody' : ''}. Toggle the
-          settings above to watch the demo update live.
+          {enabled
+            ? `Generate a password to see its signature${audio ? ' and hear its melody' : ''}.`
+            : 'Signature display is off, so the demo below won’t show a signature.'}{' '}
+          Toggle the settings above to watch the demo update live.
         </p>
         <PasswordGenerator />
       </DemoSection>
