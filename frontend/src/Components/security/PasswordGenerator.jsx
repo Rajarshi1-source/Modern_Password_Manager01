@@ -4,6 +4,7 @@ import { FaDice, FaCopy, FaCheck } from 'react-icons/fa';
 import { motion } from 'framer-motion';
 import { copyToClipboard } from '../../utils/clipboard';
 import PasswordStrengthMeter from './PasswordStrengthMeter';
+import SynestheticSignature from './SynestheticSignature';
 import QuantumDiceButton from './QuantumDiceButton';
 import QuantumCertificateModal from './QuantumCertificateModal';
 import GeneticDiceButton from './GeneticDiceButton';
@@ -332,6 +333,8 @@ const PasswordGenerator = ({ onSelect }) => {
       </PasswordDisplay>
 
       <PasswordStrengthMeter password={password} />
+
+      <SynestheticSignature password={password} />
 
       <ButtonsContainer>
         {mode === 'standard' && (
