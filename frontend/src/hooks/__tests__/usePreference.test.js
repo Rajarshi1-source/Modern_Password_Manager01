@@ -6,7 +6,7 @@
  * setter, and stays in sync when the preference changes elsewhere.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import preferencesService from '../../services/preferencesService';
 import usePreference from '../usePreference';
@@ -14,6 +14,12 @@ import usePreference from '../usePreference';
 const PATH = 'test.usePreferenceValue';
 
 describe('usePreference', () => {
+  // Reset the shared preference key between cases so tests stay independent of
+  // order and of leftover localStorage/sync side effects.
+  afterEach(() => {
+    preferencesService.reset(PATH);
+  });
+
   it('returns the default when the preference is unset', () => {
     const { result } = renderHook(() => usePreference('test.neverSet.path', 'fallback'));
     expect(result.current[0]).toBe('fallback');
