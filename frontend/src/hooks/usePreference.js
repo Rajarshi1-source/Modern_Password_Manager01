@@ -1,3 +1,6 @@
+import { useCallback, useSyncExternalStore } from 'react';
+import preferencesService from '../services/preferencesService';
+
 /**
  * usePreference
  * =============
@@ -16,9 +19,6 @@
  * @param {*} defaultValue value to use when the preference is unset
  * @returns {[any, (value: any) => void]} current value + setter
  */
-import { useCallback, useSyncExternalStore } from 'react';
-import preferencesService from '../services/preferencesService';
-
 export default function usePreference(path, defaultValue) {
   const subscribe = useCallback(
     (onStoreChange) => preferencesService.onChange(path, onStoreChange),
