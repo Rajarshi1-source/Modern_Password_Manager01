@@ -153,6 +153,9 @@ urlpatterns = [
     # Honeypot credentials (decoy passwords that alert on access)
     path('api/honeypot/', include('honeypot_credentials.urls')),
 
+    # Bug Bounty — vault self-pentest (continuous posture findings)
+    path('api/bug-bounty/', include('bug_bounty.urls')),
+
     # Self-destructing passwords (per-entry lifespan policies)
     path('api/self-destruct/', include('self_destruct.urls')),
 

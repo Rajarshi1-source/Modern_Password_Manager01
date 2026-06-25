@@ -189,6 +189,8 @@ const UltimateEntropyDashboard = lazy(() => import('./Components/security/Ultima
 const OceanWaveDashboard = lazy(() => import('./Components/security/OceanWaveDashboard'));
 // Synesthetic Password Visualization (standalone surface)
 const SynestheticDashboard = lazy(() => import('./Components/security/SynestheticDashboard'));
+// Bug Bounty — vault self-pentest (continuous posture findings)
+const BugBountyDashboard = lazy(() => import('./Components/security/BugBountyDashboard'));
 
 // Military-Grade Duress Code Components
 const DuressCodeSetup = lazy(() => import('./Components/security/DuressCodeSetup'));
@@ -1709,6 +1711,7 @@ function App() {
               <Link to="/security/cosmic-ray-entropy" className="nav-link">🌌 Cosmic Ray</Link>
               <Link to="/security/ocean-entropy" className="nav-link">🌊 Ocean Waves</Link>
               <Link to="/security/synesthetic" className="nav-link">🎨 Synesthetic</Link>
+              <Link to="/security/bug-bounty" className="nav-link">🏆 Bug Bounty</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
               <Link to="/settings" className="nav-link">Settings</Link>
@@ -2129,6 +2132,14 @@ function App() {
                   !isAuthenticated ? <Navigate to="/" /> : (
                     <ErrorBoundary fallbackMessage="Failed to load Synesthetic Dashboard">
                       <SynestheticDashboard />
+                    </ErrorBoundary>
+                  )
+                } />
+                {/* Bug Bounty — vault self-pentest (continuous posture findings) */}
+                <Route path="/security/bug-bounty" element={
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Bug Bounty Dashboard">
+                      <BugBountyDashboard />
                     </ErrorBoundary>
                   )
                 } />

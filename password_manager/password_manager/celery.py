@@ -88,6 +88,12 @@ app.conf.update(
             'task': 'ml_dark_web.tasks.check_compromised_passwords',
             'schedule': crontab(minute=0, hour='*/6'),  # Every 6 hours
         },
+
+        # Bug Bounty: continuous vault self-pentest (daily, fans out per user)
+        'bug-bounty-self-pentest-daily': {
+            'task': 'bug_bounty.tasks.run_scheduled_self_tests',
+            'schedule': crontab(hour=3, minute=30),  # 3:30 AM daily
+        },
         
         # Blockchain anchoring (if enabled, hourly)
         'anchor-vault-to-blockchain': {
