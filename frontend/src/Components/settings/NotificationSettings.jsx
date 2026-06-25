@@ -128,7 +128,7 @@ const NotificationSettings = () => {
     setNotifications(newNotifications);
     
     try {
-      await preferencesService.set('notifications', key, value);
+      await preferencesService.set(`notifications.${key}`, value);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {

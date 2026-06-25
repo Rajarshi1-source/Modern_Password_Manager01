@@ -97,7 +97,7 @@ const SecuritySettings = () => {
     setSecurity(newSecurity);
     
     try {
-      await preferencesService.set('security', key, value);
+      await preferencesService.set(`security.${key}`, value);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {
