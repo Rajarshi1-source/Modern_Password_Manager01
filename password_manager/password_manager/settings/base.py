@@ -232,6 +232,7 @@ INSTALLED_APPS = [
     'circadian_totp',  # Biological Clock-Based TOTP (wearable-derived phase)
     'decentralized_identity',  # W3C Verifiable Credentials + DID (did:key/did:web)
     'honeypot_credentials',  # Decoy credentials that trip silent alarms on access
+    'bug_bounty',  # Vault self-pentest: continuous posture findings (Bug Bounty Phase 1)
     'self_destruct',  # Per-entry self-destruct policies (TTL, use limits, geofence)
     'ultrasonic_pairing',  # Over-the-air device pairing via inaudible FSK audio
     'heartbeat_auth',  # Camera-PPG heartbeat-variability authentication with duress
@@ -559,6 +560,7 @@ REST_FRAMEWORK = {
         'dj_rest_auth': '10/minute',  # dj-rest-auth operations
         'ml_inference': '10/minute',      # BERT, Siamese ML models
         'fhe_operation': '5/minute',      # FHE encrypt/decrypt
+        'bug_bounty_run': '10/hour',      # On-demand vault self-pentest run
         'biometric_frame': '60/minute',   # Video frame submission
         'websocket_connect': '5/minute',  # WS connection rate
         'dark_web_scan': '1/hour',        # Manual scan trigger
@@ -1658,6 +1660,7 @@ CELERY_TIMEZONE = 'UTC'
 CELERY_TASK_ROUTES = {
     # ML inference tasks → dedicated ml queue
     'ml_security.tasks.*': {'queue': 'ml'},
+    'bug_bounty.tasks.*': {'queue': 'ml'},
     'ml_dark_web.tasks.*': {'queue': 'ml'},
     'adversarial_ai.tasks.*': {'queue': 'ml'},
     'ai_assistant.tasks.*': {'queue': 'ml'},
