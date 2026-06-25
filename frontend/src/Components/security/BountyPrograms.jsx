@@ -592,15 +592,37 @@ const BountyPrograms = () => {
   const [view, setView] = useState('owner');
   return (
     <Wrap>
-      <SubTabs>
-        <SubTab type="button" $active={view === 'owner'} onClick={() => setView('owner')}>
+      <SubTabs role="tablist">
+        <SubTab
+          type="button"
+          role="tab"
+          id="bp-subtab-owner"
+          aria-controls="bp-subpanel"
+          aria-selected={view === 'owner'}
+          $active={view === 'owner'}
+          onClick={() => setView('owner')}
+        >
           My programs
         </SubTab>
-        <SubTab type="button" $active={view === 'research'} onClick={() => setView('research')}>
+        <SubTab
+          type="button"
+          role="tab"
+          id="bp-subtab-research"
+          aria-controls="bp-subpanel"
+          aria-selected={view === 'research'}
+          $active={view === 'research'}
+          onClick={() => setView('research')}
+        >
           Research &amp; submit
         </SubTab>
       </SubTabs>
-      {view === 'owner' ? <OwnerView /> : <ResearchView />}
+      <div
+        role="tabpanel"
+        id="bp-subpanel"
+        aria-labelledby={view === 'owner' ? 'bp-subtab-owner' : 'bp-subtab-research'}
+      >
+        {view === 'owner' ? <OwnerView /> : <ResearchView />}
+      </div>
     </Wrap>
   );
 };

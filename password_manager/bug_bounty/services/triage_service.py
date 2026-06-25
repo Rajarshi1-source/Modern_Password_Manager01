@@ -18,7 +18,7 @@ keeping the state machine and the reward ledger consistent.
 
 from __future__ import annotations
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from ..models import Reward, RewardStatus, Submission, SubmissionStatus
@@ -91,19 +91,24 @@ def issue_reward(submission, *, amount, currency='USD', adapter='manual', note='
     if hasattr(submission, 'reward'):
         raise InvalidTransition('This submission has already been rewarded.')
 
-    with transaction.atomic():
-        reward = Reward.objects.create(
-            submission=submission,
-            amount=amount,
-            currency=currency,
-            adapter=adapter,
-        )
-        submission.status = SubmissionStatus.REWARDED
-        update_fields = ['status', 'updated_at']
-        if note:
-            submission.triage_note = note
-            update_fields.append('triage_note')
-        submission.save(update_fields=update_fields)
+    try:
+        with transaction.atomic():
+            reward = Reward.objects.create(
+                submission=submission,
+                amount=amount,
+                currency=currency,
+                adapter=adapter,
+            )
+            submission.status = SubmissionStatus.REWARDED
+            update_fields = ['status', 'updated_at']
+            if note:
+                submission.triage_note = note
+                update_fields.append('triage_note')
+            submission.save(update_fields=update_fields)
+    except IntegrityError as exc:
+        # A concurrent issue_reward for the same submission lost the race on the
+        # one-to-one constraint — surface the contract error (→ 400), not a 500.
+        raise InvalidTransition('This submission has already been rewarded.') from exc
     return reward
 
 

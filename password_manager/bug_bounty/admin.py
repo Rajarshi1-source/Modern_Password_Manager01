@@ -55,4 +55,7 @@ class RewardAdmin(admin.ModelAdmin):
     list_display = ('submission', 'amount', 'currency', 'status', 'adapter', 'paid_at')
     list_filter = ('status', 'currency', 'adapter')
     search_fields = ('submission__title', 'payout_ref')
-    readonly_fields = ('id', 'created_at', 'updated_at', 'paid_at', 'payout_ref')
+    # ``status`` is read-only: payout transitions must go through the service
+    # layer (pay_reward/void_reward) so paid_at/payout_ref stay consistent.
+    # Flipping it directly here would record a "paid" reward with no settlement.
+    readonly_fields = ('id', 'status', 'created_at', 'updated_at', 'paid_at', 'payout_ref')
