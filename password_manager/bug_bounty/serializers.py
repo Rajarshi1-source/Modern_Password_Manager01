@@ -59,6 +59,8 @@ class SelfTestRunSerializer(serializers.ModelSerializer):
 
 
 class BountyProgramSerializer(serializers.ModelSerializer):
+    """Serialize a bounty program; owner is set from the request, not the body."""
+
     owner_username = serializers.CharField(source='owner.username', read_only=True)
     submission_count = serializers.IntegerField(read_only=True)
 
@@ -74,11 +76,13 @@ class BountyProgramSerializer(serializers.ModelSerializer):
         )
 
     def validate_scope(self, value):
+        """Scope must be a JSON list of in-scope targets."""
         if not isinstance(value, list):
             raise serializers.ValidationError('Scope must be a list of in-scope targets.')
         return value
 
     def validate_reward_tiers(self, value):
+        """Reward tiers must map known severities to non-negative amounts."""
         if not isinstance(value, dict):
             raise serializers.ValidationError(
                 'Reward tiers must be an object mapping severity to amount.'
@@ -95,6 +99,8 @@ class BountyProgramSerializer(serializers.ModelSerializer):
 
 
 class RewardSerializer(serializers.ModelSerializer):
+    """Read-only view of a reward obligation; mutated only via the service layer."""
+
     class Meta:
         model = Reward
         fields = (
@@ -105,6 +111,8 @@ class RewardSerializer(serializers.ModelSerializer):
 
 
 class SubmissionSerializer(serializers.ModelSerializer):
+    """Serialize a researcher submission; only the initial report fields are writable."""
+
     program_title = serializers.CharField(source='program.title', read_only=True)
     researcher_username = serializers.CharField(source='researcher.username', read_only=True)
     reward = RewardSerializer(read_only=True)
@@ -123,6 +131,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
         )
 
     def validate_program(self, program):
+        """Reports may only be filed against an active program."""
         if program.status != ProgramStatus.ACTIVE:
             raise serializers.ValidationError(
                 'This program is not currently accepting submissions.'
@@ -151,11 +160,13 @@ class IssueRewardSerializer(serializers.Serializer):
     note = serializers.CharField(required=False, allow_blank=True, default='', max_length=2000)
 
     def validate_adapter(self, value):
+        """Only a registered payout adapter may be named."""
         if value not in available_adapters():
             raise serializers.ValidationError(f'Unknown payout adapter "{value}".')
         return value
 
     def validate_currency(self, value):
+        """Normalise to an upper-case 3-letter currency code."""
         if not value.isalpha() or len(value) != 3:
             raise serializers.ValidationError('Currency must be a 3-letter code, e.g. "USD".')
         return value.upper()

@@ -249,6 +249,8 @@ const BugBountyDashboard = () => {
         <Tab
           type="button"
           role="tab"
+          id="bb-tab-self-test"
+          aria-controls="bb-panel-self-test"
           aria-selected={tab === 'self-test'}
           $active={tab === 'self-test'}
           onClick={() => setTab('self-test')}
@@ -258,6 +260,8 @@ const BugBountyDashboard = () => {
         <Tab
           type="button"
           role="tab"
+          id="bb-tab-program"
+          aria-controls="bb-panel-program"
           aria-selected={tab === 'program'}
           $active={tab === 'program'}
           onClick={() => setTab('program')}
@@ -266,10 +270,14 @@ const BugBountyDashboard = () => {
         </Tab>
       </TabBar>
 
-      {tab === 'program' && <BountyPrograms />}
+      {tab === 'program' && (
+        <div role="tabpanel" id="bb-panel-program" aria-labelledby="bb-tab-program">
+          <BountyPrograms />
+        </div>
+      )}
 
       {tab === 'self-test' && (
-      <>
+      <div role="tabpanel" id="bb-panel-self-test" aria-labelledby="bb-tab-self-test">
       {error && <Muted role="alert">⚠️ {error}</Muted>}
 
       {!loading && (
@@ -335,7 +343,7 @@ const BugBountyDashboard = () => {
           );
         })
       )}
-      </>
+      </div>
       )}
     </Page>
   );

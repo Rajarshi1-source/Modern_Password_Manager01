@@ -126,12 +126,14 @@ class BountyProgramViewSet(viewsets.ModelViewSet):
     serializer_class = BountyProgramSerializer
 
     def get_queryset(self):
+        """Programs owned by the requester, annotated with their submission count."""
         return (
             BountyProgram.objects.filter(owner=self.request.user)
             .annotate(submission_count=Count('submissions'))
         )
 
     def perform_create(self, serializer):
+        """Bind the new program to the requesting user as its owner."""
         serializer.save(owner=self.request.user)
 
     @action(detail=False, methods=['get'], url_path='available')
@@ -160,6 +162,7 @@ class SubmissionViewSet(
     serializer_class = SubmissionSerializer
 
     def get_queryset(self):
+        """Submissions the requester filed, plus those against programs they own."""
         user = self.request.user
         return (
             Submission.objects.filter(
@@ -169,18 +172,20 @@ class SubmissionViewSet(
         )
 
     def get_throttles(self):
-        # Filing a report is the spammable action; rate-limit only that.
+        """Rate-limit only the spammable create action (filing a report)."""
         if getattr(self, 'action', None) == 'create':
             self.throttle_scope = 'bug_bounty_submit'
             return [ScopedRateThrottle()]
         return super().get_throttles()
 
     def perform_create(self, serializer):
-        # researcher is always the caller; the program (validated active in the
-        # serializer) may belong to any owner — that's the external-researcher model.
+        """File the report as the requester; the program may belong to any owner."""
+        # The program is validated active in the serializer — that's the
+        # external-researcher model (you submit against someone else's program).
         serializer.save(researcher=self.request.user)
 
     def _require_owner(self, submission):
+        """Raise 403 unless the requester owns the submission's program."""
         if submission.program.owner_id != self.request.user.id:
             raise PermissionDenied('Only the program owner can triage submissions.')
 
@@ -199,7 +204,11 @@ class SubmissionViewSet(
                 note=payload.validated_data.get('note', ''),
             )
         except triage_service.InvalidTransition as exc:
-            raise ValidationError(str(exc))
+            # Static, controlled message (don't echo the exception to the client);
+            # ``from exc`` keeps the cause in the server-side traceback.
+            raise ValidationError(
+                'This submission cannot make that triage transition from its current state.'
+            ) from exc
         return Response(SubmissionSerializer(submission).data)
 
     @action(detail=True, methods=['post'], url_path='reward')
@@ -218,7 +227,9 @@ class SubmissionViewSet(
                 note=payload.validated_data.get('note', ''),
             )
         except triage_service.InvalidTransition as exc:
-            raise ValidationError(str(exc))
+            raise ValidationError(
+                'This submission cannot be rewarded in its current state.'
+            ) from exc
         return Response(
             RewardSerializer(reward).data, status=status.HTTP_201_CREATED,
         )
@@ -239,12 +250,14 @@ class RewardViewSet(
     serializer_class = RewardSerializer
 
     def get_queryset(self):
+        """Rewards visible to the requester as the researcher or the program owner."""
         user = self.request.user
         return Reward.objects.filter(
             Q(submission__researcher=user) | Q(submission__program__owner=user)
         ).select_related('submission', 'submission__program')
 
     def _require_owner(self, reward):
+        """Raise 403 unless the requester owns the reward's program."""
         if reward.submission.program.owner_id != self.request.user.id:
             raise PermissionDenied('Only the program owner can manage payouts.')
 
@@ -256,7 +269,9 @@ class RewardViewSet(
         try:
             triage_service.pay_reward(reward)
         except triage_service.InvalidTransition as exc:
-            raise ValidationError(str(exc))
+            raise ValidationError(
+                'This reward cannot be paid in its current state.'
+            ) from exc
         return Response(RewardSerializer(reward).data)
 
     @action(detail=True, methods=['post'], url_path='void')
@@ -267,5 +282,7 @@ class RewardViewSet(
         try:
             triage_service.void_reward(reward)
         except triage_service.InvalidTransition as exc:
-            raise ValidationError(str(exc))
+            raise ValidationError(
+                'This reward cannot be voided in its current state.'
+            ) from exc
         return Response(RewardSerializer(reward).data)

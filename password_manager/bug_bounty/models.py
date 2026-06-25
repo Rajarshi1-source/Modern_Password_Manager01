@@ -303,6 +303,15 @@ class Reward(models.Model):
     class Meta:
         db_table = 'bug_bounty_rewards'
         ordering = ['-created_at']
+        constraints = [
+            # Enforce the positive-amount invariant at the DB level so it holds
+            # on every write path (service/admin), not just full_clean()/the API
+            # serializer — this is an obligation ledger.
+            models.CheckConstraint(
+                condition=models.Q(amount__gte=Decimal('0.01')),
+                name='bug_bounty_reward_amount_positive',
+            ),
+        ]
 
     def __str__(self) -> str:
         return f'Reward<{self.amount} {self.currency} {self.status}>'
