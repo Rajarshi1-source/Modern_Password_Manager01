@@ -127,5 +127,18 @@ class Finding(models.Model):
         ]
         indexes = [models.Index(fields=['user', 'status', 'severity'])]
 
+    def save(self, *args, **kwargs):
+        # Enforce the status/resolved_at invariant on every write path (admin,
+        # API, service) — not just the API view: a closed finding has a
+        # resolved_at, an open/acknowledged one does not.
+        closed = self.status in (FindingStatus.RESOLVED, FindingStatus.FALSE_POSITIVE)
+        desired = (self.resolved_at or timezone.now()) if closed else None
+        if desired != self.resolved_at:
+            self.resolved_at = desired
+            update_fields = kwargs.get('update_fields')
+            if update_fields is not None:
+                kwargs['update_fields'] = set(update_fields) | {'resolved_at'}
+        super().save(*args, **kwargs)
+
     def __str__(self) -> str:
         return f'Finding<{self.check_id} {self.severity} {self.status}>'

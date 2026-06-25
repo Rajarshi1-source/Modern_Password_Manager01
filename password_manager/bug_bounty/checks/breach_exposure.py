@@ -13,7 +13,8 @@ from .base import BaseCheck, FindingResult
 
 logger = logging.getLogger(__name__)
 
-_HIGH_SEVERITIES = {'high', 'critical'}
+# MLBreachData.severity labels are stored upper-case.
+_SEVERE_LABELS = ('CRITICAL', 'HIGH')
 
 
 class BreachExposureCheck(BaseCheck):
@@ -21,31 +22,30 @@ class BreachExposureCheck(BaseCheck):
     title = 'Credentials found in known data breaches'
 
     def _collect(self, user):
-        """Return (unresolved_count, worst_severity) or None if unavailable."""
+        """Return (unresolved_count, has_severe_breach) or None if unavailable."""
         try:
             from ml_dark_web.models import MLBreachMatch
-            qs = MLBreachMatch.objects.filter(user=user, resolved=False)
-            count = qs.count()
-            worst = None
-            if count:
-                worst = (
-                    qs.order_by('-breach__severity')
-                    .values_list('breach__severity', flat=True)
-                    .first()
-                )
-            return count, worst
-        except Exception:
+        except ImportError:  # app not installed → expected "signal unavailable"
             logger.debug('Breach signal unavailable for self-test', exc_info=True)
             return None
+        # A real ORM/runtime error below is a bug — let it bubble to the service.
+        qs = MLBreachMatch.objects.filter(user=user, resolved=False)
+        count = qs.count()
+        if not count:
+            return 0, False
+        # Explicit presence check, not lexicographic ordering of the text labels
+        # (which would rank 'MEDIUM' above 'HIGH'/'CRITICAL').
+        has_severe = qs.filter(breach__severity__in=_SEVERE_LABELS).exists()
+        return count, has_severe
 
     def run(self, user):
         collected = self._collect(user)
         if not collected:
             return []
-        count, worst = collected
+        count, has_severe = collected
         if not count:
             return []
-        severity = 'critical' if (worst or '').lower() in _HIGH_SEVERITIES else 'high'
+        severity = 'critical' if has_severe else 'high'
         return [
             FindingResult(
                 check_id=self.check_id,
@@ -57,6 +57,6 @@ class BreachExposureCheck(BaseCheck):
                     'monitoring dashboard and mark them resolved once rotated.'
                 ),
                 fingerprint='breach-exposure',
-                evidence={'unresolved_matches': count, 'worst_severity': worst},
+                evidence={'unresolved_matches': count, 'severe_breach_present': has_severe},
             )
         ]

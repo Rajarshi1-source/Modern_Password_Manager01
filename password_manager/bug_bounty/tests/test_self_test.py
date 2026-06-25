@@ -73,15 +73,15 @@ def test_missing_mfa_silent_when_enabled_or_unknown(monkeypatch, user):
 
 def test_breach_exposure_severity_and_evidence(monkeypatch, user):
     check = BreachExposureCheck()
-    monkeypatch.setattr(check, '_collect', lambda _u: (3, 'critical'))
+    monkeypatch.setattr(check, '_collect', lambda _u: (3, True))   # severe present
     res = check.run(user)
     assert res[0].severity == 'critical'
-    assert res[0].evidence == {'unresolved_matches': 3, 'worst_severity': 'critical'}
+    assert res[0].evidence == {'unresolved_matches': 3, 'severe_breach_present': True}
 
-    monkeypatch.setattr(check, '_collect', lambda _u: (1, 'low'))
+    monkeypatch.setattr(check, '_collect', lambda _u: (1, False))  # only low/medium
     assert check.run(user)[0].severity == 'high'
 
-    monkeypatch.setattr(check, '_collect', lambda _u: (0, None))
+    monkeypatch.setattr(check, '_collect', lambda _u: (0, False))
     assert check.run(user) == []
     monkeypatch.setattr(check, '_collect', lambda _u: None)  # unavailable
     assert check.run(user) == []
@@ -134,14 +134,49 @@ def test_resolved_finding_reopens_when_it_refires(user):
 
 
 def test_real_registry_run_is_import_safe(user):
-    """The actual checks must run without raising and complete the run.
-
-    A fresh user has no confirmed 2FA device, so the MFA check fires; the others
-    degrade to no-op when their optional signals are absent.
+    """Import-safety / graceful-degradation contract: the real registry runs
+    without raising and the run completes. No specific finding is asserted —
+    each check legitimately degrades to a no-op when its optional signal is
+    absent (the MFA-positive path is covered by the _has_mfa unit tests).
     """
     run = run_self_test(user)  # real CHECK_REGISTRY
     assert run.status == RunStatus.COMPLETED
-    assert Finding.objects.filter(user=user, check_id='mfa_disabled').exists()
+    assert run.completed_at is not None
+    assert 'total' in run.summary
+
+
+def test_service_dedupes_duplicate_fingerprints_in_summary(user):
+    dup = _StubCheck([_result(fingerprint='same'), _result(fingerprint='same')])
+    run = run_self_test(user, checks=[dup])
+    assert run.summary['total'] == 1
+    assert Finding.objects.filter(user=user, check_id='c1').count() == 1
+
+
+def test_evidence_is_sanitized_before_persisting(user):
+    leaky = _StubCheck([FindingResult(
+        check_id='c1', title='t', severity='low', remediation='fix',
+        fingerprint='fp1',
+        evidence={'count': 2, 'nested': {'secret': 'p@ss'}, 'blob': ['x'] * 100},
+    )])
+    run_self_test(user, checks=[leaky])
+    finding = Finding.objects.get(user=user, check_id='c1')
+    assert finding.evidence == {'count': 2}  # nested dict + list dropped
+
+
+def test_model_enforces_resolved_at_invariant(user):
+    """resolved_at bookkeeping holds on direct (non-API) writes too."""
+    finding = Finding.objects.create(
+        user=user, check_id='c1', title='t', severity='high', fingerprint='fp',
+    )
+    assert finding.resolved_at is None
+    finding.status = FindingStatus.RESOLVED
+    finding.save()
+    finding.refresh_from_db()
+    assert finding.resolved_at is not None
+    finding.status = FindingStatus.OPEN
+    finding.save()
+    finding.refresh_from_db()
+    assert finding.resolved_at is None
 
 
 # --------------------------------------------------------------------------- #
@@ -189,3 +224,18 @@ def test_patch_finding_status_marks_resolved(auth_client, user):
     finding.refresh_from_db()
     assert finding.status == FindingStatus.RESOLVED
     assert finding.resolved_at is not None
+
+
+def test_empty_patch_does_not_clear_resolved_at(auth_client, user):
+    finding = Finding.objects.create(
+        user=user, check_id='c1', title='t', severity='high', fingerprint='fp',
+        status=FindingStatus.RESOLVED,
+    )
+    finding.refresh_from_db()
+    assert finding.resolved_at is not None  # set by Finding.save() on create
+
+    resp = auth_client.patch(f'/api/bug-bounty/findings/{finding.id}/', {}, format='json')
+
+    assert resp.status_code == 200
+    finding.refresh_from_db()
+    assert finding.resolved_at is not None  # an empty PATCH must not erase it

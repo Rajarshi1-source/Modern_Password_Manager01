@@ -40,7 +40,6 @@ def run_self_test(user, trigger=RunTrigger.MANUAL, checks=None):
     A failing check is logged and skipped — one broken probe never fails the run.
     """
     registry = CHECK_REGISTRY if checks is None else checks
-    run = SelfTestRun.objects.create(user=user, trigger=trigger, status=RunStatus.RUNNING)
 
     results = []
     for check in registry:
@@ -52,9 +51,16 @@ def run_self_test(user, trigger=RunTrigger.MANUAL, checks=None):
                 getattr(check, 'check_id', '?'), getattr(user, 'pk', '?'),
             )
 
+    # Collapse duplicates first so the summary matches the persisted rows.
+    results = _dedupe(results)
     results.sort(key=lambda r: SEVERITY_ORDER.get(r.severity, 0), reverse=True)
 
+    # Create + persist + finalise atomically: a write failure rolls the run row
+    # back entirely rather than leaving it stuck in RUNNING.
     with transaction.atomic():
+        run = SelfTestRun.objects.create(
+            user=user, trigger=trigger, status=RunStatus.RUNNING,
+        )
         for result in results:
             _upsert_finding(user, run, result)
         run.status = RunStatus.COMPLETED
@@ -63,6 +69,34 @@ def run_self_test(user, trigger=RunTrigger.MANUAL, checks=None):
         run.save(update_fields=['status', 'completed_at', 'summary'])
 
     return run
+
+
+def _dedupe(results):
+    """Collapse findings sharing (check_id, fingerprint); the last one wins."""
+    unique = {}
+    for result in results:
+        unique[(result.check_id, result.fingerprint)] = result
+    return list(unique.values())
+
+
+# Evidence is metadata only. We persist a sanitised copy rather than trusting
+# each check to comply, so one buggy check can't store secrets or large blobs.
+_MAX_EVIDENCE_KEYS = 20
+_MAX_STR_LEN = 200
+
+
+def _sanitize_evidence(evidence):
+    """Keep only small primitive metadata; drop nested/complex values."""
+    if not isinstance(evidence, dict):
+        return {}
+    clean = {}
+    for key, value in list(evidence.items())[:_MAX_EVIDENCE_KEYS]:
+        if value is None or isinstance(value, (bool, int, float)):
+            clean[str(key)[:64]] = value
+        elif isinstance(value, str):
+            clean[str(key)[:64]] = value[:_MAX_STR_LEN]
+        # else: lists/dicts/objects are dropped entirely
+    return clean
 
 
 def _summarise(results) -> dict:
@@ -85,7 +119,7 @@ def _upsert_finding(user, run, result):
             'title': result.title,
             'severity': result.severity,
             'remediation': result.remediation,
-            'evidence': result.evidence,
+            'evidence': _sanitize_evidence(result.evidence),
             'last_seen': now,
         },
     )
