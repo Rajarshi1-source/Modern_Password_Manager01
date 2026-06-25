@@ -343,3 +343,4 @@ nltk>=3.9.4  # GHSA-gfwx-w7gr-fvh7 XSS, GHSA-jm6w-m3j8-898g unauth shutdown
 tornado>=6.5.7  # GHSA-mgf9-4vpg-hj56 (CVE-2026-49855) gzip-bomb DoS, GHSA-3x9g-8vmp-wqvf (CVE-2026-49853) cross-origin credential leak
 Twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS
 ujson>=5.12.1  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump()
+msgpack>=1.2.1 # not directly required, pinned by Snyk to avoid a vulnerability
