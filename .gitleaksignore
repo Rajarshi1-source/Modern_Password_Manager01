@@ -101,3 +101,11 @@ faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests
 404bc59b57f8e16440dea74009257e901146b534:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:40
 404bc59b57f8e16440dea74009257e901146b534:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:245
 404bc59b57f8e16440dea74009257e901146b534:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:324
+# Same content, post-merge commit hash on main. PR #389 merged via
+# squash → new SHA (8d1ad24), so Gitleaks re-flags the same two fixture
+# literals against the merged commit. The current state of
+# test_bounty_program.py has no password literals (fixtures use
+# force_authenticate); only history retains them. Same rationale as the
+# 404bc59 entries above.
+8d1ad241e4d0f0900152e220a56e78b3639929b1:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:35
+8d1ad241e4d0f0900152e220a56e78b3639929b1:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:324
