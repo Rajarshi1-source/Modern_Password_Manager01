@@ -24,8 +24,9 @@ describe('SecuritySettings preference persistence', () => {
 
     render(<SecuritySettings />);
 
-    // The first <Select> is "Auto-Lock Timeout" → updateSecurity('autoLockTimeout', N).
-    const timeoutSelect = screen.getAllByRole('combobox')[0];
+    // Target the Auto-Lock Timeout select by its accessible name (not render
+    // order) → updateSecurity('autoLockTimeout', N).
+    const timeoutSelect = screen.getByRole('combobox', { name: 'Auto-Lock Timeout' });
     fireEvent.change(timeoutSelect, { target: { value: '600' } });
 
     expect(setSpy).toHaveBeenCalledTimes(1);

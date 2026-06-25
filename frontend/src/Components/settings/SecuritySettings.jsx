@@ -176,6 +176,7 @@ const SecuritySettings = () => {
             </SettingInfo>
             <SettingControl>
               <Select
+                aria-label="Auto-Lock Timeout"
                 value={security.autoLockTimeout || 300}
                 onChange={(e) => updateSecurity('autoLockTimeout', parseInt(e.target.value))}
               >
