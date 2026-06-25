@@ -32,12 +32,14 @@ User = get_user_model()
 
 @pytest.fixture
 def owner(db):
-    return User.objects.create_user(username='owner', password='pw-owner-12345')  # gitleaks:allow (test fixture, not a real credential)
+    # No password: these tests authenticate via force_authenticate(), so a
+    # password-login credential would be unused (and trips secret scanners).
+    return User.objects.create_user(username='owner')
 
 
 @pytest.fixture
 def researcher(db):
-    return User.objects.create_user(username='hacker', password='pw-hacker-12345')  # gitleaks:allow (test fixture, not a real credential)
+    return User.objects.create_user(username='hacker')
 
 
 @pytest.fixture
@@ -242,7 +244,7 @@ def test_cannot_submit_to_inactive_program(owner, researcher):
 
 
 def test_submission_visible_to_researcher_and_owner_only(owner, researcher, submission):
-    stranger = User.objects.create_user(username='eve', password='pw-eve-123456')  # gitleaks:allow (test fixture, not a real credential)
+    stranger = User.objects.create_user(username='eve')
 
     for user in (owner, researcher):
         resp = _client(user).get(f'/api/bug-bounty/submissions/{submission.id}/')
@@ -321,7 +323,7 @@ def test_reward_before_resolved_returns_400(owner, submission):
 
 
 def test_rewards_are_visibility_scoped(owner, researcher, submission):
-    stranger = User.objects.create_user(username='mallory', password='pw-mal-123456')  # gitleaks:allow (test fixture, not a real credential)
+    stranger = User.objects.create_user(username='mallory')
     _resolve(submission)
     reward = triage_service.issue_reward(submission, amount=Decimal('200.00'))
 

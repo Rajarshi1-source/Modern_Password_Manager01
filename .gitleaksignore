@@ -91,3 +91,13 @@ ebc4be373d5c16adfef7bfc63517f82250006659:tests/functional/test_vault_operations.
 faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:84
 faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:147
 faf2b0ec8862c784605e403242c9c4355b44564f:password_manager/password_manager/tests/test_sentry_scrubbing.py:generic-api-key:189
+#
+# PR #389 (bug_bounty Phase 2): test_bounty_program.py pytest fixtures
+# originally created users with throwaway literal passwords. Those have
+# since been removed (the tests use force_authenticate, not password
+# login), but the generic-api-key heuristic still flags the commit that
+# first introduced them. These fingerprints allowlist that one commit.
+404bc59b57f8e16440dea74009257e901146b534:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:35
+404bc59b57f8e16440dea74009257e901146b534:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:40
+404bc59b57f8e16440dea74009257e901146b534:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:245
+404bc59b57f8e16440dea74009257e901146b534:password_manager/bug_bounty/tests/test_bounty_program.py:generic-api-key:324
