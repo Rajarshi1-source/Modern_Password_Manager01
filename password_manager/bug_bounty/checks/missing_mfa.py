@@ -21,10 +21,12 @@ class MissingMFACheck(BaseCheck):
         """
         try:
             from two_factor.models import TOTPDevice
-            return TOTPDevice.objects.filter(user=user, confirmed=True).exists()
-        except Exception:  # app/model unavailable or backend error → don't crash the run
+        except ImportError:  # app not installed → expected "signal unavailable"
             logger.debug('MFA signal unavailable for self-test', exc_info=True)
             return None
+        # A real ORM/runtime error below is a bug, not an unavailable signal —
+        # let it bubble to run_self_test(), which isolates and logs the check.
+        return TOTPDevice.objects.filter(user=user, confirmed=True).exists()
 
     def run(self, user):
         has_mfa = self._has_mfa(user)

@@ -193,7 +193,12 @@ const BugBountyDashboard = () => {
     }
   };
 
-  const summary = run?.summary || {};
+  // Derive the pill counts from the live open-findings list so they stay in
+  // sync with triage actions (and a load failure) without a reload.
+  const counts = findings.reduce((acc, f) => {
+    acc[f.severity] = (acc[f.severity] || 0) + 1;
+    return acc;
+  }, {});
 
   return (
     <Page>
@@ -216,9 +221,9 @@ const BugBountyDashboard = () => {
       {!loading && (
         <SummaryBar>
           {['critical', 'high', 'medium', 'low', 'info'].map((sev) => (
-            (summary[sev] || 0) > 0 ? (
+            (counts[sev] || 0) > 0 ? (
               <Pill key={sev} $color={SEVERITY[sev].color}>
-                {summary[sev]} {SEVERITY[sev].label}
+                {counts[sev]} {SEVERITY[sev].label}
               </Pill>
             ) : null
           ))}
@@ -232,6 +237,11 @@ const BugBountyDashboard = () => {
 
       {loading ? (
         <Muted>Loading self-pentest results…</Muted>
+      ) : error && !run && findings.length === 0 ? (
+        <EmptyState>
+          <p style={{ fontSize: 32, margin: 0 }}>⚠️</p>
+          <p>We couldn&apos;t load your current self-test state. Please try again.</p>
+        </EmptyState>
       ) : findings.length === 0 ? (
         <EmptyState>
           <p style={{ fontSize: 32, margin: 0 }}>✅</p>

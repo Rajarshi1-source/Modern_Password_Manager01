@@ -7,7 +7,6 @@ and reveals the requesting user's own posture.
 
 from __future__ import annotations
 
-from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -33,12 +32,8 @@ class FindingViewSet(
     def get_queryset(self):
         return Finding.objects.filter(user=self.request.user)
 
-    def perform_update(self, serializer):
-        new_status = serializer.validated_data.get('status')
-        resolved_at = None
-        if new_status in (FindingStatus.RESOLVED, FindingStatus.FALSE_POSITIVE):
-            resolved_at = timezone.now()
-        serializer.save(resolved_at=resolved_at)
+    # resolved_at bookkeeping lives in Finding.save() so every write path stays
+    # consistent — no perform_update override needed here.
 
 
 class SelfTestViewSet(viewsets.GenericViewSet):

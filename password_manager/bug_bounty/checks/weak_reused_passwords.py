@@ -28,14 +28,15 @@ class WeakReusedPasswordsCheck(BaseCheck):
         """
         try:
             from ml_security.models import PasswordStrengthPrediction
-            return (
-                PasswordStrengthPrediction.objects
-                .filter(user=user, strength__in=['very_weak', 'weak'])
-                .values('password_hash').distinct().count()
-            )
-        except Exception:
+        except ImportError:  # app not installed → expected "signal unavailable"
             logger.debug('Strength metadata unavailable for self-test', exc_info=True)
             return None
+        # A real ORM/runtime error below is a bug — let it bubble to the service.
+        return (
+            PasswordStrengthPrediction.objects
+            .filter(user=user, strength__in=['very_weak', 'weak'])
+            .values('password_hash').distinct().count()
+        )
 
     def run(self, user):
         weak = self._collect(user)
