@@ -20,4 +20,4 @@ CHECK_REGISTRY: list[BaseCheck] = [
     StaleRotationCheck(),
 ]
 
-__all__ = ['BaseCheck', 'FindingResult', 'CHECK_REGISTRY']
+__all__ = ['BaseCheck', 'CHECK_REGISTRY', 'FindingResult']

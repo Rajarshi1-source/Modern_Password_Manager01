@@ -211,7 +211,7 @@ const BugBountyDashboard = () => {
             with remediation — computed server-side from metadata only, never your passwords.
           </p>
         </div>
-        <RunButton type="button" onClick={handleRun} disabled={running}>
+        <RunButton type="button" onClick={handleRun} disabled={running || loading}>
           <FaPlay aria-hidden="true" /> {running ? 'Running…' : 'Run self-test'}
         </RunButton>
       </Header>
