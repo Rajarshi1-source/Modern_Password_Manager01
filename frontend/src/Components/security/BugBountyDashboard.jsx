@@ -1,10 +1,13 @@
 /**
- * Bug Bounty — Vault Self-Pentest Dashboard (Phase 1)
- * ===================================================
+ * Bug Bounty Dashboard
+ * ====================
  *
- * Shows the result of the continuous, non-destructive self-pentest: a severity
- * summary, a "Run self-test" trigger, and the list of open findings with
- * remediation and triage actions (acknowledge / resolve / false-positive).
+ * Two surfaces behind one nav entry:
+ *   • Self-pentest (Phase 1) — the continuous, non-destructive self-assessment:
+ *     a severity summary, a "Run self-test" trigger, and the list of open
+ *     findings with remediation and triage actions.
+ *   • Bounty program (Phase 2) — define programs and triage external-researcher
+ *     submissions through to recorded (adapter-settled) rewards.
  *
  * Read-only posture data — no plaintext secrets are ever returned by the API.
  */
@@ -12,8 +15,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import styled from 'styled-components';
 import { motion } from 'framer-motion';
-import { FaShieldAlt, FaPlay, FaCheck, FaEyeSlash, FaRegBell } from 'react-icons/fa';
+import { FaShieldAlt, FaPlay, FaCheck, FaEyeSlash, FaRegBell, FaTrophy } from 'react-icons/fa';
 import { getSelfTest, runSelfTest, updateFindingStatus } from '../../services/bugBountyService';
+import BountyPrograms from './BountyPrograms';
 
 const SEVERITY = {
   critical: { color: '#dc2626', label: 'Critical' },
@@ -53,6 +57,28 @@ const RunButton = styled.button`
   background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
   color: #fff;
   &:disabled { opacity: 0.6; cursor: not-allowed; }
+`;
+
+const TabBar = styled.div`
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid ${(p) => p.theme.borderColor || 'rgba(127,127,127,0.2)'};
+`;
+
+const Tab = styled.button`
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: ${(p) => (p.$active ? (p.theme.textPrimary || '#fff') : (p.theme.textSecondary || '#9ca3af'))};
+  border-bottom: 2px solid ${(p) => (p.$active ? '#8b5cf6' : 'transparent')};
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: -1px;
 `;
 
 const SummaryBar = styled.div`
@@ -144,6 +170,7 @@ const EmptyState = styled.div`
 `;
 
 const BugBountyDashboard = () => {
+  const [tab, setTab] = useState('self-test');
   const [run, setRun] = useState(null);
   const [findings, setFindings] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -204,18 +231,45 @@ const BugBountyDashboard = () => {
     <Page>
       <Header>
         <div>
-          <h1><FaShieldAlt aria-hidden="true" /> Bug Bounty — Vault Self-Pentest</h1>
+          <h1><FaShieldAlt aria-hidden="true" /> Bug Bounty</h1>
           <p>
-            A continuous, non-destructive self-assessment of your account&apos;s security posture.
-            It aggregates existing signals (breaches, 2FA, weak passwords) into prioritised findings
-            with remediation — computed server-side from metadata only, never your passwords.
+            Continuously self-assess your vault&apos;s posture, and run a bounty program for
+            external researchers — recorded findings and rewards, computed server-side from
+            metadata only, never your passwords.
           </p>
         </div>
-        <RunButton type="button" onClick={handleRun} disabled={running || loading}>
-          <FaPlay aria-hidden="true" /> {running ? 'Running…' : 'Run self-test'}
-        </RunButton>
+        {tab === 'self-test' && (
+          <RunButton type="button" onClick={handleRun} disabled={running || loading}>
+            <FaPlay aria-hidden="true" /> {running ? 'Running…' : 'Run self-test'}
+          </RunButton>
+        )}
       </Header>
 
+      <TabBar role="tablist">
+        <Tab
+          type="button"
+          role="tab"
+          aria-selected={tab === 'self-test'}
+          $active={tab === 'self-test'}
+          onClick={() => setTab('self-test')}
+        >
+          <FaShieldAlt aria-hidden="true" /> Self-pentest
+        </Tab>
+        <Tab
+          type="button"
+          role="tab"
+          aria-selected={tab === 'program'}
+          $active={tab === 'program'}
+          onClick={() => setTab('program')}
+        >
+          <FaTrophy aria-hidden="true" /> Bounty program
+        </Tab>
+      </TabBar>
+
+      {tab === 'program' && <BountyPrograms />}
+
+      {tab === 'self-test' && (
+      <>
       {error && <Muted role="alert">⚠️ {error}</Muted>}
 
       {!loading && (
@@ -280,6 +334,8 @@ const BugBountyDashboard = () => {
             </FindingCard>
           );
         })
+      )}
+      </>
       )}
     </Page>
   );

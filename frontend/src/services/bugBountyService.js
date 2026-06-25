@@ -31,4 +31,90 @@ export const updateFindingStatus = async (id, status) => {
   return response.data;
 };
 
-export default { getSelfTest, runSelfTest, updateFindingStatus };
+/* ------------------------------------------------------------------ *
+ * Phase 2 — bounty program / submissions / rewards
+ * ------------------------------------------------------------------ */
+
+/** Programs owned by the current user (management view). */
+export const getPrograms = async () => {
+  const response = await apiClient.get(`${BASE_URL}/programs/`);
+  return response.data;
+};
+
+/** Active programs any researcher can submit to (across owners). */
+export const getAvailablePrograms = async () => {
+  const response = await apiClient.get(`${BASE_URL}/programs/available/`);
+  return response.data;
+};
+
+/** Create a program. */
+export const createProgram = async (payload) => {
+  const response = await apiClient.post(`${BASE_URL}/programs/`, payload);
+  return response.data;
+};
+
+/** Update a program (e.g. change status / scope / tiers). */
+export const updateProgram = async (id, payload) => {
+  const response = await apiClient.patch(`${BASE_URL}/programs/${id}/`, payload);
+  return response.data;
+};
+
+/** Submissions visible to the user (as researcher or program owner). */
+export const getSubmissions = async () => {
+  const response = await apiClient.get(`${BASE_URL}/submissions/`);
+  return response.data;
+};
+
+/** File a report against an active program. */
+export const createSubmission = async (payload) => {
+  const response = await apiClient.post(`${BASE_URL}/submissions/`, payload);
+  return response.data;
+};
+
+/**
+ * Owner-only: advance a submission through the triage state machine.
+ * @param {string} id submission id
+ * @param {{to_status: string, severity_assigned?: string, note?: string}} body
+ */
+export const transitionSubmission = async (id, body) => {
+  const response = await apiClient.post(`${BASE_URL}/submissions/${id}/transition/`, body);
+  return response.data;
+};
+
+/**
+ * Owner-only: record a reward obligation on a resolved submission.
+ * @param {string} id submission id
+ * @param {{amount: string|number, currency?: string, adapter?: string, note?: string}} body
+ */
+export const rewardSubmission = async (id, body) => {
+  const response = await apiClient.post(`${BASE_URL}/submissions/${id}/reward/`, body);
+  return response.data;
+};
+
+/** Owner-only: settle an owed reward through its payout adapter (no money moves in-product). */
+export const payReward = async (id) => {
+  const response = await apiClient.post(`${BASE_URL}/rewards/${id}/pay/`);
+  return response.data;
+};
+
+/** Owner-only: void an obligation that will not be paid. */
+export const voidReward = async (id) => {
+  const response = await apiClient.post(`${BASE_URL}/rewards/${id}/void/`);
+  return response.data;
+};
+
+export default {
+  getSelfTest,
+  runSelfTest,
+  updateFindingStatus,
+  getPrograms,
+  getAvailablePrograms,
+  createProgram,
+  updateProgram,
+  getSubmissions,
+  createSubmission,
+  transitionSubmission,
+  rewardSubmission,
+  payReward,
+  voidReward,
+};

@@ -9,15 +9,21 @@ Privacy: a Finding NEVER stores plaintext secrets. ``evidence`` holds only
 metadata/counts the underlying security services already expose (e.g. number of
 unresolved breach matches), and every row is owned by exactly one user.
 
-Phase 2 (BountyProgram / Submission / Reward — external researchers) is a
-separate follow-up and intentionally not modelled here.
+Phase 2 adds the external-researcher bounty program on top of the same app:
+``BountyProgram`` (an owner-defined program), ``Submission`` (a researcher's
+report moving through a triage state machine), and ``Reward`` (a recorded payout
+obligation). No money moves in-product — disbursement goes through a pluggable
+adapter interface only (see ``rewards/adapters``). Researchers test the app's
+defined attack surface; they never receive access to any user's vault data.
 """
 
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 
@@ -142,3 +148,161 @@ class Finding(models.Model):
 
     def __str__(self) -> str:
         return f'Finding<{self.check_id} {self.severity} {self.status}>'
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 — external-researcher bounty program
+# --------------------------------------------------------------------------- #
+
+
+class ProgramStatus(models.TextChoices):
+    DRAFT = 'draft', 'Draft'
+    ACTIVE = 'active', 'Active'
+    PAUSED = 'paused', 'Paused'
+    CLOSED = 'closed', 'Closed'
+
+
+class SubmissionStatus(models.TextChoices):
+    NEW = 'new', 'New'
+    TRIAGING = 'triaging', 'Triaging'
+    ACCEPTED = 'accepted', 'Accepted'
+    DUPLICATE = 'duplicate', 'Duplicate'
+    REJECTED = 'rejected', 'Rejected'
+    RESOLVED = 'resolved', 'Resolved'
+    REWARDED = 'rewarded', 'Rewarded'
+
+
+class RewardStatus(models.TextChoices):
+    OWED = 'owed', 'Owed'
+    PAID = 'paid', 'Paid'
+    VOID = 'void', 'Void'
+
+
+class BountyProgram(models.Model):
+    """An owner-defined bug-bounty program for the app's attack surface.
+
+    Scope, policy, and reward tiers are published so researchers know what is in
+    scope and what a valid report earns. A program only accepts submissions while
+    ``ACTIVE``. Researchers test the defined surface (APIs/auth) — never any
+    user's vault contents.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='bug_bounty_programs',
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True, default='')
+    # In-scope targets, e.g. ["api/vault/", "auth login flow"]. App surface only.
+    scope = models.JSONField(default=list, blank=True)
+    # Disclosure policy / rules of engagement (free text).
+    policy = models.TextField(blank=True, default='')
+    # Suggested reward per severity, e.g. {"high": 200, "critical": 500}.
+    reward_tiers = models.JSONField(default=dict, blank=True)
+    status = models.CharField(
+        max_length=16, choices=ProgramStatus.choices, default=ProgramStatus.DRAFT,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'bug_bounty_programs'
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['owner', 'status'])]
+
+    def __str__(self) -> str:
+        return f'BountyProgram<{self.title} {self.status}>'
+
+
+class Submission(models.Model):
+    """A researcher's report against a program, moving through triage.
+
+    State machine (enforced in ``services.triage_service``):
+
+        new → triaging → accepted | duplicate | rejected
+        accepted → resolved → rewarded
+
+    ``duplicate``, ``rejected`` and ``rewarded`` are terminal. The researcher
+    claims a severity; the owner assigns the authoritative one during triage.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    program = models.ForeignKey(
+        BountyProgram,
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+    researcher = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='bug_bounty_submissions',
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    severity_claimed = models.CharField(
+        max_length=16, choices=Severity.choices, default=Severity.MEDIUM,
+    )
+    # Empty until the owner triages; '' means "not yet assigned".
+    severity_assigned = models.CharField(
+        max_length=16, choices=Severity.choices, blank=True, default='',
+    )
+    status = models.CharField(
+        max_length=16, choices=SubmissionStatus.choices,
+        default=SubmissionStatus.NEW, db_index=True,
+    )
+    # The owner's note attached to the most recent triage transition.
+    triage_note = models.TextField(blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'bug_bounty_submissions'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['program', 'status']),
+            models.Index(fields=['researcher', 'status']),
+        ]
+
+    def __str__(self) -> str:
+        return f'Submission<{self.title} {self.status}>'
+
+
+class Reward(models.Model):
+    """A recorded payout obligation for a rewarded submission.
+
+    This is an *obligation ledger entry*, not a payment. No payment processor is
+    integrated (KYC/PCI/tax liability are out of scope). Disbursement is handled
+    by a pluggable adapter (see ``rewards/adapters``); the default ``manual``
+    adapter merely records an off-platform reference and moves no money.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    submission = models.OneToOneField(
+        Submission,
+        on_delete=models.CASCADE,
+        related_name='reward',
+    )
+    amount = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))],
+    )
+    currency = models.CharField(max_length=3, default='USD')
+    status = models.CharField(
+        max_length=16, choices=RewardStatus.choices, default=RewardStatus.OWED,
+    )
+    # Which payout adapter is responsible for disbursing this reward.
+    adapter = models.CharField(max_length=64, default='manual')
+    # External/off-platform reference recorded once the adapter "pays".
+    payout_ref = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'bug_bounty_rewards'
+        ordering = ['-created_at']
+
+    def __str__(self) -> str:
+        return f'Reward<{self.amount} {self.currency} {self.status}>'
