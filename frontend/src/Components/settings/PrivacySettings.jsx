@@ -168,7 +168,7 @@ const PrivacySettings = () => {
     setPrivacy(newPrivacy);
     
     try {
-      await preferencesService.set('privacy', key, value);
+      await preferencesService.set(`privacy.${key}`, value);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (error) {

@@ -134,7 +134,7 @@ const ThemeSettings = () => {
     setTheme(newTheme);
     
     try {
-      await preferencesService.set('theme', key, value);
+      await preferencesService.set(`theme.${key}`, value);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       
