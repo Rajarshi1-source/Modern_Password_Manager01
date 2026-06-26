@@ -451,6 +451,31 @@ class FingerprintIngestAPITests(PredictiveExpirationAPITestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_ingest_rejects_duplicate_credential_ids(self):
+        """Two fingerprints for the same credential in one batch is a 400."""
+        batch = {'fingerprints': [
+            self._payload('dup-id')['fingerprints'][0],
+            self._payload('dup-id')['fingerprints'][0],
+        ]}
+        response = self.client.post(self.URL, batch, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_ingest_derives_length_from_sequence(self):
+        """A conflicting client length is ignored; server derives it."""
+        from security.models import PasswordPatternProfile
+
+        # 10-char sequence but a bogus length=3.
+        response = self.client.post(
+            self.URL,
+            self._payload('len-cred', length=3),
+            format='json'
+        )
+        self.assertEqual(response.status_code, 200)
+
+        profile = PasswordPatternProfile.objects.get(user=self.user)
+        # Aggregated from the true sequence length (10), not the client's 3.
+        self.assertEqual(profile.avg_password_length, 10.0)
+
 
 class PatternProfileAPITests(PredictiveExpirationAPITestCase):
     """Tests for the pattern profile endpoint."""
@@ -589,5 +614,6 @@ class RateLimitingTests(PredictiveExpirationAPITestCase):
                 format='json'
             )
 
-        # Either normal response or rate limited
-        self.assertIn(response.status_code, [200, 201, 400, 404, 429])
+        # The ingest endpoint must answer 200 (accepted) or 429 (throttled);
+        # 400/404/201 here would mean the request path itself is broken.
+        self.assertIn(response.status_code, [200, 429])

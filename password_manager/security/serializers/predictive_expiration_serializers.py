@@ -317,8 +317,9 @@ class FingerprintItemSerializer(serializers.Serializer):
         min_value=0, max_value=4096, required=False
     )
     length_bucket = serializers.ChoiceField(choices=LENGTH_BUCKETS)
+    # Entropy is uploaded as a coarse band only; the representative estimate is
+    # derived server-side so ingest and daily re-scoring score identically.
     entropy_band = serializers.ChoiceField(choices=ENTROPY_BANDS)
-    entropy_estimate = serializers.FloatField(required=False, allow_null=True)
     structure_hash = serializers.RegexField(
         r'^[0-9a-fA-F]{64}$', required=False, allow_blank=True, default=''
     )
@@ -334,6 +335,13 @@ class FingerprintItemSerializer(serializers.Serializer):
         choices=DOMAIN_CLASSES, required=False, allow_blank=True, default=''
     )
 
+    def validate(self, attrs):
+        # The char-class sequence already encodes the exact length, so derive
+        # it server-side rather than trusting a (possibly conflicting) client
+        # value. Keeps scoring and profile aggregation on one length source.
+        attrs['length'] = len(attrs['char_class_sequence'])
+        return attrs
+
 
 class FingerprintIngestSerializer(serializers.Serializer):
     """Batch of password fingerprints submitted on vault unlock / change."""
@@ -347,6 +355,13 @@ class FingerprintIngestSerializer(serializers.Serializer):
         if len(value) > MAX_FINGERPRINT_BATCH:
             raise serializers.ValidationError(
                 f"Batch too large (max {MAX_FINGERPRINT_BATCH})."
+            )
+        # Reject duplicate credential_ids: the (user, credential_id) upsert
+        # would keep only the last, yet both would be counted in the profile.
+        ids = [fp['credential_id'] for fp in value]
+        if len(ids) != len(set(ids)):
+            raise serializers.ValidationError(
+                "Duplicate credential_id values in a single batch."
             )
         return value
 

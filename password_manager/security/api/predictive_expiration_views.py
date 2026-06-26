@@ -8,6 +8,7 @@ REST API endpoints for predictive password expiration.
 import logging
 from datetime import datetime, timedelta
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Count, Q
 from rest_framework import status, generics
 from rest_framework.views import APIView
@@ -412,39 +413,41 @@ class FingerprintIngestView(APIView):
         fingerprints = serializer.validated_data['fingerprints']
         service = get_predictive_expiration_service()
 
+        # All-or-nothing: rules and the aggregate profile must stay in sync, so
+        # a failure mid-batch rolls back every write in this request.
         processed = []
-        for fp in fingerprints:
-            domain_class = fp.get('domain_class', '') or ''
-            rule = service.create_expiration_rule_from_fingerprint(
-                user_id=request.user.id,
-                credential_id=str(fp['credential_id']),
-                # Store only the coarse class for display + threat matching;
-                # the exact domain never leaves the device.
-                credential_domain=domain_class,
-                domain_class=domain_class,
-                char_class_sequence=fp['char_class_sequence'],
-                length=fp.get('length'),
-                length_bucket=fp['length_bucket'],
-                entropy_band=fp['entropy_band'],
-                entropy_estimate=fp.get('entropy_estimate'),
-                has_dictionary_base=fp.get('has_dictionary_base', False),
-                has_keyboard_pattern=fp.get('has_keyboard_pattern', False),
-                has_date_pattern=fp.get('has_date_pattern', False),
-                has_leet=fp.get('has_leet', False),
-                structure_hash=fp.get('structure_hash', '') or '',
-                credential_age_days=fp.get('age_days', 0),
-            )
-            processed.append({
-                'credential_id': rule.credential_id,
-                'risk_level': rule.risk_level,
-                'risk_score': rule.risk_score,
-                'recommended_action': rule.recommended_action,
-            })
+        with transaction.atomic():
+            for fp in fingerprints:
+                domain_class = fp.get('domain_class', '') or ''
+                rule = service.create_expiration_rule_from_fingerprint(
+                    user_id=request.user.id,
+                    credential_id=str(fp['credential_id']),
+                    # Store only the coarse class for display + threat matching;
+                    # the exact domain never leaves the device.
+                    credential_domain=domain_class,
+                    domain_class=domain_class,
+                    char_class_sequence=fp['char_class_sequence'],
+                    length=fp.get('length'),
+                    length_bucket=fp['length_bucket'],
+                    entropy_band=fp['entropy_band'],
+                    has_dictionary_base=fp.get('has_dictionary_base', False),
+                    has_keyboard_pattern=fp.get('has_keyboard_pattern', False),
+                    has_date_pattern=fp.get('has_date_pattern', False),
+                    has_leet=fp.get('has_leet', False),
+                    structure_hash=fp.get('structure_hash', '') or '',
+                    credential_age_days=fp.get('age_days', 0),
+                )
+                processed.append({
+                    'credential_id': rule.credential_id,
+                    'risk_level': rule.risk_level,
+                    'risk_score': rule.risk_score,
+                    'recommended_action': rule.recommended_action,
+                })
 
-        # Refresh the aggregate pattern profile from this batch (ZK).
-        service.update_user_pattern_profile_from_fingerprints(
-            request.user.id, list(fingerprints)
-        )
+            # Refresh the aggregate pattern profile from this batch (ZK).
+            service.update_user_pattern_profile_from_fingerprints(
+                request.user.id, list(fingerprints)
+            )
 
         return Response(
             {'processed': len(processed), 'rules': processed},

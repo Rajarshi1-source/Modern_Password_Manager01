@@ -27,6 +27,13 @@ describe('fingerprintSync — deriveDomainClass', () => {
     expect(deriveDomainClass(undefined)).toBe('');
   });
 
+  it('matches on host boundaries, not arbitrary substrings', () => {
+    // "annex.com" must NOT classify as social via the "x.com" keyword.
+    expect(deriveDomainClass('https://annex.com')).toBe('other');
+    // The real host still matches.
+    expect(deriveDomainClass('https://x.com')).toBe('social');
+  });
+
   it('only ever emits an allowed coarse class (never the exact host)', () => {
     const allowed = new Set([
       'finance', 'healthcare', 'technology', 'government', 'retail',
@@ -86,5 +93,22 @@ describe('fingerprintSync — syncVaultFingerprints', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].credential_id).toBe('a');
     expect(res.processed).toBe(1);
+  });
+
+  it('chunks large vaults to the backend batch limit', async () => {
+    submitFingerprints.mockClear();
+    const items = Array.from({ length: 501 }, (_, i) => ({
+      item_id: `c${i}`,
+      item_type: 'password',
+      data: { password: 'qwerty123' },
+    }));
+
+    const res = await syncVaultFingerprints(items);
+
+    // 501 payloads -> two requests (500 + 1), none over the cap.
+    expect(submitFingerprints).toHaveBeenCalledTimes(2);
+    expect(submitFingerprints.mock.calls[0][0]).toHaveLength(500);
+    expect(submitFingerprints.mock.calls[1][0]).toHaveLength(1);
+    expect(res.processed).toBe(501);
   });
 });

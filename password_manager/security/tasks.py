@@ -765,6 +765,14 @@ def evaluate_password_expiration_risk(credential_id: str, user_id: int):
         except PredictiveExpirationRule.DoesNotExist:
             return {'status': 'no_fingerprint', 'credential_id': str(credential_id)}
 
+        # Advance the stored age by the time elapsed since the last evaluation
+        # so age-based thresholds (180/365 days) still cross between client
+        # re-uploads. The browser overwrites this on its next sync.
+        credential_age_days = rule.credential_age_days
+        if rule.last_evaluated_at:
+            elapsed_days = (timezone.now().date() - rule.last_evaluated_at.date()).days
+            credential_age_days += max(0, elapsed_days)
+
         # Re-score from the stored structural metadata — no plaintext needed.
         rule = service.create_expiration_rule_from_fingerprint(
             user_id=user_id,
@@ -778,7 +786,7 @@ def evaluate_password_expiration_risk(credential_id: str, user_id: int):
             has_keyboard_pattern=rule.has_keyboard_pattern,
             has_date_pattern=rule.has_date_pattern,
             has_leet=rule.has_leet,
-            credential_age_days=rule.credential_age_days,
+            credential_age_days=credential_age_days,
         )
 
         logger.info(f"Re-scored credential {credential_id} for user {user_id}: "
@@ -902,12 +910,15 @@ def daily_predictive_scan(self):
                 is_active=True,
             )
 
+            # Coarse-class exclusions only: under zero-knowledge the server
+            # holds no exact domains, so exclude_domains is matched by
+            # normalized equality against the coarse class. Exact-domain
+            # exclusion is enforced client-side at upload time.
+            excluded_classes = {
+                d.strip().lower() for d in user_settings.exclude_domains if d
+            }
             for rule in rules:
-                # Honour the user's excluded coarse domain classes.
-                if rule.domain_class and any(
-                    excl in rule.domain_class
-                    for excl in user_settings.exclude_domains
-                ):
+                if rule.domain_class and rule.domain_class.lower() in excluded_classes:
                     continue
 
                 # Queue a re-score from the stored fingerprint.

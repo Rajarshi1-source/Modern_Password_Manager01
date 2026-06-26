@@ -28,6 +28,23 @@ const DOMAIN_KEYWORDS = {
   retail: ['retail', 'market'],
 };
 
+// Server-side batch cap (FingerprintIngestSerializer.MAX_FINGERPRINT_BATCH).
+// Uploads are chunked to this size so large vaults don't trip the 400.
+const MAX_FINGERPRINT_BATCH = 500;
+
+/**
+ * Whether a coarse-class keyword matches a host on a label/suffix boundary
+ * rather than as an arbitrary substring. A dotted keyword (e.g. "x.com")
+ * must be the host or one of its suffixes; a bare token (e.g. "bank") must
+ * appear within a host label — so "annex.com" no longer matches "x.com".
+ */
+function hostMatchesKeyword(host, kw) {
+  if (kw.includes('.')) {
+    return host === kw || host.endsWith(`.${kw}`);
+  }
+  return host.split('.').some((label) => label.includes(kw));
+}
+
 /**
  * Derive a coarse domain class from a URL/host. Returns 'other' when no
  * category matches and '' when there is nothing to classify.
@@ -42,7 +59,7 @@ export function deriveDomainClass(url) {
     // Fall back to the raw string if it isn't a parseable URL.
   }
   for (const [cls, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
-    if (keywords.some((kw) => host.includes(kw))) return cls;
+    if (keywords.some((kw) => hostMatchesKeyword(host, kw))) return cls;
   }
   return 'other';
 }
@@ -90,7 +107,19 @@ export async function syncVaultFingerprints(decryptedItems) {
   }
 
   if (payloads.length === 0) return null;
-  return submitFingerprints(payloads);
+
+  // Chunk to the server's batch cap so large vaults don't get rejected.
+  const results = [];
+  for (let i = 0; i < payloads.length; i += MAX_FINGERPRINT_BATCH) {
+    results.push(
+      await submitFingerprints(payloads.slice(i, i + MAX_FINGERPRINT_BATCH))
+    );
+  }
+
+  return {
+    processed: results.reduce((sum, r) => sum + (r?.processed ?? 0), 0),
+    rules: results.flatMap((r) => r?.rules ?? []),
+  };
 }
 
 export default {
