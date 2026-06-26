@@ -161,13 +161,13 @@ class PredictiveExpirationService:
     
     def calculate_exposure_risk(
         self,
-        password: str = None,
-        user_id: int = None,
+        password: Optional[str] = None,
+        user_id: Optional[int] = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
-        domain: str = None,
-        age_days: int = None,
-        fingerprint: PatternFingerprint = None,
+        domain: Optional[str] = None,
+        age_days: Optional[int] = None,
+        fingerprint: Optional[PatternFingerprint] = None,
     ):
         """
         Calculate comprehensive exposure risk for a credential.
@@ -207,7 +207,7 @@ class PredictiveExpirationService:
     def calculate_exposure_risk_from_fingerprint(
         self,
         fingerprint: PatternFingerprint,
-        user_id: int = None,
+        user_id: Optional[int] = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
     ):
@@ -223,7 +223,7 @@ class PredictiveExpirationService:
     def _risk_from_pattern(
         self,
         pattern: PatternFingerprint,
-        user_id: int = None,
+        user_id: Optional[int] = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
     ):
@@ -289,13 +289,13 @@ class PredictiveExpirationService:
     
     def predict_compromise_timeline(
         self,
-        password: str = None,
-        user_id: int = None,
+        password: Optional[str] = None,
+        user_id: Optional[int] = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
-        domain: str = None,
-        age_days: int = None,
-        fingerprint: PatternFingerprint = None,
+        domain: Optional[str] = None,
+        age_days: Optional[int] = None,
+        fingerprint: Optional[PatternFingerprint] = None,
     ) -> PredictionResult:
         if domain is not None and not credential_domain:
             credential_domain = domain
@@ -312,7 +312,7 @@ class PredictiveExpirationService:
         user_id: int,
         credential_domain: str,
         credential_age_days: int,
-        fingerprint: PatternFingerprint = None,
+        fingerprint: Optional[PatternFingerprint] = None,
     ) -> PredictionResult:
         """
         Predict when a password might be compromised.
@@ -371,13 +371,13 @@ class PredictiveExpirationService:
     
     def should_force_rotation(
         self,
-        password: str = None,
-        user_id: int = None,
+        password: Optional[str] = None,
+        user_id: Optional[int] = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
-        domain: str = None,
-        age_days: int = None,
-        fingerprint: PatternFingerprint = None,
+        domain: Optional[str] = None,
+        age_days: Optional[int] = None,
+        fingerprint: Optional[PatternFingerprint] = None,
     ) -> Tuple[bool, List[str]]:
         """
         Determine if a password should be forcibly rotated.
@@ -441,13 +441,13 @@ class PredictiveExpirationService:
     
     def generate_rotation_recommendation(
         self,
-        password: str = None,
-        user_id: int = None,
+        password: Optional[str] = None,
+        user_id: Optional[int] = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
-        domain: str = None,
-        age_days: int = None,
-        fingerprint: PatternFingerprint = None,
+        domain: Optional[str] = None,
+        age_days: Optional[int] = None,
+        fingerprint: Optional[PatternFingerprint] = None,
     ) -> RotationPlan:
         """
         Generate a comprehensive rotation recommendation.
@@ -681,10 +681,10 @@ class PredictiveExpirationService:
         credential_domain: str = '',
         domain_class: str = '',
         char_class_sequence: str,
-        length: int = None,
+        length: Optional[int] = None,
         length_bucket: str = '',
         entropy_band: str = '',
-        entropy_estimate: float = None,
+        entropy_estimate: Optional[float] = None,
         has_dictionary_base: bool = False,
         has_keyboard_pattern: bool = False,
         has_date_pattern: bool = False,
@@ -954,8 +954,8 @@ class PredictiveExpirationService:
     
     def _generate_requirements(
         self,
-        current_password: str = None,
-        pattern: PatternFingerprint = None,
+        current_password: Optional[str] = None,
+        pattern: Optional[PatternFingerprint] = None,
     ) -> Dict:
         """Generate requirements for a new password.
 
