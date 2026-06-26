@@ -96,9 +96,10 @@ export function lengthBucket(length) {
 /** Shannon entropy scaled by length, in bits (mirrors _calculate_entropy). */
 export function entropyBits(password) {
   if (!password) return 0;
+  const chars = Array.from(password); // count code points, not UTF-16 units
   const freq = new Map();
-  for (const ch of password) freq.set(ch, (freq.get(ch) || 0) + 1);
-  const length = password.length;
+  for (const ch of chars) freq.set(ch, (freq.get(ch) || 0) + 1);
+  const length = chars.length;
   let entropy = 0;
   for (const count of freq.values()) {
     const p = count / length;
@@ -173,13 +174,16 @@ export async function structureHash(seq, bucket) {
  */
 export async function computeFingerprint(password) {
   const pw = password || '';
+  // Code-point length keeps length / bucket / hash consistent with the
+  // char-class sequence (which iterates code points) and the Python server.
+  const length = Array.from(pw).length;
   const seq = charClassSequence(pw);
-  const bucket = lengthBucket(pw.length);
+  const bucket = lengthBucket(length);
   const bits = entropyBits(pw);
 
   return {
     char_class_sequence: seq,
-    length: pw.length,
+    length,
     length_bucket: bucket,
     entropy_band: entropyBand(bits),
     structure_hash: await structureHash(seq, bucket),

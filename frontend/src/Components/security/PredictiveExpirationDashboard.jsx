@@ -366,7 +366,7 @@ const PredictiveExpirationDashboard = () => {
                     <ul>
                         <li>The character-class shape (e.g. <code>ULLLLDDDD</code>), length band, and an entropy band</li>
                         <li>Yes/no habit flags: dictionary base, keyboard pattern, dates, l33t</li>
-                        <li>A salted hash of the shape and a coarse category (e.g. “finance”)</li>
+                        <li>A hash of the shape (which the server re-hashes with a secret salt before storing) and a coarse category (e.g. “finance”)</li>
                     </ul>
                     <p>
                         The server scores risk from this alone. Your actual passwords

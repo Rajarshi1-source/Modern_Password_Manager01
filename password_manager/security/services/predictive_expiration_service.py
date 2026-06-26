@@ -938,8 +938,10 @@ class PredictiveExpirationService:
         """Calculate confidence in the risk assessment."""
         confidence = 0.5  # Base confidence
         
-        # More factors = higher confidence
-        if pattern.detected_base_words:
+        # More factors = higher confidence. Use has_dictionary_base (not the
+        # word list) so the zero-knowledge fingerprint path — which never
+        # carries detected_base_words — scores the same as the plaintext path.
+        if pattern.has_dictionary_base:
             confidence += 0.1
         if threat_level.active_threats:
             confidence += 0.15
