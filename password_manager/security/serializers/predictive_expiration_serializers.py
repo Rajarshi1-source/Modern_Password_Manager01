@@ -286,27 +286,69 @@ class ForceRotationSerializer(serializers.Serializer):
     )
 
 
-class CredentialAnalysisRequestSerializer(serializers.Serializer):
-    """Serializer for credential analysis requests."""
-    credential_id = serializers.UUIDField()
-    password = serializers.CharField(write_only=True)
-    domain = serializers.CharField(max_length=255)
-    created_at = serializers.DateTimeField(required=False)
+# Allowed coarse vocabularies for the zero-knowledge fingerprint payload.
+# Anything outside these sets is rejected so the client cannot smuggle
+# higher-resolution (identifying) data through these fields.
+LENGTH_BUCKETS = ['very_short', 'short', 'medium', 'long', 'very_long']
+ENTROPY_BANDS = ['very_low', 'low', 'medium', 'high', 'very_high']
+DOMAIN_CLASSES = [
+    'finance', 'healthcare', 'technology', 'government', 'retail',
+    'education', 'social', 'email', 'shopping', 'other',
+]
+
+# Upper bound on a single ingest batch — rejects oversized payloads.
+MAX_FINGERPRINT_BATCH = 500
 
 
-class RiskAnalysisResponseSerializer(serializers.Serializer):
-    """Serializer for risk analysis responses."""
-    overall_score = serializers.FloatField()
-    pattern_risk = serializers.FloatField()
-    threat_risk = serializers.FloatField()
-    industry_risk = serializers.FloatField()
-    age_risk = serializers.FloatField()
-    risk_level = serializers.CharField()
-    factors = serializers.ListField(child=serializers.CharField())
-    predicted_compromise_date = serializers.DateField(allow_null=True)
-    prediction_confidence = serializers.FloatField()
-    recommended_action = serializers.CharField()
-    recommended_rotation_date = serializers.DateField(allow_null=True)
+class FingerprintItemSerializer(serializers.Serializer):
+    """A single zero-knowledge password fingerprint uploaded by the browser.
+
+    Every field is irreversible structural metadata. There is deliberately no
+    ``password``, no ``detected_base_words`` and no exact-domain field: the
+    server can never reconstruct the credential from this payload.
+    """
+    credential_id = serializers.CharField(max_length=128)
+    # Character-class sequence, restricted to U/L/D/S so it cannot carry the
+    # actual characters of the password.
+    char_class_sequence = serializers.RegexField(
+        r'^[ULDS]*$', max_length=256
+    )
+    length = serializers.IntegerField(
+        min_value=0, max_value=4096, required=False
+    )
+    length_bucket = serializers.ChoiceField(choices=LENGTH_BUCKETS)
+    entropy_band = serializers.ChoiceField(choices=ENTROPY_BANDS)
+    entropy_estimate = serializers.FloatField(required=False, allow_null=True)
+    structure_hash = serializers.RegexField(
+        r'^[0-9a-fA-F]{64}$', required=False, allow_blank=True, default=''
+    )
+    has_dictionary_base = serializers.BooleanField(required=False, default=False)
+    has_keyboard_pattern = serializers.BooleanField(required=False, default=False)
+    has_date_pattern = serializers.BooleanField(required=False, default=False)
+    has_leet = serializers.BooleanField(required=False, default=False)
+    age_days = serializers.IntegerField(
+        min_value=0, max_value=100000, required=False, default=0
+    )
+    # Coarse category only — never the exact site.
+    domain_class = serializers.ChoiceField(
+        choices=DOMAIN_CLASSES, required=False, allow_blank=True, default=''
+    )
+
+
+class FingerprintIngestSerializer(serializers.Serializer):
+    """Batch of password fingerprints submitted on vault unlock / change."""
+    fingerprints = FingerprintItemSerializer(many=True)
+
+    def validate_fingerprints(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "At least one fingerprint is required."
+            )
+        if len(value) > MAX_FINGERPRINT_BATCH:
+            raise serializers.ValidationError(
+                f"Batch too large (max {MAX_FINGERPRINT_BATCH})."
+            )
+        return value
 
 
 class ThreatSummarySerializer(serializers.Serializer):

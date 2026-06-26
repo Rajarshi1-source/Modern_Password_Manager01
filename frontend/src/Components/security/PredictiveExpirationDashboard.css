@@ -783,3 +783,49 @@
         width: 100%;
     }
 }
+/* Zero-knowledge privacy explainer */
+.zk-privacy-note {
+    margin: 0 0 1.25rem;
+    padding: 0.5rem 0.85rem;
+    background: rgba(99, 102, 241, 0.06);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 8px;
+    font-size: 0.85rem;
+}
+
+.zk-privacy-note > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--text-secondary, #475569);
+    list-style: none;
+}
+
+.zk-privacy-note .zk-sync {
+    font-weight: 500;
+    opacity: 0.8;
+}
+
+.zk-privacy-note .zk-sync-error {
+    color: var(--risk-high, #dc2626);
+}
+
+.zk-privacy-body {
+    margin-top: 0.6rem;
+    color: var(--text-secondary, #475569);
+    line-height: 1.5;
+}
+
+.zk-privacy-body ul {
+    margin: 0.4rem 0;
+    padding-left: 1.2rem;
+}
+
+.zk-privacy-body code {
+    padding: 0.05rem 0.3rem;
+    background: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

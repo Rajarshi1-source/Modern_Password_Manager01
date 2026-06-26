@@ -733,63 +733,64 @@ def update_threat_intelligence():
 @shared_task
 def evaluate_password_expiration_risk(credential_id: str, user_id: int):
     """
-    Calculate real-time compromise risk for a specific credential.
-    
-    Creates or updates the PredictiveExpirationRule for the credential.
-    
+    Re-score compromise risk for a credential from its stored fingerprint.
+
+    Zero-knowledge: this task never decrypts the vault. It re-scores the
+    existing PredictiveExpirationRule (whose structural fingerprint was
+    uploaded by the browser via the fingerprints/ endpoint) against the
+    current threat intelligence. If no fingerprint has been uploaded yet,
+    there is nothing to score and the task is a no-op.
+
     Args:
-        credential_id: UUID of the credential
+        credential_id: Identifier of the credential
         user_id: ID of the user
-        
+
     Returns:
         dict: Risk evaluation results
     """
     from .models import PredictiveExpirationRule
     from .services.predictive_expiration_service import get_predictive_expiration_service
-    
+
     try:
         user = User.objects.get(id=user_id)
         service = get_predictive_expiration_service()
-        
-        # Get the vault item
+
+        # The fingerprint must already exist (uploaded client-side). No rule
+        # means the browser hasn't synced this credential yet.
         try:
-            vault_item = EncryptedVaultItem.objects.get(
-                id=credential_id,
-                user=user
+            rule = PredictiveExpirationRule.objects.get(
+                user=user,
+                credential_id=str(credential_id),
             )
-        except EncryptedVaultItem.DoesNotExist:
-            return {'error': 'credential_not_found'}
-        
-        # Get password
-        password = vault_item.get_decrypted_password(user)
-        if not password:
-            return {'error': 'could_not_decrypt'}
-        
-        # Calculate age
-        age_days = (timezone.now() - vault_item.created_at).days
-        
-        # Get domain
-        domain = getattr(vault_item, 'website', '') or getattr(vault_item, 'name', '')
-        
-        # Create expiration rule
-        rule = service.create_expiration_rule(
+        except PredictiveExpirationRule.DoesNotExist:
+            return {'status': 'no_fingerprint', 'credential_id': str(credential_id)}
+
+        # Re-score from the stored structural metadata — no plaintext needed.
+        rule = service.create_expiration_rule_from_fingerprint(
             user_id=user_id,
-            credential_id=str(credential_id),
-            credential_domain=domain[:255],
-            password=password,
-            credential_age_days=age_days
+            credential_id=rule.credential_id,
+            credential_domain=rule.credential_domain,
+            domain_class=rule.domain_class,
+            char_class_sequence=rule.char_class_sequence,
+            length_bucket=rule.length_bucket,
+            entropy_band=rule.entropy_band,
+            has_dictionary_base=rule.has_dictionary_base,
+            has_keyboard_pattern=rule.has_keyboard_pattern,
+            has_date_pattern=rule.has_date_pattern,
+            has_leet=rule.has_leet,
+            credential_age_days=rule.credential_age_days,
         )
-        
-        logger.info(f"Evaluated credential {credential_id} for user {user_id}: "
+
+        logger.info(f"Re-scored credential {credential_id} for user {user_id}: "
                    f"{rule.risk_level} risk ({rule.risk_score:.2f})")
-        
+
         return {
             'credential_id': str(credential_id),
             'risk_level': rule.risk_level,
             'risk_score': rule.risk_score,
             'recommended_action': rule.recommended_action,
         }
-        
+
     except User.DoesNotExist:
         return {'error': 'user_not_found'}
     except Exception as e:
@@ -882,49 +883,51 @@ def daily_predictive_scan(self):
     high-risk items.
     """
     from .models import PredictiveExpirationSettings, PredictiveExpirationRule
-    
+
     # Get users with predictive expiration enabled
     settings = PredictiveExpirationSettings.objects.filter(is_enabled=True)
-    
+
     total_users = 0
     total_credentials = 0
-    high_risk_count = 0
-    
+
+    # Zero-knowledge scan: re-score the fingerprints the browser already
+    # uploaded. The server never decrypts the vault — it only refreshes risk
+    # on stored structural metadata against the latest threat intelligence.
     for user_settings in settings:
         user_id = user_settings.user_id
-        
-        # Analyze patterns first
-        analyze_user_password_patterns.delay(user_id)
-        
-        # Get user's vault items
+
         try:
-            vault_items = EncryptedVaultItem.objects.filter(
+            rules = PredictiveExpirationRule.objects.filter(
                 user_id=user_id,
-                item_type='password'
+                is_active=True,
             )
-            
-            for item in vault_items:
-                # Check excluded domains
-                domain = getattr(item, 'website', '') or ''
-                if any(excl in domain for excl in user_settings.exclude_domains):
+
+            for rule in rules:
+                # Honour the user's excluded coarse domain classes.
+                if rule.domain_class and any(
+                    excl in rule.domain_class
+                    for excl in user_settings.exclude_domains
+                ):
                     continue
-                
-                # Queue risk evaluation
-                evaluate_password_expiration_risk.delay(str(item.id), user_id)
+
+                # Queue a re-score from the stored fingerprint.
+                evaluate_password_expiration_risk.delay(
+                    rule.credential_id, user_id
+                )
                 total_credentials += 1
-                
+
         except Exception as e:
-            logger.error(f"Error scanning vault for user {user_id}: {e}")
+            logger.error(f"Error scanning rules for user {user_id}: {e}")
             continue
-        
+
         total_users += 1
-    
+
     # Update threat intelligence
     update_threat_intelligence.delay()
-    
+
     logger.info(
         f"Daily predictive scan complete: "
-        f"{total_users} users, {total_credentials} credentials queued"
+        f"{total_users} users, {total_credentials} fingerprints re-queued"
     )
     
     return {

@@ -9,10 +9,12 @@ Combines pattern analysis, threat intelligence, and user context
 to provide risk assessments for each credential.
 """
 
+import hashlib
 import logging
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
 from typing import TYPE_CHECKING
@@ -23,7 +25,8 @@ if TYPE_CHECKING:
 from .pattern_analysis_engine import (
     PatternAnalysisEngine,
     PatternFingerprint,
-    get_pattern_analysis_engine
+    build_fingerprint_from_metadata,
+    get_pattern_analysis_engine,
 )
 from .threat_intelligence_service import (
     ThreatIntelligenceService,
@@ -158,25 +161,31 @@ class PredictiveExpirationService:
     
     def calculate_exposure_risk(
         self,
-        password: str,
+        password: str = None,
         user_id: int = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
         domain: str = None,
         age_days: int = None,
+        fingerprint: PatternFingerprint = None,
     ):
         """
         Calculate comprehensive exposure risk for a credential.
-        
+
         Combines pattern analysis, threat intelligence, industry
         context, and credential age into an overall risk score.
-        
+
         Args:
-            password: The password to analyze
+            password: The password to analyze. Optional — prefer
+                ``fingerprint`` for the zero-knowledge path. When given, the
+                structural fingerprint is derived locally (server-side use /
+                tests only); it is never accepted over the network.
             user_id: The user's ID
             credential_domain: Domain/service for this credential
             credential_age_days: Age of the credential in days
-            
+            fingerprint: A pre-computed :class:`PatternFingerprint` (client
+                fingerprint path). Takes precedence over ``password``.
+
         Returns:
             RiskScore with detailed breakdown
         """
@@ -186,12 +195,49 @@ class PredictiveExpirationService:
         if age_days is not None and not credential_age_days:
             credential_age_days = age_days
 
+        pattern = (
+            fingerprint
+            if fingerprint is not None
+            else self.pattern_engine.analyze_password(password or '')
+        )
+        return self._risk_from_pattern(
+            pattern, user_id, credential_domain, credential_age_days
+        )
+
+    def calculate_exposure_risk_from_fingerprint(
+        self,
+        fingerprint: PatternFingerprint,
+        user_id: int = None,
+        credential_domain: str = '',
+        credential_age_days: int = 0,
+    ):
+        """Zero-knowledge exposure-risk entry point.
+
+        Identical math to :meth:`calculate_exposure_risk` but only ever takes
+        an irreversible structural fingerprint — no plaintext path.
+        """
+        return self._risk_from_pattern(
+            fingerprint, user_id, credential_domain, credential_age_days
+        )
+
+    def _risk_from_pattern(
+        self,
+        pattern: PatternFingerprint,
+        user_id: int = None,
+        credential_domain: str = '',
+        credential_age_days: int = 0,
+    ):
+        """Score exposure risk from an already-computed pattern fingerprint.
+
+        Shared by both the (server-side/test) password path and the
+        zero-knowledge client-fingerprint path. Reads only structural fields,
+        so it is agnostic to how the fingerprint was produced.
+        """
         factors = []
-        
+
         # 1. Pattern Risk
-        pattern = self.pattern_engine.analyze_password(password)
         pattern_risk = self._calculate_pattern_risk(pattern)
-        
+
         if pattern_risk > 0.5:
             factors.append("Password follows predictable patterns")
         if pattern.has_dictionary_base:
@@ -243,19 +289,21 @@ class PredictiveExpirationService:
     
     def predict_compromise_timeline(
         self,
-        password: str,
+        password: str = None,
         user_id: int = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
         domain: str = None,
         age_days: int = None,
+        fingerprint: PatternFingerprint = None,
     ) -> PredictionResult:
         if domain is not None and not credential_domain:
             credential_domain = domain
         if age_days is not None and not credential_age_days:
             credential_age_days = age_days
         return self._predict_compromise_timeline_impl(
-            password, user_id, credential_domain, credential_age_days
+            password, user_id, credential_domain, credential_age_days,
+            fingerprint=fingerprint,
         )
 
     def _predict_compromise_timeline_impl(
@@ -263,7 +311,8 @@ class PredictiveExpirationService:
         password: str,
         user_id: int,
         credential_domain: str,
-        credential_age_days: int
+        credential_age_days: int,
+        fingerprint: PatternFingerprint = None,
     ) -> PredictionResult:
         """
         Predict when a password might be compromised.
@@ -282,9 +331,10 @@ class PredictiveExpirationService:
         """
         # Calculate risk score
         risk = self.calculate_exposure_risk(
-            password, user_id, credential_domain, credential_age_days
+            password, user_id, credential_domain, credential_age_days,
+            fingerprint=fingerprint,
         )
-        
+
         # Predict timeline based on risk
         if risk.overall_score >= 0.9:
             # Critical risk - could be compromised any time
@@ -321,12 +371,13 @@ class PredictiveExpirationService:
     
     def should_force_rotation(
         self,
-        password: str,
+        password: str = None,
         user_id: int = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
         domain: str = None,
         age_days: int = None,
+        fingerprint: PatternFingerprint = None,
     ) -> Tuple[bool, List[str]]:
         """
         Determine if a password should be forcibly rotated.
@@ -360,9 +411,10 @@ class PredictiveExpirationService:
         
         # Calculate risk
         risk = self.calculate_exposure_risk(
-            password, user_id, credential_domain, credential_age_days
+            password, user_id, credential_domain, credential_age_days,
+            fingerprint=fingerprint,
         )
-        
+
         reasons = []
         should_rotate = False
         
@@ -389,12 +441,13 @@ class PredictiveExpirationService:
     
     def generate_rotation_recommendation(
         self,
-        password: str,
+        password: str = None,
         user_id: int = None,
         credential_domain: str = '',
         credential_age_days: int = 0,
         domain: str = None,
         age_days: int = None,
+        fingerprint: PatternFingerprint = None,
     ) -> RotationPlan:
         """
         Generate a comprehensive rotation recommendation.
@@ -416,17 +469,27 @@ class PredictiveExpirationService:
         if age_days is not None and not credential_age_days:
             credential_age_days = age_days
 
+        # Resolve the pattern once so requirement generation works on the
+        # fingerprint path (where no plaintext password is available).
+        req_pattern = (
+            fingerprint
+            if fingerprint is not None
+            else self.pattern_engine.analyze_password(password or '')
+        )
+
         # Check if rotation is needed
         should_rotate, reasons = self.should_force_rotation(
-            password, user_id, credential_domain, credential_age_days
+            password, user_id, credential_domain, credential_age_days,
+            fingerprint=fingerprint,
         )
-        
+
         if not should_rotate:
             # Still calculate prediction for planning
             prediction = self.predict_compromise_timeline(
-                password, user_id, credential_domain, credential_age_days
+                password, user_id, credential_domain, credential_age_days,
+                fingerprint=fingerprint,
             )
-            
+
             if prediction.risk_level in ['medium', 'high']:
                 # Recommend proactive rotation
                 return RotationPlan(
@@ -435,7 +498,7 @@ class PredictiveExpirationService:
                     recommended_date=prediction.predicted_date - timedelta(days=7)
                                      if prediction.predicted_date else None,
                     reasons=[f"Proactive rotation recommended: {prediction.risk_level} risk"],
-                    new_password_requirements=self._generate_requirements(password),
+                    new_password_requirements=self._generate_requirements(pattern=req_pattern),
                 )
             else:
                 return RotationPlan(
@@ -445,12 +508,13 @@ class PredictiveExpirationService:
                     reasons=["No immediate rotation needed"],
                     new_password_requirements={},
                 )
-        
+
         # Determine urgency based on risk
         risk = self.calculate_exposure_risk(
-            password, user_id, credential_domain, credential_age_days
+            password, user_id, credential_domain, credential_age_days,
+            fingerprint=fingerprint,
         )
-        
+
         if risk.overall_score >= 0.9:
             urgency = 'critical'
             recommended_date = timezone.now()  # Immediately
@@ -469,7 +533,7 @@ class PredictiveExpirationService:
             urgency=urgency,
             recommended_date=recommended_date,
             reasons=reasons,
-            new_password_requirements=self._generate_requirements(password),
+            new_password_requirements=self._generate_requirements(pattern=req_pattern),
         )
     
     @transaction.atomic
@@ -590,9 +654,214 @@ class PredictiveExpirationService:
             f"{'Created' if created else 'Updated'} expiration rule "
             f"for credential {credential_id}: {risk_level} risk"
         )
-        
+
         return rule
-    
+
+    def _compute_salted_structure_hash(
+        self,
+        char_class_sequence: str,
+        length_bucket: str,
+    ) -> str:
+        """Compute a per-deployment salted hash of the structure fingerprint.
+
+        Salting with a deployment secret means that even if the rules table
+        leaks, identical password *shapes* across users (or against a
+        precomputed rainbow table of char-class sequences) cannot be matched.
+        """
+        salt = getattr(settings, 'PREDICTIVE_FINGERPRINT_SALT', '') or settings.SECRET_KEY
+        payload = f"{salt}:{char_class_sequence}:{length_bucket}"
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    @transaction.atomic
+    def create_expiration_rule_from_fingerprint(
+        self,
+        *,
+        user_id: int,
+        credential_id: str,
+        credential_domain: str = '',
+        domain_class: str = '',
+        char_class_sequence: str,
+        length: int = None,
+        length_bucket: str = '',
+        entropy_band: str = '',
+        entropy_estimate: float = None,
+        has_dictionary_base: bool = False,
+        has_keyboard_pattern: bool = False,
+        has_date_pattern: bool = False,
+        has_leet: bool = False,
+        structure_hash: str = '',
+        credential_age_days: int = 0,
+    ) -> 'PredictiveExpirationRule':
+        """Create/update an expiration rule from a zero-knowledge fingerprint.
+
+        This is the ingest counterpart to :meth:`create_expiration_rule`: it
+        never receives a password. The browser computes the structural
+        fingerprint locally and uploads only the irreversible fields below;
+        the server scores risk and persists the structural metadata so the
+        daily re-score task can refresh risk without ever needing plaintext.
+        """
+        from ..models import PredictiveExpirationRule
+        from django.contrib.auth.models import User
+
+        user = User.objects.get(id=user_id)
+
+        fingerprint = build_fingerprint_from_metadata(
+            char_class_sequence=char_class_sequence,
+            length=length,
+            entropy_band=entropy_band,
+            entropy_estimate=entropy_estimate,
+            has_dictionary_base=has_dictionary_base,
+            has_keyboard_pattern=has_keyboard_pattern,
+            has_date_pattern=has_date_pattern,
+            has_leet=has_leet,
+            structure_hash=structure_hash,
+        )
+
+        risk = self.calculate_exposure_risk_from_fingerprint(
+            fingerprint, user_id, credential_domain, credential_age_days
+        )
+        prediction = self.predict_compromise_timeline(
+            user_id=user_id,
+            credential_domain=credential_domain,
+            credential_age_days=credential_age_days,
+            fingerprint=fingerprint,
+        )
+        rotation = self.generate_rotation_recommendation(
+            user_id=user_id,
+            credential_domain=credential_domain,
+            credential_age_days=credential_age_days,
+            fingerprint=fingerprint,
+        )
+
+        action_map = {
+            'critical': 'rotate_immediately',
+            'high': 'rotate_soon',
+            'medium': 'plan_rotation',
+            'low': 'monitor',
+            'none': 'no_action',
+        }
+        recommended_action = action_map.get(rotation.urgency, 'no_action')
+
+        rule, created = PredictiveExpirationRule.objects.update_or_create(
+            user=user,
+            credential_id=credential_id,
+            defaults={
+                'credential_domain': credential_domain,
+                'domain_class': domain_class,
+                'char_class_sequence': char_class_sequence,
+                'structure_hash': self._compute_salted_structure_hash(
+                    char_class_sequence, length_bucket
+                ),
+                'length_bucket': length_bucket,
+                'entropy_band': entropy_band,
+                'credential_age_days': credential_age_days,
+                'has_dictionary_base': has_dictionary_base,
+                'has_keyboard_pattern': has_keyboard_pattern,
+                'has_date_pattern': has_date_pattern,
+                'has_leet': has_leet,
+                'risk_level': risk.risk_level,
+                'risk_score': risk.overall_score,
+                'predicted_compromise_date': prediction.predicted_date.date()
+                                              if prediction.predicted_date else None,
+                'prediction_confidence': prediction.confidence,
+                'threat_factors': risk.factors,
+                'pattern_similarity_score': risk.pattern_risk,
+                'industry_threat_correlation': risk.industry_risk,
+                'recommended_action': recommended_action,
+                'recommended_rotation_date': rotation.recommended_date.date()
+                                              if rotation.recommended_date else None,
+                'is_active': True,
+                'last_evaluated_at': timezone.now(),
+            }
+        )
+
+        logger.info(
+            f"{'Created' if created else 'Updated'} ZK expiration rule "
+            f"for credential {credential_id}: {risk.risk_level} risk"
+        )
+
+        return rule
+
+    @transaction.atomic
+    def update_user_pattern_profile_from_fingerprints(
+        self,
+        user_id: int,
+        fingerprints: List[Dict],
+    ) -> None:
+        """Aggregate a batch of client fingerprints into the user profile.
+
+        Replaces the legacy stub that only bumped a timestamp. Computes the
+        aggregate char-class distribution, length stats, and habit flags from
+        the uploaded structural metadata — never from passwords.
+        """
+        from ..models import PasswordPatternProfile
+        from django.contrib.auth.models import User
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            logger.warning(f"User {user_id} not found for pattern update")
+            return
+
+        profile, _ = PasswordPatternProfile.objects.get_or_create(user=user)
+
+        if not fingerprints:
+            profile.last_analysis_at = timezone.now()
+            profile.save()
+            return
+
+        class_counts = {'U': 0, 'L': 0, 'D': 0, 'S': 0}
+        lengths = []
+        flags = {
+            'uses_common_base_words': False,
+            'uses_keyboard_patterns': False,
+            'uses_date_patterns': False,
+            'uses_leet_substitutions': False,
+        }
+
+        for fp in fingerprints:
+            seq = fp.get('char_class_sequence', '') or ''
+            for ch in seq:
+                if ch in class_counts:
+                    class_counts[ch] += 1
+            lengths.append(fp.get('length') or len(seq))
+            flags['uses_common_base_words'] |= bool(fp.get('has_dictionary_base'))
+            flags['uses_keyboard_patterns'] |= bool(fp.get('has_keyboard_pattern'))
+            flags['uses_date_patterns'] |= bool(fp.get('has_date_pattern'))
+            flags['uses_leet_substitutions'] |= bool(fp.get('has_leet'))
+
+        total_chars = sum(class_counts.values()) or 1
+        profile.char_class_distribution = {
+            'uppercase': class_counts['U'] / total_chars,
+            'lowercase': class_counts['L'] / total_chars,
+            'digits': class_counts['D'] / total_chars,
+            'special': class_counts['S'] / total_chars,
+        }
+        if lengths:
+            mean_len = sum(lengths) / len(lengths)
+            profile.avg_password_length = mean_len
+            profile.min_length_used = min(lengths)
+            profile.max_length_used = max(lengths)
+            profile.length_variance = (
+                sum((x - mean_len) ** 2 for x in lengths) / len(lengths)
+            )
+        profile.uses_common_base_words = flags['uses_common_base_words']
+        profile.uses_keyboard_patterns = flags['uses_keyboard_patterns']
+        profile.uses_date_patterns = flags['uses_date_patterns']
+        profile.uses_leet_substitutions = flags['uses_leet_substitutions']
+        profile.total_passwords_analyzed = len(fingerprints)
+        profile.weak_patterns_detected = sum(
+            1 for fp in fingerprints
+            if fp.get('has_dictionary_base') or fp.get('has_keyboard_pattern')
+        )
+        profile.last_analysis_at = timezone.now()
+        profile.save()
+
+        logger.info(
+            f"Updated pattern profile for user {user_id} from "
+            f"{len(fingerprints)} fingerprints"
+        )
+
     def _calculate_pattern_risk(self, pattern: PatternFingerprint) -> float:
         """Calculate risk score based on password pattern."""
         risk = 0.0
@@ -681,12 +950,23 @@ class PredictiveExpirationService:
         
         return min(confidence, 0.95)
     
-    def _generate_requirements(self, current_password: str) -> Dict:
-        """Generate requirements for a new password."""
-        pattern = self.pattern_engine.analyze_password(current_password)
-        
+    def _generate_requirements(
+        self,
+        current_password: str = None,
+        pattern: PatternFingerprint = None,
+    ) -> Dict:
+        """Generate requirements for a new password.
+
+        Works from either a plaintext password (server-side/test path) or a
+        pre-computed structural ``pattern`` (zero-knowledge fingerprint path),
+        deriving the minimum length from the fingerprint's length so no
+        plaintext is required.
+        """
+        if pattern is None:
+            pattern = self.pattern_engine.analyze_password(current_password or '')
+
         requirements = {
-            'min_length': max(16, len(current_password) + 4),
+            'min_length': max(16, pattern.length + 4),
             'require_uppercase': True,
             'require_lowercase': True,
             'require_digits': True,

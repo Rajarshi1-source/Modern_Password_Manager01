@@ -344,20 +344,11 @@ class RotationHistoryAPITests(PredictiveExpirationAPITestCase):
                 self.assertEqual(event.get('outcome'), 'success')
 
 
-class AnalyzeCredentialAPITests(PredictiveExpirationAPITestCase):
-    """Tests for the analyze credential endpoint."""
-    
-    @patch('security.services.predictive_expiration_service.PredictiveExpirationService')
-    def test_analyze_credential(self, mock_service):
-        """Test analyzing a credential for risk."""
-        mock_instance = MagicMock()
-        mock_instance.calculate_exposure_risk.return_value = {
-            'risk_score': 0.7,
-            'risk_level': 'high',
-            'factors': ['old_password']
-        }
-        mock_service.return_value = mock_instance
-        
+class AnalyzeCredentialDeprecatedAPITests(PredictiveExpirationAPITestCase):
+    """The plaintext analyze/ endpoint must be gone (zero-knowledge)."""
+
+    def test_analyze_endpoint_is_gone(self):
+        """Posting a password to analyze/ returns 410 Gone, not a result."""
         response = self.client.post(
             '/api/security/predictive-expiration/analyze/',
             {
@@ -367,18 +358,98 @@ class AnalyzeCredentialAPITests(PredictiveExpirationAPITestCase):
             },
             format='json'
         )
-        
-        self.assertIn(response.status_code, [200, 201, 400, 404])
-        
-    def test_analyze_credential_missing_data(self):
-        """Test analyzing with missing required fields."""
+
+        self.assertEqual(response.status_code, 410)
+        # It must point callers at the zero-knowledge replacement.
+        body = response.json()
+        self.assertIn('fingerprints', str(body))
+
+
+class FingerprintIngestAPITests(PredictiveExpirationAPITestCase):
+    """Tests for the zero-knowledge fingerprint ingest endpoint."""
+
+    URL = '/api/security/predictive-expiration/fingerprints/'
+
+    def _payload(self, credential_id='fp-cred-1', **overrides):
+        item = {
+            'credential_id': credential_id,
+            'char_class_sequence': 'ULLLLLDDDD',
+            'length': 10,
+            'length_bucket': 'medium',
+            'entropy_band': 'low',
+            'has_dictionary_base': True,
+            'has_date_pattern': True,
+            'age_days': 200,
+            'domain_class': 'finance',
+        }
+        item.update(overrides)
+        return {'fingerprints': [item]}
+
+    def test_ingest_creates_rule_and_populates_dashboard(self):
+        """A fingerprint upsert creates a rule the dashboard then surfaces."""
+        from security.models import PredictiveExpirationRule
+
+        response = self.client.post(self.URL, self._payload(), format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['processed'], 1)
+
+        rule = PredictiveExpirationRule.objects.get(
+            user=self.user, credential_id='fp-cred-1'
+        )
+        # Structural metadata is persisted; no password column exists.
+        self.assertEqual(rule.char_class_sequence, 'ULLLLLDDDD')
+        self.assertEqual(rule.domain_class, 'finance')
+        self.assertTrue(rule.has_dictionary_base)
+        # The salted structure hash is stored (not the client value verbatim).
+        self.assertEqual(len(rule.structure_hash), 64)
+
+        # Dashboard now reports the credential.
+        dash = self.client.get(
+            '/api/security/predictive-expiration/dashboard/'
+        )
+        self.assertEqual(dash.status_code, 200)
+        self.assertGreaterEqual(dash.json()['total_credentials'], 1)
+
+    def test_ingest_rejects_plaintext_like_sequence(self):
+        """char_class_sequence may only contain U/L/D/S — never real chars."""
         response = self.client.post(
-            '/api/security/predictive-expiration/analyze/',
-            {'credential_id': 'incomplete'},
+            self.URL,
+            self._payload(char_class_sequence='Password1'),
             format='json'
         )
-        
-        self.assertIn(response.status_code, [400, 404])
+        self.assertEqual(response.status_code, 400)
+
+    def test_ingest_is_owner_scoped(self):
+        """A user's fingerprints never create rules for another user."""
+        from security.models import PredictiveExpirationRule
+
+        other = User.objects.create_user(username='other', email='o@e.com')
+        self.client.post(self.URL, self._payload('shared-id'), format='json')
+
+        # The other user sees no rule for that credential id.
+        self.assertFalse(
+            PredictiveExpirationRule.objects.filter(
+                user=other, credential_id='shared-id'
+            ).exists()
+        )
+        self.assertTrue(
+            PredictiveExpirationRule.objects.filter(
+                user=self.user, credential_id='shared-id'
+            ).exists()
+        )
+
+    def test_ingest_requires_authentication(self):
+        """Unauthenticated ingest is rejected."""
+        self.client.logout()
+        response = self.client.post(self.URL, self._payload(), format='json')
+        self.assertIn(response.status_code, [401, 403])
+
+    def test_ingest_empty_batch_rejected(self):
+        """An empty fingerprint batch is a 400."""
+        response = self.client.post(
+            self.URL, {'fingerprints': []}, format='json'
+        )
+        self.assertEqual(response.status_code, 400)
 
 
 class PatternProfileAPITests(PredictiveExpirationAPITestCase):
@@ -488,11 +559,11 @@ class ErrorHandlingTests(PredictiveExpirationAPITestCase):
     def test_invalid_json(self):
         """Test handling of invalid JSON in request body."""
         response = self.client.post(
-            '/api/security/predictive-expiration/analyze/',
+            '/api/security/predictive-expiration/fingerprints/',
             'invalid json',
             content_type='application/json'
         )
-        
+
         self.assertIn(response.status_code, [400, 404, 415])
 
 
@@ -500,15 +571,23 @@ class RateLimitingTests(PredictiveExpirationAPITestCase):
     """Tests for API rate limiting (if implemented)."""
     
     @override_settings(RATELIMIT_ENABLE=True)
-    def test_rate_limiting_on_analyze(self):
-        """Test rate limiting on resource-intensive endpoints."""
+    def test_rate_limiting_on_fingerprints(self):
+        """Test rate limiting on the fingerprint ingest endpoint."""
+        payload = {
+            'fingerprints': [{
+                'credential_id': 'test',
+                'char_class_sequence': 'LLLL',
+                'length_bucket': 'very_short',
+                'entropy_band': 'very_low',
+            }]
+        }
         # Make multiple requests in quick succession
         for _ in range(20):
             response = self.client.post(
-                '/api/security/predictive-expiration/analyze/',
-                {'credential_id': 'test', 'password': 'test', 'domain': 'test.com'},
+                '/api/security/predictive-expiration/fingerprints/',
+                payload,
                 format='json'
             )
-        
+
         # Either normal response or rate limited
         self.assertIn(response.status_code, [200, 201, 400, 404, 429])

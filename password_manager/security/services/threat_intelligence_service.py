@@ -139,12 +139,23 @@ class ThreatIntelligenceService:
         except IndustryThreatLevel.DoesNotExist:
             pass
         
-        # Also check threat actors targeting this industry
-        actors = ThreatActorTTP.objects.filter(
-            is_currently_active=True,
-            target_industries__contains=[user_industry]
-        )
-        
+        # Also check threat actors targeting this industry. The JSONField
+        # ``__contains`` lookup needs backend support (Postgres in prod); on
+        # backends without it (e.g. SQLite) we filter in Python so callers —
+        # including the zero-knowledge fingerprint ingest path — never 500.
+        from django.db import connection
+
+        active_actors = ThreatActorTTP.objects.filter(is_currently_active=True)
+        if connection.features.supports_json_field_contains:
+            actors = active_actors.filter(
+                target_industries__contains=[user_industry]
+            )
+        else:
+            actors = [
+                a for a in active_actors
+                if user_industry in (a.target_industries or [])
+            ]
+
         for actor in actors:
             # Add as industry threat if not already covered
             if not any(t.industry_code == user_industry for t in threats):
