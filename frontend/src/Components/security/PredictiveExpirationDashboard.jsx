@@ -26,6 +26,8 @@ import {
     XCircle
 } from 'lucide-react';
 import predictiveExpirationService from '../../services/predictiveExpirationService';
+import { syncVaultFingerprints } from '../../services/predictive/fingerprintSync';
+import { useVault } from '../../contexts/VaultContext';
 import './PredictiveExpirationDashboard.css';
 
 // Risk level badge component
@@ -154,6 +156,8 @@ const PredictiveExpirationDashboard = () => {
     const [threatSummary, setThreatSummary] = useState(null);
     const [settings, setSettings] = useState(null);
     const [showSettings, setShowSettings] = useState(false);
+    const [syncStatus, setSyncStatus] = useState(null);
+    const vault = useVault();
 
     // Fetch dashboard data
     const fetchDashboard = useCallback(async () => {
@@ -181,8 +185,49 @@ const PredictiveExpirationDashboard = () => {
         fetchDashboard();
     }, [fetchDashboard]);
 
+    // Zero-knowledge fingerprint sync: when the vault is unlocked, compute
+    // structural fingerprints in the browser and upload them so the server
+    // can populate the dashboard. No password or exact domain is sent.
+    const syncFingerprints = useCallback(async () => {
+        try {
+            if (!vault?.isUnlocked || !Array.isArray(vault.items) || vault.items.length === 0) {
+                return;
+            }
+            setSyncStatus('syncing');
+
+            const passwordItems = vault.items.filter((i) => i.item_type === 'password');
+            const decrypted = [];
+            for (const item of passwordItems) {
+                try {
+                    const d = await vault.decryptItem(item.item_id);
+                    if (d && !d._decryptionFailed) decrypted.push(d);
+                } catch {
+                    // Skip items that fail to decrypt; never block the sync.
+                }
+            }
+
+            const result = await syncVaultFingerprints(decrypted);
+            if (result) {
+                setSyncStatus('synced');
+                await fetchDashboard();
+            } else {
+                setSyncStatus(null);
+            }
+        } catch (err) {
+            console.error('Fingerprint sync failed:', err);
+            setSyncStatus('error');
+        }
+    }, [vault, fetchDashboard]);
+
+    useEffect(() => {
+        syncFingerprints();
+        // Run once when the vault unlock state flips to unlocked.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [vault?.isUnlocked]);
+
     const handleRefresh = () => {
         setRefreshing(true);
+        syncFingerprints();
         fetchDashboard();
     };
 
@@ -302,6 +347,33 @@ const PredictiveExpirationDashboard = () => {
                     </button>
                 </div>
             </header>
+
+            {/* Zero-knowledge privacy explainer */}
+            <details className="zk-privacy-note">
+                <summary>
+                    <Lock size={14} />
+                    Zero-knowledge: what leaves your device
+                    {syncStatus === 'syncing' && <span className="zk-sync"> · syncing…</span>}
+                    {syncStatus === 'synced' && <span className="zk-sync"> · synced</span>}
+                    {syncStatus === 'error' && <span className="zk-sync zk-sync-error"> · sync failed</span>}
+                </summary>
+                <div className="zk-privacy-body">
+                    <p>
+                        Your passwords are analyzed <strong>in this browser</strong>.
+                        We only upload irreversible structural metadata — never your
+                        passwords or the exact sites:
+                    </p>
+                    <ul>
+                        <li>The character-class shape (e.g. <code>ULLLLDDDD</code>), length band, and an entropy band</li>
+                        <li>Yes/no habit flags: dictionary base, keyboard pattern, dates, l33t</li>
+                        <li>A salted hash of the shape and a coarse category (e.g. “finance”)</li>
+                    </ul>
+                    <p>
+                        The server scores risk from this alone. Your actual passwords
+                        and the websites they belong to never leave your device.
+                    </p>
+                </div>
+            </details>
 
             {/* Risk Overview */}
             <section className="risk-overview">

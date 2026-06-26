@@ -479,6 +479,71 @@ class PatternAnalysisEngine:
         return detected
 
 
+# Representative entropy estimate (bits) for each band label. Used to drive
+# the structural risk math when only a band — not the exact entropy — is
+# uploaded by the client (zero-knowledge fingerprint path).
+ENTROPY_BAND_ESTIMATES = {
+    'very_low': 20.0,
+    'low': 40.0,
+    'medium': 60.0,
+    'high': 80.0,
+    'very_high': 100.0,
+}
+
+
+def build_fingerprint_from_metadata(
+    *,
+    char_class_sequence: str,
+    length: Optional[int] = None,
+    entropy_band: str = '',
+    entropy_estimate: Optional[float] = None,
+    has_dictionary_base: bool = False,
+    has_keyboard_pattern: bool = False,
+    has_date_pattern: bool = False,
+    has_leet: bool = False,
+    structure_hash: str = '',
+) -> PatternFingerprint:
+    """Reconstruct a :class:`PatternFingerprint` from client-submitted
+    structural metadata — never from a password.
+
+    This is the zero-knowledge counterpart to :meth:`analyze_password`. The
+    browser computes the structural fingerprint locally and uploads only
+    irreversible fields; the server rebuilds a ``PatternFingerprint`` whose
+    ``detected_base_words`` is always empty (no dictionary words ever leave
+    the device).
+    """
+    if length is None:
+        length = len(char_class_sequence)
+
+    if entropy_estimate is None:
+        entropy_estimate = ENTROPY_BAND_ESTIMATES.get(entropy_band, 50.0)
+
+    structure_bytes = b''
+    if structure_hash:
+        try:
+            structure_bytes = bytes.fromhex(structure_hash)
+        except ValueError:
+            structure_bytes = b''
+
+    # Map boolean habit flags onto the list-shaped fields the risk math reads.
+    # We deliberately use opaque placeholder tokens, never the user's words.
+    mutations = ['leet'] if has_leet else []
+    keyboard_patterns = ['client_detected'] if has_keyboard_pattern else []
+    date_patterns = ['client_detected'] if has_date_pattern else []
+
+    return PatternFingerprint(
+        structure_hash=structure_bytes,
+        char_class_sequence=char_class_sequence,
+        length=length,
+        entropy_estimate=entropy_estimate,
+        has_dictionary_base=has_dictionary_base,
+        detected_base_words=[],  # ZK invariant: never reconstructed server-side
+        mutations=mutations,
+        keyboard_patterns=keyboard_patterns,
+        date_patterns=date_patterns,
+    )
+
+
 # Singleton instance
 _pattern_engine: Optional[PatternAnalysisEngine] = None
 

@@ -119,16 +119,22 @@ export const getRotationHistory = async (params = {}) => {
 };
 
 /**
- * Analyze a credential for risk
- * @param {Object} data - Credential data
- * @param {string} data.credential_id - UUID of the credential
- * @param {string} data.password - Password to analyze
- * @param {string} data.domain - Domain/service
- * @param {string} [data.created_at] - Credential creation date
- * @returns {Promise} Risk analysis results
+ * Submit a batch of zero-knowledge password fingerprints.
+ *
+ * Each fingerprint is irreversible structural metadata computed in the
+ * browser (see services/predictive/clientPatternEngine.js). No plaintext
+ * password and no exact domain are ever sent. This is the path that
+ * populates the dashboard under the zero-knowledge model; it replaces the
+ * removed plaintext `analyze/` endpoint.
+ *
+ * @param {Array<Object>} fingerprints - structural fingerprint payloads
+ * @returns {Promise} Ingest summary ({ processed, rules })
  */
-export const analyzeCredential = async (data) => {
-  const response = await api.post(`${PREDICTIVE_EXPIRATION_BASE}/analyze/`, data);
+export const submitFingerprints = async (fingerprints) => {
+  const response = await api.post(
+    `${PREDICTIVE_EXPIRATION_BASE}/fingerprints/`,
+    { fingerprints }
+  );
   return response.data;
 };
 
@@ -162,7 +168,7 @@ export const predictiveExpirationService = {
   getSettings,
   updateSettings,
   getRotationHistory,
-  analyzeCredential,
+  submitFingerprints,
   getPatternProfile,
   getIndustryThreats,
 };

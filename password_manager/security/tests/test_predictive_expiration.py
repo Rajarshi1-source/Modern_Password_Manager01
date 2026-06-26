@@ -265,9 +265,9 @@ class PredictiveExpirationServiceTests(TestCase):
         """Test expiration rule creation."""
         from security.services.predictive_expiration_service import PredictiveExpirationService
         from security.models import PredictiveExpirationRule
-        
+
         service = PredictiveExpirationService()
-        
+
         rule = service.create_expiration_rule(
             user_id=self.user.id,
             credential_id='test-cred-123',
@@ -275,11 +275,77 @@ class PredictiveExpirationServiceTests(TestCase):
             password='TestPassword123!',
             credential_age_days=45
         )
-        
+
         self.assertIsInstance(rule, PredictiveExpirationRule)
         self.assertEqual(rule.user_id, self.user.id)
         self.assertEqual(rule.credential_domain, 'example.com')
         self.assertTrue(rule.is_active)
+
+    def test_fingerprint_risk_parity_with_password_path(self):
+        """Scoring a fingerprint matches scoring the same password directly.
+
+        The structural risk math reads only length / dictionary / keyboard /
+        leet / entropy, so the zero-knowledge path must produce the same
+        pattern_risk as the (server-side) plaintext path for the same shape.
+        """
+        from security.services.predictive_expiration_service import PredictiveExpirationService
+        from security.services.pattern_analysis_engine import (
+            get_pattern_analysis_engine, build_fingerprint_from_metadata,
+        )
+
+        service = PredictiveExpirationService()
+        engine = get_pattern_analysis_engine()
+
+        password = 'Summer2024'  # ULLLLLDDDD, dictionary base + date
+        plain = engine.analyze_password(password)
+
+        fingerprint = build_fingerprint_from_metadata(
+            char_class_sequence=plain.char_class_sequence,
+            length=plain.length,
+            entropy_estimate=plain.entropy_estimate,
+            has_dictionary_base=plain.has_dictionary_base,
+            has_keyboard_pattern=bool(plain.keyboard_patterns),
+            has_date_pattern=bool(plain.date_patterns),
+            has_leet='leet' in plain.mutations,
+        )
+
+        risk_pw = service.calculate_exposure_risk(
+            password=password, user_id=self.user.id, age_days=30
+        )
+        risk_fp = service.calculate_exposure_risk_from_fingerprint(
+            fingerprint, user_id=self.user.id, credential_age_days=30
+        )
+
+        self.assertAlmostEqual(risk_pw['pattern_risk'], risk_fp['pattern_risk'])
+
+    def test_create_expiration_rule_from_fingerprint(self):
+        """Rule creation from a fingerprint persists structural metadata only."""
+        from security.services.predictive_expiration_service import PredictiveExpirationService
+        from security.models import PredictiveExpirationRule
+
+        service = PredictiveExpirationService()
+
+        rule = service.create_expiration_rule_from_fingerprint(
+            user_id=self.user.id,
+            credential_id='zk-cred-1',
+            credential_domain='finance',
+            domain_class='finance',
+            char_class_sequence='ULLLLLDDDD',
+            length=10,
+            length_bucket='medium',
+            entropy_band='low',
+            has_dictionary_base=True,
+            has_date_pattern=True,
+            credential_age_days=200,
+        )
+
+        self.assertIsInstance(rule, PredictiveExpirationRule)
+        self.assertEqual(rule.char_class_sequence, 'ULLLLLDDDD')
+        self.assertEqual(rule.domain_class, 'finance')
+        self.assertTrue(rule.has_dictionary_base)
+        self.assertTrue(rule.is_active)
+        # Salted structure hash is a 64-char hex digest.
+        self.assertEqual(len(rule.structure_hash), 64)
 
 
 class PredictiveExpirationModelTests(TestCase):

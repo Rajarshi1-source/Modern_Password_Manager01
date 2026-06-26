@@ -562,6 +562,7 @@ REST_FRAMEWORK = {
         'fhe_operation': '5/minute',      # FHE encrypt/decrypt
         'bug_bounty_run': '10/hour',      # On-demand vault self-pentest run
         'bug_bounty_submit': '20/hour',   # Researcher bounty-program submissions
+        'predictive_fingerprint': '60/hour',  # ZK password fingerprint ingest
         'biometric_frame': '60/minute',   # Video frame submission
         'websocket_connect': '5/minute',  # WS connection rate
         'dark_web_scan': '1/hour',        # Manual scan trigger

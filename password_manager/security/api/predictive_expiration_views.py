@@ -13,6 +13,7 @@ from rest_framework import status, generics
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.throttling import ScopedRateThrottle
 
 from ..models import (
     PasswordPatternProfile,
@@ -33,8 +34,7 @@ from ..serializers.predictive_expiration_serializers import (
     PredictiveExpirationSettingsSerializer,
     DashboardSerializer,
     ForceRotationSerializer,
-    CredentialAnalysisRequestSerializer,
-    RiskAnalysisResponseSerializer,
+    FingerprintIngestSerializer,
     ThreatSummarySerializer,
 )
 from ..services.predictive_expiration_service import (
@@ -389,84 +389,92 @@ class RotationHistoryView(generics.ListAPIView):
         return queryset
 
 
-class AnalyzeCredentialView(APIView):
+class FingerprintIngestView(APIView):
     """
-    Analyze a credential for risk.
-    
-    POST: Analyzes the provided credential and returns risk assessment.
+    Ingest zero-knowledge password fingerprints from the browser.
+
+    POST: Accepts a batch of irreversible structural fingerprints (computed
+    client-side over the decrypted vault) and upserts a
+    ``PredictiveExpirationRule`` per credential. No plaintext password — and
+    no exact domain — ever reaches this endpoint.
+
+    This is the path that populates the dashboard under the zero-knowledge
+    model; it replaces the removed plaintext ``analyze/`` endpoint.
     """
     permission_classes = [IsAuthenticated]
-    
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'predictive_fingerprint'
+
     def post(self, request):
-        serializer = CredentialAnalysisRequestSerializer(data=request.data)
+        serializer = FingerprintIngestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
-        data = serializer.validated_data
-        credential_id = str(data['credential_id'])
-        password = data['password']
-        domain = data['domain']
-        created_at = data.get('created_at', timezone.now())
-        
-        # Calculate credential age
-        age_days = (timezone.now() - created_at).days
-        
-        # Get predictive service
+
+        fingerprints = serializer.validated_data['fingerprints']
         service = get_predictive_expiration_service()
-        
-        # Calculate risk
-        risk = service.calculate_exposure_risk(
-            password=password,
-            user_id=request.user.id,
-            credential_domain=domain,
-            credential_age_days=age_days
+
+        processed = []
+        for fp in fingerprints:
+            domain_class = fp.get('domain_class', '') or ''
+            rule = service.create_expiration_rule_from_fingerprint(
+                user_id=request.user.id,
+                credential_id=str(fp['credential_id']),
+                # Store only the coarse class for display + threat matching;
+                # the exact domain never leaves the device.
+                credential_domain=domain_class,
+                domain_class=domain_class,
+                char_class_sequence=fp['char_class_sequence'],
+                length=fp.get('length'),
+                length_bucket=fp['length_bucket'],
+                entropy_band=fp['entropy_band'],
+                entropy_estimate=fp.get('entropy_estimate'),
+                has_dictionary_base=fp.get('has_dictionary_base', False),
+                has_keyboard_pattern=fp.get('has_keyboard_pattern', False),
+                has_date_pattern=fp.get('has_date_pattern', False),
+                has_leet=fp.get('has_leet', False),
+                structure_hash=fp.get('structure_hash', '') or '',
+                credential_age_days=fp.get('age_days', 0),
+            )
+            processed.append({
+                'credential_id': rule.credential_id,
+                'risk_level': rule.risk_level,
+                'risk_score': rule.risk_score,
+                'recommended_action': rule.recommended_action,
+            })
+
+        # Refresh the aggregate pattern profile from this batch (ZK).
+        service.update_user_pattern_profile_from_fingerprints(
+            request.user.id, list(fingerprints)
         )
-        
-        # Get prediction
-        prediction = service.predict_compromise_timeline(
-            password=password,
-            user_id=request.user.id,
-            credential_domain=domain,
-            credential_age_days=age_days
+
+        return Response(
+            {'processed': len(processed), 'rules': processed},
+            status=status.HTTP_200_OK,
         )
-        
-        # Get rotation recommendation
-        rotation = service.generate_rotation_recommendation(
-            password=password,
-            user_id=request.user.id,
-            credential_domain=domain,
-            credential_age_days=age_days
+
+
+class AnalyzeCredentialView(APIView):
+    """
+    Removed (zero-knowledge): the legacy plaintext analysis endpoint.
+
+    Sending a password to the server violated the zero-knowledge model, so
+    this endpoint now returns 410 Gone. Use ``fingerprints/`` instead, which
+    accepts only irreversible structural metadata computed in the browser.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        return Response(
+            {
+                'error': 'gone',
+                'detail': (
+                    'The plaintext analyze endpoint has been removed to '
+                    'preserve zero-knowledge. Submit structural fingerprints '
+                    'to predictive-expiration/fingerprints/ instead.'
+                ),
+                'replacement': 'predictive-expiration/fingerprints/',
+            },
+            status=status.HTTP_410_GONE,
         )
-        
-        # Map risk level
-        if risk.overall_score >= 0.8:
-            risk_level = 'critical'
-        elif risk.overall_score >= 0.6:
-            risk_level = 'high'
-        elif risk.overall_score >= 0.4:
-            risk_level = 'medium'
-        elif risk.overall_score >= 0.2:
-            risk_level = 'low'
-        else:
-            risk_level = 'minimal'
-        
-        response_data = {
-            'overall_score': risk.overall_score,
-            'pattern_risk': risk.pattern_risk,
-            'threat_risk': risk.threat_risk,
-            'industry_risk': risk.industry_risk,
-            'age_risk': risk.age_risk,
-            'risk_level': risk_level,
-            'factors': risk.factors,
-            'predicted_compromise_date': prediction.predicted_date.date()
-                                          if prediction.predicted_date else None,
-            'prediction_confidence': prediction.confidence,
-            'recommended_action': rotation.urgency if rotation.should_rotate else 'none',
-            'recommended_rotation_date': rotation.recommended_date.date()
-                                          if rotation.recommended_date else None,
-        }
-        
-        response_serializer = RiskAnalysisResponseSerializer(response_data)
-        return Response(response_serializer.data)
 
 
 class PatternProfileView(generics.RetrieveAPIView):

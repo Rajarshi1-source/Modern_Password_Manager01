@@ -352,7 +352,58 @@ class PredictiveExpirationRule(models.Model):
         blank=True,
         help_text="Domain/service for this credential"
     )
-    
+    # Coarse domain class derived client-side (e.g. finance, healthcare,
+    # other). Never the exact site — keeps targeting signal without leaking
+    # which service the credential belongs to.
+    domain_class = models.CharField(
+        max_length=32,
+        blank=True,
+        default='',
+        help_text="Coarse domain category (finance/healthcare/...) — not the exact domain"
+    )
+
+    # ------------------------------------------------------------------
+    # Zero-knowledge structural fingerprint (client-submitted).
+    #
+    # These columns hold the irreversible structural metadata uploaded by
+    # the browser via the fingerprints/ endpoint. None of them can be used
+    # to reconstruct the password: a char-class sequence ("ULLLDDDD"), a
+    # salted structure hash, an entropy band, and boolean habit flags.
+    # The server scores risk from these alone — it never sees plaintext.
+    # ------------------------------------------------------------------
+    char_class_sequence = models.CharField(
+        max_length=256,
+        blank=True,
+        default='',
+        help_text="Character-class sequence, e.g. 'ULLLLDDDD' (U/L/D/S)"
+    )
+    structure_hash = models.CharField(
+        max_length=64,
+        blank=True,
+        default='',
+        help_text="Salted SHA-256 (hex) of the structure fingerprint"
+    )
+    length_bucket = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        help_text="Length bucket (very_short/short/medium/long/very_long)"
+    )
+    entropy_band = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        help_text="Entropy band (very_low/low/medium/high/very_high)"
+    )
+    credential_age_days = models.IntegerField(
+        default=0,
+        help_text="Age of the credential in days at last fingerprint upload"
+    )
+    has_dictionary_base = models.BooleanField(default=False)
+    has_keyboard_pattern = models.BooleanField(default=False)
+    has_date_pattern = models.BooleanField(default=False)
+    has_leet = models.BooleanField(default=False)
+
     # Risk assessment
     risk_level = models.CharField(
         max_length=20,
