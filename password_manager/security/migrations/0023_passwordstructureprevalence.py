@@ -14,7 +14,7 @@ class Migration(migrations.Migration):
             name='PasswordStructurePrevalence',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('char_class_pattern', models.CharField(db_index=True, help_text="Char-class transition signature (runs collapsed), e.g. 'ULD'", max_length=64)),
+                ('char_class_pattern', models.CharField(help_text="Char-class transition signature (runs collapsed), e.g. 'ULD'", max_length=64)),
                 ('length_bucket', models.CharField(blank=True, default='', help_text='Coarse length bucket; blank = applies to any length', max_length=20)),
                 ('prevalence', models.FloatField(default=0.0, help_text='Fraction of breached passwords with this structure (0-1)')),
                 ('occurrence_count', models.BigIntegerField(default=0)),
@@ -28,7 +28,6 @@ class Migration(migrations.Migration):
                 'verbose_name_plural': 'Password Structure Prevalences',
                 'db_table': 'security_password_structure_prevalence',
                 'ordering': ['-prevalence'],
-                'indexes': [models.Index(fields=['char_class_pattern', 'length_bucket'], name='security_pa_char_cl_04f145_idx')],
                 'unique_together': {('char_class_pattern', 'length_bucket')},
             },
         ),

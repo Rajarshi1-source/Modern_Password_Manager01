@@ -769,6 +769,19 @@ def _apply_industry_signals(IndustryThreatLevel, industry_totals):
             },
         )
         updated += 1
+
+    # Keep the recency window accurate: clear breach pressure for industries
+    # that previously had recent breaches but none in the current feed result.
+    # Only touch rows this task drove (recent_breaches_count > 0) so any
+    # admin-managed posture is left alone.
+    stale = IndustryThreatLevel.objects.filter(
+        recent_breaches_count__gt=0,
+    ).exclude(industry_code__in=industry_totals.keys())
+    updated += stale.update(
+        recent_breaches_count=0,
+        threat_score=0.0,
+        current_threat_level='low',
+    )
     return updated
 
 
@@ -932,12 +945,13 @@ def daily_predictive_scan(self):
     threat intelligence. The server never decrypts the vault — it only refreshes
     risk on stored structural metadata.
     """
+    from celery import chord
     from ..models import PredictiveExpirationSettings, PredictiveExpirationRule
 
     settings = PredictiveExpirationSettings.objects.filter(is_enabled=True)
 
     total_users = 0
-    total_credentials = 0
+    rescore_sigs = []
 
     for user_settings in settings:
         user_id = user_settings.user_id
@@ -960,9 +974,10 @@ def daily_predictive_scan(self):
                 if rule.domain_class and rule.domain_class.lower() in excluded_classes:
                     continue
 
-                # Queue a re-score from the stored fingerprint.
-                evaluate_password_expiration_risk.delay(rule.credential_id, user_id)
-                total_credentials += 1
+                # Immutable signature: re-score from the stored fingerprint.
+                rescore_sigs.append(
+                    evaluate_password_expiration_risk.si(rule.credential_id, user_id)
+                )
 
         except Exception as e:
             logger.error(f"Error scanning rules for user {user_id}: {e}")
@@ -970,9 +985,17 @@ def daily_predictive_scan(self):
 
         total_users += 1
 
-    # Threat intelligence is refreshed by its own beat entry
-    # (predictive-update-threat-intel) ahead of this scan, so it is not
-    # re-triggered here.
+    total_credentials = len(rescore_sigs)
+
+    # Completion handoff: fan out every re-score, then send notifications only
+    # once they have ALL finished — so we never notify before the re-score
+    # queue drains and miss newly high-risk credentials. With nothing to
+    # re-score, send notifications directly. (Threat intel is refreshed by its
+    # own beat entry ahead of this scan.)
+    if rescore_sigs:
+        chord(rescore_sigs)(send_expiration_notifications.si())
+    else:
+        send_expiration_notifications.delay()
 
     logger.info(
         f"Daily predictive scan complete: "

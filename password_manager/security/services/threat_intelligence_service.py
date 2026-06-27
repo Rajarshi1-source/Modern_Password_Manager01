@@ -271,7 +271,9 @@ class ThreatIntelligenceService:
                     seq.append('S')
             char_class_sequence = ''.join(seq)
 
-        # Primary: real structural-prevalence lookup against breach corpora.
+        # Real structural-prevalence signal from breach corpora. This is an
+        # *additional* signal, not a replacement: a low prevalence must not
+        # suppress the higher-confidence weak-pattern heuristics below.
         prevalence = self.get_structural_prevalence(char_class_sequence)
         if prevalence > 0:
             matches.append(DictionaryMatch(
@@ -279,9 +281,8 @@ class ThreatIntelligenceService:
                 match_type='structure',
                 similarity_score=min(prevalence, 1.0),
             ))
-            return matches
 
-        # Fallback heuristic (used only until the prevalence table is seeded).
+        # Known weak local structures (also a fallback before the table seeds).
         weak_patterns = [
             ('LLLLDDDD', 'rockyou_common', 0.8),  # word + 4 digits
             ('ULLLDDDD', 'rockyou_common', 0.75),  # Word123 pattern

@@ -353,15 +353,12 @@ app.conf.update(
         },
 
         # Re-score stored fingerprints against refreshed intel (2:15 AM daily).
+        # The scan dispatches a chord that runs send_expiration_notifications
+        # only after every re-score completes — so notifications are NOT on a
+        # separate fixed-offset beat (that could fire before the queue drains).
         'predictive-daily-scan': {
             'task': 'security.tasks.daily_predictive_scan',
             'schedule': crontab(hour=2, minute=15),
-        },
-
-        # Fan out high-risk alerts/notifications after the scan (2:45 AM daily).
-        'predictive-send-notifications': {
-            'task': 'security.tasks.send_expiration_notifications',
-            'schedule': crontab(hour=2, minute=45),
         },
     },
 )

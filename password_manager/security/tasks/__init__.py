@@ -50,31 +50,42 @@ try:
         send_expiration_notifications,
     )
 except ImportError as e:  # pragma: no cover
-    logger.warning(f"Could not import predictive tasks: {e}")
+    # Do NOT silently no-op: these are production beat-scheduled tasks. A stub
+    # that returns success would keep beat green while the daily re-score and
+    # risk-alert fan-out never run. Register fallbacks under the real
+    # security.tasks.* names that fail loudly so the breakage is visible.
+    logger.exception(f"Could not import predictive tasks from .breach_tasks: {e}")
+    _IMPORT_ERROR = e
 
-    @shared_task
+    def _unavailable(task_name):
+        raise RuntimeError(
+            f"{task_name} is unavailable: security.tasks.breach_tasks failed "
+            f"to import ({_IMPORT_ERROR})"
+        )
+
+    @shared_task(name='security.tasks.analyze_user_password_patterns')
     def analyze_user_password_patterns(user_id=None):
-        return {'status': 'stub', 'user_id': user_id}
+        _unavailable('analyze_user_password_patterns')
 
-    @shared_task
+    @shared_task(name='security.tasks.evaluate_password_expiration_risk')
     def evaluate_password_expiration_risk(credential_id=None, user_id=None):
-        return {'status': 'stub'}
+        _unavailable('evaluate_password_expiration_risk')
 
-    @shared_task
+    @shared_task(name='security.tasks.process_forced_rotation')
     def process_forced_rotation(credential_id=None, user_id=None, reason=''):
-        return {'status': 'stub'}
+        _unavailable('process_forced_rotation')
 
-    @shared_task
+    @shared_task(name='security.tasks.update_threat_intelligence')
     def update_threat_intelligence():
-        return {'status': 'stub'}
+        _unavailable('update_threat_intelligence')
 
-    @shared_task
+    @shared_task(name='security.tasks.daily_predictive_scan')
     def daily_predictive_scan():
-        return {'status': 'stub'}
+        _unavailable('daily_predictive_scan')
 
-    @shared_task
+    @shared_task(name='security.tasks.send_expiration_notifications')
     def send_expiration_notifications():
-        return {'status': 'stub'}
+        _unavailable('send_expiration_notifications')
 
 
 @shared_task(name='security.daily_credential_scan')
