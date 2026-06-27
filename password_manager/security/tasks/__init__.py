@@ -46,6 +46,8 @@ try:
         evaluate_password_expiration_risk,
         process_forced_rotation,
         update_threat_intelligence,
+        daily_predictive_scan,
+        send_expiration_notifications,
     )
 except ImportError as e:  # pragma: no cover
     logger.warning(f"Could not import predictive tasks: {e}")
@@ -64,6 +66,14 @@ except ImportError as e:  # pragma: no cover
 
     @shared_task
     def update_threat_intelligence():
+        return {'status': 'stub'}
+
+    @shared_task
+    def daily_predictive_scan():
+        return {'status': 'stub'}
+
+    @shared_task
+    def send_expiration_notifications():
         return {'status': 'stub'}
 
 
@@ -137,6 +147,8 @@ __all__ = [
     'evaluate_password_expiration_risk',
     'process_forced_rotation',
     'update_threat_intelligence',
+    'daily_predictive_scan',
+    'send_expiration_notifications',
     'daily_credential_scan',
     'PatternAnalysisEngine',
     'PredictiveExpirationService',

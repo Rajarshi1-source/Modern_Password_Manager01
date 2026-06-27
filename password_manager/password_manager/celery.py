@@ -341,6 +341,28 @@ app.conf.update(
             'task': 'personality_auth.prune_expired_questions',
             'schedule': crontab(minute=10),
         },
+
+        # =================================================================
+        # Predictive Password Expiration (zero-knowledge)
+        # =================================================================
+
+        # Refresh threat intel from active feeds first (1:15 AM daily).
+        'predictive-update-threat-intel': {
+            'task': 'security.tasks.update_threat_intelligence',
+            'schedule': crontab(hour=1, minute=15),
+        },
+
+        # Re-score stored fingerprints against refreshed intel (2:15 AM daily).
+        'predictive-daily-scan': {
+            'task': 'security.tasks.daily_predictive_scan',
+            'schedule': crontab(hour=2, minute=15),
+        },
+
+        # Fan out high-risk alerts/notifications after the scan (2:45 AM daily).
+        'predictive-send-notifications': {
+            'task': 'security.tasks.send_expiration_notifications',
+            'schedule': crontab(hour=2, minute=45),
+        },
     },
 )
 

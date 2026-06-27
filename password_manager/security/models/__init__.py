@@ -56,5 +56,6 @@ from .predictive_expiration_models import (
     PasswordRotationEvent,
     ThreatIntelFeed,
     PredictiveExpirationSettings,
+    PasswordStructurePrevalence,
 )
 

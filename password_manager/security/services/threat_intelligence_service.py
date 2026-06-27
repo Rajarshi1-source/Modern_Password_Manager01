@@ -170,24 +170,90 @@ class ThreatIntelligenceService:
         
         return threats
     
+    @staticmethod
+    def _structure_signature(char_class_sequence: str) -> str:
+        """Collapse a char-class sequence into its transition signature.
+
+        e.g. ``ULLLLLDDDD`` -> ``ULD`` ("Uppercase + lowercase run + digit
+        run", the classic Word+year-suffix shape). This low-cardinality,
+        irreversible signature is what dark-web structural prevalence is keyed
+        on.
+        """
+        signature = []
+        for ch in char_class_sequence:
+            if not signature or signature[-1] != ch:
+                signature.append(ch)
+        return ''.join(signature)
+
+    @staticmethod
+    def _length_bucket(length: int) -> str:
+        """Length bucket matching the client/pattern-engine bucketing."""
+        if length <= 6:
+            return 'very_short'
+        if length <= 8:
+            return 'short'
+        if length <= 12:
+            return 'medium'
+        if length <= 16:
+            return 'long'
+        return 'very_long'
+
+    def get_structural_prevalence(
+        self,
+        char_class_sequence: str,
+        length_bucket: str = ''
+    ) -> float:
+        """Return how prevalent this password *structure* is in breach corpora.
+
+        Looks up :class:`PasswordStructurePrevalence` by the transition
+        signature and length bucket. Returns 0.0 when nothing is seeded (the
+        feature degrades gracefully until ``seed_structure_prevalence`` runs).
+        """
+        if not char_class_sequence:
+            return 0.0
+
+        from ..models import PasswordStructurePrevalence
+
+        signature = self._structure_signature(char_class_sequence)
+        if not length_bucket:
+            length_bucket = self._length_bucket(len(char_class_sequence))
+
+        try:
+            row = (
+                PasswordStructurePrevalence.objects.filter(
+                    char_class_pattern=signature, length_bucket=length_bucket
+                ).first()
+                or PasswordStructurePrevalence.objects.filter(
+                    char_class_pattern=signature, length_bucket=''
+                ).first()
+            )
+        except Exception as e:  # pragma: no cover - defensive DB guard
+            logger.warning(f"Structural prevalence lookup failed: {e}")
+            return 0.0
+
+        return row.prevalence if row else 0.0
+
     def check_pattern_in_dictionaries(
         self,
         pattern_fingerprint,
         char_class_sequence: str = ''
     ):
         """
-        Check if a password pattern matches known compromised dictionaries.
-        
+        Check if a password structure matches known compromised corpora.
+
+        Primary signal is the dark-web structural prevalence table
+        (:class:`PasswordStructurePrevalence`). When that table is empty, this
+        falls back to a small hardcoded heuristic so the method stays useful
+        before the seed runs.
+
         Args:
-            pattern_fingerprint: The password structure fingerprint
+            pattern_fingerprint: The password structure fingerprint (or a raw
+                password string, in which case the sequence is derived).
             char_class_sequence: The character class sequence
-            
+
         Returns:
             List of dictionary matches
         """
-        # This is a simplified implementation
-        # In production, this would check against actual password databases
-        
         matches = []
 
         # If called with a raw password string (e.g. from tests), derive the
@@ -205,7 +271,17 @@ class ThreatIntelligenceService:
                     seq.append('S')
             char_class_sequence = ''.join(seq)
 
-        # Check for common weak patterns
+        # Primary: real structural-prevalence lookup against breach corpora.
+        prevalence = self.get_structural_prevalence(char_class_sequence)
+        if prevalence > 0:
+            matches.append(DictionaryMatch(
+                dictionary_name='breach_corpus',
+                match_type='structure',
+                similarity_score=min(prevalence, 1.0),
+            ))
+            return matches
+
+        # Fallback heuristic (used only until the prevalence table is seeded).
         weak_patterns = [
             ('LLLLDDDD', 'rockyou_common', 0.8),  # word + 4 digits
             ('ULLLDDDD', 'rockyou_common', 0.75),  # Word123 pattern
@@ -246,28 +322,42 @@ class ThreatIntelligenceService:
     def get_real_time_threat_level(
         self,
         user_id: int = None,
-        credential_domain: str = ''
+        credential_domain: str = '',
+        char_class_sequence: str = ''
     ):
         """
         Calculate real-time threat level for a specific credential.
-        
+
         Combines multiple threat sources to provide an overall
         risk assessment.
-        
+
         Args:
             user_id: The user's ID
             credential_domain: The domain/service of the credential
-            
+            char_class_sequence: The credential's char-class sequence, used to
+                fold in dark-web structural prevalence (zero-knowledge — never
+                a password).
+
         Returns:
             ThreatLevel assessment
         """
         from django.contrib.auth.models import User
         from ..models import PredictiveExpirationSettings, ThreatActorTTP
-        
+
         factors = []
         threat_matches = []
         total_score = 0.0
-        
+
+        # Dark-web structural prevalence: passwords shaped like this one being
+        # common in breach dumps raises risk.
+        if char_class_sequence:
+            prevalence = self.get_structural_prevalence(char_class_sequence)
+            if prevalence > 0:
+                factors.append(
+                    f"Structure appears in ~{prevalence:.0%} of breach corpora"
+                )
+                total_score += min(prevalence * 0.3, 0.25)
+
         # Get user settings for industry context
         user_industry = ''
         if user_id is not None:

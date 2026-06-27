@@ -1668,6 +1668,11 @@ CELERY_TASK_ROUTES = {
     'ai_assistant.tasks.*': {'queue': 'ml'},
     'biometric_liveness.tasks.*': {'queue': 'ml'},
     'cognitive_auth.tasks.*': {'queue': 'ml'},
+    # Predictive expiration: threat-intel ingest + ZK re-score on the ml queue.
+    'security.tasks.update_threat_intelligence': {'queue': 'ml'},
+    'security.tasks.daily_predictive_scan': {'queue': 'ml'},
+    'security.tasks.evaluate_password_expiration_risk': {'queue': 'ml'},
+    'security.tasks.send_expiration_notifications': {'queue': 'ml'},
     # Blockchain tasks → single-concurrency queue
     'blockchain.tasks.*': {'queue': 'blockchain'},
     'smart_contracts.tasks.*': {'queue': 'blockchain'},

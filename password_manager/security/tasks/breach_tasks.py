@@ -666,130 +666,181 @@ def analyze_user_password_patterns(user_id: int):
         return {'error': str(e)}
 
 
-@shared_task
+@shared_task(name='security.tasks.update_threat_intelligence')
 def update_threat_intelligence():
     """
-    Fetch and update threat intelligence from all active feeds.
-    
-    This task runs periodically to keep threat data current.
-    
+    Ingest threat intelligence from all active feeds via pluggable adapters.
+
+    Each feed is dispatched to its adapter (HIBP, internal dark-web, or a
+    graceful no-op for unconfigured feeds). Recent-breach pressure per industry
+    is aggregated across feeds and written to IndustryThreatLevel.
+
     Returns:
         dict: Update statistics
     """
-    from ..models import ThreatIntelFeed, ThreatActorTTP, IndustryThreatLevel
-    from ..services.threat_intelligence_service import get_threat_intelligence_service
-    
-    threat_service = get_threat_intelligence_service()
-    
-    # Get active feeds
+    from ..models import ThreatIntelFeed, IndustryThreatLevel
+    from ..services.threat_feed_adapters import get_feed_adapter
+
     feeds = ThreatIntelFeed.objects.filter(is_active=True)
-    
+
     updated_count = 0
     failed_count = 0
-    
+    total_items = 0
+    # Aggregate recent-breach pressure per industry across all feeds.
+    industry_totals = {}
+
     for feed in feeds:
+        adapter = get_feed_adapter(feed.feed_type)
         try:
-            # In production, this would call the actual feed API
-            # For now, we'll update the sync timestamp
-            
-            feed.last_sync_at = timezone.now()
-            feed.last_sync_success = True
-            feed.save()
-            
-            updated_count += 1
-            logger.info(f"Updated threat feed: {feed.name}")
-            
+            result = adapter.fetch(feed)
         except Exception as e:
+            # Adapters are meant to degrade gracefully; treat a raise as a
+            # failed sync rather than crashing the whole task.
+            logger.error(f"Feed {feed.name} adapter crashed: {e}")
+            result = None
+
+        if result is None or not result.ok:
+            feed.last_sync_at = timezone.now()
             feed.last_sync_success = False
             feed.is_healthy = False
-            feed.health_check_message = str(e)
+            feed.health_check_message = (
+                result.message if result else 'adapter error'
+            )[:500]
             feed.save()
-            
             failed_count += 1
-            logger.error(f"Failed to update feed {feed.name}: {e}")
-    
-    # Update internal dark web threat data from ml_dark_web
-    try:
-        from ml_dark_web.models import MLBreachData
-        
-        recent_breaches = MLBreachData.objects.filter(
-            detected_at__gte=timezone.now() - timezone.timedelta(days=30),
-            severity__in=['HIGH', 'CRITICAL']
-        ).count()
-        
-        logger.info(f"Found {recent_breaches} high-severity breaches in last 30 days")
-        
-    except Exception as e:
-        logger.warning(f"Could not fetch ml_dark_web data: {e}")
-    
-    logger.info(f"Threat intel update complete: {updated_count} updated, {failed_count} failed")
-    
+            continue
+
+        feed.last_sync_at = timezone.now()
+        feed.last_sync_success = True
+        feed.is_healthy = True
+        feed.health_check_message = result.message[:500]
+        feed.last_sync_items_count = result.items_count
+        feed.total_items_ingested = (feed.total_items_ingested or 0) + result.items_count
+        feed.save()
+
+        updated_count += 1
+        total_items += result.items_count
+        for industry, count in result.industry_signals.items():
+            industry_totals[industry] = industry_totals.get(industry, 0) + count
+        logger.info(f"Synced threat feed {feed.name}: {result.message}")
+
+    industries_updated = _apply_industry_signals(IndustryThreatLevel, industry_totals)
+
+    logger.info(
+        f"Threat intel update complete: {updated_count} feeds updated, "
+        f"{failed_count} failed, {total_items} items, "
+        f"{industries_updated} industries refreshed"
+    )
+
     return {
         'feeds_updated': updated_count,
         'feeds_failed': failed_count,
+        'items_ingested': total_items,
+        'industries_updated': industries_updated,
     }
 
 
-@shared_task
+def _apply_industry_signals(IndustryThreatLevel, industry_totals):
+    """Upsert IndustryThreatLevel rows from aggregated recent-breach counts."""
+    def _score(count):
+        return min(count / 20.0, 1.0)
+
+    def _level(score):
+        if score >= 0.8:
+            return 'critical'
+        if score >= 0.6:
+            return 'severe'
+        if score >= 0.4:
+            return 'high'
+        if score >= 0.2:
+            return 'elevated'
+        return 'low'
+
+    updated = 0
+    for industry, count in industry_totals.items():
+        score = _score(count)
+        IndustryThreatLevel.objects.update_or_create(
+            industry_code=industry,
+            defaults={
+                'industry_name': industry.replace('_', ' ').title(),
+                'recent_breaches_count': count,
+                'threat_score': score,
+                'current_threat_level': _level(score),
+            },
+        )
+        updated += 1
+    return updated
+
+
+@shared_task(name='security.tasks.evaluate_password_expiration_risk')
 def evaluate_password_expiration_risk(credential_id: str, user_id: int):
     """
-    Calculate real-time compromise risk for a specific credential.
-    
-    Creates or updates the PredictiveExpirationRule for the credential.
-    
+    Re-score compromise risk for a credential from its stored fingerprint.
+
+    Zero-knowledge: this task never decrypts the vault. It re-scores the
+    existing PredictiveExpirationRule (whose structural fingerprint was
+    uploaded by the browser via the fingerprints/ endpoint) against the
+    current threat intelligence. If no fingerprint has been uploaded yet,
+    there is nothing to score and the task is a no-op.
+
     Args:
-        credential_id: UUID of the credential
+        credential_id: Identifier of the credential
         user_id: ID of the user
-        
+
     Returns:
         dict: Risk evaluation results
     """
     from ..models import PredictiveExpirationRule
     from ..services.predictive_expiration_service import get_predictive_expiration_service
-    
+
     try:
         user = User.objects.get(id=user_id)
         service = get_predictive_expiration_service()
-        
-        # Get the vault item
+
+        # The fingerprint must already exist (uploaded client-side). No rule
+        # means the browser hasn't synced this credential yet.
         try:
-            vault_item = EncryptedVaultItem.objects.get(
-                id=credential_id,
-                user=user
+            rule = PredictiveExpirationRule.objects.get(
+                user=user,
+                credential_id=str(credential_id),
             )
-        except EncryptedVaultItem.DoesNotExist:
-            return {'error': 'credential_not_found'}
-        
-        # Get password
-        password = vault_item.get_decrypted_password(user)
-        if not password:
-            return {'error': 'could_not_decrypt'}
-        
-        # Calculate age
-        age_days = (timezone.now() - vault_item.created_at).days
-        
-        # Get domain
-        domain = getattr(vault_item, 'website', '') or getattr(vault_item, 'name', '')
-        
-        # Create expiration rule
-        rule = service.create_expiration_rule(
+        except PredictiveExpirationRule.DoesNotExist:
+            return {'status': 'no_fingerprint', 'credential_id': str(credential_id)}
+
+        # Advance the stored age by the time elapsed since the last evaluation
+        # so age-based thresholds (180/365 days) still cross between client
+        # re-uploads. The browser overwrites this on its next sync.
+        credential_age_days = rule.credential_age_days
+        if rule.last_evaluated_at:
+            elapsed_days = (timezone.now().date() - rule.last_evaluated_at.date()).days
+            credential_age_days += max(0, elapsed_days)
+
+        # Re-score from the stored structural metadata — no plaintext needed.
+        rule = service.create_expiration_rule_from_fingerprint(
             user_id=user_id,
-            credential_id=str(credential_id),
-            credential_domain=domain[:255],
-            password=password,
-            credential_age_days=age_days
+            credential_id=rule.credential_id,
+            credential_domain=rule.credential_domain,
+            domain_class=rule.domain_class,
+            char_class_sequence=rule.char_class_sequence,
+            length_bucket=rule.length_bucket,
+            entropy_band=rule.entropy_band,
+            has_dictionary_base=rule.has_dictionary_base,
+            has_keyboard_pattern=rule.has_keyboard_pattern,
+            has_date_pattern=rule.has_date_pattern,
+            has_leet=rule.has_leet,
+            credential_age_days=credential_age_days,
         )
-        
-        logger.info(f"Evaluated credential {credential_id} for user {user_id}: "
+
+        logger.info(f"Re-scored credential {credential_id} for user {user_id}: "
                    f"{rule.risk_level} risk ({rule.risk_score:.2f})")
-        
+
         return {
             'credential_id': str(credential_id),
             'risk_level': rule.risk_level,
             'risk_score': rule.risk_score,
             'recommended_action': rule.recommended_action,
         }
-        
+
     except User.DoesNotExist:
         return {'error': 'user_not_found'}
     except Exception as e:
@@ -872,68 +923,91 @@ def process_forced_rotation(credential_id: str, user_id: int, reason: str):
         return {'error': str(e)}
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, name='security.tasks.daily_predictive_scan')
 def daily_predictive_scan(self):
     """
-    Daily scan of all credentials against current threats.
-    
-    Runs for all users with predictive expiration enabled,
-    evaluating each credential and sending notifications for
-    high-risk items.
+    Daily zero-knowledge re-score of stored credential fingerprints.
+
+    Re-scores the fingerprints the browser already uploaded against the latest
+    threat intelligence. The server never decrypts the vault — it only refreshes
+    risk on stored structural metadata.
     """
     from ..models import PredictiveExpirationSettings, PredictiveExpirationRule
-    
-    # Get users with predictive expiration enabled
+
     settings = PredictiveExpirationSettings.objects.filter(is_enabled=True)
-    
+
     total_users = 0
     total_credentials = 0
-    high_risk_count = 0
-    
+
     for user_settings in settings:
         user_id = user_settings.user_id
-        
-        # Analyze patterns first
-        analyze_user_password_patterns.delay(user_id)
-        
-        # Get user's vault items
+
+        # Coarse-class exclusions only: under zero-knowledge the server holds
+        # no exact domains, so exclude_domains is matched by normalized equality
+        # against the coarse class. Exact-domain exclusion is enforced
+        # client-side at upload time.
+        excluded_classes = {
+            d.strip().lower() for d in user_settings.exclude_domains if d
+        }
+
         try:
-            vault_items = EncryptedVaultItem.objects.filter(
+            rules = PredictiveExpirationRule.objects.filter(
                 user_id=user_id,
-                item_type='password'
+                is_active=True,
             )
-            
-            for item in vault_items:
-                # Check excluded domains
-                domain = getattr(item, 'website', '') or ''
-                if any(excl in domain for excl in user_settings.exclude_domains):
+
+            for rule in rules:
+                if rule.domain_class and rule.domain_class.lower() in excluded_classes:
                     continue
-                
-                # Queue risk evaluation
-                evaluate_password_expiration_risk.delay(str(item.id), user_id)
+
+                # Queue a re-score from the stored fingerprint.
+                evaluate_password_expiration_risk.delay(rule.credential_id, user_id)
                 total_credentials += 1
-                
+
         except Exception as e:
-            logger.error(f"Error scanning vault for user {user_id}: {e}")
+            logger.error(f"Error scanning rules for user {user_id}: {e}")
             continue
-        
+
         total_users += 1
-    
-    # Update threat intelligence
-    update_threat_intelligence.delay()
-    
+
+    # Threat intelligence is refreshed by its own beat entry
+    # (predictive-update-threat-intel) ahead of this scan, so it is not
+    # re-triggered here.
+
     logger.info(
         f"Daily predictive scan complete: "
-        f"{total_users} users, {total_credentials} credentials queued"
+        f"{total_users} users, {total_credentials} fingerprints re-queued"
     )
-    
+
     return {
         'users_scanned': total_users,
         'credentials_queued': total_credentials,
     }
 
 
-@shared_task
+def _send_ws_risk_alert(user_id, credential_id, credential_domain,
+                        risk_level, risk_score):
+    """Push a real-time risk alert to the user's WebSocket group.
+
+    Best-effort: any failure (no channel layer configured, send error) is
+    logged and swallowed so notification delivery never breaks the task.
+    """
+    try:
+        from asgiref.sync import async_to_sync
+        from ..consumers.predictive_expiration_consumer import send_risk_alert
+
+        async_to_sync(send_risk_alert)(
+            user_id=user_id,
+            credential_id=credential_id,
+            credential_domain=credential_domain,
+            risk_level=risk_level,
+            risk_score=risk_score,
+        )
+    except Exception as e:
+        logger.warning(f"WS risk alert for user {user_id} not delivered: {e}")
+
+
+@shared_task(name='security.tasks.send_expiration_notifications')
 def send_expiration_notifications():
     """
     Send notifications to users with high-risk credentials.
@@ -976,17 +1050,21 @@ def send_expiration_notifications():
             except PredictiveExpirationSettings.DoesNotExist:
                 pass
             
-            # Send notification (placeholder - would use notification service)
-            logger.info(
-                f"Would notify user {rule.user_id} about {rule.risk_level} risk "
-                f"on {rule.credential_domain}"
+            # Fan out a real-time risk alert over the WebSocket (best-effort:
+            # a missing/!configured channel layer must not fail the task).
+            _send_ws_risk_alert(
+                user_id=rule.user_id,
+                credential_id=rule.credential_id,
+                credential_domain=rule.credential_domain,
+                risk_level=rule.risk_level,
+                risk_score=rule.risk_score,
             )
-            
+
             # Update rule
             rule.last_notification_sent = timezone.now()
             rule.notification_count += 1
             rule.save()
-            
+
             notifications_sent += 1
             
         except Exception as e:

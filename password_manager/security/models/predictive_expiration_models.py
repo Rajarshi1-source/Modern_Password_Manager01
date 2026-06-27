@@ -743,6 +743,67 @@ class PredictiveExpirationSettings(models.Model):
         db_table = 'security_predictive_expiration_settings'
         verbose_name = 'Predictive Expiration Settings'
         verbose_name_plural = 'Predictive Expiration Settings'
-    
+
     def __str__(self):
         return f"Predictive Settings for {self.user.username}"
+
+
+class PasswordStructurePrevalence(models.Model):
+    """
+    Prevalence of a password *structure* (character-class shape) in breach
+    corpora — the zero-knowledge "dark-web monitoring" signal.
+
+    Keyed by an irreversible structural signature (the character-class
+    transition pattern, e.g. ``ULD`` for "Uppercase + lowercase run + digit
+    run", plus a coarse length bucket) — never a password or a word. Seeded
+    from curated public breach-structure statistics via the
+    ``seed_structure_prevalence`` management command, and refreshable by the
+    internal dark-web threat feed.
+
+    A high prevalence means "passwords shaped like yours are extremely common
+    in dumps" (e.g. the classic word+year-suffix shape), which raises risk.
+    """
+    # Character-class transition signature, e.g. 'L', 'LD', 'ULD', 'ULDS'.
+    char_class_pattern = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="Char-class transition signature (runs collapsed), e.g. 'ULD'"
+    )
+    length_bucket = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        help_text="Coarse length bucket; blank = applies to any length"
+    )
+
+    prevalence = models.FloatField(
+        default=0.0,
+        help_text="Fraction of breached passwords with this structure (0-1)"
+    )
+    occurrence_count = models.BigIntegerField(default=0)
+    sample_size = models.BigIntegerField(
+        default=0,
+        help_text="Size of the corpus this prevalence was derived from"
+    )
+    source = models.CharField(
+        max_length=100,
+        default='curated_seed',
+        help_text="Where this statistic came from (curated_seed, internal_darkweb, ...)"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'security_password_structure_prevalence'
+        verbose_name = 'Password Structure Prevalence'
+        verbose_name_plural = 'Password Structure Prevalences'
+        unique_together = ['char_class_pattern', 'length_bucket']
+        ordering = ['-prevalence']
+        indexes = [
+            models.Index(fields=['char_class_pattern', 'length_bucket']),
+        ]
+
+    def __str__(self):
+        bucket = self.length_bucket or 'any'
+        return f"{self.char_class_pattern}/{bucket}: {self.prevalence:.2%}"
