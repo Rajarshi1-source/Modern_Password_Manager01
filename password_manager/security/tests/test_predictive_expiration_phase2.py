@@ -82,6 +82,21 @@ class StructuralPrevalenceTests(TestCase):
         self.assertTrue(any('breach corpora' in f for f in tl.factors))
         self.assertGreater(tl.score, 0)
 
+    def test_source_scoped_rows_coexist_highest_wins(self):
+        """A curated row and a feed row for the same shape coexist; lookup
+        picks the highest prevalence (source is part of the unique key)."""
+        from security.models import PasswordStructurePrevalence
+        PasswordStructurePrevalence.objects.create(
+            char_class_pattern='ULD', length_bucket='medium',
+            prevalence=0.09, source='curated_seed',
+        )
+        PasswordStructurePrevalence.objects.create(
+            char_class_pattern='ULD', length_bucket='medium',
+            prevalence=0.30, source='internal_darkweb',
+        )
+        svc = self._svc()
+        self.assertAlmostEqual(svc.get_structural_prevalence('ULLLLLDDDD'), 0.30)
+
 
 class SeedStructurePrevalenceCommandTests(TestCase):
     def test_seed_is_idempotent(self):
@@ -194,6 +209,29 @@ class UpdateThreatIntelligenceTaskTests(TestCase):
         self.assertTrue(feed.is_healthy)
         self.assertIn('not configured', feed.health_check_message)
 
+    @patch('security.services.threat_feed_adapters.HIBPFeedAdapter._fetch_breaches',
+           side_effect=Exception('net down'))
+    def test_partial_feed_failure_skips_stale_reset(self, _mock):
+        """A failed feed must not zero out real recent-breach pressure."""
+        from security.models import ThreatIntelFeed, IndustryThreatLevel
+        from security.tasks import update_threat_intelligence
+
+        IndustryThreatLevel.objects.create(
+            industry_code='finance', industry_name='Finance',
+            recent_breaches_count=10, threat_score=0.6,
+            current_threat_level='severe',
+        )
+        ThreatIntelFeed.objects.create(
+            name='hibp', feed_type='hibp', is_active=True
+        )
+
+        result = update_threat_intelligence()
+
+        self.assertEqual(result['feeds_failed'], 1)
+        finance = IndustryThreatLevel.objects.get(industry_code='finance')
+        # Not reset, because the feed run was incomplete.
+        self.assertEqual(finance.recent_breaches_count, 10)
+
     def test_stale_industry_pressure_is_reset(self):
         """An industry with no breaches in the current feed is cleared."""
         from security.models import ThreatIntelFeed, IndustryThreatLevel
@@ -235,6 +273,23 @@ class WebSocketAlertTests(TestCase):
 
         self.assertEqual(result['notifications_sent'], 1)
         mock_ws.assert_called_once()
+
+    @patch('security.tasks.breach_tasks._send_ws_risk_alert', return_value=False)
+    def test_failed_ws_delivery_leaves_rule_unnotified(self, _mock):
+        """If WS delivery fails, the rule stays eligible for retry."""
+        from security.models import PredictiveExpirationRule
+        from security.tasks import send_expiration_notifications
+
+        rule = PredictiveExpirationRule.objects.create(
+            user=self.user, credential_id='c2', credential_domain='finance',
+            risk_level='critical', risk_score=0.95, user_acknowledged=False,
+        )
+        result = send_expiration_notifications()
+
+        self.assertEqual(result['notifications_sent'], 0)
+        rule.refresh_from_db()
+        self.assertIsNone(rule.last_notification_sent)
+        self.assertEqual(rule.notification_count, 0)
 
     def test_send_ws_risk_alert_swallows_errors(self):
         """A broken/missing channel layer must never break the task."""

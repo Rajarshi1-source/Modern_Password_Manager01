@@ -27,8 +27,8 @@ class Migration(migrations.Migration):
                 'verbose_name': 'Password Structure Prevalence',
                 'verbose_name_plural': 'Password Structure Prevalences',
                 'db_table': 'security_password_structure_prevalence',
-                'ordering': ['-prevalence'],
-                'unique_together': {('char_class_pattern', 'length_bucket')},
+                'ordering': ('-prevalence',),
+                'unique_together': {('char_class_pattern', 'length_bucket', 'source')},
             },
         ),
     ]

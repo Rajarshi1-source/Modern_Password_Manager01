@@ -219,13 +219,15 @@ class ThreatIntelligenceService:
             length_bucket = self._length_bucket(len(char_class_sequence))
 
         try:
+            # Multiple sources may share a (pattern, bucket); take the highest
+            # prevalence as the signal (deterministic precedence across sources).
             row = (
                 PasswordStructurePrevalence.objects.filter(
                     char_class_pattern=signature, length_bucket=length_bucket
-                ).first()
+                ).order_by('-prevalence').first()
                 or PasswordStructurePrevalence.objects.filter(
                     char_class_pattern=signature, length_bucket=''
-                ).first()
+                ).order_by('-prevalence').first()
             )
         except Exception as e:  # pragma: no cover - defensive DB guard
             logger.warning(f"Structural prevalence lookup failed: {e}")
