@@ -684,7 +684,6 @@ class PredictiveExpirationService:
         length: Optional[int] = None,
         length_bucket: str = '',
         entropy_band: str = '',
-        entropy_estimate: Optional[float] = None,
         has_dictionary_base: bool = False,
         has_keyboard_pattern: bool = False,
         has_date_pattern: bool = False,
@@ -705,11 +704,13 @@ class PredictiveExpirationService:
 
         user = User.objects.get(id=user_id)
 
+        # Score from the entropy band only — the same source the daily
+        # re-score reconstructs from stored metadata — so a credential's risk
+        # is deterministic across ingest and rescans.
         fingerprint = build_fingerprint_from_metadata(
             char_class_sequence=char_class_sequence,
             length=length,
             entropy_band=entropy_band,
-            entropy_estimate=entropy_estimate,
             has_dictionary_base=has_dictionary_base,
             has_keyboard_pattern=has_keyboard_pattern,
             has_date_pattern=has_date_pattern,
