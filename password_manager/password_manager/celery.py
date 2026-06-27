@@ -346,16 +346,11 @@ app.conf.update(
         # Predictive Password Expiration (zero-knowledge)
         # =================================================================
 
-        # Refresh threat intel from active feeds first (1:15 AM daily).
-        'predictive-update-threat-intel': {
-            'task': 'security.tasks.update_threat_intelligence',
-            'schedule': crontab(hour=1, minute=15),
-        },
-
-        # Re-score stored fingerprints against refreshed intel (2:15 AM daily).
-        # The scan dispatches a chord that runs send_expiration_notifications
-        # only after every re-score completes — so notifications are NOT on a
-        # separate fixed-offset beat (that could fire before the queue drains).
+        # Single daily pipeline (2:15 AM): the scan first refreshes threat
+        # intel in-process (so it always re-scores on fresh data), then
+        # dispatches a chord that runs send_expiration_notifications only after
+        # every re-score completes — so notifications never fire on stale or
+        # not-yet-drained risk state. No separate fixed-offset beats.
         'predictive-daily-scan': {
             'task': 'security.tasks.daily_predictive_scan',
             'schedule': crontab(hour=2, minute=15),

@@ -91,6 +91,11 @@ class HIBPFeedAdapter(ThreatFeedAdapter):
         return resp.json()
 
     def fetch(self, feed) -> FeedSyncResult:
+        """Pull recent HIBP breaches and aggregate them per industry.
+
+        Returns a graceful failed result (no raise) when the breaches list
+        can't be fetched, so a network blip never fails the sync run.
+        """
         try:
             breaches = self._fetch_breaches()
         except Exception as e:
@@ -126,6 +131,11 @@ class InternalDarkWebFeedAdapter(ThreatFeedAdapter):
     """Derive threat intel from the local ml_dark_web corpus (no network)."""
 
     def fetch(self, feed) -> FeedSyncResult:
+        """Aggregate recent local breaches per industry and sync threat actors.
+
+        Reads the ml_dark_web corpus only; returns a graceful failed result if
+        that app/model is unavailable.
+        """
         try:
             from ml_dark_web.models import MLBreachData, BreachPatternAnalysis
         except Exception as e:
@@ -183,9 +193,11 @@ class UnconfiguredFeedAdapter(ThreatFeedAdapter):
     """Graceful no-op for feeds without a real fetcher yet (MISP/OTX/...)."""
 
     def __init__(self, feed_type: str):
+        """Remember the feed type so health messages can name it."""
         self.feed_type = feed_type
 
     def fetch(self, feed) -> FeedSyncResult:
+        """No-op sync that reports whether the feed is configured yet."""
         has_creds = bool(feed.api_endpoint) and bool(feed.api_key_encrypted)
         if not has_creds:
             return FeedSyncResult(

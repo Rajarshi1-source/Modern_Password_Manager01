@@ -941,16 +941,26 @@ def daily_predictive_scan(self):
     """
     Daily zero-knowledge re-score of stored credential fingerprints.
 
-    Re-scores the fingerprints the browser already uploaded against the latest
-    threat intelligence. The server never decrypts the vault — it only refreshes
-    risk on stored structural metadata.
+    Refreshes threat intelligence first (so the re-score runs on current
+    IndustryThreatLevel/actor data), then re-scores the fingerprints the
+    browser already uploaded. The server never decrypts the vault — it only
+    refreshes risk on stored structural metadata.
     """
     from celery import chord
     from ..models import PredictiveExpirationSettings, PredictiveExpirationRule
 
+    # Refresh threat intel in-process first so the scan is always tied to a
+    # fresh ingest rather than a wall-clock-offset beat that could lag/fail.
+    # A refresh failure must not abort the scan — fall back to existing intel.
+    try:
+        update_threat_intelligence()
+    except Exception:
+        logger.exception("Threat-intel refresh failed; scanning on existing data")
+
     settings = PredictiveExpirationSettings.objects.filter(is_enabled=True)
 
     total_users = 0
+    scan_failures = 0
     rescore_sigs = []
 
     for user_settings in settings:
@@ -979,19 +989,36 @@ def daily_predictive_scan(self):
                     evaluate_password_expiration_risk.si(rule.credential_id, user_id)
                 )
 
-        except Exception as e:
-            logger.error(f"Error scanning rules for user {user_id}: {e}")
+        except Exception:
+            scan_failures += 1
+            logger.exception("Error scanning predictive rules for user %s", user_id)
             continue
 
         total_users += 1
 
     total_credentials = len(rescore_sigs)
 
+    # Don't notify on an incomplete scan: send_expiration_notifications is
+    # global, so if any user's rules were never queued for re-score it could
+    # fire on stale risk state. Skip the dispatch and let the next run retry;
+    # per-credential re-scores still happen via the client ingest path.
+    if scan_failures:
+        logger.error(
+            "Daily predictive scan incomplete: %s user(s) failed; "
+            "skipping notification dispatch",
+            scan_failures,
+        )
+        return {
+            'users_scanned': total_users,
+            'credentials_queued': total_credentials,
+            'scan_failures': scan_failures,
+            'notifications_dispatched': False,
+        }
+
     # Completion handoff: fan out every re-score, then send notifications only
     # once they have ALL finished — so we never notify before the re-score
     # queue drains and miss newly high-risk credentials. With nothing to
-    # re-score, send notifications directly. (Threat intel is refreshed by its
-    # own beat entry ahead of this scan.)
+    # re-score, send notifications directly.
     if rescore_sigs:
         chord(rescore_sigs)(send_expiration_notifications.si())
     else:
@@ -1005,6 +1032,8 @@ def daily_predictive_scan(self):
     return {
         'users_scanned': total_users,
         'credentials_queued': total_credentials,
+        'scan_failures': 0,
+        'notifications_dispatched': True,
     }
 
 

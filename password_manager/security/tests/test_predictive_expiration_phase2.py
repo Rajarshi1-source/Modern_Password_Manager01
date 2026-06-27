@@ -248,3 +248,34 @@ class WebSocketAlertTests(TestCase):
                 user_id=self.user.id, credential_id='c1',
                 credential_domain='finance', risk_level='high', risk_score=0.7,
             )
+
+
+class DailyScanFailureGatingTests(TestCase):
+    """A partial scan failure must not dispatch the global notification pass."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='scanu', email='s@e.com')
+
+    @patch('security.tasks.breach_tasks.send_expiration_notifications')
+    @patch('security.tasks.breach_tasks.update_threat_intelligence')
+    def test_partial_failure_skips_notifications(self, _mock_refresh, mock_notify):
+        from security.models import (
+            PredictiveExpirationSettings, PredictiveExpirationRule,
+        )
+        from security.tasks.breach_tasks import daily_predictive_scan
+
+        PredictiveExpirationSettings.objects.create(
+            user=self.user, is_enabled=True
+        )
+
+        # Force the per-user rule query to fail.
+        with patch.object(
+            PredictiveExpirationRule.objects, 'filter',
+            side_effect=Exception('db down'),
+        ):
+            result = daily_predictive_scan()
+
+        self.assertGreaterEqual(result['scan_failures'], 1)
+        self.assertFalse(result['notifications_dispatched'])
+        mock_notify.delay.assert_not_called()
+        mock_notify.si.assert_not_called()
