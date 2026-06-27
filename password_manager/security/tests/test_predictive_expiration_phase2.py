@@ -108,6 +108,39 @@ class SeedStructurePrevalenceCommandTests(TestCase):
         call_command('seed_structure_prevalence')
         self.assertEqual(PasswordStructurePrevalence.objects.count(), count)
 
+    def test_clear_only_removes_curated_rows(self):
+        """--clear must drop only curated_seed rows, never feed-sourced data."""
+        from security.models import PasswordStructurePrevalence
+        # Feed-derived row sharing a shape with a curated seed entry.
+        PasswordStructurePrevalence.objects.create(
+            char_class_pattern='LD', length_bucket='medium',
+            prevalence=0.99, source='internal_darkweb',
+        )
+        # Stale curated row not present in SEED_DATA — must be cleared.
+        PasswordStructurePrevalence.objects.create(
+            char_class_pattern='ZZZ', length_bucket='medium',
+            prevalence=0.5, source='curated_seed',
+        )
+
+        call_command('seed_structure_prevalence', clear=True)
+
+        # Feed-sourced provenance survives untouched.
+        feed = PasswordStructurePrevalence.objects.get(source='internal_darkweb')
+        self.assertEqual(feed.char_class_pattern, 'LD')
+        self.assertAlmostEqual(feed.prevalence, 0.99)
+        # Stale curated row was removed.
+        self.assertFalse(
+            PasswordStructurePrevalence.objects.filter(
+                char_class_pattern='ZZZ', source='curated_seed'
+            ).exists()
+        )
+        # Curated baseline was reseeded.
+        self.assertTrue(
+            PasswordStructurePrevalence.objects.filter(
+                source='curated_seed'
+            ).exists()
+        )
+
 
 class FeedAdapterTests(TestCase):
     def test_classify_domain_industry(self):
