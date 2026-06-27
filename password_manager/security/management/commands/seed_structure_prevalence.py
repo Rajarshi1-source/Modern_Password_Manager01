@@ -59,6 +59,7 @@ class Command(BaseCommand):
     help = "Seed curated dark-web password-structure prevalence statistics."
 
     def add_arguments(self, parser):
+        """Register the optional ``--clear`` flag."""
         parser.add_argument(
             '--clear',
             action='store_true',
@@ -66,6 +67,7 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        """Upsert the curated prevalence rows (idempotent)."""
         from security.models import PasswordStructurePrevalence
 
         if options['clear']:
