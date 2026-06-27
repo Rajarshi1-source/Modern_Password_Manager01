@@ -724,7 +724,11 @@ def update_threat_intelligence():
             industry_totals[industry] = industry_totals.get(industry, 0) + count
         logger.info(f"Synced threat feed {feed.name}: {result.message}")
 
-    industries_updated = _apply_industry_signals(IndustryThreatLevel, industry_totals)
+    # Only reset stale industries when every feed succeeded — a partial feed
+    # failure yields incomplete industry_totals that must not zero out real data.
+    industries_updated = _apply_industry_signals(
+        IndustryThreatLevel, industry_totals, reset_stale=(failed_count == 0)
+    )
 
     logger.info(
         f"Threat intel update complete: {updated_count} feeds updated, "
@@ -740,8 +744,12 @@ def update_threat_intelligence():
     }
 
 
-def _apply_industry_signals(IndustryThreatLevel, industry_totals):
-    """Upsert IndustryThreatLevel rows from aggregated recent-breach counts."""
+def _apply_industry_signals(IndustryThreatLevel, industry_totals, reset_stale=True):
+    """Upsert IndustryThreatLevel rows from aggregated recent-breach counts.
+
+    ``reset_stale`` must be False when any feed failed: industry_totals is then
+    incomplete and clearing "stale" rows would wrongly zero real breach data.
+    """
     def _score(count):
         return min(count / 20.0, 1.0)
 
@@ -773,15 +781,16 @@ def _apply_industry_signals(IndustryThreatLevel, industry_totals):
     # Keep the recency window accurate: clear breach pressure for industries
     # that previously had recent breaches but none in the current feed result.
     # Only touch rows this task drove (recent_breaches_count > 0) so any
-    # admin-managed posture is left alone.
-    stale = IndustryThreatLevel.objects.filter(
-        recent_breaches_count__gt=0,
-    ).exclude(industry_code__in=industry_totals.keys())
-    updated += stale.update(
-        recent_breaches_count=0,
-        threat_score=0.0,
-        current_threat_level='low',
-    )
+    # admin-managed posture is left alone. Skipped on partial feed failure.
+    if reset_stale:
+        stale = IndustryThreatLevel.objects.filter(
+            recent_breaches_count__gt=0,
+        ).exclude(industry_code__in=industry_totals.keys())
+        updated += stale.update(
+            recent_breaches_count=0,
+            threat_score=0.0,
+            current_threat_level='low',
+        )
     return updated
 
 
@@ -856,9 +865,13 @@ def evaluate_password_expiration_risk(credential_id: str, user_id: int):
 
     except User.DoesNotExist:
         return {'error': 'user_not_found'}
-    except Exception as e:
-        logger.error(f"Error evaluating credential {credential_id}: {e}")
-        return {'error': str(e)}
+    except Exception:
+        # Re-raise unexpected failures so a mid-chord error fails the chord and
+        # the send_expiration_notifications callback does NOT run against
+        # partially re-scored state. (no_fingerprint / user_not_found stay as
+        # graceful returns.)
+        logger.exception("Error evaluating credential %s", credential_id)
+        raise
 
 
 @shared_task
@@ -1041,8 +1054,12 @@ def _send_ws_risk_alert(user_id, credential_id, credential_domain,
                         risk_level, risk_score):
     """Push a real-time risk alert to the user's WebSocket group.
 
-    Best-effort: any failure (no channel layer configured, send error) is
-    logged and swallowed so notification delivery never breaks the task.
+    Never raises (a missing/!configured channel layer must not break the task),
+    but returns whether delivery succeeded so the caller can decide whether to
+    mark the notification as sent.
+
+    Returns:
+        bool: True if the alert was delivered, False otherwise.
     """
     try:
         from asgiref.sync import async_to_sync
@@ -1055,8 +1072,10 @@ def _send_ws_risk_alert(user_id, credential_id, credential_domain,
             risk_level=risk_level,
             risk_score=risk_score,
         )
+        return True
     except Exception as e:
         logger.warning(f"WS risk alert for user {user_id} not delivered: {e}")
+        return False
 
 
 @shared_task(name='security.tasks.send_expiration_notifications')
@@ -1102,15 +1121,19 @@ def send_expiration_notifications():
             except PredictiveExpirationSettings.DoesNotExist:
                 pass
             
-            # Fan out a real-time risk alert over the WebSocket (best-effort:
-            # a missing/!configured channel layer must not fail the task).
-            _send_ws_risk_alert(
+            # Fan out a real-time risk alert over the WebSocket. Only mark the
+            # notification as sent if it was actually delivered, so a missing or
+            # transiently-down channel layer leaves the rule eligible for retry
+            # on the next run rather than silently dropping the alert.
+            delivered = _send_ws_risk_alert(
                 user_id=rule.user_id,
                 credential_id=rule.credential_id,
                 credential_domain=rule.credential_domain,
                 risk_level=rule.risk_level,
                 risk_score=rule.risk_score,
             )
+            if not delivered:
+                continue
 
             # Update rule
             rule.last_notification_sent = timezone.now()

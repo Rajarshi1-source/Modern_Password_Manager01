@@ -78,14 +78,16 @@ class Command(BaseCommand):
 
         created = updated = 0
         for pattern, bucket, prevalence in SEED_DATA:
+            # source is part of the key, so this only ever upserts the curated
+            # baseline row and never overwrites a feed-sourced row.
             _, was_created = PasswordStructurePrevalence.objects.update_or_create(
                 char_class_pattern=pattern,
                 length_bucket=bucket,
+                source='curated_seed',
                 defaults={
                     'prevalence': prevalence,
                     'occurrence_count': int(prevalence * SEED_SAMPLE_SIZE),
                     'sample_size': SEED_SAMPLE_SIZE,
-                    'source': 'curated_seed',
                 },
             )
             created += int(was_created)

@@ -799,11 +799,13 @@ class PasswordStructurePrevalence(models.Model):
         db_table = 'security_password_structure_prevalence'
         verbose_name = 'Password Structure Prevalence'
         verbose_name_plural = 'Password Structure Prevalences'
-        # unique_together already provides the composite index that the
-        # (char_class_pattern, length_bucket) and (char_class_pattern, '')
-        # lookups need, so no extra indexes are declared.
-        unique_together = ['char_class_pattern', 'length_bucket']
-        ordering = ['-prevalence']
+        # source is part of the key so a curated seed and a feed refresh can
+        # coexist for the same (pattern, bucket) without clobbering each other;
+        # lookups pick the highest-prevalence row (see get_structural_prevalence).
+        # The composite unique index also serves the leftmost-prefix lookups,
+        # so no extra indexes are declared. Tuples (not lists) avoid RUF012.
+        unique_together = ('char_class_pattern', 'length_bucket', 'source')
+        ordering = ('-prevalence',)
 
     def __str__(self):
         bucket = self.length_bucket or 'any'
