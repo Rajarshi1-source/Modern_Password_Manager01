@@ -724,10 +724,14 @@ def update_threat_intelligence():
             industry_totals[industry] = industry_totals.get(industry, 0) + count
         logger.info(f"Synced threat feed {feed.name}: {result.message}")
 
-    # Only reset stale industries when every feed succeeded — a partial feed
-    # failure yields incomplete industry_totals that must not zero out real data.
+    # Only reset stale industries when every feed succeeded AND at least one feed
+    # actually produced fresh intel. A partial feed failure yields incomplete
+    # industry_totals; zero active feeds yields empty totals — neither must zero
+    # out real data.
     industries_updated = _apply_industry_signals(
-        IndustryThreatLevel, industry_totals, reset_stale=(failed_count == 0)
+        IndustryThreatLevel,
+        industry_totals,
+        reset_stale=(failed_count == 0 and updated_count > 0),
     )
 
     logger.info(
@@ -870,7 +874,10 @@ def evaluate_password_expiration_risk(credential_id: str, user_id: int):
         # the send_expiration_notifications callback does NOT run against
         # partially re-scored state. (no_fingerprint / user_not_found stay as
         # graceful returns.)
-        logger.exception("Error evaluating credential %s", credential_id)
+        #
+        # Do not log the credential_id/user_id: in a password-manager context
+        # those identifiers don't belong in logs. The traceback gives context.
+        logger.exception("Error evaluating credential risk")
         raise
 
 
@@ -1073,8 +1080,10 @@ def _send_ws_risk_alert(user_id, credential_id, credential_domain,
             risk_score=risk_score,
         )
         return True
-    except Exception as e:
-        logger.warning(f"WS risk alert for user {user_id} not delivered: {e}")
+    except Exception:
+        # Don't log the user_id (password-manager context); exc_info keeps the
+        # cause for triage without persisting a user-level identifier.
+        logger.warning("WS risk alert not delivered", exc_info=True)
         return False
 
 
