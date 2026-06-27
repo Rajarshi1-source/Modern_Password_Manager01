@@ -857,8 +857,12 @@ def evaluate_password_expiration_risk(credential_id: str, user_id: int):
             credential_age_days=credential_age_days,
         )
 
-        logger.info(f"Re-scored credential {credential_id} for user {user_id}: "
-                   f"{rule.risk_level} risk ({rule.risk_score:.2f})")
+        # No credential_id/user_id in logs (password-manager context).
+        logger.info(
+            "Re-scored credential risk: %s risk (%.2f)",
+            rule.risk_level,
+            rule.risk_score,
+        )
 
         return {
             'credential_id': str(credential_id),
@@ -1011,7 +1015,8 @@ def daily_predictive_scan(self):
 
         except Exception:
             scan_failures += 1
-            logger.exception("Error scanning predictive rules for user %s", user_id)
+            # No user_id in logs (password-manager context); traceback gives context.
+            logger.exception("Error scanning predictive rules for a user")
             continue
 
         total_users += 1

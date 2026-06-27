@@ -31,4 +31,25 @@ class Migration(migrations.Migration):
                 'unique_together': {('char_class_pattern', 'length_bucket', 'source')},
             },
         ),
+        migrations.AddConstraint(
+            model_name='passwordstructureprevalence',
+            constraint=models.CheckConstraint(
+                condition=models.Q(prevalence__gte=0.0) & models.Q(prevalence__lte=1.0),
+                name='structure_prevalence_between_0_and_1',
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name='passwordstructureprevalence',
+            constraint=models.CheckConstraint(
+                condition=models.Q(occurrence_count__gte=0),
+                name='structure_occurrence_count_non_negative',
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name='passwordstructureprevalence',
+            constraint=models.CheckConstraint(
+                condition=models.Q(sample_size__gte=0),
+                name='structure_sample_size_non_negative',
+            ),
+        ),
     ]
