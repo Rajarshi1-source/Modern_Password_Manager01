@@ -194,6 +194,29 @@ class UpdateThreatIntelligenceTaskTests(TestCase):
         self.assertTrue(feed.is_healthy)
         self.assertIn('not configured', feed.health_check_message)
 
+    def test_stale_industry_pressure_is_reset(self):
+        """An industry with no breaches in the current feed is cleared."""
+        from security.models import ThreatIntelFeed, IndustryThreatLevel
+        from security.tasks import update_threat_intelligence
+
+        # Pre-existing elevated industry that the current feed won't mention.
+        IndustryThreatLevel.objects.create(
+            industry_code='finance', industry_name='Finance',
+            recent_breaches_count=12, threat_score=0.6,
+            current_threat_level='severe',
+        )
+        # Active feed that produces no industry signals (unconfigured no-op).
+        ThreatIntelFeed.objects.create(
+            name='misp', feed_type='misp', is_active=True
+        )
+
+        update_threat_intelligence()
+
+        finance = IndustryThreatLevel.objects.get(industry_code='finance')
+        self.assertEqual(finance.recent_breaches_count, 0)
+        self.assertEqual(finance.threat_score, 0.0)
+        self.assertEqual(finance.current_threat_level, 'low')
+
 
 class WebSocketAlertTests(TestCase):
     def setUp(self):

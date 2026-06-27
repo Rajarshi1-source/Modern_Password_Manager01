@@ -764,9 +764,10 @@ class PasswordStructurePrevalence(models.Model):
     in dumps" (e.g. the classic word+year-suffix shape), which raises risk.
     """
     # Character-class transition signature, e.g. 'L', 'LD', 'ULD', 'ULDS'.
+    # No explicit db_index: the unique_together composite index below already
+    # serves leftmost-prefix lookups on this column.
     char_class_pattern = models.CharField(
         max_length=64,
-        db_index=True,
         help_text="Char-class transition signature (runs collapsed), e.g. 'ULD'"
     )
     length_bucket = models.CharField(
@@ -798,11 +799,11 @@ class PasswordStructurePrevalence(models.Model):
         db_table = 'security_password_structure_prevalence'
         verbose_name = 'Password Structure Prevalence'
         verbose_name_plural = 'Password Structure Prevalences'
+        # unique_together already provides the composite index that the
+        # (char_class_pattern, length_bucket) and (char_class_pattern, '')
+        # lookups need, so no extra indexes are declared.
         unique_together = ['char_class_pattern', 'length_bucket']
         ordering = ['-prevalence']
-        indexes = [
-            models.Index(fields=['char_class_pattern', 'length_bucket']),
-        ]
 
     def __str__(self):
         bucket = self.length_bucket or 'any'
