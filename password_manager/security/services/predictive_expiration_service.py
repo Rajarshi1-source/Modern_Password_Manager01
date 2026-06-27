@@ -247,9 +247,10 @@ class PredictiveExpirationService:
         if 'leet' in pattern.mutations:
             factors.append("Uses common l33t substitutions")
         
-        # 2. Threat Risk
+        # 2. Threat Risk (incl. dark-web structural prevalence)
         threat_level = self.threat_service.get_real_time_threat_level(
-            user_id, credential_domain
+            user_id, credential_domain,
+            char_class_sequence=getattr(pattern, 'char_class_sequence', ''),
         )
         threat_risk = threat_level.score
         factors.extend(threat_level.factors)
