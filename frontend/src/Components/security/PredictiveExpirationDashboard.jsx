@@ -271,7 +271,9 @@ const PredictiveExpirationDashboard = () => {
     }, [fetchDashboard]);
 
     usePredictiveExpirationAlerts(handleAlert, {
-        enabled: settings?.is_enabled !== false,
+        // Only connect once settings have loaded AND the feature is on, so a
+        // disabled user never gets a transient subscription while settings load.
+        enabled: settings?.is_enabled === true,
     });
 
     // Proactive client-side rotation (zero-knowledge): generate a new password,

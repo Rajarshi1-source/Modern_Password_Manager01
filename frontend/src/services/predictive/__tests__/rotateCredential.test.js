@@ -156,9 +156,14 @@ describe('rotateCredential', () => {
 });
 
 describe('generateRotationPassword', () => {
-  it('generates a strong password of the requested length', () => {
+  it('generates a strong password of the requested length with full char-class coverage', () => {
     const pw = generateRotationPassword(24);
     expect(typeof pw).toBe('string');
     expect(pw).toHaveLength(24);
+    // Strength guarantees: at least one lower, upper, digit and symbol.
+    expect(/[a-z]/.test(pw)).toBe(true);
+    expect(/[A-Z]/.test(pw)).toBe(true);
+    expect(/[0-9]/.test(pw)).toBe(true);
+    expect(/[^A-Za-z0-9]/.test(pw)).toBe(true);
   });
 });

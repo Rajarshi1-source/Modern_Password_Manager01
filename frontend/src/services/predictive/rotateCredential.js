@@ -79,15 +79,25 @@ export async function rotateCredential(vault, credentialId, options = {}) {
     throw new Error('Failed to generate a new password.');
   }
 
-  // 2. Re-encrypt + persist. updateItem encrypts item.data via the session key
-  //    and PATCHes only the ciphertext — the plaintext is never sent.
   const rotatedItem = {
     ...decrypted,
     data: { ...decrypted.data, password: newPassword },
   };
+
+  // 2. Record the rotation event server-side FIRST (reason only, no secret), so
+  //    the pending obligation exists before the irreversible local write. If
+  //    this fails we abort before touching the vault; if the local write later
+  //    fails, the event legitimately stays pending. (Two-phase audit:
+  //    pending here, completed in step 5.)
+  const event = await forceRotation(credentialId, {
+    reason: options.reason || 'Proactive rotation from predictive dashboard',
+  });
+
+  // 3. Re-encrypt + persist. updateItem encrypts item.data via the session key
+  //    and PATCHes only the ciphertext — the plaintext is never sent.
   await vault.updateItem(rotatedItem);
 
-  // 3. Re-sync the ZK fingerprint for the new shape. A fresh password resets
+  // 4. Re-sync the ZK fingerprint for the new shape. A fresh password resets
   //    the credential age to 0 (override created_at just for the computation —
   //    the stored item is untouched).
   let fingerprintSynced = false;
@@ -106,13 +116,8 @@ export async function rotateCredential(vault, credentialId, options = {}) {
     console.warn('Post-rotation fingerprint sync failed; will re-sync later.', err);
   }
 
-  // 4. Record the rotation event server-side (reason only, no secret).
-  const event = await forceRotation(credentialId, {
-    reason: options.reason || 'Proactive rotation from predictive dashboard',
-  });
-
-  // 5. Confirm completion: the rotation already finished locally, so flip the
-  //    event pending → completed. Best-effort — a failure here leaves the event
+  // 5. Confirm completion: the rotation finished locally, so flip the event
+  //    pending → completed. Best-effort — a failure here leaves the event
   //    pending (the rotation itself stands), so never fail the whole flow on it.
   let completed = false;
   try {
