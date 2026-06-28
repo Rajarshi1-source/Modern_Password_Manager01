@@ -273,16 +273,18 @@ class DashboardSerializer(serializers.Serializer):
 
 
 class ForceRotationSerializer(serializers.Serializer):
-    """Serializer for force rotation requests."""
+    """Serializer for force rotation requests.
+
+    Zero-knowledge: the rotate endpoint only *records* the rotation obligation
+    (a PasswordRotationEvent) — the actual password is regenerated, re-encrypted
+    and stored entirely client-side. It therefore accepts a reason only; no
+    plaintext password field exists here, so a new password can never reach the
+    server. (The view already ignored the old write-only ``new_password``.)
+    """
     reason = serializers.CharField(
         max_length=500,
         required=False,
         default='Manual rotation request'
-    )
-    new_password = serializers.CharField(
-        max_length=200,
-        required=False,
-        write_only=True
     )
 
 

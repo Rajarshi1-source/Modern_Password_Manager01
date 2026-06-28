@@ -25,8 +25,11 @@ import {
     CheckCircle,
     XCircle
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import predictiveExpirationService from '../../services/predictiveExpirationService';
 import { syncVaultFingerprints } from '../../services/predictive/fingerprintSync';
+import { rotateCredential } from '../../services/predictive/rotateCredential';
+import { usePredictiveExpirationAlerts } from '../../hooks/usePredictiveExpirationAlerts';
 import { useVault } from '../../contexts/VaultContext';
 import './PredictiveExpirationDashboard.css';
 
@@ -50,7 +53,7 @@ const RiskBadge = ({ level, score }) => {
 };
 
 // Credential risk card component
-const CredentialRiskCard = ({ credential, onRotate, onAcknowledge, onView }) => {
+const CredentialRiskCard = ({ credential, onRotate, onAcknowledge, onView, isRotating }) => {
     const getDaysUntil = (date) => {
         if (!date) return null;
         const now = new Date();
@@ -113,10 +116,11 @@ const CredentialRiskCard = ({ credential, onRotate, onAcknowledge, onView }) => 
                     <button
                         className="btn-rotate"
                         onClick={() => onRotate(credential.credential_id)}
-                        title="Rotate password"
+                        title="Rotate password on this device"
+                        disabled={isRotating}
                     >
-                        <RefreshCw size={16} />
-                        Rotate
+                        <RefreshCw size={16} className={isRotating ? 'spinning' : ''} />
+                        {isRotating ? 'Rotating…' : 'Rotate'}
                     </button>
                 )}
             </div>
@@ -157,6 +161,7 @@ const PredictiveExpirationDashboard = () => {
     const [settings, setSettings] = useState(null);
     const [showSettings, setShowSettings] = useState(false);
     const [syncStatus, setSyncStatus] = useState(null);
+    const [rotatingId, setRotatingId] = useState(null);
     const vault = useVault();
 
     // Fetch dashboard data
@@ -231,14 +236,62 @@ const PredictiveExpirationDashboard = () => {
         fetchDashboard();
     };
 
+    // Real-time alerts: surface server-pushed risk/rotation/threat events as
+    // toasts and refresh the dashboard when risk state changes server-side
+    // (e.g. after the daily re-score). Only connect while the feature is on.
+    const handleAlert = useCallback((msg) => {
+        switch (msg.type) {
+            case 'risk_alert':
+                toast(
+                    `${msg.credential_domain || 'A credential'} is now ${msg.risk_level || 'higher'} risk`,
+                    { icon: '⚠️' }
+                );
+                fetchDashboard();
+                break;
+            case 'rotation_required':
+                toast(
+                    `Rotation recommended: ${msg.credential_domain || 'a credential'}`,
+                    { icon: '🔄' }
+                );
+                fetchDashboard();
+                break;
+            case 'risk_updated':
+            case 'bulk_scan_complete':
+                fetchDashboard();
+                break;
+            case 'threat_update':
+                toast(
+                    `New threat activity: ${msg.threat_actor || 'unknown actor'}`,
+                    { icon: '🛡️' }
+                );
+                break;
+            default:
+                break;
+        }
+    }, [fetchDashboard]);
+
+    usePredictiveExpirationAlerts(handleAlert, {
+        enabled: settings?.is_enabled !== false,
+    });
+
+    // Proactive client-side rotation (zero-knowledge): generate a new password,
+    // re-encrypt + store it in the vault on this device, re-sync the structural
+    // fingerprint so the server re-scores the new shape, and record the rotation
+    // event. The plaintext password never leaves the browser.
     const handleRotate = async (credentialId) => {
+        if (rotatingId) return; // one rotation at a time
+        setRotatingId(credentialId);
         try {
-            await predictiveExpirationService.forceRotation(credentialId, {
-                reason: 'Manual rotation from dashboard'
+            await rotateCredential(vault, credentialId, {
+                reason: 'Proactive rotation from predictive dashboard',
             });
-            fetchDashboard();
+            toast.success('Password rotated and re-encrypted on this device.');
+            await fetchDashboard();
         } catch (err) {
             console.error('Error rotating credential:', err);
+            toast.error(err?.message || 'Could not rotate this password.');
+        } finally {
+            setRotatingId(null);
         }
     };
 
@@ -458,6 +511,7 @@ const PredictiveExpirationDashboard = () => {
                                     onRotate={handleRotate}
                                     onAcknowledge={handleAcknowledge}
                                     onView={handleView}
+                                    isRotating={rotatingId === cred.credential_id}
                                 />
                             ))
                         ) : (
