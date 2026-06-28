@@ -17,7 +17,11 @@
  */
 
 import { buildFingerprintPayload } from './fingerprintSync';
-import { submitFingerprints, forceRotation } from '../predictiveExpirationService';
+import {
+  submitFingerprints,
+  forceRotation,
+  completeRotation,
+} from '../predictiveExpirationService';
 import { SecureVaultCrypto } from '../secureVaultCrypto';
 
 // A rotated password should be strong by default; mirror the generator the
@@ -102,12 +106,23 @@ export async function rotateCredential(vault, credentialId, options = {}) {
     console.warn('Post-rotation fingerprint sync failed; will re-sync later.', err);
   }
 
-  // 4. Record the rotation obligation server-side (reason only, no secret).
+  // 4. Record the rotation event server-side (reason only, no secret).
   const event = await forceRotation(credentialId, {
     reason: options.reason || 'Proactive rotation from predictive dashboard',
   });
 
-  return { credentialId: String(credentialId), event, fingerprintSynced };
+  // 5. Confirm completion: the rotation already finished locally, so flip the
+  //    event pending → completed. Best-effort — a failure here leaves the event
+  //    pending (the rotation itself stands), so never fail the whole flow on it.
+  let completed = false;
+  try {
+    await completeRotation(credentialId, event?.event_id);
+    completed = true;
+  } catch (err) {
+    console.warn('Could not mark rotation complete; event stays pending.', err);
+  }
+
+  return { credentialId: String(credentialId), event, fingerprintSynced, completed };
 }
 
 export default { rotateCredential, generateRotationPassword };

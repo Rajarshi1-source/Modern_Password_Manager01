@@ -35,6 +35,7 @@ from ..serializers.predictive_expiration_serializers import (
     PredictiveExpirationSettingsSerializer,
     DashboardSerializer,
     ForceRotationSerializer,
+    RotationCompleteSerializer,
     FingerprintIngestSerializer,
     ThreatSummarySerializer,
 )
@@ -252,6 +253,52 @@ class ForceRotationView(APIView):
         if x_forwarded_for:
             return x_forwarded_for.split(',')[0].strip()
         return request.META.get('REMOTE_ADDR')
+
+
+class CompleteRotationView(APIView):
+    """
+    Confirm that a client-side rotation finished.
+
+    POST: Flips a recorded rotation event from ``pending`` to ``completed``.
+
+    Under zero-knowledge the server can't observe the rotation itself (it never
+    sees the password), so the browser reports completion after it has
+    regenerated, re-encrypted and stored the new password locally. Targets the
+    event_id returned by the rotate call, or the latest pending event for the
+    credential when none is given. Owner-scoped.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id):
+        serializer = RotationCompleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        event_id = serializer.validated_data.get('event_id')
+
+        events = PasswordRotationEvent.objects.filter(
+            user=request.user,
+            credential_id=id,
+            outcome='pending',
+        )
+        if event_id:
+            events = events.filter(event_id=event_id)
+
+        event = events.order_by('-initiated_at').first()
+        if not event:
+            return Response(
+                {'error': 'No pending rotation to complete for this credential'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        event.outcome = 'completed'
+        event.completed_at = timezone.now()
+        event.save(update_fields=['outcome', 'completed_at'])
+
+        return Response({
+            'event_id': str(event.event_id),
+            'outcome': event.outcome,
+            'completed_at': event.completed_at.isoformat(),
+            'credential_id': str(id),
+        }, status=status.HTTP_200_OK)
 
 
 class AcknowledgeRiskView(APIView):

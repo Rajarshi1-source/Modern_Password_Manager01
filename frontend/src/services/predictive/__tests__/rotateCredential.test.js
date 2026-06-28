@@ -8,10 +8,20 @@ vi.mock('../../predictiveExpirationService', () => ({
     message: 'Rotation initiated',
     credential_id: credentialId,
   })),
+  completeRotation: vi.fn(async (credentialId, eventId) => ({
+    event_id: eventId,
+    outcome: 'completed',
+    completed_at: new Date().toISOString(),
+    credential_id: credentialId,
+  })),
 }));
 
 import { rotateCredential, generateRotationPassword } from '../rotateCredential';
-import { submitFingerprints, forceRotation } from '../../predictiveExpirationService';
+import {
+  submitFingerprints,
+  forceRotation,
+  completeRotation,
+} from '../../predictiveExpirationService';
 
 function makeVault(overrides = {}) {
   const item = {
@@ -38,6 +48,7 @@ describe('rotateCredential', () => {
   beforeEach(() => {
     submitFingerprints.mockClear();
     forceRotation.mockClear();
+    completeRotation.mockClear();
   });
 
   it('runs the full ZK flow: decrypt → generate → re-encrypt → resync → record', async () => {
@@ -65,8 +76,25 @@ describe('rotateCredential', () => {
     expect(forceRotation).toHaveBeenCalledTimes(1);
     expect(forceRotation.mock.calls[0][0]).toBe('cred-42');
 
+    // Marked the event completed, targeting the returned event_id.
+    expect(completeRotation).toHaveBeenCalledTimes(1);
+    expect(completeRotation).toHaveBeenCalledWith('cred-42', 'evt-1');
+
     expect(result.credentialId).toBe('cred-42');
     expect(result.event.event_id).toBe('evt-1');
+    expect(result.completed).toBe(true);
+  });
+
+  it('still succeeds (event left pending) if completion confirmation fails', async () => {
+    const vault = makeVault();
+    completeRotation.mockRejectedValueOnce(new Error('network'));
+    const result = await rotateCredential(vault, 'cred-42', {
+      generatePassword: () => 'Yet#Another1',
+    });
+    // Rotation persisted + recorded despite the completion call failing.
+    expect(vault.updateItem).toHaveBeenCalledTimes(1);
+    expect(forceRotation).toHaveBeenCalledTimes(1);
+    expect(result.completed).toBe(false);
   });
 
   it('never sends the plaintext password to the server (ZK invariant)', async () => {

@@ -54,6 +54,26 @@ export const forceRotation = async (credentialId, data = {}) => {
 };
 
 /**
+ * Confirm a client-side rotation finished, flipping the recorded event from
+ * pending to completed.
+ *
+ * Zero-knowledge: the browser performs the rotation locally and then reports
+ * completion — no password is sent. Targets the event_id returned by
+ * forceRotation (falls back to the latest pending event server-side).
+ *
+ * @param {string} credentialId - UUID/identifier of the credential
+ * @param {string} [eventId] - event_id returned by forceRotation
+ * @returns {Promise} Completion confirmation ({ event_id, outcome, completed_at })
+ */
+export const completeRotation = async (credentialId, eventId) => {
+  const response = await api.post(
+    `${PREDICTIVE_EXPIRATION_BASE}/credential/${credentialId}/rotate/complete/`,
+    eventId ? { event_id: eventId } : {}
+  );
+  return response.data;
+};
+
+/**
  * Acknowledge a risk warning for a credential
  * @param {string} credentialId - UUID of the credential
  * @returns {Promise} Acknowledgement confirmation
@@ -162,6 +182,7 @@ export const predictiveExpirationService = {
   getCredentialRisks,
   getCredentialRiskDetail,
   forceRotation,
+  completeRotation,
   acknowledgeRisk,
   getActiveThreats,
   getThreatSummary,
