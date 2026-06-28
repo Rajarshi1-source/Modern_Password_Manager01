@@ -67,6 +67,8 @@ describe('rotateCredential', () => {
     // Other fields preserved.
     expect(stored.data.url).toBe('https://chase.com/login');
     expect(stored.id).toBe(7);
+    // Persisted rotation timestamp so later syncs keep scoring it as fresh.
+    expect(stored.data.passwordChangedAt).toBeTruthy();
 
     // Re-synced exactly one fingerprint for the new shape.
     expect(submitFingerprints).toHaveBeenCalledTimes(1);
@@ -79,6 +81,15 @@ describe('rotateCredential', () => {
     // Marked the event completed, targeting the returned event_id.
     expect(completeRotation).toHaveBeenCalledTimes(1);
     expect(completeRotation).toHaveBeenCalledWith('cred-42', 'evt-1');
+
+    // Side-effect ordering is the audit contract: record (pending) BEFORE the
+    // irreversible local write, and confirm (completed) only AFTER it.
+    expect(forceRotation.mock.invocationCallOrder[0]).toBeLessThan(
+      vault.updateItem.mock.invocationCallOrder[0]
+    );
+    expect(vault.updateItem.mock.invocationCallOrder[0]).toBeLessThan(
+      completeRotation.mock.invocationCallOrder[0]
+    );
 
     expect(result.credentialId).toBe('cred-42');
     expect(result.event.event_id).toBe('evt-1');

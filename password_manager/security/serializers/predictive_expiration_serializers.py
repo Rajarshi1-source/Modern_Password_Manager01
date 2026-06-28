@@ -293,12 +293,12 @@ class RotationCompleteSerializer(serializers.Serializer):
 
     Zero-knowledge: the client performs the rotation locally (regenerate,
     re-encrypt, store) and then calls the completion endpoint to flip the
-    recorded event from ``pending`` to ``completed``. The optional
-    ``event_id`` targets the specific event returned by the rotate call; when
-    omitted, the latest pending event for the credential is completed. No
-    secret is involved.
+    recorded event from ``pending`` to ``completed``. ``event_id`` is required
+    and targets the exact event returned by the rotate call, so completion is
+    never ambiguous (it can't accidentally complete a different pending
+    rotation). No secret is involved.
     """
-    event_id = serializers.UUIDField(required=False)
+    event_id = serializers.UUIDField(required=True)
 
 
 # Allowed coarse vocabularies for the zero-knowledge fingerprint payload.

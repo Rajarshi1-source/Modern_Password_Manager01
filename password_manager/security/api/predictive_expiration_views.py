@@ -263,40 +263,42 @@ class CompleteRotationView(APIView):
 
     Under zero-knowledge the server can't observe the rotation itself (it never
     sees the password), so the browser reports completion after it has
-    regenerated, re-encrypted and stored the new password locally. Targets the
-    event_id returned by the rotate call, or the latest pending event for the
-    credential when none is given. Owner-scoped.
+    regenerated, re-encrypted and stored the new password locally. The request
+    targets the exact ``event_id`` returned by the rotate call. Owner-scoped and
+    idempotent: a retry on an already-completed event returns its completed
+    state instead of a false 404.
     """
     permission_classes = [IsAuthenticated]
 
     def post(self, request, credential_id):
         serializer = RotationCompleteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        event_id = serializer.validated_data.get('event_id')
+        event_id = serializer.validated_data['event_id']
 
-        events = PasswordRotationEvent.objects.filter(
+        # Look up the exact event regardless of outcome so a retry after a lost
+        # success response is idempotent rather than a false 404.
+        event = PasswordRotationEvent.objects.filter(
             user=request.user,
             credential_id=credential_id,
-            outcome='pending',
-        )
-        if event_id:
-            events = events.filter(event_id=event_id)
-
-        event = events.order_by('-initiated_at').first()
+            event_id=event_id,
+        ).first()
         if not event:
             return Response(
-                {'error': 'No pending rotation to complete for this credential'},
+                {'error': 'Rotation event not found'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        event.outcome = 'completed'
-        event.completed_at = timezone.now()
-        event.save(update_fields=['outcome', 'completed_at'])
+        # Only the pending → completed transition is performed; an already
+        # completed (or otherwise terminal) event is returned unchanged.
+        if event.outcome == 'pending':
+            event.outcome = 'completed'
+            event.completed_at = timezone.now()
+            event.save(update_fields=['outcome', 'completed_at'])
 
         return Response({
             'event_id': str(event.event_id),
             'outcome': event.outcome,
-            'completed_at': event.completed_at.isoformat(),
+            'completed_at': event.completed_at.isoformat() if event.completed_at else None,
             'credential_id': str(credential_id),
         }, status=status.HTTP_200_OK)
 
