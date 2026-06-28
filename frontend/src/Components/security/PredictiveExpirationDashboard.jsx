@@ -242,17 +242,17 @@ const PredictiveExpirationDashboard = () => {
     const handleAlert = useCallback((msg) => {
         switch (msg.type) {
             case 'risk_alert':
+                // Don't render the credential identifier from the WS payload —
+                // the refresh below surfaces the specific at-risk card. Only the
+                // coarse risk level drives the message.
                 toast(
-                    `${msg.credential_domain || 'A credential'} is now ${msg.risk_level || 'higher'} risk`,
+                    `A saved credential moved to ${msg.risk_level || 'higher'} risk`,
                     { icon: '⚠️' }
                 );
                 fetchDashboard();
                 break;
             case 'rotation_required':
-                toast(
-                    `Rotation recommended: ${msg.credential_domain || 'a credential'}`,
-                    { icon: '🔄' }
-                );
+                toast('Rotation recommended for a saved credential', { icon: '🔄' });
                 fetchDashboard();
                 break;
             case 'risk_updated':
@@ -264,6 +264,8 @@ const PredictiveExpirationDashboard = () => {
                     `New threat activity: ${msg.threat_actor || 'unknown actor'}`,
                     { icon: '🛡️' }
                 );
+                // Active Threats / threat summary panels changed server-side.
+                fetchDashboard();
                 break;
             default:
                 break;
