@@ -58,17 +58,22 @@ export const forceRotation = async (credentialId, data = {}) => {
  * pending to completed.
  *
  * Zero-knowledge: the browser performs the rotation locally and then reports
- * completion — no password is sent. Targets the event_id returned by
- * forceRotation (falls back to the latest pending event server-side).
+ * completion — no password is sent. The backend requires event_id to target
+ * the exact event returned by forceRotation, so it is mandatory here.
  *
  * @param {string} credentialId - UUID/identifier of the credential
- * @param {string} [eventId] - event_id returned by forceRotation
+ * @param {string} eventId - event_id returned by forceRotation (required)
  * @returns {Promise} Completion confirmation ({ event_id, outcome, completed_at })
  */
 export const completeRotation = async (credentialId, eventId) => {
+  if (!eventId) {
+    // Fail fast: the backend contract requires event_id, so an empty payload
+    // would 400 and leave the rotation stuck pending.
+    throw new Error('completeRotation requires an event_id');
+  }
   const response = await api.post(
     `${PREDICTIVE_EXPIRATION_BASE}/credential/${credentialId}/rotate/complete/`,
-    eventId ? { event_id: eventId } : {}
+    { event_id: eventId }
   );
   return response.data;
 };
