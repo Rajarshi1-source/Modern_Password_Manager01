@@ -53,7 +53,7 @@ const RiskBadge = ({ level, score }) => {
 };
 
 // Credential risk card component
-const CredentialRiskCard = ({ credential, onRotate, onAcknowledge, onView, isRotating }) => {
+const CredentialRiskCard = ({ credential, onRotate, onAcknowledge, onView, isRotating, rotationsLocked }) => {
     const getDaysUntil = (date) => {
         if (!date) return null;
         const now = new Date();
@@ -117,7 +117,7 @@ const CredentialRiskCard = ({ credential, onRotate, onAcknowledge, onView, isRot
                         className="btn-rotate"
                         onClick={() => onRotate(credential.credential_id)}
                         title="Rotate password on this device"
-                        disabled={isRotating}
+                        disabled={rotationsLocked}
                     >
                         <RefreshCw size={16} className={isRotating ? 'spinning' : ''} />
                         {isRotating ? 'Rotating…' : 'Rotate'}
@@ -516,6 +516,7 @@ const PredictiveExpirationDashboard = () => {
                                     onAcknowledge={handleAcknowledge}
                                     onView={handleView}
                                     isRotating={rotatingId === cred.credential_id}
+                                    rotationsLocked={rotatingId !== null}
                                 />
                             ))
                         ) : (
