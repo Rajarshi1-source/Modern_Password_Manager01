@@ -810,7 +810,7 @@ class PasswordStructurePrevalence(models.Model):
         # rows feed get_structural_prevalence() (ordered by -prevalence), so a
         # malformed feed row must never persist with prevalence outside [0, 1]
         # or negative counts. Mirrored in migration 0023.
-        constraints = [
+        constraints = (
             models.CheckConstraint(
                 condition=models.Q(prevalence__gte=0.0) & models.Q(prevalence__lte=1.0),
                 name='structure_prevalence_between_0_and_1',
@@ -823,7 +823,7 @@ class PasswordStructurePrevalence(models.Model):
                 condition=models.Q(sample_size__gte=0),
                 name='structure_sample_size_non_negative',
             ),
-        ]
+        )
 
     def __str__(self):
         bucket = self.length_bucket or 'any'
