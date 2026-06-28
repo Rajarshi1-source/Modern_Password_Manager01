@@ -145,22 +145,52 @@ class CompleteRotationEndpointTests(TestCase):
         self.assertEqual(event.outcome, 'completed')
         self.assertIsNotNone(event.completed_at)
 
-    def test_complete_without_event_id_uses_latest_pending(self):
+    def test_complete_requires_event_id(self):
+        """event_id is mandatory so completion is never ambiguous."""
+        self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        resp = self.client.post(self.complete_url, {}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        # The custom exception handler nests field errors; just confirm the
+        # missing field is named somewhere in the validation response.
+        self.assertIn('event_id', str(resp.data))
+
+    def test_complete_targets_the_specified_event_only(self):
+        """Completion flips exactly the requested event, not the newest pending."""
         from security.models import PasswordRotationEvent
 
         first = self.client.post(self.rotate_url, {'reason': 'first'}, format='json').data['event_id']
         second = self.client.post(self.rotate_url, {'reason': 'second'}, format='json').data['event_id']
 
-        resp = self.client.post(self.complete_url, {}, format='json')
+        resp = self.client.post(self.complete_url, {'event_id': first}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['event_id'], first)
 
-        # Only the newest pending event is completed; the earlier one is untouched.
-        self.assertEqual(resp.data['event_id'], second)
-        self.assertEqual(PasswordRotationEvent.objects.get(event_id=first).outcome, 'pending')
-        self.assertEqual(PasswordRotationEvent.objects.get(event_id=second).outcome, 'completed')
+        # Only the targeted event is completed; the other stays pending.
+        self.assertEqual(PasswordRotationEvent.objects.get(event_id=first).outcome, 'completed')
+        self.assertEqual(PasswordRotationEvent.objects.get(event_id=second).outcome, 'pending')
 
-    def test_complete_with_no_pending_returns_404(self):
-        resp = self.client.post(self.complete_url, {}, format='json')
+    def test_complete_is_idempotent(self):
+        """A retry on an already-completed event returns 200, not a false 404."""
+        from security.models import PasswordRotationEvent
+
+        event_id = self.client.post(self.rotate_url, {'reason': 'r'}, format='json').data['event_id']
+
+        first = self.client.post(self.complete_url, {'event_id': event_id}, format='json')
+        second = self.client.post(self.complete_url, {'event_id': event_id}, format='json')
+
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(second.data['outcome'], 'completed')
+        self.assertEqual(
+            PasswordRotationEvent.objects.filter(event_id=event_id, outcome='completed').count(),
+            1,
+        )
+
+    def test_complete_unknown_event_returns_404(self):
+        import uuid
+        resp = self.client.post(
+            self.complete_url, {'event_id': str(uuid.uuid4())}, format='json'
+        )
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_complete_is_owner_scoped(self):

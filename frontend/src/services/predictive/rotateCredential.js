@@ -79,9 +79,17 @@ export async function rotateCredential(vault, credentialId, options = {}) {
     throw new Error('Failed to generate a new password.');
   }
 
+  // Persist the rotation timestamp in the (encrypted) item data so age-based
+  // scoring stays correct on every future full vault sync, not just the
+  // immediate re-sync below. Only a coarse age_days is ever derived from it;
+  // the timestamp itself stays client-side inside the encrypted payload.
   const rotatedItem = {
     ...decrypted,
-    data: { ...decrypted.data, password: newPassword },
+    data: {
+      ...decrypted.data,
+      password: newPassword,
+      passwordChangedAt: new Date().toISOString(),
+    },
   };
 
   // 2. Record the rotation event server-side FIRST (reason only, no secret), so
@@ -97,15 +105,12 @@ export async function rotateCredential(vault, credentialId, options = {}) {
   //    and PATCHes only the ciphertext — the plaintext is never sent.
   await vault.updateItem(rotatedItem);
 
-  // 4. Re-sync the ZK fingerprint for the new shape. A fresh password resets
-  //    the credential age to 0 (override created_at just for the computation —
-  //    the stored item is untouched).
+  // 4. Re-sync the ZK fingerprint for the new shape. buildFingerprintPayload
+  //    derives age from the persisted passwordChangedAt above, so the rotated
+  //    password is scored as freshly created (age 0).
   let fingerprintSynced = false;
   try {
-    const fp = await buildFingerprintPayload({
-      ...rotatedItem,
-      created_at: new Date().toISOString(),
-    });
+    const fp = await buildFingerprintPayload(rotatedItem);
     if (fp) {
       await submitFingerprints([fp]);
       fingerprintSynced = true;
