@@ -135,6 +135,7 @@ class CompleteRotationEndpointTests(TestCase):
         from security.models import PasswordRotationEvent
 
         rotate = self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        self.assertEqual(rotate.status_code, status.HTTP_202_ACCEPTED)
         event_id = rotate.data['event_id']
 
         resp = self.client.post(self.complete_url, {'event_id': event_id}, format='json')
@@ -158,8 +159,12 @@ class CompleteRotationEndpointTests(TestCase):
         """Completion flips exactly the requested event, not the newest pending."""
         from security.models import PasswordRotationEvent
 
-        first = self.client.post(self.rotate_url, {'reason': 'first'}, format='json').data['event_id']
-        second = self.client.post(self.rotate_url, {'reason': 'second'}, format='json').data['event_id']
+        first_rotate = self.client.post(self.rotate_url, {'reason': 'first'}, format='json')
+        second_rotate = self.client.post(self.rotate_url, {'reason': 'second'}, format='json')
+        self.assertEqual(first_rotate.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(second_rotate.status_code, status.HTTP_202_ACCEPTED)
+        first = first_rotate.data['event_id']
+        second = second_rotate.data['event_id']
 
         resp = self.client.post(self.complete_url, {'event_id': first}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
@@ -173,7 +178,9 @@ class CompleteRotationEndpointTests(TestCase):
         """A retry on an already-completed event returns 200, not a false 404."""
         from security.models import PasswordRotationEvent
 
-        event_id = self.client.post(self.rotate_url, {'reason': 'r'}, format='json').data['event_id']
+        rotate = self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        self.assertEqual(rotate.status_code, status.HTTP_202_ACCEPTED)
+        event_id = rotate.data['event_id']
 
         first = self.client.post(self.complete_url, {'event_id': event_id}, format='json')
         second = self.client.post(self.complete_url, {'event_id': event_id}, format='json')
@@ -201,6 +208,7 @@ class CompleteRotationEndpointTests(TestCase):
         from security.models import PasswordRotationEvent
 
         rotate = self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        self.assertEqual(rotate.status_code, status.HTTP_202_ACCEPTED)
         event_id = rotate.data['event_id']
 
         other = User.objects.create_user(

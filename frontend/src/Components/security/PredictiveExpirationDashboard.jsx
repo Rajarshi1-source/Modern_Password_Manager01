@@ -6,7 +6,7 @@
  * Shows risk overview, at-risk credentials, and active threats.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     Shield,
     AlertTriangle,
@@ -162,6 +162,10 @@ const PredictiveExpirationDashboard = () => {
     const [showSettings, setShowSettings] = useState(false);
     const [syncStatus, setSyncStatus] = useState(null);
     const [rotatingId, setRotatingId] = useState(null);
+    // Synchronous lock: rotatingId is async state, so two rapid clicks could
+    // both pass an `if (rotatingId)` check before React commits. The ref flips
+    // immediately, before any await, so it can't be double-entered.
+    const rotationInFlightRef = useRef(false);
     const vault = useVault();
 
     // Fetch dashboard data
@@ -283,7 +287,8 @@ const PredictiveExpirationDashboard = () => {
     // fingerprint so the server re-scores the new shape, and record the rotation
     // event. The plaintext password never leaves the browser.
     const handleRotate = async (credentialId) => {
-        if (rotatingId) return; // one rotation at a time
+        if (rotationInFlightRef.current) return; // one rotation at a time
+        rotationInFlightRef.current = true;
         setRotatingId(credentialId);
         try {
             await rotateCredential(vault, credentialId, {
@@ -295,6 +300,7 @@ const PredictiveExpirationDashboard = () => {
             console.error('Error rotating credential:', err);
             toast.error(err?.message || 'Could not rotate this password.');
         } finally {
+            rotationInFlightRef.current = false;
             setRotatingId(null);
         }
     };
