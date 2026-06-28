@@ -128,7 +128,7 @@ class CompleteRotationEndpointTests(TestCase):
         )
         self.complete_url = reverse(
             'predictive-expiration-complete-rotation',
-            kwargs={'id': 'cred-complete-1'},
+            kwargs={'credential_id': 'cred-complete-1'},
         )
 
     def test_complete_marks_pending_event_completed(self):
@@ -148,15 +148,16 @@ class CompleteRotationEndpointTests(TestCase):
     def test_complete_without_event_id_uses_latest_pending(self):
         from security.models import PasswordRotationEvent
 
-        self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        first = self.client.post(self.rotate_url, {'reason': 'first'}, format='json').data['event_id']
+        second = self.client.post(self.rotate_url, {'reason': 'second'}, format='json').data['event_id']
+
         resp = self.client.post(self.complete_url, {}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(
-            PasswordRotationEvent.objects.filter(
-                user=self.user, credential_id='cred-complete-1', outcome='completed'
-            ).count(),
-            1,
-        )
+
+        # Only the newest pending event is completed; the earlier one is untouched.
+        self.assertEqual(resp.data['event_id'], second)
+        self.assertEqual(PasswordRotationEvent.objects.get(event_id=first).outcome, 'pending')
+        self.assertEqual(PasswordRotationEvent.objects.get(event_id=second).outcome, 'completed')
 
     def test_complete_with_no_pending_returns_404(self):
         resp = self.client.post(self.complete_url, {}, format='json')

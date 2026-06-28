@@ -84,8 +84,12 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
       }
     };
 
-    ws.onclose = (event) => {
-      if (intentionallyClosedRef.current || event.code === 1000) return;
+    ws.onclose = () => {
+      // Reconnect on any unexpected close — including a clean (1000) server-side
+      // idle timeout or restart, which would otherwise silently stop alerts.
+      // Skip only when we closed it ourselves or this socket is already stale
+      // (a newer connect() has replaced it).
+      if (intentionallyClosedRef.current || wsRef.current !== ws) return;
       if (attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) return;
 
       const delay = Math.min(
@@ -111,12 +115,15 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
         reconnectTimerRef.current = null;
       }
       if (wsRef.current) {
+        // Clear the ref BEFORE closing so the stale-socket guard in onclose
+        // (wsRef.current !== ws) suppresses a reconnect for this teardown.
+        const sock = wsRef.current;
+        wsRef.current = null;
         try {
-          wsRef.current.close(1000, 'component unmounted');
+          sock.close(1000, 'component unmounted');
         } catch {
           /* noop */
         }
-        wsRef.current = null;
       }
     };
   }, [enabled, connect]);

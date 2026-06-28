@@ -438,7 +438,7 @@ urlpatterns = [
     path('predictive-expiration/credential/<str:id>/rotate/',
          predictive_expiration_views.ForceRotationView.as_view(),
          name='predictive-expiration-force-rotation'),
-    path('predictive-expiration/credential/<str:id>/rotate/complete/',
+    path('predictive-expiration/credential/<str:credential_id>/rotate/complete/',
          predictive_expiration_views.CompleteRotationView.as_view(),
          name='predictive-expiration-complete-rotation'),
     path('predictive-expiration/credential/<str:id>/acknowledge/',

@@ -269,14 +269,14 @@ class CompleteRotationView(APIView):
     """
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, id):
+    def post(self, request, credential_id):
         serializer = RotationCompleteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         event_id = serializer.validated_data.get('event_id')
 
         events = PasswordRotationEvent.objects.filter(
             user=request.user,
-            credential_id=id,
+            credential_id=credential_id,
             outcome='pending',
         )
         if event_id:
@@ -297,7 +297,7 @@ class CompleteRotationView(APIView):
             'event_id': str(event.event_id),
             'outcome': event.outcome,
             'completed_at': event.completed_at.isoformat(),
-            'credential_id': str(id),
+            'credential_id': str(credential_id),
         }, status=status.HTTP_200_OK)
 
 
