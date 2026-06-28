@@ -185,6 +185,9 @@ class CompleteRotationEndpointTests(TestCase):
             PasswordRotationEvent.objects.filter(event_id=event_id, outcome='completed').count(),
             1,
         )
+        # The conditional update only writes on the pending → completed edge, so
+        # the retry must not overwrite the first completion's timestamp.
+        self.assertEqual(first.data['completed_at'], second.data['completed_at'])
 
     def test_complete_unknown_event_returns_404(self):
         import uuid

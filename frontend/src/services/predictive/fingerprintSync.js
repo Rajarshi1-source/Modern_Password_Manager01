@@ -85,8 +85,14 @@ export async function buildFingerprintPayload(item) {
   const fingerprint = await computeFingerprint(password);
   // Age is measured from the last password rotation when known, falling back to
   // the item's creation date. This keeps a freshly-rotated password scored as
-  // young on *every* sync — not just the one right after rotation.
-  const ageBasis = item.data?.passwordChangedAt || item.created_at;
+  // young on *every* sync — not just the one right after rotation. Only use the
+  // rotation timestamp when it parses to a real date; a malformed value would
+  // otherwise make ageDays() return 0 and score an old password as fresh.
+  const rotatedAt = item.data?.passwordChangedAt;
+  const ageBasis =
+    rotatedAt && !Number.isNaN(new Date(rotatedAt).getTime())
+      ? rotatedAt
+      : item.created_at;
   return {
     credential_id: String(item.item_id ?? item.id),
     ...fingerprint,

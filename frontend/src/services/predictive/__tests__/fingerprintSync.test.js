@@ -76,6 +76,30 @@ describe('fingerprintSync — buildFingerprintPayload', () => {
     expect(serialized).not.toContain('chase.com');
     expect(serialized.toLowerCase()).not.toContain('summer');
   });
+
+  it('measures age from a valid passwordChangedAt over created_at', async () => {
+    const item = {
+      item_id: 'cred-1',
+      item_type: 'password',
+      created_at: new Date(Date.now() - 300 * 86400 * 1000).toISOString(),
+      data: {
+        password: 'qwerty123',
+        passwordChangedAt: new Date(Date.now() - 5 * 86400 * 1000).toISOString(),
+      },
+    };
+    expect((await buildFingerprintPayload(item)).age_days).toBe(5);
+  });
+
+  it('falls back to created_at when passwordChangedAt is malformed', async () => {
+    const item = {
+      item_id: 'cred-2',
+      item_type: 'password',
+      created_at: new Date(Date.now() - 12 * 86400 * 1000).toISOString(),
+      data: { password: 'qwerty123', passwordChangedAt: 'not-a-real-date' },
+    };
+    // Garbage timestamp must not score the password as freshly rotated (age 0).
+    expect((await buildFingerprintPayload(item)).age_days).toBe(12);
+  });
 });
 
 describe('fingerprintSync — syncVaultFingerprints', () => {

@@ -275,25 +275,30 @@ class CompleteRotationView(APIView):
         serializer.is_valid(raise_exception=True)
         event_id = serializer.validated_data['event_id']
 
-        # Look up the exact event regardless of outcome so a retry after a lost
-        # success response is idempotent rather than a false 404.
-        event = PasswordRotationEvent.objects.filter(
+        scoped = PasswordRotationEvent.objects.filter(
             user=request.user,
             credential_id=credential_id,
             event_id=event_id,
-        ).first()
+        )
+
+        # Atomic pending → completed: a single conditional UPDATE means only the
+        # first of any concurrent/retried completions matches outcome='pending'
+        # and writes completed_at, so the audit timestamp reflects the first
+        # success and a later retry can't overwrite it. (Already-completed or
+        # otherwise terminal events match zero rows and are left unchanged.)
+        scoped.filter(outcome='pending').update(
+            outcome='completed',
+            completed_at=timezone.now(),
+        )
+
+        # Re-read for the response — idempotent: a retry after a lost success
+        # returns the existing completed state rather than a false 404.
+        event = scoped.first()
         if not event:
             return Response(
                 {'error': 'Rotation event not found'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
-        # Only the pending → completed transition is performed; an already
-        # completed (or otherwise terminal) event is returned unchanged.
-        if event.outcome == 'pending':
-            event.outcome = 'completed'
-            event.completed_at = timezone.now()
-            event.save(update_fields=['outcome', 'completed_at'])
 
         return Response({
             'event_id': str(event.event_id),
