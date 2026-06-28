@@ -288,6 +288,19 @@ class ForceRotationSerializer(serializers.Serializer):
     )
 
 
+class RotationCompleteSerializer(serializers.Serializer):
+    """Serializer for confirming a client-side rotation finished.
+
+    Zero-knowledge: the client performs the rotation locally (regenerate,
+    re-encrypt, store) and then calls the completion endpoint to flip the
+    recorded event from ``pending`` to ``completed``. The optional
+    ``event_id`` targets the specific event returned by the rotate call; when
+    omitted, the latest pending event for the credential is completed. No
+    secret is involved.
+    """
+    event_id = serializers.UUIDField(required=False)
+
+
 # Allowed coarse vocabularies for the zero-knowledge fingerprint payload.
 # Anything outside these sets is rejected so the client cannot smuggle
 # higher-resolution (identifying) data through these fields.

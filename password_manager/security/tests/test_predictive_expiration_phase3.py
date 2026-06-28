@@ -99,3 +99,85 @@ class ForceRotationEndpointTests(TestCase):
         url = reverse('predictive-expiration-analyze')
         resp = self.client.post(url, {'password': 'whatever'}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_410_GONE)
+
+
+class CompleteRotationEndpointTests(TestCase):
+    """The client confirms a finished rotation; the event flips to completed."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='completeuser',
+            email='complete@example.com',
+            password='CompleteTest123!',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+        from security.models import PredictiveExpirationRule
+        PredictiveExpirationRule.objects.create(
+            user=self.user,
+            credential_id='cred-complete-1',
+            credential_domain='other',
+            risk_level='high',
+            risk_score=0.85,
+            recommended_action='rotate_immediately',
+        )
+        self.rotate_url = reverse(
+            'predictive-expiration-force-rotation',
+            kwargs={'id': 'cred-complete-1'},
+        )
+        self.complete_url = reverse(
+            'predictive-expiration-complete-rotation',
+            kwargs={'id': 'cred-complete-1'},
+        )
+
+    def test_complete_marks_pending_event_completed(self):
+        from security.models import PasswordRotationEvent
+
+        rotate = self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        event_id = rotate.data['event_id']
+
+        resp = self.client.post(self.complete_url, {'event_id': event_id}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['outcome'], 'completed')
+
+        event = PasswordRotationEvent.objects.get(event_id=event_id)
+        self.assertEqual(event.outcome, 'completed')
+        self.assertIsNotNone(event.completed_at)
+
+    def test_complete_without_event_id_uses_latest_pending(self):
+        from security.models import PasswordRotationEvent
+
+        self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        resp = self.client.post(self.complete_url, {}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            PasswordRotationEvent.objects.filter(
+                user=self.user, credential_id='cred-complete-1', outcome='completed'
+            ).count(),
+            1,
+        )
+
+    def test_complete_with_no_pending_returns_404(self):
+        resp = self.client.post(self.complete_url, {}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_complete_is_owner_scoped(self):
+        """Another user cannot complete someone else's rotation event."""
+        from security.models import PasswordRotationEvent
+
+        rotate = self.client.post(self.rotate_url, {'reason': 'r'}, format='json')
+        event_id = rotate.data['event_id']
+
+        other = User.objects.create_user(
+            username='intruder', email='intruder@example.com', password='Intruder123!'
+        )
+        other_client = APIClient()
+        other_client.force_authenticate(user=other)
+
+        resp = other_client.post(self.complete_url, {'event_id': event_id}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+        # Untouched: still pending.
+        event = PasswordRotationEvent.objects.get(event_id=event_id)
+        self.assertEqual(event.outcome, 'pending')
