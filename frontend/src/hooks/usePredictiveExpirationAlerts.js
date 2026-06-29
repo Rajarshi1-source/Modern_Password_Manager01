@@ -37,16 +37,29 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
   }, [onMessage]);
 
   const connect = useCallback(() => {
-    const token = localStorage.getItem('token');
-    if (!token) return; // can't authenticate the socket without a token
+    // Guard all browser-only access together: localStorage and window can throw
+    // (restricted storage, SSR, tests). Fail closed rather than break the
+    // dashboard before the socket is even created.
+    let token;
+    let location;
+    let SocketCtor;
+    try {
+      if (typeof window === 'undefined') return;
+      location = window.location;
+      SocketCtor = window.WebSocket;
+      token = window.localStorage?.getItem('token');
+    } catch {
+      return;
+    }
+    if (!token || !SocketCtor) return; // no auth token / no WebSocket — no-op
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname;
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = location.hostname;
     const port =
       process.env.NODE_ENV === 'development'
         ? ':8000'
-        : window.location.port
-          ? `:${window.location.port}`
+        : location.port
+          ? `:${location.port}`
           : '';
     const url =
       `${protocol}//${host}${port}/ws/security/predictive-expiration/` +
@@ -54,7 +67,7 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
 
     let ws;
     try {
-      ws = new WebSocket(url);
+      ws = new SocketCtor(url);
     } catch {
       return; // environment without WebSocket (e.g. SSR/tests) — no-op
     }

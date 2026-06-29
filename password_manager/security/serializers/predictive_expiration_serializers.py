@@ -279,13 +279,33 @@ class ForceRotationSerializer(serializers.Serializer):
     (a PasswordRotationEvent) — the actual password is regenerated, re-encrypted
     and stored entirely client-side. It therefore accepts a reason only; no
     plaintext password field exists here, so a new password can never reach the
-    server. (The view already ignored the old write-only ``new_password``.)
+    server. A request that nonetheless carries a password-like field is
+    rejected (400) rather than silently dropped, so a client bug that would
+    leak plaintext fails loudly instead of slipping through.
     """
     reason = serializers.CharField(
         max_length=500,
         required=False,
         default='Manual rotation request'
     )
+
+    # Substrings that mark a field as carrying a secret we must never receive.
+    _SECRET_KEY_MARKERS = ('password', 'passwd', 'pwd', 'secret', 'passphrase')
+
+    def validate(self, attrs):
+        """Fail closed if the client sent any password-like field."""
+        forbidden = [
+            key for key in (self.initial_data or {})
+            if any(marker in key.lower() for marker in self._SECRET_KEY_MARKERS)
+        ]
+        if forbidden:
+            raise serializers.ValidationError({
+                forbidden[0]: (
+                    'This field is not allowed: passwords must never be sent to '
+                    'the server (rotation happens client-side).'
+                )
+            })
+        return attrs
 
 
 class RotationCompleteSerializer(serializers.Serializer):
