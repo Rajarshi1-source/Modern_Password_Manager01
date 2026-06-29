@@ -291,10 +291,18 @@ const PredictiveExpirationDashboard = () => {
         rotationInFlightRef.current = true;
         setRotatingId(credentialId);
         try {
-            await rotateCredential(vault, credentialId, {
+            const result = await rotateCredential(vault, credentialId, {
                 reason: 'Proactive rotation from predictive dashboard',
             });
             toast.success('Password rotated and re-encrypted on this device.');
+            // Surface the best-effort post-rotation steps so the user isn't told
+            // everything succeeded when re-scoring or server confirmation didn't.
+            if (!result.fingerprintSynced) {
+                toast('Risk scoring will refresh on the next sync.', { icon: '⚠️' });
+            }
+            if (!result.completed) {
+                toast('Saved locally; server confirmation is still pending.', { icon: '⚠️' });
+            }
             await fetchDashboard();
         } catch (err) {
             console.error('Error rotating credential:', err);
