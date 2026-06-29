@@ -307,6 +307,10 @@ const PredictiveExpirationDashboard = () => {
         } catch (err) {
             console.error('Error rotating credential:', err);
             toast.error(err?.message || 'Could not rotate this password.');
+            // rotateCredential records the pending event before the local write,
+            // so a mid-flow failure may already have changed server state —
+            // refresh so the dashboard reflects it instead of the stale view.
+            await fetchDashboard();
         } finally {
             rotationInFlightRef.current = false;
             setRotatingId(null);
