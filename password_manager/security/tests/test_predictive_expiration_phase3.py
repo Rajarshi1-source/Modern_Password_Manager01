@@ -6,9 +6,9 @@ Phase 3 wires the proactive *client-side* rotation flow. The server only
 records the rotation obligation; the password is regenerated, re-encrypted and
 stored entirely in the browser. These tests lock the server-side ZK contract:
 
-- the rotate endpoint accepts a reason only — there is no plaintext password
-  field, so a new password can never reach the server (even if a client sends
-  one, it is ignored and never persisted);
+- the rotate endpoint accepts a reason only; a request carrying any
+  password-like field (at any nesting depth) is rejected with 400 — fail
+  closed — so a new password can never reach the server;
 - the legacy plaintext ``analyze/`` endpoint stays gone (410).
 """
 
@@ -96,6 +96,22 @@ class ForceRotationEndpointTests(TestCase):
         self.assertIn("new_password", str(resp.data))
 
         # Nothing was recorded for this credential.
+        self.assertFalse(
+            PasswordRotationEvent.objects.filter(
+                user=self.user, credential_id="cred-rotate-1"
+            ).exists()
+        )
+
+    def test_rotate_rejects_nested_password_field(self):
+        """Fail closed even when the secret is nested rather than top-level."""
+        from security.models import PasswordRotationEvent
+
+        resp = self.client.post(
+            self.url,
+            {"reason": "r", "meta": {"new_password": "ShouldNotSend#1"}},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(
             PasswordRotationEvent.objects.filter(
                 user=self.user, credential_id="cred-rotate-1"
