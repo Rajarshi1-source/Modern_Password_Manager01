@@ -166,6 +166,9 @@ const PredictiveExpirationDashboard = () => {
     // both pass an `if (rotatingId)` check before React commits. The ref flips
     // immediately, before any await, so it can't be double-entered.
     const rotationInFlightRef = useRef(false);
+    // Coalesce burst WS-alert refreshes so overlapping fetches can't race and
+    // overwrite fresher UI state with an older response.
+    const alertRefreshTimerRef = useRef(null);
     const vault = useVault();
 
     // Fetch dashboard data
@@ -240,6 +243,22 @@ const PredictiveExpirationDashboard = () => {
         fetchDashboard();
     };
 
+    // Debounced refresh for WS-alert bursts: the first alert arms a short timer
+    // and subsequent alerts within the window coalesce into that single refresh.
+    const scheduleAlertRefresh = useCallback(() => {
+        if (alertRefreshTimerRef.current) return;
+        alertRefreshTimerRef.current = setTimeout(() => {
+            alertRefreshTimerRef.current = null;
+            fetchDashboard();
+        }, 250);
+    }, [fetchDashboard]);
+
+    useEffect(() => () => {
+        if (alertRefreshTimerRef.current) {
+            clearTimeout(alertRefreshTimerRef.current);
+        }
+    }, []);
+
     // Real-time alerts: surface server-pushed risk/rotation/threat events as
     // toasts and refresh the dashboard when risk state changes server-side
     // (e.g. after the daily re-score). Only connect while the feature is on.
@@ -253,15 +272,15 @@ const PredictiveExpirationDashboard = () => {
                     `A saved credential moved to ${msg.risk_level || 'higher'} risk`,
                     { icon: '⚠️' }
                 );
-                fetchDashboard();
+                scheduleAlertRefresh();
                 break;
             case 'rotation_required':
                 toast('Rotation recommended for a saved credential', { icon: '🔄' });
-                fetchDashboard();
+                scheduleAlertRefresh();
                 break;
             case 'risk_updated':
             case 'bulk_scan_complete':
-                fetchDashboard();
+                scheduleAlertRefresh();
                 break;
             case 'threat_update':
                 toast(
@@ -269,12 +288,12 @@ const PredictiveExpirationDashboard = () => {
                     { icon: '🛡️' }
                 );
                 // Active Threats / threat summary panels changed server-side.
-                fetchDashboard();
+                scheduleAlertRefresh();
                 break;
             default:
                 break;
         }
-    }, [fetchDashboard]);
+    }, [scheduleAlertRefresh]);
 
     usePredictiveExpirationAlerts(handleAlert, {
         // Only connect once settings have loaded AND the feature is on, so a
