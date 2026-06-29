@@ -300,6 +300,16 @@ class CompleteRotationView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Fail closed for terminal non-completed states (failed/cancelled/
+        # skipped): a pending event is now 'completed' and an already-completed
+        # one stays 'completed' (idempotent), but anything else must not be
+        # reported as a successful completion.
+        if event.outcome != 'completed':
+            return Response(
+                {'error': 'Rotation event is not completable in its current state'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         return Response({
             'event_id': str(event.event_id),
             'outcome': event.outcome,

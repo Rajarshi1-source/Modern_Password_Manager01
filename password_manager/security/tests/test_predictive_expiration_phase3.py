@@ -245,6 +245,25 @@ class CompleteRotationEndpointTests(TestCase):
         )
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_complete_rejects_terminal_non_completed_event(self):
+        """A failed/cancelled/etc. event is not completable — fail closed (409)."""
+        from security.models import PasswordRotationEvent
+
+        event = PasswordRotationEvent.objects.create(
+            user=self.user,
+            credential_id="cred-complete-1",
+            credential_domain="other",
+            rotation_type="forced",
+            outcome="failed",
+        )
+        resp = self.client.post(
+            self.complete_url, {"event_id": str(event.event_id)}, format="json"
+        )
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        # Left unchanged — not silently flipped to completed.
+        event.refresh_from_db()
+        self.assertEqual(event.outcome, "failed")
+
     def test_complete_is_owner_scoped(self):
         """Another user cannot complete someone else's rotation event."""
         from security.models import PasswordRotationEvent
