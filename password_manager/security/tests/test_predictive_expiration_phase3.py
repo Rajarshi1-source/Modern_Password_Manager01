@@ -76,23 +76,25 @@ class ForceRotationEndpointTests(TestCase):
         self.rule.refresh_from_db()
         self.assertTrue(self.rule.user_acknowledged)
 
-    def test_rotate_ignores_any_submitted_password(self):
-        """A client that wrongly sends a password gets no error and no leak:
-        the field is unknown, so DRF drops it and nothing is persisted."""
+    def test_rotate_rejects_password_bearing_input(self):
+        """Zero-knowledge: a request carrying a password-like field fails closed
+        (400) and records nothing, rather than silently dropping the field."""
         from security.models import PasswordRotationEvent
 
         resp = self.client.post(
             self.url,
-            {'reason': 'r', 'new_password': 'ShouldBeIgnored#1'},
+            {'reason': 'r', 'new_password': 'ShouldNotSend#1'},
             format='json',
         )
-        self.assertEqual(resp.status_code, status.HTTP_202_ACCEPTED)
-        self.assertNotIn('new_password', resp.data)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('new_password', str(resp.data))
 
-        event = PasswordRotationEvent.objects.get(user=self.user, credential_id='cred-rotate-1')
-        # The secret must not have landed in any recorded field.
-        for value in (event.trigger_reason, str(event.threat_factors_at_rotation)):
-            self.assertNotIn('ShouldBeIgnored#1', value or '')
+        # Nothing was recorded for this credential.
+        self.assertFalse(
+            PasswordRotationEvent.objects.filter(
+                user=self.user, credential_id='cred-rotate-1'
+            ).exists()
+        )
 
     def test_analyze_endpoint_stays_gone(self):
         """The plaintext analyze path must remain removed (ZK)."""

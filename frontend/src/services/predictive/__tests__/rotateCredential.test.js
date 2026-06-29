@@ -96,6 +96,22 @@ describe('rotateCredential', () => {
     expect(result.completed).toBe(true);
   });
 
+  it('does not mutate the vault when recording the pending rotation fails', async () => {
+    // Contract: forceRotation runs before the local write, so a failure to
+    // record the pending event must abort before vault.updateItem — no
+    // local-only mutation, no fingerprint resync, no completion.
+    const vault = makeVault();
+    forceRotation.mockRejectedValueOnce(new Error('network'));
+
+    await expect(
+      rotateCredential(vault, 'cred-42', { generatePassword: () => 'BrandNewStr0ng#Pass' })
+    ).rejects.toThrow(/network/i);
+
+    expect(vault.updateItem).not.toHaveBeenCalled();
+    expect(submitFingerprints).not.toHaveBeenCalled();
+    expect(completeRotation).not.toHaveBeenCalled();
+  });
+
   it('still succeeds (event left pending) if completion confirmation fails', async () => {
     const vault = makeVault();
     completeRotation.mockRejectedValueOnce(new Error('network'));
