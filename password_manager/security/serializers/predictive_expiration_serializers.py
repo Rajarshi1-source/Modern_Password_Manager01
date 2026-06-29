@@ -292,15 +292,32 @@ class ForceRotationSerializer(serializers.Serializer):
     # Substrings that mark a field as carrying a secret we must never receive.
     _SECRET_KEY_MARKERS = ('password', 'passwd', 'pwd', 'secret', 'passphrase')
 
+    def _find_forbidden_key(self, value):
+        """Return the first password-like key found anywhere in the payload.
+
+        Recurses into nested dicts/lists so a secret can't hide below the top
+        level (e.g. ``{"meta": {"new_password": ...}}``).
+        """
+        if isinstance(value, dict):
+            for key, nested_value in value.items():
+                if any(marker in str(key).lower() for marker in self._SECRET_KEY_MARKERS):
+                    return key
+                nested = self._find_forbidden_key(nested_value)
+                if nested:
+                    return nested
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                nested = self._find_forbidden_key(item)
+                if nested:
+                    return nested
+        return None
+
     def validate(self, attrs):
-        """Fail closed if the client sent any password-like field."""
-        forbidden = [
-            key for key in (self.initial_data or {})
-            if any(marker in key.lower() for marker in self._SECRET_KEY_MARKERS)
-        ]
+        """Fail closed if the client sent any password-like field (at any depth)."""
+        forbidden = self._find_forbidden_key(self.initial_data or {})
         if forbidden:
             raise serializers.ValidationError({
-                forbidden[0]: (
+                forbidden: (
                     'This field is not allowed: passwords must never be sent to '
                     'the server (rotation happens client-side).'
                 )
