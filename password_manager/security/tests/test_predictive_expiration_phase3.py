@@ -12,11 +12,11 @@ stored entirely in the browser. These tests lock the server-side ZK contract:
 - the legacy plaintext ``analyze/`` endpoint stays gone (410).
 """
 
-from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.test import TestCase
 from django.urls import reverse
-from rest_framework.test import APIClient
 from rest_framework import status
+from rest_framework.test import APIClient
 
 User = get_user_model()
 
