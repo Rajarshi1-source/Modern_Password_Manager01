@@ -72,10 +72,12 @@ export async function rotateCredential(vault, credentialId, options = {}) {
     throw new Error('Could not decrypt this credential to rotate it.');
   }
 
-  // 1. Fresh password (client-side only).
+  // 1. Fresh password (client-side only). The generator is injectable, so it
+  //    may be async or return a non-string; resolve it and require a non-empty
+  //    string before it ever reaches the encrypted payload / fingerprint sync.
   const generate = options.generatePassword || generateRotationPassword;
-  const newPassword = generate();
-  if (!newPassword) {
+  const newPassword = await generate();
+  if (typeof newPassword !== 'string' || newPassword.length === 0) {
     throw new Error('Failed to generate a new password.');
   }
 
@@ -100,6 +102,12 @@ export async function rotateCredential(vault, credentialId, options = {}) {
   const event = await forceRotation(credentialId, {
     reason: options.reason || 'Proactive rotation from predictive dashboard',
   });
+  // Guard the rotation-event contract before the irreversible local write: a
+  // malformed response with no event_id would otherwise persist the rotation
+  // yet leave an uncompletable pending event (step 5 can't target it).
+  if (!event?.event_id) {
+    throw new Error('forceRotation must return an event_id.');
+  }
 
   // 3. Re-encrypt + persist. updateItem encrypts item.data via the session key
   //    and PATCHes only the ciphertext — the plaintext is never sent.
