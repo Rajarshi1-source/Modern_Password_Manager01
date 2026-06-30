@@ -169,10 +169,14 @@ const PredictiveExpirationDashboard = () => {
     // Coalesce burst WS-alert refreshes so overlapping fetches can't race and
     // overwrite fresher UI state with an older response.
     const alertRefreshTimerRef = useRef(null);
+    // Monotonic token so concurrent refreshes are latest-wins: a slower, older
+    // response is dropped instead of clobbering a newer one's state.
+    const fetchSeqRef = useRef(0);
     const vault = useVault();
 
     // Fetch dashboard data
     const fetchDashboard = useCallback(async () => {
+        const seq = ++fetchSeqRef.current;
         try {
             const [dashData, threatData, settingsData] = await Promise.all([
                 predictiveExpirationService.getDashboard(),
@@ -180,16 +184,22 @@ const PredictiveExpirationDashboard = () => {
                 predictiveExpirationService.getSettings()
             ]);
 
+            // A newer fetch started after this one — discard this stale result.
+            if (seq !== fetchSeqRef.current) return;
             setDashboard(dashData);
             setThreatSummary(threatData);
             setSettings(settingsData);
             setError(null);
         } catch (err) {
+            if (seq !== fetchSeqRef.current) return;
             console.error('Error fetching dashboard:', err);
             setError('Failed to load dashboard data');
         } finally {
-            setLoading(false);
-            setRefreshing(false);
+            // Only the latest in-flight fetch owns the loading/refreshing flags.
+            if (seq === fetchSeqRef.current) {
+                setLoading(false);
+                setRefreshing(false);
+            }
         }
     }, []);
 
