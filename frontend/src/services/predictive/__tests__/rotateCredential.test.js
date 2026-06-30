@@ -112,6 +112,22 @@ describe('rotateCredential', () => {
     expect(completeRotation).not.toHaveBeenCalled();
   });
 
+  it('does not mutate the vault when forceRotation returns no event_id', async () => {
+    // The pre-write guard must reject a malformed create response: without an
+    // event_id the rotation could never be completed, so the irreversible local
+    // write must not run (no updateItem, no resync, no completion).
+    const vault = makeVault();
+    forceRotation.mockResolvedValueOnce({ message: 'Rotation initiated' });
+
+    await expect(
+      rotateCredential(vault, 'cred-42', { generatePassword: () => 'BrandNewStr0ng#Pass' })
+    ).rejects.toThrow(/event_id/i);
+
+    expect(vault.updateItem).not.toHaveBeenCalled();
+    expect(submitFingerprints).not.toHaveBeenCalled();
+    expect(completeRotation).not.toHaveBeenCalled();
+  });
+
   it('still succeeds (event left pending) if completion confirmation fails', async () => {
     const vault = makeVault();
     completeRotation.mockRejectedValueOnce(new Error('network'));

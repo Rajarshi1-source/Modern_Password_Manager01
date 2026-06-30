@@ -8,10 +8,13 @@
  *
  *   1. decrypt the vault item in the browser   (plaintext never leaves)
  *   2. generate a fresh strong password
- *   3. re-encrypt + store via the vault         (only ciphertext is uploaded)
- *   4. re-sync the structural fingerprint       (server re-scores the NEW shape)
- *   5. record the rotation event server-side    (reason only — no password)
+ *   3. record the pending event server-side     (reason only — no password)
+ *   4. re-encrypt + store via the vault         (only ciphertext is uploaded)
+ *   5. re-sync the structural fingerprint       (server re-scores the NEW shape)
+ *   6. confirm completion server-side           (no password is sent)
  *
+ * The pending event is recorded BEFORE the irreversible local write so the
+ * audit obligation always exists first; completion flips it pending → done.
  * The server-side `forceRotation` call is purely an audit/obligation record;
  * it carries no secret. This mirrors the ZK contract used by fingerprintSync.
  */
@@ -48,7 +51,7 @@ export function generateRotationPassword(length = DEFAULT_LENGTH) {
  * @param {Object} [options]
  * @param {string} [options.reason] - audit reason recorded with the event
  * @param {Function} [options.generatePassword] - override generator (tests)
- * @returns {Promise<{credentialId: string, event: Object, fingerprintSynced: boolean}>}
+ * @returns {Promise<{credentialId: string, event: Object, fingerprintSynced: boolean, completed: boolean}>}
  */
 export async function rotateCredential(vault, credentialId, options = {}) {
   if (!vault || !credentialId) {
