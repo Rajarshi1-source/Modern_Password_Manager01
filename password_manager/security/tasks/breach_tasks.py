@@ -524,7 +524,12 @@ def refresh_dna_tokens():
                 logger.debug("Provider OAuth refresh queued for user %s", connection.user_id)
                 refreshed_count += 1
                 
-        except Exception as e:
+        # get_dna_provider raises ValueError for an unknown/misconfigured
+        # provider — a legitimate per-connection failure we count and skip.
+        # (When the real refresh call lands, add its own network/decrypt errors
+        # here rather than widening to bare Exception, so unrelated bugs still
+        # surface instead of inflating failed_count.)
+        except ValueError as e:
             logger.error(
                 "Provider OAuth refresh failed for user %s: %s",
                 connection.user_id, e,

@@ -72,12 +72,13 @@ jobs:
           syft version
 
       - name: Generate SBOM (CycloneDX and SPDX) from image
-        # GHCR is eventually consistent for manifest reads. The push above
-        # can complete (build action reports "DONE") while a follow-up
+        # On push, Syft reads the freshly pushed manifest from GHCR, which is
+        # eventually consistent: the push can report "DONE" while a follow-up
         # ``manifest GET`` against the same tag still returns 404
-        # MANIFEST_UNKNOWN for a brief window. We retry the Syft scan a
-        # few times with a short backoff rather than fail the whole
-        # build on a transient consistency hit.
+        # MANIFEST_UNKNOWN for a brief window. On PRs the image is only loaded
+        # into the local Docker daemon, so Syft resolves it immediately and the
+        # retry is a harmless no-op. The retry/backoff below covers the
+        # push-path consistency hit rather than failing the whole build.
         run: |
           attempts=0
           max_attempts=5
