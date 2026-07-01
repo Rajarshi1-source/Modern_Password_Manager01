@@ -1010,8 +1010,25 @@ GEOIP_COUNTRY = 'GeoLite2-Country.mmdb'
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_DURATION_MINUTES = 30
 SUSPICIOUS_THRESHOLD = 3
+
+
+def _parse_blacklisted_ips(raw):
+    """Split BLACKLISTED_IPS into address/CIDR tokens (fail closed).
+
+    Expects a bare comma-separated list ("1.2.3.4,10.0.0.0/8"). Defensively
+    strips stray braces/brackets/quotes/whitespace per token, so a value
+    mistakenly written as a Python set/list literal ("{'1.2.3.4'}") still
+    parses instead of silently emptying the blacklist — a security control
+    should not drop entries on a config typo. Genuinely unparseable tokens
+    are still surfaced by the ip_network() loop below.
+    """
+    if not raw:
+        return set()
+    return {tok.strip(" \t'\"{}[]") for tok in raw.split(',')} - {''}
+
+
 _blacklisted = os.environ.get('BLACKLISTED_IPS', '')
-BLACKLISTED_IPS = set(_blacklisted.split(',')) if _blacklisted else set()
+BLACKLISTED_IPS = _parse_blacklisted_ips(_blacklisted)
 
 # Audit finding #13: parse BLACKLISTED_IPS into network objects once at
 # startup so AccountProtectionService.is_ip_blacklisted supports CIDR
