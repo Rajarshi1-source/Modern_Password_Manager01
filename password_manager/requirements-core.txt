@@ -11,7 +11,8 @@ Django==5.1.15
 djangorestframework==3.16.1
 djangorestframework-simplejwt==5.5.1
 fido2>=1.1.3
-asgiref==3.8.1
+# asgiref>=3.9.1 required by channels-redis 4.3.0 (Django 5.1 allows <4,>=3.8.1)
+asgiref==3.9.1
 
 # Django Extensions & Tools
 django-extensions==4.1
@@ -80,7 +81,7 @@ pyfcm==1.5.4
 
 # Django Channels & WebSockets
 channels>=4.0.0
-channels-redis>=4.1.0
+channels-redis>=4.3.0
 daphne>=4.0.0
 
 # GeoIP & Device Detection
