@@ -104,3 +104,50 @@ class BlacklistCidrTests(TestCase):
         nets = [ipaddress.ip_network('10.0.0.0/8')]
         with override_settings(BLACKLISTED_IP_NETS=nets):
             self.assertFalse(self.service.is_ip_blacklisted('not-an-ip'))
+
+
+class BlacklistedIpsParsingTests(TestCase):
+    """#13 follow-up: BLACKLISTED_IPS parsing must fail closed.
+
+    A value fat-fingered as a Python set/list literal (e.g. env line
+    ``BLACKLISTED_IPS={'1.2.3.4'}``) used to split into garbage tokens that
+    ip_network() rejected, silently leaving BLACKLISTED_IP_NETS empty — a
+    fail-open misconfig. The parser now strips stray braces/quotes so the
+    intended entries survive.
+    """
+
+    @staticmethod
+    def _parse():
+        from password_manager.settings.base import _parse_blacklisted_ips
+        return _parse_blacklisted_ips
+
+    def test_set_literal_value_still_parses(self):
+        self.assertEqual(
+            self._parse()("{'192.168.1.100', '10.0.0.5'}"),
+            {'192.168.1.100', '10.0.0.5'},
+        )
+
+    def test_plain_comma_separated_list(self):
+        self.assertEqual(
+            self._parse()('192.168.1.100,10.0.0.5'),
+            {'192.168.1.100', '10.0.0.5'},
+        )
+
+    def test_cidr_and_surrounding_whitespace(self):
+        self.assertEqual(
+            self._parse()(' 10.0.0.0/8 , 192.168.1.5 '),
+            {'10.0.0.0/8', '192.168.1.5'},
+        )
+
+    def test_empty_value_is_empty_set(self):
+        self.assertEqual(self._parse()(''), set())
+
+    def test_parsed_set_literal_builds_usable_networks(self):
+        # End-to-end: the cleaned tokens must feed ip_network() so the
+        # blacklist is actually populated instead of failing open.
+        import ipaddress
+        tokens = self._parse()("{'192.168.1.100', '10.0.0.5'}")
+        nets = [ipaddress.ip_network(t, strict=False) for t in tokens]
+        self.assertEqual(len(nets), 2)
+        self.assertTrue(any(ipaddress.ip_address('192.168.1.100') in n for n in nets))
+        self.assertTrue(any(ipaddress.ip_address('10.0.0.5') in n for n in nets))
