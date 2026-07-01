@@ -77,3 +77,13 @@ PYSEC-2025-121 exp:2026-09-15
 # nltk.util.filestring path traversal — we don't call filestring
 # (grep -r returns no matches).
 PYSEC-2026-97 exp:2026-09-15
+
+# nltk.data.load()/find() percent-encoded path traversal (CVE-2026-12243,
+# incomplete fix for issue #3504). NO upstream fix exists — the advisory's
+# last_affected is 3.9.4, which is the current latest (fix_versions: []), so
+# every release is affected and pinning cannot help. nltk is not imported
+# anywhere in the codebase (grep -r "nltk" *.py returns no matches), so
+# nltk.data.load()/find() is never reached with a user-controlled resource
+# name. Same package/class as PYSEC-2026-97 above; re-evaluate both when
+# nltk ships a fixed release.
+PYSEC-2026-597 exp:2026-09-20
