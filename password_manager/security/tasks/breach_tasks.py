@@ -521,16 +521,17 @@ def refresh_dna_tokens():
                 # This is a placeholder - actual implementation would decrypt
                 # and call the provider's refresh endpoint
                 
-                logger.debug(f"Token refresh queued for user {connection.user_id}")
+                logger.debug("Provider OAuth refresh queued for user %s", connection.user_id)
                 refreshed_count += 1
                 
         except Exception as e:
             logger.error(
-                f"Failed to refresh token for user {connection.user_id}: {str(e)}"
+                "Provider OAuth refresh failed for user %s: %s",
+                connection.user_id, e,
             )
             failed_count += 1
     
-    logger.info(f"Token refresh complete: {refreshed_count} refreshed, {failed_count} failed")
+    logger.info("Provider OAuth refresh complete: %s refreshed, %s failed", refreshed_count, failed_count)
     return {
         'refreshed': refreshed_count,
         'failed': failed_count,
@@ -922,7 +923,7 @@ def process_forced_rotation(credential_id: str, user_id: int, reason: str):
         rotation_dedup_key = f"rotation_dedup:{credential_id}:{user_id}:{today}"
         
         if cache.get(rotation_dedup_key):
-            logger.info(f"Rotation event deduplicated for credential {credential_id}")
+            logger.info("Rotation event deduplicated for %s", credential_id)
             return {
                 'credential_id': str(credential_id),
                 'status': 'deduplicated',
@@ -948,7 +949,7 @@ def process_forced_rotation(credential_id: str, user_id: int, reason: str):
         rule.notification_count += 1
         rule.save()
         
-        logger.info(f"Processed forced rotation for credential {credential_id}")
+        logger.info("Processed forced rotation for %s", credential_id)
         
         return {
             'event_id': str(event.event_id),
@@ -959,7 +960,7 @@ def process_forced_rotation(credential_id: str, user_id: int, reason: str):
     except User.DoesNotExist:
         return {'error': 'user_not_found'}
     except Exception as e:
-        logger.error(f"Error processing rotation for {credential_id}: {e}")
+        logger.error("Error processing rotation for %s: %s", credential_id, e)
         return {'error': str(e)}
 
 

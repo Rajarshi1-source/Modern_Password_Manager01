@@ -42,18 +42,27 @@ jobs:
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Log in to registry (GHCR)
+        # Only needed when we actually publish (push to main). PR runs build
+        # the image locally and never touch the registry.
+        if: github.event_name == 'push'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build image (push to GHCR only on main)
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           file: docker/backend/Dockerfile
-          push: true
+          # Publish to GHCR only on push to main. On PRs, load the image into
+          # the local Docker daemon instead: this still validates the Dockerfile
+          # and lets Syft scan the image for the SBOM, but avoids the flaky
+          # multi-GB registry push that times out on PR runs
+          # (failed to authorize: DeadlineExceeded).
+          push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name != 'push' }}
           tags: ${{ env.IMAGE }}
           platforms: linux/amd64
 
@@ -98,6 +107,8 @@ jobs:
 
 
       - name: Push SBOM as OCI artifact (ORAS)
+        # Attaching to the pushed manifest only makes sense when we published it.
+        if: github.event_name == 'push'
         run: |
           curl -sSfL https://github.com/oras-project/oras/releases/download/v1.1.0/oras_1.1.0_linux_amd64.tar.gz | tar -xz
           sudo mv oras /usr/local/bin/oras
@@ -108,6 +119,8 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign SBOM with cosign (keyless)
+        # Provenance signing is for published images only; skip on PRs.
+        if: github.event_name == 'push'
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
