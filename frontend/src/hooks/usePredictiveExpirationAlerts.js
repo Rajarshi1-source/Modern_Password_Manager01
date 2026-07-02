@@ -13,6 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
+import { getWsTicket } from '../services/wsTicket';
 
 const MAX_RECONNECT_ATTEMPTS = 6;
 const BASE_RECONNECT_DELAY = 1000; // 1s
@@ -36,7 +37,7 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
     onMessageRef.current = onMessage;
   }, [onMessage]);
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     // Guard all browser-only access together: localStorage and window can throw
     // (restricted storage, SSR, tests). Fail closed rather than break the
     // dashboard before the socket is even created.
@@ -51,7 +52,25 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
     } catch {
       return;
     }
-    if (!token || !SocketCtor) return; // no auth token / no WebSocket — no-op
+    if (!token || !SocketCtor) return; // not authenticated / no WebSocket — no-op
+
+    // Exchange the long-lived token for a short-lived, single-use ticket so it
+    // never appears in the ws:// URL (access logs / history). Retry a ticket
+    // failure with the same capped backoff the socket itself uses.
+    let ticket;
+    try {
+      ticket = await getWsTicket();
+    } catch {
+      if (intentionallyClosedRef.current || attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) return;
+      const retryDelay = Math.min(
+        BASE_RECONNECT_DELAY * 2 ** attemptsRef.current,
+        MAX_RECONNECT_DELAY
+      );
+      attemptsRef.current += 1;
+      reconnectTimerRef.current = setTimeout(connect, retryDelay);
+      return;
+    }
+    if (intentionallyClosedRef.current) return; // torn down while fetching the ticket
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.hostname;
@@ -63,7 +82,7 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
           : '';
     const url =
       `${protocol}//${host}${port}/ws/security/predictive-expiration/` +
-      `?token=${encodeURIComponent(token)}`;
+      `?ticket=${encodeURIComponent(ticket)}`;
 
     let ws;
     try {

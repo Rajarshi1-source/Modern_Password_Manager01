@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import NetworkQualityEstimator from '../utils/NetworkQualityEstimator';
 import OfflineQueueManager from '../utils/OfflineQueueManager';
+import { getWsTicket } from '../services/wsTicket';
 
 export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange) => {
   // Connection state
@@ -46,6 +47,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
   const pingIntervalRef = useRef(null);
   const lastPongRef = useRef(Date.now());
   const reconnectAttemptsRef = useRef(0);
+  const connectGenerationRef = useRef(0);
   const pingTimestampRef = useRef(null);
   const networkEstimatorRef = useRef(new NetworkQualityEstimator());
   const offlineQueueRef = useRef(new OfflineQueueManager());
@@ -192,19 +194,28 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
   /**
    * Establish WebSocket connection
    */
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!userId) {
       console.warn('[WebSocket] No userId provided');
       return;
     }
 
+    // Generation guard: a newer connect() or a disconnect() bumps this, so an
+    // older attempt still awaiting its ticket aborts instead of opening a
+    // zombie socket after teardown or supersession (userId change / reconnect).
+    connectGenerationRef.current += 1;
+    const generation = connectGenerationRef.current;
+
     try {
-      const token = localStorage.getItem('token');
+      // Exchange the long-lived token for a short-lived, single-use ticket so
+      // it never appears in the ws:// URL (access logs / browser history).
+      const ticket = await getWsTicket();
+      if (generation !== connectGenerationRef.current) return; // superseded / torn down
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.hostname;
       const port = process.env.NODE_ENV === 'development' ? ':8000' : '';
-      
-      const wsUrl = `${protocol}//${host}${port}/ws/breach-alerts/${userId}/?token=${token}`;
+
+      const wsUrl = `${protocol}//${host}${port}/ws/breach-alerts/${userId}/?ticket=${ticket}`;
       
       console.log(`[WebSocket] 🔌 Connecting... (attempt ${reconnectAttemptsRef.current + 1})`);
       
@@ -330,9 +341,18 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
     } catch (error) {
       console.error('[WebSocket] ❌ Connection error:', error);
       setConnectionError(error.message);
-      
-      // If WebSocket fails to create, use polling fallback
-      if (error.message?.includes('WebSocket') || error.message?.includes('ECONNREFUSED')) {
+
+      // A failure here (ticket fetch OR socket creation) happens before any
+      // WebSocket exists, so the onclose-driven backoff never runs. Drive the
+      // same capped backoff here, then fall back to polling once exhausted.
+      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        const delay = getReconnectDelay();
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectAttemptsRef.current += 1;
+          setReconnectAttempts(reconnectAttemptsRef.current);
+          connect();
+        }, delay);
+      } else {
         console.log('[WebSocket] Falling back to HTTP polling');
         startPolling();
       }
@@ -354,6 +374,8 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
    */
   const disconnect = useCallback(() => {
     console.log('[WebSocket] 🔌 Manual disconnect');
+    // Invalidate any connect() whose ticket request is still in flight.
+    connectGenerationRef.current += 1;
     stopHealthMonitoring();
     stopPolling();
     
