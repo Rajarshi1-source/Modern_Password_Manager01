@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import NetworkQualityEstimator from '../utils/NetworkQualityEstimator';
 import OfflineQueueManager from '../utils/OfflineQueueManager';
+import { getWsTicket } from '../services/wsTicket';
 
 export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange) => {
   // Connection state
@@ -192,19 +193,21 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
   /**
    * Establish WebSocket connection
    */
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!userId) {
       console.warn('[WebSocket] No userId provided');
       return;
     }
 
     try {
-      const token = localStorage.getItem('token');
+      // Exchange the long-lived token for a short-lived, single-use ticket so
+      // it never appears in the ws:// URL (access logs / browser history).
+      const ticket = await getWsTicket();
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.hostname;
       const port = process.env.NODE_ENV === 'development' ? ':8000' : '';
-      
-      const wsUrl = `${protocol}//${host}${port}/ws/breach-alerts/${userId}/?token=${token}`;
+
+      const wsUrl = `${protocol}//${host}${port}/ws/breach-alerts/${userId}/?ticket=${ticket}`;
       
       console.log(`[WebSocket] 🔌 Connecting... (attempt ${reconnectAttemptsRef.current + 1})`);
       
