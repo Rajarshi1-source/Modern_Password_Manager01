@@ -142,6 +142,14 @@ class BlacklistedIpsParsingTests(TestCase):
     def test_empty_value_is_empty_set(self):
         self.assertEqual(self._parse()(''), set())
 
+    def test_embedded_newlines_are_stripped(self):
+        # A multi-line .env value can leave \r/\n on tokens; strip them so the
+        # entries still parse instead of being dropped at ip_network().
+        self.assertEqual(
+            self._parse()('192.168.1.100,\n10.0.0.5\r\n'),
+            {'192.168.1.100', '10.0.0.5'},
+        )
+
     def test_parsed_set_literal_builds_usable_networks(self):
         # End-to-end: the cleaned tokens must feed ip_network() so the
         # blacklist is actually populated instead of failing open.

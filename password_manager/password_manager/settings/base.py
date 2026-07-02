@@ -1024,7 +1024,7 @@ def _parse_blacklisted_ips(raw):
     """
     if not raw:
         return set()
-    return {tok.strip(" \t'\"{}[]") for tok in raw.split(',')} - {''}
+    return {tok.strip(" \t\r\n'\"{}[]") for tok in raw.split(',')} - {''}
 
 
 _blacklisted = os.environ.get('BLACKLISTED_IPS', '')
