@@ -312,7 +312,18 @@ class SecurityMiddleware:
     
     def _check_ip_whitelist(self, request):
         """Check if IP whitelisting blocks this request"""
-        if getattr(settings, 'IP_WHITELISTING_ENABLED', False) and getattr(settings, 'ALLOWED_IP_RANGES', []):
+        if getattr(settings, 'IP_WHITELISTING_ENABLED', False):
+            allowed_ranges = getattr(settings, 'ALLOWED_IP_RANGES', set())
+            if not allowed_ranges:
+                # Enabled but no ranges configured (unset, or a value that parsed
+                # to empty) — fail closed: deny rather than silently allowing
+                # every IP. Relying on truthiness alone would turn a whitelist
+                # misconfiguration into a full bypass.
+                logger.warning(
+                    "IP_WHITELISTING_ENABLED is True but ALLOWED_IP_RANGES is "
+                    "empty; denying request to avoid a fail-open misconfiguration."
+                )
+                return HttpResponseForbidden("Access denied: IP whitelist is not configured.")
             client_ip = self._get_client_ip(request)
             if not self._is_ip_allowed(client_ip):
                 logger.warning(f"Access denied for IP: {client_ip}")
