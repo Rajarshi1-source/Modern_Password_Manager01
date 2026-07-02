@@ -193,9 +193,8 @@ class IpWhitelistFailClosedTests(TestCase):
 
     @staticmethod
     def _request(ip='10.5.6.7'):
-        class _Req:
-            META = {'REMOTE_ADDR': ip}
-        return _Req()
+        from types import SimpleNamespace
+        return SimpleNamespace(META={'REMOTE_ADDR': ip})
 
     @override_settings(IP_WHITELISTING_ENABLED=True, ALLOWED_IP_RANGES=set())
     def test_enabled_but_empty_ranges_denies(self):
