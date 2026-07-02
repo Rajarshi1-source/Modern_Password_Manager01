@@ -178,3 +178,41 @@ class BlacklistedIpsParsingTests(TestCase):
         self.assertEqual(len(nets), 2)
         self.assertTrue(any(ipaddress.ip_address('192.168.1.100') in n for n in nets))
         self.assertTrue(any(ipaddress.ip_address('10.0.0.5') in n for n in nets))
+
+
+class IpWhitelistFailClosedTests(TestCase):
+    """ALLOWED_IP_RANGES follow-up: an enabled whitelist with no usable ranges
+    must fail closed (deny), not silently allow every request. Parsing a
+    misconfigured value down to an empty set must not become a full bypass.
+    """
+
+    @staticmethod
+    def _mw():
+        from middleware import SecurityMiddleware
+        return SecurityMiddleware(lambda request: None)
+
+    @staticmethod
+    def _request(ip='10.5.6.7'):
+        class _Req:
+            META = {'REMOTE_ADDR': ip}
+        return _Req()
+
+    @override_settings(IP_WHITELISTING_ENABLED=True, ALLOWED_IP_RANGES=set())
+    def test_enabled_but_empty_ranges_denies(self):
+        resp = self._mw()._check_ip_whitelist(self._request())
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp.status_code, 403)
+
+    @override_settings(IP_WHITELISTING_ENABLED=True, ALLOWED_IP_RANGES={'10.0.0.0/8'})
+    def test_enabled_with_allowed_ip_passes(self):
+        self.assertIsNone(self._mw()._check_ip_whitelist(self._request('10.5.6.7')))
+
+    @override_settings(IP_WHITELISTING_ENABLED=True, ALLOWED_IP_RANGES={'10.0.0.0/8'})
+    def test_enabled_with_disallowed_ip_denies(self):
+        resp = self._mw()._check_ip_whitelist(self._request('192.0.2.1'))
+        self.assertIsNotNone(resp)
+        self.assertEqual(resp.status_code, 403)
+
+    @override_settings(IP_WHITELISTING_ENABLED=False, ALLOWED_IP_RANGES=set())
+    def test_disabled_allows(self):
+        self.assertIsNone(self._mw()._check_ip_whitelist(self._request()))
