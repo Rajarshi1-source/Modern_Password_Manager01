@@ -150,6 +150,18 @@ class BlacklistedIpsParsingTests(TestCase):
             {'192.168.1.100', '10.0.0.5'},
         )
 
+    def test_alternate_separators(self):
+        # Semicolon- or newline-only separation (no commas) is tolerated so an
+        # accidental .env format doesn't collapse into one unparseable token.
+        self.assertEqual(
+            self._parse()('192.168.1.100;10.0.0.5'),
+            {'192.168.1.100', '10.0.0.5'},
+        )
+        self.assertEqual(
+            self._parse()('192.168.1.100\n10.0.0.5'),
+            {'192.168.1.100', '10.0.0.5'},
+        )
+
     def test_parsed_set_literal_builds_usable_networks(self):
         # End-to-end: the cleaned tokens must feed ip_network() so the
         # blacklist is actually populated instead of failing open.

@@ -1015,7 +1015,7 @@ SUSPICIOUS_THRESHOLD = 3
 def _parse_blacklisted_ips(raw):
     """Split BLACKLISTED_IPS into address/CIDR tokens (fail closed).
 
-    Expects a bare comma-separated list ("1.2.3.4,10.0.0.0/8"). Defensively
+    Expects a comma/semicolon/newline-separated list ("1.2.3.4,10.0.0.0/8"). Defensively
     strips stray braces/brackets/quotes/whitespace per token, so a value
     mistakenly written as a Python set/list literal ("{'1.2.3.4'}") still
     parses instead of silently emptying the blacklist — a security control
@@ -1024,7 +1024,10 @@ def _parse_blacklisted_ips(raw):
     """
     if not raw:
         return set()
-    return {tok.strip(" \t\r\n'\"{}[]") for tok in raw.split(',')} - {''}
+    # Accept comma, semicolon, or newline separators — all plausible accidental
+    # .env formats — so entries never collapse into one unparseable token.
+    import re as _re
+    return {tok.strip(" \t\r\n'\"{}[]") for tok in _re.split(r"[,;\r\n]", raw)} - {''}
 
 
 _blacklisted = os.environ.get('BLACKLISTED_IPS', '')
