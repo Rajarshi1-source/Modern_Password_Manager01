@@ -118,8 +118,8 @@ class BlacklistedIpsParsingTests(TestCase):
 
     @staticmethod
     def _parse():
-        from password_manager.settings.base import _parse_blacklisted_ips
-        return _parse_blacklisted_ips
+        from password_manager.settings.base import _parse_ip_list
+        return _parse_ip_list
 
     def test_set_literal_value_still_parses(self):
         self.assertEqual(
@@ -161,6 +161,13 @@ class BlacklistedIpsParsingTests(TestCase):
             self._parse()('192.168.1.100\n10.0.0.5'),
             {'192.168.1.100', '10.0.0.5'},
         )
+
+    def test_allowed_ip_ranges_uses_shared_parser(self):
+        # ALLOWED_IP_RANGES is routed through the same fail-closed parser, so it
+        # is a cleaned set (previously a raw comma-split list that could collapse
+        # a set-literal value into one bad token and disable the whitelist).
+        from django.conf import settings
+        self.assertIsInstance(settings.ALLOWED_IP_RANGES, set)
 
     def test_parsed_set_literal_builds_usable_networks(self):
         # End-to-end: the cleaned tokens must feed ip_network() so the
