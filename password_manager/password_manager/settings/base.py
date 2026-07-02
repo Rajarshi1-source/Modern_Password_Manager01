@@ -1012,15 +1012,15 @@ LOCKOUT_DURATION_MINUTES = 30
 SUSPICIOUS_THRESHOLD = 3
 
 
-def _parse_blacklisted_ips(raw):
-    """Split BLACKLISTED_IPS into address/CIDR tokens (fail closed).
+def _parse_ip_list(raw):
+    """Parse a BLACKLISTED_IPS / ALLOWED_IP_RANGES value into address/CIDR tokens.
 
-    Expects a comma/semicolon/newline-separated list ("1.2.3.4,10.0.0.0/8"). Defensively
-    strips stray braces/brackets/quotes/whitespace per token, so a value
-    mistakenly written as a Python set/list literal ("{'1.2.3.4'}") still
-    parses instead of silently emptying the blacklist — a security control
-    should not drop entries on a config typo. Genuinely unparseable tokens
-    are still surfaced by the ip_network() loop below.
+    Expects a comma/semicolon/newline-separated list ("1.2.3.4,10.0.0.0/8").
+    Defensively strips stray braces/brackets/quotes/whitespace per token, so a
+    value mistakenly written as a Python set/list literal ("{'1.2.3.4'}") still
+    parses instead of silently emptying the list — a security control should not
+    drop entries on a config typo. Genuinely unparseable tokens are still
+    surfaced by ip_network() validation in the consumers.
     """
     if not raw:
         return set()
@@ -1031,7 +1031,7 @@ def _parse_blacklisted_ips(raw):
 
 
 _blacklisted = os.environ.get('BLACKLISTED_IPS', '')
-BLACKLISTED_IPS = _parse_blacklisted_ips(_blacklisted)
+BLACKLISTED_IPS = _parse_ip_list(_blacklisted)
 
 # Audit finding #13: parse BLACKLISTED_IPS into network objects once at
 # startup so AccountProtectionService.is_ip_blacklisted supports CIDR
@@ -1058,7 +1058,10 @@ for _bl_entry in BLACKLISTED_IPS:
 # IP Whitelisting (Enterprise Feature - Optional)
 # Set ALLOWED_IP_RANGES in .env for IP restriction
 # Example: ALLOWED_IP_RANGES=192.168.1.0/24,10.0.0.0/8
-ALLOWED_IP_RANGES = os.environ.get('ALLOWED_IP_RANGES', '').split(',') if os.environ.get('ALLOWED_IP_RANGES') else []
+# Parsed with the same fail-closed helper as BLACKLISTED_IPS so a value
+# fat-fingered as a set/list literal or with ;/newline separators still yields
+# usable entries instead of silently disabling the whitelist.
+ALLOWED_IP_RANGES = _parse_ip_list(os.environ.get('ALLOWED_IP_RANGES', ''))
 IP_WHITELISTING_ENABLED = os.environ.get('IP_WHITELISTING_ENABLED', 'False').lower() == 'true'
 
 # ==============================================================================
