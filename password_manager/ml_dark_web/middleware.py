@@ -2,12 +2,16 @@
 Custom middleware for WebSocket authentication
 """
 
+from urllib.parse import parse_qs
+
 from channels.middleware import BaseMiddleware
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from rest_framework.authtoken.models import Token
 import logging
+
+from .ws_ticket import consume_ticket
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -20,24 +24,39 @@ class TokenAuthMiddleware(BaseMiddleware):
     """
     
     async def __call__(self, scope, receive, send):
-        # Get token from query string
-        query_string = scope.get('query_string', b'').decode()
-        token = None
-        
-        # Parse query string for token
-        for param in query_string.split('&'):
-            if param.startswith('token='):
-                token = param.split('=')[1]
-                break
-        
-        if token:
+        # Prefer a short-lived, single-use ticket (?ticket=) so the long-lived
+        # auth token never appears in the ws:// URL (and therefore not in access
+        # logs or browser history). Fall back to ?token= for backward-compatible
+        # migration of clients that haven't switched yet.
+        #
+        # parse_qs handles URL-decoding and values containing '=' correctly
+        # (the old ``param.split('=')[1]`` truncated such tokens).
+        params = parse_qs(scope.get('query_string', b'').decode())
+        ticket = params.get('ticket', [None])[0]
+        token = params.get('token', [None])[0]
+
+        if ticket:
+            scope['user'] = await self.get_user_from_ticket(ticket)
+        elif token:
             scope['user'] = await self.get_user_from_token(token)
         else:
             scope['user'] = AnonymousUser()
-            logger.warning("WebSocket connection attempt without token")
-        
+            logger.warning("WebSocket connection attempt without ticket or token")
+
         return await super().__call__(scope, receive, send)
-    
+
+    @database_sync_to_async
+    def get_user_from_ticket(self, ticket):
+        """Resolve a single-use WS ticket to its user, consuming it."""
+        user_id = consume_ticket(ticket)
+        if user_id is None:
+            logger.warning("WebSocket ticket invalid, expired, or already used")
+            return AnonymousUser()
+        try:
+            return User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return AnonymousUser()
+
     @database_sync_to_async
     def get_user_from_token(self, token):
         """Validate token and return user"""

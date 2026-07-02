@@ -45,6 +45,8 @@ from .time_locked_view import (
     TimeLockedReleaseView,
     TimeLockedCanaryAckView,
 )
+# WebSocket auth ticket endpoint (keeps the long-lived token out of ws:// URLs)
+from . import ws_ticket_view
 
 @api_view(['GET'])
 def auth_root(request, format=None):
@@ -71,6 +73,9 @@ urlpatterns = [
     # Add JWT endpoints
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    # Short-lived, single-use WebSocket auth ticket: keeps the long-lived token
+    # out of ws:// URLs / access logs (see auth_module/ws_ticket_view.py).
+    path('ws-ticket/', ws_ticket_view.ws_ticket_view, name='ws-ticket'),
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
     # HttpOnly-cookie refresh-token endpoints (foundation for the
     # localStorage -> cookie migration). These coexist with the legacy
