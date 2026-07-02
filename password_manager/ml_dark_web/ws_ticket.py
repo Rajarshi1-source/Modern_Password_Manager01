@@ -44,6 +44,9 @@ def consume_ticket(ticket):
     user_id = cache.get(key)
     if user_id is None:
         return None
-    # Single-use: delete before returning so a replay finds nothing.
-    cache.delete(key)
+    # Single-use via an atomic claim: cache.delete() (Redis DEL) is atomic and
+    # returns truthy only for the caller that actually removed the key, so two
+    # concurrent handshakes replaying one ticket cannot both authenticate.
+    if not cache.delete(key):
+        return None
     return user_id

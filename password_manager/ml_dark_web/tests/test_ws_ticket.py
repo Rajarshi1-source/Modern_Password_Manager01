@@ -74,6 +74,17 @@ class WsTicketEndpointTests(TestCase):
         # The issued ticket resolves back to the caller (and is consumed).
         self.assertEqual(consume_ticket(ticket), self.user.id)
 
+    def test_drf_token_authorization_header_is_accepted(self):
+        # The SPA api client sends "Authorization: Token <key>"; the DRF default
+        # is JWT-only, so the endpoint must opt into TokenAuthentication or this
+        # regresses to 401 (force_authenticate above bypasses auth classes).
+        token = Token.objects.create(user=self.user)
+        resp = APIClient().post(
+            reverse('ws-ticket'), HTTP_AUTHORIZATION=f'Token {token.key}'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data['ticket'])
+
 
 class WsTicketMiddlewareTests(TransactionTestCase):
     # TransactionTestCase: get_user_from_* runs in a database_sync_to_async
