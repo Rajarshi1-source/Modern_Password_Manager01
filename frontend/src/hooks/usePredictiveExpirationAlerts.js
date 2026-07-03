@@ -31,6 +31,7 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
   const attemptsRef = useRef(0);
   const reconnectTimerRef = useRef(null);
   const intentionallyClosedRef = useRef(false);
+  const connectGenerationRef = useRef(0);
   // Keep the latest callback without forcing a reconnect on every render.
   const onMessageRef = useRef(onMessage);
   useEffect(() => {
@@ -54,6 +55,12 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
     }
     if (!token || !SocketCtor) return; // not authenticated / no WebSocket — no-op
 
+    // Generation guard: a newer connect() (e.g. a rapid disable→enable toggle)
+    // supersedes this one, so a stale in-flight ticket bails out instead of
+    // opening a second socket. intentionallyClosedRef only covers teardown.
+    connectGenerationRef.current += 1;
+    const generation = connectGenerationRef.current;
+
     // Exchange the long-lived token for a short-lived, single-use ticket so it
     // never appears in the ws:// URL (access logs / history). Retry a ticket
     // failure with the same capped backoff the socket itself uses.
@@ -61,7 +68,11 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
     try {
       ticket = await getWsTicket();
     } catch {
-      if (intentionallyClosedRef.current || attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) return;
+      if (
+        intentionallyClosedRef.current ||
+        generation !== connectGenerationRef.current ||
+        attemptsRef.current >= MAX_RECONNECT_ATTEMPTS
+      ) return;
       const retryDelay = Math.min(
         BASE_RECONNECT_DELAY * 2 ** attemptsRef.current,
         MAX_RECONNECT_DELAY
@@ -70,7 +81,8 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
       reconnectTimerRef.current = setTimeout(connect, retryDelay);
       return;
     }
-    if (intentionallyClosedRef.current) return; // torn down while fetching the ticket
+    // torn down or superseded while fetching the ticket
+    if (intentionallyClosedRef.current || generation !== connectGenerationRef.current) return;
 
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = location.hostname;
