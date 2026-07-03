@@ -215,7 +215,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
       const host = window.location.hostname;
       const port = process.env.NODE_ENV === 'development' ? ':8000' : '';
 
-      const wsUrl = `${protocol}//${host}${port}/ws/breach-alerts/${userId}/?ticket=${ticket}`;
+      const wsUrl = `${protocol}//${host}${port}/ws/breach-alerts/${userId}/?ticket=${encodeURIComponent(ticket)}`;
       
       console.log(`[WebSocket] 🔌 Connecting... (attempt ${reconnectAttemptsRef.current + 1})`);
       
@@ -339,6 +339,9 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
         }
       };
     } catch (error) {
+      // Stale attempt: disconnect() or a newer connect() bumped the generation
+      // while the ticket request was in flight — don't resurrect it via a retry.
+      if (generation !== connectGenerationRef.current) return;
       console.error('[WebSocket] ❌ Connection error:', error);
       setConnectionError(error.message);
 
