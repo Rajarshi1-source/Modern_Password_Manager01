@@ -123,3 +123,22 @@ class WsTicketMiddlewareTests(TransactionTestCase):
         scope = {'type': 'websocket', 'query_string': b''}
         async_to_sync(self.mw)(scope, _noop_receive, _noop_send)
         self.assertTrue(self.captured['user'].is_anonymous)
+
+    def test_call_routes_token_only_to_user(self):
+        token = Token.objects.create(user=self.user)
+        scope = {'type': 'websocket', 'query_string': f'token={token.key}'.encode()}
+        async_to_sync(self.mw)(scope, _noop_receive, _noop_send)
+        self.assertEqual(self.captured['user'], self.user)
+
+    def test_ticket_takes_precedence_over_token(self):
+        # When both are present the middleware must use (and consume) the ticket,
+        # never fall through to token auth.
+        ticket = issue_ticket(self.user.id)
+        token = Token.objects.create(user=self.user)
+        scope = {
+            'type': 'websocket',
+            'query_string': f'ticket={ticket}&token={token.key}'.encode(),
+        }
+        async_to_sync(self.mw)(scope, _noop_receive, _noop_send)
+        self.assertEqual(self.captured['user'], self.user)
+        self.assertIsNone(consume_ticket(ticket))  # ticket was consumed, not the token
