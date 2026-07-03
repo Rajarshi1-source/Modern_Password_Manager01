@@ -20,7 +20,7 @@ from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
 
 from ml_dark_web.middleware import TokenAuthMiddleware
-from ml_dark_web.ws_ticket import consume_ticket, issue_ticket
+from ml_dark_web.ws_ticket import TTL_SECONDS, consume_ticket, issue_ticket
 
 User = get_user_model()
 
@@ -81,6 +81,7 @@ class WsTicketEndpointTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         ticket = resp.data['ticket']
         self.assertTrue(ticket)
+        self.assertEqual(resp.data['expires_in'], TTL_SECONDS)  # response contract
         # The issued ticket resolves back to the caller (and is consumed).
         self.assertEqual(consume_ticket(ticket), self.user.id)
 

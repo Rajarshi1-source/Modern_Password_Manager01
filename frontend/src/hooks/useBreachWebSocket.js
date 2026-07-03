@@ -312,6 +312,10 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
       };
 
       websocket.onclose = (event) => {
+        // Ignore a stale socket's close: a newer connect() already replaced it,
+        // so it must not flip shared state or schedule a reconnect for the live
+        // socket. (Matches the wsRef identity guard in usePredictiveExpirationAlerts.)
+        if (wsRef.current !== websocket) return;
         console.log('[WebSocket] 🔌 Disconnected:', event.code, event.reason);
         setIsConnected(false);
         setConnectionQuality('disconnected');
