@@ -67,7 +67,8 @@ export function usePredictiveExpirationAlerts(onMessage, opts = {}) {
     let ticket;
     try {
       ticket = await getWsTicket();
-    } catch {
+    } catch (err) {
+      console.error('[WebSocket] ❌ Ticket fetch failed:', err);
       if (
         intentionallyClosedRef.current ||
         generation !== connectGenerationRef.current ||

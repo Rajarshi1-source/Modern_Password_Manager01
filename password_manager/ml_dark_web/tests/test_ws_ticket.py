@@ -9,6 +9,8 @@ Covers:
     ?token= path still authenticates (backward-compatible fallback); a request
     with neither is AnonymousUser.
 """
+from unittest import mock
+
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -35,7 +37,7 @@ class WsTicketUtilTests(TestCase):
     def setUp(self):
         cache.clear()
         self.user = User.objects.create_user(
-            username='bob', email='bob@example.com', password='pw1234pw1234'
+            username='bob', email='bob@example.com', password='pw1234pw1234'  # noqa: S106 — test fixture
         )
 
     def test_issue_then_consume_returns_user_id(self):
@@ -52,12 +54,20 @@ class WsTicketUtilTests(TestCase):
         self.assertIsNone(consume_ticket(''))
         self.assertIsNone(consume_ticket(None))
 
+    def test_ticket_expires_per_ttl(self):
+        # TTL_SECONDS governs retention: with a zero window the ticket is not
+        # retained, so a subsequent consume misses. Guards the expiry contract
+        # without a real-time sleep.
+        with mock.patch('ml_dark_web.ws_ticket.TTL_SECONDS', 0):
+            ticket = issue_ticket(self.user.id)
+        self.assertIsNone(consume_ticket(ticket))
+
 
 class WsTicketEndpointTests(TestCase):
     def setUp(self):
         cache.clear()
         self.user = User.objects.create_user(
-            username='carol', email='carol@example.com', password='pw1234pw1234'
+            username='carol', email='carol@example.com', password='pw1234pw1234'  # noqa: S106 — test fixture
         )
 
     def test_requires_authentication(self):
@@ -92,7 +102,7 @@ class WsTicketMiddlewareTests(TransactionTestCase):
     def setUp(self):
         cache.clear()
         self.user = User.objects.create_user(
-            username='dave', email='dave@example.com', password='pw1234pw1234'
+            username='dave', email='dave@example.com', password='pw1234pw1234'  # noqa: S106 — test fixture
         )
         self.mw = TokenAuthMiddleware(self._capture)
         self.captured = {}
