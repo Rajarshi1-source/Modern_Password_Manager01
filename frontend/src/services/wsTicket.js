@@ -13,6 +13,11 @@ import api from './api';
  */
 export async function getWsTicket() {
   const { data } = await api.post('/auth/ws-ticket/');
+  if (!data?.ticket) {
+    // Fail fast so the caller's retry/backoff runs, rather than opening a
+    // socket with ?ticket=undefined that the server would just reject.
+    throw new Error('ws-ticket response missing ticket');
+  }
   return data.ticket;
 }
 

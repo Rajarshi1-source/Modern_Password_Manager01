@@ -367,7 +367,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
         startPolling();
       }
     }
-  }, [userId, onAlert, onUpdate, onConnectionChange, startHealthMonitoring, getReconnectDelay, processOfflineQueue, startPolling]);
+  }, [userId, onAlert, onUpdate, onConnectionChange, startHealthMonitoring, stopHealthMonitoring, getReconnectDelay, processOfflineQueue, startPolling]);
 
   /**
    * Handle alerts when offline (add to queue)
