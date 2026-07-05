@@ -31,7 +31,16 @@ class TokenAuthMiddleware(BaseMiddleware):
         #
         # parse_qs handles URL-decoding and values containing '=' correctly
         # (the old ``param.split('=')[1]`` truncated such tokens).
-        params = parse_qs(scope.get('query_string', b'').decode())
+        # Decode defensively (a crafted handshake may carry non-UTF-8 bytes) and
+        # cap the field count so an oversized query can't burden the parser
+        # before auth. On either failure, treat the request as unauthenticated.
+        try:
+            params = parse_qs(
+                scope.get('query_string', b'').decode('utf-8', 'ignore'),
+                max_num_fields=25,
+            )
+        except ValueError:
+            params = {}
         ticket = params.get('ticket', [None])[0]
         token = params.get('token', [None])[0]
 
