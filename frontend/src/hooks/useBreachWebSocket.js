@@ -202,7 +202,16 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
 
     // Not authenticated (no token) — skip the ticket fetch (it would 401) and
     // the ensuing retry/polling churn. Mirrors usePredictiveExpirationAlerts.
-    if (!localStorage.getItem('token')) {
+    // Guard the storage read: localStorage can throw (restricted storage / SSR /
+    // tests), and this runs before the try below, so a throw would become an
+    // unhandled rejection instead of failing closed.
+    let token;
+    try {
+      token = localStorage.getItem('token');
+    } catch {
+      return; // fail closed
+    }
+    if (!token) {
       console.warn('[WebSocket] No auth token; skipping connect');
       return;
     }
