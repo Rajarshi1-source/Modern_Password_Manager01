@@ -103,7 +103,7 @@ python-dateutil==2.9.0.post0
 python-crontab==3.3.0
 cron-descriptor==1.4.5
 pytz==2025.2
-tzdata==2025.2
+tzdata==2026.2
 tzlocal==5.3.1
 
 # XML & Serialization
