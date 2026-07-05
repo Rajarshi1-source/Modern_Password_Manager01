@@ -223,6 +223,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
       wsRef.current = websocket;
 
       websocket.onopen = () => {
+        if (wsRef.current !== websocket) return; // stale socket — a newer connect() replaced it
         console.log('[WebSocket] ✓ Connected successfully');
         setIsConnected(true);
         setConnectionQuality('good');
@@ -246,6 +247,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
       };
 
       websocket.onmessage = (event) => {
+        if (wsRef.current !== websocket) return; // stale socket — ignore late frames
         try {
           const data = JSON.parse(event.data);
           
@@ -307,6 +309,7 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
       };
 
       websocket.onerror = (error) => {
+        if (wsRef.current !== websocket) return; // stale socket
         console.error('[WebSocket] ❌ Error:', error);
         setConnectionQuality('poor');
       };

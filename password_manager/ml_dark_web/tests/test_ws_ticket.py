@@ -153,3 +153,15 @@ class WsTicketMiddlewareTests(TransactionTestCase):
         async_to_sync(self.mw)(scope, _noop_receive, _noop_send)
         self.assertEqual(self.captured['user'], self.user)
         self.assertIsNone(consume_ticket(ticket))  # ticket was consumed, not the token
+
+    def test_invalid_ticket_does_not_fall_back_to_token(self):
+        # A present-but-invalid ticket takes the ticket branch and denies — it
+        # must NOT silently fall through to the token path. Migrated clients send
+        # only ?ticket=, so a bad ticket fails closed even if a token is present.
+        token = Token.objects.create(user=self.user)
+        scope = {
+            'type': 'websocket',
+            'query_string': f'ticket=bogus&token={token.key}'.encode(),
+        }
+        async_to_sync(self.mw)(scope, _noop_receive, _noop_send)
+        self.assertTrue(self.captured['user'].is_anonymous)
