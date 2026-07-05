@@ -225,6 +225,9 @@ class NeuroFeedbackService {
     try {
       ticket = await getWsTicket();
     } catch (error) {
+      // Superseded by a disconnect or a session change while the ticket was in
+      // flight — don't emit a stale error for an abandoned attempt.
+      if (generation !== this.wsConnectGeneration) return null;
       console.error('Failed to fetch WebSocket ticket:', error);
       this._emit('error', { error });
       return null;
