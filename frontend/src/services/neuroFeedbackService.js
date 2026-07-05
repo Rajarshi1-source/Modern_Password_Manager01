@@ -8,6 +8,8 @@
  * @created 2026-02-07
  */
 
+import { getWsTicket } from './wsTicket';
+
 const API_BASE = '/api/neuro-feedback';
 
 /**
@@ -206,10 +208,21 @@ class NeuroFeedbackService {
    * Connect to neuro-training WebSocket.
    * @param {string} sessionId - Training session ID
    */
-  connectWebSocket(sessionId) {
-    const token = localStorage.getItem('access_token');
+  async connectWebSocket(sessionId) {
+    // Exchange the long-lived auth token for a short-lived, single-use ticket so
+    // it never appears in the ws:// URL (access logs / browser history). The
+    // ticket is consumed by the shared TokenAuthMiddleware, so no consumer-side
+    // change is needed.
+    let ticket;
+    try {
+      ticket = await getWsTicket();
+    } catch (error) {
+      console.error('Failed to fetch WebSocket ticket:', error);
+      this._emit('error', { error });
+      return null;
+    }
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/neuro-training/${sessionId}/?token=${token}`;
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/neuro-training/${sessionId}/?ticket=${encodeURIComponent(ticket)}`;
 
     this.socket = new WebSocket(wsUrl);
 

@@ -6,8 +6,9 @@
  */
 
 import axios from 'axios';
+import { getWsTicket } from './wsTicket';
 
-const API_URL = import.meta.env.VITE_API_URL || 
+const API_URL = import.meta.env.VITE_API_URL ||
   (import.meta.env.PROD ? 'https://api.securevault.com' : '');
 const API_BASE = `${API_URL}/api/adversarial`;
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
@@ -151,15 +152,29 @@ class AdversarialService {
    * @param {string} userId - User ID
    * @param {Object} callbacks - Event callbacks
    */
-  connectWebSocket(userId, callbacks = {}) {
+  async connectWebSocket(userId, callbacks = {}) {
     if (this.wsConnection && this.wsConnection.readyState === WebSocket.OPEN) {
       console.log('WebSocket already connected');
       return;
     }
 
     this.wsCallbacks = callbacks;
-    const token = localStorage.getItem('access_token');
-    const wsUrl = `${WS_URL}/ws/adversarial/${userId}/?token=${token}`;
+
+    // Exchange the long-lived auth token for a short-lived, single-use ticket so
+    // it never appears in the ws:// URL (access logs / browser history). The
+    // ticket is consumed by the same TokenAuthMiddleware that authenticates
+    // every WS route, so no consumer-side change is needed. On failure, surface
+    // it and let the existing capped-backoff reconnect retry.
+    let ticket;
+    try {
+      ticket = await getWsTicket();
+    } catch (error) {
+      console.error('Error fetching WebSocket ticket:', error);
+      if (callbacks.onError) callbacks.onError(error);
+      this._attemptReconnect(userId, callbacks);
+      return;
+    }
+    const wsUrl = `${WS_URL}/ws/adversarial/${userId}/?ticket=${encodeURIComponent(ticket)}`;
 
     try {
       this.wsConnection = new WebSocket(wsUrl);

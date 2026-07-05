@@ -32,7 +32,10 @@ const PasswordTrainer = ({ session, onEnd }) => {
 
     // Connect to WebSocket
     useEffect(() => {
-        const ws = neuroFeedbackService.connectWebSocket(session.session_id);
+        // connectWebSocket is async (fetches a WS ticket first); the socket is
+        // tracked internally and consumed via the .on(...) handlers below, so
+        // its return value is intentionally not awaited here.
+        neuroFeedbackService.connectWebSocket(session.session_id);
 
         neuroFeedbackService.on('session_ready', handleSessionReady);
         neuroFeedbackService.on('feedback', handleFeedback);
