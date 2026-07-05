@@ -18,7 +18,9 @@ const API_BASE = '/api/neuro-feedback';
 class NeuroFeedbackService {
   constructor() {
     this.socket = null;
-    this.callbacks = {};
+    // Event name -> listener array. A Map (not a plain object) keeps the
+    // dynamic `event` key off a prototype-injection sink.
+    this.callbacks = new Map();
     // Bumped on every connect/disconnect so an in-flight ticket fetch that is
     // superseded (teardown or a session change) aborts instead of opening a
     // stale socket. Mirrors the hooks' connectGeneration guard.
@@ -340,24 +342,25 @@ class NeuroFeedbackService {
    * Register callback for WebSocket events.
    */
   on(event, callback) {
-    if (!this.callbacks[event]) {
-      this.callbacks[event] = [];
+    if (!this.callbacks.has(event)) {
+      this.callbacks.set(event, []);
     }
-    this.callbacks[event].push(callback);
+    this.callbacks.get(event).push(callback);
   }
 
   /**
    * Remove callback.
    */
   off(event, callback) {
-    if (this.callbacks[event]) {
-      this.callbacks[event] = this.callbacks[event].filter(cb => cb !== callback);
+    if (this.callbacks.has(event)) {
+      this.callbacks.set(event, this.callbacks.get(event).filter(cb => cb !== callback));
     }
   }
 
   _emit(event, data) {
-    if (this.callbacks[event]) {
-      this.callbacks[event].forEach(cb => cb(data));
+    const handlers = this.callbacks.get(event);
+    if (handlers) {
+      handlers.forEach(cb => cb(data));
     }
   }
 
