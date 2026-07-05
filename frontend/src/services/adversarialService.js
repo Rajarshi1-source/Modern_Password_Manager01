@@ -174,6 +174,9 @@ class AdversarialService {
     try {
       ticket = await getWsTicket();
     } catch (error) {
+      // Superseded by a disconnect or a newer connect() while the ticket was in
+      // flight — don't fire onError or schedule a reconnect for a dead attempt.
+      if (generation !== this.wsConnectGeneration) return;
       console.error('Error fetching WebSocket ticket:', error);
       if (callbacks.onError) callbacks.onError(error);
       this._attemptReconnect(userId, callbacks);
