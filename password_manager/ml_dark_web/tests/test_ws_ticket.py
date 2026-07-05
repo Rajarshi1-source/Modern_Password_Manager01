@@ -9,6 +9,7 @@ Covers:
     ?token= path still authenticates (backward-compatible fallback); a request
     with neither is AnonymousUser.
 """
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from asgiref.sync import async_to_sync
@@ -53,6 +54,18 @@ class WsTicketUtilTests(TestCase):
         self.assertIsNone(consume_ticket('does-not-exist'))
         self.assertIsNone(consume_ticket(''))
         self.assertIsNone(consume_ticket(None))
+
+    def test_consume_is_atomic_under_concurrency(self):
+        # The single-use guarantee rests on the `if not cache.delete(key)` claim
+        # in consume_ticket — a branch the sequential replay test never reaches
+        # (there the second get() already misses). Fire many consumers at one
+        # ticket concurrently: exactly one must win the delete race and resolve
+        # to the user; every other must miss.
+        ticket = issue_ticket(self.user.id)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: consume_ticket(ticket), range(8)))
+        self.assertEqual(results.count(self.user.id), 1)  # exactly one winner
+        self.assertEqual(results.count(None), 7)  # the rest fail closed
 
     def test_ticket_expires_per_ttl(self):
         # TTL_SECONDS governs retention: with a zero window the ticket is not
