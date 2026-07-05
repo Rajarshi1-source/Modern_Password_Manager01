@@ -200,6 +200,13 @@ export const useBreachWebSocket = (userId, onAlert, onUpdate, onConnectionChange
       return;
     }
 
+    // Not authenticated (no token) — skip the ticket fetch (it would 401) and
+    // the ensuing retry/polling churn. Mirrors usePredictiveExpirationAlerts.
+    if (!localStorage.getItem('token')) {
+      console.warn('[WebSocket] No auth token; skipping connect');
+      return;
+    }
+
     // Generation guard: a newer connect() or a disconnect() bumps this, so an
     // older attempt still awaiting its ticket aborts instead of opening a
     // zombie socket after teardown or supersession (userId change / reconnect).
