@@ -19,6 +19,10 @@ class AdversarialService {
     this.wsCallbacks = {};
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
+    // Bumped on every connect/disconnect so an in-flight ticket fetch that is
+    // superseded (teardown or a newer connect) aborts instead of opening a
+    // stale/duplicate socket. Mirrors the hooks' connectGeneration guard.
+    this.wsConnectGeneration = 0;
   }
 
   // ==========================================================================
@@ -159,6 +163,7 @@ class AdversarialService {
     }
 
     this.wsCallbacks = callbacks;
+    const generation = ++this.wsConnectGeneration;
 
     // Exchange the long-lived auth token for a short-lived, single-use ticket so
     // it never appears in the ws:// URL (access logs / browser history). The
@@ -174,6 +179,9 @@ class AdversarialService {
       this._attemptReconnect(userId, callbacks);
       return;
     }
+    // Superseded by a disconnect or a newer connect() while the ticket was in
+    // flight — abort so we don't open a stale/duplicate socket.
+    if (generation !== this.wsConnectGeneration) return;
     const wsUrl = `${WS_URL}/ws/adversarial/${userId}/?ticket=${encodeURIComponent(ticket)}`;
 
     try {
@@ -213,6 +221,8 @@ class AdversarialService {
    * Disconnect WebSocket
    */
   disconnectWebSocket() {
+    // Invalidate any connect() whose ticket request is still in flight.
+    this.wsConnectGeneration++;
     if (this.wsConnection) {
       this.wsConnection.close();
       this.wsConnection = null;

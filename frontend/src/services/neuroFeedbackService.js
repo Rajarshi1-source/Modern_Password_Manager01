@@ -19,6 +19,10 @@ class NeuroFeedbackService {
   constructor() {
     this.socket = null;
     this.callbacks = {};
+    // Bumped on every connect/disconnect so an in-flight ticket fetch that is
+    // superseded (teardown or a session change) aborts instead of opening a
+    // stale socket. Mirrors the hooks' connectGeneration guard.
+    this.wsConnectGeneration = 0;
   }
 
   /**
@@ -209,6 +213,8 @@ class NeuroFeedbackService {
    * @param {string} sessionId - Training session ID
    */
   async connectWebSocket(sessionId) {
+    const generation = ++this.wsConnectGeneration;
+
     // Exchange the long-lived auth token for a short-lived, single-use ticket so
     // it never appears in the ws:// URL (access logs / browser history). The
     // ticket is consumed by the shared TokenAuthMiddleware, so no consumer-side
@@ -221,10 +227,23 @@ class NeuroFeedbackService {
       this._emit('error', { error });
       return null;
     }
+    // Superseded by a disconnect or a session change while the ticket was in
+    // flight — abort so we don't open a stale socket after teardown.
+    if (generation !== this.wsConnectGeneration) return null;
+
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProtocol}//${window.location.host}/ws/neuro-training/${sessionId}/?ticket=${encodeURIComponent(ticket)}`;
 
-    this.socket = new WebSocket(wsUrl);
+    try {
+      this.socket = new WebSocket(wsUrl);
+    } catch (error) {
+      // Construction can throw synchronously (invalid URL / SecurityError).
+      // Fail closed so this async method never rejects — the sole caller invokes
+      // it fire-and-forget, so a rejection would otherwise go unhandled.
+      console.error('Neuro-feedback WebSocket construction failed:', error);
+      this._emit('error', { error });
+      return null;
+    }
 
     this.socket.onopen = () => {
       console.log('Neuro-feedback WebSocket connected');
@@ -257,6 +276,8 @@ class NeuroFeedbackService {
    * Disconnect WebSocket.
    */
   disconnectWebSocket() {
+    // Invalidate any connect() whose ticket request is still in flight.
+    this.wsConnectGeneration++;
     if (this.socket) {
       this.socket.close();
       this.socket = null;
