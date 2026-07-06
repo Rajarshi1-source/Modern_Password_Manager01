@@ -7,15 +7,7 @@ import {
     Shield, AlertTriangle, Lock, Unlock, Plus,
     Smartphone, Monitor, Globe, CheckCircle, ExternalLink
 } from 'lucide-react';
-
-// Build the Authorization header for the JWT-only backend. The JWT lives under
-// `accessToken` (useAuth email/pw) or `token` (OAuth-callback / DID login); when
-// neither is set (unauthenticated / post-logout) omit the header entirely so we
-// send no credential rather than a literal `Bearer null`.
-const authHeader = () => {
-  const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
+import { authHeader } from '../../utils/authHeader';
 
 // Simple UI component replacements
 const Card = ({ children, className = '' }) => (
