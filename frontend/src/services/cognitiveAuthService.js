@@ -9,6 +9,8 @@
  * @created 2026-02-07
  */
 
+import { authHeader } from '../utils/authHeader';
+
 class CognitiveAuthService {
   constructor() {
     this.baseUrl = '/api/cognitive';
@@ -295,16 +297,12 @@ class CognitiveAuthService {
 
   async _fetch(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
-    // JWT lives under `accessToken` (useAuth email/pw login) or `token`
-    // (OAuth-callback / DID login); the backend is JWT-only (Bearer scheme).
-    const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
 
     const response = await fetch(url, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
-        // Omit the header when unauthenticated rather than sending an empty one.
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...authHeader(),
         ...options.headers,
       },
     });

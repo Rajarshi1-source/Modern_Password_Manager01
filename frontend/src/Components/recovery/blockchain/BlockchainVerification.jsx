@@ -12,14 +12,7 @@ import { Box, Typography, Card, CardContent, CircularProgress, Alert, Button, Ch
 import { CheckCircle, Pending, Error as ErrorIcon, OpenInNew } from '@mui/icons-material';
 import axios from 'axios';
 import arbitrumService from '../../../services/blockchain/arbitrumService';
-
-// Build the Authorization header for the JWT-only backend. The JWT lives under
-// `accessToken` (useAuth email/pw) or `token` (OAuth-callback / DID login); when
-// neither is set, omit the header rather than sending a literal `Bearer null`.
-const authHeader = () => {
-  const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
+import { authHeader } from '../../../utils/authHeader';
 
 const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
   const [verificationData, setVerificationData] = useState(null);
