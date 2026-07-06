@@ -30,13 +30,10 @@ const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
       setLoading(true);
       setError(null);
 
+      const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
       const response = await axios.get(
         `/api/blockchain/verify-commitment/${commitmentId}/`,
-        {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`
-          }
-        }
+        { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
       );
 
       setVerificationData(response.data);
@@ -53,13 +50,10 @@ const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
       setVerifyingOnChain(true);
 
       // Call API with on-chain verification enabled
+      const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
       const response = await axios.get(
         `/api/blockchain/verify-commitment/${commitmentId}/?verify_onchain=true`,
-        {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`
-          }
-        }
+        { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
       );
 
       setVerificationData(response.data);

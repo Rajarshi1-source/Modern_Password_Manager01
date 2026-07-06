@@ -24,7 +24,8 @@ class BiometricLivenessService {
     const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
     return {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
+      // Omit the header when unauthenticated rather than sending `Bearer null`.
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     };
   }
 
