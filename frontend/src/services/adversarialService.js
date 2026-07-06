@@ -179,7 +179,7 @@ class AdversarialService {
       if (generation !== this.wsConnectGeneration) return;
       console.error('Error fetching WebSocket ticket:', error);
       if (callbacks.onError) callbacks.onError(error);
-      this._attemptReconnect(userId, callbacks);
+      this._attemptReconnect(userId, callbacks, generation);
       return;
     }
     // Superseded by a disconnect or a newer connect() while the ticket was in
@@ -208,7 +208,11 @@ class AdversarialService {
       this.wsConnection.onclose = (event) => {
         console.log('Adversarial WebSocket disconnected:', event.code);
         if (callbacks.onDisconnect) callbacks.onDisconnect(event);
-        this._attemptReconnect(userId, callbacks);
+        // Don't reconnect a socket that a manual disconnect / newer connect has
+        // superseded (its captured generation is now stale).
+        if (generation === this.wsConnectGeneration) {
+          this._attemptReconnect(userId, callbacks, generation);
+        }
       };
 
       this.wsConnection.onerror = (error) => {
@@ -325,12 +329,18 @@ class AdversarialService {
     }
   }
 
-  _attemptReconnect(userId, callbacks) {
+  _attemptReconnect(userId, callbacks, generation = this.wsConnectGeneration) {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
       console.log(`Attempting reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
-      setTimeout(() => this.connectWebSocket(userId, callbacks), delay);
+      // Skip if disconnectWebSocket() / a newer connect advanced the generation
+      // during the backoff delay — a manual disconnect must not reopen the socket.
+      setTimeout(() => {
+        if (generation === this.wsConnectGeneration) {
+          this.connectWebSocket(userId, callbacks);
+        }
+      }, delay);
     }
   }
 
