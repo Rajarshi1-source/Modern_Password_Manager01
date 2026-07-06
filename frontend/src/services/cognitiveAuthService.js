@@ -295,13 +295,15 @@ class CognitiveAuthService {
 
   async _fetch(endpoint, options = {}) {
     const url = `${this.baseUrl}${endpoint}`;
-    const token = localStorage.getItem('token');
+    // JWT lives under `accessToken` (useAuth email/pw login) or `token`
+    // (OAuth-callback / DID login); the backend is JWT-only (Bearer scheme).
+    const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
 
     const response = await fetch(url, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': token ? `Token ${token}` : '',
+        'Authorization': token ? `Bearer ${token}` : '',
         ...options.headers,
       },
     });

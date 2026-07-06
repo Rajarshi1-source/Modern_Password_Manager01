@@ -207,7 +207,7 @@ const AccountProtection = () => {
             setLoading(true);
             const response = await fetch('/api/security/account-protection/security_dashboard/', {
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`,
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'
                 }
             });
@@ -234,7 +234,7 @@ const AccountProtection = () => {
         try {
             const response = await fetch('/api/security/account-protection/notification_settings/', {
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`
                 }
             });
 
@@ -252,7 +252,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/lock_accounts/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`,
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -279,7 +279,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/unlock_accounts/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`,
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -305,7 +305,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/social-accounts/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`,
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(accountData)
@@ -330,7 +330,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/trust_device/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`,
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ device_id: deviceId })
@@ -353,7 +353,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/resolve_alert/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`,
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ alert_id: alertId })
@@ -376,7 +376,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/notification_settings/', {
                 method: 'PUT',
                 headers: {
-                    'Authorization': `Token ${localStorage.getItem('authToken')}`,
+                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(settings)
