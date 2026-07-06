@@ -79,7 +79,7 @@ api.interceptors.response.use(
     // Handle authentication errors
     if (error.response && error.response.status === 401) {
       // Clear token and device fingerprint on unauthorized
-      localStorage.removeItem('token');
+      localStorage.removeItem('accessToken');
       DeviceFingerprint.clear();
       
       // Redirect to login if not already there
@@ -261,7 +261,7 @@ const ApiService = {
       // Handle authentication errors
       if (error.response.status === 401) {
         // Clear token and device fingerprint on unauthorized
-        localStorage.removeItem('token');
+        localStorage.removeItem('accessToken');
         DeviceFingerprint.clear();
         window.location.href = '/login';
       }
