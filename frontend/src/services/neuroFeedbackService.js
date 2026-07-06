@@ -31,7 +31,12 @@ class NeuroFeedbackService {
    * Get auth headers with JWT token.
    */
   _getHeaders() {
-    const token = localStorage.getItem('access_token');
+    // The SPA is JWT-only (settings DEFAULT_AUTHENTICATION_CLASSES =
+    // JWTAuthentication) and stores the JWT access token under `token`; the
+    // legacy `access_token` key was never set, so requests went out as
+    // `Bearer null` and 401'd. Read the real key, matching the sibling
+    // Bearer services (biometricLivenessService, darkProtocolService).
+    const token = localStorage.getItem('token');
     return {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json',
