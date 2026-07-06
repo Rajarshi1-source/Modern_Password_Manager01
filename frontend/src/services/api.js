@@ -44,11 +44,17 @@ attachGeolocationInterceptor(api);
 
 // Add auth token and device fingerprint to requests if available
 api.interceptors.request.use(async (config) => {
-  const token = localStorage.getItem('token');
-  
+  // The live provider (hooks/useAuth) is JWT and stores the access token under
+  // `accessToken`; the backend's DEFAULT_AUTHENTICATION_CLASSES is
+  // JWTAuthentication only, with AUTH_HEADER_TYPES=('Bearer',). The previous
+  // `Token ${localStorage.token}` targeted the now-dead DRF-token AuthContext
+  // and was rejected by the JWT backend, so align with the canonical
+  // `Bearer ${accessToken}` used by useAuth / deviceFingerprint / SocialMediaLogin.
+  const token = localStorage.getItem('accessToken');
+
   if (token) {
     // Add authentication token
-    config.headers.Authorization = `Token ${token}`;
+    config.headers.Authorization = `Bearer ${token}`;
     
     // Add device fingerprint for security tracking
     try {
