@@ -303,7 +303,8 @@ class CognitiveAuthService {
       ...options,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': token ? `Bearer ${token}` : '',
+        // Omit the header when unauthenticated rather than sending an empty one.
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         ...options.headers,
       },
     });
