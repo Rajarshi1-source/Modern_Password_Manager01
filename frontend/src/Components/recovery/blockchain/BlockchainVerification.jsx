@@ -13,6 +13,14 @@ import { CheckCircle, Pending, Error as ErrorIcon, OpenInNew } from '@mui/icons-
 import axios from 'axios';
 import arbitrumService from '../../../services/blockchain/arbitrumService';
 
+// Build the Authorization header for the JWT-only backend. The JWT lives under
+// `accessToken` (useAuth email/pw) or `token` (OAuth-callback / DID login); when
+// neither is set, omit the header rather than sending a literal `Bearer null`.
+const authHeader = () => {
+  const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
   const [verificationData, setVerificationData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -30,10 +38,9 @@ const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
       setLoading(true);
       setError(null);
 
-      const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
       const response = await axios.get(
         `/api/blockchain/verify-commitment/${commitmentId}/`,
-        { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
+        { headers: authHeader() }
       );
 
       setVerificationData(response.data);
@@ -50,10 +57,9 @@ const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
       setVerifyingOnChain(true);
 
       // Call API with on-chain verification enabled
-      const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
       const response = await axios.get(
         `/api/blockchain/verify-commitment/${commitmentId}/?verify_onchain=true`,
-        { headers: token ? { 'Authorization': `Bearer ${token}` } : {} }
+        { headers: authHeader() }
       );
 
       setVerificationData(response.data);
