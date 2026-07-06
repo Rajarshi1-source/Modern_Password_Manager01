@@ -19,9 +19,12 @@ class BiometricLivenessService {
    * Get auth headers for API requests
    */
   getHeaders() {
+    // JWT lives under `accessToken` (useAuth email/pw login) or `token`
+    // (OAuth-callback / DID login); read whichever the active flow set.
+    const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
     return {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      'Authorization': `Bearer ${token}`,
     };
   }
 

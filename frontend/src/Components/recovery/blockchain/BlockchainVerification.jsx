@@ -34,7 +34,7 @@ const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
         `/api/blockchain/verify-commitment/${commitmentId}/`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+            'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`
           }
         }
       );
@@ -57,7 +57,7 @@ const BlockchainVerification = ({ commitmentId, showDetails = true }) => {
         `/api/blockchain/verify-commitment/${commitmentId}/?verify_onchain=true`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+            'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`
           }
         }
       );
