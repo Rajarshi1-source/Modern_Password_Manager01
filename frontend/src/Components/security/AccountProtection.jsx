@@ -8,6 +8,15 @@ import {
     Smartphone, Monitor, Globe, CheckCircle, ExternalLink
 } from 'lucide-react';
 
+// Build the Authorization header for the JWT-only backend. The JWT lives under
+// `accessToken` (useAuth email/pw) or `token` (OAuth-callback / DID login); when
+// neither is set (unauthenticated / post-logout) omit the header entirely so we
+// send no credential rather than a literal `Bearer null`.
+const authHeader = () => {
+  const token = localStorage.getItem('accessToken') || localStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
 // Simple UI component replacements
 const Card = ({ children, className = '' }) => (
     <div className={`bg-white rounded-lg shadow border ${className}`}>{children}</div>
@@ -207,7 +216,7 @@ const AccountProtection = () => {
             setLoading(true);
             const response = await fetch('/api/security/account-protection/security_dashboard/', {
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 }
             });
@@ -234,7 +243,7 @@ const AccountProtection = () => {
         try {
             const response = await fetch('/api/security/account-protection/notification_settings/', {
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`
+                    ...authHeader()
                 }
             });
 
@@ -252,7 +261,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/lock_accounts/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -279,7 +288,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/unlock_accounts/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
@@ -305,7 +314,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/social-accounts/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(accountData)
@@ -330,7 +339,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/trust_device/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ device_id: deviceId })
@@ -353,7 +362,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/resolve_alert/', {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ alert_id: alertId })
@@ -376,7 +385,7 @@ const AccountProtection = () => {
             const response = await fetch('/api/security/account-protection/notification_settings/', {
                 method: 'PUT',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('accessToken') || localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify(settings)
