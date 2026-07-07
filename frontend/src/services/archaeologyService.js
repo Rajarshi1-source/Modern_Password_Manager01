@@ -28,7 +28,7 @@ const api = axios.create({
 
 // Add auth header to every request
 api.interceptors.request.use((config) => {
-  Object.assign(config.headers, authHeader());
+  config.headers.set(authHeader());
   return config;
 });
 
