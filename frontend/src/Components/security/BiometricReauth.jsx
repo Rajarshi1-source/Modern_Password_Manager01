@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import { FaFingerprint, FaExclamationCircle, FaCheckCircle, FaLock } from 'react-icons/fa';
+import { authHeader } from '../../utils/authHeader';
 
 const ReauthModal = styled.div`
   position: fixed;
@@ -233,7 +234,7 @@ const BiometricReauth = ({ isOpen, onSuccess, onCancel, operation = "this action
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          ...authHeader()
         }
       });
 
@@ -268,7 +269,7 @@ const BiometricReauth = ({ isOpen, onSuccess, onCancel, operation = "this action
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          ...authHeader()
         },
         body: JSON.stringify({
           id: credential.id,
@@ -311,7 +312,7 @@ const BiometricReauth = ({ isOpen, onSuccess, onCancel, operation = "this action
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          ...authHeader()
         },
         body: JSON.stringify({ password })
       });

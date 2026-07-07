@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './DeadDropManager.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE = '/api/mesh';
 
@@ -24,7 +25,7 @@ const DeadDropManager = () => {
         try {
             const response = await fetch(`${API_BASE}/deaddrops/`, {
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    ...authHeader()
                 }
             });
             const data = await response.json();
@@ -247,7 +248,7 @@ const CreateDeadDropModal = ({ onClose, onCreated }) => {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    ...authHeader()
                 },
                 body: JSON.stringify(formData)
             });
@@ -541,7 +542,7 @@ const DeadDropDetailModal = ({ drop, onClose, onUpdate }) => {
         // Fetch distribution status
         fetch(`${API_BASE}/deaddrops/${drop.id}/`, {
             headers: {
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
+                ...authHeader()
             }
         })
             .then(r => r.json())
@@ -557,7 +558,7 @@ const DeadDropDetailModal = ({ drop, onClose, onUpdate }) => {
             await fetch(`${API_BASE}/deaddrops/${drop.id}/cancel/`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    ...authHeader()
                 }
             });
             onUpdate();

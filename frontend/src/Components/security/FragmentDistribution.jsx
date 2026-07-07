@@ -9,6 +9,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import './FragmentDistribution.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE = '/api/mesh';
 
@@ -26,7 +27,7 @@ const FragmentDistribution = ({ deadDropId, onRefresh }) => {
             try {
                 const response = await fetch(`${API_BASE}/deaddrops/${deadDropId}/`, {
                     headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                        ...authHeader()
                     }
                 });
                 const data = await response.json();
@@ -51,7 +52,7 @@ const FragmentDistribution = ({ deadDropId, onRefresh }) => {
             const response = await fetch(`${API_BASE}/deaddrops/${deadDropId}/distribute/`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    ...authHeader()
                 }
             });
             const data = await response.json();

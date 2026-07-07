@@ -5,6 +5,7 @@
  */
 
 import axios from 'axios';
+import { authHeader } from '../utils/authHeader';
 
 const API_BASE = '/api/archaeology';
 
@@ -12,8 +13,7 @@ const API_BASE = '/api/archaeology';
  * Get auth headers from stored JWT token.
  */
 function getAuthHeaders() {
-  const token = localStorage.getItem('access_token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return authHeader();
 }
 
 /**
@@ -28,10 +28,7 @@ const api = axios.create({
 
 // Add auth header to every request
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  Object.assign(config.headers, authHeader());
   return config;
 });
 

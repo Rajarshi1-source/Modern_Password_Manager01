@@ -13,6 +13,7 @@ import ABTestResults from './ABTestResults';
 import BlockchainStats from './BlockchainStats';
 import TrendsChart from './TrendsChart';
 import FeedbackSummary from './FeedbackSummary';
+import { authHeader } from '../../../utils/authHeader';
 
 const RecoveryMetricsDashboard = () => {
   const [metrics, setMetrics] = useState(null);
@@ -43,7 +44,7 @@ const RecoveryMetricsDashboard = () => {
         {
           params: { time_range_days: timeRange },
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            ...authHeader()
           }
         }
       );

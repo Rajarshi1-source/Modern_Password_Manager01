@@ -9,6 +9,7 @@
  */
 
 import axios from 'axios';
+import { authHeader } from '../utils/authHeader';
 
 const API_BASE = '/api/ml';
 
@@ -28,9 +29,8 @@ class PredictiveIntentService {
    * Get auth headers
    */
   getAuthHeaders() {
-    const token = localStorage.getItem('authToken');
     return {
-      'Authorization': `Bearer ${token}`,
+      ...authHeader(),
       'Content-Type': 'application/json',
     };
   }

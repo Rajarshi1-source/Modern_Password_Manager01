@@ -13,6 +13,7 @@
  * @author Password Manager Team
  * @created 2026-02-02
  */
+import { authHeader } from '../utils/authHeader';
 
 // API base URL
 const DARK_PROTOCOL_BASE = '/api/security/dark-protocol';
@@ -32,7 +33,7 @@ export const getConfig = async () => {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
   });
   
@@ -48,7 +49,7 @@ export const updateConfig = async (config) => {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
     body: JSON.stringify(config),
   });
@@ -69,7 +70,7 @@ export const getSession = async () => {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
   });
   
@@ -85,7 +86,7 @@ export const establishSession = async (options = {}) => {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
     body: JSON.stringify({
       hop_count: options.hopCount,
@@ -116,7 +117,7 @@ export const terminateSession = async (sessionId = null) => {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
     body: JSON.stringify({ session_id: sessionId }),
   });
@@ -139,7 +140,7 @@ export const getNodes = async (nodeType = null) => {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
   });
   
@@ -155,7 +156,7 @@ export const getRoutes = async () => {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
   });
   
@@ -171,7 +172,7 @@ export const requestNewRoute = async () => {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
   });
   
@@ -187,7 +188,7 @@ export const getNetworkHealth = async () => {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
   });
   
@@ -203,7 +204,7 @@ export const getStats = async () => {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
   });
   
@@ -223,7 +224,7 @@ export const proxyVaultOperation = async (operation, payload = {}, sessionId = n
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      ...authHeader(),
     },
     body: JSON.stringify({
       operation,

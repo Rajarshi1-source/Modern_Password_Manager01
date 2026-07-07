@@ -10,6 +10,7 @@
 
 import axios from 'axios';
 import apiService from './api';
+import { authHeader } from '../utils/authHeader';
 
 // Use relative paths in development to leverage Vite proxy
 const API_BASE = import.meta.env.VITE_API_URL || 
@@ -35,7 +36,7 @@ class MFAService {
         },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'Content-Type': 'application/json'
           }
         }
@@ -67,7 +68,7 @@ class MFAService {
         },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'Content-Type': 'application/json'
           }
         }
@@ -132,7 +133,7 @@ class MFAService {
         },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'Content-Type': 'application/json'
           }
         }
@@ -177,7 +178,7 @@ class MFAService {
         requestData,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'Content-Type': 'application/json'
           }
         }
@@ -206,7 +207,7 @@ class MFAService {
         },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'Content-Type': 'application/json'
           }
         }
@@ -229,7 +230,7 @@ class MFAService {
         `${API_BASE}/api/auth/mfa/factors/`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            ...authHeader()
           }
         }
       );
@@ -251,7 +252,7 @@ class MFAService {
         `${API_BASE}/api/auth/mfa/policy/`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            ...authHeader()
           }
         }
       );
@@ -275,7 +276,7 @@ class MFAService {
         policy,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'Content-Type': 'application/json'
           }
         }
@@ -299,7 +300,7 @@ class MFAService {
         `${API_BASE}/api/auth/mfa/auth-attempts/?limit=${limit}`,
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            ...authHeader()
           }
         }
       );
@@ -499,7 +500,7 @@ class MFAService {
         {
           params: { operation_type: operationType },
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'X-Device-Fingerprint': deviceFingerprint
           }
         }
@@ -526,7 +527,7 @@ class MFAService {
         { factors },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            ...authHeader(),
             'Content-Type': 'application/json',
             'X-Device-Fingerprint': deviceFingerprint
           }

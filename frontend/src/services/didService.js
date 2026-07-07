@@ -11,6 +11,7 @@
 import axios from 'axios';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
+import { authHeader } from '../utils/authHeader';
 
 const API_BASE =
   import.meta.env.VITE_API_URL ||
@@ -177,7 +178,7 @@ export async function signVp({ holderDid, privateKeyHex, nonce, audience, verifi
 // ---------------------------------------------------------------------------
 
 const authHeaders = () => ({
-  Authorization: `Bearer ${localStorage.getItem('token')}`,
+  ...authHeader(),
   'Content-Type': 'application/json',
 });
 
