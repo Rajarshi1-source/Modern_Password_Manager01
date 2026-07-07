@@ -15,6 +15,12 @@
  */
 import { authHeader } from '../utils/authHeader';
 
+// JSON + auth headers shared by every dark-protocol fetch call.
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  ...authHeader(),
+});
+
 // API base URL
 const DARK_PROTOCOL_BASE = '/api/security/dark-protocol';
 
@@ -31,10 +37,7 @@ let connectionListeners = [];
 export const getConfig = async () => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/config/`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
   });
   
   if (!response.ok) {
@@ -47,10 +50,7 @@ export const getConfig = async () => {
 export const updateConfig = async (config) => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/config/`, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
     body: JSON.stringify(config),
   });
   
@@ -68,10 +68,7 @@ export const updateConfig = async (config) => {
 export const getSession = async () => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/session/`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
   });
   
   if (!response.ok) {
@@ -84,10 +81,7 @@ export const getSession = async () => {
 export const establishSession = async (options = {}) => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/session/`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
     body: JSON.stringify({
       hop_count: options.hopCount,
       preferred_regions: options.preferredRegions,
@@ -115,10 +109,7 @@ export const terminateSession = async (sessionId = null) => {
   
   const response = await fetch(`${DARK_PROTOCOL_BASE}/session/`, {
     method: 'DELETE',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
     body: JSON.stringify({ session_id: sessionId }),
   });
   
@@ -138,10 +129,7 @@ export const getNodes = async (nodeType = null) => {
   
   const response = await fetch(`${DARK_PROTOCOL_BASE}/nodes/${params}`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
   });
   
   if (!response.ok) {
@@ -154,10 +142,7 @@ export const getNodes = async (nodeType = null) => {
 export const getRoutes = async () => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/route/`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
   });
   
   if (!response.ok) {
@@ -170,10 +155,7 @@ export const getRoutes = async () => {
 export const requestNewRoute = async () => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/route/`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
   });
   
   if (!response.ok) {
@@ -186,10 +168,7 @@ export const requestNewRoute = async () => {
 export const getNetworkHealth = async () => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/health/`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
   });
   
   if (!response.ok) {
@@ -202,10 +181,7 @@ export const getNetworkHealth = async () => {
 export const getStats = async () => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/stats/`, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
   });
   
   if (!response.ok) {
@@ -222,10 +198,7 @@ export const getStats = async () => {
 export const proxyVaultOperation = async (operation, payload = {}, sessionId = null) => {
   const response = await fetch(`${DARK_PROTOCOL_BASE}/vault-proxy/`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeader(),
-    },
+    headers: authHeaders(),
     body: JSON.stringify({
       operation,
       payload,
