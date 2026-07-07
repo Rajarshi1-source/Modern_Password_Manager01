@@ -6,6 +6,7 @@ import {
     InteractiveCertificateBadge,
     EntropySourceCard
 } from './EnhancedEntropyVisualizations';
+import { authHeader } from '../../utils/authHeader';
 import './UltimateEntropyDashboard.css';
 
 // =============================================================================
@@ -45,7 +46,7 @@ const API_BASE = '/api/security';
 
 async function fetchGlobalStatus(): Promise<GlobalStatus> {
     const response = await fetch(`${API_BASE}/natural/status/`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        headers: { ...authHeader() }
     });
     if (!response.ok) throw new Error('Failed to fetch status');
     return response.json();
@@ -60,7 +61,7 @@ async function generateNaturalPassword(
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('token')}`
+            ...authHeader()
         },
         body: JSON.stringify({ sources, length, charset })
     });

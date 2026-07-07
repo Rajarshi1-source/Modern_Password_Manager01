@@ -7,13 +7,14 @@
  */
 
 import axios from 'axios';
+import { authHeader } from '../utils/authHeader';
 
 const API_BASE =
   import.meta.env.VITE_API_URL ||
   (import.meta.env.PROD ? 'https://api.securevault.com' : '');
 
 const authHeaders = () => ({
-  Authorization: `Bearer ${localStorage.getItem('token')}`,
+  ...authHeader(),
   'Content-Type': 'application/json',
 });
 

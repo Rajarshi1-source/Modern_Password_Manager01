@@ -20,6 +20,7 @@ import {
     AlertOctagon
 } from 'lucide-react';
 import './InstantRevokeModal.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -39,7 +40,7 @@ const InstantRevokeModal = ({ pair, onConfirm, onCancel }) => {
             const response = await fetch(`${API_BASE_URL}/api/security/entanglement/revoke/`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({

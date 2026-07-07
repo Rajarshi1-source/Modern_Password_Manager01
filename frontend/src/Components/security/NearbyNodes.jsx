@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './NearbyNodes.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE = '/api/mesh';
 
@@ -44,7 +45,7 @@ const NearbyNodes = ({ onNodeSelect, radiusKm = 10 }) => {
                 `${API_BASE}/nodes/nearby/?lat=${userLocation.lat}&lon=${userLocation.lng}&radius=${radiusKm}`,
                 {
                     headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                        ...authHeader()
                     }
                 }
             );

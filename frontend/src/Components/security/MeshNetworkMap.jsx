@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './MeshNetworkMap.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE = '/api/mesh';
 
@@ -57,7 +58,7 @@ const MeshNetworkMap = ({
                     `${API_BASE}/nodes/nearby/?lat=${userLocation.lat}&lon=${userLocation.lng}&radius=10`,
                     {
                         headers: {
-                            'Authorization': `Bearer ${localStorage.getItem('token')}`
+                            ...authHeader()
                         }
                     }
                 );

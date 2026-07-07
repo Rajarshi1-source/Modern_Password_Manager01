@@ -28,6 +28,7 @@ import {
     CheckCircle
 } from 'lucide-react';
 import './DevicePairingFlow.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -49,7 +50,7 @@ const DevicePairingFlow = ({ onComplete, onCancel }) => {
             try {
                 const response = await fetch(`${API_BASE_URL}/api/security/devices/`, {
                     headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                        ...authHeader(),
                     },
                 });
                 if (response.ok) {
@@ -100,7 +101,7 @@ const DevicePairingFlow = ({ onComplete, onCancel }) => {
             const response = await fetch(`${API_BASE_URL}/api/security/entanglement/initiate/`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -142,7 +143,7 @@ const DevicePairingFlow = ({ onComplete, onCancel }) => {
             const response = await fetch(`${API_BASE_URL}/api/security/entanglement/verify/`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({

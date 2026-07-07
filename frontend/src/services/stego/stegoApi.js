@@ -7,15 +7,12 @@
  */
 
 import axios from 'axios';
+import { authHeader } from '../../utils/authHeader';
 
 const BASE = '/api/stego';
 
 function authHeaders(extra = {}) {
-  const token =
-    localStorage.getItem('access_token') ||
-    sessionStorage.getItem('access_token') ||
-    '';
-  return token ? { Authorization: `Bearer ${token}`, ...extra } : { ...extra };
+  return { ...authHeader(), ...extra };
 }
 
 export async function fetchStegoConfig() {

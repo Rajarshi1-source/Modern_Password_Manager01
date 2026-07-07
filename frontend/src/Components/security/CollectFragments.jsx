@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './CollectFragments.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE = '/api/mesh';
 
@@ -29,7 +30,7 @@ const CollectFragments = ({ deadDropId, onSuccess, onCancel }) => {
             try {
                 const response = await fetch(`${API_BASE}/deaddrops/${deadDropId}/`, {
                     headers: {
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                        ...authHeader()
                     }
                 });
                 const data = await response.json();
@@ -133,7 +134,7 @@ const CollectFragments = ({ deadDropId, onSuccess, onCancel }) => {
             const response = await fetch(`${API_BASE}/deaddrops/${deadDropId}/collect/`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ location: locationData })

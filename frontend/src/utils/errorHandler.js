@@ -158,7 +158,7 @@ class ErrorHandler {
   handleAuthError(error, action = 'authentication') {
     this.handleError(error, 'authError', {
       action,
-      isAuthenticated: !!localStorage.getItem('access_token')
+      isAuthenticated: !!(localStorage.getItem('accessToken') || localStorage.getItem('token'))
     });
     
     // Clear auth tokens

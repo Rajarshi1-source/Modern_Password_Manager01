@@ -29,6 +29,7 @@ import DevicePairingFlow from './DevicePairingFlow';
 import EntropyHealthCard from './EntropyHealthCard';
 import InstantRevokeModal from './InstantRevokeModal';
 import './EntangledDeviceManager.css';
+import { authHeader } from '../../utils/authHeader';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -47,7 +48,7 @@ const EntangledDeviceManager = () => {
             setLoading(true);
             const response = await fetch(`${API_BASE_URL}/api/security/entanglement/pairs/`, {
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json',
                 },
             });
@@ -75,7 +76,7 @@ const EntangledDeviceManager = () => {
             const response = await fetch(`${API_BASE_URL}/api/security/entanglement/rotate/`, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                    ...authHeader(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
