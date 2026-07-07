@@ -5,6 +5,7 @@
 
 import { performanceMonitor } from '../services/performanceMonitor';
 import { clearAccessToken } from '../services/tokenStore';
+import { authHeader } from './authHeader';
 
 class ErrorHandler {
   constructor() {
@@ -159,7 +160,7 @@ class ErrorHandler {
   handleAuthError(error, action = 'authentication') {
     this.handleError(error, 'authError', {
       action,
-      isAuthenticated: !!(localStorage.getItem('accessToken') || localStorage.getItem('token'))
+      isAuthenticated: !!authHeader().Authorization
     });
     
     // Clear every auth source authHeader() reads so a stale credential can't be
