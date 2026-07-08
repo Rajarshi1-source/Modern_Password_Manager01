@@ -1,4 +1,5 @@
 import FingerprintJS from '@fingerprintjs/fingerprintjs';
+import { authHeader } from './authHeader';
 
 /**
  * Utility class for generating and managing device fingerprints
@@ -73,7 +74,7 @@ class DeviceFingerprint {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          ...authHeader()
         },
         body: JSON.stringify({ device_id: fingerprint })
       });

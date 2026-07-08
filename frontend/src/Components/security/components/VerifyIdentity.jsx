@@ -4,6 +4,7 @@ import styled, { keyframes } from 'styled-components';
 import { FaExclamationTriangle, FaArrowLeft, FaPaperPlane, FaRedo, FaCheckCircle } from 'react-icons/fa';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
+import { authHeader } from '../../../utils/authHeader';
 
 // Animations
 const fadeIn = keyframes`
@@ -285,7 +286,7 @@ const VerifyIdentity = () => {
       setAccountError(false);
       const response = await axios.get(`/api/social-accounts/${socialAccountId}/`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          ...authHeader()
         }
       });
       setAccountDetails(response.data);
@@ -316,7 +317,7 @@ const VerifyIdentity = () => {
     try {
       await axios.post(`/api/social-accounts/${socialAccountId}/request_verification/`, {}, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          ...authHeader()
         }
       });
 
@@ -342,7 +343,7 @@ const VerifyIdentity = () => {
         { verification_code: verificationCode },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+            ...authHeader()
           }
         }
       );

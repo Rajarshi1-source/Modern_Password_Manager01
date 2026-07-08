@@ -19,6 +19,7 @@
 
 import axios from 'axios';
 import { SecureVaultCrypto, getSecureVaultCrypto, resetSecureVaultCrypto } from './secureVaultCrypto';
+import { authHeader } from '../utils/authHeader';
 
 // API Configuration
 const API_BASE = '/api';
@@ -66,10 +67,7 @@ export class SecureVaultService {
     // Request interceptor - add auth token
     client.interceptors.request.use(
       (config) => {
-        const token = localStorage.getItem('accessToken');
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
+        config.headers.set(authHeader());
         return config;
       },
       (error) => Promise.reject(error)
