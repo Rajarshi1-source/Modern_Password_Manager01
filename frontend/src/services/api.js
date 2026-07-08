@@ -2,6 +2,7 @@ import axios from 'axios';
 import DeviceFingerprint from '../utils/deviceFingerprint';
 import { attachGeolocationInterceptor } from './geolocation';
 import { authHeader } from '../utils/authHeader';
+import { clearAccessToken } from './tokenStore';
 
 // Create API instance with enforced HTTPS
 const createSecureApiInstance = (baseURL) => {
@@ -68,6 +69,18 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+// On a forced logout (401), clear every auth source authHeader() reads — the
+// in-memory tokenStore, plus localStorage accessToken / token / refreshToken —
+// and the device fingerprint, so a stale credential can't be reused after the
+// redirect. Mirrors errorHandler.handleAuthError.
+const clearAuthState = () => {
+  clearAccessToken();
+  localStorage.removeItem('accessToken');
+  localStorage.removeItem('token');
+  localStorage.removeItem('refreshToken');
+  DeviceFingerprint.clear();
+};
+
 // Response interceptor for handling auth errors and device tracking
 api.interceptors.response.use(
   (response) => {
@@ -77,10 +90,8 @@ api.interceptors.response.use(
   (error) => {
     // Handle authentication errors
     if (error.response && error.response.status === 401) {
-      // Clear token and device fingerprint on unauthorized
-      localStorage.removeItem('accessToken');
-      DeviceFingerprint.clear();
-      
+      clearAuthState();
+
       // Redirect to login if not already there
       if (!window.location.pathname.includes('/login')) {
         window.location.href = '/login';
@@ -259,9 +270,7 @@ const ApiService = {
       
       // Handle authentication errors
       if (error.response.status === 401) {
-        // Clear token and device fingerprint on unauthorized
-        localStorage.removeItem('accessToken');
-        DeviceFingerprint.clear();
+        clearAuthState();
         window.location.href = '/login';
       }
       
