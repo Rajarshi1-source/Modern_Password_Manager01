@@ -67,14 +67,20 @@ class DeviceFingerprint {
    * @returns {Promise<boolean>} Whether the device is registered
    */
   async isRegistered() {
+    // Don't POST the persistent device fingerprint on unauthenticated requests.
+    const auth = authHeader();
+    if (!auth.Authorization) {
+      return false;
+    }
+
     const fingerprint = await this.generate();
-    
+
     try {
       const response = await fetch('/api/devices/check/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...authHeader()
+          ...auth
         },
         body: JSON.stringify({ device_id: fingerprint })
       });
