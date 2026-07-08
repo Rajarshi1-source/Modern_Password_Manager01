@@ -6,6 +6,7 @@ import { toast } from 'react-hot-toast';
 import { FaLock, FaExclamationTriangle, FaUser, FaKey, FaShieldAlt } from 'react-icons/fa';
 import { errorTracker } from '../../services/errorTracker';
 import deviceFingerprint from '../../utils/deviceFingerprint';
+import { authHeader } from '../../utils/authHeader';
 
 const Container = styled.div`
   max-width: 400px;
@@ -226,7 +227,7 @@ const SocialMediaLogin = ({ socialAccountId }) => {
       // First, attempt to retrieve encrypted password from our password manager
       const passwordResponse = await axios.get(`/api/social-accounts/${socialAccountId}/password/`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          ...authHeader()
         }
       });
 
@@ -237,7 +238,7 @@ const SocialMediaLogin = ({ socialAccountId }) => {
         { device_id: deviceId },
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+            ...authHeader()
           }
         }
       );

@@ -4,6 +4,7 @@ import axios from 'axios';
 import { toast } from 'react-hot-toast';
 import { format } from 'date-fns';
 import { FaHistory, FaExclamationTriangle, FaCheckCircle, FaTimesCircle, FaGlobe, FaDesktop, FaMobileAlt, FaFilter, FaSync } from 'react-icons/fa';
+import { authHeader } from '../../../utils/authHeader';
 
 const spin = keyframes`
   from { transform: rotate(0deg); }
@@ -339,7 +340,7 @@ const LoginHistory = () => {
       
       const response = await axios.get(url, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          ...authHeader()
         }
       });
       

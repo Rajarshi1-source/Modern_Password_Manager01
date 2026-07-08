@@ -3,6 +3,7 @@ import styled, { keyframes } from 'styled-components';
 import axios from 'axios';
 import { toast } from 'react-hot-toast';
 import { FaBell, FaEnvelope, FaMobileAlt, FaDesktop, FaShieldAlt, FaClock, FaExclamationTriangle, FaSave, FaToggleOn, FaToggleOff } from 'react-icons/fa';
+import { authHeader } from '../../../utils/authHeader';
 
 const spin = keyframes`
   from { transform: rotate(0deg); }
@@ -329,7 +330,7 @@ const NotificationSettings = () => {
     try {
       const response = await axios.get('/api/security/account-protection/notification-settings/', {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          ...authHeader()
         }
       });
       setSettings(response.data);
@@ -352,7 +353,7 @@ const NotificationSettings = () => {
     try {
       await axios.put('/api/security/account-protection/notification-settings/', settings, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+          ...authHeader()
         }
       });
       

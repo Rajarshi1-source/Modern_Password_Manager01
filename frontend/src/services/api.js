@@ -1,6 +1,7 @@
 import axios from 'axios';
 import DeviceFingerprint from '../utils/deviceFingerprint';
 import { attachGeolocationInterceptor } from './geolocation';
+import { authHeader } from '../utils/authHeader';
 
 // Create API instance with enforced HTTPS
 const createSecureApiInstance = (baseURL) => {
@@ -44,18 +45,16 @@ attachGeolocationInterceptor(api);
 
 // Add auth token and device fingerprint to requests if available
 api.interceptors.request.use(async (config) => {
-  // The live provider (hooks/useAuth) is JWT and stores the access token under
-  // `accessToken`; the backend's DEFAULT_AUTHENTICATION_CLASSES is
-  // JWTAuthentication only, with AUTH_HEADER_TYPES=('Bearer',). The previous
-  // `Token ${localStorage.token}` targeted the now-dead DRF-token AuthContext
-  // and was rejected by the JWT backend, so align with the canonical
-  // `Bearer ${accessToken}` used by useAuth / deviceFingerprint / SocialMediaLogin.
-  const token = localStorage.getItem('accessToken');
+  // Resolve the Bearer JWT via the shared authHeader() so this client stays in
+  // sync with every auth flow (in-memory tokenStore for cookie sessions, then
+  // localStorage accessToken, then token). This is a separate axios instance
+  // from useAuth's global interceptor, so there is no double-header interaction.
+  const auth = authHeader();
 
-  if (token) {
+  if (auth.Authorization) {
     // Add authentication token
-    config.headers.Authorization = `Bearer ${token}`;
-    
+    config.headers.Authorization = auth.Authorization;
+
     // Add device fingerprint for security tracking
     try {
       const deviceFingerprint = await DeviceFingerprint.generate();
