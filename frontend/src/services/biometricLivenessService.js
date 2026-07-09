@@ -65,6 +65,10 @@ class BiometricLivenessService {
    * AnonymousUser and the consumer immediately close(4001)'d. This is demo
    * enablement only — connecting the socket does NOT make the anti-spoofing
    * claims real.
+   *
+   * @returns {Promise<boolean>} true once the socket was created and handlers
+   *   attached; false if the ticket fetch or socket construction failed, or the
+   *   attempt was superseded. Callers must abort their "connected" flow on false.
    */
   async connectWebSocket(sessionId, onFrameResult, onComplete, onError) {
     const generation = ++this.wsConnectGeneration;
@@ -77,13 +81,13 @@ class BiometricLivenessService {
     } catch (error) {
       // Superseded by a disconnect()/newer connect() while the ticket was in
       // flight — stay silent for a dead attempt.
-      if (generation !== this.wsConnectGeneration) return;
+      if (generation !== this.wsConnectGeneration) return false;
       console.error('Error fetching liveness WebSocket ticket:', error);
       if (onError) onError('WebSocket authentication failed');
-      return;
+      return false;
     }
     // Superseded while the ticket was in flight — don't open a stale socket.
-    if (generation !== this.wsConnectGeneration) return;
+    if (generation !== this.wsConnectGeneration) return false;
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProtocol}//${window.location.host}/ws/liveness/${sessionId}/?ticket=${encodeURIComponent(ticket)}`;
@@ -93,7 +97,7 @@ class BiometricLivenessService {
     } catch (error) {
       console.error('Error creating liveness WebSocket:', error);
       if (onError) onError('WebSocket connection error');
-      return;
+      return false;
     }
 
     this.ws.onopen = () => {
@@ -120,6 +124,8 @@ class BiometricLivenessService {
     this.ws.onclose = () => {
       console.log('Liveness WebSocket closed');
     };
+
+    return true;
   }
 
   /**
