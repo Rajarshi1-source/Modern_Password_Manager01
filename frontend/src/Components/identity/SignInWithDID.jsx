@@ -80,7 +80,10 @@ export default function SignInWithDID() {
         // login flow can't leave a stale credential authHeader() would prefer.
         setSessionToken('token', result.access_token);
         if (result.refresh_token) {
-          localStorage.setItem('refresh_token', result.refresh_token);
+          // Store under the shared `refreshToken` key (not `refresh_token`) so
+          // the refresh flow (storage.getRefreshToken) can use it and
+          // clearStoredTokens() wipes it on logout / auth-error.
+          localStorage.setItem('refreshToken', result.refresh_token);
         }
         setOk('Signed in. Redirecting…');
         setTimeout(() => navigate('/'), 500);

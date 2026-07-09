@@ -42,7 +42,15 @@ const REFRESH_TOKEN_KEY = 'refreshToken';
  */
 export function setSessionToken(key, value) {
   const alternate = key === ACCESS_TOKEN_KEY ? LEGACY_TOKEN_KEY : ACCESS_TOKEN_KEY;
-  localStorage.setItem(key, value);
+  // A falsy token is treated as a clear: localStorage.setItem would coerce
+  // undefined/null to the strings "undefined"/"null", which authHeader() would
+  // later emit as a garbage `Bearer undefined`. Removing both keys keeps the
+  // "at most one access-token key set" invariant intact.
+  if (value == null || value === '') {
+    localStorage.removeItem(key);
+  } else {
+    localStorage.setItem(key, value);
+  }
   localStorage.removeItem(alternate);
 }
 
