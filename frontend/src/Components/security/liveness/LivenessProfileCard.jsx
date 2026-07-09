@@ -69,7 +69,7 @@ const LivenessProfileCard = ({ onStartVerification }) => {
                 <span className="card-icon">🎭</span>
                 <div className="card-title">
                     <h3>Biometric Liveness</h3>
-                    <p>Deepfake-resistant verification</p>
+                    <p>Experimental liveness checks</p>
                 </div>
                 <div className={`status-badge ${profile?.is_calibrated ? 'active' : 'inactive'}`}>
                     {profile?.is_calibrated ? 'Calibrated' : 'Not Calibrated'}
