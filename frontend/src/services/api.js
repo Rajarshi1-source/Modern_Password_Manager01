@@ -2,7 +2,7 @@ import axios from 'axios';
 import DeviceFingerprint from '../utils/deviceFingerprint';
 import { attachGeolocationInterceptor } from './geolocation';
 import { authHeader } from '../utils/authHeader';
-import { clearAccessToken } from './tokenStore';
+import { clearStoredTokens } from '../utils/authStorage';
 
 // Create API instance with enforced HTTPS
 const createSecureApiInstance = (baseURL) => {
@@ -74,10 +74,7 @@ api.interceptors.request.use(async (config) => {
 // and the device fingerprint, so a stale credential can't be reused after the
 // redirect. Mirrors errorHandler.handleAuthError.
 const clearAuthState = () => {
-  clearAccessToken();
-  localStorage.removeItem('accessToken');
-  localStorage.removeItem('token');
-  localStorage.removeItem('refreshToken');
+  clearStoredTokens();
   DeviceFingerprint.clear();
 };
 

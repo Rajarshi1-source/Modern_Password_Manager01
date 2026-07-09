@@ -14,6 +14,7 @@ import LoadingIndicator from './Components/common/LoadingIndicator';
 import ErrorBoundary from './Components/common/ErrorBoundary';
 import ApiService from './services/api';
 import { clearStoredUser } from './utils/userStorage';
+import { setSessionToken } from './utils/authStorage';
 import toast, { Toaster } from 'react-hot-toast';
 import oauthService from './services/oauthService';
 import SessionMonitor from './Components/security/SessionMonitor';
@@ -1226,7 +1227,10 @@ function App() {
           return;
         }
 
-        localStorage.setItem('accessToken', oauthTokens.access);
+        // setSessionToken writes `accessToken` and clears the alternate `token`
+        // key so a prior OAuth-callback / DID / passkey login can't leave a
+        // stale credential that authHeader() would prefer over this one.
+        setSessionToken('accessToken', oauthTokens.access);
         axios.defaults.headers.common['Authorization'] = `Bearer ${oauthTokens.access}`;
 
         // Guard against `undefined` being coerced to the string "undefined",

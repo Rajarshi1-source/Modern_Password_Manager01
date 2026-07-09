@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { errorTracker } from '../../services/errorTracker';
+import { setSessionToken } from '../../utils/authStorage';
 
 /**
  * Component for signing in with passkeys
@@ -206,9 +207,11 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       const userData = verifyResponse.data.user;
       const tokens = verifyResponse.data.tokens;
       
-      // Store JWT tokens if provided
+      // Store JWT tokens if provided — setSessionToken clears the alternate
+      // `accessToken` key so a prior login flow can't leave a stale credential
+      // authHeader() would surface instead of this one.
       if (tokens) {
-        localStorage.setItem('token', tokens.access);
+        setSessionToken('token', tokens.access);
         localStorage.setItem('refreshToken', tokens.refresh);
       }
       

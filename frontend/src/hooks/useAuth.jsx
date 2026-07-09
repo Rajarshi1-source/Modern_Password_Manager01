@@ -47,6 +47,7 @@ import {
   getAccessToken as getInMemoryAccessToken,
   clearAccessToken,
 } from '../services/tokenStore';
+import { setSessionToken, clearStoredTokens } from '../utils/authStorage';
 
 // Opt-in feature flag for the HttpOnly-cookie refresh-token flow.
 // When true, the SPA:
@@ -92,7 +93,10 @@ const LEGACY_USER_KEY = 'user';
 
 const storage = {
   getAccessToken: () => localStorage.getItem(TOKEN_STORAGE_KEY),
-  setAccessToken: (token) => localStorage.setItem(TOKEN_STORAGE_KEY, token),
+  // Route through setSessionToken so writing `accessToken` also clears the
+  // alternate `token` key — otherwise a prior OAuth/DID/passkey login could
+  // leave a stale `token` that authHeader() would surface instead.
+  setAccessToken: (token) => setSessionToken(TOKEN_STORAGE_KEY, token),
   removeAccessToken: () => localStorage.removeItem(TOKEN_STORAGE_KEY),
 
   getRefreshToken: () => localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY),
@@ -100,8 +104,11 @@ const storage = {
   removeRefreshToken: () => localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY),
 
   clearAll: () => {
-    storage.removeAccessToken();
-    storage.removeRefreshToken();
+    // clearStoredTokens() wipes both localStorage access-token keys
+    // (accessToken + the legacy `token`), the refresh token, and the
+    // in-memory cookie-flow token, so logout leaves no credential
+    // authHeader() can read behind.
+    clearStoredTokens();
     // Defensive cleanup of any legacy user blob left by older builds.
     localStorage.removeItem(LEGACY_USER_KEY);
   }
