@@ -266,18 +266,33 @@ export const connectWebSocket = async (sessionId) => {
   const url = `${getWebSocketUrl(sessionId)}?ticket=${encodeURIComponent(ticket)}`;
 
   return new Promise((resolve, reject) => {
-    // Bind handlers to THIS socket instance, not the module-level wsConnection.
-    // A rapid disconnect→reconnect can fire the old socket's onclose after the
-    // new socket is live; without this guard the stale handler would clear the
-    // new connection's heartbeat/cover-traffic and null its reference.
+    // Bind handlers to THIS socket instance, not the module-level wsConnection,
+    // and settle exactly once. A concurrent connect() can replace wsConnection
+    // while this socket is still CONNECTING; without these guards a stale socket
+    // could resolve an orphaned connection, tear down the newer one, or (on an
+    // early close with no onerror) leave this promise — and establishSession —
+    // hanging forever.
     const socket = new WebSocket(url);
     wsConnection = socket;
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
 
     socket.onopen = () => {
+      // Superseded by a newer connect() while CONNECTING — close the orphan and
+      // reject this attempt rather than overwrite the live connection.
+      if (socket !== wsConnection) {
+        try { socket.close(); } catch { /* already closing */ }
+        settle(reject, new Error('Dark Protocol connect superseded'));
+        return;
+      }
       console.log('Dark Protocol WebSocket connected');
       startHeartbeat();
       notifyListeners({ type: 'connected', sessionId });
-      resolve(socket);
+      settle(resolve, socket);
     };
 
     socket.onmessage = (event) => {
@@ -291,8 +306,11 @@ export const connectWebSocket = async (sessionId) => {
 
     socket.onclose = (event) => {
       console.log('Dark Protocol WebSocket closed:', event.code);
-      // Skip when a newer connect() has already replaced this socket. When
-      // disconnectWebSocket() nulled wsConnection, this is false so cleanup runs.
+      // Closed before it ever opened — settle so awaiters don't hang when
+      // onerror doesn't fire (a clean server-side close emits onclose only).
+      // No-ops if the socket had already opened and resolved.
+      settle(reject, new Error(`Dark Protocol WebSocket closed before open (code ${event.code})`));
+      // Don't tear down a newer connection that already replaced this socket.
       if (socket !== wsConnection && wsConnection !== null) return;
       stopHeartbeat();
       stopCoverTraffic();
@@ -302,9 +320,13 @@ export const connectWebSocket = async (sessionId) => {
 
     socket.onerror = (error) => {
       console.error('Dark Protocol WebSocket error:', error);
-      if (socket !== wsConnection && wsConnection !== null) return;
+      // Superseded socket — settle its own promise, leave the newer one alone.
+      if (socket !== wsConnection && wsConnection !== null) {
+        settle(reject, error);
+        return;
+      }
       notifyListeners({ type: 'error', error });
-      reject(error);
+      settle(reject, error);
     };
   });
 };
