@@ -2,18 +2,23 @@
  * Dark Protocol Service
  * =======================
  * 
- * Frontend service for the Dark Protocol anonymous vault access network.
- * 
+ * Frontend service for the experimental Dark Protocol vault-access demo.
+ *
  * Features:
  * - Session management via REST API
  * - WebSocket connection for real-time communication
  * - Cover traffic generation (client-side)
  * - Connection state management
- * 
+ *
+ * NOTE: the dark-protocol transport is SIMULATED on a single Django server
+ * (no distributed relay network, no outbound inter-node transport), so this is
+ * a demo — it does NOT provide real anonymity or censorship resistance.
+ *
  * @author Password Manager Team
  * @created 2026-02-02
  */
 import { authHeader } from '../utils/authHeader';
+import { getWsTicket } from './wsTicket';
 
 // JSON + auth headers shared by every dark-protocol fetch call.
 const authHeaders = () => ({
@@ -26,6 +31,9 @@ const DARK_PROTOCOL_BASE = '/api/security/dark-protocol';
 
 // WebSocket state
 let wsConnection = null;
+// Bumped by every connect/disconnect so an in-flight ticket fetch that has been
+// superseded doesn't open a stale socket.
+let wsConnectGeneration = 0;
 let coverTrafficInterval = null;
 let heartbeatInterval = null;
 let connectionListeners = [];
@@ -225,15 +233,32 @@ const getWebSocketUrl = (sessionId) => {
 };
 
 export const connectWebSocket = async (sessionId) => {
+  if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+    return wsConnection;
+  }
+
+  const generation = ++wsConnectGeneration;
+
+  // Exchange the long-lived auth token for a short-lived, single-use ticket so
+  // it never lands in the ws:// URL (access logs / browser history). The ticket
+  // is consumed by the same TokenAuthMiddleware that authenticates the WS route,
+  // so no consumer change is needed. Without it the socket connected as
+  // AnonymousUser and the consumer immediately close(4003)'d. Demo enablement
+  // only — connecting the socket does NOT make the anonymity / censorship-
+  // resistance claims real (the transport is simulated on one server).
+  const ticket = await getWsTicket();
+
+  // Superseded by a disconnect()/newer connect() while the ticket was in
+  // flight — abort rather than open a stale/duplicate socket.
+  if (generation !== wsConnectGeneration) {
+    return null;
+  }
+
+  const url = `${getWebSocketUrl(sessionId)}?ticket=${encodeURIComponent(ticket)}`;
+
   return new Promise((resolve, reject) => {
-    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-      resolve(wsConnection);
-      return;
-    }
-    
-    const url = getWebSocketUrl(sessionId);
     wsConnection = new WebSocket(url);
-    
+
     wsConnection.onopen = () => {
       console.log('Dark Protocol WebSocket connected');
       startHeartbeat();
@@ -267,9 +292,11 @@ export const connectWebSocket = async (sessionId) => {
 };
 
 export const disconnectWebSocket = () => {
+  // Invalidate any connect() whose ticket request is still in flight.
+  wsConnectGeneration++;
   stopHeartbeat();
   stopCoverTraffic();
-  
+
   if (wsConnection) {
     wsConnection.close();
     wsConnection = null;

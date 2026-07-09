@@ -140,7 +140,7 @@ const LivenessResults = ({ results, onClose, onRetry }) => {
                 </div>
 
                 <div className="breakdown-item">
-                    <span className="breakdown-label">🛡️ Deepfake Detection</span>
+                    <span className="breakdown-label">🛡️ Spoof heuristic</span>
                     <div className="breakdown-bar-container">
                         <div
                             className={`breakdown-bar ${deepfake_probability < 0.3 ? 'excellent' : deepfake_probability < 0.5 ? 'fair' : 'poor'}`}

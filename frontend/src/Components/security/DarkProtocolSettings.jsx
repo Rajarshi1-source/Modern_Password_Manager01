@@ -2,8 +2,11 @@
  * Dark Protocol Settings Component
  * ==================================
  * 
- * Configuration UI for the Dark Protocol anonymous vault access network.
- * Provides controls for privacy settings and network preferences.
+ * Configuration UI for the experimental Dark Protocol vault-access demo.
+ * Provides controls for routing settings and network preferences.
+ *
+ * NOTE: transport is simulated on a single server — these controls tune a demo
+ * and do NOT deliver real anonymity or censorship resistance.
  * 
  * @author Password Manager Team
  * @created 2026-02-02
@@ -152,7 +155,7 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                     <div className="dp-master-toggle">
                         <div className="dp-toggle-info">
                             <h3>Enable Dark Protocol</h3>
-                            <p>Route vault access through anonymous network</p>
+                            <p>Route vault access through the experimental relay demo</p>
                         </div>
                         <label className="dp-switch">
                             <input
@@ -165,9 +168,9 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                     </div>
                 </div>
 
-                {/* Anonymity Level */}
+                {/* Routing Hops */}
                 <div className="dp-settings-section">
-                    <h4>🔒 Anonymity Level</h4>
+                    <h4>🔒 Routing Hops</h4>
 
                     <div className="dp-setting-row">
                         <label>Minimum Hops</label>
@@ -181,7 +184,7 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                             />
                             <span className="dp-range-value">{formData.min_hops}</span>
                         </div>
-                        <p className="dp-setting-desc">More hops = more anonymous, slower speed</p>
+                        <p className="dp-setting-desc">More hops = more indirection, slower speed</p>
                     </div>
 
                     <div className="dp-setting-row">
@@ -297,9 +300,9 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                     )}
                 </div>
 
-                {/* Censorship Resistance */}
+                {/* Bridge Nodes */}
                 <div className="dp-settings-section">
-                    <h4>🛡️ Censorship Resistance</h4>
+                    <h4>🛡️ Bridge Nodes</h4>
 
                     <div className="dp-setting-row checkbox">
                         <label>

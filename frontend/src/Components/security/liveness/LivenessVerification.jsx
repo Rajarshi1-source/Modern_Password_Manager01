@@ -1,7 +1,7 @@
 /**
  * LivenessVerification Component
  * 
- * Main UI for deepfake-resistant biometric liveness verification.
+ * Main UI for experimental biometric liveness verification.
  * Orchestrates camera capture, challenge display, and results.
  */
 
@@ -42,8 +42,8 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
             const sessionData = await biometricLivenessService.startSession(context);
             setSession(sessionData);
 
-            // Connect WebSocket
-            biometricLivenessService.connectWebSocket(
+            // Connect WebSocket (async: fetches a single-use ws-ticket first)
+            await biometricLivenessService.connectWebSocket(
                 sessionData.session_id,
                 handleFrameResult,
                 handleSessionComplete,
@@ -252,7 +252,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         <div className="liveness-verification">
             <div className="liveness-header">
                 <h1>🎭 Biometric Liveness Verification</h1>
-                <p>Advanced anti-spoofing authentication</p>
+                <p>Experimental liveness checks — not a security guarantee</p>
             </div>
             {renderContent()}
         </div>
