@@ -266,16 +266,21 @@ export const connectWebSocket = async (sessionId) => {
   const url = `${getWebSocketUrl(sessionId)}?ticket=${encodeURIComponent(ticket)}`;
 
   return new Promise((resolve, reject) => {
-    wsConnection = new WebSocket(url);
+    // Bind handlers to THIS socket instance, not the module-level wsConnection.
+    // A rapid disconnect→reconnect can fire the old socket's onclose after the
+    // new socket is live; without this guard the stale handler would clear the
+    // new connection's heartbeat/cover-traffic and null its reference.
+    const socket = new WebSocket(url);
+    wsConnection = socket;
 
-    wsConnection.onopen = () => {
+    socket.onopen = () => {
       console.log('Dark Protocol WebSocket connected');
       startHeartbeat();
       notifyListeners({ type: 'connected', sessionId });
-      resolve(wsConnection);
+      resolve(socket);
     };
-    
-    wsConnection.onmessage = (event) => {
+
+    socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         handleWebSocketMessage(data);
@@ -283,17 +288,21 @@ export const connectWebSocket = async (sessionId) => {
         console.error('Failed to parse WebSocket message:', e);
       }
     };
-    
-    wsConnection.onclose = (event) => {
+
+    socket.onclose = (event) => {
       console.log('Dark Protocol WebSocket closed:', event.code);
+      // Skip when a newer connect() has already replaced this socket. When
+      // disconnectWebSocket() nulled wsConnection, this is false so cleanup runs.
+      if (socket !== wsConnection && wsConnection !== null) return;
       stopHeartbeat();
       stopCoverTraffic();
       notifyListeners({ type: 'disconnected', code: event.code });
       wsConnection = null;
     };
-    
-    wsConnection.onerror = (error) => {
+
+    socket.onerror = (error) => {
       console.error('Dark Protocol WebSocket error:', error);
+      if (socket !== wsConnection && wsConnection !== null) return;
       notifyListeners({ type: 'error', error });
       reject(error);
     };

@@ -66,18 +66,36 @@ describe('biometricLivenessService WebSocket ticket auth', () => {
     expect(onError).toHaveBeenCalledWith('WebSocket authentication failed');
   });
 
-  it('returns false without opening a socket when a disconnect supersedes the in-flight ticket', async () => {
+  it('returns false without opening a socket (and stays silent) when a disconnect supersedes the ticket', async () => {
     let resolveTicket;
     getWsTicket.mockImplementationOnce(
       () => new Promise((resolve) => { resolveTicket = resolve; })
     );
 
-    const connectPromise = livenessService.connectWebSocket('sess-3', vi.fn(), vi.fn(), vi.fn());
+    const onError = vi.fn();
+    const connectPromise = livenessService.connectWebSocket('sess-3', vi.fn(), vi.fn(), onError);
     // Supersede the attempt while the ticket request is still pending.
     livenessService.disconnect();
     resolveTicket('tkt-late');
 
     expect(await connectPromise).toBe(false);
     expect(sockets).toHaveLength(0);
+    // A superseded (dead) attempt must not fire onError.
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('fails closed (returns false, onError fired) when the WebSocket constructor throws', async () => {
+    getWsTicket.mockResolvedValueOnce('tkt-456');
+    global.WebSocket = class {
+      constructor() {
+        throw new Error('WS constructor failed');
+      }
+    };
+
+    const onError = vi.fn();
+    const connected = await livenessService.connectWebSocket('sess-4', vi.fn(), vi.fn(), onError);
+
+    expect(connected).toBe(false);
+    expect(onError).toHaveBeenCalledWith('WebSocket connection error');
   });
 });
