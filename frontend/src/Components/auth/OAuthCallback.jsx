@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import styled from 'styled-components';
 import oauthService from '../../services/oauthService';
 import { errorTracker } from '../../services/errorTracker';
+import { setSessionToken } from '../../utils/authStorage';
 import { FaSpinner, FaCheckCircle, FaTimesCircle, FaMobileAlt } from 'react-icons/fa';
 
 const Container = styled.div`
@@ -112,8 +113,10 @@ const OAuthCallback = () => {
         setStatus('success');
         setMessage('Login successful! Redirecting...');
 
-        // Store tokens
-        localStorage.setItem('token', result.tokens.access);
+        // Store tokens — setSessionToken clears the alternate `accessToken`
+        // key so an earlier email/pw or OAuth-redirect login can't leave a
+        // stale credential authHeader() would surface instead of this one.
+        setSessionToken('token', result.tokens.access);
         localStorage.setItem('refreshToken', result.tokens.refresh);
 
         // Send message to opener window (if opened in popup)
@@ -208,8 +211,9 @@ const OAuthCallback = () => {
         setStatus('success');
         setMessage('Login successful! Redirecting...');
 
-        // Store tokens
-        localStorage.setItem('token', result.tokens.access);
+        // Store tokens — setSessionToken clears the alternate `accessToken`
+        // key so a stale credential from a prior login flow can't be surfaced.
+        setSessionToken('token', result.tokens.access);
         localStorage.setItem('refreshToken', result.tokens.refresh);
 
         // Send message to opener window

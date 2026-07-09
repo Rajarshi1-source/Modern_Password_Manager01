@@ -3,6 +3,7 @@ import styled from 'styled-components';
 import { useNavigate } from 'react-router-dom';
 import didService, { signVp } from '../../services/didService';
 import { listDids } from '../../services/credentialWalletStorage';
+import { setSessionToken } from '../../utils/authStorage';
 
 const Wrap = styled.div`
   max-width: 480px;
@@ -75,7 +76,9 @@ export default function SignInWithDID() {
         vpJwt: vp,
       });
       if (result?.verified && result?.access_token) {
-        localStorage.setItem('token', result.access_token);
+        // setSessionToken clears the alternate `accessToken` key so a prior
+        // login flow can't leave a stale credential authHeader() would prefer.
+        setSessionToken('token', result.access_token);
         if (result.refresh_token) {
           localStorage.setItem('refresh_token', result.refresh_token);
         }

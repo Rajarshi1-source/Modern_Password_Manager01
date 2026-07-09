@@ -4,7 +4,7 @@
  */
 
 import { performanceMonitor } from '../services/performanceMonitor';
-import { clearAccessToken } from '../services/tokenStore';
+import { clearStoredTokens } from './authStorage';
 import { authHeader } from './authHeader';
 
 class ErrorHandler {
@@ -164,13 +164,10 @@ class ErrorHandler {
     });
     
     // Clear every auth source authHeader() reads so a stale credential can't be
-    // reused after the redirect. The old `access_token`/`refresh_token` keys were
-    // never written; the JWT lives under accessToken/token, the refresh under
-    // refreshToken, and the cookie-flow access token in the in-memory tokenStore.
-    clearAccessToken();
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('token');
-    localStorage.removeItem('refreshToken');
+    // reused after the redirect: both localStorage access-token keys
+    // (accessToken/token), the refreshToken, and the cookie-flow access token
+    // in the in-memory tokenStore.
+    clearStoredTokens();
 
     // Redirect to login
     window.location.href = '/login';
