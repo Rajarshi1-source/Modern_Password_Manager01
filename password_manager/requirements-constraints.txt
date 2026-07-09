@@ -39,14 +39,19 @@ webdriver-manager==4.0.2
 #   Twisted   — Trivy #1760: CVE in 25.5.0 and earlier
 #   pip       — Trivy #1550/#1551/#1553/#1554/#1761/#1762: wheel-install CVEs in <25
 #   wheel     — Trivy #1557/#1558: privilege escalation in <0.46.1
-#   setuptools — Trivy #1549 chain via jaraco.context: <78.1.1
+#   setuptools — Trivy #1549 chain via jaraco.context: floor <78.1.1. Also
+#                ceilinged <81: setuptools 81 removed the `pkg_resources`
+#                module, which the legacy cyclonedx-bom (<2) SBOM CLI imports
+#                at startup (security.yml SBOM step). Without the ceiling the
+#                prod install re-resolves setuptools past 81 and the SBOM step
+#                fails with `ModuleNotFoundError: No module named 'pkg_resources'`.
 #   jaraco.context — Trivy #1549: path traversal in <6.0.1
 #   python-dotenv — Trivy #1556: symlink-follow CVE in <1.1.1 / older system wheel
 urllib3>=2.7.0
 Twisted>=26.4.0
 pip>=25.0
 wheel>=0.46.2
-setuptools>=78.1.1
+setuptools>=78.1.1,<81
 jaraco.context>=6.0.1
 python-dotenv>=1.2.2
 
