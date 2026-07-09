@@ -35,6 +35,14 @@ describe('authStorage', () => {
       expect(localStorage.getItem('accessToken')).toBeNull();
     });
 
+    it('treats a falsy token as a clear rather than persisting "undefined"', () => {
+      localStorage.setItem('accessToken', 'stale-a');
+      setSessionToken('token', undefined);
+      // Neither key holds a coerced "undefined"/"null" string.
+      expect(localStorage.getItem('token')).toBeNull();
+      expect(localStorage.getItem('accessToken')).toBeNull();
+    });
+
     it('leaves at most one access-token key set after a flow switch', () => {
       // Simulate: email/pw login, then re-auth via OAuth-callback flow
       // without a clean logout in between.
