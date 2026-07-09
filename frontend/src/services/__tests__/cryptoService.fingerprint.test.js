@@ -128,6 +128,16 @@ describe('cryptoService password fingerprint (ZK)', () => {
     expect(argon2.hash).toHaveBeenCalledTimes(2);
   });
 
+  it('hard-fails (no silent PBKDF2 fallback) when Argon2 is unavailable', async () => {
+    // A fallback KDF would derive different key material for the same
+    // password + salt and silently produce a non-matching fingerprint. We
+    // fail closed instead, so the divergence can never be silent.
+    const svc = new CryptoService('master-password');
+    argon2.hash.mockRejectedValueOnce(new Error('WASM unavailable'));
+    await expect(svc.passwordFingerprint('CorrectHorse1!', 'argon2-down-salt'))
+      .rejects.toThrow(/Argon2id/);
+  });
+
   it('never leaks the raw password through the fingerprint value', async () => {
     const svc = new CryptoService('master-password');
     const secret = 'Sup3rSecret-Passw0rd!';

@@ -218,9 +218,10 @@ export class CryptoService {
   /**
    * Derive (and cache) the HMAC fingerprint key from the master password.
    *
-   * The key is memory-hard (Argon2id, PBKDF2 fallback), never leaves the
-   * client, and is domain-separated from the vault encryption key via the
-   * ":adaptive-fp" salt suffix so the two key streams cannot be correlated.
+   * The key is memory-hard (Argon2id only — no fallback, so the fingerprint
+   * stays consistent across devices), never leaves the client, and is
+   * domain-separated from the vault encryption key via the ":adaptive-fp"
+   * salt suffix so the two key streams cannot be correlated.
    *
    * @param {string} perUserSalt - Non-secret, stable per-user salt (seeds the
    *   KDF; useless without the master password).
@@ -252,13 +253,24 @@ export class CryptoService {
 
   /**
    * Derive 256 bits of fingerprint-key material from the master password.
-   * Prefers Argon2id (matching the vault KDF); falls back to WebCrypto PBKDF2.
+   *
+   * Argon2id is the ONLY accepted KDF here — deliberately NO PBKDF2 fallback.
+   * passwordFingerprint is a *deterministic* token that is stored and compared
+   * across devices/sessions; a second KDF would derive different key material
+   * for the same password + salt and silently emit a non-matching fingerprint
+   * (false "different password", lookup misses, behaviour that flips with
+   * Argon2 availability). We fail closed instead, so the divergence can never
+   * be silent — callers already treat a thrown fingerprint as "skip this
+   * capture" (see useTypingPatternCapture.endCapture). This is why it differs
+   * from the vault deriveKey(), whose fallback preserves within-environment
+   * usability where a single consistent KDF is all that matters.
    * @private
    */
   async _deriveFingerprintKeyBits(perUserSalt) {
     const domainSalt = `${perUserSalt}:adaptive-fp`;
+    let result;
     try {
-      const result = await argon2.hash({
+      result = await argon2.hash({
         pass: this.masterPassword,
         salt: domainSalt,
         time: 3,
@@ -267,26 +279,16 @@ export class CryptoService {
         parallelism: 1,
         type: argon2.ArgonType.Argon2id,
       });
-      return result.hash instanceof Uint8Array
-        ? result.hash
-        : Uint8Array.from(result.hash);
     } catch (error) {
-      console.error('Argon2 fingerprint-key derivation failed, falling back to PBKDF2:', error);
-      const enc = new TextEncoder();
-      const keyMaterial = await this.subtle.importKey(
-        'raw',
-        enc.encode(this.masterPassword),
-        { name: 'PBKDF2' },
-        false,
-        ['deriveBits']
+      throw new Error(
+        'Fingerprint key derivation requires Argon2id and does not fall back ' +
+          '(a fallback KDF would make the fingerprint diverge across devices): ' +
+          (error?.message || String(error))
       );
-      const bits = await this.subtle.deriveBits(
-        { name: 'PBKDF2', salt: enc.encode(domainSalt), iterations: 600000, hash: 'SHA-256' },
-        keyMaterial,
-        256
-      );
-      return new Uint8Array(bits);
     }
+    return result.hash instanceof Uint8Array
+      ? result.hash
+      : Uint8Array.from(result.hash);
   }
 
   /**
