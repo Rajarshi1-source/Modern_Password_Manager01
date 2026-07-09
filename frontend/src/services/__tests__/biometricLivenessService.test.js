@@ -46,25 +46,27 @@ describe('biometricLivenessService WebSocket ticket auth', () => {
   it('fetches a single-use ticket and carries it in the ws URL (not the token)', async () => {
     getWsTicket.mockResolvedValueOnce('tkt-123');
 
-    await livenessService.connectWebSocket('sess-1', vi.fn(), vi.fn(), vi.fn());
+    const connected = await livenessService.connectWebSocket('sess-1', vi.fn(), vi.fn(), vi.fn());
 
+    expect(connected).toBe(true);
     expect(getWsTicket).toHaveBeenCalledTimes(1);
     expect(sockets).toHaveLength(1);
     expect(sockets[0].url).toContain('/ws/liveness/sess-1/');
     expect(sockets[0].url).toContain('ticket=tkt-123');
   });
 
-  it('fails closed (no socket, onError fired) when the ticket fetch fails', async () => {
+  it('fails closed (returns false, no socket, onError fired) when the ticket fetch fails', async () => {
     const onError = vi.fn();
     getWsTicket.mockRejectedValueOnce(new Error('no ticket'));
 
-    await livenessService.connectWebSocket('sess-2', vi.fn(), vi.fn(), onError);
+    const connected = await livenessService.connectWebSocket('sess-2', vi.fn(), vi.fn(), onError);
 
+    expect(connected).toBe(false);
     expect(sockets).toHaveLength(0);
     expect(onError).toHaveBeenCalledWith('WebSocket authentication failed');
   });
 
-  it('does not open a socket when a disconnect supersedes the in-flight ticket', async () => {
+  it('returns false without opening a socket when a disconnect supersedes the in-flight ticket', async () => {
     let resolveTicket;
     getWsTicket.mockImplementationOnce(
       () => new Promise((resolve) => { resolveTicket = resolve; })
@@ -74,8 +76,8 @@ describe('biometricLivenessService WebSocket ticket auth', () => {
     // Supersede the attempt while the ticket request is still pending.
     livenessService.disconnect();
     resolveTicket('tkt-late');
-    await connectPromise;
 
+    expect(await connectPromise).toBe(false);
     expect(sockets).toHaveLength(0);
   });
 });

@@ -42,13 +42,16 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
             const sessionData = await biometricLivenessService.startSession(context);
             setSession(sessionData);
 
-            // Connect WebSocket (async: fetches a single-use ws-ticket first)
-            await biometricLivenessService.connectWebSocket(
+            // Connect WebSocket (async: fetches a single-use ws-ticket first).
+            // On failure it already set the 'error' status via handleError, so
+            // bail out rather than overwrite it with 'capturing'.
+            const connected = await biometricLivenessService.connectWebSocket(
                 sessionData.session_id,
                 handleFrameResult,
                 handleSessionComplete,
                 handleError
             );
+            if (!connected) return;
 
             // Set first challenge
             if (sessionData.challenges && sessionData.challenges.length > 0) {

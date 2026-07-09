@@ -246,7 +246,16 @@ export const connectWebSocket = async (sessionId) => {
   // AnonymousUser and the consumer immediately close(4003)'d. Demo enablement
   // only — connecting the socket does NOT make the anonymity / censorship-
   // resistance claims real (the transport is simulated on one server).
-  const ticket = await getWsTicket();
+  let ticket;
+  try {
+    ticket = await getWsTicket();
+  } catch (error) {
+    // Superseded while the ticket was in flight — stay silent for a dead
+    // attempt rather than propagating a rejection for an abandoned connect.
+    if (generation !== wsConnectGeneration) return null;
+    console.error('Error fetching dark-protocol WebSocket ticket:', error);
+    throw error;
+  }
 
   // Superseded by a disconnect()/newer connect() while the ticket was in
   // flight — abort rather than open a stale/duplicate socket.
