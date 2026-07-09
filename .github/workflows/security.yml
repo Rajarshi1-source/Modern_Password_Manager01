@@ -32,7 +32,11 @@ jobs:
       - name: Install tools
         run: |
           pip install --upgrade pip
-          pip install "safety==2.3.5" "cyclonedx-bom>=1.4.3,<2"
+          # setuptools<81 keeps `pkg_resources` importable: setuptools 81
+          # removed that module, which the legacy cyclonedx-bom (<2)
+          # `cyclonedx-py` CLI imports at startup — without the pin the SBOM
+          # step fails with `ModuleNotFoundError: No module named 'pkg_resources'`.
+          pip install "safety==2.3.5" "cyclonedx-bom>=1.4.3,<2" "setuptools<81"
 
       - name: Dependency install (prod)
         run: |
