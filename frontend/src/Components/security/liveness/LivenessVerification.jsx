@@ -51,7 +51,13 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
                 handleSessionComplete,
                 handleError
             );
-            if (!connected) return;
+            if (!connected) {
+                // connectWebSocket already surfaced the error via handleError;
+                // release the camera + session so "Try Again" starts clean
+                // instead of stacking a second camera stream.
+                cleanup();
+                return;
+            }
 
             // Set first challenge
             if (sessionData.challenges && sessionData.challenges.length > 0) {
