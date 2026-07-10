@@ -105,8 +105,16 @@ class BiometricLivenessService {
     };
 
     this.ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        // A malformed frame must not throw out of the handler and kill the
+        // session's message loop; drop it (matches darkProtocolService).
+        console.error('Failed to parse liveness WebSocket message:', e);
+        return;
+      }
+
       if (data.type === 'frame_result' && this.onFrameResult) {
         this.onFrameResult(data);
       } else if (data.type === 'session_complete' && this.onSessionComplete) {
