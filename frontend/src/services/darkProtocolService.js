@@ -103,9 +103,15 @@ export const establishSession = async (options = {}) => {
   
   const session = await response.json();
   
-  // Connect WebSocket after establishing session
+  // Connect WebSocket after establishing session. connectWebSocket resolves to
+  // null when the attempt was superseded (a concurrent disconnect/connect bumped
+  // the generation during the ticket fetch); treat that as a failed establish so
+  // callers don't report a live session with no socket behind it.
   if (session.session_id) {
-    await connectWebSocket(session.session_id);
+    const ws = await connectWebSocket(session.session_id);
+    if (!ws) {
+      throw new Error('Dark Protocol connection was superseded before it opened');
+    }
   }
   
   return session;
