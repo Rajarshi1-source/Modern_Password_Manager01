@@ -135,4 +135,35 @@ describe('darkProtocolService WebSocket connect lifecycle', () => {
     await expect(connectWebSocket('sess-5')).rejects.toThrow('ticket service unavailable');
     expect(sockets).toHaveLength(0);
   });
+
+  it('rejects with a real Error (not the raw DOM Event) when onerror fires before open', async () => {
+    getWsTicket.mockResolvedValue('tkt');
+
+    const p = connectWebSocket('sess-6');
+    await flush();
+
+    // The DOM error Event has no `.message`; the handler must wrap it so callers
+    // reading err.message don't see `undefined`.
+    sockets[0].onerror(new Event('error'));
+    await expect(p).rejects.toThrow('Dark Protocol WebSocket connection error');
+  });
+
+  it('rejects a superseded socket on error without disturbing the newer one', async () => {
+    getWsTicket.mockResolvedValue('tkt');
+
+    const p1 = connectWebSocket('sess-7');
+    await flush();
+    const socketA = sockets[0];
+
+    const p2 = connectWebSocket('sess-7');
+    await flush();
+    const socketB = sockets[1];
+
+    // A errors after being superseded — it settles only its own promise.
+    socketA.onerror(new Event('error'));
+    await expect(p1).rejects.toThrow('Dark Protocol WebSocket connection error');
+
+    socketB._open();
+    await expect(p2).resolves.toBe(socketB);
+  });
 });
