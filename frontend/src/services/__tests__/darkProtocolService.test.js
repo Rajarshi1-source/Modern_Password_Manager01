@@ -19,6 +19,7 @@ import { getWsTicket } from '../wsTicket';
 import {
   connectWebSocket,
   disconnectWebSocket,
+  establishSession,
 } from '../darkProtocolService';
 
 // Flush the microtask + a macrotask turn so the awaited (mocked) ticket
@@ -28,10 +29,12 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 describe('darkProtocolService WebSocket connect lifecycle', () => {
   let sockets;
   let originalWebSocket;
+  let originalFetch;
 
   beforeEach(() => {
     sockets = [];
     originalWebSocket = global.WebSocket;
+    originalFetch = global.fetch;
     class FakeWebSocket {
       constructor(url) {
         this.url = url;
@@ -64,6 +67,7 @@ describe('darkProtocolService WebSocket connect lifecycle', () => {
   afterEach(() => {
     disconnectWebSocket(); // resets module-level wsConnection + clears intervals
     global.WebSocket = originalWebSocket;
+    global.fetch = originalFetch;
   });
 
   it('carries the ticket in the ws URL and resolves with the socket on open', async () => {
@@ -165,5 +169,23 @@ describe('darkProtocolService WebSocket connect lifecycle', () => {
 
     socketB._open();
     await expect(p2).resolves.toBe(socketB);
+  });
+
+  it('terminates the orphaned REST session when the WebSocket connect fails', async () => {
+    // POST creates the session; the ticket fetch then fails, so establishSession
+    // must DELETE the session it just created (otherwise it stays active until
+    // expiry and blocks a retry with the server's one-active-session 409).
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ session_id: 'S1' }) }) // POST /session/
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ message: 'terminated' }) }); // DELETE /session/
+    global.fetch = fetchMock;
+    getWsTicket.mockRejectedValue(new Error('ticket service unavailable'));
+
+    await expect(establishSession({ hopCount: 3 })).rejects.toThrow('ticket service unavailable');
+
+    const deleteCall = fetchMock.mock.calls.find(([, opts]) => opts?.method === 'DELETE');
+    expect(deleteCall).toBeTruthy();
+    expect(JSON.parse(deleteCall[1].body)).toEqual({ session_id: 'S1' });
+    expect(sockets).toHaveLength(0);
   });
 });
