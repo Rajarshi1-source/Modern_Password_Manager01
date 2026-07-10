@@ -11,7 +11,7 @@ import './LivenessVerification.css';
 
 const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const [status, setStatus] = useState('initializing'); // initializing, capturing, challenge, processing, complete
-    const [session, setSession] = useState(null);
+    const [, setSession] = useState(null);
     const [currentChallenge, setCurrentChallenge] = useState(null);
     const [results, setResults] = useState(null);
     const [error, setError] = useState(null);
@@ -23,10 +23,13 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const streamRef = useRef(null);
     const captureIntervalRef = useRef(null);
 
-    // Initialize session and camera
+    // Initialize session and camera. Mount-only: initSession/cleanup are
+    // re-created each render, so listing them would re-run the effect (and
+    // re-open the camera) on every render.
     useEffect(() => {
         initSession();
         return () => cleanup();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const initSession = async () => {
