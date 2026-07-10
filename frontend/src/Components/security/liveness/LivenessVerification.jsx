@@ -30,6 +30,10 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     }, []);
 
     const initSession = async () => {
+        // Release any leftovers from a prior attempt (camera stream, capture
+        // loop, socket) so a "Try Again" after a post-connect error starts
+        // clean rather than stacking a second stream. All no-ops on first mount.
+        cleanup();
         try {
             setStatus('initializing');
 
