@@ -318,15 +318,18 @@ export const connectWebSocket = async (sessionId) => {
       wsConnection = null;
     };
 
-    socket.onerror = (error) => {
-      console.error('Dark Protocol WebSocket error:', error);
+    socket.onerror = (event) => {
+      console.error('Dark Protocol WebSocket error:', event);
+      // The DOM error Event has no `.message`; reject with a real Error so
+      // callers reading err.message don't see `undefined` (matches onclose).
+      const err = new Error('Dark Protocol WebSocket connection error');
       // Superseded socket — settle its own promise, leave the newer one alone.
       if (socket !== wsConnection && wsConnection !== null) {
-        settle(reject, error);
+        settle(reject, err);
         return;
       }
-      notifyListeners({ type: 'error', error });
-      settle(reject, error);
+      notifyListeners({ type: 'error', error: err });
+      settle(reject, err);
     };
   });
 };

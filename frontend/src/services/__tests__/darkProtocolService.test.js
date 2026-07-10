@@ -128,4 +128,11 @@ describe('darkProtocolService WebSocket connect lifecycle', () => {
     await expect(p).resolves.toBeNull();
     expect(sockets).toHaveLength(0);
   });
+
+  it('rejects with the error when getWsTicket fails and the attempt is not superseded', async () => {
+    getWsTicket.mockRejectedValue(new Error('ticket service unavailable'));
+
+    await expect(connectWebSocket('sess-5')).rejects.toThrow('ticket service unavailable');
+    expect(sockets).toHaveLength(0);
+  });
 });
