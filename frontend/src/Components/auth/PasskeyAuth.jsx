@@ -272,7 +272,7 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       
       {!supportsPasskeys ? (
         <div className="browser-warning">
-          <p>Your browser doesn't support passkeys. Please use a modern browser like Chrome, Safari, or Edge.</p>
+          <p>Your browser doesn&apos;t support passkeys. Please use a modern browser like Chrome, Safari, or Edge.</p>
           <p>Alternatively, you can authenticate with your username and password.</p>
         </div>
       ) : !isVerified ? (

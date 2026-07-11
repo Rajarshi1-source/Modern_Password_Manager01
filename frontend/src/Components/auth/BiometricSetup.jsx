@@ -349,7 +349,7 @@ const BiometricSetup = ({ onComplete }) => {
         <ul style={{ marginTop: '0.5rem', marginBottom: 0, paddingLeft: '1.5rem' }}>
           <li>Find a quiet location</li>
           <li>Speak clearly and naturally</li>
-          <li>Say: "My voice is my password"</li>
+          <li>Say: &quot;My voice is my password&quot;</li>
           <li>Recording will last 3 seconds</li>
         </ul>
       </Instructions>
