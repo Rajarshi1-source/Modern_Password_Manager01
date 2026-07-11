@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { errorTracker } from '../../services/errorTracker';
 import { setSessionToken } from '../../utils/authStorage';
+import { base64urlToArrayBuffer, arrayBufferToBase64url } from '../../utils/webauthnBase64';
 
 /**
  * Component for signing in with passkeys
@@ -33,28 +34,6 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
     checkPasskeySupport();
   }, []);
 
-  // Helper function to convert base64 string to array buffer
-  const base64ToArrayBuffer = (base64) => {
-    const binaryString = window.atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      // eslint-disable-next-line security/detect-object-injection -- typed-array write by bounded loop index, not user input
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
-  };
-
-  // Helper function to convert array buffer to base64 string
-  const arrayBufferToBase64 = (buffer) => {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      // eslint-disable-next-line security/detect-object-injection -- typed-array read by bounded loop index, not user input
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return window.btoa(binary);
-  };
-  
   // Function to verify if user exists
   const verifyUserCredentials = async (e) => {
     if (e) e.preventDefault();
@@ -108,10 +87,10 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       const authOptions = optionsResponse.data;
       
       // Convert challenge and allowCredentials from base64 to ArrayBuffer
-      const challengeBuffer = base64ToArrayBuffer(authOptions.challenge);
+      const challengeBuffer = base64urlToArrayBuffer(authOptions.challenge);
       const allowCredentials = authOptions.allowCredentials?.map(cred => ({
         ...cred,
-        id: base64ToArrayBuffer(cred.id),
+        id: base64urlToArrayBuffer(cred.id),
       })) || [];
       
       // Step 2: Call WebAuthn API to get credential
@@ -143,10 +122,10 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
       const authOptions = optionsResponse.data;
       
       // Process options
-      const challengeBuffer = base64ToArrayBuffer(authOptions.challenge);
+      const challengeBuffer = base64urlToArrayBuffer(authOptions.challenge);
       const allowCredentials = authOptions.allowCredentials?.map(cred => ({
         ...cred,
-        id: base64ToArrayBuffer(cred.id),
+        id: base64urlToArrayBuffer(cred.id),
       })) || [];
       
       // Use conditional UI
@@ -179,19 +158,19 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
     // Prepare credential for sending to server
     const authResponse = {
       id: credential.id,
-      rawId: arrayBufferToBase64(credential.rawId),
+      rawId: arrayBufferToBase64url(credential.rawId),
       response: {
-        authenticatorData: arrayBufferToBase64(
+        authenticatorData: arrayBufferToBase64url(
           credential.response.authenticatorData
         ),
-        clientDataJSON: arrayBufferToBase64(
+        clientDataJSON: arrayBufferToBase64url(
           credential.response.clientDataJSON
         ),
-        signature: arrayBufferToBase64(
+        signature: arrayBufferToBase64url(
           credential.response.signature
         ),
         userHandle: credential.response.userHandle ? 
-          arrayBufferToBase64(credential.response.userHandle) : null,
+          arrayBufferToBase64url(credential.response.userHandle) : null,
       },
       type: credential.type,
     };
