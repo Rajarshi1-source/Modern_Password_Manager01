@@ -2,14 +2,22 @@
 Pulse Oximetry Service (rPPG)
 ==============================
 
-Remote photoplethysmography for liveness detection.
-Extracts pulse and blood oxygen patterns from camera video
-that cannot be faked by deepfakes or static images.
+Remote photoplethysmography (rPPG) for liveness detection.
+
+Extracts a heart-rate pulse signal from facial video. A live face with real
+blood flow produces a coherent pulse waveform; a static photo or screen replay
+does not, so the presence and plausibility of the signal is used as a passive
+presentation-attack signal (defense-in-depth, not an unbeatable guarantee).
+
+SpO2 (blood oxygen) CANNOT be derived from a standard RGB webcam -- real SpO2
+requires calibrated dual-wavelength (red + infrared) hardware. SpO2 is therefore
+only populated when an external pulse-oximeter reading is ingested via
+``ingest_hardware_spo2()``; otherwise it is absent and excluded from scoring.
 
 Features:
-- Extract PPG signal from facial video
+- Extract PPG (pulse) signal from facial video
 - Estimate heart rate and variability
-- Estimate SpO2 (blood oxygen)
+- Accept SpO2 only from real external oximeter hardware
 - Validate physiological consistency
 """
 
@@ -68,8 +76,13 @@ class PulseOximetryService:
         
         self.frame_count = 0
         self.current_hr: Optional[float] = None
+        # SpO2 is only ever set from a real external pulse-oximeter reading
+        # (see ingest_hardware_spo2). It is NEVER derived from webcam RGB.
         self.current_spo2: Optional[float] = None
-        
+        self.hardware_spo2: Optional[float] = None
+        self.hardware_spo2_quality: float = 0.0
+        self.hardware_spo2_timestamp_ms: Optional[float] = None
+
         logger.info("PulseOximetryService initialized")
     
     def extract_roi(
@@ -160,12 +173,14 @@ class PulseOximetryService:
                 signal_quality=0.0
             )
         
-        # Calculate vital signs
+        # Calculate vital signs. Heart rate comes from the rPPG signal; SpO2 is
+        # NOT derived from RGB -- it is only present if real oximeter hardware
+        # has reported a reading (see ingest_hardware_spo2).
         heart_rate, hrv, hr_quality = self._calculate_heart_rate()
-        spo2, spo2_quality = self._estimate_spo2()
-        
-        signal_quality = (hr_quality + spo2_quality) / 2
-        
+        spo2 = self.hardware_spo2
+
+        signal_quality = hr_quality
+
         self.current_hr = heart_rate
         self.current_spo2 = spo2
         
@@ -309,45 +324,39 @@ class PulseOximetryService:
         
         return np.array(peaks)
     
-    def _estimate_spo2(self) -> Tuple[Optional[float], float]:
+    def ingest_hardware_spo2(
+        self,
+        spo2_percent: Optional[float],
+        quality: float = 1.0,
+        timestamp_ms: Optional[float] = None,
+    ) -> None:
         """
-        Estimate blood oxygen saturation (SpO2).
-        
-        Uses ratio of AC/DC components of red and infrared channels.
-        With RGB camera, we approximate using R and B channels.
-        
-        Returns:
-            (spo2_percentage, quality)
+        Ingest a real SpO2 reading from an external pulse-oximeter device.
+
+        This is the ONLY path by which SpO2 enters the pipeline. Real blood
+        oxygen saturation requires calibrated dual-wavelength (red + infrared)
+        hardware and cannot be recovered from a standard RGB webcam, so we never
+        estimate it from video. Readings typically arrive over Bluetooth GATT
+        (Pulse Oximeter Service 0x1822 / PLX) and are relayed by the client.
+
+        Args:
+            spo2_percent: Measured oxygen saturation (0-100), or None to clear.
+            quality: Device-reported signal quality/confidence in [0, 1].
+            timestamp_ms: Reading timestamp; defaults to the latest frame time.
         """
-        if len(self.rgb_buffer) < self.fps * 3:
-            return None, 0.0
-        
-        rgb_data = np.array(list(self.rgb_buffer))
-        
-        red = rgb_data[:, 0]
-        blue = rgb_data[:, 2]  # Blue approximates IR in some setups
-        
-        # Calculate AC (pulsatile) and DC (mean) components
-        red_ac = np.std(red)
-        red_dc = np.mean(red)
-        blue_ac = np.std(blue)
-        blue_dc = np.mean(blue)
-        
-        if red_dc < 1 or blue_dc < 1:
-            return None, 0.0
-        
-        # Calculate ratio of ratios
-        r = (red_ac / red_dc) / (blue_ac / blue_dc + 0.001)
-        
-        # Empirical SpO2 calibration curve
-        # SpO2 = 110 - 25 * R (simplified, would be calibrated for production)
-        spo2 = 110 - 25 * r
-        spo2 = max(70, min(100, spo2))  # Clamp to reasonable range
-        
-        # Quality based on signal strength
-        quality = min(1.0, (red_ac + blue_ac) / 10)
-        
-        return spo2, quality
+        if spo2_percent is None:
+            return
+        self.hardware_spo2 = float(max(0.0, min(100.0, spo2_percent)))
+        self.hardware_spo2_quality = float(max(0.0, min(1.0, quality)))
+        self.hardware_spo2_timestamp_ms = (
+            timestamp_ms if timestamp_ms is not None
+            else (self.timestamps[-1] if self.timestamps else None)
+        )
+        self.current_spo2 = self.hardware_spo2
+
+    def has_hardware_spo2(self) -> bool:
+        """True only when a real external oximeter reading has been ingested."""
+        return self.hardware_spo2 is not None
     
     def validate_physiological_consistency(
         self,
@@ -393,23 +402,27 @@ class PulseOximetryService:
         hr_cv = hr_std / (hr_mean + 0.001)
         hr_variability_score = 1.0 if 0.02 <= hr_cv <= 0.15 else 0.5
         
-        # Check SpO2
-        spo2_values = [r.spo2_estimate for r in valid_readings if r.spo2_estimate]
+        # SpO2 only contributes when a real external oximeter reading is present
+        # (see ingest_hardware_spo2). It is never derived from webcam RGB, so in
+        # the webcam-only case it is excluded from the score rather than filled
+        # with a neutral value that would silently inflate it.
+        component_scores = [hr_range_score, hr_variability_score]
+        spo2_values = [r.spo2_estimate for r in valid_readings if r.spo2_estimate is not None]
         if spo2_values:
             spo2_mean = np.mean(spo2_values)
             spo2_score = 1.0 if self.NORMAL_SPO2_RANGE[0] <= spo2_mean <= self.NORMAL_SPO2_RANGE[1] else 0.3
-        else:
-            spo2_score = 0.5
-        
-        # Overall consistency
-        consistency_score = (hr_range_score + hr_variability_score + spo2_score) / 3
-        
+            component_scores.append(spo2_score)
+
+        # Overall consistency (averaged over the components that actually applied)
+        consistency_score = float(np.mean(component_scores))
+
         return {
             'is_valid': consistency_score > 0.6,
             'consistency_score': consistency_score,
             'average_hr': hr_mean,
             'hr_variability': hr_std,
-            'average_spo2': np.mean(spo2_values) if spo2_values else None,
+            'average_spo2': float(np.mean(spo2_values)) if spo2_values else None,
+            'spo2_source': 'hardware' if spo2_values else None,
             'reason': None if consistency_score > 0.6 else 'Abnormal vital signs'
         }
     

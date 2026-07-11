@@ -165,6 +165,18 @@ def complete_session(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+def get_capabilities(request):
+    """Report which liveness modalities are genuinely operational server-side."""
+    try:
+        service = get_session_service()
+        return Response(service.get_capabilities())
+    except Exception as e:
+        logger.error(f"Error getting capabilities: {e}")
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_profile(request):
     """Get user's liveness profile."""
     try:
