@@ -24,7 +24,7 @@ psycopg[binary]==3.2.4
 # Channels / WebSockets
 channels==4.2.2
 channels-redis==4.3.0
-daphne==4.2.1
+daphne==4.2.2
 
 # Cloud & Notifications
 firebase-admin==5.3.0
