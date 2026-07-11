@@ -38,27 +38,27 @@ export const RecoveryDashboard = () => {
   };
 
   const getStatusColor = (status) => {
-    const colors = {
-      'completed': 'text-green-600',
-      'failed': 'text-red-600',
-      'cancelled': 'text-orange-600',
-      'initiated': 'text-blue-600',
-      'challenge_phase': 'text-yellow-600',
-      'shard_collection': 'text-purple-600',
-      'guardian_approval': 'text-indigo-600'
-    };
-    // eslint-disable-next-line security/detect-object-injection -- static status→class lookup table, string values only
-    return colors[status] || 'text-gray-600';
+    // Map (not an object literal) so a status like "toString"/"constructor"
+    // can't resolve an inherited prototype member; .get() only sees own entries.
+    const colors = new Map([
+      ['completed', 'text-green-600'],
+      ['failed', 'text-red-600'],
+      ['cancelled', 'text-orange-600'],
+      ['initiated', 'text-blue-600'],
+      ['challenge_phase', 'text-yellow-600'],
+      ['shard_collection', 'text-purple-600'],
+      ['guardian_approval', 'text-indigo-600'],
+    ]);
+    return colors.get(status) || 'text-gray-600';
   };
 
   const getSeverityColor = (severity) => {
-    const colors = {
-      'high': 'bg-red-100 text-red-800 border-red-300',
-      'medium': 'bg-orange-100 text-orange-800 border-orange-300',
-      'low': 'bg-yellow-100 text-yellow-800 border-yellow-300'
-    };
-    // eslint-disable-next-line security/detect-object-injection -- static severity→class lookup table, string values only
-    return colors[severity] || 'bg-gray-100 text-gray-800 border-gray-300';
+    const colors = new Map([
+      ['high', 'bg-red-100 text-red-800 border-red-300'],
+      ['medium', 'bg-orange-100 text-orange-800 border-orange-300'],
+      ['low', 'bg-yellow-100 text-yellow-800 border-yellow-300'],
+    ]);
+    return colors.get(severity) || 'bg-gray-100 text-gray-800 border-gray-300';
   };
 
   if (loading) {
