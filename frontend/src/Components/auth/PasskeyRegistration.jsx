@@ -120,12 +120,6 @@ const PasskeyRegistration = ({ onRegistrationSuccess }) => {
     return window.PublicKeyCredential !== undefined;
   };
 
-  // Check if conditional UI is supported
-  const isConditionalUiSupported = async () => {
-    if (!isWebAuthnSupported()) return false;
-    return await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-  };
-
   return (
     <div className="passkey-registration">
       {error && <div className="error-message">{error}</div>}
@@ -137,7 +131,7 @@ const PasskeyRegistration = ({ onRegistrationSuccess }) => {
       
       {!isWebAuthnSupported() ? (
         <p className="browser-warning">
-          Your browser doesn't support passkeys. Please use a modern browser.
+          Your browser doesn&apos;t support passkeys. Please use a modern browser.
         </p>
       ) : (
         <button 
