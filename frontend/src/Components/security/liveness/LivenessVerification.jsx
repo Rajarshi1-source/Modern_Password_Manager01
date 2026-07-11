@@ -11,7 +11,6 @@ import './LivenessVerification.css';
 
 const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const [status, setStatus] = useState('initializing'); // initializing, capturing, challenge, processing, complete
-    const [, setSession] = useState(null);
     const [currentChallenge, setCurrentChallenge] = useState(null);
     const [results, setResults] = useState(null);
     const [error, setError] = useState(null);
@@ -61,7 +60,6 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
             // Start liveness session
             const sessionData = await biometricLivenessService.startSession(context);
             if (attempt !== initAttemptRef.current) return;
-            setSession(sessionData);
 
             // Connect WebSocket (async: fetches a single-use ws-ticket first).
             // On failure it already set the 'error' status via handleError, so
