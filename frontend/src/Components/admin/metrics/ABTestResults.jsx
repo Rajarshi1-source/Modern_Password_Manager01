@@ -20,6 +20,7 @@ const ABTestResults = ({ tests }) => {
       'similarity_threshold': 'Behavioral Similarity Threshold',
       'challenge_frequency': 'Challenge Frequency'
     };
+    // eslint-disable-next-line security/detect-object-injection -- static display-name lookup table, string values only
     return names[testName] || testName;
   };
 
@@ -35,6 +36,7 @@ const ABTestResults = ({ tests }) => {
       'twice_daily': '2x per Day',
       'three_daily': '3x per Day'
     };
+    // eslint-disable-next-line security/detect-object-injection -- static display-name lookup table, string values only
     return names[variantName] || variantName;
   };
 

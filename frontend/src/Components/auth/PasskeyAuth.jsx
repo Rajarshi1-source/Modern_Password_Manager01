@@ -38,6 +38,7 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
     const binaryString = window.atob(base64);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
+      // eslint-disable-next-line security/detect-object-injection -- typed-array write by bounded loop index, not user input
       bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
@@ -48,6 +49,7 @@ const PasskeyAuth = ({ onLoginSuccess }) => {
     const bytes = new Uint8Array(buffer);
     let binary = '';
     for (let i = 0; i < bytes.byteLength; i++) {
+      // eslint-disable-next-line security/detect-object-injection -- typed-array read by bounded loop index, not user input
       binary += String.fromCharCode(bytes[i]);
     }
     return window.btoa(binary);

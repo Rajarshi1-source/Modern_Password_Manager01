@@ -5,7 +5,7 @@
  * Displays KPIs, A/B test results, blockchain stats, and trends.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import './RecoveryMetricsDashboard.css';
 import MetricCard from './MetricCard';
@@ -22,21 +22,7 @@ const RecoveryMetricsDashboard = () => {
   const [timeRange, setTimeRange] = useState(30); // Default: 30 days
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  useEffect(() => {
-    fetchMetrics();
-    
-    // Auto-refresh every 5 minutes if enabled
-    let interval;
-    if (autoRefresh) {
-      interval = setInterval(fetchMetrics, 5 * 60 * 1000);
-    }
-    
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [timeRange, autoRefresh]);
-
-  const fetchMetrics = async () => {
+  const fetchMetrics = useCallback(async () => {
     try {
       setLoading(true);
       const response = await axios.get(
@@ -48,7 +34,7 @@ const RecoveryMetricsDashboard = () => {
           }
         }
       );
-      
+
       setMetrics(response.data.data);
       setError(null);
     } catch (err) {
@@ -57,7 +43,21 @@ const RecoveryMetricsDashboard = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [timeRange]);
+
+  useEffect(() => {
+    fetchMetrics();
+
+    // Auto-refresh every 5 minutes if enabled
+    let interval;
+    if (autoRefresh) {
+      interval = setInterval(fetchMetrics, 5 * 60 * 1000);
+    }
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [fetchMetrics, autoRefresh]);
 
   const handleTimeRangeChange = (days) => {
     setTimeRange(days);
