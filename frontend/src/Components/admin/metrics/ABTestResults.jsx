@@ -15,29 +15,29 @@ const ABTestResults = ({ tests }) => {
   };
 
   const getTestDisplayName = (testName) => {
-    const names = {
-      'recovery_time_duration': 'Recovery Timeline Duration',
-      'similarity_threshold': 'Behavioral Similarity Threshold',
-      'challenge_frequency': 'Challenge Frequency'
-    };
-    // eslint-disable-next-line security/detect-object-injection -- static display-name lookup table, string values only
-    return names[testName] || testName;
+    // Map (not an object literal) so a key like "toString"/"constructor" can't
+    // resolve an inherited prototype member; .get() only sees own entries.
+    const names = new Map([
+      ['recovery_time_duration', 'Recovery Timeline Duration'],
+      ['similarity_threshold', 'Behavioral Similarity Threshold'],
+      ['challenge_frequency', 'Challenge Frequency'],
+    ]);
+    return names.get(testName) || testName;
   };
 
   const getVariantDisplayName = (variantName) => {
-    const names = {
-      '3_days': '3 Days',
-      '5_days': '5 Days',
-      '7_days': '7 Days',
-      'threshold_085': '85% Threshold',
-      'threshold_087': '87% Threshold',
-      'threshold_090': '90% Threshold',
-      'once_daily': '1x per Day',
-      'twice_daily': '2x per Day',
-      'three_daily': '3x per Day'
-    };
-    // eslint-disable-next-line security/detect-object-injection -- static display-name lookup table, string values only
-    return names[variantName] || variantName;
+    const names = new Map([
+      ['3_days', '3 Days'],
+      ['5_days', '5 Days'],
+      ['7_days', '7 Days'],
+      ['threshold_085', '85% Threshold'],
+      ['threshold_087', '87% Threshold'],
+      ['threshold_090', '90% Threshold'],
+      ['once_daily', '1x per Day'],
+      ['twice_daily', '2x per Day'],
+      ['three_daily', '3x per Day'],
+    ]);
+    return names.get(variantName) || variantName;
   };
 
   if (!tests || Object.keys(tests).length === 0) {
