@@ -313,7 +313,7 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                             />
                             <span className="dp-checkbox-label">Use Bridge Nodes</span>
                         </label>
-                        <p className="dp-setting-desc">Use obfuscated bridges for censored networks</p>
+                        <p className="dp-setting-desc">Simulated bridge-node routing (demo — does not bypass censorship)</p>
                     </div>
 
                     <div className="dp-setting-row checkbox">

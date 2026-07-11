@@ -531,7 +531,7 @@ const DarkProtocolSettings = ({ config, onUpdate, onClose }) => {
                                     checked={formData.use_bridge_nodes}
                                     onChange={(e) => handleChange('use_bridge_nodes', e.target.checked)}
                                 />
-                                Use Bridge Nodes (for censored regions)
+                                Use Bridge Nodes (simulated demo)
                             </label>
                         </div>
                     </div>
