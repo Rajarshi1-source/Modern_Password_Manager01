@@ -35,8 +35,21 @@ class DeepfakeDetector:
         self.config = config or {}
         self.frame_history: List[np.ndarray] = []
         self.analysis_history: List[DeepfakeAnalysis] = []
+        # A trained deepfake/PAD model is loaded here in Phase 2. Until then the
+        # detector runs signal heuristics only, which are advisory (they must not
+        # gate a verdict on their own). has_real_model() reports the truth.
         self._dcnn_model = None
         logger.info("DeepfakeDetector initialized")
+
+    def has_real_model(self) -> bool:
+        """
+        True only when a genuinely trained deepfake/PAD model is loaded.
+
+        The heuristic analysis below (texture variance, FFT ratios, frame diffs)
+        is not a substitute for a trained detector, so callers use this to keep
+        heuristic-only output advisory rather than treating it as ground truth.
+        """
+        return self._dcnn_model is not None
     
     def analyze_frame(self, frame: np.ndarray, face_region: Optional[np.ndarray] = None, timestamp_ms: float = 0) -> DeepfakeAnalysis:
         """Analyze a single frame for deepfake indicators."""

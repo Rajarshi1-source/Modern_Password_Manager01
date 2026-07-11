@@ -212,6 +212,40 @@ class BiometricLivenessService {
   }
 
   /**
+   * Get server-side liveness capabilities: which modalities are genuinely
+   * operational (e.g. deepfake model loaded, thermal source configured). SpO2
+   * is always server-unavailable because it requires client oximeter hardware.
+   */
+  async getCapabilities() {
+    const response = await fetch(`${API_BASE}/capabilities/`, {
+      headers: this.getHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to load liveness capabilities');
+    }
+    return response.json();
+  }
+
+  /**
+   * Detect capabilities available on THIS device. SpO2 and thermal are
+   * hardware-gated and never fabricated: SpO2 needs a Bluetooth pulse oximeter,
+   * thermal needs an IR camera (no standard web API exposes one). If the
+   * hardware isn't present, the modality stays off.
+   */
+  detectClientCapabilities() {
+    const nav = typeof navigator !== 'undefined' ? navigator : {};
+    const hasCamera = !!(nav.mediaDevices && nav.mediaDevices.getUserMedia);
+    const hasBluetooth = 'bluetooth' in nav;
+    return {
+      camera: hasCamera,
+      // A real SpO2 reading requires a BLE pulse oximeter the user must pair.
+      spo2Hardware: hasBluetooth,
+      // No standard web API exposes a thermal/IR camera stream in the browser.
+      thermalHardware: false,
+    };
+  }
+
+  /**
    * Get verification history
    */
   async getHistory(limit = 10) {

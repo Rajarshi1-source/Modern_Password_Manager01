@@ -1,7 +1,10 @@
 /**
  * PulseReadout Component
- * 
- * Real-time pulse and SpO2 display for liveness verification.
+ *
+ * Real-time pulse display for liveness verification. Heart rate comes from the
+ * camera rPPG signal. SpO2 is only shown when a real external pulse-oximeter
+ * reading is present -- it is never derived from the webcam -- so the SpO2 tile
+ * stays hidden unless such a reading arrives.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -119,14 +122,19 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
                     <div className="vital-label">Heart Rate</div>
                 </div>
 
-                <div className={`vital-card ${getSpo2Status()}`}>
-                    <div className="vital-icon">🩸</div>
-                    <div className="vital-value">
-                        {spo2 ? `${Math.round(spo2)}` : '--'}
+                {/* SpO2 requires a real dual-wavelength pulse oximeter; it is
+                    never estimated from the webcam, so the tile only appears
+                    when an external device has supplied a reading. */}
+                {spo2 != null && (
+                    <div className={`vital-card ${getSpo2Status()}`}>
+                        <div className="vital-icon">🩸</div>
+                        <div className="vital-value">
+                            {`${Math.round(spo2)}`}
+                        </div>
+                        <div className="vital-unit">%</div>
+                        <div className="vital-label">SpO2</div>
                     </div>
-                    <div className="vital-unit">%</div>
-                    <div className="vital-label">SpO2</div>
-                </div>
+                )}
 
                 <div className="vital-card">
                     <div className="vital-icon">📊</div>

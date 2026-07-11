@@ -64,7 +64,13 @@ class LivenessSessionService:
     - ThermalImagingService
     - DeepfakeDetector
     """
-    
+
+    # Minimum number of valid rPPG readings before the pulse modality counts.
+    MIN_PULSE_READINGS = 5
+    # Minimum number of independent live modalities required to verify. Below
+    # this the session fails closed (INSUFFICIENT_SIGNAL) rather than passing.
+    MIN_MODALITIES = 2
+
     def __init__(self):
         """Initialize session service with all detectors."""
         self.config = self._load_config()
@@ -126,8 +132,16 @@ class LivenessSessionService:
             'frames_processed': 0,
             'started_at': None,
             'completed_at': None,
+            # Per-session accumulation of REAL signals. complete_session scores
+            # only the modalities that actually populated these during the run.
+            'pulse_readings': [],
+            'deepfake_probs': [],
+            'expression_au_frames': 0,
+            'gaze_samples': 0,
+            'gaze_task_results': [],
+            'thermal_readings': [],
         }
-        
+
         self.active_sessions[session_id] = session
         
         # Reset all services for new session
@@ -207,7 +221,15 @@ class LivenessSessionService:
             session['started_at'] = timezone.now()
         
         session['frames_processed'] += 1
-        
+
+        # Defensive: ensure per-session accumulators exist even if this session
+        # dict was created outside create_session (e.g. a future shared-store
+        # path), so frame accumulation below can never KeyError.
+        session.setdefault('pulse_readings', [])
+        session.setdefault('deepfake_probs', [])
+        session.setdefault('expression_au_frames', 0)
+        session.setdefault('gaze_samples', 0)
+
         # Run all detection services
         results = {}
         
@@ -219,7 +241,9 @@ class LivenessSessionService:
         if face_landmarks is not None:
             aus = self.expression_analyzer.extract_action_units(face_landmarks)
             results['expression'] = {'action_units': aus}
-        
+            if aus:
+                session['expression_au_frames'] += 1
+
         # Gaze tracking
         gaze_point = self.gaze_service.estimate_gaze(frame, face_landmarks)
         if gaze_point:
@@ -228,7 +252,8 @@ class LivenessSessionService:
                 'y': gaze_point.y,
                 'confidence': gaze_point.confidence,
             }
-        
+            session['gaze_samples'] += 1
+
         # Pulse oximetry
         pulse_reading = self.pulse_service.process_frame(frame, timestamp_ms, face_landmarks)
         if pulse_reading:
@@ -237,13 +262,18 @@ class LivenessSessionService:
                 'spo2': pulse_reading.spo2_estimate,
                 'quality': pulse_reading.signal_quality,
             }
-        
-        # Deepfake detection
+            # Only readings with a resolved heart rate count as real pulse signal.
+            if pulse_reading.heart_rate_bpm is not None:
+                session['pulse_readings'].append(pulse_reading)
+
+        # Deepfake detection (heuristic output is advisory until a real model
+        # is loaded -- see complete_session).
         deepfake_analysis = self.deepfake_detector.analyze_frame(frame, None, timestamp_ms)
         results['deepfake'] = {
             'is_fake': deepfake_analysis.is_fake,
             'probability': deepfake_analysis.fake_probability,
         }
+        session['deepfake_probs'].append(deepfake_analysis.fake_probability)
         
         return {
             'frame_number': session['frames_processed'],
@@ -267,30 +297,77 @@ class LivenessSessionService:
         
         session['status'] = 'completed'
         session['completed_at'] = timezone.now()
-        
-        # Aggregate scores from all services
-        expression_score = 0.7  # Placeholder - would use analyzer results
-        gaze_score = self.gaze_service.get_liveness_score([])
-        pulse_score = self.pulse_service.get_liveness_score([])
-        thermal_score = self.thermal_service.get_liveness_score([])
-        deepfake_score = self.deepfake_detector.get_liveness_score()
-        
-        # Calculate overall liveness
-        weights = {'expression': 0.2, 'gaze': 0.2, 'pulse': 0.25, 'thermal': 0.1, 'deepfake': 0.25}
-        
-        overall = (
-            expression_score * weights['expression'] +
-            gaze_score * weights['gaze'] +
-            pulse_score * weights['pulse'] +
-            thermal_score * weights['thermal'] +
-            deepfake_score * weights['deepfake']
-        )
-        
-        # Determine verdict
+
+        # Base weights per modality. A modality participates in the final score
+        # ONLY when it produced real data during the session; absent modalities
+        # are excluded and the remaining weights are renormalised. This replaces
+        # the previous behaviour of feeding fixed placeholder values (a hardcoded
+        # 0.7 expression score, empty-list calls returning neutral 0.3/0.5), which
+        # let a session with no genuine signal inherit a passing score.
+        base_weights = {
+            'gaze': 0.30,
+            'pulse': 0.25,
+            'expression': 0.20,
+            'deepfake': 0.15,
+            'thermal': 0.10,
+        }
+        modality_scores: Dict[str, float] = {}
+
+        # --- Gaze (cognitive challenge/response) ------------------------------
+        # Real gaze liveness comes from evaluated challenge responses. Absent
+        # those (no responses submitted), gaze contributes nothing.
+        gaze_results = session.get('gaze_task_results', [])
+        if gaze_results:
+            modality_scores['gaze'] = self.gaze_service.get_liveness_score(gaze_results)
+
+        # --- Pulse (rPPG heart rate) ------------------------------------------
+        pulse_readings = session.get('pulse_readings', [])
+        if len(pulse_readings) >= self.MIN_PULSE_READINGS:
+            modality_scores['pulse'] = self.pulse_service.get_liveness_score(pulse_readings)
+
+        # --- Micro-expression -------------------------------------------------
+        # A real expression score requires detected MicroExpression sequences and
+        # temporal analysis (Phase 2). Until that pipeline produces them, this
+        # modality reports no data and is excluded rather than guessed.
+        expression_score = session.get('expression_score')
+        if expression_score is not None:
+            modality_scores['expression'] = expression_score
+
+        # --- Deepfake detection -----------------------------------------------
+        # Only a genuinely loaded PAD/deepfake model may gate the verdict. The
+        # heuristic detector is advisory-only: its probability is reported in
+        # details but excluded from scoring until a real model is available.
+        deepfake_probs = session.get('deepfake_probs', [])
+        deepfake_probability = float(np.mean(deepfake_probs)) if deepfake_probs else None
+        if self.deepfake_detector.has_real_model() and deepfake_probability is not None:
+            modality_scores['deepfake'] = 1.0 - deepfake_probability
+
+        # --- Thermal ----------------------------------------------------------
+        thermal_readings = session.get('thermal_readings', [])
+        if self.thermal_service.is_available() and thermal_readings:
+            modality_scores['thermal'] = self.thermal_service.get_liveness_score(thermal_readings)
+
+        # Aggregate over present modalities only, with renormalised weights.
+        present_weights = {m: base_weights[m] for m in modality_scores}
+        total_weight = sum(present_weights.values())
+        if total_weight > 0:
+            overall = sum(
+                modality_scores[m] * (present_weights[m] / total_weight)
+                for m in modality_scores
+            )
+        else:
+            overall = 0.0
+
         threshold = self.config.get('LIVENESS_THRESHOLD', 0.85)
-        is_verified = overall >= threshold
-        
-        if overall >= 0.9:
+
+        # Fail closed: require at least MIN_MODALITIES independent live signals
+        # before a session can verify. No signal => INSUFFICIENT_SIGNAL, not pass.
+        sufficient_signal = len(modality_scores) >= self.MIN_MODALITIES
+        is_verified = sufficient_signal and overall >= threshold
+
+        if not sufficient_signal:
+            verdict = 'INSUFFICIENT_SIGNAL'
+        elif overall >= 0.9:
             verdict = 'HIGH_CONFIDENCE_LIVE'
         elif overall >= threshold:
             verdict = 'VERIFIED_LIVE'
@@ -298,28 +375,87 @@ class LivenessSessionService:
             verdict = 'LOW_CONFIDENCE'
         else:
             verdict = 'SUSPECTED_FAKE'
-        
+
         duration_ms = 0
         if session['started_at']:
             duration_ms = (session['completed_at'] - session['started_at']).total_seconds() * 1000
-        
+
         return SessionResult(
             session_id=session_id,
             is_verified=is_verified,
             overall_liveness_score=overall,
-            deepfake_probability=1.0 - deepfake_score,
-            confidence=0.8,
-            micro_expression_score=expression_score,
-            gaze_tracking_score=gaze_score,
-            pulse_oximetry_score=pulse_score,
-            thermal_score=thermal_score,
-            texture_artifact_score=deepfake_score,
+            # Advisory only when the deepfake model is heuristic; 0.0 when no data.
+            deepfake_probability=deepfake_probability if deepfake_probability is not None else 0.0,
+            # Confidence reflects how many modalities actually contributed.
+            confidence=float(len(modality_scores) / len(base_weights)),
+            micro_expression_score=modality_scores.get('expression', 0.0),
+            gaze_tracking_score=modality_scores.get('gaze', 0.0),
+            pulse_oximetry_score=modality_scores.get('pulse', 0.0),
+            thermal_score=modality_scores.get('thermal', 0.0),
+            texture_artifact_score=(1.0 - deepfake_probability) if deepfake_probability is not None else 0.0,
             total_frames_processed=session['frames_processed'],
             duration_ms=duration_ms,
             verdict=verdict,
-            details={},
+            details={
+                'modalities_present': sorted(modality_scores.keys()),
+                'modality_scores': modality_scores,
+                'deepfake_advisory_probability': deepfake_probability,
+                'deepfake_gates_verdict': 'deepfake' in modality_scores,
+            },
         )
     
+    def get_capabilities(self) -> Dict:
+        """
+        Report which liveness modalities are genuinely operational server-side.
+
+        A modality is only advertised as gating the verdict when its real
+        capability is present: deepfake detection needs a loaded model, thermal
+        needs a configured IR source, and SpO2 can never come from the server at
+        all (it requires client-side pulse-oximeter hardware). The client merges
+        this with its own hardware detection (camera, BLE oximeter, thermal cam)
+        so it only surfaces checks that can actually be performed.
+        """
+        deepfake_real = self.deepfake_detector.has_real_model()
+        thermal_available = self.thermal_service.is_available()
+        return {
+            'modalities': {
+                # Camera-based checks: the server implements them; the client
+                # still needs a working camera to supply frames.
+                'gaze': {
+                    'available': True, 'source': 'camera', 'gates_verdict': True,
+                },
+                'pulse_rppg': {
+                    'available': True, 'source': 'camera', 'gates_verdict': True,
+                    'note': 'Heart rate only; SpO2 is never derived from webcam.',
+                },
+                'micro_expression': {
+                    'available': True, 'source': 'camera', 'gates_verdict': True,
+                },
+                # Model-gated: heuristic output is advisory until a real model loads.
+                'deepfake': {
+                    'available': deepfake_real,
+                    'source': 'model',
+                    'advisory_only': not deepfake_real,
+                    'gates_verdict': deepfake_real,
+                },
+                # Hardware-gated: never provided by the server.
+                'spo2': {
+                    'available': False,
+                    'source': 'external_hardware',
+                    'requires': 'ble_pulse_oximeter',
+                    'gates_verdict': False,
+                },
+                'thermal': {
+                    'available': thermal_available,
+                    'source': 'thermal_camera',
+                    'requires': 'ir_thermal_source',
+                    'gates_verdict': thermal_available,
+                },
+            },
+            'min_modalities_required': self.MIN_MODALITIES,
+            'liveness_threshold': self.config.get('LIVENESS_THRESHOLD', 0.85),
+        }
+
     def get_session_status(self, session_id: str) -> Optional[Dict]:
         """Get current session status."""
         session = self.active_sessions.get(session_id)

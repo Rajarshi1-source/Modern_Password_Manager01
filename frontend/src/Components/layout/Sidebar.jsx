@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
 import styled from 'styled-components';
 import { NavLink, useLocation } from 'react-router-dom';
-import { 
-  FaHome, 
-  FaKey, 
-  FaCreditCard, 
-  FaIdCard, 
+import {
+  FaHome,
+  FaKey,
+  FaCreditCard,
+  FaIdCard,
   FaStickyNote,
-  FaShield, 
-  FaClipboardList, 
+  FaShield,
+  FaClipboardList,
   FaCog,
   FaChevronLeft,
   FaChevronRight,
-  FaStar
+  FaStar,
+  FaUserShield,
+  FaUserSecret
 } from 'react-icons/fa';
 
 const SidebarContainer = styled.aside`
@@ -215,6 +217,18 @@ const Sidebar = () => {
           </NavItem>
         </NavSection>
         
+        <NavSection>
+          <NavSectionTitle collapsed={collapsed}>Advanced Security</NavSectionTitle>
+          <NavItem to="/liveness-verification" collapsed={collapsed}>
+            <FaUserShield />
+            <NavItemText collapsed={collapsed}>Biometric Liveness</NavItemText>
+          </NavItem>
+          <NavItem to="/security/dark-protocol" collapsed={collapsed}>
+            <FaUserSecret />
+            <NavItemText collapsed={collapsed}>Dark Protocol</NavItemText>
+          </NavItem>
+        </NavSection>
+
         <NavSection>
           <NavSectionTitle collapsed={collapsed}>Settings</NavSectionTitle>
           <NavItem to="/settings" collapsed={collapsed}>

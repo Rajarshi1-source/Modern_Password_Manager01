@@ -22,6 +22,9 @@ urlpatterns = [
     path('challenge/', views.get_challenge, name='get_challenge'),
     path('challenge/respond/', views.submit_challenge_response, name='submit_challenge_response'),
     
+    # Capabilities (which modalities are genuinely operational)
+    path('capabilities/', views.get_capabilities, name='get_capabilities'),
+
     # Profile & Settings
     path('profile/', views.get_profile, name='get_profile'),
     path('settings/', views.settings_view, name='settings'),
