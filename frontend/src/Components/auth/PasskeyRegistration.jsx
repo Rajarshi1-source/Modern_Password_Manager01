@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { errorTracker } from '../../services/errorTracker';
+import { base64urlToArrayBuffer, arrayBufferToBase64url } from '../../utils/webauthnBase64';
 
 /**
  * Component for registering new passkeys
@@ -10,26 +11,6 @@ const PasskeyRegistration = ({ onRegistrationSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);
-
-  // Helper function to convert base64 string to array buffer
-  const base64ToArrayBuffer = (base64) => {
-    const binaryString = window.atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
-  };
-
-  // Helper function to convert array buffer to base64 string
-  const arrayBufferToBase64 = (buffer) => {
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return window.btoa(binary);
-  };
 
   // Function to detect device type (for labeling the passkey)
   const detectDeviceType = () => {
@@ -56,13 +37,13 @@ const PasskeyRegistration = ({ onRegistrationSuccess }) => {
       const registrationOptions = optionsResponse.data;
       
       // Convert challenge and user.id from base64 to ArrayBuffer
-      const challengeBuffer = base64ToArrayBuffer(registrationOptions.challenge);
-      const userIdBuffer = base64ToArrayBuffer(registrationOptions.user.id);
+      const challengeBuffer = base64urlToArrayBuffer(registrationOptions.challenge);
+      const userIdBuffer = base64urlToArrayBuffer(registrationOptions.user.id);
       
       // Convert excluded credentials if any
       const excludeCredentials = registrationOptions.excludeCredentials?.map(cred => ({
         ...cred,
-        id: base64ToArrayBuffer(cred.id),
+        id: base64urlToArrayBuffer(cred.id),
       })) || [];
       
       // Step 2: Call WebAuthn API to create credential
@@ -86,12 +67,12 @@ const PasskeyRegistration = ({ onRegistrationSuccess }) => {
       // Step 3: Prepare credential for sending to server
       const registrationResponse = {
         id: credential.id,
-        rawId: arrayBufferToBase64(credential.rawId),
+        rawId: arrayBufferToBase64url(credential.rawId),
         response: {
-          attestationObject: arrayBufferToBase64(
+          attestationObject: arrayBufferToBase64url(
             credential.response.attestationObject
           ),
-          clientDataJSON: arrayBufferToBase64(
+          clientDataJSON: arrayBufferToBase64url(
             credential.response.clientDataJSON
           ),
         },
