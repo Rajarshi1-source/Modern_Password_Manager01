@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import ApiService from '../../services/api';
 import './RecoveryDashboard.css';
 
@@ -10,7 +9,6 @@ export const RecoveryDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [error, setError] = useState(null);
-  const navigate = useNavigate();
 
   useEffect(() => {
     fetchDashboardData();
@@ -49,6 +47,7 @@ export const RecoveryDashboard = () => {
       'shard_collection': 'text-purple-600',
       'guardian_approval': 'text-indigo-600'
     };
+    // eslint-disable-next-line security/detect-object-injection -- static status→class lookup table, string values only
     return colors[status] || 'text-gray-600';
   };
 
@@ -58,6 +57,7 @@ export const RecoveryDashboard = () => {
       'medium': 'bg-orange-100 text-orange-800 border-orange-300',
       'low': 'bg-yellow-100 text-yellow-800 border-yellow-300'
     };
+    // eslint-disable-next-line security/detect-object-injection -- static severity→class lookup table, string values only
     return colors[severity] || 'bg-gray-100 text-gray-800 border-gray-300';
   };
 

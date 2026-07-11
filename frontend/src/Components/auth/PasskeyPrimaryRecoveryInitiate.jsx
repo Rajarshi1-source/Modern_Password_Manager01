@@ -200,7 +200,6 @@ const PasskeyPrimaryRecoveryInitiate = () => {
   const [error, setError] = useState('');
   const [recoveryAttemptId, setRecoveryAttemptId] = useState(null);
   const [userId, setUserId] = useState(null);
-  const [hasBackups, setHasBackups] = useState(false);
   const [backupCount, setBackupCount] = useState(0);
   const [recoveredCredential, setRecoveredCredential] = useState(null);
   const [fallbackAvailable, setFallbackAvailable] = useState(false);
@@ -222,7 +221,6 @@ const PasskeyPrimaryRecoveryInitiate = () => {
       });
 
       setUserId(response.data.user_id);
-      setHasBackups(response.data.has_backups);
       setBackupCount(response.data.backup_count);
       setRecoveryAttemptId(response.data.recovery_attempt_id);
       setFallbackAvailable(response.data.fallback_available || false);
