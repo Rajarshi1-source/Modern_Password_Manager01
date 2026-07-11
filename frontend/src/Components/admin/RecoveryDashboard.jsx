@@ -212,7 +212,7 @@ export const RecoveryDashboard = () => {
               </div>
 
               <div className="today-stats">
-                <h3>Today's Activity</h3>
+                <h3>Today&apos;s Activity</h3>
                 <div className="today-grid">
                   <div className="today-item">
                     <span className="today-label">Attempts Initiated</span>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { FaKey, FaShieldAlt, FaCheckCircle, FaCopy, FaExclamationTriangle, FaDownload } from 'react-icons/fa';
@@ -272,11 +272,11 @@ const PasskeyPrimaryRecoverySetup = ({ passkeyCredentialId, deviceName, onComple
           <Content>
             <h3>Why Set Up Recovery?</h3>
             <p style={{ marginBottom: '16px', lineHeight: '1.6', color: '#666' }}>
-              A recovery key allows you to regain access to your passkey if you lose your device or can't authenticate.
+              A recovery key allows you to regain access to your passkey if you lose your device or can&apos;t authenticate.
               This backup is encrypted with quantum-resistant Kyber + AES-GCM encryption.
             </p>
 
-            <h3>What You'll Get:</h3>
+            <h3>What You&apos;ll Get:</h3>
             <ul style={{ marginBottom: '24px', lineHeight: '1.8', color: '#666' }}>
               <li>A 24-character recovery key (one-time display)</li>
               <li>Quantum-resistant encryption (Kyber + AES-GCM)</li>
@@ -290,7 +290,7 @@ const PasskeyPrimaryRecoverySetup = ({ passkeyCredentialId, deviceName, onComple
                 <h4>Important Security Notice</h4>
                 <p>
                   Your recovery key will be shown ONLY ONCE. Store it in a secure location such as a password manager or physical safe.
-                  Without this key, you'll need to use guardian-based recovery (3-7 days).
+                  Without this key, you&apos;ll need to use guardian-based recovery (3-7 days).
                 </p>
               </div>
             </WarningBox>
@@ -338,7 +338,7 @@ const PasskeyPrimaryRecoverySetup = ({ passkeyCredentialId, deviceName, onComple
                 <h4>⚠️ Save This Key NOW</h4>
                 <p>
                   This recovery key will be shown ONLY ONCE and cannot be retrieved later.
-                  If you lose both your device and this key, you'll need guardian-based recovery.
+                  If you lose both your device and this key, you&apos;ll need guardian-based recovery.
                 </p>
               </div>
             </WarningBox>
@@ -421,7 +421,7 @@ const PasskeyPrimaryRecoverySetup = ({ passkeyCredentialId, deviceName, onComple
             </div>
 
             <div style={{ background: '#f8f9fa', padding: '20px', borderRadius: '8px', marginBottom: '20px' }}>
-              <h3 style={{ margin: '0 0 12px 0', fontSize: '16px' }}>What's Next?</h3>
+              <h3 style={{ margin: '0 0 12px 0', fontSize: '16px' }}>What&apos;s Next?</h3>
               <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: '1.8', color: '#666' }}>
                 <li>Your recovery key is ready to use immediately</li>
                 <li>Consider setting up guardian-based recovery as a backup</li>

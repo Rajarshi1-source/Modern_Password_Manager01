@@ -83,7 +83,7 @@ const PasskeyManagement = () => {
         {loading ? (
           <p className="loading">Loading your passkeys...</p>
         ) : passkeys.length === 0 ? (
-          <p className="no-passkeys">You haven't set up any passkeys yet.</p>
+          <p className="no-passkeys">You haven&apos;t set up any passkeys yet.</p>
         ) : (
           <div className="passkey-list">
             {passkeys.map(passkey => (
