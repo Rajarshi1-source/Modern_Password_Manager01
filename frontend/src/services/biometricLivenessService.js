@@ -1,11 +1,17 @@
 /**
  * Biometric Liveness Service
- * 
- * Frontend service for deepfake-resistant biometric verification.
+ *
+ * Frontend service for experimental biometric liveness verification.
  * Handles API calls, WebSocket streaming, and camera capture utilities.
+ *
+ * NOTE: the liveness checks are experimental signal-processing heuristics
+ * (rPPG pulse, face-mesh landmarks), NOT a proven anti-deepfake guarantee —
+ * there are no trained detection models behind them. Do not present the result
+ * as definitive spoof resistance.
  */
 
 import { authHeader } from '../utils/authHeader';
+import { getWsTicket } from './wsTicket';
 
 const API_BASE = '/api/liveness';
 
@@ -15,6 +21,9 @@ class BiometricLivenessService {
     this.sessionId = null;
     this.onFrameResult = null;
     this.onSessionComplete = null;
+    // Bumped by every connect/disconnect so an in-flight ticket fetch that has
+    // been superseded doesn't open a stale socket.
+    this.wsConnectGeneration = 0;
   }
 
   /**
@@ -47,23 +56,65 @@ class BiometricLivenessService {
   }
 
   /**
-   * Connect WebSocket for real-time frame processing
+   * Connect WebSocket for real-time frame processing.
+   *
+   * Exchanges the long-lived auth token for a short-lived, single-use ticket so
+   * it never lands in the ws:// URL (access logs / browser history); the ticket
+   * is consumed by the same TokenAuthMiddleware that authenticates the WS route,
+   * so no consumer change is needed. Without it the socket connected as
+   * AnonymousUser and the consumer immediately close(4001)'d. This is demo
+   * enablement only — connecting the socket does NOT make the anti-spoofing
+   * claims real.
+   *
+   * @returns {Promise<boolean>} true once the socket was created and handlers
+   *   attached; false if the ticket fetch or socket construction failed, or the
+   *   attempt was superseded. Callers must abort their "connected" flow on false.
    */
-  connectWebSocket(sessionId, onFrameResult, onComplete, onError) {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/liveness/${sessionId}/`;
-    
-    this.ws = new WebSocket(wsUrl);
+  async connectWebSocket(sessionId, onFrameResult, onComplete, onError) {
+    const generation = ++this.wsConnectGeneration;
     this.onFrameResult = onFrameResult;
     this.onSessionComplete = onComplete;
+
+    let ticket;
+    try {
+      ticket = await getWsTicket();
+    } catch (error) {
+      // Superseded by a disconnect()/newer connect() while the ticket was in
+      // flight — stay silent for a dead attempt.
+      if (generation !== this.wsConnectGeneration) return false;
+      console.error('Error fetching liveness WebSocket ticket:', error);
+      if (onError) onError('WebSocket authentication failed');
+      return false;
+    }
+    // Superseded while the ticket was in flight — don't open a stale socket.
+    if (generation !== this.wsConnectGeneration) return false;
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/liveness/${sessionId}/?ticket=${encodeURIComponent(ticket)}`;
+
+    try {
+      this.ws = new WebSocket(wsUrl);
+    } catch (error) {
+      console.error('Error creating liveness WebSocket:', error);
+      if (onError) onError('WebSocket connection error');
+      return false;
+    }
 
     this.ws.onopen = () => {
       console.log('Liveness WebSocket connected');
     };
 
     this.ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      
+      let data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (e) {
+        // A malformed frame must not throw out of the handler and kill the
+        // session's message loop; drop it (matches darkProtocolService).
+        console.error('Failed to parse liveness WebSocket message:', e);
+        return;
+      }
+
       if (data.type === 'frame_result' && this.onFrameResult) {
         this.onFrameResult(data);
       } else if (data.type === 'session_complete' && this.onSessionComplete) {
@@ -81,6 +132,8 @@ class BiometricLivenessService {
     this.ws.onclose = () => {
       console.log('Liveness WebSocket closed');
     };
+
+    return true;
   }
 
   /**
@@ -172,6 +225,8 @@ class BiometricLivenessService {
    * Disconnect WebSocket
    */
   disconnect() {
+    // Invalidate any connect() whose ticket request is still in flight.
+    this.wsConnectGeneration++;
     if (this.ws) {
       this.ws.close();
       this.ws = null;

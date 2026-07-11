@@ -2,18 +2,23 @@
  * Dark Protocol Service
  * =======================
  * 
- * Frontend service for the Dark Protocol anonymous vault access network.
- * 
+ * Frontend service for the experimental Dark Protocol vault-access demo.
+ *
  * Features:
  * - Session management via REST API
  * - WebSocket connection for real-time communication
  * - Cover traffic generation (client-side)
  * - Connection state management
- * 
+ *
+ * NOTE: the dark-protocol transport is SIMULATED on a single Django server
+ * (no distributed relay network, no outbound inter-node transport), so this is
+ * a demo — it does NOT provide real anonymity or censorship resistance.
+ *
  * @author Password Manager Team
  * @created 2026-02-02
  */
 import { authHeader } from '../utils/authHeader';
+import { getWsTicket } from './wsTicket';
 
 // JSON + auth headers shared by every dark-protocol fetch call.
 const authHeaders = () => ({
@@ -26,6 +31,9 @@ const DARK_PROTOCOL_BASE = '/api/security/dark-protocol';
 
 // WebSocket state
 let wsConnection = null;
+// Bumped by every connect/disconnect so an in-flight ticket fetch that has been
+// superseded doesn't open a stale socket.
+let wsConnectGeneration = 0;
 let coverTrafficInterval = null;
 let heartbeatInterval = null;
 let connectionListeners = [];
@@ -95,11 +103,27 @@ export const establishSession = async (options = {}) => {
   
   const session = await response.json();
   
-  // Connect WebSocket after establishing session
+  // Connect the WebSocket after creating the REST session. connectWebSocket
+  // resolves to null when superseded, or rejects on ticket/socket failure. The
+  // REST session already exists, so in every failure case terminate it before
+  // propagating — otherwise it stays `active` until expiry and the next attempt
+  // hits the server's one-active-session 409 (retry blocked for the whole TTL).
   if (session.session_id) {
-    await connectWebSocket(session.session_id);
+    try {
+      const ws = await connectWebSocket(session.session_id);
+      if (!ws) {
+        throw new Error('Dark Protocol connection was superseded before it opened');
+      }
+    } catch (err) {
+      try {
+        await terminateSession(session.session_id);
+      } catch {
+        /* best-effort cleanup; surface the original connect error below */
+      }
+      throw err;
+    }
   }
-  
+
   return session;
 };
 
@@ -225,23 +249,69 @@ const getWebSocketUrl = (sessionId) => {
 };
 
 export const connectWebSocket = async (sessionId) => {
+  if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+    return wsConnection;
+  }
+
+  const generation = ++wsConnectGeneration;
+
+  // Exchange the long-lived auth token for a short-lived, single-use ticket so
+  // it never lands in the ws:// URL (access logs / browser history). The ticket
+  // is consumed by the same TokenAuthMiddleware that authenticates the WS route,
+  // so no consumer change is needed. Without it the socket connected as
+  // AnonymousUser and the consumer immediately close(4003)'d. Demo enablement
+  // only — connecting the socket does NOT make the anonymity / censorship-
+  // resistance claims real (the transport is simulated on one server).
+  let ticket;
+  try {
+    ticket = await getWsTicket();
+  } catch (error) {
+    // Superseded while the ticket was in flight — stay silent for a dead
+    // attempt rather than propagating a rejection for an abandoned connect.
+    if (generation !== wsConnectGeneration) return null;
+    console.error('Error fetching dark-protocol WebSocket ticket:', error);
+    throw error;
+  }
+
+  // Superseded by a disconnect()/newer connect() while the ticket was in
+  // flight — abort rather than open a stale/duplicate socket.
+  if (generation !== wsConnectGeneration) {
+    return null;
+  }
+
+  const url = `${getWebSocketUrl(sessionId)}?ticket=${encodeURIComponent(ticket)}`;
+
   return new Promise((resolve, reject) => {
-    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-      resolve(wsConnection);
-      return;
-    }
-    
-    const url = getWebSocketUrl(sessionId);
-    wsConnection = new WebSocket(url);
-    
-    wsConnection.onopen = () => {
+    // Bind handlers to THIS socket instance, not the module-level wsConnection,
+    // and settle exactly once. A concurrent connect() can replace wsConnection
+    // while this socket is still CONNECTING; without these guards a stale socket
+    // could resolve an orphaned connection, tear down the newer one, or (on an
+    // early close with no onerror) leave this promise — and establishSession —
+    // hanging forever.
+    const socket = new WebSocket(url);
+    wsConnection = socket;
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+
+    socket.onopen = () => {
+      // Superseded by a newer connect() while CONNECTING — close the orphan and
+      // reject this attempt rather than overwrite the live connection.
+      if (socket !== wsConnection) {
+        try { socket.close(); } catch { /* already closing */ }
+        settle(reject, new Error('Dark Protocol connect superseded'));
+        return;
+      }
       console.log('Dark Protocol WebSocket connected');
       startHeartbeat();
       notifyListeners({ type: 'connected', sessionId });
-      resolve(wsConnection);
+      settle(resolve, socket);
     };
-    
-    wsConnection.onmessage = (event) => {
+
+    socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         handleWebSocketMessage(data);
@@ -249,27 +319,43 @@ export const connectWebSocket = async (sessionId) => {
         console.error('Failed to parse WebSocket message:', e);
       }
     };
-    
-    wsConnection.onclose = (event) => {
+
+    socket.onclose = (event) => {
       console.log('Dark Protocol WebSocket closed:', event.code);
+      // Closed before it ever opened — settle so awaiters don't hang when
+      // onerror doesn't fire (a clean server-side close emits onclose only).
+      // No-ops if the socket had already opened and resolved.
+      settle(reject, new Error(`Dark Protocol WebSocket closed before open (code ${event.code})`));
+      // Don't tear down a newer connection that already replaced this socket.
+      if (socket !== wsConnection && wsConnection !== null) return;
       stopHeartbeat();
       stopCoverTraffic();
       notifyListeners({ type: 'disconnected', code: event.code });
       wsConnection = null;
     };
-    
-    wsConnection.onerror = (error) => {
-      console.error('Dark Protocol WebSocket error:', error);
-      notifyListeners({ type: 'error', error });
-      reject(error);
+
+    socket.onerror = (event) => {
+      console.error('Dark Protocol WebSocket error:', event);
+      // The DOM error Event has no `.message`; reject with a real Error so
+      // callers reading err.message don't see `undefined` (matches onclose).
+      const err = new Error('Dark Protocol WebSocket connection error');
+      // Superseded socket — settle its own promise, leave the newer one alone.
+      if (socket !== wsConnection && wsConnection !== null) {
+        settle(reject, err);
+        return;
+      }
+      notifyListeners({ type: 'error', error: err });
+      settle(reject, err);
     };
   });
 };
 
 export const disconnectWebSocket = () => {
+  // Invalidate any connect() whose ticket request is still in flight.
+  wsConnectGeneration++;
   stopHeartbeat();
   stopCoverTraffic();
-  
+
   if (wsConnection) {
     wsConnection.close();
     wsConnection = null;

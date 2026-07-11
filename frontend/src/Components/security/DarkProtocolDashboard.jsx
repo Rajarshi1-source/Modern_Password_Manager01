@@ -2,8 +2,11 @@
  * Dark Protocol Dashboard
  * ========================
  * 
- * Main dashboard for managing anonymous vault access.
+ * Main dashboard for the experimental Dark Protocol vault-access demo.
  * Shows connection status, network health, and session info.
+ *
+ * NOTE: transport is simulated on a single server — this is a demo and does
+ * NOT deliver real anonymity or censorship resistance.
  * 
  * @author Password Manager Team
  * @created 2026-02-02
@@ -173,7 +176,7 @@ const DarkProtocolDashboard = () => {
                     <div className="dp-icon">🌑</div>
                     <div className="dp-title">
                         <h1>Dark Protocol Network</h1>
-                        <p>Anonymous Vault Access</p>
+                        <p>Experimental vault-access demo</p>
                     </div>
                 </div>
                 <div className="dp-header-right">
@@ -232,7 +235,7 @@ const DarkProtocolDashboard = () => {
                             onClick={handleConnect}
                             disabled={loading || !config?.is_enabled}
                         >
-                            {loading ? 'Connecting...' : 'Connect Anonymously'}
+                            {loading ? 'Connecting...' : 'Connect'}
                         </button>
                     )}
                 </div>
@@ -423,7 +426,7 @@ const DarkProtocolSettings = ({ config, onUpdate, onClose }) => {
 
                 <div className="dp-settings-content">
                     <div className="dp-setting-group">
-                        <h4>Anonymity Level</h4>
+                        <h4>Routing Hops</h4>
 
                         <div className="dp-setting-row">
                             <label>Minimum Hops</label>
@@ -519,7 +522,7 @@ const DarkProtocolSettings = ({ config, onUpdate, onClose }) => {
                     </div>
 
                     <div className="dp-setting-group">
-                        <h4>Censorship Resistance</h4>
+                        <h4>Bridge Nodes</h4>
 
                         <div className="dp-setting-row checkbox">
                             <label>
@@ -528,7 +531,7 @@ const DarkProtocolSettings = ({ config, onUpdate, onClose }) => {
                                     checked={formData.use_bridge_nodes}
                                     onChange={(e) => handleChange('use_bridge_nodes', e.target.checked)}
                                 />
-                                Use Bridge Nodes (for censored regions)
+                                Use Bridge Nodes (simulated demo)
                             </label>
                         </div>
                     </div>

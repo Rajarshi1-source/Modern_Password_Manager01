@@ -1,7 +1,7 @@
 /**
  * LivenessVerification Component
  * 
- * Main UI for deepfake-resistant biometric liveness verification.
+ * Main UI for experimental biometric liveness verification.
  * Orchestrates camera capture, challenge display, and results.
  */
 
@@ -11,7 +11,6 @@ import './LivenessVerification.css';
 
 const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const [status, setStatus] = useState('initializing'); // initializing, capturing, challenge, processing, complete
-    const [session, setSession] = useState(null);
     const [currentChallenge, setCurrentChallenge] = useState(null);
     const [results, setResults] = useState(null);
     const [error, setError] = useState(null);
@@ -22,33 +21,63 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const canvasRef = useRef(null);
     const streamRef = useRef(null);
     const captureIntervalRef = useRef(null);
+    // Cancellation token bumped by cleanup(). An unmount/retry mid-init must
+    // invalidate an initSession still awaiting startCamera()/startSession() —
+    // the service generation guard only covers the WS ticket fetch.
+    const initAttemptRef = useRef(0);
 
-    // Initialize session and camera
+    // Initialize session and camera. Mount-only: initSession/cleanup are
+    // re-created each render, so listing them would re-run the effect (and
+    // re-open the camera) on every render.
     useEffect(() => {
         initSession();
         return () => cleanup();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const initSession = async () => {
+        // Release any leftovers from a prior attempt (camera stream, capture
+        // loop, socket) so a "Try Again" after a post-connect error starts
+        // clean rather than stacking a second stream. All no-ops on first mount.
+        cleanup();
+        // cleanup() bumped the token; capture it and re-check after every await
+        // so an unmount/retry mid-init can't assign a stream or open a socket
+        // once cleanup has already run.
+        const attempt = initAttemptRef.current;
         try {
             setStatus('initializing');
 
             // Start camera
             if (videoRef.current) {
-                streamRef.current = await CameraUtils.startCamera(videoRef.current);
+                const stream = await CameraUtils.startCamera(videoRef.current);
+                if (attempt !== initAttemptRef.current) {
+                    CameraUtils.stopCamera(stream); // canceled while starting — release it
+                    return;
+                }
+                streamRef.current = stream;
             }
 
             // Start liveness session
             const sessionData = await biometricLivenessService.startSession(context);
-            setSession(sessionData);
+            if (attempt !== initAttemptRef.current) return;
 
-            // Connect WebSocket
-            biometricLivenessService.connectWebSocket(
+            // Connect WebSocket (async: fetches a single-use ws-ticket first).
+            // On failure it already set the 'error' status via handleError, so
+            // bail out rather than overwrite it with 'capturing'.
+            const connected = await biometricLivenessService.connectWebSocket(
                 sessionData.session_id,
                 handleFrameResult,
                 handleSessionComplete,
                 handleError
             );
+            if (attempt !== initAttemptRef.current) return;
+            if (!connected) {
+                // connectWebSocket already surfaced the error via handleError;
+                // release the camera + session so "Try Again" starts clean
+                // instead of stacking a second camera stream.
+                cleanup();
+                return;
+            }
 
             // Set first challenge
             if (sessionData.challenges && sessionData.challenges.length > 0) {
@@ -58,6 +87,12 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
             setStatus('capturing');
             startFrameCapture();
         } catch (err) {
+            // Superseded/unmounted attempt — the cleanup() that bumped the token
+            // already released resources; don't touch state.
+            if (attempt !== initAttemptRef.current) return;
+            // Release the camera so the error screen doesn't keep it live and a
+            // retry doesn't stack a second stream.
+            cleanup();
             setError(err.message);
             setStatus('error');
         }
@@ -118,9 +153,11 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     };
 
     const cleanup = () => {
+        initAttemptRef.current++; // invalidate any in-flight initSession
         stopFrameCapture();
         if (streamRef.current) {
             CameraUtils.stopCamera(streamRef.current);
+            streamRef.current = null;
         }
         biometricLivenessService.disconnect();
     };
@@ -252,7 +289,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         <div className="liveness-verification">
             <div className="liveness-header">
                 <h1>🎭 Biometric Liveness Verification</h1>
-                <p>Advanced anti-spoofing authentication</p>
+                <p>Experimental liveness checks — not a security guarantee</p>
             </div>
             {renderContent()}
         </div>

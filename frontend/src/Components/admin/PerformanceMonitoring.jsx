@@ -16,19 +16,15 @@
 import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import axios from 'axios';
-import { 
-  FaServer, 
-  FaDatabase, 
-  FaExclamationTriangle, 
-  FaChartLine, 
+import {
+  FaServer,
+  FaExclamationTriangle,
   FaClock,
   FaMemory,
   FaMicrochip,
   FaHdd,
   FaBug,
-  FaCheckCircle,
-  FaTimesCircle,
-  FaExclamationCircle
+  FaCheckCircle
 } from 'react-icons/fa';
 
 const Container = styled.div`

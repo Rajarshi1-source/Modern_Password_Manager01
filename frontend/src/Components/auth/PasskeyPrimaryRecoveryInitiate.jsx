@@ -324,7 +324,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
           <Content>
             <p style={{ marginBottom: '24px', lineHeight: '1.6', color: '#666' }}>
               Enter your account email or username to begin the recovery process.
-              You'll need your 24-character recovery key to complete recovery.
+              You&apos;ll need your 24-character recovery key to complete recovery.
             </p>
 
             {error && (
@@ -355,10 +355,10 @@ const PasskeyPrimaryRecoveryInitiate = () => {
 
             <FallbackOption>
               <h3>
-                <FaUsers /> Don't Have Your Recovery Key?
+                <FaUsers /> Don&apos;t Have Your Recovery Key?
               </h3>
               <p>
-                If you don't have your recovery key, you can use guardian-based recovery.
+                If you don&apos;t have your recovery key, you can use guardian-based recovery.
                 This process takes 3-7 days and requires help from your trusted guardians.
               </p>
               <Button secondary onClick={() => navigate('/recovery/social-mesh')}>
@@ -435,7 +435,7 @@ const PasskeyPrimaryRecoveryInitiate = () => {
                   <FaUsers /> Recovery Key Not Working?
                 </h3>
                 <p>
-                  If you don't have the correct recovery key, you can fall back to guardian-based recovery.
+                  If you don&apos;t have the correct recovery key, you can fall back to guardian-based recovery.
                   Your trusted guardians will help verify your identity.
                 </p>
                 <Button secondary onClick={handleFallbackToSocialMesh} disabled={loading}>
