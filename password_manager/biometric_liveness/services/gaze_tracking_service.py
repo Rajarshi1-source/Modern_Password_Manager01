@@ -104,11 +104,22 @@ class GazeTrackingService:
         """Lazy initialization of gaze estimation model."""
         if self._gaze_model is None:
             try:
-                # Would load a trained gaze estimation model
-                # e.g., GazeML, L2CS, etc.
-                logger.info("Gaze estimation model loaded")
+                # A trained gaze estimation model (e.g. L2CS / MediaPipe-iris)
+                # is loaded here in a later step. Until then no model is loaded
+                # and has_real_gaze_model() reports False.
+                pass
             except Exception as e:
                 logger.warning(f"Gaze model init failed: {e}")
+
+    def has_real_gaze_model(self) -> bool:
+        """
+        True only when a genuinely trained gaze estimator is loaded.
+
+        Without it, estimate_gaze cannot measure real eye position, so gaze must
+        not gate a liveness verdict (a placeholder position would be a fabricated
+        signal). Callers use this to keep gaze capability-gated.
+        """
+        return self._gaze_model is not None
     
     def estimate_gaze(
         self, 
@@ -126,7 +137,14 @@ class GazeTrackingService:
             Estimated gaze point or None
         """
         self._init_gaze_model()
-        
+
+        # Do not fabricate a gaze position. Without a trained estimator the
+        # eye-region/direction code below is placeholder (previously returned
+        # random coordinates), so we report "no observation" until a real model
+        # is present. Gaze then simply does not contribute to the verdict.
+        if not self.has_real_gaze_model():
+            return None
+
         try:
             # Extract eye regions
             left_eye, right_eye = self._extract_eye_regions(frame, face_landmarks)
@@ -378,9 +396,13 @@ class GazeTrackingService:
         
         # If the task has a correct answer, a matching answer is REQUIRED. A
         # missing/blank answer must not pass the cognitive part for free.
+        # user_answer is untyped client input, so coerce to str before strip().
         answer_correct = True
         if task.correct_answer:
-            answer_correct = bool(user_answer) and user_answer.strip() == task.correct_answer
+            answer_correct = (
+                user_answer is not None
+                and str(user_answer).strip() == task.correct_answer
+            )
         
         # Determine if passed
         is_passed = (

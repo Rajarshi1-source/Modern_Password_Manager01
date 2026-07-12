@@ -162,6 +162,7 @@ class LivenessSessionService:
             'deepfake_model_probs': [],     # model-derived only — may gate/veto
             'expression_au_frames': 0,
             'gaze_samples': 0,
+            'gaze_track': [],               # server-observed gaze (from frames)
             'gaze_task_results': [],
             'thermal_readings': [],
         }
@@ -268,6 +269,7 @@ class LivenessSessionService:
         session.setdefault('deepfake_model_probs', [])
         session.setdefault('expression_au_frames', 0)
         session.setdefault('gaze_samples', 0)
+        session.setdefault('gaze_track', [])
 
         # Run all detection services. Use this session's OWN detector instances
         # so accumulated per-frame state never mixes with another session's.
@@ -290,15 +292,19 @@ class LivenessSessionService:
             if aus:
                 session['expression_au_frames'] += 1
 
-        # Gaze tracking
+        # Gaze tracking (server-observed). estimate_gaze only returns a point
+        # when a real gaze estimator is loaded; that sample -- not any client-
+        # supplied track -- is what the challenge is scored against.
         gaze_point = svc['gaze'].estimate_gaze(frame, face_landmarks)
         if gaze_point:
+            gaze_point.timestamp_ms = timestamp_ms
             results['gaze'] = {
                 'x': gaze_point.x,
                 'y': gaze_point.y,
                 'confidence': gaze_point.confidence,
             }
             session['gaze_samples'] += 1
+            session.setdefault('gaze_track', []).append(gaze_point)
 
         # Pulse oximetry
         pulse_reading = svc['pulse'].process_frame(frame, timestamp_ms, face_landmarks)
@@ -496,24 +502,26 @@ class LivenessSessionService:
 
         if challenge['type'] == 'gaze':
             task = challenge.get('cognitive_task')
-            gaze_data = self._parse_gaze_data(response.get('gaze_data', []))
-            if task is not None and gaze_data:
+            # Score ONLY the server-observed gaze track (accumulated from the
+            # submitted frames). A client-supplied track is ignored -- it can be
+            # synthesized from the known target positions and would not prove
+            # liveness. With no real gaze estimator loaded, no track exists, so
+            # gaze records nothing and does not gate the verdict.
+            gaze_track = session.get('gaze_track', [])
+            if task is not None and gaze_track:
                 svc = session.get('services')
                 if svc is None:
                     svc = self._new_session_services()
                     session['services'] = svc
                 result = svc['gaze'].validate_task_response(
-                    task, gaze_data, response.get('answer')
+                    task, gaze_track, response.get('answer')
                 )
                 session.setdefault('gaze_task_results', []).append(result)
                 summary['passed'] = bool(result.is_passed)
                 summary['accuracy'] = float(result.accuracy_score)
             else:
-                # No gaze samples observed: record nothing so an empty/blank
-                # response does not count as a present gaze modality (it must not
-                # mask the cleaner INSUFFICIENT_SIGNAL verdict).
                 summary['passed'] = False
-                summary['reason'] = 'no_gaze_data'
+                summary['reason'] = 'no_gaze_observed'
         else:
             # Expression/pulse have no per-challenge verdict here.
             summary['status'] = 'acknowledged'
@@ -522,32 +530,6 @@ class LivenessSessionService:
         session['current_challenge_idx'] = min(idx + 1, len(challenges))
         summary['next_challenge'] = session['current_challenge_idx'] < len(challenges)
         return summary
-
-    def _parse_gaze_data(self, raw) -> List:
-        """
-        Convert client gaze samples into GazePoint objects, skipping malformed
-        entries. The payload is never trusted to be well-formed.
-        """
-        from .gaze_tracking_service import GazePoint
-        points: List = []
-        if not isinstance(raw, list):
-            return points
-        for p in raw:
-            if not isinstance(p, dict):
-                continue
-            try:
-                points.append(GazePoint(
-                    x=float(p['x']),
-                    y=float(p['y']),
-                    timestamp_ms=float(p.get('timestamp_ms', 0.0)),
-                    confidence=float(p.get('confidence', 1.0)),
-                    is_fixation=bool(p.get('is_fixation', False)),
-                    pupil_diameter=(float(p['pupil_diameter'])
-                                    if p.get('pupil_diameter') is not None else None),
-                ))
-            except (KeyError, TypeError, ValueError):
-                continue
-        return points
 
     def get_capabilities(self) -> Dict:
         """
@@ -566,9 +548,14 @@ class LivenessSessionService:
             'modalities': {
                 # Camera-based checks: the server implements them; the client
                 # still needs a working camera to supply frames.
+                # Gaze gates the verdict only once a real gaze estimator is
+                # loaded: it is scored from server-observed eye movement, and a
+                # placeholder position would be a fabricated signal.
                 'gaze': {
-                    'available': True, 'source': 'camera', 'gates_verdict': True,
-                    'note': 'Scored from the cognitive challenge-response.',
+                    'available': True, 'source': 'camera',
+                    'gates_verdict': self.gaze_service.has_real_gaze_model(),
+                    'note': 'Server-observed gaze scored against the cognitive '
+                            'challenge; gates only when a real estimator is loaded.',
                 },
                 'pulse_rppg': {
                     'available': True, 'source': 'camera', 'gates_verdict': True,

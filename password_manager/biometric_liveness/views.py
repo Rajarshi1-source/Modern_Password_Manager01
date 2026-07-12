@@ -81,8 +81,12 @@ def submit_frame(request):
         session_id = request.data.get('session_id')
         frame_b64 = request.data.get('frame')
         timestamp_ms = request.data.get('timestamp_ms', 0)
-        width = int(request.data.get('width', 0) or 0)
-        height = int(request.data.get('height', 0) or 0)
+        try:
+            width = int(request.data.get('width', 0) or 0)
+            height = int(request.data.get('height', 0) or 0)
+        except (TypeError, ValueError):
+            return Response({'error': 'Invalid frame dimensions'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         if not session_id or not frame_b64:
             return Response({'error': 'Missing session_id or frame'}, status=status.HTTP_400_BAD_REQUEST)
@@ -126,7 +130,9 @@ def get_challenge(request):
         session_id = request.query_params.get('session_id')
         if not session_id:
             return Response({'error': 'Missing session_id'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if not _user_owns_session(request, session_id):
+            return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
+
         service = get_session_service()
         session_status = service.get_session_status(session_id)
         
