@@ -164,11 +164,15 @@ class MicroExpressionAnalyzer:
         return None
     
     def _fallback_landmark_detection(self, frame: np.ndarray) -> Optional[np.ndarray]:
-        """Fallback landmark detection without MediaPipe."""
-        # Simplified detection - returns basic face region estimation
-        # In production, would use dlib or other detector
-        h, w = frame.shape[:2]
-        return np.random.rand(468, 3) * [w, h, 0.1]  # Placeholder
+        """
+        No real landmark detector available (MediaPipe not loaded).
+
+        Returns None rather than fabricating landmarks. Emitting random points
+        would inject a fake signal and -- being un-normalised -- also corrupt
+        downstream ROI math (e.g. the rPPG forehead crop). Landmark-based checks
+        are simply unavailable until a real detector is present.
+        """
+        return None
     
     def extract_action_units(
         self, 

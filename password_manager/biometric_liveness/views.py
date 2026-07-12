@@ -61,15 +61,27 @@ def submit_frame(request):
         session_id = request.data.get('session_id')
         frame_b64 = request.data.get('frame')
         timestamp_ms = request.data.get('timestamp_ms', 0)
-        
+        width = int(request.data.get('width', 0) or 0)
+        height = int(request.data.get('height', 0) or 0)
+
         if not session_id or not frame_b64:
             return Response({'error': 'Missing session_id or frame'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Decode base64 frame
+
+        # Decode base64 frame and reshape to HxWxC using the provided dimensions
+        # (raw RGB/RGBA pixel data from the client canvas). Without this the
+        # detectors receive a flat 1-D array and produce no usable signal.
         frame_bytes = base64.b64decode(frame_b64)
         frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
-        # Would reshape based on provided dimensions
-        
+        if width > 0 and height > 0:
+            try:
+                frame_array = frame_array.reshape((height, width, 3))
+            except ValueError:
+                try:
+                    frame_array = frame_array.reshape((height, width, 4))[:, :, :3]
+                except ValueError:
+                    return Response({'error': 'Frame dimensions do not match data'},
+                                    status=status.HTTP_400_BAD_REQUEST)
+
         service = get_session_service()
         result = service.process_frame(session_id, frame_array, timestamp_ms)
         
@@ -113,11 +125,12 @@ def submit_challenge_response(request):
         
         if not session_id:
             return Response({'error': 'Missing session_id'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Process challenge response
-        # Would validate and store response
-        
-        return Response({'status': 'received', 'next_challenge': True})
+
+        service = get_session_service()
+        result = service.submit_challenge_response(session_id, response_data)
+        if 'error' in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
     except Exception as e:
         logger.error(f"Error submitting response: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

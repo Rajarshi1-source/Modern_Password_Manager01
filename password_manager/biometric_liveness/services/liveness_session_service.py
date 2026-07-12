@@ -176,7 +176,13 @@ class LivenessSessionService:
         
         return {
             'session_id': session_id,
-            'challenges': [{'type': c['type'], 'instruction': c['instruction']} for c in challenges],
+            'challenges': [
+                # Client-facing view: the CognitiveTask object is deliberately
+                # excluded (kept server-side for scoring); data carries the
+                # targets/time-limit the client needs to render the challenge.
+                {'type': c['type'], 'instruction': c['instruction'], 'data': c.get('data', {})}
+                for c in challenges
+            ],
             'expires_at': session['expires_at'].isoformat(),
             'status': 'pending',
         }
@@ -198,6 +204,10 @@ class LivenessSessionService:
                         'time_limit_ms': task.time_limit_ms,
                     },
                     'sequence': i,
+                    # Retained server-side (never sent to the client) so the
+                    # response can be scored against these exact randomized
+                    # targets in submit_challenge_response.
+                    'cognitive_task': task,
                 })
             elif challenge_type == 'expression':
                 challenges.append({
@@ -451,6 +461,78 @@ class LivenessSessionService:
             },
         )
     
+    def submit_challenge_response(self, session_id: str, response: Dict) -> Dict:
+        """
+        Evaluate a user's response to a cognitive challenge.
+
+        For gaze challenges this scores the recorded gaze track against the
+        session's randomized targets (accuracy, path similarity, human-likelihood)
+        via the session's gaze service and records a real TaskResult -- which is
+        what lets gaze contribute to the verdict in complete_session. A recorded
+        or deepfake stream cannot follow the unpredictable targets in real time.
+        """
+        session = self.active_sessions.get(session_id)
+        if not session:
+            return {'error': 'Session not found'}
+        if timezone.now() > session['expires_at']:
+            session['status'] = 'expired'
+            return {'error': 'Session expired'}
+
+        challenges = session.get('challenges', [])
+        idx = session.get('current_challenge_idx', 0)
+        seq = response.get('sequence', idx)
+        challenge = next((c for c in challenges if c.get('sequence') == seq), None)
+        if challenge is None:
+            return {'error': 'Unknown challenge'}
+
+        summary: Dict = {'type': challenge['type'], 'sequence': seq, 'passed': None}
+
+        if challenge['type'] == 'gaze':
+            task = challenge.get('cognitive_task')
+            gaze_data = self._parse_gaze_data(response.get('gaze_data', []))
+            if task is not None:
+                svc = session.get('services')
+                if svc is None:
+                    svc = self._new_session_services()
+                    session['services'] = svc
+                result = svc['gaze'].validate_task_response(
+                    task, gaze_data, response.get('answer')
+                )
+                session.setdefault('gaze_task_results', []).append(result)
+                summary['passed'] = bool(result.is_passed)
+                summary['accuracy'] = float(result.accuracy_score)
+
+        # Advance to the next challenge.
+        session['current_challenge_idx'] = min(idx + 1, len(challenges))
+        summary['next_challenge'] = session['current_challenge_idx'] < len(challenges)
+        return summary
+
+    def _parse_gaze_data(self, raw) -> List:
+        """
+        Convert client gaze samples into GazePoint objects, skipping malformed
+        entries. The payload is never trusted to be well-formed.
+        """
+        from .gaze_tracking_service import GazePoint
+        points: List = []
+        if not isinstance(raw, list):
+            return points
+        for p in raw:
+            if not isinstance(p, dict):
+                continue
+            try:
+                points.append(GazePoint(
+                    x=float(p['x']),
+                    y=float(p['y']),
+                    timestamp_ms=float(p.get('timestamp_ms', 0.0)),
+                    confidence=float(p.get('confidence', 1.0)),
+                    is_fixation=bool(p.get('is_fixation', False)),
+                    pupil_diameter=(float(p['pupil_diameter'])
+                                    if p.get('pupil_diameter') is not None else None),
+                ))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return points
+
     def get_capabilities(self) -> Dict:
         """
         Report which liveness modalities are genuinely operational server-side.
@@ -468,21 +550,21 @@ class LivenessSessionService:
             'modalities': {
                 # Camera-based checks: the server implements them; the client
                 # still needs a working camera to supply frames.
-                # Captured today, but not yet wired to the verdict: complete_session
-                # only scores these once session['gaze_task_results'] /
-                # session['expression_score'] are populated, which lands in Phase 2.
-                # Advertise gates_verdict=False so the capability matches the scorer.
                 'gaze': {
-                    'available': True, 'source': 'camera', 'gates_verdict': False,
-                    'note': 'Captured but not yet scored; gates the verdict in Phase 2.',
+                    'available': True, 'source': 'camera', 'gates_verdict': True,
+                    'note': 'Scored from the cognitive challenge-response.',
                 },
                 'pulse_rppg': {
                     'available': True, 'source': 'camera', 'gates_verdict': True,
                     'note': 'Heart rate only; SpO2 is never derived from webcam.',
                 },
+                # Captured today but not yet scored: complete_session only scores
+                # expression once session['expression_score'] is populated, which
+                # lands in a later Phase 2 step. gates_verdict=False matches the
+                # scorer until then.
                 'micro_expression': {
                     'available': True, 'source': 'camera', 'gates_verdict': False,
-                    'note': 'Captured but not yet scored; gates the verdict in Phase 2.',
+                    'note': 'Captured but not yet scored; gates the verdict in a later Phase 2 step.',
                 },
                 # Model-gated: heuristic output is advisory until a real model loads.
                 'deepfake': {
