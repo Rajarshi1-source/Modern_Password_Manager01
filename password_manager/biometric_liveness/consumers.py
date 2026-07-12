@@ -43,10 +43,13 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             return
         
         await self.accept()
-        
-        # Initialize session service
-        from .services import LivenessSessionService
-        self.service = LivenessSessionService()
+
+        # Share the same in-process session store as the REST views, so frames
+        # and challenge responses land on the session created by start_session.
+        # (Cross-process sharing between the WS and HTTP workers needs a
+        # Redis-backed store -- Phase 3.)
+        from .views import get_session_service
+        self.service = get_session_service()
         
         await self.send_json({
             'type': 'connected',
@@ -112,13 +115,17 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
     
     async def handle_challenge_response(self, content):
         """Handle challenge response submission."""
-        response_data = content.get('response', {})
-        
-        await self.send_json({
-            'type': 'challenge_result',
-            'status': 'received',
-            'next_challenge': True
-        })
+        try:
+            result = await sync_to_async(self.service.submit_challenge_response)(
+                self.session_id, content.get('response', {})
+            )
+            if 'error' in result:
+                await self.send_json({'type': 'error', 'message': result['error']})
+                return
+            await self.send_json({'type': 'challenge_result', **result})
+        except Exception as e:
+            logger.error(f"Challenge response error: {e}")
+            await self.send_json({'type': 'error', 'message': str(e)})
     
     async def handle_complete(self):
         """Complete session and send final result."""

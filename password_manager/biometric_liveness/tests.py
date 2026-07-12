@@ -333,6 +333,73 @@ class LivenessAPITests(APITestCase):
         """Test getting verification history."""
         url = reverse('biometric_liveness:get_history')
         response = self.client.get(url)
-        
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('sessions', response.data)
+
+
+class ChallengeResponseFlowTests(TestCase):
+    """Gaze cognitive challenge-response is scored and gates the verdict."""
+
+    def setUp(self):
+        self.service = LivenessSessionService()
+
+    def _good_gaze_data(self, task):
+        data, t = [], 100.0
+        for (tx, ty) in task.target_positions:
+            for k in range(6):
+                data.append({'x': tx, 'y': ty, 'timestamp_ms': t,
+                             'confidence': 0.9, 'is_fixation': k > 1})
+                t += 40.0
+        return data
+
+    def _inject_pulse(self, session, n=6):
+        """Give the session a real 2nd modality without processing 100+ frames."""
+        from .services.pulse_oximetry_service import PulseReading
+        session['pulse_readings'] = [
+            PulseReading(timestamp_ms=i * 33.0, frame_number=i, rgb_means=(0.0, 0.0, 0.0),
+                         ppg_value=0.0, heart_rate_bpm=72.0, heart_rate_variability=30.0,
+                         spo2_estimate=None, signal_quality=0.8)
+            for i in range(n)
+        ]
+
+    def test_client_challenges_include_render_data(self):
+        info = self.service.create_session(user_id=1)
+        self.assertTrue(all('data' in c for c in info['challenges']))
+
+    def test_gaze_response_recorded_and_gates(self):
+        info = self.service.create_session(user_id=1)
+        sid = info['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        out = self.service.submit_challenge_response(sid, {
+            'sequence': gaze_ch['sequence'],
+            'gaze_data': self._good_gaze_data(gaze_ch['cognitive_task']),
+        })
+        self.assertIn('passed', out)
+        self.assertEqual(len(session['gaze_task_results']), 1)
+        self._inject_pulse(session)
+        result = self.service.complete_session(sid)
+        self.assertIn('gaze', result.details['modalities_present'])
+        self.assertIn('pulse', result.details['modalities_present'])
+        self.assertNotEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
+
+    def test_empty_gaze_response_scores_zero(self):
+        info = self.service.create_session(user_id=1)
+        sid = info['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence'], 'gaze_data': []})
+        self._inject_pulse(session)
+        result = self.service.complete_session(sid)
+        self.assertEqual(result.gaze_tracking_score, 0.0)
+
+    def test_no_response_fails_closed(self):
+        sid = self.service.create_session(user_id=1)['session_id']
+        result = self.service.complete_session(sid)
+        self.assertEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
+        self.assertFalse(result.is_verified)
+
+    def test_unknown_session_returns_error(self):
+        out = self.service.submit_challenge_response('does-not-exist', {'gaze_data': []})
+        self.assertIn('error', out)
