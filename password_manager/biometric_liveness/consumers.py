@@ -81,22 +81,35 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
         try:
             frame_b64 = content.get('frame')
             timestamp_ms = content.get('timestamp_ms', 0)
-            width = content.get('width', 640)
-            height = content.get('height', 480)
-            
+            try:
+                width = int(content.get('width', 0) or 0)
+                height = int(content.get('height', 0) or 0)
+            except (TypeError, ValueError):
+                width = height = 0
+
             if not frame_b64:
                 await self.send_json({'type': 'error', 'message': 'Missing frame data'})
                 return
-            
+            # Require explicit dimensions, matching the REST contract -- there is
+            # no safe default resolution, and a wrong guess just corrupts the
+            # reshape.
+            if width <= 0 or height <= 0:
+                await self.send_json({'type': 'error', 'message': 'Missing or invalid frame dimensions'})
+                return
+
             # Decode frame
             frame_bytes = base64.b64decode(frame_b64)
             frame = np.frombuffer(frame_bytes, dtype=np.uint8)
-            
+
             try:
                 frame = frame.reshape((height, width, 3))
             except ValueError:
-                frame = frame.reshape((height, width, 4))[:, :, :3]
-            
+                try:
+                    frame = frame.reshape((height, width, 4))[:, :, :3]
+                except ValueError:
+                    await self.send_json({'type': 'error', 'message': 'Frame dimensions do not match data'})
+                    return
+
             # Process frame
             result = await sync_to_async(self.service.process_frame)(
                 self.session_id, frame, timestamp_ms
