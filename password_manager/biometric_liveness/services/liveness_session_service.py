@@ -254,8 +254,13 @@ class LivenessSessionService:
 
         # Run all detection services. Use this session's OWN detector instances
         # so accumulated per-frame state never mixes with another session's.
+        # (Plain get + conditional build: setdefault would construct a throwaway
+        # detector set on every frame because its default arg is evaluated eagerly.)
         results = {}
-        svc = session.setdefault('services', self._new_session_services())
+        svc = session.get('services')
+        if svc is None:
+            svc = self._new_session_services()
+            session['services'] = svc
 
         # Extract landmarks if not provided
         if face_landmarks is None:

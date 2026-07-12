@@ -355,17 +355,25 @@ class PulseOximetryService:
             # is not copied into subsequent PulseReadings.
             self._clear_hardware_spo2()
             return
-        # Reject non-finite values: min()/max() would silently normalise NaN/inf
-        # into a valid-looking number and let bogus SpO2 evidence enter scoring.
-        if not (np.isfinite(spo2_percent) and np.isfinite(quality)):
-            self._clear_hardware_spo2()
-            return
-        self.hardware_spo2 = float(max(0.0, min(100.0, spo2_percent)))
-        self.hardware_spo2_quality = float(max(0.0, min(1.0, quality)))
-        self.hardware_spo2_timestamp_ms = (
+        # Resolve the sample timestamp against our frame clock (explicit value,
+        # else the latest frame time).
+        sample_timestamp_ms = (
             timestamp_ms if timestamp_ms is not None
             else (self.timestamps[-1] if self.timestamps else None)
         )
+        # Reject malformed samples outright rather than clamping them into a
+        # valid-looking value (e.g. 150 -> 100) or storing an unverifiable
+        # timestamp: bogus or undatable SpO2 must never enter scoring.
+        if not (
+            np.isfinite(spo2_percent) and 0.0 <= spo2_percent <= 100.0
+            and np.isfinite(quality) and 0.0 <= quality <= 1.0
+            and sample_timestamp_ms is not None and np.isfinite(sample_timestamp_ms)
+        ):
+            self._clear_hardware_spo2()
+            return
+        self.hardware_spo2 = float(spo2_percent)
+        self.hardware_spo2_quality = float(quality)
+        self.hardware_spo2_timestamp_ms = float(sample_timestamp_ms)
         self.current_spo2 = self.hardware_spo2
 
     def has_hardware_spo2(self) -> bool:
@@ -390,9 +398,12 @@ class PulseOximetryService:
         if self.hardware_spo2_quality < self.MIN_SPO2_QUALITY:
             return None
         ts = self.hardware_spo2_timestamp_ms
-        # No timestamp => freshness cannot be verified. Fail safe: treat it as
-        # expired rather than emitting a reading of unknown age indefinitely.
-        if ts is None or (timestamp_ms - ts) > self.MAX_SPO2_AGE_MS:
+        # No / non-finite timestamp => freshness cannot be verified. Fail safe.
+        if ts is None or not np.isfinite(timestamp_ms):
+            return None
+        age_ms = timestamp_ms - ts
+        # Reject stale (too old) and impossible (future-dated) readings.
+        if age_ms < 0 or age_ms > self.MAX_SPO2_AGE_MS:
             return None
         return self.hardware_spo2
     

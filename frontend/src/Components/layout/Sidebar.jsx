@@ -203,7 +203,7 @@ const Sidebar = () => {
         
         <NavSection>
           <NavSectionTitle collapsed={collapsed}>Tools</NavSectionTitle>
-          <NavItem to="/security" collapsed={collapsed}>
+          <NavItem to="/security" collapsed={collapsed} end>
             <FaShield />
             <NavItemText collapsed={collapsed}>Security Dashboard</NavItemText>
           </NavItem>
