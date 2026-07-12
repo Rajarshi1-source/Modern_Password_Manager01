@@ -235,11 +235,15 @@ class BiometricLivenessService {
   detectClientCapabilities() {
     const nav = typeof navigator !== 'undefined' ? navigator : {};
     const hasCamera = !!(nav.mediaDevices && nav.mediaDevices.getUserMedia);
-    const hasBluetooth = 'bluetooth' in nav;
+    // Only detects whether the browser ships the Web Bluetooth API -- NOT that a
+    // pulse oximeter is paired or reachable. A real SpO2 reading additionally
+    // requires the user to pair a BLE oximeter, so spo2Hardware stays false here
+    // and is only upgraded after a device is actually connected.
+    const bluetoothApiSupported = 'bluetooth' in nav;
     return {
       camera: hasCamera,
-      // A real SpO2 reading requires a BLE pulse oximeter the user must pair.
-      spo2Hardware: hasBluetooth,
+      bluetoothApiSupported,
+      spo2Hardware: false,
       // No standard web API exposes a thermal/IR camera stream in the browser.
       thermalHardware: false,
     };
