@@ -57,6 +57,11 @@ class PulseOximetryService:
     MIN_HR_BPM = 40
     MAX_HR_BPM = 180
     NORMAL_SPO2_RANGE = (95, 100)
+
+    # Hardware SpO2 is only emitted while fresh and of acceptable quality: a
+    # stalled/disconnected oximeter must not keep contributing a stale reading.
+    MAX_SPO2_AGE_MS = 5000
+    MIN_SPO2_QUALITY = 0.3
     
     def __init__(self, config: Optional[Dict] = None):
         """
@@ -177,7 +182,7 @@ class PulseOximetryService:
         # NOT derived from RGB -- it is only present if real oximeter hardware
         # has reported a reading (see ingest_hardware_spo2).
         heart_rate, hrv, hr_quality = self._calculate_heart_rate()
-        spo2 = self.hardware_spo2
+        spo2 = self._current_hardware_spo2(timestamp_ms)
 
         signal_quality = hr_quality
 
@@ -337,7 +342,8 @@ class PulseOximetryService:
         oxygen saturation requires calibrated dual-wavelength (red + infrared)
         hardware and cannot be recovered from a standard RGB webcam, so we never
         estimate it from video. Readings typically arrive over Bluetooth GATT
-        (Pulse Oximeter Service 0x1822 / PLX) and are relayed by the client.
+        (Pulse Oximeter Service 0x1822 / PLX) and are relayed by the client; that
+        client relay path (WS message + BLE pairing UI) is wired in Phase 2.
 
         Args:
             spo2_percent: Measured oxygen saturation (0-100), or None to clear.
@@ -347,10 +353,12 @@ class PulseOximetryService:
         if spo2_percent is None:
             # Device disconnected / reading invalidated: clear so a stale value
             # is not copied into subsequent PulseReadings.
-            self.hardware_spo2 = None
-            self.hardware_spo2_quality = 0.0
-            self.hardware_spo2_timestamp_ms = None
-            self.current_spo2 = None
+            self._clear_hardware_spo2()
+            return
+        # Reject non-finite values: min()/max() would silently normalise NaN/inf
+        # into a valid-looking number and let bogus SpO2 evidence enter scoring.
+        if not (np.isfinite(spo2_percent) and np.isfinite(quality)):
+            self._clear_hardware_spo2()
             return
         self.hardware_spo2 = float(max(0.0, min(100.0, spo2_percent)))
         self.hardware_spo2_quality = float(max(0.0, min(1.0, quality)))
@@ -363,6 +371,28 @@ class PulseOximetryService:
     def has_hardware_spo2(self) -> bool:
         """True only when a real external oximeter reading has been ingested."""
         return self.hardware_spo2 is not None
+
+    def _clear_hardware_spo2(self) -> None:
+        """Drop any ingested hardware SpO2 reading and its metadata."""
+        self.hardware_spo2 = None
+        self.hardware_spo2_quality = 0.0
+        self.hardware_spo2_timestamp_ms = None
+        self.current_spo2 = None
+
+    def _current_hardware_spo2(self, timestamp_ms: float) -> Optional[float]:
+        """
+        Return the ingested hardware SpO2 only while it is fresh and of
+        acceptable quality; otherwise None, so a stalled/disconnected device does
+        not keep contributing the same stale value to every new PulseReading.
+        """
+        if self.hardware_spo2 is None:
+            return None
+        if self.hardware_spo2_quality < self.MIN_SPO2_QUALITY:
+            return None
+        ts = self.hardware_spo2_timestamp_ms
+        if ts is not None and (timestamp_ms - ts) > self.MAX_SPO2_AGE_MS:
+            return None
+        return self.hardware_spo2
     
     def validate_physiological_consistency(
         self,
@@ -460,9 +490,6 @@ class PulseOximetryService:
         self.timestamps.clear()
         self.frame_count = 0
         self.current_hr = None
-        self.current_spo2 = None
         # Clear any ingested hardware SpO2 so a reading from a previous session
         # cannot leak into the next one (this service is reused via reset()).
-        self.hardware_spo2 = None
-        self.hardware_spo2_quality = 0.0
-        self.hardware_spo2_timestamp_ms = None
+        self._clear_hardware_spo2()

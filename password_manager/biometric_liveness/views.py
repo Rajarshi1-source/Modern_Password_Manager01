@@ -170,8 +170,9 @@ def get_capabilities(request):
     try:
         service = get_session_service()
         return Response(service.get_capabilities())
-    except Exception as e:
-        logger.error(f"Error getting capabilities: {e}")
+    except Exception:
+        # Boundary converts unexpected failures to HTTP 500; keep the traceback.
+        logger.exception("Error getting capabilities")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

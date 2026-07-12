@@ -24,6 +24,10 @@ class DeepfakeAnalysis:
     frequency_score: float
     blending_score: float
     artifacts_detected: List[str]
+    # True only when fake_probability came from a genuinely trained model. The
+    # heuristic analyze_frame() path leaves this False, so heuristic output can
+    # never gate a verdict just because a model object happens to be assigned.
+    model_derived: bool = False
 
 
 class DeepfakeDetector:
