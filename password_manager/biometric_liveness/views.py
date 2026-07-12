@@ -14,6 +14,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from django.core.exceptions import ValidationError
+
 from .services import LivenessSessionService
 from .models import LivenessProfile, LivenessSession, LivenessSettings
 
@@ -23,6 +25,24 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def get_session_service():
     return LivenessSessionService()
+
+
+def _user_owns_session(request, session_id) -> bool:
+    """
+    True only if the liveness session belongs to the requesting user.
+
+    The in-memory session store is keyed by an opaque UUID, so the endpoints that
+    mutate/finalize a session (frame, challenge response, complete) must confirm
+    ownership -- otherwise any authenticated user holding another user's session
+    id could inject signal into or finalize that session. Mirrors the WS
+    consumer's verify_session.
+    """
+    if not session_id:
+        return False
+    try:
+        return LivenessSession.objects.filter(id=session_id, user=request.user).exists()
+    except (ValidationError, ValueError, TypeError):
+        return False
 
 
 @api_view(['POST'])
@@ -66,21 +86,25 @@ def submit_frame(request):
 
         if not session_id or not frame_b64:
             return Response({'error': 'Missing session_id or frame'}, status=status.HTTP_400_BAD_REQUEST)
+        if not _user_owns_session(request, session_id):
+            return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
 
         # Decode base64 frame and reshape to HxWxC using the provided dimensions
-        # (raw RGB/RGBA pixel data from the client canvas). Without this the
-        # detectors receive a flat 1-D array and produce no usable signal.
+        # (raw RGB/RGBA pixel data from the client canvas). Dimensions are
+        # required -- a flat 1-D array yields no usable signal, so reject it.
         frame_bytes = base64.b64decode(frame_b64)
         frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
-        if width > 0 and height > 0:
+        if width <= 0 or height <= 0:
+            return Response({'error': 'Missing or invalid frame dimensions'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            frame_array = frame_array.reshape((height, width, 3))
+        except ValueError:
             try:
-                frame_array = frame_array.reshape((height, width, 3))
+                frame_array = frame_array.reshape((height, width, 4))[:, :, :3]
             except ValueError:
-                try:
-                    frame_array = frame_array.reshape((height, width, 4))[:, :, :3]
-                except ValueError:
-                    return Response({'error': 'Frame dimensions do not match data'},
-                                    status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'Frame dimensions do not match data'},
+                                status=status.HTTP_400_BAD_REQUEST)
 
         service = get_session_service()
         result = service.process_frame(session_id, frame_array, timestamp_ms)
@@ -125,6 +149,8 @@ def submit_challenge_response(request):
         
         if not session_id:
             return Response({'error': 'Missing session_id'}, status=status.HTTP_400_BAD_REQUEST)
+        if not _user_owns_session(request, session_id):
+            return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
 
         service = get_session_service()
         result = service.submit_challenge_response(session_id, response_data)
@@ -144,7 +170,9 @@ def complete_session(request):
         session_id = request.data.get('session_id')
         if not session_id:
             return Response({'error': 'Missing session_id'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if not _user_owns_session(request, session_id):
+            return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
+
         service = get_session_service()
         result = service.complete_session(session_id)
         

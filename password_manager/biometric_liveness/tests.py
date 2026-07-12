@@ -337,6 +337,19 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('sessions', response.data)
 
+    def test_challenge_response_rejects_non_owner(self):
+        """A user cannot submit a challenge response to another user's session."""
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        other = User.objects.create_user(
+            username='bob', email='bob@example.com', password='testpass123')
+        self.client.force_authenticate(user=other)
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_challenge_response'),
+            {'session_id': session_id, 'response': {'gaze_data': []}}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
 
 class ChallengeResponseFlowTests(TestCase):
     """Gaze cognitive challenge-response is scored and gates the verdict."""
@@ -384,15 +397,19 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertIn('pulse', result.details['modalities_present'])
         self.assertNotEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
 
-    def test_empty_gaze_response_scores_zero(self):
+    def test_empty_gaze_response_not_recorded(self):
         info = self.service.create_session(user_id=1)
         sid = info['session_id']
         session = self.service.active_sessions[sid]
         gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
-        self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence'], 'gaze_data': []})
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence'], 'gaze_data': []})
+        self.assertFalse(out['passed'])
+        # Empty gaze is not recorded, so it cannot count as a present modality.
+        self.assertEqual(len(session['gaze_task_results']), 0)
         self._inject_pulse(session)
         result = self.service.complete_session(sid)
-        self.assertEqual(result.gaze_tracking_score, 0.0)
+        self.assertNotIn('gaze', result.details['modalities_present'])
+        self.assertEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
 
     def test_no_response_fails_closed(self):
         sid = self.service.create_session(user_id=1)['session_id']

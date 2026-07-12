@@ -195,7 +195,14 @@ class LivenessSessionService:
         
         for i, challenge_type in enumerate(required):
             if challenge_type == 'gaze':
-                task = self.gaze_service.generate_cognitive_task()
+                # Restrict to the gaze-trajectory task: it needs no verbal answer
+                # channel (which the client does not yet provide), so the gate is
+                # purely gaze-to-target correlation for now. Answer-based tasks
+                # (COUNT_ITEMS/FIND_OBJECT) return once that channel exists.
+                from .gaze_tracking_service import CognitiveTaskType
+                task = self.gaze_service.generate_cognitive_task(
+                    CognitiveTaskType.FOLLOW_TARGET
+                )
                 challenges.append({
                     'type': 'gaze',
                     'instruction': task.instruction,
@@ -485,12 +492,12 @@ class LivenessSessionService:
         if challenge is None:
             return {'error': 'Unknown challenge'}
 
-        summary: Dict = {'type': challenge['type'], 'sequence': seq, 'passed': None}
+        summary: Dict = {'type': challenge['type'], 'sequence': seq}
 
         if challenge['type'] == 'gaze':
             task = challenge.get('cognitive_task')
             gaze_data = self._parse_gaze_data(response.get('gaze_data', []))
-            if task is not None:
+            if task is not None and gaze_data:
                 svc = session.get('services')
                 if svc is None:
                     svc = self._new_session_services()
@@ -501,6 +508,15 @@ class LivenessSessionService:
                 session.setdefault('gaze_task_results', []).append(result)
                 summary['passed'] = bool(result.is_passed)
                 summary['accuracy'] = float(result.accuracy_score)
+            else:
+                # No gaze samples observed: record nothing so an empty/blank
+                # response does not count as a present gaze modality (it must not
+                # mask the cleaner INSUFFICIENT_SIGNAL verdict).
+                summary['passed'] = False
+                summary['reason'] = 'no_gaze_data'
+        else:
+            # Expression/pulse have no per-challenge verdict here.
+            summary['status'] = 'acknowledged'
 
         # Advance to the next challenge.
         session['current_challenge_idx'] = min(idx + 1, len(challenges))
