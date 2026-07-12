@@ -135,7 +135,8 @@ class LivenessSessionService:
             # Per-session accumulation of REAL signals. complete_session scores
             # only the modalities that actually populated these during the run.
             'pulse_readings': [],
-            'deepfake_probs': [],
+            'deepfake_probs': [],          # advisory (heuristic) — never gates
+            'deepfake_model_probs': [],     # model-derived only — may gate/veto
             'expression_au_frames': 0,
             'gaze_samples': 0,
             'gaze_task_results': [],
@@ -227,6 +228,7 @@ class LivenessSessionService:
         # path), so frame accumulation below can never KeyError.
         session.setdefault('pulse_readings', [])
         session.setdefault('deepfake_probs', [])
+        session.setdefault('deepfake_model_probs', [])
         session.setdefault('expression_au_frames', 0)
         session.setdefault('gaze_samples', 0)
 
@@ -274,6 +276,10 @@ class LivenessSessionService:
             'probability': deepfake_analysis.fake_probability,
         }
         session['deepfake_probs'].append(deepfake_analysis.fake_probability)
+        # Only probabilities that actually came from a trained model may gate the
+        # verdict later; heuristic output stays advisory (see complete_session).
+        if getattr(deepfake_analysis, 'model_derived', False):
+            session.setdefault('deepfake_model_probs', []).append(deepfake_analysis.fake_probability)
         
         return {
             'frame_number': session['frames_processed'],
@@ -334,13 +340,16 @@ class LivenessSessionService:
             modality_scores['expression'] = expression_score
 
         # --- Deepfake detection -----------------------------------------------
-        # Only a genuinely loaded PAD/deepfake model may gate the verdict. The
-        # heuristic detector is advisory-only: its probability is reported in
-        # details but excluded from scoring until a real model is available.
+        # Only genuinely model-derived probabilities may gate the verdict. The
+        # heuristic detector is advisory-only (reported in details), so its output
+        # is excluded from scoring even if a model object is later assigned but
+        # inference is not actually routed through it.
         deepfake_probs = session.get('deepfake_probs', [])
         deepfake_probability = float(np.mean(deepfake_probs)) if deepfake_probs else None
-        if self.deepfake_detector.has_real_model() and deepfake_probability is not None:
-            modality_scores['deepfake'] = 1.0 - deepfake_probability
+        model_probs = session.get('deepfake_model_probs', [])
+        model_deepfake_probability = float(np.mean(model_probs)) if model_probs else None
+        if model_deepfake_probability is not None:
+            modality_scores['deepfake'] = 1.0 - model_deepfake_probability
 
         # --- Thermal ----------------------------------------------------------
         thermal_readings = session.get('thermal_readings', [])
@@ -376,14 +385,13 @@ class LivenessSessionService:
         else:
             verdict = 'SUSPECTED_FAKE'
 
-        # Hard veto: a genuinely trained PAD/deepfake model that flags the
-        # presentation as fake must fail the verdict outright, rather than being
-        # averaged in and potentially outvoted by the other modalities. Dormant
-        # until a real model is loaded (has_real_model() is False otherwise).
+        # Hard veto: a genuinely model-derived fake finding must fail the verdict
+        # outright, rather than being averaged in and potentially outvoted by the
+        # other modalities. Keyed on model-derived provenance (not merely a model
+        # object being present), so heuristic output can never trigger it.
         if (
-            self.deepfake_detector.has_real_model()
-            and deepfake_probability is not None
-            and deepfake_probability >= self.deepfake_detector.FAKE_THRESHOLD
+            model_deepfake_probability is not None
+            and model_deepfake_probability >= self.deepfake_detector.FAKE_THRESHOLD
         ):
             is_verified = False
             verdict = 'SUSPECTED_FAKE'

@@ -20,7 +20,9 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
     useEffect(() => {
         if (pulseData) {
             if (pulseData.heart_rate_bpm) setHeartRate(pulseData.heart_rate_bpm);
-            if (pulseData.spo2) setSpo2(pulseData.spo2);
+            // Clear SpO2 when the backend reports none (device disconnected /
+            // reading expired) so a stale value doesn't stay on screen.
+            setSpo2(pulseData.spo2 ?? null);
             if (pulseData.signal_quality) setSignalQuality(pulseData.signal_quality);
 
             // Add to waveform history
