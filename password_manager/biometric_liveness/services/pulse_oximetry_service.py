@@ -390,7 +390,9 @@ class PulseOximetryService:
         if self.hardware_spo2_quality < self.MIN_SPO2_QUALITY:
             return None
         ts = self.hardware_spo2_timestamp_ms
-        if ts is not None and (timestamp_ms - ts) > self.MAX_SPO2_AGE_MS:
+        # No timestamp => freshness cannot be verified. Fail safe: treat it as
+        # expired rather than emitting a reading of unknown age indefinitely.
+        if ts is None or (timestamp_ms - ts) > self.MAX_SPO2_AGE_MS:
             return None
         return self.hardware_spo2
     
