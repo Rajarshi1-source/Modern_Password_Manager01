@@ -345,6 +345,12 @@ class PulseOximetryService:
             timestamp_ms: Reading timestamp; defaults to the latest frame time.
         """
         if spo2_percent is None:
+            # Device disconnected / reading invalidated: clear so a stale value
+            # is not copied into subsequent PulseReadings.
+            self.hardware_spo2 = None
+            self.hardware_spo2_quality = 0.0
+            self.hardware_spo2_timestamp_ms = None
+            self.current_spo2 = None
             return
         self.hardware_spo2 = float(max(0.0, min(100.0, spo2_percent)))
         self.hardware_spo2_quality = float(max(0.0, min(1.0, quality)))
@@ -455,3 +461,8 @@ class PulseOximetryService:
         self.frame_count = 0
         self.current_hr = None
         self.current_spo2 = None
+        # Clear any ingested hardware SpO2 so a reading from a previous session
+        # cannot leak into the next one (this service is reused via reset()).
+        self.hardware_spo2 = None
+        self.hardware_spo2_quality = 0.0
+        self.hardware_spo2_timestamp_ms = None

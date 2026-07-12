@@ -376,6 +376,18 @@ class LivenessSessionService:
         else:
             verdict = 'SUSPECTED_FAKE'
 
+        # Hard veto: a genuinely trained PAD/deepfake model that flags the
+        # presentation as fake must fail the verdict outright, rather than being
+        # averaged in and potentially outvoted by the other modalities. Dormant
+        # until a real model is loaded (has_real_model() is False otherwise).
+        if (
+            self.deepfake_detector.has_real_model()
+            and deepfake_probability is not None
+            and deepfake_probability >= self.deepfake_detector.FAKE_THRESHOLD
+        ):
+            is_verified = False
+            verdict = 'SUSPECTED_FAKE'
+
         duration_ms = 0
         if session['started_at']:
             duration_ms = (session['completed_at'] - session['started_at']).total_seconds() * 1000
@@ -421,15 +433,21 @@ class LivenessSessionService:
             'modalities': {
                 # Camera-based checks: the server implements them; the client
                 # still needs a working camera to supply frames.
+                # Captured today, but not yet wired to the verdict: complete_session
+                # only scores these once session['gaze_task_results'] /
+                # session['expression_score'] are populated, which lands in Phase 2.
+                # Advertise gates_verdict=False so the capability matches the scorer.
                 'gaze': {
-                    'available': True, 'source': 'camera', 'gates_verdict': True,
+                    'available': True, 'source': 'camera', 'gates_verdict': False,
+                    'note': 'Captured but not yet scored; gates the verdict in Phase 2.',
                 },
                 'pulse_rppg': {
                     'available': True, 'source': 'camera', 'gates_verdict': True,
                     'note': 'Heart rate only; SpO2 is never derived from webcam.',
                 },
                 'micro_expression': {
-                    'available': True, 'source': 'camera', 'gates_verdict': True,
+                    'available': True, 'source': 'camera', 'gates_verdict': False,
+                    'note': 'Captured but not yet scored; gates the verdict in Phase 2.',
                 },
                 # Model-gated: heuristic output is advisory until a real model loads.
                 'deepfake': {
