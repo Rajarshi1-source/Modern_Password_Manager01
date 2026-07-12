@@ -376,10 +376,11 @@ class GazeTrackingService:
         reaction_time = gaze_data[0].timestamp_ms if gaze_data else 0
         human_score = self._calculate_human_likelihood(gaze_data)
         
-        # Check explicit answer if applicable
+        # If the task has a correct answer, a matching answer is REQUIRED. A
+        # missing/blank answer must not pass the cognitive part for free.
         answer_correct = True
-        if task.correct_answer and user_answer:
-            answer_correct = user_answer.strip() == task.correct_answer
+        if task.correct_answer:
+            answer_correct = bool(user_answer) and user_answer.strip() == task.correct_answer
         
         # Determine if passed
         is_passed = (
@@ -423,17 +424,37 @@ class GazeTrackingService:
         return hits / len(task.target_positions)
     
     def _calculate_path_similarity(
-        self, 
-        task: CognitiveTask, 
+        self,
+        task: CognitiveTask,
         gaze_data: List[GazePoint]
     ) -> float:
-        """Calculate similarity between expected and actual gaze path."""
-        if not task.expected_sequence or len(gaze_data) < 2:
-            return 0.5  # Neutral score
-        
-        # Would use DTW or similar for path matching
-        # Simplified version
-        return np.random.uniform(0.5, 0.9)
+        """
+        Similarity between the expected target order and the observed gaze path.
+
+        Walks the time-ordered gaze samples and counts how many targets were
+        visited (within a radius) in the task's expected sequence -- each target
+        matched only by a sample occurring after the previous target's match. A
+        recorded or synthetic track that ignores the server-randomized order, or
+        supplies no ordered movement, scores low. Returns the fraction matched.
+        """
+        order = task.expected_sequence
+        if not order or not task.target_positions or len(gaze_data) < 2:
+            return 0.0
+
+        points = sorted(gaze_data, key=lambda g: g.timestamp_ms)
+        radius = 0.15
+        matched = 0
+        search_from = 0
+        for ti in order:
+            if ti >= len(task.target_positions):
+                continue
+            tx, ty = task.target_positions[ti]
+            for j in range(search_from, len(points)):
+                if math.hypot(points[j].x - tx, points[j].y - ty) <= radius:
+                    matched += 1
+                    search_from = j + 1
+                    break
+        return matched / len(order)
     
     def _calculate_human_likelihood(self, gaze_data: List[GazePoint]) -> float:
         """

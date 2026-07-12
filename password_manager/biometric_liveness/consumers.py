@@ -122,7 +122,15 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             if 'error' in result:
                 await self.send_json({'type': 'error', 'message': result['error']})
                 return
-            await self.send_json({'type': 'challenge_result', **result})
+            # Keep the WS envelope type as 'challenge_result'; the service's own
+            # 'type' (the challenge type, e.g. 'gaze') is surfaced separately so
+            # it can't overwrite the message-routing type.
+            challenge_type = result.pop('type', None)
+            await self.send_json({
+                'type': 'challenge_result',
+                'challenge_type': challenge_type,
+                **result,
+            })
         except Exception as e:
             logger.error(f"Challenge response error: {e}")
             await self.send_json({'type': 'error', 'message': str(e)})
