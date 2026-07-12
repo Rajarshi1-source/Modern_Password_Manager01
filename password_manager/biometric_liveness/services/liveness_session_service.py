@@ -104,6 +104,29 @@ class LivenessSessionService:
             'THERMAL_ENABLED': False,
         })
     
+    def _new_session_services(self) -> Dict:
+        """
+        Build a fresh set of stateful detectors for a single session.
+
+        The service object itself is a process-wide singleton (get_session_service
+        uses lru_cache), so per-frame accumulators (rPPG buffers, deepfake frame
+        history, gaze history, ingested hardware SpO2) must live per session --
+        otherwise a second session's create_session would clobber a first
+        session's in-progress state.
+        """
+        return {
+            'expression': MicroExpressionAnalyzer(),
+            'gaze': GazeTrackingService({
+                'gaze_tracking_points': self.config.get('GAZE_TRACKING_POINTS', 9),
+                'cognitive_task_timeout_ms': self.config.get('COGNITIVE_TASK_TIMEOUT_MS', 5000),
+            }),
+            'pulse': PulseOximetryService(),
+            'thermal': ThermalImagingService({
+                'thermal_enabled': self.config.get('THERMAL_ENABLED', False),
+            }),
+            'deepfake': DeepfakeDetector(),
+        }
+
     def create_session(self, user_id: int, context: str = 'login') -> Dict:
         """
         Create a new liveness verification session.
@@ -143,15 +166,12 @@ class LivenessSessionService:
             'thermal_readings': [],
         }
 
+        # Isolated per-session detectors so a concurrent session cannot clobber
+        # this one's accumulated state (see _new_session_services).
+        session['services'] = self._new_session_services()
+
         self.active_sessions[session_id] = session
-        
-        # Reset all services for new session
-        self.expression_analyzer = MicroExpressionAnalyzer()
-        self.gaze_service.clear_history()
-        self.pulse_service.reset()
-        self.thermal_service.reset()
-        self.deepfake_detector.reset()
-        
+
         logger.info(f"Created liveness session {session_id} for user {user_id}")
         
         return {
@@ -232,22 +252,24 @@ class LivenessSessionService:
         session.setdefault('expression_au_frames', 0)
         session.setdefault('gaze_samples', 0)
 
-        # Run all detection services
+        # Run all detection services. Use this session's OWN detector instances
+        # so accumulated per-frame state never mixes with another session's.
         results = {}
-        
+        svc = session.setdefault('services', self._new_session_services())
+
         # Extract landmarks if not provided
         if face_landmarks is None:
-            face_landmarks = self.expression_analyzer.extract_landmarks(frame)
-        
+            face_landmarks = svc['expression'].extract_landmarks(frame)
+
         # Micro-expression analysis
         if face_landmarks is not None:
-            aus = self.expression_analyzer.extract_action_units(face_landmarks)
+            aus = svc['expression'].extract_action_units(face_landmarks)
             results['expression'] = {'action_units': aus}
             if aus:
                 session['expression_au_frames'] += 1
 
         # Gaze tracking
-        gaze_point = self.gaze_service.estimate_gaze(frame, face_landmarks)
+        gaze_point = svc['gaze'].estimate_gaze(frame, face_landmarks)
         if gaze_point:
             results['gaze'] = {
                 'x': gaze_point.x,
@@ -257,7 +279,7 @@ class LivenessSessionService:
             session['gaze_samples'] += 1
 
         # Pulse oximetry
-        pulse_reading = self.pulse_service.process_frame(frame, timestamp_ms, face_landmarks)
+        pulse_reading = svc['pulse'].process_frame(frame, timestamp_ms, face_landmarks)
         if pulse_reading:
             results['pulse'] = {
                 'heart_rate': pulse_reading.heart_rate_bpm,
@@ -270,7 +292,7 @@ class LivenessSessionService:
 
         # Deepfake detection (heuristic output is advisory until a real model
         # is loaded -- see complete_session).
-        deepfake_analysis = self.deepfake_detector.analyze_frame(frame, None, timestamp_ms)
+        deepfake_analysis = svc['deepfake'].analyze_frame(frame, None, timestamp_ms)
         results['deepfake'] = {
             'is_fake': deepfake_analysis.is_fake,
             'probability': deepfake_analysis.fake_probability,
