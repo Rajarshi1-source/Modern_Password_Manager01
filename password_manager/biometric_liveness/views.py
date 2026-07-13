@@ -205,6 +205,9 @@ def complete_session(request):
             'verdict': result.verdict,
             'confidence': result.confidence,
         })
+    except ValueError as e:
+        # Session not found / already completed -> a client/state error, not a 500.
+        return Response({'error': str(e)}, status=status.HTTP_409_CONFLICT)
     except Exception as e:
         logger.error(f"Error completing session: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

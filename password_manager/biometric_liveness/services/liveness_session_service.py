@@ -165,6 +165,7 @@ class LivenessSessionService:
             'gaze_track': [],               # server-observed gaze (from frames)
             'gaze_task_results': [],
             'thermal_readings': [],
+            'answered_challenges': set(),   # replay guard: seq answered at most once
         }
 
         # Isolated per-session detectors so a concurrent session cannot clobber
@@ -254,7 +255,10 @@ class LivenessSessionService:
         if timezone.now() > session['expires_at']:
             session['status'] = 'expired'
             return {'error': 'Session expired'}
-        
+        # A completed session's verdict is final; do not accept more signal.
+        if session['status'] == 'completed':
+            return {'error': 'Session already completed'}
+
         if session['status'] == 'pending':
             session['status'] = 'in_progress'
             session['started_at'] = timezone.now()
@@ -350,7 +354,12 @@ class LivenessSessionService:
         session = self.active_sessions.get(session_id)
         if not session:
             raise ValueError('Session not found')
-        
+        # A verdict is final. Refuse to re-score a completed session -- otherwise
+        # a failing session could be upgraded by submitting more frames and
+        # calling complete again.
+        if session.get('status') == 'completed':
+            raise ValueError('Session already completed')
+
         session['status'] = 'completed'
         session['completed_at'] = timezone.now()
 
@@ -490,6 +499,8 @@ class LivenessSessionService:
         if timezone.now() > session['expires_at']:
             session['status'] = 'expired'
             return {'error': 'Session expired'}
+        if session.get('status') == 'completed':
+            return {'error': 'Session already completed'}
 
         challenges = session.get('challenges', [])
         idx = session.get('current_challenge_idx', 0)
@@ -497,6 +508,11 @@ class LivenessSessionService:
         challenge = next((c for c in challenges if c.get('sequence') == seq), None)
         if challenge is None:
             return {'error': 'Unknown challenge'}
+        # Replay guard: each challenge is answerable once, so a client cannot
+        # re-consume one challenge to advance past (and skip) the others.
+        answered = session.setdefault('answered_challenges', set())
+        if seq in answered:
+            return {'error': 'Challenge already answered'}
 
         summary: Dict = {'type': challenge['type'], 'sequence': seq}
 
@@ -516,9 +532,15 @@ class LivenessSessionService:
                 result = svc['gaze'].validate_task_response(
                     task, gaze_track, response.get('answer')
                 )
-                session.setdefault('gaze_task_results', []).append(result)
                 summary['passed'] = bool(result.is_passed)
                 summary['accuracy'] = float(result.accuracy_score)
+                # Only a PASSED challenge counts as a live gaze signal. A failed
+                # track (poor accuracy/human-likelihood, or a wrong answer) must
+                # not contribute a partial score toward the verdict.
+                if result.is_passed:
+                    session.setdefault('gaze_task_results', []).append(result)
+                else:
+                    summary['reason'] = 'gaze_challenge_failed'
             else:
                 summary['passed'] = False
                 summary['reason'] = 'no_gaze_observed'
@@ -526,9 +548,11 @@ class LivenessSessionService:
             # Expression/pulse have no per-challenge verdict here.
             summary['status'] = 'acknowledged'
 
-        # Advance to the next challenge.
-        session['current_challenge_idx'] = min(idx + 1, len(challenges))
-        summary['next_challenge'] = session['current_challenge_idx'] < len(challenges)
+        # Mark this challenge answered and advance by the number answered, so a
+        # skipped challenge still has to be completed.
+        answered.add(seq)
+        session['current_challenge_idx'] = len(answered)
+        summary['next_challenge'] = len(answered) < len(challenges)
         return summary
 
     def get_capabilities(self) -> Dict:
