@@ -124,7 +124,7 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             
         except Exception as e:
             logger.error(f"Frame processing error: {e}")
-            await self.send_json({'type': 'error', 'message': str(e)})
+            await self.send_json({'type': 'error', 'message': 'internal_error'})
     
     async def handle_challenge_response(self, content):
         """Handle challenge response submission."""
@@ -146,7 +146,7 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             })
         except Exception as e:
             logger.error(f"Challenge response error: {e}")
-            await self.send_json({'type': 'error', 'message': str(e)})
+            await self.send_json({'type': 'error', 'message': 'internal_error'})
     
     async def handle_complete(self):
         """Complete session and send final result."""
@@ -165,7 +165,7 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             
         except Exception as e:
             logger.error(f"Session completion error: {e}")
-            await self.send_json({'type': 'error', 'message': str(e)})
+            await self.send_json({'type': 'error', 'message': 'internal_error'})
     
     @database_sync_to_async
     def verify_session(self):

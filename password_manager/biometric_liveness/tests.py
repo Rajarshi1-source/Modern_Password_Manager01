@@ -368,18 +368,18 @@ class ChallengeResponseFlowTests(TestCase):
     def setUp(self):
         self.service = LivenessSessionService()
 
-    def _server_gaze_track(self, task):
-        """Simulate the gaze track a real server-side estimator would observe."""
-        from .services.gaze_tracking_service import GazePoint
-        track, t = [], 100.0
-        order = task.expected_sequence or list(range(len(task.target_positions)))
-        for ti in order:
-            tx, ty = task.target_positions[ti]
-            for k in range(6):
-                track.append(GazePoint(x=tx, y=ty, timestamp_ms=t,
-                                       confidence=0.9, is_fixation=k > 1))
-                t += 40.0
-        return track
+    def _stub_gaze(self, session, passed):
+        """Give the session one server-observed gaze sample and a deterministic
+        challenge verdict (bypasses the estimator, which is capability-gated)."""
+        from .services.gaze_tracking_service import GazePoint, TaskResult, CognitiveTaskType
+        session['gaze_track'] = [GazePoint(x=0.5, y=0.5, timestamp_ms=0.0,
+                                           confidence=0.9, is_fixation=True)]
+        score = 0.9 if passed else 0.2
+        session['services']['gaze'].validate_task_response = (
+            lambda *a, **k: TaskResult(
+                task_type=CognitiveTaskType.FOLLOW_TARGET, is_passed=passed,
+                accuracy_score=score, reaction_time_ms=100.0,
+                gaze_path_similarity=score, human_likelihood_score=score))
 
     def _inject_pulse(self, session, n=6):
         """Give the session a real 2nd modality without processing 100+ frames."""
@@ -395,21 +395,54 @@ class ChallengeResponseFlowTests(TestCase):
         info = self.service.create_session(user_id=1)
         self.assertTrue(all('data' in c for c in info['challenges']))
 
-    def test_server_observed_gaze_gates(self):
+    def test_passing_gaze_gates(self):
         info = self.service.create_session(user_id=1)
         sid = info['session_id']
         session = self.service.active_sessions[sid]
         gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
-        # Simulate what a real gaze estimator would accumulate from the frames.
-        session['gaze_track'] = self._server_gaze_track(gaze_ch['cognitive_task'])
+        self._stub_gaze(session, passed=True)
         out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
-        self.assertIn('passed', out)
+        self.assertTrue(out['passed'])
         self.assertEqual(len(session['gaze_task_results']), 1)
         self._inject_pulse(session)
         result = self.service.complete_session(sid)
         self.assertIn('gaze', result.details['modalities_present'])
         self.assertIn('pulse', result.details['modalities_present'])
         self.assertNotEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
+
+    def test_failing_gaze_not_recorded(self):
+        info = self.service.create_session(user_id=1)
+        sid = info['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        self._stub_gaze(session, passed=False)
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertFalse(out['passed'])
+        # A failed challenge is not recorded, so it cannot count as a modality.
+        self.assertEqual(len(session['gaze_task_results']), 0)
+        self._inject_pulse(session)
+        result = self.service.complete_session(sid)
+        self.assertNotIn('gaze', result.details['modalities_present'])
+        self.assertEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
+
+    def test_completed_session_cannot_be_rescored(self):
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        self._inject_pulse(session)
+        self.service.complete_session(sid)
+        with self.assertRaises(ValueError):
+            self.service.complete_session(sid)
+        res = self.service.process_frame(sid, np.zeros((120, 120, 3), np.uint8), 0.0)
+        self.assertIn('error', res)
+
+    def test_challenge_replay_rejected(self):
+        info = self.service.create_session(user_id=1)
+        sid = info['session_id']
+        gaze_ch = next(c for c in self.service.active_sessions[sid]['challenges']
+                       if c['type'] == 'gaze')
+        self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertIn('error', out)
 
     def test_client_gaze_data_is_ignored(self):
         """A client-supplied gaze track must not create a gaze modality."""
