@@ -471,3 +471,9 @@ class ChallengeResponseFlowTests(TestCase):
     def test_unknown_session_returns_error(self):
         out = self.service.submit_challenge_response('does-not-exist', {'gaze_data': []})
         self.assertIn('error', out)
+
+    def test_non_dict_response_does_not_crash(self):
+        # An explicit null / non-object 'response' must be normalized, not raise.
+        sid = self.service.create_session(user_id=1)['session_id']
+        out = self.service.submit_challenge_response(sid, None)
+        self.assertIn('next_challenge', out)

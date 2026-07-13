@@ -301,7 +301,8 @@ class LivenessSessionService:
         # supplied track -- is what the challenge is scored against.
         gaze_point = svc['gaze'].estimate_gaze(frame, face_landmarks)
         if gaze_point:
-            gaze_point.timestamp_ms = timestamp_ms
+            # Keep estimate_gaze's server-assigned timestamp; do NOT trust the
+            # client frame timestamp for the ordering/velocity used in scoring.
             results['gaze'] = {
                 'x': gaze_point.x,
                 'y': gaze_point.y,
@@ -493,6 +494,10 @@ class LivenessSessionService:
         what lets gaze contribute to the verdict in complete_session. A recorded
         or deepfake stream cannot follow the unpredictable targets in real time.
         """
+        # Untrusted payload: an explicit null / non-object 'response' must not
+        # reach .get() below (that raised AttributeError -> 500).
+        if not isinstance(response, dict):
+            response = {}
         session = self.active_sessions.get(session_id)
         if not session:
             return {'error': 'Session not found'}
@@ -548,11 +553,14 @@ class LivenessSessionService:
             # Expression/pulse have no per-challenge verdict here.
             summary['status'] = 'acknowledged'
 
-        # Mark this challenge answered and advance by the number answered, so a
-        # skipped challenge still has to be completed.
+        # Mark this challenge answered and point the index at the lowest
+        # unanswered sequence (not merely the count), so a later request that
+        # omits 'sequence' targets the right challenge even after an out-of-order
+        # answer, and a skipped challenge still has to be completed.
         answered.add(seq)
-        session['current_challenge_idx'] = len(answered)
-        summary['next_challenge'] = len(answered) < len(challenges)
+        remaining = sorted(c['sequence'] for c in challenges if c['sequence'] not in answered)
+        session['current_challenge_idx'] = remaining[0] if remaining else len(challenges)
+        summary['next_challenge'] = bool(remaining)
         return summary
 
     def get_capabilities(self) -> Dict:
