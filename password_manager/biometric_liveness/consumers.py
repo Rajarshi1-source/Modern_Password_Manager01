@@ -97,8 +97,12 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({'type': 'error', 'message': 'Missing or invalid frame dimensions'})
                 return
 
-            # Decode frame
-            frame_bytes = base64.b64decode(frame_b64)
+            # Decode frame (binascii.Error subclasses ValueError -> covers bad base64)
+            try:
+                frame_bytes = base64.b64decode(frame_b64, validate=True)
+            except ValueError:
+                await self.send_json({'type': 'error', 'message': 'Invalid frame encoding'})
+                return
             frame = np.frombuffer(frame_bytes, dtype=np.uint8)
 
             try:

@@ -96,7 +96,12 @@ def submit_frame(request):
         # Decode base64 frame and reshape to HxWxC using the provided dimensions
         # (raw RGB/RGBA pixel data from the client canvas). Dimensions are
         # required -- a flat 1-D array yields no usable signal, so reject it.
-        frame_bytes = base64.b64decode(frame_b64)
+        try:
+            # binascii.Error subclasses ValueError, so this covers malformed base64.
+            frame_bytes = base64.b64decode(frame_b64, validate=True)
+        except ValueError:
+            return Response({'error': 'Invalid frame encoding'},
+                            status=status.HTTP_400_BAD_REQUEST)
         frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
         if width <= 0 or height <= 0:
             return Response({'error': 'Missing or invalid frame dimensions'},
@@ -207,7 +212,9 @@ def complete_session(request):
         })
     except ValueError as e:
         # Session not found / already completed -> a client/state error, not a 500.
-        return Response({'error': str(e)}, status=status.HTTP_409_CONFLICT)
+        # Do not echo the exception text to the client (CodeQL info-exposure).
+        logger.warning(f"Session completion conflict: {e}")
+        return Response({'error': 'invalid_session_state'}, status=status.HTTP_409_CONFLICT)
     except Exception as e:
         logger.error(f"Error completing session: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
