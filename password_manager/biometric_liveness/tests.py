@@ -435,6 +435,30 @@ class ChallengeResponseFlowTests(TestCase):
         res = self.service.process_frame(sid, np.zeros((120, 120, 3), np.uint8), 0.0)
         self.assertIn('error', res)
 
+    def test_completed_verdict_survives_expiry(self):
+        """A completed session must not be reclassified as expired and re-scored."""
+        from django.utils import timezone as dj_timezone
+        from datetime import timedelta
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        self._inject_pulse(session)
+        self.service.complete_session(sid)
+        # Push the deadline into the past; the terminal verdict must hold.
+        session['expires_at'] = dj_timezone.now() - timedelta(seconds=1)
+        res = self.service.process_frame(sid, np.zeros((120, 120, 3), np.uint8), 0.0)
+        self.assertEqual(res.get('error'), 'Session already completed')
+        with self.assertRaises(ValueError):
+            self.service.complete_session(sid)
+
+    def test_expired_session_cannot_be_completed(self):
+        from django.utils import timezone as dj_timezone
+        from datetime import timedelta
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        session['expires_at'] = dj_timezone.now() - timedelta(seconds=1)
+        with self.assertRaises(ValueError):
+            self.service.complete_session(sid)
+
     def test_challenge_replay_rejected(self):
         info = self.service.create_session(user_id=1)
         sid = info['session_id']

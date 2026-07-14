@@ -252,12 +252,14 @@ class LivenessSessionService:
         if not session:
             return {'error': 'Session not found'}
         
+        # Terminal state first: a completed verdict is final and must not be
+        # reclassified as 'expired' (that would defeat the re-scoring guard in
+        # complete_session, which keys off status == 'completed').
+        if session['status'] == 'completed':
+            return {'error': 'Session already completed'}
         if timezone.now() > session['expires_at']:
             session['status'] = 'expired'
             return {'error': 'Session expired'}
-        # A completed session's verdict is final; do not accept more signal.
-        if session['status'] == 'completed':
-            return {'error': 'Session already completed'}
 
         if session['status'] == 'pending':
             session['status'] = 'in_progress'
@@ -360,6 +362,10 @@ class LivenessSessionService:
         # calling complete again.
         if session.get('status') == 'completed':
             raise ValueError('Session already completed')
+        # An expired session must not be scored at all.
+        if session.get('status') == 'expired' or timezone.now() > session['expires_at']:
+            session['status'] = 'expired'
+            raise ValueError('Session expired')
 
         session['status'] = 'completed'
         session['completed_at'] = timezone.now()
@@ -501,11 +507,13 @@ class LivenessSessionService:
         session = self.active_sessions.get(session_id)
         if not session:
             return {'error': 'Session not found'}
+        # Terminal state first (see process_frame): a completed verdict must not
+        # be reclassified as expired.
+        if session.get('status') == 'completed':
+            return {'error': 'Session already completed'}
         if timezone.now() > session['expires_at']:
             session['status'] = 'expired'
             return {'error': 'Session expired'}
-        if session.get('status') == 'completed':
-            return {'error': 'Session already completed'}
 
         challenges = session.get('challenges', [])
         idx = session.get('current_challenge_idx', 0)

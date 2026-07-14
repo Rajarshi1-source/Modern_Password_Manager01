@@ -214,14 +214,17 @@ class GazeTrackingService:
         right_eye: np.ndarray,
         frame: np.ndarray
     ) -> Tuple[float, float, float]:
-        """Compute normalized gaze direction from eye regions."""
-        # Would use trained CNN model
-        # Returning placeholder values
-        gaze_x = np.random.uniform(0.3, 0.7)
-        gaze_y = np.random.uniform(0.3, 0.7)
-        confidence = np.random.uniform(0.7, 0.95)
-        
-        return gaze_x, gaze_y, confidence
+        """
+        Compute normalized gaze direction from eye regions.
+
+        Real inference (through the trained model in _gaze_model) lands with the
+        gaze estimator. There is deliberately NO placeholder: returning invented
+        coordinates here would let fabricated gaze gate a liveness verdict the
+        moment a model object is assigned, even though nothing was measured.
+        """
+        raise NotImplementedError(
+            'No trained gaze estimator is wired up; gaze inference is unavailable.'
+        )
     
     def _classify_gaze_event(self, gaze_x: float, gaze_y: float) -> bool:
         """Classify current gaze as fixation or saccade."""
@@ -246,9 +249,13 @@ class GazeTrackingService:
         left_eye: np.ndarray, 
         right_eye: np.ndarray
     ) -> Optional[float]:
-        """Estimate pupil diameter (useful for cognitive load detection)."""
-        # Would use pupil detection algorithm
-        return np.random.uniform(3.0, 5.0)  # mm, placeholder
+        """
+        Estimate pupil diameter (useful for cognitive load detection).
+
+        No real pupil detector is implemented, so report None rather than
+        inventing a measurement.
+        """
+        return None
     
     def _get_current_time_ms(self) -> float:
         """Get current timestamp in milliseconds."""
