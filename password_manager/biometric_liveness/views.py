@@ -6,9 +6,7 @@ REST API endpoints for liveness verification.
 """
 
 import logging
-import base64
 from functools import lru_cache
-import numpy as np
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -16,6 +14,7 @@ from rest_framework.response import Response
 
 from django.core.exceptions import ValidationError
 
+from .frame_utils import decode_frame
 from .services import LivenessSessionService
 from .models import LivenessProfile, LivenessSession, LivenessSettings
 
@@ -25,6 +24,31 @@ logger = logging.getLogger(__name__)
 @lru_cache(maxsize=1)
 def get_session_service():
     return LivenessSessionService()
+
+
+def persist_session_result(result) -> None:
+    """
+    Mirror a finalized in-memory verdict onto the LivenessSession row.
+
+    Shared by the REST complete endpoint and the WS consumer. Without it on the
+    WS path the row stays pending/in_progress, so the consumer's verify_session
+    keeps accepting reconnects to an already-completed session and the user's
+    verification history never records the scores.
+    """
+    try:
+        session = LivenessSession.objects.get(id=result.session_id)
+    except (LivenessSession.DoesNotExist, ValidationError, ValueError, TypeError):
+        return
+    session.status = 'passed' if result.is_verified else 'failed'
+    session.overall_liveness_score = result.overall_liveness_score
+    session.deepfake_probability = result.deepfake_probability
+    session.confidence = result.confidence
+    session.micro_expression_score = result.micro_expression_score
+    session.gaze_tracking_score = result.gaze_tracking_score
+    session.pulse_oximetry_score = result.pulse_oximetry_score
+    session.thermal_score = result.thermal_score
+    session.total_frames_processed = result.total_frames_processed
+    session.save()
 
 
 def _user_owns_session(request, session_id) -> bool:
@@ -93,27 +117,11 @@ def submit_frame(request):
         if not _user_owns_session(request, session_id):
             return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Decode base64 frame and reshape to HxWxC using the provided dimensions
-        # (raw RGB/RGBA pixel data from the client canvas). Dimensions are
-        # required -- a flat 1-D array yields no usable signal, so reject it.
-        try:
-            # binascii.Error subclasses ValueError, so this covers malformed base64.
-            frame_bytes = base64.b64decode(frame_b64, validate=True)
-        except ValueError:
-            return Response({'error': 'Invalid frame encoding'},
-                            status=status.HTTP_400_BAD_REQUEST)
-        frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
-        if width <= 0 or height <= 0:
-            return Response({'error': 'Missing or invalid frame dimensions'},
-                            status=status.HTTP_400_BAD_REQUEST)
-        try:
-            frame_array = frame_array.reshape((height, width, 3))
-        except ValueError:
-            try:
-                frame_array = frame_array.reshape((height, width, 4))[:, :, :3]
-            except ValueError:
-                return Response({'error': 'Frame dimensions do not match data'},
-                                status=status.HTTP_400_BAD_REQUEST)
+        # Raw RGB/RGBA pixel data from the client canvas; same decode contract as
+        # the WS path.
+        frame_array, decode_error = decode_frame(frame_b64, width, height)
+        if decode_error:
+            return Response({'error': decode_error}, status=status.HTTP_400_BAD_REQUEST)
 
         service = get_session_service()
         result = service.process_frame(session_id, frame_array, timestamp_ms)
@@ -186,23 +194,9 @@ def complete_session(request):
 
         service = get_session_service()
         result = service.complete_session(session_id)
-        
-        # Update database record
-        try:
-            session = LivenessSession.objects.get(id=session_id)
-            session.status = 'passed' if result.is_verified else 'failed'
-            session.overall_liveness_score = result.overall_liveness_score
-            session.deepfake_probability = result.deepfake_probability
-            session.confidence = result.confidence
-            session.micro_expression_score = result.micro_expression_score
-            session.gaze_tracking_score = result.gaze_tracking_score
-            session.pulse_oximetry_score = result.pulse_oximetry_score
-            session.thermal_score = result.thermal_score
-            session.total_frames_processed = result.total_frames_processed
-            session.save()
-        except LivenessSession.DoesNotExist:
-            pass
-        
+
+        persist_session_result(result)
+
         return Response({
             'session_id': result.session_id,
             'is_verified': result.is_verified,

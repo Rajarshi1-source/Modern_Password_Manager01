@@ -350,6 +350,36 @@ class LivenessAPITests(APITestCase):
             {'session_id': session_id, 'response': {'gaze_data': []}}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_persist_session_result_leaves_pending(self):
+        """The shared persistence helper writes the verdict onto the row.
+
+        The WS consumer uses this on completion; without it a WS-completed
+        session stays pending/in_progress and would keep accepting reconnects.
+        """
+        from .views import persist_session_result
+        from .services.liveness_session_service import SessionResult
+        row = LivenessSession.objects.create(user=self.user, context='login')
+        persist_session_result(SessionResult(
+            session_id=str(row.id), is_verified=True, overall_liveness_score=0.91,
+            deepfake_probability=0.02, confidence=0.4, micro_expression_score=0.0,
+            gaze_tracking_score=0.9, pulse_oximetry_score=0.8, thermal_score=0.0,
+            texture_artifact_score=0.98, total_frames_processed=42,
+            duration_ms=1000.0, verdict='HIGH_CONFIDENCE_LIVE', details={}))
+        row.refresh_from_db()
+        self.assertEqual(row.status, 'passed')
+        self.assertEqual(row.total_frames_processed, 42)
+
+    def test_persist_session_result_unknown_row_is_noop(self):
+        """An unknown/malformed session id must not raise."""
+        from .views import persist_session_result
+        from .services.liveness_session_service import SessionResult
+        persist_session_result(SessionResult(
+            session_id='not-a-uuid', is_verified=False, overall_liveness_score=0.0,
+            deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
+            gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
+            texture_artifact_score=0.0, total_frames_processed=0,
+            duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={}))
+
     def test_challenge_response_same_owner_ok(self):
         """The owning user can submit a challenge response (shared session store)."""
         start = self.client.post(
@@ -368,11 +398,20 @@ class ChallengeResponseFlowTests(TestCase):
     def setUp(self):
         self.service = LivenessSessionService()
 
+    def _open_gaze_window(self, session):
+        """Open the gaze challenge's response window now, as the first frame would."""
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        now_ms = LivenessSessionService._now_ms()
+        session['challenge_activated_ms'][gaze_ch['sequence']] = now_ms
+        return gaze_ch, now_ms
+
     def _stub_gaze(self, session, passed):
-        """Give the session one server-observed gaze sample and a deterministic
-        challenge verdict (bypasses the estimator, which is capability-gated)."""
+        """Give the session one server-observed gaze sample inside the challenge
+        window, and a deterministic challenge verdict (bypasses the estimator,
+        which is capability-gated)."""
         from .services.gaze_tracking_service import GazePoint, TaskResult, CognitiveTaskType
-        session['gaze_track'] = [GazePoint(x=0.5, y=0.5, timestamp_ms=0.0,
+        _, now_ms = self._open_gaze_window(session)
+        session['gaze_track'] = [GazePoint(x=0.5, y=0.5, timestamp_ms=now_ms + 10.0,
                                            confidence=0.9, is_fixation=True)]
         score = 0.9 if passed else 0.2
         session['services']['gaze'].validate_task_response = (
@@ -473,7 +512,7 @@ class ChallengeResponseFlowTests(TestCase):
         info = self.service.create_session(user_id=1)
         sid = info['session_id']
         session = self.service.active_sessions[sid]
-        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        gaze_ch, _ = self._open_gaze_window(session)
         # No server-observed track; client submits a forged one matching targets.
         client = [{'x': tx, 'y': ty, 'timestamp_ms': i * 40.0, 'confidence': 0.9, 'is_fixation': True}
                   for i, (tx, ty) in enumerate(gaze_ch['cognitive_task'].target_positions)]
@@ -485,6 +524,83 @@ class ChallengeResponseFlowTests(TestCase):
         result = self.service.complete_session(sid)
         self.assertNotIn('gaze', result.details['modalities_present'])
         self.assertEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
+
+    def test_gaze_outside_challenge_window_is_not_scored(self):
+        """Samples captured after the task's time limit must not be scored."""
+        from .services.gaze_tracking_service import GazePoint
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch, now_ms = self._open_gaze_window(session)
+        limit = gaze_ch['cognitive_task'].time_limit_ms
+        # Track lands entirely past the deadline (but still inside the arrival
+        # grace, so the response itself is accepted and scored on nothing).
+        session['gaze_track'] = [
+            GazePoint(x=0.5, y=0.5, timestamp_ms=now_ms + limit + 500.0,
+                      confidence=0.9, is_fixation=True)
+        ]
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertFalse(out['passed'])
+        self.assertEqual(out['reason'], 'no_gaze_observed')
+        self.assertEqual(len(session['gaze_task_results']), 0)
+
+    def test_late_challenge_response_rejected(self):
+        """A response arriving long after the window closed cannot pass."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        self._stub_gaze(session, passed=True)
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        # Backdate activation so the window (plus arrival grace) has closed.
+        stale = (LivenessSessionService._now_ms()
+                 - gaze_ch['cognitive_task'].time_limit_ms
+                 - LivenessSessionService.CHALLENGE_RESPONSE_GRACE_MS - 1000)
+        session['challenge_activated_ms'][gaze_ch['sequence']] = stale
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertFalse(out['passed'])
+        self.assertEqual(out['reason'], 'challenge_window_expired')
+        self.assertEqual(len(session['gaze_task_results']), 0)
+
+    def test_unstarted_challenge_cannot_pass(self):
+        """With no window opened (no frames observed), gaze cannot be scored."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertFalse(out['passed'])
+        self.assertEqual(out['reason'], 'challenge_not_started')
+
+    def test_out_of_order_answer_keeps_index_on_unanswered(self):
+        """Answering a later challenge first must not skip an earlier one."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        sequences = sorted(c['sequence'] for c in session['challenges'])
+        first, second = sequences[0], sequences[1]
+        self.service.submit_challenge_response(sid, {'sequence': second})
+        self.assertEqual(session['current_challenge_idx'], first)
+        # Omitting 'sequence' must target the still-unanswered challenge.
+        out = self.service.submit_challenge_response(sid, {})
+        self.assertNotIn('error', out)
+        self.assertEqual(out['sequence'], first)
+
+    def test_stale_sessions_are_evicted(self):
+        """The in-memory store must not grow for the process lifetime."""
+        from django.utils import timezone as dj_timezone
+        from datetime import timedelta
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        session['expires_at'] = dj_timezone.now() - timedelta(
+            seconds=LivenessSessionService.SESSION_RETENTION_SECONDS + 60)
+        self.service.create_session(user_id=1)  # eviction runs on create
+        self.assertNotIn(sid, self.service.active_sessions)
+        self.assertNotIn(sid, self.service._session_locks)
+
+    def test_recent_terminal_session_is_retained(self):
+        """A just-completed session stays long enough to keep rejecting replays."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        self.service.complete_session(sid)
+        self.service.create_session(user_id=1)
+        self.assertIn(sid, self.service.active_sessions)
+        with self.assertRaises(ValueError):
+            self.service.complete_session(sid)
 
     def test_no_response_fails_closed(self):
         sid = self.service.create_session(user_id=1)['session_id']

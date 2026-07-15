@@ -6,12 +6,12 @@ Real-time video streaming for liveness verification.
 """
 
 import json
-import base64
 import logging
-import numpy as np
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from asgiref.sync import sync_to_async
+
+from .frame_utils import decode_frame
 
 logger = logging.getLogger(__name__)
 
@@ -90,29 +90,12 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             if not frame_b64:
                 await self.send_json({'type': 'error', 'message': 'Missing frame data'})
                 return
-            # Require explicit dimensions, matching the REST contract -- there is
-            # no safe default resolution, and a wrong guess just corrupts the
-            # reshape.
-            if width <= 0 or height <= 0:
-                await self.send_json({'type': 'error', 'message': 'Missing or invalid frame dimensions'})
-                return
 
-            # Decode frame (binascii.Error subclasses ValueError -> covers bad base64)
-            try:
-                frame_bytes = base64.b64decode(frame_b64, validate=True)
-            except ValueError:
-                await self.send_json({'type': 'error', 'message': 'Invalid frame encoding'})
+            # Same decode contract as the REST path (explicit dimensions required).
+            frame, decode_error = decode_frame(frame_b64, width, height)
+            if decode_error:
+                await self.send_json({'type': 'error', 'message': decode_error})
                 return
-            frame = np.frombuffer(frame_bytes, dtype=np.uint8)
-
-            try:
-                frame = frame.reshape((height, width, 3))
-            except ValueError:
-                try:
-                    frame = frame.reshape((height, width, 4))[:, :, :3]
-                except ValueError:
-                    await self.send_json({'type': 'error', 'message': 'Frame dimensions do not match data'})
-                    return
 
             # Process frame
             result = await sync_to_async(self.service.process_frame)(
@@ -156,7 +139,11 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
         """Complete session and send final result."""
         try:
             result = await sync_to_async(self.service.complete_session)(self.session_id)
-            
+
+            # Mirror the verdict onto the DB row exactly as the REST path does,
+            # so the row leaves pending/in_progress and the scores are recorded.
+            await self.persist_result(result)
+
             await self.send_json({
                 'type': 'session_complete',
                 'is_verified': result.is_verified,
@@ -164,13 +151,24 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 'verdict': result.verdict,
                 'confidence': result.confidence,
             })
-            
+
             await self.close()
-            
+
+        except ValueError as e:
+            # Session not found / already completed / expired -> a state error.
+            # Do not echo the exception text back to the client.
+            logger.warning(f"Session completion conflict: {e}")
+            await self.send_json({'type': 'error', 'message': 'invalid_session_state'})
         except Exception as e:
             logger.error(f"Session completion error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
-    
+
+    @database_sync_to_async
+    def persist_result(self, result):
+        """Persist a finalized verdict (shared with the REST complete endpoint)."""
+        from .views import persist_session_result
+        persist_session_result(result)
+
     @database_sync_to_async
     def verify_session(self):
         """Verify session exists and belongs to user."""
