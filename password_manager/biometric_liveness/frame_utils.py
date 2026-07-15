@@ -29,9 +29,10 @@ def decode_frame(
         return None, 'Missing or invalid frame dimensions'
 
     try:
-        # binascii.Error subclasses ValueError, so this covers malformed base64.
+        # binascii.Error subclasses ValueError, so this covers malformed base64;
+        # TypeError covers a non-string/bytes JSON value (number, list, object).
         frame_bytes = base64.b64decode(frame_b64, validate=True)
-    except ValueError:
+    except (ValueError, TypeError):
         return None, 'Invalid frame encoding'
 
     frame = np.frombuffer(frame_bytes, dtype=np.uint8)

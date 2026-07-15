@@ -67,6 +67,12 @@ def _with_session_lock(method):
     """
     @functools.wraps(method)
     def wrapper(self, session_id, *args, **kwargs):
+        if session_id not in self.active_sessions:
+            # Nothing to serialize, and creating a lock here would let a caller
+            # replaying unknown/evicted ids grow _session_locks unboundedly
+            # between evictions. Session ids are server-generated uuid4s, so no
+            # concurrent create can be racing this exact id into existence.
+            return method(self, session_id, *args, **kwargs)
         with self._session_lock(session_id):
             return method(self, session_id, *args, **kwargs)
     return wrapper
@@ -170,6 +176,22 @@ class LivenessSessionService:
         """
         return timezone.now().timestamp() * 1000
 
+    def _record_failed_required_challenge(self, session: Dict, challenge: Dict) -> None:
+        """
+        Note that a REQUIRED challenge was scored and failed, so it vetoes.
+
+        Only call this when the challenge was actually evaluated against real
+        observed signal and did not pass. A challenge that could not be observed
+        (no estimator loaded, no track, window never opened) must NOT land here:
+        that is a capability gap, and treating it as a failure would fail every
+        session in the current capability-gated state rather than simply leaving
+        the modality absent.
+        """
+        required = self.config.get('REQUIRED_CHALLENGES', ['gaze', 'expression', 'pulse'])
+        ctype = challenge.get('type')
+        if ctype in required:
+            session.setdefault('failed_required_challenges', []).append(ctype)
+
     def _activate_current_challenge(self, session: Dict) -> None:
         """
         Stamp the server-side start of the current challenge's response window.
@@ -261,6 +283,11 @@ class LivenessSessionService:
             'answered_challenges': set(),   # replay guard: seq answered at most once
             # sequence -> server epoch ms the challenge's response window opened.
             'challenge_activated_ms': {},
+            # Required challenges that were actually scored and FAILED. These
+            # veto the verdict (see complete_session). A challenge that could
+            # not be observed at all is NOT listed here -- that is an absent
+            # modality, not a failure.
+            'failed_required_challenges': [],
         }
 
         # Isolated per-session detectors so a concurrent session cannot clobber
@@ -563,6 +590,15 @@ class LivenessSessionService:
             is_verified = False
             verdict = 'SUSPECTED_FAKE'
 
+        # Hard veto: failing a REQUIRED randomized challenge is a positive fake
+        # signal. Dropping the modality alone would let the remaining modalities
+        # (e.g. rPPG + a real deepfake model) still carry the session over the
+        # threshold, so the cognitive challenge would stop being a real gate.
+        failed_required = session.get('failed_required_challenges', [])
+        if failed_required:
+            is_verified = False
+            verdict = 'SUSPECTED_FAKE'
+
         duration_ms = 0
         if session['started_at']:
             duration_ms = (session['completed_at'] - session['started_at']).total_seconds() * 1000
@@ -588,6 +624,7 @@ class LivenessSessionService:
                 'modality_scores': modality_scores,
                 'deepfake_advisory_probability': deepfake_probability,
                 'deepfake_gates_verdict': 'deepfake' in modality_scores,
+                'failed_required_challenges': sorted(set(failed_required)),
             },
         )
     
@@ -675,6 +712,12 @@ class LivenessSessionService:
                         session.setdefault('gaze_task_results', []).append(result)
                     else:
                         summary['reason'] = 'gaze_challenge_failed'
+                        # We OBSERVED the user's gaze and it failed the
+                        # randomized challenge -- a positive fake signal, not a
+                        # missing one. Omitting the modality is not enough:
+                        # other passing modalities could still carry the verdict
+                        # over the threshold. Record it so completion vetoes.
+                        self._record_failed_required_challenge(session, challenge)
         else:
             # Expression/pulse have no per-challenge verdict here.
             summary['status'] = 'acknowledged'

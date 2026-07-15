@@ -350,8 +350,8 @@ class LivenessAPITests(APITestCase):
             {'session_id': session_id, 'response': {'gaze_data': []}}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_persist_session_result_leaves_pending(self):
-        """The shared persistence helper writes the verdict onto the row.
+    def test_persist_session_result_writes_status_and_verdict(self):
+        """The shared persistence helper writes status AND the nuanced verdict.
 
         The WS consumer uses this on completion; without it a WS-completed
         session stays pending/in_progress and would keep accepting reconnects.
@@ -367,7 +367,25 @@ class LivenessAPITests(APITestCase):
             duration_ms=1000.0, verdict='HIGH_CONFIDENCE_LIVE', details={}))
         row.refresh_from_db()
         self.assertEqual(row.status, 'passed')
+        self.assertEqual(row.verdict, 'HIGH_CONFIDENCE_LIVE')
         self.assertEqual(row.total_frames_processed, 42)
+
+    def test_persist_session_result_accepts_insufficient_signal_verdict(self):
+        """INSUFFICIENT_SIGNAL is a real service verdict and must be storable."""
+        from .views import persist_session_result
+        from .services.liveness_session_service import SessionResult
+        row = LivenessSession.objects.create(user=self.user, context='login')
+        persist_session_result(SessionResult(
+            session_id=str(row.id), is_verified=False, overall_liveness_score=0.0,
+            deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
+            gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
+            texture_artifact_score=0.0, total_frames_processed=0,
+            duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={}))
+        row.refresh_from_db()
+        self.assertEqual(row.status, 'failed')
+        self.assertEqual(row.verdict, 'INSUFFICIENT_SIGNAL')
+        # ...and it must be a declared choice, not just an arbitrary string.
+        self.assertIn('INSUFFICIENT_SIGNAL', dict(LivenessSession.VERDICT_CHOICES))
 
     def test_persist_session_result_unknown_row_is_noop(self):
         """An unknown/malformed session id must not raise."""
@@ -379,6 +397,17 @@ class LivenessAPITests(APITestCase):
             gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
             texture_artifact_score=0.0, total_frames_processed=0,
             duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={}))
+
+    def test_submit_frame_non_string_frame_is_400(self):
+        """A non-string 'frame' is client error, not a 500 (b64decode TypeError)."""
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_frame'),
+            {'session_id': start.data['session_id'], 'frame': 12345,
+             'width': 4, 'height': 4}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['error'], 'Invalid frame encoding')
 
     def test_challenge_response_same_owner_ok(self):
         """The owning user can submit a challenge response (shared session store)."""
@@ -462,7 +491,51 @@ class ChallengeResponseFlowTests(TestCase):
         self._inject_pulse(session)
         result = self.service.complete_session(sid)
         self.assertNotIn('gaze', result.details['modalities_present'])
-        self.assertEqual(result.verdict, 'INSUFFICIENT_SIGNAL')
+        # Scored-and-failed is a positive fake signal, so it vetoes outright
+        # rather than merely leaving the verdict short of signal.
+        self.assertFalse(result.is_verified)
+        self.assertEqual(result.verdict, 'SUSPECTED_FAKE')
+
+    def test_failed_gaze_challenge_vetoes_verdict(self):
+        """A scored-and-failed required challenge must veto, not just drop out.
+
+        Otherwise the remaining modalities could still carry the session over
+        the threshold, so the randomized challenge would not be a real gate.
+        """
+        info = self.service.create_session(user_id=1)
+        sid = info['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        self._stub_gaze(session, passed=False)
+        self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertEqual(session['failed_required_challenges'], ['gaze'])
+        # Two strong non-gaze modalities that would otherwise verify the session.
+        self._inject_pulse(session)
+        session['expression_score'] = 0.95
+        result = self.service.complete_session(sid)
+        self.assertFalse(result.is_verified)
+        self.assertEqual(result.verdict, 'SUSPECTED_FAKE')
+        self.assertEqual(result.details['failed_required_challenges'], ['gaze'])
+
+    def test_unobservable_gaze_does_not_veto(self):
+        """A capability gap is an ABSENT modality, not a failed challenge.
+
+        Gaze is gated off until a real estimator loads; treating 'no gaze
+        observed' as a failure would veto every session in that state.
+        """
+        info = self.service.create_session(user_id=1)
+        sid = info['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch, _ = self._open_gaze_window(session)
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertEqual(out['reason'], 'no_gaze_observed')
+        self.assertEqual(session['failed_required_challenges'], [])
+        self._inject_pulse(session)
+        session['expression_score'] = 0.95
+        result = self.service.complete_session(sid)
+        # Not vetoed: fails/passes purely on the modalities actually present.
+        self.assertNotEqual(result.verdict, 'SUSPECTED_FAKE')
+        self.assertEqual(result.details['failed_required_challenges'], [])
 
     def test_completed_session_cannot_be_rescored(self):
         sid = self.service.create_session(user_id=1)['session_id']

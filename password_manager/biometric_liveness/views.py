@@ -13,6 +13,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError
 
 from .frame_utils import decode_frame
 from .services import LivenessSessionService
@@ -40,6 +41,10 @@ def persist_session_result(result) -> None:
     except (LivenessSession.DoesNotExist, ValidationError, ValueError, TypeError):
         return
     session.status = 'passed' if result.is_verified else 'failed'
+    # The nuanced verdict, not just the binary pass/fail: the row's `verdict`
+    # field exists precisely to record it, and collapsing SUSPECTED_FAKE and
+    # INSUFFICIENT_SIGNAL to the same 'failed' loses why a session failed.
+    session.verdict = result.verdict
     session.overall_liveness_score = result.overall_liveness_score
     session.deepfake_probability = result.deepfake_probability
     session.confidence = result.confidence
@@ -48,7 +53,16 @@ def persist_session_result(result) -> None:
     session.pulse_oximetry_score = result.pulse_oximetry_score
     session.thermal_score = result.thermal_score
     session.total_frames_processed = result.total_frames_processed
-    session.save()
+    try:
+        session.save()
+    except DatabaseError:
+        # Best-effort mirror. complete_session() has already flipped the session
+        # to its terminal state, so re-completing to retry is impossible; letting
+        # this propagate would lose the verdict AND deny the client its result.
+        # The in-memory terminal guards still reject further frames/re-scoring.
+        logger.exception(
+            f"Failed to persist liveness verdict for session {result.session_id}"
+        )
 
 
 def _user_owns_session(request, session_id) -> bool:
