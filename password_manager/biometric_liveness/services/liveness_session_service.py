@@ -178,14 +178,17 @@ class LivenessSessionService:
 
     def _record_failed_required_challenge(self, session: Dict, challenge: Dict) -> None:
         """
-        Note that a REQUIRED challenge was scored and failed, so it vetoes.
+        Note that a REQUIRED challenge failed, so it vetoes the verdict.
 
-        Only call this when the challenge was actually evaluated against real
-        observed signal and did not pass. A challenge that could not be observed
-        (no estimator loaded, no track, window never opened) must NOT land here:
-        that is a capability gap, and treating it as a failure would fail every
-        session in the current capability-gated state rather than simply leaving
-        the modality absent.
+        Call this only when the modality was MEASURABLE and the user still did
+        not satisfy the challenge -- either it was scored and did not pass, or
+        its window closed with nothing observed (a deliberate skip).
+
+        Never call it when the modality simply cannot be measured (no estimator
+        loaded). That is a capability gap, not a failure: the modality is absent
+        and contributes nothing, whereas recording a failure would veto every
+        session in the current capability-gated state. Callers own that check --
+        see the gaze_capable gate in submit_challenge_response.
         """
         required = self.config.get('REQUIRED_CHALLENGES', ['gaze', 'expression', 'pulse'])
         ctype = challenge.get('type')
@@ -667,21 +670,42 @@ class LivenessSessionService:
             return {'error': 'Challenge already answered'}
 
         summary: Dict = {'type': challenge['type'], 'sequence': seq}
+        # A challenge is only consumed by a response that could actually be
+        # evaluated. A premature response (window not open yet, or no gaze seen
+        # so far while the window is still running) stays retryable -- consuming
+        # it would let a client burn the challenge without ever being scored.
+        consume = True
 
         if challenge['type'] == 'gaze':
             task = challenge.get('cognitive_task')
+            svc = session.get('services')
+            if svc is None:
+                svc = self._new_session_services()
+                session['services'] = svc
+            # Whether gaze can be measured at all right now. When it cannot, a
+            # missing track is a capability gap (absent modality); when it can,
+            # a missing track means the user did not do the challenge.
+            gaze_capable = svc['gaze'].has_real_gaze_model()
             # Score ONLY the server-observed gaze track (accumulated from the
             # submitted frames). A client-supplied track is ignored -- it can be
             # synthesized from the known target positions and would not prove
             # liveness. With no real gaze estimator loaded, no track exists, so
             # gaze records nothing and does not gate the verdict.
             activated_ms = session.get('challenge_activated_ms', {}).get(seq)
+            now_ms = self._now_ms()
             if task is None or activated_ms is None:
+                # Nothing was ever asked of the user; keep it retryable.
                 summary['passed'] = False
                 summary['reason'] = 'challenge_not_started'
-            elif self._now_ms() > activated_ms + task.time_limit_ms + self.CHALLENGE_RESPONSE_GRACE_MS:
+                consume = False
+            elif now_ms > activated_ms + task.time_limit_ms + self.CHALLENGE_RESPONSE_GRACE_MS:
                 summary['passed'] = False
                 summary['reason'] = 'challenge_window_expired'
+                # The window closed unanswered. With gaze measurable, that is a
+                # deliberate skip, not a capability gap -- veto it, or a client
+                # could dodge the challenge and still verify on other modalities.
+                if gaze_capable:
+                    self._record_failed_required_challenge(session, challenge)
             else:
                 # Cut the track to this challenge's own advertised window. The
                 # targets are disclosed to the client, so scoring the whole
@@ -695,11 +719,13 @@ class LivenessSessionService:
                 if not window_track:
                     summary['passed'] = False
                     summary['reason'] = 'no_gaze_observed'
+                    if now_ms <= deadline_ms:
+                        # Still inside the window: too early to judge, retryable.
+                        consume = False
+                    elif gaze_capable:
+                        # Window ran out with nothing observed -- same skip as above.
+                        self._record_failed_required_challenge(session, challenge)
                 else:
-                    svc = session.get('services')
-                    if svc is None:
-                        svc = self._new_session_services()
-                        session['services'] = svc
                     result = svc['gaze'].validate_task_response(
                         task, window_track, response.get('answer')
                     )
@@ -721,6 +747,11 @@ class LivenessSessionService:
         else:
             # Expression/pulse have no per-challenge verdict here.
             summary['status'] = 'acknowledged'
+
+        if not consume:
+            # Challenge stays current and unanswered; the client may retry it.
+            summary['next_challenge'] = True
+            return summary
 
         # Mark this challenge answered and point the index at the lowest
         # unanswered sequence (not merely the count), so a later request that

@@ -52,6 +52,7 @@ def persist_session_result(result) -> None:
     session.gaze_tracking_score = result.gaze_tracking_score
     session.pulse_oximetry_score = result.pulse_oximetry_score
     session.thermal_score = result.thermal_score
+    session.texture_artifact_score = result.texture_artifact_score
     session.total_frames_processed = result.total_frames_processed
     try:
         session.save()

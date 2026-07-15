@@ -409,6 +409,17 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(resp.data['error'], 'Invalid frame encoding')
 
+    def test_submit_frame_rejects_oversized_dimensions(self):
+        """Huge dimensions are rejected before any decode allocation."""
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_frame'),
+            {'session_id': start.data['session_id'], 'frame': 'AAAA',
+             'width': 50000, 'height': 50000}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['error'], 'Frame dimensions exceed maximum')
+
     def test_challenge_response_same_owner_ok(self):
         """The owning user can submit a challenge response (shared session store)."""
         start = self.client.post(
@@ -574,11 +585,54 @@ class ChallengeResponseFlowTests(TestCase):
     def test_challenge_replay_rejected(self):
         info = self.service.create_session(user_id=1)
         sid = info['session_id']
-        gaze_ch = next(c for c in self.service.active_sessions[sid]['challenges']
-                       if c['type'] == 'gaze')
-        self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        session = self.service.active_sessions[sid]
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        # The challenge must actually be evaluated before it is consumed, so
+        # give it an observable track (otherwise the first response is merely
+        # premature and stays retryable -- not a replay).
+        self._stub_gaze(session, passed=True)
+        first = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertTrue(first['passed'])
         out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
         self.assertIn('error', out)
+
+    def test_premature_response_does_not_consume_challenge(self):
+        """An unevaluable response must stay retryable, not burn the challenge.
+
+        Consuming it would let a client skip required gaze validation by
+        submitting before the window opens.
+        """
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertEqual(out['reason'], 'challenge_not_started')
+        self.assertNotIn(gaze_ch['sequence'], session['answered_challenges'])
+        self.assertEqual(session['current_challenge_idx'], gaze_ch['sequence'])
+        # ...and the same challenge can still be answered for real afterwards.
+        self._stub_gaze(session, passed=True)
+        retry = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertTrue(retry['passed'])
+
+    def test_skipped_gaze_vetoes_when_gaze_is_measurable(self):
+        """With gaze measurable, letting the window lapse is a skip, not a gap."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        gaze_ch, _ = self._open_gaze_window(session)
+        # Pretend a real estimator is loaded, but observe no gaze at all.
+        session['services']['gaze'].has_real_gaze_model = lambda: True
+        stale = (LivenessSessionService._now_ms()
+                 - gaze_ch['cognitive_task'].time_limit_ms
+                 - LivenessSessionService.CHALLENGE_RESPONSE_GRACE_MS - 1000)
+        session['challenge_activated_ms'][gaze_ch['sequence']] = stale
+        out = self.service.submit_challenge_response(sid, {'sequence': gaze_ch['sequence']})
+        self.assertEqual(out['reason'], 'challenge_window_expired')
+        self.assertEqual(session['failed_required_challenges'], ['gaze'])
+        self._inject_pulse(session)
+        session['expression_score'] = 0.95
+        result = self.service.complete_session(sid)
+        self.assertFalse(result.is_verified)
+        self.assertEqual(result.verdict, 'SUSPECTED_FAKE')
 
     def test_client_gaze_data_is_ignored(self):
         """A client-supplied gaze track must not create a gaze modality."""
@@ -631,6 +685,10 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertFalse(out['passed'])
         self.assertEqual(out['reason'], 'challenge_window_expired')
         self.assertEqual(len(session['gaze_task_results']), 0)
+        # Gaze is NOT measurable here (no estimator), so an expired window is a
+        # capability gap, not a skip: it must not veto. Vetoing on an
+        # unmeasurable modality would fail every session in the gated state.
+        self.assertEqual(session['failed_required_challenges'], [])
 
     def test_unstarted_challenge_cannot_pass(self):
         """With no window opened (no frames observed), gaze cannot be scored."""
@@ -688,5 +746,8 @@ class ChallengeResponseFlowTests(TestCase):
     def test_non_dict_response_does_not_crash(self):
         # An explicit null / non-object 'response' must be normalized, not raise.
         sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
         out = self.service.submit_challenge_response(sid, None)
         self.assertIn('next_challenge', out)
+        # ...and malformed input must not consume the required challenge.
+        self.assertEqual(session['answered_challenges'], set())
