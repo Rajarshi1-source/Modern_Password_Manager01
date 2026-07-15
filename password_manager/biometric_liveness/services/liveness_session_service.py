@@ -6,7 +6,9 @@ Orchestrates the complete liveness verification session.
 Coordinates all detection services and aggregates results.
 """
 
+import functools
 import logging
+import threading
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from django.conf import settings
@@ -53,6 +55,23 @@ class SessionResult:
     details: Dict
 
 
+def _with_session_lock(method):
+    """
+    Serialize a session-mutating method against other callers of the same session.
+
+    The service is a process-wide singleton shared by the REST views and the WS
+    consumer, and both run on worker threads, so concurrent frames/responses for
+    one session would otherwise interleave -- losing accumulator updates and
+    letting two racing complete_session calls both pass the terminal-state check
+    and score the same session twice. Different sessions never contend.
+    """
+    @functools.wraps(method)
+    def wrapper(self, session_id, *args, **kwargs):
+        with self._session_lock(session_id):
+            return method(self, session_id, *args, **kwargs)
+    return wrapper
+
+
 class LivenessSessionService:
     """
     Orchestrates liveness verification sessions.
@@ -70,6 +89,15 @@ class LivenessSessionService:
     # Minimum number of independent live modalities required to verify. Below
     # this the session fails closed (INSUFFICIENT_SIGNAL) rather than passing.
     MIN_MODALITIES = 2
+    # Slack allowed on a challenge response's ARRIVAL time (network latency), on
+    # top of the task's own time limit. The gaze samples that get scored are
+    # still cut strictly at the deadline, so this cannot buy extra track.
+    CHALLENGE_RESPONSE_GRACE_MS = 2000
+    # How long past its deadline a session is kept before eviction. The store is
+    # a process-wide singleton, so entries must not accumulate for the worker's
+    # lifetime; retention keeps the already-completed/expired guards effective
+    # for the whole time a client could still be calling with that session id.
+    SESSION_RETENTION_SECONDS = 300
 
     def __init__(self):
         """Initialize session service with all detectors."""
@@ -89,8 +117,70 @@ class LivenessSessionService:
         
         # Session state
         self.active_sessions: Dict[str, Dict] = {}
-        
+        # Per-session locks (see _with_session_lock), guarded by _store_lock so
+        # two threads racing on a brand-new session get the same lock object.
+        self._store_lock = threading.Lock()
+        self._session_locks: Dict[str, threading.RLock] = {}
+
         logger.info("LivenessSessionService initialized")
+
+    def _session_lock(self, session_id: str) -> threading.RLock:
+        """Get (or create) the lock guarding one session's state."""
+        with self._store_lock:
+            lock = self._session_locks.get(session_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._session_locks[session_id] = lock
+            return lock
+
+    def _evict_stale_sessions(self) -> None:
+        """
+        Drop sessions whose deadline passed more than SESSION_RETENTION_SECONDS
+        ago, plus any orphaned locks.
+
+        Without this, every completed/expired session would live for the lifetime
+        of the worker process. Eviction is deliberately NOT done at completion:
+        the terminal-state guards (status == 'completed'/'expired') must keep
+        rejecting late frames and re-scoring attempts, which needs the entry to
+        survive until the client can no longer plausibly be using it.
+        """
+        cutoff = timezone.now() - timedelta(seconds=self.SESSION_RETENTION_SECONDS)
+        # Snapshot both stores before iterating: another thread may be adding a
+        # session (create_session) or a lock concurrently, and iterating a dict
+        # that changes size raises RuntimeError.
+        stale = [
+            sid for sid, s in list(self.active_sessions.items())
+            if s.get('expires_at') and s['expires_at'] < cutoff
+        ]
+        for sid in stale:
+            self.active_sessions.pop(sid, None)
+        with self._store_lock:
+            for sid in [s for s in list(self._session_locks) if s not in self.active_sessions]:
+                self._session_locks.pop(sid, None)
+        if stale:
+            logger.info(f"Evicted {len(stale)} stale liveness sessions")
+
+    @staticmethod
+    def _now_ms() -> float:
+        """
+        Server wall-clock epoch milliseconds.
+
+        Same clock GazeTrackingService stamps onto each observed GazePoint, so
+        challenge windows and gaze samples are directly comparable.
+        """
+        return timezone.now().timestamp() * 1000
+
+    def _activate_current_challenge(self, session: Dict) -> None:
+        """
+        Stamp the server-side start of the current challenge's response window.
+
+        Recorded once per challenge (the first stamp wins) so a client cannot
+        reopen a window by replaying whatever opened it.
+        """
+        activated = session.setdefault('challenge_activated_ms', {})
+        idx = session.get('current_challenge_idx', 0)
+        if any(c.get('sequence') == idx for c in session.get('challenges', [])):
+            activated.setdefault(idx, self._now_ms())
     
     def _load_config(self) -> Dict:
         """Load configuration from Django settings."""
@@ -138,8 +228,11 @@ class LivenessSessionService:
         Returns:
             Session info dict
         """
+        # Bound the in-memory store before adding to it.
+        self._evict_stale_sessions()
+
         session_id = str(uuid.uuid4())
-        
+
         # Generate cognitive challenges
         challenges = self._generate_challenges(context)
         
@@ -166,6 +259,8 @@ class LivenessSessionService:
             'gaze_task_results': [],
             'thermal_readings': [],
             'answered_challenges': set(),   # replay guard: seq answered at most once
+            # sequence -> server epoch ms the challenge's response window opened.
+            'challenge_activated_ms': {},
         }
 
         # Isolated per-session detectors so a concurrent session cannot clobber
@@ -234,7 +329,8 @@ class LivenessSessionService:
                 })
         
         return challenges
-    
+
+    @_with_session_lock
     def process_frame(self, session_id: str, frame: np.ndarray, timestamp_ms: float, face_landmarks: Optional[np.ndarray] = None) -> Dict:
         """
         Process a video frame within a session.
@@ -264,7 +360,10 @@ class LivenessSessionService:
         if session['status'] == 'pending':
             session['status'] = 'in_progress'
             session['started_at'] = timezone.now()
-        
+            # The first challenge's response window opens with the first frame:
+            # that is the earliest point the client can be observed at all.
+            self._activate_current_challenge(session)
+
         session['frames_processed'] += 1
 
         # Defensive: ensure per-session accumulators exist even if this session
@@ -276,6 +375,7 @@ class LivenessSessionService:
         session.setdefault('expression_au_frames', 0)
         session.setdefault('gaze_samples', 0)
         session.setdefault('gaze_track', [])
+        session.setdefault('challenge_activated_ms', {})
 
         # Run all detection services. Use this session's OWN detector instances
         # so accumulated per-frame state never mixes with another session's.
@@ -344,6 +444,7 @@ class LivenessSessionService:
             'current_challenge': session['current_challenge_idx'],
         }
     
+    @_with_session_lock
     def complete_session(self, session_id: str) -> SessionResult:
         """
         Complete session and generate final verdict.
@@ -490,6 +591,7 @@ class LivenessSessionService:
             },
         )
     
+    @_with_session_lock
     def submit_challenge_response(self, session_id: str, response: Dict) -> Dict:
         """
         Evaluate a user's response to a cognitive challenge.
@@ -536,27 +638,43 @@ class LivenessSessionService:
             # synthesized from the known target positions and would not prove
             # liveness. With no real gaze estimator loaded, no track exists, so
             # gaze records nothing and does not gate the verdict.
-            gaze_track = session.get('gaze_track', [])
-            if task is not None and gaze_track:
-                svc = session.get('services')
-                if svc is None:
-                    svc = self._new_session_services()
-                    session['services'] = svc
-                result = svc['gaze'].validate_task_response(
-                    task, gaze_track, response.get('answer')
-                )
-                summary['passed'] = bool(result.is_passed)
-                summary['accuracy'] = float(result.accuracy_score)
-                # Only a PASSED challenge counts as a live gaze signal. A failed
-                # track (poor accuracy/human-likelihood, or a wrong answer) must
-                # not contribute a partial score toward the verdict.
-                if result.is_passed:
-                    session.setdefault('gaze_task_results', []).append(result)
-                else:
-                    summary['reason'] = 'gaze_challenge_failed'
-            else:
+            activated_ms = session.get('challenge_activated_ms', {}).get(seq)
+            if task is None or activated_ms is None:
                 summary['passed'] = False
-                summary['reason'] = 'no_gaze_observed'
+                summary['reason'] = 'challenge_not_started'
+            elif self._now_ms() > activated_ms + task.time_limit_ms + self.CHALLENGE_RESPONSE_GRACE_MS:
+                summary['passed'] = False
+                summary['reason'] = 'challenge_window_expired'
+            else:
+                # Cut the track to this challenge's own advertised window. The
+                # targets are disclosed to the client, so scoring the whole
+                # session-lifetime track would let a stream keep wandering until
+                # it eventually covered them -- the time limit IS the challenge.
+                deadline_ms = activated_ms + task.time_limit_ms
+                window_track = [
+                    g for g in session.get('gaze_track', [])
+                    if activated_ms <= g.timestamp_ms <= deadline_ms
+                ]
+                if not window_track:
+                    summary['passed'] = False
+                    summary['reason'] = 'no_gaze_observed'
+                else:
+                    svc = session.get('services')
+                    if svc is None:
+                        svc = self._new_session_services()
+                        session['services'] = svc
+                    result = svc['gaze'].validate_task_response(
+                        task, window_track, response.get('answer')
+                    )
+                    summary['passed'] = bool(result.is_passed)
+                    summary['accuracy'] = float(result.accuracy_score)
+                    # Only a PASSED challenge counts as a live gaze signal. A
+                    # failed track (poor accuracy/human-likelihood, or a wrong
+                    # answer) must not contribute a partial score to the verdict.
+                    if result.is_passed:
+                        session.setdefault('gaze_task_results', []).append(result)
+                    else:
+                        summary['reason'] = 'gaze_challenge_failed'
         else:
             # Expression/pulse have no per-challenge verdict here.
             summary['status'] = 'acknowledged'
@@ -568,6 +686,9 @@ class LivenessSessionService:
         answered.add(seq)
         remaining = sorted(c['sequence'] for c in challenges if c['sequence'] not in answered)
         session['current_challenge_idx'] = remaining[0] if remaining else len(challenges)
+        if remaining:
+            # The next challenge's window opens now that this one is answered.
+            self._activate_current_challenge(session)
         summary['next_challenge'] = bool(remaining)
         return summary
 

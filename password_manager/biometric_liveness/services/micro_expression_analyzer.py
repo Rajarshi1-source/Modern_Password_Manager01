@@ -167,10 +167,13 @@ class MicroExpressionAnalyzer:
         """
         No real landmark detector available (MediaPipe not loaded).
 
-        Returns None rather than fabricating landmarks. Emitting random points
-        would inject a fake signal and -- being un-normalised -- also corrupt
-        downstream ROI math (e.g. the rPPG forehead crop). Landmark-based checks
-        are simply unavailable until a real detector is present.
+        Returns None rather than fabricating landmarks. The placeholder removed
+        here (`np.random.rand(468, 3) * [w, h, 0.1]`) was pixel-scale, so it also
+        corrupted downstream ROI math that expects normalised coords (e.g. the
+        rPPG forehead crop) -- but normalising it would not have made it usable:
+        random points bear no relation to the face in the observed frame, so they
+        inject a fake biometric signal either way. Landmark-based checks are
+        simply unavailable until a real detector is present.
         """
         return None
     
