@@ -10,6 +10,18 @@ import base64
 from typing import Optional, Tuple
 
 import numpy as np
+from django.conf import settings
+
+# Upper bound on a decoded frame, as a pixel count. Liveness frames come from a
+# webcam canvas, so 1080p is already generous; the cap exists to stop a client
+# forcing a huge allocation rather than to constrain real capture.
+DEFAULT_MAX_FRAME_PIXELS = 1920 * 1080
+
+
+def _max_frame_pixels() -> int:
+    return getattr(settings, 'BIOMETRIC_LIVENESS', {}).get(
+        'MAX_FRAME_PIXELS', DEFAULT_MAX_FRAME_PIXELS
+    )
 
 
 def decode_frame(
@@ -27,10 +39,23 @@ def decode_frame(
     """
     if width <= 0 or height <= 0:
         return None, 'Missing or invalid frame dimensions'
+    if width * height > _max_frame_pixels():
+        return None, 'Frame dimensions exceed maximum'
+
+    # A non-string/bytes JSON value (number, list, object) is a client error, not
+    # a 500 -- and len() below must not raise on it either.
+    if not isinstance(frame_b64, (str, bytes)):
+        return None, 'Invalid frame encoding'
+    # Reject an oversized payload BEFORE b64decode allocates it. The largest
+    # legitimate frame is RGBA (4 bytes/px) and base64 expands 3 bytes -> 4
+    # chars; without this, the WS path (which has no message-size bound) lets a
+    # client force an arbitrarily large decode.
+    if len(frame_b64) > ((width * height * 4 + 2) // 3) * 4 + 4:
+        return None, 'Frame payload too large'
 
     try:
         # binascii.Error subclasses ValueError, so this covers malformed base64;
-        # TypeError covers a non-string/bytes JSON value (number, list, object).
+        # TypeError is belt-and-braces for anything isinstance let through.
         frame_bytes = base64.b64decode(frame_b64, validate=True)
     except (ValueError, TypeError):
         return None, 'Invalid frame encoding'

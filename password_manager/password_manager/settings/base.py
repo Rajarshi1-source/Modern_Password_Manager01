@@ -2123,6 +2123,10 @@ BIOMETRIC_LIVENESS = {
     # Session settings
     'SESSION_TIMEOUT_SECONDS': int(os.environ.get('LIVENESS_SESSION_TIMEOUT', '120')),
     'REQUIRED_CHALLENGES': ['gaze', 'expression', 'pulse'],
+
+    # Largest decodable frame, as a pixel count (1080p). Bounds the per-frame
+    # allocation a client can force on the REST/WS decode path.
+    'MAX_FRAME_PIXELS': int(os.environ.get('LIVENESS_MAX_FRAME_PIXELS', str(1920 * 1080))),
     
     # Thermal settings
     'THERMAL_ENABLED': os.environ.get('LIVENESS_THERMAL_ENABLED', 'False').lower() == 'true',
