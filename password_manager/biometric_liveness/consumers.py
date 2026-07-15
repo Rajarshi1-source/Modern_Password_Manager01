@@ -101,7 +101,15 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             result = await sync_to_async(self.service.process_frame)(
                 self.session_id, frame, timestamp_ms
             )
-            
+
+            # Surface real session-state errors (expired, already completed,
+            # not found) instead of replying with an empty frame_result -- the
+            # REST path returns 400 for these, and a WS client would otherwise
+            # keep streaming with no idea the session stopped accepting frames.
+            if 'error' in result:
+                await self.send_json({'type': 'error', 'message': result['error']})
+                return
+
             await self.send_json({
                 'type': 'frame_result',
                 'frame_number': result.get('frame_number', 0),

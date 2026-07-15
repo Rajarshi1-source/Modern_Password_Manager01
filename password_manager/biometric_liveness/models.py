@@ -186,6 +186,7 @@ class LivenessSession(models.Model):
         ('VERIFIED_LIVE', 'Verified live'),
         ('LOW_CONFIDENCE', 'Low confidence'),
         ('SUSPECTED_FAKE', 'Suspected fake'),
+        ('INSUFFICIENT_SIGNAL', 'Insufficient signal'),
         ('INCONCLUSIVE', 'Inconclusive'),
     ]
     verdict = models.CharField(

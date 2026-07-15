@@ -102,14 +102,10 @@ class GazeTrackingService:
     
     def _init_gaze_model(self):
         """Lazy initialization of gaze estimation model."""
-        if self._gaze_model is None:
-            try:
-                # A trained gaze estimation model (e.g. L2CS / MediaPipe-iris)
-                # is loaded here in a later step. Until then no model is loaded
-                # and has_real_gaze_model() reports False.
-                pass
-            except Exception as e:
-                logger.warning(f"Gaze model init failed: {e}")
+        # A trained gaze estimation model (e.g. L2CS / MediaPipe-iris) is loaded
+        # here in a later step (wrap the load in try/except then). Until it
+        # exists no model is loaded and has_real_gaze_model() reports False.
+        return
 
     def has_real_gaze_model(self) -> bool:
         """
