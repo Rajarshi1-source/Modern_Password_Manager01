@@ -195,6 +195,34 @@ class LivenessSessionService:
         if ctype in required:
             session.setdefault('failed_required_challenges', []).append(ctype)
 
+    def _required_gaze_unanswered(self, session: Dict) -> bool:
+        """
+        True if a REQUIRED, MEASURABLE gaze challenge has no recorded response.
+
+        The failed-challenge veto only covers challenges that were attempted and
+        failed (see _record_failed_required_challenge). A client that never calls
+        submit_challenge_response for gaze would otherwise skip the randomized
+        challenge entirely and still verify on other modalities. Gaze is the only
+        required challenge scored via an explicit response; expression/pulse are
+        accumulated passively from frames.
+
+        Gated on the SAME capability check as the veto: when no estimator is
+        loaded gaze cannot be measured, so a missing response is a capability gap
+        (absent modality), not a skip, and must not block completion -- otherwise
+        every session would fail in the current capability-gated state.
+        """
+        required = self.config.get('REQUIRED_CHALLENGES', ['gaze', 'expression', 'pulse'])
+        if 'gaze' not in required:
+            return False
+        gaze = (session.get('services') or {}).get('gaze')
+        if gaze is None or not gaze.has_real_gaze_model():
+            return False
+        answered = session.get('answered_challenges', set())
+        return any(
+            c.get('type') == 'gaze' and c.get('sequence') not in answered
+            for c in session.get('challenges', [])
+        )
+
     def _activate_current_challenge(self, session: Dict) -> None:
         """
         Stamp the server-side start of the current challenge's response window.
@@ -497,6 +525,16 @@ class LivenessSessionService:
         if session.get('status') == 'expired' or timezone.now() > session['expires_at']:
             session['status'] = 'expired'
             raise ValueError('Session expired')
+
+        # A required, measurable gaze challenge that was never answered blocks
+        # verification. Raised (not vetoed) BEFORE the terminal transition so the
+        # session stays retryable: an honest client that completed prematurely can
+        # still answer gaze and finish, while a client that omits it cannot verify
+        # on other modalities. "Never attempted" is not "detected fake", so this
+        # is a state error, not a SUSPECTED_FAKE verdict (which the veto reserves
+        # for challenges actually attempted and failed).
+        if self._required_gaze_unanswered(session):
+            raise ValueError('Required gaze challenge incomplete')
 
         session['status'] = 'completed'
         session['completed_at'] = timezone.now()
