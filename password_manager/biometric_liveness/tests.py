@@ -554,6 +554,34 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertNotEqual(result.verdict, 'SUSPECTED_FAKE')
         self.assertEqual(result.details['failed_required_challenges'], [])
 
+    def test_unanswered_gaze_blocks_completion_when_measurable(self):
+        """Skipping the required gaze challenge entirely must block verification.
+
+        The failed-challenge veto only fires if gaze was attempted; a client that
+        never submits it would otherwise verify on other modalities and bypass
+        the randomized challenge.
+        """
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        # Real estimator present, but the gaze challenge is never answered.
+        session['services']['gaze'].has_real_gaze_model = lambda: True
+        self._inject_pulse(session)
+        session['expression_score'] = 0.95
+        with self.assertRaises(ValueError):
+            self.service.complete_session(sid)
+        # Blocked, not terminal: the session stays completable after answering.
+        self.assertNotEqual(session['status'], 'completed')
+
+    def test_unanswered_gaze_does_not_block_when_not_measurable(self):
+        """Capability gap: with no estimator, skipped gaze is absent, not a skip."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        self._inject_pulse(session)
+        session['expression_score'] = 0.95
+        # has_real_gaze_model() is False by default -> must NOT raise.
+        result = self.service.complete_session(sid)
+        self.assertNotIn('gaze', result.details['modalities_present'])
+
     def test_completed_session_cannot_be_rescored(self):
         sid = self.service.create_session(user_id=1)['session_id']
         session = self.service.active_sessions[sid]
