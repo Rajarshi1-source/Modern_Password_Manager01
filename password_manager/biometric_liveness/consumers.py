@@ -97,8 +97,11 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({'type': 'error', 'message': decode_error})
                 return
 
-            # Process frame
-            result = await sync_to_async(self.service.process_frame)(
+            # Process frame. thread_sensitive=False so CPU-heavy frame analysis
+            # for independent sessions runs concurrently instead of serializing
+            # in asgiref's single thread-sensitive lane. Safe here: process_frame
+            # is per-session-locked and touches no Django ORM / thread-locals.
+            result = await sync_to_async(self.service.process_frame, thread_sensitive=False)(
                 self.session_id, frame, timestamp_ms
             )
 
@@ -124,7 +127,9 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
     async def handle_challenge_response(self, content):
         """Handle challenge response submission."""
         try:
-            result = await sync_to_async(self.service.submit_challenge_response)(
+            # thread_sensitive=False: per-session-locked, ORM-free gaze scoring
+            # (see handle_frame) -- keep independent sessions off the single lane.
+            result = await sync_to_async(self.service.submit_challenge_response, thread_sensitive=False)(
                 self.session_id, content.get('response', {})
             )
             if 'error' in result:
@@ -146,7 +151,9 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
     async def handle_complete(self):
         """Complete session and send final result."""
         try:
-            result = await sync_to_async(self.service.complete_session)(self.session_id)
+            # thread_sensitive=False: per-session-locked, ORM-free scoring (see
+            # handle_frame). The DB mirror below stays on database_sync_to_async.
+            result = await sync_to_async(self.service.complete_session, thread_sensitive=False)(self.session_id)
 
             # Mirror the verdict onto the DB row exactly as the REST path does,
             # so the row leaves pending/in_progress and the scores are recorded.

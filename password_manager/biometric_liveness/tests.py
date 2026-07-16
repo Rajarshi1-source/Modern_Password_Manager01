@@ -470,6 +470,24 @@ class ChallengeResponseFlowTests(TestCase):
             for i in range(n)
         ]
 
+    def test_capabilities_gaze_unavailable_without_estimator(self):
+        """Gaze must report unavailable until a real estimator is loaded.
+
+        estimate_gaze() returns nothing without a model, so advertising it as
+        available would invite the client to render an unscoreable challenge.
+        """
+        caps = self.service.get_capabilities()
+        gaze = caps['modalities']['gaze']
+        self.assertFalse(gaze['available'])
+        self.assertFalse(gaze['gates_verdict'])
+
+    def test_capabilities_gaze_available_with_estimator(self):
+        """With a real estimator, gaze reports available and gating."""
+        self.service.gaze_service.has_real_gaze_model = lambda: True
+        gaze = self.service.get_capabilities()['modalities']['gaze']
+        self.assertTrue(gaze['available'])
+        self.assertTrue(gaze['gates_verdict'])
+
     def test_client_challenges_include_render_data(self):
         info = self.service.create_session(user_id=1)
         self.assertTrue(all('data' in c for c in info['challenges']))

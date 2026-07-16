@@ -817,18 +817,20 @@ class LivenessSessionService:
         """
         deepfake_real = self.deepfake_detector.has_real_model()
         thermal_available = self.thermal_service.is_available()
+        gaze_real = self.gaze_service.has_real_gaze_model()
         return {
             'modalities': {
                 # Camera-based checks: the server implements them; the client
                 # still needs a working camera to supply frames.
-                # Gaze gates the verdict only once a real gaze estimator is
-                # loaded: it is scored from server-observed eye movement, and a
-                # placeholder position would be a fabricated signal.
+                # Gaze reports available only once a real estimator is loaded:
+                # without one estimate_gaze() returns nothing (unlike expression,
+                # which captures real AU frames), so advertising it as available
+                # would invite the client to render an unscoreable challenge.
                 'gaze': {
-                    'available': True, 'source': 'camera',
-                    'gates_verdict': self.gaze_service.has_real_gaze_model(),
+                    'available': gaze_real, 'source': 'camera',
+                    'gates_verdict': gaze_real,
                     'note': 'Server-observed gaze scored against the cognitive '
-                            'challenge; gates only when a real estimator is loaded.',
+                            'challenge; available and gating only with a real estimator.',
                 },
                 'pulse_rppg': {
                     'available': True, 'source': 'camera', 'gates_verdict': True,
