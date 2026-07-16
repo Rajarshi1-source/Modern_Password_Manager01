@@ -473,6 +473,12 @@ class ChallengeResponseFlowTests(TestCase):
     def test_client_challenges_include_render_data(self):
         info = self.service.create_session(user_id=1)
         self.assertTrue(all('data' in c for c in info['challenges']))
+        # The gaze challenge must actually carry what the client needs to render
+        # it: a non-empty target set and the time limit. An empty {} would pass
+        # the 'data' key check while leaving the UI unable to draw the challenge.
+        gaze = next(c for c in info['challenges'] if c['type'] == 'gaze')
+        self.assertTrue(gaze['data'].get('target_positions'))
+        self.assertIn('time_limit_ms', gaze['data'])
 
     def test_passing_gaze_gates(self):
         info = self.service.create_session(user_id=1)
@@ -705,7 +711,11 @@ class ChallengeResponseFlowTests(TestCase):
         session = self.service.active_sessions[sid]
         sequences = sorted(c['sequence'] for c in session['challenges'])
         first, second = sequences[0], sequences[1]
+        # `second` is the expression challenge, which is acknowledged (and thus
+        # consumed) immediately; if it were NOT consumed the sequencing assertion
+        # below could pass vacuously, so pin the consumption explicitly.
         self.service.submit_challenge_response(sid, {'sequence': second})
+        self.assertIn(second, session['answered_challenges'])
         self.assertEqual(session['current_challenge_idx'], first)
         # Omitting 'sequence' must target the still-unanswered challenge.
         out = self.service.submit_challenge_response(sid, {})
