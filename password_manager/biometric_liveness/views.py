@@ -14,9 +14,11 @@ from rest_framework.response import Response
 
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
+from django.utils import timezone
 
 from .frame_utils import decode_frame
 from .services import LivenessSessionService
+from .services.liveness_session_service import SessionCapacityError
 from .models import LivenessProfile, LivenessSession, LivenessSettings
 
 logger = logging.getLogger(__name__)
@@ -38,9 +40,18 @@ def persist_session_result(result) -> None:
     """
     try:
         session = LivenessSession.objects.get(id=result.session_id)
-    except (LivenessSession.DoesNotExist, ValidationError, ValueError, TypeError):
+    except LivenessSession.DoesNotExist:
+        return
+    except (DatabaseError, ValidationError, ValueError, TypeError):
+        # Same rationale as the guarded save() below: the in-memory session is
+        # already terminal, so a transient DB error on lookup must not propagate
+        # (500, unretryable) and lose the verdict / deny the client its result.
+        logger.exception(
+            f"Failed to load liveness row for session {result.session_id}"
+        )
         return
     session.status = 'passed' if result.is_verified else 'failed'
+    session.completed_at = timezone.now()
     # The nuanced verdict, not just the binary pass/fail: the row's `verdict`
     # field exists precisely to record it, and collapsing SUSPECTED_FAKE and
     # INSUFFICIENT_SIGNAL to the same 'failed' loses why a session failed.
@@ -107,6 +118,10 @@ def start_session(request):
         )
         
         return Response(session_info, status=status.HTTP_201_CREATED)
+    except SessionCapacityError:
+        logger.warning("Liveness session capacity reached; rejecting new session")
+        return Response({'error': 'capacity_reached'},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE)
     except Exception as e:
         logger.error(f"Error starting session: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

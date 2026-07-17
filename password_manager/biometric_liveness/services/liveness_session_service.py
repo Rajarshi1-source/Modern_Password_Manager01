@@ -26,6 +26,10 @@ from .deepfake_detector import DeepfakeDetector
 logger = logging.getLogger(__name__)
 
 
+class SessionCapacityError(Exception):
+    """Raised when the in-memory session store is at capacity (see MAX_ACTIVE_SESSIONS)."""
+
+
 @dataclass
 class SessionConfig:
     """Configuration for liveness session."""
@@ -104,6 +108,11 @@ class LivenessSessionService:
     # lifetime; retention keeps the already-completed/expired guards effective
     # for the whole time a client could still be calling with that session id.
     SESSION_RETENTION_SECONDS = 300
+    # Hard cap on concurrent in-memory sessions per worker. Eviction bounds age,
+    # not cardinality: a burst of start_session calls would otherwise grow the
+    # store (and its per-session detectors) unbounded until retention expires.
+    # Config-overridable; generous relative to real concurrency (~7 min lifetime).
+    MAX_ACTIVE_SESSIONS = 1000
 
     def __init__(self):
         """Initialize session service with all detectors."""
@@ -281,8 +290,16 @@ class LivenessSessionService:
         Returns:
             Session info dict
         """
-        # Bound the in-memory store before adding to it.
+        # Bound the in-memory store before adding to it: first evict aged-out
+        # sessions, then refuse new ones past the hard cap so a burst of
+        # start_session calls cannot grow the store (and its per-session
+        # detectors) without limit. Checked under the store lock so concurrent
+        # creators cannot both slip past the cap.
         self._evict_stale_sessions()
+        max_sessions = self.config.get('MAX_ACTIVE_SESSIONS', self.MAX_ACTIVE_SESSIONS)
+        with self._store_lock:
+            if len(self.active_sessions) >= max_sessions:
+                raise SessionCapacityError('Liveness session capacity reached')
 
         session_id = str(uuid.uuid4())
 
@@ -798,8 +815,12 @@ class LivenessSessionService:
         answered.add(seq)
         remaining = sorted(c['sequence'] for c in challenges if c['sequence'] not in answered)
         session['current_challenge_idx'] = remaining[0] if remaining else len(challenges)
-        if remaining:
-            # The next challenge's window opens now that this one is answered.
+        if remaining and session.get('status') == 'in_progress':
+            # Open the next challenge's window only once frames are actually being
+            # processed. If the session is still 'pending' (a response arrived
+            # before any frame), opening the window now would let it count down --
+            # and potentially expire -- before the first observable frame. The
+            # first frame's process_frame activates the then-current challenge.
             self._activate_current_challenge(session)
         summary['next_challenge'] = bool(remaining)
         return summary

@@ -369,6 +369,22 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(row.status, 'passed')
         self.assertEqual(row.verdict, 'HIGH_CONFIDENCE_LIVE')
         self.assertEqual(row.total_frames_processed, 42)
+        # A terminal row must carry its completion timestamp, not stay None.
+        self.assertIsNotNone(row.completed_at)
+
+    def test_persist_session_result_swallows_db_lookup_error(self):
+        """A DB error on the lookup must not propagate (session is terminal)."""
+        from .views import persist_session_result
+        from .services.liveness_session_service import SessionResult
+        from django.db import DatabaseError
+        result = SessionResult(
+            session_id=str(uuid.uuid4()), is_verified=False, overall_liveness_score=0.0,
+            deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
+            gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
+            texture_artifact_score=0.0, total_frames_processed=0,
+            duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={})
+        with patch.object(LivenessSession.objects, 'get', side_effect=DatabaseError('boom')):
+            persist_session_result(result)  # must not raise
 
     def test_persist_session_result_accepts_insufficient_signal_verdict(self):
         """INSUFFICIENT_SIGNAL is a real service verdict and must be storable."""
@@ -599,6 +615,28 @@ class ChallengeResponseFlowTests(TestCase):
         # has_real_gaze_model() is False by default -> must NOT raise.
         result = self.service.complete_session(sid)
         self.assertNotIn('gaze', result.details['modalities_present'])
+
+    def test_pending_response_does_not_open_next_window(self):
+        """A response before any frame must not open the next challenge window.
+
+        Opening it while pending would let the window count down (and possibly
+        expire) before the first observable frame ever arrives.
+        """
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        self.assertEqual(session['status'], 'pending')
+        expr = next(c for c in session['challenges'] if c['type'] == 'expression')
+        self.service.submit_challenge_response(sid, {'sequence': expr['sequence']})
+        # No frame processed yet -> no challenge window may be open.
+        self.assertEqual(session['challenge_activated_ms'], {})
+
+    def test_session_capacity_cap_rejects_new_sessions(self):
+        """Past the hard cap, new sessions are refused rather than growing forever."""
+        from .services.liveness_session_service import SessionCapacityError
+        self.service.MAX_ACTIVE_SESSIONS = 1
+        self.service.create_session(user_id=1)
+        with self.assertRaises(SessionCapacityError):
+            self.service.create_session(user_id=1)
 
     def test_completed_session_cannot_be_rescored(self):
         sid = self.service.create_session(user_id=1)['session_id']
