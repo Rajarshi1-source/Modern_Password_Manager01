@@ -2107,6 +2107,24 @@ COGNITIVE_AUTH = {
 # Advanced anti-spoofing that defeats deepfakes using micro-expressions,
 # gaze tracking, pulse oximetry, and thermal imaging
 
+def _liveness_int_env(env_var, default, *, minimum=1):
+    """
+    Parse an integer liveness limit from the environment, failing fast on a bad
+    value. A non-numeric override would otherwise crash Django with an opaque
+    ValueError, and a zero/negative one would silently break the store (reject
+    every frame/session, or evict all retained records).
+    """
+    from django.core.exceptions import ImproperlyConfigured
+    raw = os.environ.get(env_var, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ImproperlyConfigured(f"{env_var} must be an integer, got {raw!r}")
+    if value < minimum:
+        raise ImproperlyConfigured(f"{env_var} must be >= {minimum}, got {value}")
+    return value
+
+
 BIOMETRIC_LIVENESS = {
     # Feature toggle
     'ENABLED': os.environ.get('BIOMETRIC_LIVENESS_ENABLED', 'False').lower() == 'true',
@@ -2126,12 +2144,13 @@ BIOMETRIC_LIVENESS = {
 
     # Largest decodable frame, as a pixel count (1080p). Bounds the per-frame
     # allocation a client can force on the REST/WS decode path.
-    'MAX_FRAME_PIXELS': int(os.environ.get('LIVENESS_MAX_FRAME_PIXELS', str(1920 * 1080))),
+    'MAX_FRAME_PIXELS': _liveness_int_env('LIVENESS_MAX_FRAME_PIXELS', str(1920 * 1080), minimum=1),
 
     # In-memory session store bounds (per worker). Live = concurrent
-    # pending/in_progress; retained = terminal records kept for replay guards.
-    'MAX_ACTIVE_SESSIONS': int(os.environ.get('LIVENESS_MAX_ACTIVE_SESSIONS', '1000')),
-    'MAX_RETAINED_SESSIONS': int(os.environ.get('LIVENESS_MAX_RETAINED_SESSIONS', '2000')),
+    # pending/in_progress; retained = terminal records kept for replay guards
+    # (retention may be 0 to keep none).
+    'MAX_ACTIVE_SESSIONS': _liveness_int_env('LIVENESS_MAX_ACTIVE_SESSIONS', '1000', minimum=1),
+    'MAX_RETAINED_SESSIONS': _liveness_int_env('LIVENESS_MAX_RETAINED_SESSIONS', '2000', minimum=0),
     
     # Thermal settings
     'THERMAL_ENABLED': os.environ.get('LIVENESS_THERMAL_ENABLED', 'False').lower() == 'true',
