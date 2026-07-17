@@ -107,18 +107,24 @@ def start_session(request):
         
         service = get_session_service()
         session_info = service.create_session(request.user.id, context)
-        
-        # Create database record
-        LivenessSession.objects.create(
-            id=session_info['session_id'],
-            user=request.user,
-            context=context,
-            required_challenges=session_info['challenges'],
-            device_fingerprint=device_fingerprint,
-            user_agent=request.META.get('HTTP_USER_AGENT', ''),
-            ip_address=request.META.get('REMOTE_ADDR'),
-        )
-        
+
+        # Create database record. If it fails, drop the in-memory session so it
+        # doesn't hold a live capacity slot until eviction (it would also be
+        # unreachable -- ownership checks require the DB row).
+        try:
+            LivenessSession.objects.create(
+                id=session_info['session_id'],
+                user=request.user,
+                context=context,
+                required_challenges=session_info['challenges'],
+                device_fingerprint=device_fingerprint,
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                ip_address=request.META.get('REMOTE_ADDR'),
+            )
+        except Exception:
+            service.discard_session(session_info['session_id'])
+            raise
+
         return Response(session_info, status=status.HTTP_201_CREATED)
     except SessionCapacityError:
         logger.warning("Liveness session capacity reached; rejecting new session")
