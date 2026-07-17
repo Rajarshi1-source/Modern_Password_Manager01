@@ -501,6 +501,19 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(resp.data['error'], 'Frame dimensions exceed maximum')
 
+    def test_liveness_limit_env_validation(self):
+        """Liveness limits fail fast on non-numeric / out-of-range config."""
+        from password_manager.settings.base import _liveness_int_env
+        from django.core.exceptions import ImproperlyConfigured
+        # Uses the default arg (env var unset), so no environment mutation.
+        self.assertEqual(_liveness_int_env('LIVENESS_UNSET_X', '42', minimum=1), 42)
+        with self.assertRaises(ImproperlyConfigured):
+            _liveness_int_env('LIVENESS_UNSET_X', 'abc', minimum=1)   # non-numeric
+        with self.assertRaises(ImproperlyConfigured):
+            _liveness_int_env('LIVENESS_UNSET_X', '0', minimum=1)     # below minimum
+        # A non-negative limit (retention) may be zero.
+        self.assertEqual(_liveness_int_env('LIVENESS_UNSET_X', '0', minimum=0), 0)
+
     def test_challenge_response_same_owner_ok(self):
         """The owning user can submit a challenge response (shared session store)."""
         start = self.client.post(
