@@ -439,15 +439,21 @@ class LivenessAPITests(APITestCase):
         self.assertIn('INSUFFICIENT_SIGNAL', dict(LivenessSession.VERDICT_CHOICES))
 
     def test_persist_session_result_unknown_row_is_noop(self):
-        """An unknown/malformed session id must not raise."""
+        """Both a malformed id and a valid-but-absent id must be no-ops, not raise."""
         from .views import persist_session_result
         from .services.liveness_session_service import SessionResult
-        persist_session_result(SessionResult(
-            session_id='not-a-uuid', is_verified=False, overall_liveness_score=0.0,
-            deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
-            gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
-            texture_artifact_score=0.0, total_frames_processed=0,
-            duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={}))
+
+        def _result(sid):
+            return SessionResult(
+                session_id=sid, is_verified=False, overall_liveness_score=0.0,
+                deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
+                gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
+                texture_artifact_score=0.0, total_frames_processed=0,
+                duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={})
+        # Malformed uuid (ValidationError path) ...
+        persist_session_result(_result('not-a-uuid'))
+        # ... and a well-formed but absent id (LivenessSession.DoesNotExist path).
+        persist_session_result(_result(str(uuid.uuid4())))
 
     def test_submit_frame_non_string_frame_is_400(self):
         """A non-string 'frame' is client error, not a 500 (b64decode TypeError)."""
@@ -675,6 +681,19 @@ class ChallengeResponseFlowTests(TestCase):
         with self.assertRaises(SessionCapacityError):
             self.service.create_session(user_id=1)
 
+    def test_capacity_cap_counts_only_live_sessions(self):
+        """A completed session must not consume a capacity slot.
+
+        Otherwise a user who churns create+complete would 503 legitimate new
+        starts despite having zero in-progress sessions.
+        """
+        self.service.MAX_ACTIVE_SESSIONS = 1
+        sid = self.service.create_session(user_id=1)['session_id']
+        self.service.complete_session(sid)  # -> terminal (INSUFFICIENT_SIGNAL)
+        self.assertEqual(self.service.active_sessions[sid]['status'], 'completed')
+        # The terminal record is still retained, but must not block a new start.
+        self.service.create_session(user_id=1)  # must NOT raise
+
     def test_session_capacity_cap_holds_under_concurrency(self):
         """Under many concurrent creators the store must never exceed the cap.
 
@@ -689,23 +708,29 @@ class ChallengeResponseFlowTests(TestCase):
         n_threads = 40
         barrier = threading.Barrier(n_threads)
         created = []
+        errors = []
         lock = threading.Lock()
 
         def worker():
-            barrier.wait()  # release all at once to maximize contention
             try:
+                barrier.wait()  # release all at once to maximize contention
                 info = self.service.create_session(user_id=1)
                 with lock:
                     created.append(info['session_id'])
             except SessionCapacityError:
                 pass
+            except Exception as exc:  # a worker crash must fail the test, not pass it
+                with lock:
+                    errors.append(exc)
 
         threads = [threading.Thread(target=worker) for _ in range(n_threads)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
-        # Never exceed the cap, in the store or in the count of accepted creates.
+            t.join(timeout=10)
+            self.assertFalse(t.is_alive())
+        self.assertEqual(errors, [])
+        # All sessions are live here, so the store size is the cap; never exceed it.
         self.assertLessEqual(len(self.service.active_sessions), cap)
         self.assertEqual(len(created), len(self.service.active_sessions))
         self.assertLessEqual(len(created), cap)
@@ -805,9 +830,15 @@ class ChallengeResponseFlowTests(TestCase):
         # No server-observed track; client submits a forged one matching targets.
         client = [{'x': tx, 'y': ty, 'timestamp_ms': i * 40.0, 'confidence': 0.9, 'is_fixation': True}
                   for i, (tx, ty) in enumerate(gaze_ch['cognitive_task'].target_positions)]
+        # Prove the forged track never even reaches scoring: validate_task_response
+        # must not be called when there is no server-observed track.
+        from unittest.mock import MagicMock
+        session['services']['gaze'].validate_task_response = MagicMock()
         out = self.service.submit_challenge_response(
             sid, {'sequence': gaze_ch['sequence'], 'gaze_data': client})
+        session['services']['gaze'].validate_task_response.assert_not_called()
         self.assertFalse(out['passed'])
+        self.assertEqual(out['reason'], 'no_gaze_observed')
         self.assertEqual(len(session['gaze_task_results']), 0)  # client data ignored
         self._inject_pulse(session)
         result = self.service.complete_session(sid)
