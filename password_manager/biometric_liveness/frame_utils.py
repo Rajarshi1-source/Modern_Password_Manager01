@@ -66,6 +66,9 @@ def decode_frame(
     except ValueError:
         pass
     try:
-        return frame.reshape((height, width, 4))[:, :, :3], None
+        # Materialize the alpha-dropped RGB as a C-contiguous array: the sliced
+        # view is non-contiguous, which native vision detectors may reject or
+        # silently copy.
+        return np.ascontiguousarray(frame.reshape((height, width, 4))[:, :, :3]), None
     except ValueError:
         return None, 'Frame dimensions do not match data'

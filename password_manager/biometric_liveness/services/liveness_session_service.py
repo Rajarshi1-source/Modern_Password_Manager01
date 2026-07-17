@@ -351,9 +351,16 @@ class LivenessSessionService:
         # Capacity check and insert in ONE critical section: doing the check and
         # the insert in separate locked blocks would let two concurrent creators
         # both pass the check and both insert, exceeding MAX_ACTIVE_SESSIONS.
+        # Count only LIVE (pending/in_progress) sessions: terminal records
+        # (completed/expired) are retained briefly for the replay/late-frame
+        # guards and cleared by age-eviction, so counting them would let a user
+        # who rapidly creates+completes sessions exhaust the cap and 503 genuine
+        # new starts despite zero in-progress work.
         max_sessions = self.config.get('MAX_ACTIVE_SESSIONS', self.MAX_ACTIVE_SESSIONS)
         with self._store_lock:
-            if len(self.active_sessions) >= max_sessions:
+            live = sum(1 for s in self.active_sessions.values()
+                       if s.get('status') in ('pending', 'in_progress'))
+            if live >= max_sessions:
                 raise SessionCapacityError('Liveness session capacity reached')
             self.active_sessions[session_id] = session
 
