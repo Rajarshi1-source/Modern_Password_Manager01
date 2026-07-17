@@ -385,6 +385,20 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(resp.data['error'], 'required_challenge_incomplete')
         self.assertTrue(resp.data.get('retryable'))
 
+    def test_start_session_db_failure_discards_in_memory_session(self):
+        """A DB-create failure must not leak the in-memory session's capacity slot."""
+        from django.db import DatabaseError
+        from .views import get_session_service
+        service = get_session_service()
+        before = len(service.active_sessions)
+        with patch.object(LivenessSession.objects, 'create',
+                          side_effect=DatabaseError('boom')):
+            resp = self.client.post(
+                reverse('biometric_liveness:start_session'), {'context': 'login'})
+        self.assertEqual(resp.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # The orphaned in-memory session was discarded, not left holding a slot.
+        self.assertEqual(len(service.active_sessions), before)
+
     def test_persist_session_result_writes_status_and_verdict(self):
         """The shared persistence helper writes status AND the nuanced verdict.
 
@@ -533,6 +547,9 @@ class ChallengeResponseFlowTests(TestCase):
         estimate_gaze() returns nothing without a model, so advertising it as
         available would invite the client to render an unscoreable challenge.
         """
+        # Force the estimator-absent precondition so a configured model in some
+        # environment cannot make this test flap.
+        self.service.gaze_service.has_real_gaze_model = lambda: False
         caps = self.service.get_capabilities()
         gaze = caps['modalities']['gaze']
         self.assertFalse(gaze['available'])
@@ -680,6 +697,47 @@ class ChallengeResponseFlowTests(TestCase):
         self.service.create_session(user_id=1)
         with self.assertRaises(SessionCapacityError):
             self.service.create_session(user_id=1)
+
+    def test_concurrent_create_with_stale_eviction_no_error(self):
+        """Concurrent create_session (which evicts + counts active_sessions under
+        _store_lock) must not raise 'dictionary changed size during iteration'."""
+        import threading
+        from datetime import timedelta
+        from django.utils import timezone as djtz
+        # Seed stale sessions so eviction actually pops entries during the burst.
+        for _ in range(10):
+            sid = self.service.create_session(user_id=1)['session_id']
+            self.service.active_sessions[sid]['expires_at'] = (
+                djtz.now() - timedelta(
+                    seconds=self.service.SESSION_RETENTION_SECONDS + 60))
+        n = 30
+        barrier = threading.Barrier(n)
+        errors = []
+        lock = threading.Lock()
+
+        def worker():
+            try:
+                barrier.wait()
+                self.service.create_session(user_id=1)
+            except Exception as exc:  # RuntimeError from the race would land here
+                with lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+            self.assertFalse(t.is_alive())
+        self.assertEqual(errors, [])
+
+    def test_discard_session_frees_slot(self):
+        """discard_session removes the in-memory session (e.g. after a DB failure)."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        self.assertIn(sid, self.service.active_sessions)
+        self.service.discard_session(sid)
+        self.assertNotIn(sid, self.service.active_sessions)
+        self.assertNotIn(sid, self.service._session_locks)
 
     def test_capacity_cap_counts_only_live_sessions(self):
         """A completed session must not consume a capacity slot.

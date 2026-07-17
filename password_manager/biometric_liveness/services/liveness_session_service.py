@@ -160,6 +160,16 @@ class LivenessSessionService:
                 self._session_locks[session_id] = lock
             return lock
 
+    def discard_session(self, session_id: str) -> None:
+        """
+        Drop an in-memory session and its lock (e.g. when its DB row could not be
+        created). Without this, an orphaned session would hold a live capacity
+        slot until age-eviction. Membership mutation stays under _store_lock.
+        """
+        with self._store_lock:
+            self.active_sessions.pop(session_id, None)
+            self._session_locks.pop(session_id, None)
+
     def _evict_stale_sessions(self) -> None:
         """
         Drop sessions whose deadline passed more than SESSION_RETENTION_SECONDS
@@ -172,16 +182,19 @@ class LivenessSessionService:
         survive until the client can no longer plausibly be using it.
         """
         cutoff = timezone.now() - timedelta(seconds=self.SESSION_RETENTION_SECONDS)
-        # Snapshot both stores before iterating: another thread may be adding a
-        # session (create_session) or a lock concurrently, and iterating a dict
-        # that changes size raises RuntimeError.
-        stale = [
-            sid for sid, s in list(self.active_sessions.items())
-            if s.get('expires_at') and s['expires_at'] < cutoff
-        ]
-        for sid in stale:
-            self.active_sessions.pop(sid, None)
+        # Mutate active_sessions under _store_lock, the SAME lock create_session
+        # holds while iterating it for the capacity count. Popping here without
+        # the lock would race that iteration -> RuntimeError: dictionary changed
+        # size during iteration. All active_sessions membership changes (this
+        # pop and create_session's insert) are serialized by _store_lock; per-
+        # session content is separately guarded by _with_session_lock.
         with self._store_lock:
+            stale = [
+                sid for sid, s in self.active_sessions.items()
+                if s.get('expires_at') and s['expires_at'] < cutoff
+            ]
+            for sid in stale:
+                self.active_sessions.pop(sid, None)
             for sid in [s for s in list(self._session_locks) if s not in self.active_sessions]:
                 self._session_locks.pop(sid, None)
         if stale:
