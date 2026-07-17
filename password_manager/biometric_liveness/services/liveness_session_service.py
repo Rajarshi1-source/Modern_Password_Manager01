@@ -125,6 +125,11 @@ class LivenessSessionService:
     # store (and its per-session detectors) unbounded until retention expires.
     # Config-overridable; generous relative to real concurrency (~7 min lifetime).
     MAX_ACTIVE_SESSIONS = 1000
+    # Cardinality bound on RETAINED terminal (completed/expired) records. The
+    # live cap counts only in-progress sessions, so age-eviction alone would let
+    # rapid create+complete grow terminal records within the retention window.
+    # When over this bound, the oldest terminal records are evicted early.
+    MAX_RETAINED_SESSIONS = 2000
 
     def __init__(self):
         """Initialize session service with all detectors."""
@@ -182,6 +187,7 @@ class LivenessSessionService:
         survive until the client can no longer plausibly be using it.
         """
         cutoff = timezone.now() - timedelta(seconds=self.SESSION_RETENTION_SECONDS)
+        max_retained = self.config.get('MAX_RETAINED_SESSIONS', self.MAX_RETAINED_SESSIONS)
         # Mutate active_sessions under _store_lock, the SAME lock create_session
         # holds while iterating it for the capacity count. Popping here without
         # the lock would race that iteration -> RuntimeError: dictionary changed
@@ -195,10 +201,22 @@ class LivenessSessionService:
             ]
             for sid in stale:
                 self.active_sessions.pop(sid, None)
+            # Cardinality bound on retained terminal records: age-eviction alone
+            # lets rapid create+complete accumulate terminal records within the
+            # retention window. Evict the OLDEST terminal ones beyond the cap.
+            terminal = sorted(
+                (sid for sid, s in self.active_sessions.items()
+                 if s.get('status') in ('completed', 'expired')),
+                key=lambda sid: self.active_sessions[sid].get('expires_at') or cutoff,
+            )
+            overflow = terminal[:max(0, len(terminal) - max_retained)]
+            for sid in overflow:
+                self.active_sessions.pop(sid, None)
             for sid in [s for s in list(self._session_locks) if s not in self.active_sessions]:
                 self._session_locks.pop(sid, None)
-        if stale:
-            logger.info(f"Evicted {len(stale)} stale liveness sessions")
+        if stale or overflow:
+            logger.info(
+                f"Evicted {len(stale)} stale + {len(overflow)} overflow liveness sessions")
 
     @staticmethod
     def _now_ms() -> float:
@@ -408,6 +426,14 @@ class LivenessSessionService:
                 task = self.gaze_service.generate_cognitive_task(
                     CognitiveTaskType.FOLLOW_TARGET
                 )
+                # Honor the configured challenge timeout: the task generator picks
+                # a difficulty-based default, but COGNITIVE_TASK_TIMEOUT_MS
+                # (LIVENESS_TASK_TIMEOUT) is the operator knob for the advertised
+                # AND enforced window (submit_challenge_response keys off
+                # task.time_limit_ms). Override before building the client data.
+                configured_timeout = self.config.get('COGNITIVE_TASK_TIMEOUT_MS')
+                if configured_timeout:
+                    task.time_limit_ms = int(configured_timeout)
                 challenges.append({
                     'type': 'gaze',
                     'instruction': task.instruction,

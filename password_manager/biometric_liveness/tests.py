@@ -420,6 +420,16 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(row.total_frames_processed, 42)
         # A terminal row must carry its completion timestamp, not stay None.
         self.assertIsNotNone(row.completed_at)
+        # Every score field must map correctly -- distinct values so a dropped or
+        # swapped assignment is caught.
+        self.assertEqual(row.overall_liveness_score, 0.91)
+        self.assertEqual(row.deepfake_probability, 0.02)
+        self.assertEqual(row.confidence, 0.4)
+        self.assertEqual(row.micro_expression_score, 0.0)
+        self.assertEqual(row.gaze_tracking_score, 0.9)
+        self.assertEqual(row.pulse_oximetry_score, 0.8)
+        self.assertEqual(row.thermal_score, 0.0)
+        self.assertEqual(row.texture_artifact_score, 0.98)
 
     def test_persist_session_result_swallows_db_lookup_error(self):
         """A DB error on the lookup must not propagate (session is terminal)."""
@@ -507,6 +517,12 @@ class ChallengeResponseFlowTests(TestCase):
     """Gaze cognitive challenge-response is scored and gates the verdict."""
 
     def setUp(self):
+        # Default the whole suite to "no gaze estimator loaded" so a configured
+        # model in some environment cannot silently change scoring/completion
+        # behaviour. Individual tests that need it override on their instance.
+        cap = patch.object(GazeTrackingService, 'has_real_gaze_model', return_value=False)
+        cap.start()
+        self.addCleanup(cap.stop)
         self.service = LivenessSessionService()
 
     def _open_gaze_window(self, session):
@@ -693,7 +709,7 @@ class ChallengeResponseFlowTests(TestCase):
     def test_session_capacity_cap_rejects_new_sessions(self):
         """Past the hard cap, new sessions are refused rather than growing forever."""
         from .services.liveness_session_service import SessionCapacityError
-        self.service.MAX_ACTIVE_SESSIONS = 1
+        self.service.config = {**self.service.config, 'MAX_ACTIVE_SESSIONS': 1}
         self.service.create_session(user_id=1)
         with self.assertRaises(SessionCapacityError):
             self.service.create_session(user_id=1)
@@ -731,6 +747,37 @@ class ChallengeResponseFlowTests(TestCase):
             self.assertFalse(t.is_alive())
         self.assertEqual(errors, [])
 
+    def test_retained_terminal_records_are_capped(self):
+        """Terminal records are bounded by cardinality, not just age.
+
+        Rapid create+complete must not accumulate terminal records past the cap;
+        the oldest are evicted first.
+        """
+        self.service.config = {**self.service.config, 'MAX_RETAINED_SESSIONS': 2}
+        sids = []
+        for _ in range(3):
+            sid = self.service.create_session(user_id=1)['session_id']
+            self.service.complete_session(sid)  # -> terminal
+            sids.append(sid)
+        # One more create triggers eviction, which caps terminal records at 2.
+        self.service.create_session(user_id=1)
+        terminal = [s for s in self.service.active_sessions.values()
+                    if s.get('status') in ('completed', 'expired')]
+        self.assertLessEqual(len(terminal), 2)
+        self.assertNotIn(sids[0], self.service.active_sessions)  # oldest evicted first
+
+    def test_gaze_challenge_honors_configured_timeout(self):
+        """COGNITIVE_TASK_TIMEOUT_MS drives the advertised AND enforced window."""
+        self.service.config = {**self.service.config, 'COGNITIVE_TASK_TIMEOUT_MS': 8000}
+        info = self.service.create_session(user_id=1)
+        sid = info['session_id']
+        gaze = next(c for c in info['challenges'] if c['type'] == 'gaze')
+        self.assertEqual(gaze['data']['time_limit_ms'], 8000)
+        # ...and the server-side task scored against is the same window.
+        server = next(c for c in self.service.active_sessions[sid]['challenges']
+                      if c['type'] == 'gaze')
+        self.assertEqual(server['cognitive_task'].time_limit_ms, 8000)
+
     def test_discard_session_frees_slot(self):
         """discard_session removes the in-memory session (e.g. after a DB failure)."""
         sid = self.service.create_session(user_id=1)['session_id']
@@ -745,7 +792,7 @@ class ChallengeResponseFlowTests(TestCase):
         Otherwise a user who churns create+complete would 503 legitimate new
         starts despite having zero in-progress sessions.
         """
-        self.service.MAX_ACTIVE_SESSIONS = 1
+        self.service.config = {**self.service.config, 'MAX_ACTIVE_SESSIONS': 1}
         sid = self.service.create_session(user_id=1)['session_id']
         self.service.complete_session(sid)  # -> terminal (INSUFFICIENT_SIGNAL)
         self.assertEqual(self.service.active_sessions[sid]['status'], 'completed')
@@ -762,7 +809,7 @@ class ChallengeResponseFlowTests(TestCase):
         import threading
         from .services.liveness_session_service import SessionCapacityError
         cap = 20
-        self.service.MAX_ACTIVE_SESSIONS = cap
+        self.service.config = {**self.service.config, 'MAX_ACTIVE_SESSIONS': cap}
         n_threads = 40
         barrier = threading.Barrier(n_threads)
         created = []

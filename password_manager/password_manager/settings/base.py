@@ -2127,6 +2127,11 @@ BIOMETRIC_LIVENESS = {
     # Largest decodable frame, as a pixel count (1080p). Bounds the per-frame
     # allocation a client can force on the REST/WS decode path.
     'MAX_FRAME_PIXELS': int(os.environ.get('LIVENESS_MAX_FRAME_PIXELS', str(1920 * 1080))),
+
+    # In-memory session store bounds (per worker). Live = concurrent
+    # pending/in_progress; retained = terminal records kept for replay guards.
+    'MAX_ACTIVE_SESSIONS': int(os.environ.get('LIVENESS_MAX_ACTIVE_SESSIONS', '1000')),
+    'MAX_RETAINED_SESSIONS': int(os.environ.get('LIVENESS_MAX_RETAINED_SESSIONS', '2000')),
     
     # Thermal settings
     'THERMAL_ENABLED': os.environ.get('LIVENESS_THERMAL_ENABLED', 'False').lower() == 'true',
