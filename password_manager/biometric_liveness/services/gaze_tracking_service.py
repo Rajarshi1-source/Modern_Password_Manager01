@@ -407,10 +407,13 @@ class GazeTrackingService:
                 and str(user_answer).strip() == task.correct_answer
             )
         
-        # Determine if passed
+        # Determine if passed. Path similarity only applies to tasks that define
+        # an expected trajectory (expected_sequence); answer-based tasks
+        # (FIND_OBJECT/COUNT_ITEMS) have none, so _calculate_path_similarity
+        # returns 0.0 for them and an unconditional check would always fail.
         is_passed = (
-            accuracy > 0.6 and 
-            path_similarity > 0.5 and 
+            accuracy > 0.6 and
+            (not task.expected_sequence or path_similarity > 0.5) and
             human_score > 0.6 and
             answer_correct
         )

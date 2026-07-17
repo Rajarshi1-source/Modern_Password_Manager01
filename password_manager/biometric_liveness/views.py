@@ -18,7 +18,9 @@ from django.utils import timezone
 
 from .frame_utils import decode_frame
 from .services import LivenessSessionService
-from .services.liveness_session_service import SessionCapacityError
+from .services.liveness_session_service import (
+    SessionCapacityError, GazeChallengeIncompleteError,
+)
 from .models import LivenessProfile, LivenessSession, LivenessSettings
 
 logger = logging.getLogger(__name__)
@@ -234,8 +236,13 @@ def complete_session(request):
             'verdict': result.verdict,
             'confidence': result.confidence,
         })
+    except GazeChallengeIncompleteError:
+        # Distinct from the terminal errors below: the session is still live, so
+        # the client should answer the gaze challenge and retry, not abandon it.
+        return Response({'error': 'required_challenge_incomplete', 'retryable': True},
+                        status=status.HTTP_409_CONFLICT)
     except ValueError as e:
-        # Session not found / already completed -> a client/state error, not a 500.
+        # Session not found / already completed / expired -> terminal state error.
         # Do not echo the exception text to the client (CodeQL info-exposure).
         logger.warning(f"Session completion conflict: {e}")
         return Response({'error': 'invalid_session_state'}, status=status.HTTP_409_CONFLICT)
