@@ -128,6 +128,24 @@ class GazeTrackingServiceTests(TestCase):
         result = self.service.estimate_gaze(None, None)
         self.assertIsNone(result)
 
+    def test_answer_task_not_failed_by_missing_path_sequence(self):
+        """A task without an expected trajectory must not be auto-failed by the
+        path-similarity check (it returns 0.0 when expected_sequence is absent)."""
+        from .services.gaze_tracking_service import (
+            CognitiveTask, CognitiveTaskType, GazePoint)
+        task = CognitiveTask(
+            task_type=CognitiveTaskType.FIND_OBJECT, instruction='x',
+            target_positions=[(0.5, 0.5)], time_limit_ms=6000,
+            expected_sequence=None, correct_answer='3')
+        pts = [GazePoint(x=0.5, y=0.5, timestamp_ms=i * 40.0,
+                         confidence=0.9, is_fixation=True) for i in range(6)]
+        # Isolate the path-sequence guard: hold accuracy/human above threshold.
+        self.service._calculate_gaze_accuracy = lambda *a, **k: 0.9
+        self.service._calculate_human_likelihood = lambda *a, **k: 0.9
+        res = self.service.validate_task_response(task, pts, user_answer='3')
+        self.assertEqual(res.gaze_path_similarity, 0.0)
+        self.assertTrue(res.is_passed)  # passes on accuracy + answer, not path
+
 
 class PulseOximetryServiceTests(TestCase):
     """Tests for PulseOximetryService."""
@@ -349,6 +367,23 @@ class LivenessAPITests(APITestCase):
             reverse('biometric_liveness:submit_challenge_response'),
             {'session_id': session_id, 'response': {'gaze_data': []}}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_complete_incomplete_gaze_returns_retryable_code(self):
+        """Incomplete gaze must map to a distinct, retryable code, not the same
+        invalid_session_state as terminal errors."""
+        from .services.liveness_session_service import GazeChallengeIncompleteError
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        with patch('biometric_liveness.views.get_session_service') as gss:
+            gss.return_value.complete_session.side_effect = \
+                GazeChallengeIncompleteError('Required gaze challenge incomplete')
+            resp = self.client.post(
+                reverse('biometric_liveness:complete_session'),
+                {'session_id': session_id}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(resp.data['error'], 'required_challenge_incomplete')
+        self.assertTrue(resp.data.get('retryable'))
 
     def test_persist_session_result_writes_status_and_verdict(self):
         """The shared persistence helper writes status AND the nuanced verdict.
@@ -601,7 +636,9 @@ class ChallengeResponseFlowTests(TestCase):
         session['services']['gaze'].has_real_gaze_model = lambda: True
         self._inject_pulse(session)
         session['expression_score'] = 0.95
-        with self.assertRaises(ValueError):
+        from .services.liveness_session_service import GazeChallengeIncompleteError
+        # Distinct, retryable type (not a generic terminal ValueError).
+        with self.assertRaises(GazeChallengeIncompleteError):
             self.service.complete_session(sid)
         # Blocked, not terminal: the session stays completable after answering.
         self.assertNotEqual(session['status'], 'completed')
@@ -637,6 +674,41 @@ class ChallengeResponseFlowTests(TestCase):
         self.service.create_session(user_id=1)
         with self.assertRaises(SessionCapacityError):
             self.service.create_session(user_id=1)
+
+    def test_session_capacity_cap_holds_under_concurrency(self):
+        """Under many concurrent creators the store must never exceed the cap.
+
+        The correctness guarantee is structural (check+insert share one locked
+        block), so this asserts the invariant under contention rather than trying
+        to deterministically trigger the old non-atomic race (which is only
+        probabilistically wrong under the GIL and cannot be forced reliably)."""
+        import threading
+        from .services.liveness_session_service import SessionCapacityError
+        cap = 20
+        self.service.MAX_ACTIVE_SESSIONS = cap
+        n_threads = 40
+        barrier = threading.Barrier(n_threads)
+        created = []
+        lock = threading.Lock()
+
+        def worker():
+            barrier.wait()  # release all at once to maximize contention
+            try:
+                info = self.service.create_session(user_id=1)
+                with lock:
+                    created.append(info['session_id'])
+            except SessionCapacityError:
+                pass
+
+        threads = [threading.Thread(target=worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        # Never exceed the cap, in the store or in the count of accepted creates.
+        self.assertLessEqual(len(self.service.active_sessions), cap)
+        self.assertEqual(len(created), len(self.service.active_sessions))
+        self.assertLessEqual(len(created), cap)
 
     def test_completed_session_cannot_be_rescored(self):
         sid = self.service.create_session(user_id=1)['session_id']

@@ -30,6 +30,18 @@ class SessionCapacityError(Exception):
     """Raised when the in-memory session store is at capacity (see MAX_ACTIVE_SESSIONS)."""
 
 
+class GazeChallengeIncompleteError(ValueError):
+    """
+    Completion attempted while a required, measurable gaze challenge is unanswered.
+
+    Unlike the terminal state errors (already completed / expired), this is
+    RETRYABLE: complete_session raises it BEFORE marking the session terminal, so
+    the client can answer gaze and complete. Subclasses ValueError so existing
+    ``except ValueError`` fallbacks still treat it as a client/state error, while
+    transports that catch it first can signal retryability distinctly.
+    """
+
+
 @dataclass
 class SessionConfig:
     """Configuration for liveness session."""
@@ -290,16 +302,10 @@ class LivenessSessionService:
         Returns:
             Session info dict
         """
-        # Bound the in-memory store before adding to it: first evict aged-out
-        # sessions, then refuse new ones past the hard cap so a burst of
-        # start_session calls cannot grow the store (and its per-session
-        # detectors) without limit. Checked under the store lock so concurrent
-        # creators cannot both slip past the cap.
+        # Bound the in-memory store: evict aged-out sessions, then refuse new
+        # ones past the hard cap so a burst of start_session calls cannot grow
+        # the store (and its per-session detectors) without limit.
         self._evict_stale_sessions()
-        max_sessions = self.config.get('MAX_ACTIVE_SESSIONS', self.MAX_ACTIVE_SESSIONS)
-        with self._store_lock:
-            if len(self.active_sessions) >= max_sessions:
-                raise SessionCapacityError('Liveness session capacity reached')
 
         session_id = str(uuid.uuid4())
 
@@ -342,7 +348,14 @@ class LivenessSessionService:
         # this one's accumulated state (see _new_session_services).
         session['services'] = self._new_session_services()
 
-        self.active_sessions[session_id] = session
+        # Capacity check and insert in ONE critical section: doing the check and
+        # the insert in separate locked blocks would let two concurrent creators
+        # both pass the check and both insert, exceeding MAX_ACTIVE_SESSIONS.
+        max_sessions = self.config.get('MAX_ACTIVE_SESSIONS', self.MAX_ACTIVE_SESSIONS)
+        with self._store_lock:
+            if len(self.active_sessions) >= max_sessions:
+                raise SessionCapacityError('Liveness session capacity reached')
+            self.active_sessions[session_id] = session
 
         logger.info(f"Created liveness session {session_id} for user {user_id}")
         
@@ -551,7 +564,7 @@ class LivenessSessionService:
         # is a state error, not a SUSPECTED_FAKE verdict (which the veto reserves
         # for challenges actually attempted and failed).
         if self._required_gaze_unanswered(session):
-            raise ValueError('Required gaze challenge incomplete')
+            raise GazeChallengeIncompleteError('Required gaze challenge incomplete')
 
         session['status'] = 'completed'
         session['completed_at'] = timezone.now()
