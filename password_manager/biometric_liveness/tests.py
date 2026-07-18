@@ -799,6 +799,28 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertNotIn(sid, self.service.active_sessions)
         self.assertNotIn(sid, self.service._session_locks)
 
+    def test_past_deadline_pending_not_counted_as_live(self):
+        """An abandoned (past-deadline) pending session must not hold a live slot."""
+        from django.utils import timezone as djtz
+        from datetime import timedelta
+        self.service.config = {**self.service.config, 'MAX_ACTIVE_SESSIONS': 1}
+        sid = self.service.create_session(user_id=1)['session_id']
+        # Abandon it: past its deadline, but not yet age-evictable (< retention).
+        self.service.active_sessions[sid]['expires_at'] = djtz.now() - timedelta(seconds=1)
+        # A new session must still be admitted -- the abandoned one isn't live.
+        self.service.create_session(user_id=1)  # must NOT raise
+
+    def test_past_deadline_pending_counts_toward_terminal_cap(self):
+        """Abandoned past-deadline sessions are bounded by the retained cap too."""
+        from django.utils import timezone as djtz
+        from datetime import timedelta
+        self.service.config = {**self.service.config, 'MAX_RETAINED_SESSIONS': 0}
+        sid = self.service.create_session(user_id=1)['session_id']
+        self.service.active_sessions[sid]['expires_at'] = djtz.now() - timedelta(seconds=1)
+        # Next create runs eviction; the past-deadline entry is terminal -> evicted.
+        self.service.create_session(user_id=1)
+        self.assertNotIn(sid, self.service.active_sessions)
+
     def test_capacity_cap_counts_only_live_sessions(self):
         """A completed session must not consume a capacity slot.
 

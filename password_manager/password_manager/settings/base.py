@@ -2134,12 +2134,14 @@ BIOMETRIC_LIVENESS = {
     'DEEPFAKE_THRESHOLD': float(os.environ.get('DEEPFAKE_THRESHOLD', '0.70')),
     'PULSE_CONFIDENCE_MIN': float(os.environ.get('PULSE_CONFIDENCE_MIN', '0.75')),
     
-    # Cognitive tasks
-    'COGNITIVE_TASK_TIMEOUT_MS': int(os.environ.get('LIVENESS_TASK_TIMEOUT', '5000')),
-    'GAZE_TRACKING_POINTS': int(os.environ.get('LIVENESS_GAZE_POINTS', '9')),
-    
-    # Session settings
-    'SESSION_TIMEOUT_SECONDS': int(os.environ.get('LIVENESS_SESSION_TIMEOUT', '120')),
+    # Cognitive tasks. Positive-only: a non-positive challenge timeout would
+    # publish/enforce an already-expired gaze window (see _generate_challenges).
+    'COGNITIVE_TASK_TIMEOUT_MS': _liveness_int_env('LIVENESS_TASK_TIMEOUT', '5000', minimum=1),
+    'GAZE_TRACKING_POINTS': _liveness_int_env('LIVENESS_GAZE_POINTS', '9', minimum=1),
+
+    # Session settings. Positive-only: a non-positive timeout would expire every
+    # session instantly.
+    'SESSION_TIMEOUT_SECONDS': _liveness_int_env('LIVENESS_SESSION_TIMEOUT', '120', minimum=1),
     'REQUIRED_CHALLENGES': ['gaze', 'expression', 'pulse'],
 
     # Largest decodable frame, as a pixel count (1080p). Bounds the per-frame

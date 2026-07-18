@@ -175,6 +175,20 @@ class LivenessSessionService:
             self.active_sessions.pop(session_id, None)
             self._session_locks.pop(session_id, None)
 
+    @staticmethod
+    def _is_live(session: Dict, now) -> bool:
+        """
+        True while a session still consumes LIVE capacity: pending/in_progress
+        AND not yet past its deadline. A pending/in_progress entry past its
+        expires_at is effectively dead -- it was abandoned before completing, so
+        its status never flipped, but every op (process_frame/submit/complete)
+        rejects it. Counting it as live would let abandoned sessions hold slots
+        for the whole retention window; it belongs in the retained-terminal cap.
+        """
+        expires_at = session.get('expires_at')
+        return (session.get('status') in ('pending', 'in_progress')
+                and expires_at is not None and expires_at > now)
+
     def _evict_stale_sessions(self) -> None:
         """
         Drop sessions whose deadline passed more than SESSION_RETENTION_SECONDS
@@ -186,7 +200,8 @@ class LivenessSessionService:
         rejecting late frames and re-scoring attempts, which needs the entry to
         survive until the client can no longer plausibly be using it.
         """
-        cutoff = timezone.now() - timedelta(seconds=self.SESSION_RETENTION_SECONDS)
+        now = timezone.now()
+        cutoff = now - timedelta(seconds=self.SESSION_RETENTION_SECONDS)
         max_retained = self.config.get('MAX_RETAINED_SESSIONS', self.MAX_RETAINED_SESSIONS)
         # Mutate active_sessions under _store_lock, the SAME lock create_session
         # holds while iterating it for the capacity count. Popping here without
@@ -201,12 +216,15 @@ class LivenessSessionService:
             ]
             for sid in stale:
                 self.active_sessions.pop(sid, None)
-            # Cardinality bound on retained terminal records: age-eviction alone
-            # lets rapid create+complete accumulate terminal records within the
-            # retention window. Evict the OLDEST terminal ones beyond the cap.
+            # Cardinality bound on retained records: age-eviction alone lets
+            # rapid create+complete (or abandoned past-deadline sessions)
+            # accumulate within the retention window. Terminal = anything NOT
+            # live (completed/expired OR past its deadline); evict the OLDEST
+            # beyond the cap. Using _is_live keeps this the exact complement of
+            # the live-capacity count so the two cannot drift apart.
             terminal = sorted(
                 (sid for sid, s in self.active_sessions.items()
-                 if s.get('status') in ('completed', 'expired')),
+                 if not self._is_live(s, now)),
                 key=lambda sid: self.active_sessions[sid].get('expires_at') or cutoff,
             )
             overflow = terminal[:max(0, len(terminal) - max_retained)]
@@ -382,15 +400,15 @@ class LivenessSessionService:
         # Capacity check and insert in ONE critical section: doing the check and
         # the insert in separate locked blocks would let two concurrent creators
         # both pass the check and both insert, exceeding MAX_ACTIVE_SESSIONS.
-        # Count only LIVE (pending/in_progress) sessions: terminal records
-        # (completed/expired) are retained briefly for the replay/late-frame
-        # guards and cleared by age-eviction, so counting them would let a user
-        # who rapidly creates+completes sessions exhaust the cap and 503 genuine
-        # new starts despite zero in-progress work.
+        # Count only LIVE sessions (_is_live): terminal records AND abandoned
+        # past-deadline sessions are retained briefly for the replay/late-frame
+        # guards and cleared by eviction, so counting them would let a user who
+        # rapidly creates+completes (or abandons) sessions exhaust the cap and
+        # 503 genuine new starts despite zero in-progress work.
+        now = timezone.now()
         max_sessions = self.config.get('MAX_ACTIVE_SESSIONS', self.MAX_ACTIVE_SESSIONS)
         with self._store_lock:
-            live = sum(1 for s in self.active_sessions.values()
-                       if s.get('status') in ('pending', 'in_progress'))
+            live = sum(1 for s in self.active_sessions.values() if self._is_live(s, now))
             if live >= max_sessions:
                 raise SessionCapacityError('Liveness session capacity reached')
             self.active_sessions[session_id] = session
