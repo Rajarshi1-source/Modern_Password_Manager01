@@ -368,6 +368,24 @@ class LivenessAPITests(APITestCase):
             {'session_id': session_id, 'response': {'gaze_data': []}}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_submit_frame_rejects_non_owner(self):
+        """A user cannot submit frames to another user's session.
+
+        Locks the in-memory (DB-query-free) ownership check on the hot frame path
+        against a session-id-guessing cross-user injection.
+        """
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        other = User.objects.create_user(
+            username='carol', email='carol@example.com', password='testpass123')
+        self.client.force_authenticate(user=other)
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_frame'),
+            {'session_id': session_id, 'frame': 'AAAA', 'width': 4, 'height': 4},
+            format='json')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_complete_incomplete_gaze_returns_retryable_code(self):
         """Incomplete gaze must map to a distinct, retryable code, not the same
         invalid_session_state as terminal errors."""
@@ -570,6 +588,17 @@ class ChallengeResponseFlowTests(TestCase):
             for i in range(n)
         ]
 
+    def _stub_pulse_score(self, score=0.95):
+        """Force a deterministic (passing) pulse modality score.
+
+        The veto tests must prove the veto flips a would-be-VERIFIED verdict, so
+        the non-gaze baseline has to be genuinely above threshold. Left to the
+        real rPPG scorer, the pulse score could fall short and the test would
+        pass because the baseline already failed, not because the veto fired.
+        complete_session scores pulse via the shared self.pulse_service.
+        """
+        self.service.pulse_service.get_liveness_score = lambda *a, **k: score
+
     def test_capabilities_gaze_unavailable_without_estimator(self):
         """Gaze must report unavailable until a real estimator is loaded.
 
@@ -649,6 +678,7 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertEqual(session['failed_required_challenges'], ['gaze'])
         # Two strong non-gaze modalities that would otherwise verify the session.
         self._inject_pulse(session)
+        self._stub_pulse_score()
         session['expression_score'] = 0.95
         result = self.service.complete_session(sid)
         self.assertFalse(result.is_verified)
@@ -956,6 +986,7 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertEqual(out['reason'], 'challenge_window_expired')
         self.assertEqual(session['failed_required_challenges'], ['gaze'])
         self._inject_pulse(session)
+        self._stub_pulse_score()
         session['expression_score'] = 0.95
         result = self.service.complete_session(sid)
         self.assertFalse(result.is_verified)
