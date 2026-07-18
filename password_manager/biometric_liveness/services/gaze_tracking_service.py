@@ -79,43 +79,61 @@ class GazeTrackingService:
     DEFAULT_FIXATION_THRESHOLD_MS = 100  # Min duration for fixation
     DEFAULT_SACCADE_VELOCITY_THRESHOLD = 30  # deg/sec
     NATURAL_SACCADE_AMPLITUDE_RANGE = (2, 45)  # degrees
-    
+
+    # The trained gaze estimator is a PROCESS-WIDE resource, held at CLASS scope
+    # so every instance observes the same has_real_gaze_model() state: the
+    # capabilities singleton (which get_capabilities queries but which never
+    # processes frames) AND each per-session service used for scoring/completion.
+    # If it were per-instance, the singleton would never load a model while
+    # per-session instances did, so capabilities would advertise gaze unavailable
+    # while sessions actively scored it (and the client would suppress the
+    # challenge UI). Loading it once class-wide also avoids duplicating a large
+    # model per session.
+    _gaze_model = None
+
     def __init__(self, config: Optional[Dict] = None):
         """
         Initialize gaze tracking service.
-        
+
         Args:
             config: Configuration options
         """
         self.config = config or {}
         self.gaze_history: List[GazePoint] = []
         self.current_task: Optional[CognitiveTask] = None
-        
-        # ML model for gaze estimation
-        self._gaze_model = None
-        
+
         # Task parameters
         self.num_tracking_points = self.config.get('gaze_tracking_points', 9)
         self.task_timeout_ms = self.config.get('cognitive_task_timeout_ms', 5000)
-        
+
         logger.info("GazeTrackingService initialized")
-    
+
     def _init_gaze_model(self):
-        """Lazy initialization of gaze estimation model."""
+        """Lazily load the shared gaze estimation model (idempotent)."""
         # A trained gaze estimation model (e.g. L2CS / MediaPipe-iris) is loaded
-        # here in a later step (wrap the load in try/except then). Until it
-        # exists no model is loaded and has_real_gaze_model() reports False.
+        # here in a later step (wrap the load in try/except then) and MUST be
+        # stored on the CLASS -- GazeTrackingService._gaze_model -- not on self,
+        # so the capabilities singleton and every per-session instance report the
+        # same has_real_gaze_model() state. Until it exists no model is loaded and
+        # has_real_gaze_model() reports False everywhere.
+        if GazeTrackingService._gaze_model is not None:
+            return
+        # Real model load lands here; assign GazeTrackingService._gaze_model.
         return
 
     def has_real_gaze_model(self) -> bool:
         """
         True only when a genuinely trained gaze estimator is loaded.
 
-        Without it, estimate_gaze cannot measure real eye position, so gaze must
-        not gate a liveness verdict (a placeholder position would be a fabricated
-        signal). Callers use this to keep gaze capability-gated.
+        Resolves the shared (class-level) model first so the answer reflects the
+        real operational capability even on the singleton -- which get_capabilities
+        queries but which never processes frames. Without a model estimate_gaze
+        cannot measure real eye position, so gaze must not gate a liveness verdict
+        (a placeholder position would be a fabricated signal); callers use this to
+        keep gaze capability-gated.
         """
-        return self._gaze_model is not None
+        self._init_gaze_model()
+        return GazeTrackingService._gaze_model is not None
     
     def estimate_gaze(
         self, 

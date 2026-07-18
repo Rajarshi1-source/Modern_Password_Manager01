@@ -175,6 +175,18 @@ class LivenessSessionService:
             self.active_sessions.pop(session_id, None)
             self._session_locks.pop(session_id, None)
 
+    def owner_of(self, session_id: str) -> Optional[int]:
+        """
+        Return the user_id that owns an in-memory session, or None if unknown.
+
+        Lets the hot per-frame REST path authorize against server-stamped
+        in-memory state instead of an ORM query per frame (see
+        views._owns_in_memory_session). create_session stamps user_id itself, so
+        this is authoritative and not client-forgeable.
+        """
+        session = self.active_sessions.get(session_id)
+        return session.get('user_id') if session else None
+
     @staticmethod
     def _is_live(session: Dict, now) -> bool:
         """

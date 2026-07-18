@@ -97,6 +97,25 @@ def _user_owns_session(request, session_id) -> bool:
         return False
 
 
+def _owns_in_memory_session(request, session_id, service) -> bool:
+    """
+    Ownership check for the hot per-frame path, without a DB query.
+
+    submit_frame runs at video-frame rates, so an ORM exists() per frame (see
+    _user_owns_session) is sustained database load. create_session stamps the
+    owning user_id onto the in-memory session server-side, and a frame can only
+    be processed if that session is in THIS worker's store (process_frame keys
+    off it), so comparing against the stored user_id is authoritative and exactly
+    as strict as the DB check for this path. A session absent from memory (never
+    created here / evicted) is treated as not owned -> 404, matching how
+    process_frame would reject it.
+    """
+    if not session_id:
+        return False
+    owner_id = service.owner_of(session_id)
+    return owner_id is not None and owner_id == request.user.id
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def start_session(request):
@@ -152,7 +171,11 @@ def submit_frame(request):
 
         if not session_id or not frame_b64:
             return Response({'error': 'Missing session_id or frame'}, status=status.HTTP_400_BAD_REQUEST)
-        if not _user_owns_session(request, session_id):
+
+        service = get_session_service()
+        # Per-frame ownership is resolved from the in-memory session's stamped
+        # user_id (no ORM query at video-frame rates); see _owns_in_memory_session.
+        if not _owns_in_memory_session(request, session_id, service):
             return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
 
         # Raw RGB/RGBA pixel data from the client canvas; same decode contract as
@@ -161,7 +184,6 @@ def submit_frame(request):
         if decode_error:
             return Response({'error': decode_error}, status=status.HTTP_400_BAD_REQUEST)
 
-        service = get_session_service()
         result = service.process_frame(session_id, frame_array, timestamp_ms)
         
         if 'error' in result:
