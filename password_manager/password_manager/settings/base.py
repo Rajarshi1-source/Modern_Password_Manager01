@@ -2125,14 +2125,36 @@ def _liveness_int_env(env_var, default, *, minimum=1):
     return value
 
 
+def _liveness_float_env(env_var, default, *, minimum, maximum):
+    """
+    Parse a float liveness threshold from the environment, failing fast on a bad
+    value -- mirrors _liveness_int_env for the score thresholds. A non-numeric
+    override would otherwise crash Django with an opaque ValueError at import, and
+    an out-of-range one would silently break scoring (a >1 liveness threshold
+    verifies nothing; a <0 one verifies everything).
+    """
+    from django.core.exceptions import ImproperlyConfigured
+    raw = os.environ.get(env_var, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ImproperlyConfigured(f"{env_var} must be a number, got {raw!r}")
+    if not (minimum <= value <= maximum):
+        raise ImproperlyConfigured(
+            f"{env_var} must be in [{minimum}, {maximum}], got {value}")
+    return value
+
+
 BIOMETRIC_LIVENESS = {
     # Feature toggle
     'ENABLED': os.environ.get('BIOMETRIC_LIVENESS_ENABLED', 'False').lower() == 'true',
     
-    # Detection thresholds
-    'LIVENESS_THRESHOLD': float(os.environ.get('LIVENESS_THRESHOLD', '0.85')),
-    'DEEPFAKE_THRESHOLD': float(os.environ.get('DEEPFAKE_THRESHOLD', '0.70')),
-    'PULSE_CONFIDENCE_MIN': float(os.environ.get('PULSE_CONFIDENCE_MIN', '0.75')),
+    # Detection thresholds. Score thresholds are validated to [0, 1] (see
+    # _liveness_float_env) so a bad override fails fast instead of silently
+    # breaking scoring.
+    'LIVENESS_THRESHOLD': _liveness_float_env('LIVENESS_THRESHOLD', '0.85', minimum=0.0, maximum=1.0),
+    'DEEPFAKE_THRESHOLD': _liveness_float_env('DEEPFAKE_THRESHOLD', '0.70', minimum=0.0, maximum=1.0),
+    'PULSE_CONFIDENCE_MIN': _liveness_float_env('PULSE_CONFIDENCE_MIN', '0.75', minimum=0.0, maximum=1.0),
     
     # Cognitive tasks. Positive-only: a non-positive challenge timeout would
     # publish/enforce an already-expired gaze window (see _generate_challenges).
@@ -2153,6 +2175,10 @@ BIOMETRIC_LIVENESS = {
     # (retention may be 0 to keep none).
     'MAX_ACTIVE_SESSIONS': _liveness_int_env('LIVENESS_MAX_ACTIVE_SESSIONS', '1000', minimum=1),
     'MAX_RETAINED_SESSIONS': _liveness_int_env('LIVENESS_MAX_RETAINED_SESSIONS', '2000', minimum=0),
+    # Per-user LIVE-session bound: stops one account from filling the global cap
+    # and 503-ing everyone else. Generous vs legitimate use (one verification at
+    # a time).
+    'MAX_USER_ACTIVE_SESSIONS': _liveness_int_env('LIVENESS_MAX_USER_ACTIVE_SESSIONS', '50', minimum=1),
     
     # Thermal settings
     'THERMAL_ENABLED': os.environ.get('LIVENESS_THERMAL_ENABLED', 'False').lower() == 'true',

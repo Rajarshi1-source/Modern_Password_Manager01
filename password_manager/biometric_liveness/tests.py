@@ -570,6 +570,35 @@ class LivenessAPITests(APITestCase):
         # A non-negative limit (retention) may be zero.
         self.assertEqual(_liveness_int_env('LIVENESS_UNSET_X', '0', minimum=0), 0)
 
+    def test_liveness_float_env_validation(self):
+        """Float liveness thresholds fail fast on non-numeric / out-of-range config."""
+        from password_manager.settings.base import _liveness_float_env
+        from django.core.exceptions import ImproperlyConfigured
+        # Uses the default arg (env var unset), so no environment mutation.
+        self.assertEqual(
+            _liveness_float_env('LIVENESS_UNSET_F', '0.85', minimum=0.0, maximum=1.0), 0.85)
+        with self.assertRaises(ImproperlyConfigured):
+            _liveness_float_env('LIVENESS_UNSET_F', 'abc', minimum=0.0, maximum=1.0)   # non-numeric
+        with self.assertRaises(ImproperlyConfigured):
+            _liveness_float_env('LIVENESS_UNSET_F', '1.5', minimum=0.0, maximum=1.0)   # above max
+        with self.assertRaises(ImproperlyConfigured):
+            _liveness_float_env('LIVENESS_UNSET_F', '-0.1', minimum=0.0, maximum=1.0)  # below min
+
+    def test_decode_frame_rgb_is_writable(self):
+        """The decoded RGB frame must be writable, like the RGBA path.
+
+        np.frombuffer yields a read-only buffer; without an explicit copy a
+        detector that preprocesses the frame in place would fail on RGB frames
+        while succeeding on RGBA ones.
+        """
+        import base64
+        from .frame_utils import decode_frame
+        raw = bytes(2 * 2 * 3)  # 2x2 RGB, all zero
+        frame, err = decode_frame(base64.b64encode(raw).decode(), 2, 2)
+        self.assertIsNone(err)
+        self.assertEqual(frame.shape, (2, 2, 3))
+        self.assertTrue(frame.flags.writeable)
+
     def test_challenge_response_same_owner_ok(self):
         """The owning user can submit a challenge response (shared session store)."""
         start = self.client.post(
@@ -794,6 +823,43 @@ class ChallengeResponseFlowTests(TestCase):
         self.service.create_session(user_id=1)
         with self.assertRaises(SessionCapacityError):
             self.service.create_session(user_id=1)
+
+    def test_per_user_session_cap_rejects_excess(self):
+        """One user cannot exhaust global capacity; a per-user live cap applies.
+
+        The global cap protects worker memory; the per-user cap protects fairness
+        so a single account cannot 503 everyone else.
+        """
+        from .services.liveness_session_service import SessionCapacityError
+        self.service.config = {**self.service.config, 'MAX_USER_ACTIVE_SESSIONS': 2}
+        self.service.create_session(user_id=1)
+        self.service.create_session(user_id=1)
+        with self.assertRaises(SessionCapacityError):
+            self.service.create_session(user_id=1)
+        # A different user is unaffected by user 1 hitting their own cap.
+        self.service.create_session(user_id=2)  # must NOT raise
+
+    def test_pulse_uses_server_timestamp_not_client(self):
+        """The client frame timestamp must not define the pulse sampling clock."""
+        from unittest.mock import MagicMock
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        session['services']['pulse'].process_frame = MagicMock(return_value=None)
+        absurd_client_ts = -10_000_000_000.0
+        self.service.process_frame(
+            sid, np.zeros((64, 64, 3), np.uint8), absurd_client_ts)
+        # The 2nd positional arg is the timestamp handed to the pulse service.
+        called_ts = session['services']['pulse'].process_frame.call_args[0][1]
+        self.assertNotEqual(called_ts, absurd_client_ts)
+        self.assertGreater(called_ts, 0)  # a server epoch-ms timestamp
+
+    def test_non_positive_configured_timeout_is_ignored(self):
+        """A non-positive challenge timeout must not publish an expired gaze window."""
+        self.service.config = {**self.service.config, 'COGNITIVE_TASK_TIMEOUT_MS': -5}
+        info = self.service.create_session(user_id=1)
+        gaze = next(c for c in info['challenges'] if c['type'] == 'gaze')
+        # Falls back to the task generator's positive default, not -5.
+        self.assertGreater(gaze['data']['time_limit_ms'], 0)
 
     def test_concurrent_create_with_stale_eviction_no_error(self):
         """Concurrent create_session (which evicts + counts active_sessions under
