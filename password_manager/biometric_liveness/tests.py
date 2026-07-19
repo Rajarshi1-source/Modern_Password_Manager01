@@ -515,8 +515,9 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(row.thermal_score, 0.0)
         self.assertEqual(row.texture_artifact_score, 0.98)
 
-    def test_persist_session_result_swallows_db_lookup_error(self):
-        """A DB error on the lookup must not propagate (session is terminal)."""
+    def test_persist_db_error_enqueues_durable_retry(self):
+        """A transient DB failure hands the verdict to a durable retry queue rather
+        than silently losing it (closes the 'silent verdict loss' finding)."""
         from .views import persist_session_result
         from .services.liveness_session_service import SessionResult
         from django.db import DatabaseError
@@ -526,8 +527,14 @@ class LivenessAPITests(APITestCase):
             gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
             texture_artifact_score=0.0, total_frames_processed=0,
             duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={})
-        with patch.object(LivenessSession.objects, 'get', side_effect=DatabaseError('boom')):
+        with patch.object(LivenessSession.objects, 'get', side_effect=DatabaseError('boom')), \
+             patch('biometric_liveness.tasks.retry_persist_liveness_result.delay') as mock_delay:
             persist_session_result(result)  # must not raise
+        # The verdict was queued for durable retry, carrying enough to re-apply it.
+        mock_delay.assert_called_once()
+        payload = mock_delay.call_args[0][0]
+        self.assertEqual(payload['verdict'], 'INSUFFICIENT_SIGNAL')
+        self.assertEqual(payload['session_id'], result.session_id)
 
     def test_persist_session_result_accepts_insufficient_signal_verdict(self):
         """INSUFFICIENT_SIGNAL is a real service verdict and must be storable."""
@@ -562,6 +569,60 @@ class LivenessAPITests(APITestCase):
         persist_session_result(_result('not-a-uuid'))
         # ... and a well-formed but absent id (LivenessSession.DoesNotExist path).
         persist_session_result(_result(str(uuid.uuid4())))
+
+    def test_persist_unknown_row_does_not_enqueue_retry(self):
+        """Permanent failures (bad/absent id) must NOT be queued for retry."""
+        from .views import persist_session_result
+        from .services.liveness_session_service import SessionResult
+
+        def _result(sid):
+            return SessionResult(
+                session_id=sid, is_verified=False, overall_liveness_score=0.0,
+                deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
+                gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
+                texture_artifact_score=0.0, total_frames_processed=0,
+                duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={})
+        with patch('biometric_liveness.tasks.retry_persist_liveness_result.delay') as mock_delay:
+            persist_session_result(_result('not-a-uuid'))          # ValidationError -> no retry
+            persist_session_result(_result(str(uuid.uuid4())))     # DoesNotExist -> no retry
+        mock_delay.assert_not_called()
+
+    def test_retry_task_applies_result_to_row(self):
+        """The durable retry task writes the verdict onto its row, idempotently."""
+        from .views import _liveness_result_payload
+        from .services.liveness_session_service import SessionResult
+        from .tasks import retry_persist_liveness_result
+        row = LivenessSession.objects.create(user=self.user, context='login')
+        payload = _liveness_result_payload(SessionResult(
+            session_id=str(row.id), is_verified=True, overall_liveness_score=0.9,
+            deepfake_probability=0.01, confidence=0.4, micro_expression_score=0.0,
+            gaze_tracking_score=0.9, pulse_oximetry_score=0.8, thermal_score=0.0,
+            texture_artifact_score=0.99, total_frames_processed=10,
+            duration_ms=0.0, verdict='HIGH_CONFIDENCE_LIVE', details={}))
+        # Run synchronously; applying twice must be idempotent (same terminal row).
+        retry_persist_liveness_result.apply(args=[payload]).get()
+        retry_persist_liveness_result.apply(args=[payload]).get()
+        row.refresh_from_db()
+        self.assertEqual(row.status, 'passed')
+        self.assertEqual(row.verdict, 'HIGH_CONFIDENCE_LIVE')
+        self.assertEqual(row.overall_liveness_score, 0.9)
+        self.assertEqual(row.total_frames_processed, 10)
+
+    def test_apply_liveness_result_raises_on_db_error(self):
+        """apply_liveness_result surfaces DatabaseError so the caller can retry."""
+        from .views import apply_liveness_result, _liveness_result_payload
+        from .services.liveness_session_service import SessionResult
+        from django.db import DatabaseError
+        row = LivenessSession.objects.create(user=self.user, context='login')
+        payload = _liveness_result_payload(SessionResult(
+            session_id=str(row.id), is_verified=False, overall_liveness_score=0.0,
+            deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
+            gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
+            texture_artifact_score=0.0, total_frames_processed=0,
+            duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={}))
+        with patch.object(LivenessSession, 'save', side_effect=DatabaseError('boom')):
+            with self.assertRaises(DatabaseError):
+                apply_liveness_result(payload)
 
     def test_submit_frame_non_string_frame_is_400(self):
         """A non-string 'frame' is client error, not a 500 (b64decode TypeError)."""
@@ -1037,15 +1098,35 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertEqual(len(created), len(self.service.active_sessions))
         self.assertLessEqual(len(created), cap)
 
-    def test_completed_session_cannot_be_rescored(self):
+    def test_completed_session_returns_cached_verdict_not_rescored(self):
+        """Re-completion is idempotent (returns the cached verdict), never a
+        re-score. Anti-upgrade still holds: post-completion frames are rejected,
+        so no new signal can raise the frozen verdict."""
         sid = self.service.create_session(user_id=1)['session_id']
         session = self.service.active_sessions[sid]
         self._inject_pulse(session)
-        self.service.complete_session(sid)
-        with self.assertRaises(ValueError):
-            self.service.complete_session(sid)
+        first = self.service.complete_session(sid)
+        second = self.service.complete_session(sid)
+        # Same frozen verdict object, not a ValueError and not a fresh scoring.
+        self.assertIs(second, first)
+        self.assertEqual(second.verdict, first.verdict)
+        # Frames after completion are still rejected -> the verdict cannot be upgraded.
         res = self.service.process_frame(sid, np.zeros((120, 120, 3), np.uint8), 0.0)
         self.assertIn('error', res)
+
+    def test_idempotent_completion_ignores_post_completion_signal(self):
+        """Even signal stuffed in AFTER completion must not upgrade the frozen
+        verdict on re-completion -- the cached result wins."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        first = self.service.complete_session(sid)  # no modalities -> INSUFFICIENT_SIGNAL
+        self.assertEqual(first.verdict, 'INSUFFICIENT_SIGNAL')
+        # Directly inject strong modalities post-completion, then re-complete.
+        self._inject_pulse(session)
+        session['expression_score'] = 0.95
+        second = self.service.complete_session(sid)
+        self.assertIs(second, first)
+        self.assertEqual(second.verdict, 'INSUFFICIENT_SIGNAL')  # NOT upgraded
 
     def test_completed_verdict_survives_expiry(self):
         """A completed session must not be reclassified as expired and re-scored."""
@@ -1054,13 +1135,15 @@ class ChallengeResponseFlowTests(TestCase):
         sid = self.service.create_session(user_id=1)['session_id']
         session = self.service.active_sessions[sid]
         self._inject_pulse(session)
-        self.service.complete_session(sid)
+        first = self.service.complete_session(sid)
         # Push the deadline into the past; the terminal verdict must hold.
         session['expires_at'] = dj_timezone.now() - timedelta(seconds=1)
         res = self.service.process_frame(sid, np.zeros((120, 120, 3), np.uint8), 0.0)
         self.assertEqual(res.get('error'), 'Session already completed')
-        with self.assertRaises(ValueError):
-            self.service.complete_session(sid)
+        # Completed takes precedence over expired: re-completion returns the
+        # cached verdict idempotently, it is NOT reclassified/expired/re-scored.
+        second = self.service.complete_session(sid)
+        self.assertIs(second, first)
 
     def test_expired_session_cannot_be_completed(self):
         from django.utils import timezone as dj_timezone
@@ -1225,13 +1308,14 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertNotIn(sid, self.service._session_locks)
 
     def test_recent_terminal_session_is_retained(self):
-        """A just-completed session stays long enough to keep rejecting replays."""
+        """A just-completed session stays retained; re-completion is idempotent."""
         sid = self.service.create_session(user_id=1)['session_id']
-        self.service.complete_session(sid)
+        first = self.service.complete_session(sid)
         self.service.create_session(user_id=1)
         self.assertIn(sid, self.service.active_sessions)
-        with self.assertRaises(ValueError):
-            self.service.complete_session(sid)
+        # Retained terminal record: re-completion returns the cached verdict, not
+        # a re-score (and not an error).
+        self.assertIs(self.service.complete_session(sid), first)
 
     def test_no_response_fails_closed(self):
         sid = self.service.create_session(user_id=1)['session_id']
