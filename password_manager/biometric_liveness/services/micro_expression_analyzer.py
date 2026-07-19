@@ -482,9 +482,14 @@ class MicroExpressionAnalyzer:
         Real faces have natural asymmetry; perfectly symmetric 
         expressions may indicate synthetic generation.
         """
-        # Would compare left/right AU intensities
-        # Returns 0.0 (perfect symmetry) to 1.0 (high asymmetry)
-        return np.random.uniform(0.1, 0.4)  # Natural asymmetry range
+        # No real left/right AU comparison is implemented yet, so return 0.0
+        # rather than a fabricated random value -- matching the AU-intensity
+        # stubs. The previous np.random.uniform(0.1, 0.4) always landed inside
+        # get_liveness_score's "natural" band, fabricating a perfect asymmetry
+        # score on every call; 0.0 yields a neutral score instead. This modality
+        # does not gate the verdict yet (session['expression_score'] is unset), so
+        # it is dormant either way. Returns 0.0 (perfect symmetry) to 1.0 (high).
+        return 0.0
     
     def analyze_temporal_consistency(
         self,
