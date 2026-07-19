@@ -31,6 +31,77 @@ def get_session_service():
     return LivenessSessionService()
 
 
+def _liveness_result_payload(result) -> dict:
+    """
+    Flatten a SessionResult into the primitive fields the row needs.
+
+    Kept JSON-serializable so the very same write can run inline (persist_session_result)
+    or from the Celery retry task (which serializes its args as JSON).
+    """
+    return {
+        'session_id': str(result.session_id),
+        'is_verified': bool(result.is_verified),
+        # The nuanced verdict, not just the binary pass/fail: the row's `verdict`
+        # field exists precisely to record it, and collapsing SUSPECTED_FAKE and
+        # INSUFFICIENT_SIGNAL to the same 'failed' loses why a session failed.
+        'verdict': result.verdict,
+        'overall_liveness_score': result.overall_liveness_score,
+        'deepfake_probability': result.deepfake_probability,
+        'confidence': result.confidence,
+        'micro_expression_score': result.micro_expression_score,
+        'gaze_tracking_score': result.gaze_tracking_score,
+        'pulse_oximetry_score': result.pulse_oximetry_score,
+        'thermal_score': result.thermal_score,
+        'texture_artifact_score': result.texture_artifact_score,
+        'total_frames_processed': result.total_frames_processed,
+    }
+
+
+def apply_liveness_result(payload: dict) -> None:
+    """
+    Write a finalized verdict onto its LivenessSession row.
+
+    Raises LivenessSession.DoesNotExist / ValidationError (bad id) for PERMANENT
+    failures and DatabaseError for TRANSIENT ones -- the caller decides whether to
+    retry. Idempotent: re-applying writes the same terminal fields, so a retry
+    (or a re-completion) can safely run it again.
+    """
+    session = LivenessSession.objects.get(id=payload['session_id'])
+    session.status = 'passed' if payload['is_verified'] else 'failed'
+    session.completed_at = timezone.now()
+    session.verdict = payload['verdict']
+    session.overall_liveness_score = payload['overall_liveness_score']
+    session.deepfake_probability = payload['deepfake_probability']
+    session.confidence = payload['confidence']
+    session.micro_expression_score = payload['micro_expression_score']
+    session.gaze_tracking_score = payload['gaze_tracking_score']
+    session.pulse_oximetry_score = payload['pulse_oximetry_score']
+    session.thermal_score = payload['thermal_score']
+    session.texture_artifact_score = payload['texture_artifact_score']
+    session.total_frames_processed = payload['total_frames_processed']
+    session.save()
+
+
+def _enqueue_persist_retry(payload: dict) -> None:
+    """
+    Hand a verdict to the durable retry queue.
+
+    The queue (Celery broker) is a SEPARATE service from the app DB, so a queued
+    verdict survives a transient DB failure and is applied once the DB recovers --
+    this is why the durable layer is the broker, not a DB-backed pending table (a
+    DB row cannot be written during the very DB outage it would be protecting
+    against). Best-effort: if even the enqueue fails (broker unreachable) we have
+    logged, the client already holds its verdict, and the in-memory session stays
+    terminal for the retention window -- never propagate a 500 here.
+    """
+    try:
+        from .tasks import retry_persist_liveness_result
+        retry_persist_liveness_result.delay(payload)
+    except Exception:
+        logger.exception(
+            f"Could not enqueue liveness persistence retry for {payload['session_id']}")
+
+
 def persist_session_result(result) -> None:
     """
     Mirror a finalized in-memory verdict onto the LivenessSession row.
@@ -38,45 +109,26 @@ def persist_session_result(result) -> None:
     Shared by the REST complete endpoint and the WS consumer. Without it on the
     WS path the row stays pending/in_progress, so the consumer's verify_session
     keeps accepting reconnects to an already-completed session and the user's
-    verification history never records the scores.
+    verification history never records the scores. On a TRANSIENT DB failure the
+    write is handed to a durable retry rather than silently dropped -- the verdict
+    is not lost, and complete_session is idempotent so re-applying is safe.
     """
+    payload = _liveness_result_payload(result)
     try:
-        session = LivenessSession.objects.get(id=result.session_id)
+        apply_liveness_result(payload)
     except LivenessSession.DoesNotExist:
+        # No row to mirror onto (never persisted / already removed). Not retryable.
         return
-    except (DatabaseError, ValidationError, ValueError, TypeError):
-        # Same rationale as the guarded save() below: the in-memory session is
-        # already terminal, so a transient DB error on lookup must not propagate
-        # (500, unretryable) and lose the verdict / deny the client its result.
+    except (ValidationError, ValueError, TypeError):
+        # A malformed/unusable id can never succeed on retry; log and drop.
         logger.exception(
-            f"Failed to load liveness row for session {result.session_id}"
-        )
+            f"Unusable liveness session id for persistence: {payload['session_id']}")
         return
-    session.status = 'passed' if result.is_verified else 'failed'
-    session.completed_at = timezone.now()
-    # The nuanced verdict, not just the binary pass/fail: the row's `verdict`
-    # field exists precisely to record it, and collapsing SUSPECTED_FAKE and
-    # INSUFFICIENT_SIGNAL to the same 'failed' loses why a session failed.
-    session.verdict = result.verdict
-    session.overall_liveness_score = result.overall_liveness_score
-    session.deepfake_probability = result.deepfake_probability
-    session.confidence = result.confidence
-    session.micro_expression_score = result.micro_expression_score
-    session.gaze_tracking_score = result.gaze_tracking_score
-    session.pulse_oximetry_score = result.pulse_oximetry_score
-    session.thermal_score = result.thermal_score
-    session.texture_artifact_score = result.texture_artifact_score
-    session.total_frames_processed = result.total_frames_processed
-    try:
-        session.save()
     except DatabaseError:
-        # Best-effort mirror. complete_session() has already flipped the session
-        # to its terminal state, so re-completing to retry is impossible; letting
-        # this propagate would lose the verdict AND deny the client its result.
-        # The in-memory terminal guards still reject further frames/re-scoring.
-        logger.exception(
-            f"Failed to persist liveness verdict for session {result.session_id}"
-        )
+        # Transient: do NOT lose the verdict. Hand it to the durable retry queue.
+        logger.warning(
+            f"Deferring liveness verdict persistence for {payload['session_id']} to retry")
+        _enqueue_persist_retry(payload)
 
 
 def _user_owns_session(request, session_id) -> bool:

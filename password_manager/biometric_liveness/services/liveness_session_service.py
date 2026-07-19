@@ -653,10 +653,19 @@ class LivenessSessionService:
         session = self.active_sessions.get(session_id)
         if not session:
             raise ValueError('Session not found')
-        # A verdict is final. Refuse to re-score a completed session -- otherwise
-        # a failing session could be upgraded by submitting more frames and
-        # calling complete again.
+        # A verdict is final and completion is IDEMPOTENT: re-completing returns
+        # the CACHED result instead of re-scoring. This preserves the anti-upgrade
+        # guarantee (process_frame rejects post-completion frames, and the cached
+        # result is frozen at first completion, so no newly-submitted signal can
+        # raise the verdict) while letting a failed DB persist be retried by
+        # re-completing -- the retry relies on getting the same verdict back, not
+        # a state error.
         if session.get('status') == 'completed':
+            cached = session.get('result')
+            if cached is not None:
+                return cached
+            # Terminal but somehow uncached (should not happen): fail closed as a
+            # state error rather than silently re-scoring.
             raise ValueError('Session already completed')
         # An expired session must not be scored at all.
         if session.get('status') == 'expired' or timezone.now() > session['expires_at']:
@@ -781,7 +790,7 @@ class LivenessSessionService:
         if session['started_at']:
             duration_ms = (session['completed_at'] - session['started_at']).total_seconds() * 1000
 
-        return SessionResult(
+        result = SessionResult(
             session_id=session_id,
             is_verified=is_verified,
             overall_liveness_score=overall,
@@ -805,7 +814,11 @@ class LivenessSessionService:
                 'failed_required_challenges': sorted(set(failed_required)),
             },
         )
-    
+        # Cache the frozen verdict so a re-completion (e.g. a persist retry) returns
+        # it idempotently rather than re-scoring or erroring.
+        session['result'] = result
+        return result
+
     @_with_session_lock
     def submit_challenge_response(self, session_id: str, response: Dict) -> Dict:
         """
