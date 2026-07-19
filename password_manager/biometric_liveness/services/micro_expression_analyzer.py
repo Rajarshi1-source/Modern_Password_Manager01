@@ -247,33 +247,45 @@ class MicroExpressionAnalyzer:
     
     def _calculate_au2_intensity(self, landmarks: np.ndarray) -> float:
         """Calculate AU2 (Outer Brow Raiser) intensity."""
-        return np.random.uniform(0, 0.3)  # Placeholder - implement geometry
+        # Real geometry is not implemented yet, so return 0.0 (AU inactive) rather
+        # than a fabricated random intensity. A random value would inject a fake
+        # biometric signal the moment the expression scoring pipeline is wired --
+        # the same never-fabricate stance as _fallback_landmark_detection and
+        # GazeTrackingService._compute_gaze_direction. 0.0 matches the AU45=0.0
+        # "no signal" default used in extract_action_units.
+        return 0.0
     
     def _calculate_au4_intensity(self, landmarks: np.ndarray) -> float:
         """Calculate AU4 (Brow Lowerer) intensity."""
-        return np.random.uniform(0, 0.3)  # Placeholder
+        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
+        return 0.0
     
     def _calculate_au5_intensity(self, landmarks: np.ndarray) -> float:
         """Calculate AU5 (Upper Lid Raiser) intensity."""
-        # Eye aspect ratio calculation
-        return np.random.uniform(0.2, 0.6)  # Placeholder
+        # Eye-aspect-ratio geometry not implemented; 0.0 (inactive), not
+        # fabricated -- see _calculate_au2_intensity.
+        return 0.0
     
     def _calculate_au6_intensity(self, landmarks: np.ndarray) -> float:
         """Calculate AU6 (Cheek Raiser) intensity."""
-        return np.random.uniform(0, 0.4)  # Placeholder
+        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
+        return 0.0
     
     def _calculate_au12_intensity(self, landmarks: np.ndarray) -> float:
         """Calculate AU12 (Lip Corner Puller/Smile) intensity."""
-        # Lip corner positions relative to mouth center
-        return np.random.uniform(0, 0.5)  # Placeholder
+        # Lip-corner geometry not implemented; 0.0 (inactive), not fabricated --
+        # see _calculate_au2_intensity.
+        return 0.0
     
     def _calculate_au25_intensity(self, landmarks: np.ndarray) -> float:
         """Calculate AU25 (Lips Part) intensity."""
-        return np.random.uniform(0, 0.3)  # Placeholder
+        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
+        return 0.0
     
     def _calculate_au26_intensity(self, landmarks: np.ndarray) -> float:
         """Calculate AU26 (Jaw Drop) intensity."""
-        return np.random.uniform(0, 0.3)  # Placeholder
+        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
+        return 0.0
     
     def _calculate_blink_intensity(
         self, 
@@ -281,9 +293,9 @@ class MicroExpressionAnalyzer:
         prev_landmarks: np.ndarray
     ) -> float:
         """Detect blink from eye aspect ratio change."""
-        # Calculate eye aspect ratio for current and previous
-        # High intensity = blink detected
-        return np.random.uniform(0, 0.8)  # Placeholder
+        # Eye-aspect-ratio blink geometry not implemented; 0.0 (no blink), not
+        # fabricated -- see _calculate_au2_intensity.
+        return 0.0
     
     def detect_micro_expressions(
         self,

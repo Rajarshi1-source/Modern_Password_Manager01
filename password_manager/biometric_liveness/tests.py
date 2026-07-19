@@ -91,6 +91,23 @@ class MicroExpressionAnalyzerTests(TestCase):
         """Test AU extraction with empty landmarks."""
         result = self.analyzer.extract_action_units(None)
         self.assertEqual(result, {})
+
+    def test_action_units_are_deterministic_not_fabricated(self):
+        """Unimplemented AU intensities must be 0.0, never random values.
+
+        The placeholder AU methods previously returned np.random.uniform(...), a
+        fabricated biometric signal sitting one wiring step from the verdict. They
+        must be deterministic (0.0 = inactive) until real geometry lands, matching
+        the never-fabricate stance of the landmark/gaze placeholders.
+        """
+        landmarks = np.zeros((468, 3), dtype=np.float64)
+        first = self.analyzer.extract_action_units(landmarks)
+        second = self.analyzer.extract_action_units(landmarks)
+        # No randomness anywhere in the AU pipeline: identical across calls.
+        self.assertEqual(first, second)
+        # The not-yet-implemented AUs report inactive (0.0), not a random intensity.
+        for au in (2, 4, 5, 6, 12, 25, 26, 45):
+            self.assertEqual(first[au], 0.0)
     
     @unittest.skipUnless(_HAS_MP_PYTHON, "mediapipe.python.solutions not available")
     @patch('mediapipe.python.solutions.face_mesh.FaceMesh')
