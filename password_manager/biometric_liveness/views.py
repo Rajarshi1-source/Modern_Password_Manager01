@@ -15,6 +15,7 @@ from rest_framework.response import Response
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from .frame_utils import decode_frame
 from .services import LivenessSessionService
@@ -54,7 +55,26 @@ def _liveness_result_payload(result) -> dict:
         'thermal_score': result.thermal_score,
         'texture_artifact_score': result.texture_artifact_score,
         'total_frames_processed': result.total_frames_processed,
+        # Carry the REAL completion time so a deferred/retried write records when
+        # the session actually completed, not when the write ran (ISO for JSON).
+        'completed_at': result.completed_at.isoformat() if result.completed_at is not None else None,
     }
+
+
+def _completion_time(value):
+    """
+    Resolve a payload's completion timestamp to an aware datetime.
+
+    Uses the carried real completion time so a deferred/retried persist records
+    WHEN the session finished, not the write time -- and so re-applying the same
+    payload is truly idempotent. Falls back to now() only when it is missing or
+    unparseable.
+    """
+    if value:
+        parsed = parse_datetime(value)
+        if parsed is not None:
+            return parsed
+    return timezone.now()
 
 
 def apply_liveness_result(payload: dict) -> None:
@@ -63,12 +83,13 @@ def apply_liveness_result(payload: dict) -> None:
 
     Raises LivenessSession.DoesNotExist / ValidationError (bad id) for PERMANENT
     failures and DatabaseError for TRANSIENT ones -- the caller decides whether to
-    retry. Idempotent: re-applying writes the same terminal fields, so a retry
-    (or a re-completion) can safely run it again.
+    retry. Idempotent: re-applying writes the same terminal fields (including the
+    carried completion time), so a retry (or a re-completion) can safely run it
+    again without drifting completed_at to the write time.
     """
     session = LivenessSession.objects.get(id=payload['session_id'])
     session.status = 'passed' if payload['is_verified'] else 'failed'
-    session.completed_at = timezone.now()
+    session.completed_at = _completion_time(payload.get('completed_at'))
     session.verdict = payload['verdict']
     session.overall_liveness_score = payload['overall_liveness_score']
     session.deepfake_probability = payload['deepfake_probability']
@@ -119,10 +140,11 @@ def persist_session_result(result) -> None:
     except LivenessSession.DoesNotExist:
         # No row to mirror onto (never persisted / already removed). Not retryable.
         return
-    except (ValidationError, ValueError, TypeError):
-        # A malformed/unusable id can never succeed on retry; log and drop.
+    except (ValidationError, ValueError, TypeError, KeyError):
+        # A malformed/unusable id or payload can never succeed on retry; log and
+        # drop. Same non-retryable classification as the Celery retry task.
         logger.exception(
-            f"Unusable liveness session id for persistence: {payload['session_id']}")
+            f"Unusable liveness session id for persistence: {payload.get('session_id')}")
         return
     except DatabaseError:
         # Transient: do NOT lose the verdict. Hand it to the durable retry queue.
