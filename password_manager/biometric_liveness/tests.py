@@ -108,6 +108,15 @@ class MicroExpressionAnalyzerTests(TestCase):
         # The not-yet-implemented AUs report inactive (0.0), not a random intensity.
         for au in (2, 4, 5, 6, 12, 25, 26, 45):
             self.assertEqual(first[au], 0.0)
+
+    def test_asymmetry_is_deterministic_not_fabricated(self):
+        """The asymmetry stub must return a fixed 0.0, not a random value.
+
+        The previous np.random.uniform(0.1, 0.4) fabricated a perfect asymmetry
+        score every call (that band maps to 1.0 in get_liveness_score).
+        """
+        self.assertEqual(self.analyzer._calculate_asymmetry({}), 0.0)
+        self.assertEqual(self.analyzer._calculate_asymmetry({1: 0.5}), 0.0)
     
     @unittest.skipUnless(_HAS_MP_PYTHON, "mediapipe.python.solutions not available")
     @patch('mediapipe.python.solutions.face_mesh.FaceMesh')
@@ -162,6 +171,25 @@ class GazeTrackingServiceTests(TestCase):
         res = self.service.validate_task_response(task, pts, user_answer='3')
         self.assertEqual(res.gaze_path_similarity, 0.0)
         self.assertTrue(res.is_passed)  # passes on accuracy + answer, not path
+
+    def test_reaction_time_is_not_absolute_epoch_timestamp(self):
+        """reaction_time_ms must not be the first sample's absolute epoch time.
+
+        It is a duration field; storing an epoch timestamp (~1.7e12 ms) there is
+        meaningless and would mislead any future consumer.
+        """
+        from .services.gaze_tracking_service import (
+            CognitiveTask, CognitiveTaskType, GazePoint)
+        task = CognitiveTask(
+            task_type=CognitiveTaskType.FOLLOW_TARGET, instruction='x',
+            target_positions=[(0.5, 0.5)], time_limit_ms=5000,
+            expected_sequence=[0])
+        epoch_ms = 1_700_000_000_000.0
+        pts = [GazePoint(x=0.5, y=0.5, timestamp_ms=epoch_ms + i * 40.0,
+                         confidence=0.9, is_fixation=True) for i in range(6)]
+        res = self.service.validate_task_response(task, pts)
+        self.assertEqual(res.reaction_time_ms, 0.0)
+        self.assertNotEqual(res.reaction_time_ms, epoch_ms)
 
 
 class PulseOximetryServiceTests(TestCase):

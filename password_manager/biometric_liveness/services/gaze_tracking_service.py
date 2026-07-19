@@ -412,7 +412,12 @@ class GazeTrackingService:
         # Calculate metrics
         accuracy = self._calculate_gaze_accuracy(task, gaze_data)
         path_similarity = self._calculate_path_similarity(task, gaze_data)
-        reaction_time = gaze_data[0].timestamp_ms if gaze_data else 0
+        # reaction_time_ms is not scored today. A real value is the latency from
+        # challenge onset to the first on-target gaze, which needs the challenge
+        # activation time (wired in with a real gaze estimator). Do NOT store the
+        # first sample's ABSOLUTE epoch timestamp here -- that is not a reaction
+        # time and would mislead any future consumer.
+        reaction_time = 0.0
         human_score = self._calculate_human_likelihood(gaze_data)
         
         # If the task has a correct answer, a matching answer is REQUIRED. A
