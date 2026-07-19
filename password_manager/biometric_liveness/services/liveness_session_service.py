@@ -135,6 +135,11 @@ class LivenessSessionService:
     # rapid create+complete grow terminal records within the retention window.
     # When over this bound, the oldest terminal records are evicted early.
     MAX_RETAINED_SESSIONS = 2000
+    # Per-user bound on LIVE sessions. The global cap protects total worker
+    # memory; this stops a single authenticated user from filling it and 503-ing
+    # everyone else. Generous relative to legitimate use (a user runs one
+    # verification at a time). Config-overridable.
+    MAX_USER_ACTIVE_SESSIONS = 50
 
     def __init__(self):
         """Initialize session service with all detectors."""
@@ -424,10 +429,23 @@ class LivenessSessionService:
         # 503 genuine new starts despite zero in-progress work.
         now = timezone.now()
         max_sessions = self.config.get('MAX_ACTIVE_SESSIONS', self.MAX_ACTIVE_SESSIONS)
+        max_user_sessions = self.config.get(
+            'MAX_USER_ACTIVE_SESSIONS', self.MAX_USER_ACTIVE_SESSIONS)
         with self._store_lock:
-            live = sum(1 for s in self.active_sessions.values() if self._is_live(s, now))
+            # One pass counts total live (global cap) and this user's live
+            # (per-user cap): the per-user bound stops a single account from
+            # exhausting global capacity and denying everyone else.
+            live = 0
+            user_live = 0
+            for s in self.active_sessions.values():
+                if self._is_live(s, now):
+                    live += 1
+                    if s.get('user_id') == user_id:
+                        user_live += 1
             if live >= max_sessions:
                 raise SessionCapacityError('Liveness session capacity reached')
+            if user_live >= max_user_sessions:
+                raise SessionCapacityError('User liveness session capacity reached')
             self.active_sessions[session_id] = session
 
         logger.info(f"Created liveness session {session_id} for user {user_id}")
@@ -466,8 +484,12 @@ class LivenessSessionService:
                 # (LIVENESS_TASK_TIMEOUT) is the operator knob for the advertised
                 # AND enforced window (submit_challenge_response keys off
                 # task.time_limit_ms). Override before building the client data.
+                # Ignore a non-positive timeout: it would publish/enforce an
+                # already-expired gaze window. Settings validates this
+                # (_liveness_int_env(minimum=1)); this guard keeps the service
+                # robust if config is populated another way.
                 configured_timeout = self.config.get('COGNITIVE_TASK_TIMEOUT_MS')
-                if configured_timeout:
+                if configured_timeout and int(configured_timeout) > 0:
                     task.time_limit_ms = int(configured_timeout)
                 challenges.append({
                     'type': 'gaze',
@@ -582,8 +604,12 @@ class LivenessSessionService:
             session['gaze_samples'] += 1
             session.setdefault('gaze_track', []).append(gaze_point)
 
-        # Pulse oximetry
-        pulse_reading = svc['pulse'].process_frame(frame, timestamp_ms, face_landmarks)
+        # Pulse oximetry. Use a server-derived timestamp, not the client's: the
+        # client must not define the pulse sampling clock (defense-in-depth). This
+        # does not change the inferred rate -- heart rate is derived from the fixed
+        # fps, not these stamps -- but it keeps the frame clock and the hardware-
+        # SpO2 ingest clock on the same server time for when BLE SpO2 lands.
+        pulse_reading = svc['pulse'].process_frame(frame, self._now_ms(), face_landmarks)
         if pulse_reading:
             results['pulse'] = {
                 'heart_rate': pulse_reading.heart_rate_bpm,

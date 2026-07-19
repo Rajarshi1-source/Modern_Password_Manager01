@@ -62,7 +62,10 @@ def decode_frame(
 
     frame = np.frombuffer(frame_bytes, dtype=np.uint8)
     try:
-        return frame.reshape((height, width, 3)), None
+        # .copy() so the RGB path returns a writable, C-contiguous array,
+        # consistent with the RGBA branch below (np.frombuffer yields a read-only
+        # buffer, and native vision detectors may preprocess the frame in place).
+        return frame.reshape((height, width, 3)).copy(), None
     except ValueError:
         pass
     try:
