@@ -89,6 +89,11 @@ def _with_session_lock(method):
             # between evictions. Session ids are server-generated uuid4s, so no
             # concurrent create can be racing this exact id into existence.
             return method(self, session_id, *args, **kwargs)
+        # If the session is evicted between this membership check and lock
+        # acquisition, _session_lock creates a lock for a now-absent session and
+        # the wrapped method degrades cleanly to 'Session not found' (or raises).
+        # That orphaned lock is bounded (one per racing op) and pruned by the next
+        # _evict_stale_sessions, which drops locks whose session left active_sessions.
         with self._session_lock(session_id):
             return method(self, session_id, *args, **kwargs)
     return wrapper
@@ -791,15 +796,20 @@ class LivenessSessionService:
         if not isinstance(response, dict):
             response = {}
         session = self.active_sessions.get(session_id)
+        # Session-lifecycle conflicts (gone / already terminal) carry a
+        # 'state_conflict' marker so the REST view maps them to 409, exactly as
+        # complete_session's ValueErrors are -- rather than the blanket 400 used
+        # for genuine bad requests (unknown/replayed challenge). The marker is
+        # popped before the response reaches the client.
         if not session:
-            return {'error': 'Session not found'}
+            return {'error': 'Session not found', 'state_conflict': True}
         # Terminal state first (see process_frame): a completed verdict must not
         # be reclassified as expired.
         if session.get('status') == 'completed':
-            return {'error': 'Session already completed'}
+            return {'error': 'Session already completed', 'state_conflict': True}
         if timezone.now() > session['expires_at']:
             session['status'] = 'expired'
-            return {'error': 'Session expired'}
+            return {'error': 'Session expired', 'state_conflict': True}
 
         challenges = session.get('challenges', [])
         idx = session.get('current_challenge_idx', 0)

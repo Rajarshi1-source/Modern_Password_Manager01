@@ -403,6 +403,27 @@ class LivenessAPITests(APITestCase):
             format='json')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_challenge_response_on_completed_session_returns_409(self):
+        """A challenge response to a terminal session mirrors complete's 409.
+
+        A session-lifecycle conflict (already completed) must not be reported as a
+        generic 400 bad request, matching complete_session's status semantics.
+        """
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        # No estimator loaded -> completes as INSUFFICIENT_SIGNAL (terminal), no raise.
+        complete = self.client.post(
+            reverse('biometric_liveness:complete_session'),
+            {'session_id': session_id}, format='json')
+        self.assertEqual(complete.status_code, status.HTTP_200_OK)
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_challenge_response'),
+            {'session_id': session_id, 'response': {}}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        # The internal routing marker must not leak into the client payload.
+        self.assertNotIn('state_conflict', resp.data)
+
     def test_complete_incomplete_gaze_returns_retryable_code(self):
         """Incomplete gaze must map to a distinct, retryable code, not the same
         invalid_session_state as terminal errors."""

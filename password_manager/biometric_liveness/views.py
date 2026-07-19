@@ -234,7 +234,12 @@ def submit_challenge_response(request):
         service = get_session_service()
         result = service.submit_challenge_response(session_id, response_data)
         if 'error' in result:
-            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+            # Mirror complete_session's status semantics: a session-lifecycle
+            # conflict (gone / already completed / expired) is 409, while a
+            # genuine bad request (unknown or replayed challenge) stays 400.
+            conflict = result.pop('state_conflict', False)
+            return Response(result, status=status.HTTP_409_CONFLICT if conflict
+                            else status.HTTP_400_BAD_REQUEST)
         return Response(result)
     except Exception as e:
         logger.error(f"Error submitting response: {e}")
