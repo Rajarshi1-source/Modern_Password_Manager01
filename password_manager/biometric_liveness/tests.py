@@ -624,6 +624,49 @@ class LivenessAPITests(APITestCase):
             with self.assertRaises(DatabaseError):
                 apply_liveness_result(payload)
 
+    def test_persist_db_error_enqueue_failure_does_not_raise(self):
+        """If even the retry-enqueue fails (broker down), persist_session_result
+        must still not raise -- the client already holds its verdict."""
+        from .views import persist_session_result
+        from .services.liveness_session_service import SessionResult
+        from django.db import DatabaseError
+        result = SessionResult(
+            session_id=str(uuid.uuid4()), is_verified=False, overall_liveness_score=0.0,
+            deepfake_probability=0.0, confidence=0.0, micro_expression_score=0.0,
+            gaze_tracking_score=0.0, pulse_oximetry_score=0.0, thermal_score=0.0,
+            texture_artifact_score=0.0, total_frames_processed=0,
+            duration_ms=0.0, verdict='INSUFFICIENT_SIGNAL', details={})
+        with patch.object(LivenessSession.objects, 'get', side_effect=DatabaseError('boom')), \
+             patch('biometric_liveness.tasks.retry_persist_liveness_result.delay',
+                   side_effect=Exception('broker down')):
+            persist_session_result(result)  # must not raise
+
+    def test_persisted_completed_at_is_real_completion_time(self):
+        """The row's completed_at reflects when the session actually completed, not
+        when the (possibly retried) write ran -- and re-applying keeps it stable."""
+        from .views import _liveness_result_payload, apply_liveness_result
+        from .services.liveness_session_service import SessionResult
+        from django.utils import timezone as djtz
+        from datetime import timedelta
+        row = LivenessSession.objects.create(user=self.user, context='login')
+        real_completion = djtz.now() - timedelta(hours=2)  # completed 2h ago
+        payload = _liveness_result_payload(SessionResult(
+            session_id=str(row.id), is_verified=True, overall_liveness_score=0.9,
+            deepfake_probability=0.0, confidence=0.4, micro_expression_score=0.0,
+            gaze_tracking_score=0.9, pulse_oximetry_score=0.8, thermal_score=0.0,
+            texture_artifact_score=0.99, total_frames_processed=10,
+            duration_ms=0.0, verdict='HIGH_CONFIDENCE_LIVE', details={},
+            completed_at=real_completion))
+        apply_liveness_result(payload)
+        row.refresh_from_db()
+        # Persisted as the real completion time (~2h ago), not now().
+        self.assertLess(row.completed_at, djtz.now() - timedelta(minutes=30))
+        saved = row.completed_at
+        # Re-applying the same payload is idempotent: completed_at does not drift.
+        apply_liveness_result(payload)
+        row.refresh_from_db()
+        self.assertEqual(row.completed_at, saved)
+
     def test_submit_frame_non_string_frame_is_400(self):
         """A non-string 'frame' is client error, not a 500 (b64decode TypeError)."""
         start = self.client.post(

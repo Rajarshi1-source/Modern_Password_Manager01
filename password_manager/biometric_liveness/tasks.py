@@ -47,4 +47,4 @@ def retry_persist_liveness_result(self, payload):
     except DatabaseError as exc:
         # Capped exponential backoff so a longer outage doesn't hot-loop.
         countdown = min(_MAX_RETRY_COUNTDOWN, 60 * (2 ** self.request.retries))
-        raise self.retry(exc=exc, countdown=countdown)
+        raise self.retry(exc=exc, countdown=countdown) from exc

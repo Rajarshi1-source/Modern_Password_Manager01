@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 from django.conf import settings
 from django.utils import timezone
-from datetime import timedelta
+from datetime import timedelta, datetime
 import uuid
 import numpy as np
 
@@ -69,6 +69,11 @@ class SessionResult:
     duration_ms: float
     verdict: str
     details: Dict
+    # The real completion time (when complete_session finished), carried through
+    # to persistence so a deferred/retried DB write records WHEN the session
+    # actually completed -- not when the write happened to run. Optional so
+    # callers/tests that don't need it can omit it.
+    completed_at: Optional[datetime] = None
 
 
 def _with_session_lock(method):
@@ -813,6 +818,7 @@ class LivenessSessionService:
                 'deepfake_gates_verdict': 'deepfake' in modality_scores,
                 'failed_required_challenges': sorted(set(failed_required)),
             },
+            completed_at=session['completed_at'],
         )
         # Cache the frozen verdict so a re-completion (e.g. a persist retry) returns
         # it idempotently rather than re-scoring or erroring.
