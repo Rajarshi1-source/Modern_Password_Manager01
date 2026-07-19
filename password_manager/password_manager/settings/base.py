@@ -2180,10 +2180,13 @@ BIOMETRIC_LIVENESS = {
     # a time).
     'MAX_USER_ACTIVE_SESSIONS': _liveness_int_env('LIVENESS_MAX_USER_ACTIVE_SESSIONS', '50', minimum=1),
     
-    # Thermal settings
+    # Thermal settings. The Celsius bounds go through _liveness_float_env like the
+    # other numeric liveness settings so a non-numeric override fails fast at
+    # startup (ImproperlyConfigured) instead of crashing Django with an opaque
+    # ValueError at import. Range is a plausible skin-temperature span.
     'THERMAL_ENABLED': os.environ.get('LIVENESS_THERMAL_ENABLED', 'False').lower() == 'true',
-    'THERMAL_MIN_TEMP_C': float(os.environ.get('LIVENESS_THERMAL_MIN', '35.0')),
-    'THERMAL_MAX_TEMP_C': float(os.environ.get('LIVENESS_THERMAL_MAX', '38.0')),
+    'THERMAL_MIN_TEMP_C': _liveness_float_env('LIVENESS_THERMAL_MIN', '35.0', minimum=0.0, maximum=100.0),
+    'THERMAL_MAX_TEMP_C': _liveness_float_env('LIVENESS_THERMAL_MAX', '38.0', minimum=0.0, maximum=100.0),
 }
 
 # =============================================================================
