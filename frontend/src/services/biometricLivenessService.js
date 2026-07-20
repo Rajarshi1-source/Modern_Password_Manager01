@@ -172,6 +172,18 @@ class BiometricLivenessService {
   }
 
   /**
+   * Relay a real SpO2 reading from a paired BLE pulse oximeter over the same
+   * session WebSocket. SpO2 is never derived from the webcam; this is the only
+   * path it enters scoring. The backend stamps it on the server clock and
+   * validates range/quality, so a bad reading is simply dropped (no SpO2).
+   */
+  submitHardwareSpo2(spo2, quality = 1.0) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'hardware_spo2', spo2, quality }));
+    }
+  }
+
+  /**
    * Complete session via WebSocket
    */
   completeSession() {

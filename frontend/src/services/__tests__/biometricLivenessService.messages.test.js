@@ -105,4 +105,18 @@ describe('biometricLivenessService message routing', () => {
             ws.onmessage({ data: JSON.stringify({ type: 'challenge_result', sequence: 0 }) })
         ).not.toThrow();
     });
+
+    it('submitHardwareSpo2 relays a hardware_spo2 frame over the session socket', async () => {
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError: vi.fn(), onChallenge: vi.fn(),
+        });
+        ws.send = vi.fn();
+
+        livenessService.submitHardwareSpo2(98, 0.9);
+
+        expect(ws.send).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({
+            type: 'hardware_spo2', spo2: 98, quality: 0.9,
+        });
+    });
 });

@@ -179,38 +179,17 @@ class RPPGExtractor:
     
     def _calculate_spo2(self) -> Tuple[Optional[float], float]:
         """
-        Estimate blood oxygen saturation (SpO2).
-        
-        Uses ratio of AC/DC components of red and infrared signals.
-        With RGB camera, blue approximates IR behavior.
+        SpO2 is never derived from a webcam.
+
+        Blood oxygen saturation requires calibrated dual-wavelength (red +
+        infrared) hardware; a standard RGB camera cannot measure it. The blue
+        channel does NOT approximate IR, so any RGB-derived SpO2 is a fabricated
+        signal. This intentionally returns no reading -- real SpO2 enters the
+        pipeline only via an external oximeter (see
+        PulseOximetryService.ingest_hardware_spo2). Kept as a stub so callers
+        that request SpO2 uniformly get "unavailable" rather than a fake value.
         """
-        if len(self.rgb_buffer) < self.fps * 3:
-            return None, 0.0
-        
-        rgb_data = np.array(list(self.rgb_buffer))
-        red = rgb_data[:, 0]
-        blue = rgb_data[:, 2]  # Approximate IR
-        
-        # AC (pulsatile) and DC (mean) components
-        red_ac = np.std(red)
-        red_dc = np.mean(red)
-        blue_ac = np.std(blue)
-        blue_dc = np.mean(blue)
-        
-        if red_dc < 1 or blue_dc < 1:
-            return None, 0.0
-        
-        # Ratio of ratios
-        r = (red_ac / red_dc) / (blue_ac / blue_dc + 0.001)
-        
-        # Empirical SpO2 curve (simplified)
-        spo2 = 110 - 25 * r
-        spo2 = max(70, min(100, spo2))
-        
-        # Confidence from signal quality
-        confidence = min(1.0, (red_ac + blue_ac) / 10)
-        
-        return float(spo2), float(confidence)
+        return None, 0.0
     
     def _bandpass_filter(
         self, 
