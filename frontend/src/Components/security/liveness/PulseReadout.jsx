@@ -27,7 +27,10 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
             // Clear SpO2 when the backend reports none (device disconnected /
             // reading expired) so a stale value doesn't stay on screen.
             setSpo2(pulseData.spo2 ?? null);
-            if (pulseData.quality != null) setSignalQuality(pulseData.quality);
+            // Clear on null (signal lost) so the Signal tile/bars don't keep a
+            // stale, misleadingly-good value -- mirrors heart_rate/spo2 above.
+            // 0 (not null) matches the numeric initial state used in arithmetic.
+            setSignalQuality(pulseData.quality ?? 0);
 
             // Waveform history. The backend does not currently stream a
             // per-frame PPG sample, so this stays empty (no waveform drawn)
