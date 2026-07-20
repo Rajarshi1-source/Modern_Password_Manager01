@@ -1378,3 +1378,97 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertIn('next_challenge', out)
         # ...and malformed input must not consume the required challenge.
         self.assertEqual(session['answered_challenges'], set())
+
+
+class HardwareSpo2RelayTests(TestCase):
+    """A client-paired BLE oximeter relays real SpO2 into scoring; it is never
+    fabricated from the webcam, is server-clock stamped, and is capability-gated."""
+
+    def setUp(self):
+        cap = patch.object(GazeTrackingService, 'has_real_gaze_model', return_value=False)
+        cap.start()
+        self.addCleanup(cap.stop)
+        self.service = LivenessSessionService()
+
+    def _session(self):
+        sid = self.service.create_session(user_id=1)['session_id']
+        return sid, self.service.active_sessions[sid]
+
+    def test_relayed_spo2_is_ingested_and_fresh(self):
+        sid, session = self._session()
+        out = self.service.submit_hardware_spo2(sid, 98.0, 0.9)
+        self.assertTrue(out['accepted'])
+        pulse = session['services']['pulse']
+        self.assertTrue(pulse.has_hardware_spo2())
+        # Fresh reading surfaces when read at a slightly-later frame time.
+        self.assertEqual(
+            pulse._current_hardware_spo2(LivenessSessionService._now_ms()), 98.0)
+
+    def test_relayed_spo2_surfaces_on_the_pulse_reading(self):
+        # Even during the rPPG warm-up (buffer < 3s), the external reading shows.
+        sid, session = self._session()
+        self.service.submit_hardware_spo2(sid, 97.0, 0.9)
+        pulse = session['services']['pulse']
+        frame = np.full((120, 120, 3), 128, dtype=np.uint8)
+        reading = pulse.process_frame(frame, LivenessSessionService._now_ms(), None)
+        self.assertEqual(reading.spo2_estimate, 97.0)
+
+    def test_spo2_is_stamped_on_the_server_clock_not_the_client(self):
+        # The API accepts no client timestamp: the stored ts is the server clock,
+        # so a client cannot keep a stale reading "fresh" by lying about its time.
+        sid, session = self._session()
+        before = LivenessSessionService._now_ms()
+        self.service.submit_hardware_spo2(sid, 96.0, 0.9)
+        ts = session['services']['pulse'].hardware_spo2_timestamp_ms
+        self.assertIsNotNone(ts)
+        self.assertGreaterEqual(ts, before)
+        self.assertLessEqual(ts, LivenessSessionService._now_ms())
+
+    def test_out_of_range_spo2_is_rejected_not_clamped(self):
+        sid, session = self._session()
+        out = self.service.submit_hardware_spo2(sid, 150.0, 0.9)
+        self.assertFalse(out['accepted'])
+        self.assertFalse(session['services']['pulse'].has_hardware_spo2())
+
+    def test_none_clears_a_prior_reading(self):
+        sid, session = self._session()
+        self.service.submit_hardware_spo2(sid, 98.0, 0.9)
+        out = self.service.submit_hardware_spo2(sid, None)
+        self.assertFalse(out['accepted'])
+        self.assertFalse(session['services']['pulse'].has_hardware_spo2())
+
+    def test_non_numeric_spo2_is_rejected(self):
+        sid, _ = self._session()
+        out = self.service.submit_hardware_spo2(sid, 'not-a-number', 0.9)
+        self.assertFalse(out['accepted'])
+
+    def test_completed_session_rejects_spo2(self):
+        sid, session = self._session()
+        session['status'] = 'completed'
+        out = self.service.submit_hardware_spo2(sid, 98.0, 0.9)
+        self.assertIn('error', out)
+        self.assertTrue(out.get('state_conflict'))
+
+    def test_unknown_session_rejects_spo2(self):
+        out = self.service.submit_hardware_spo2('no-such-session', 98.0, 0.9)
+        self.assertEqual(out.get('error'), 'Session not found')
+        self.assertTrue(out.get('state_conflict'))
+
+    def test_spo2_capability_reports_external_hardware_only(self):
+        caps = self.service.get_capabilities()
+        spo2 = caps['modalities']['spo2']
+        self.assertFalse(spo2['available'])  # server never measures it
+        self.assertEqual(spo2['requires'], 'ble_pulse_oximeter')
+
+
+class RppgSpo2HonestyTests(TestCase):
+    """SpO2 is never derived from a webcam (removes the 110-25*R fabrication)."""
+
+    def test_rppg_never_fabricates_spo2(self):
+        extractor = RPPGExtractor()
+        # Even with a full RGB buffer, no SpO2 is invented from the webcam.
+        for _ in range(extractor.fps * 4):
+            extractor.process_frame(np.full((120, 120, 3), 150, dtype=np.uint8))
+        self.assertEqual(extractor._calculate_spo2(), (None, 0.0))
+        result = extractor.process_frame(np.full((120, 120, 3), 150, dtype=np.uint8))
+        self.assertIsNone(result.get('spo2'))

@@ -165,7 +165,9 @@ class PulseOximetryService:
         ppg_value = self._extract_ppg_value(rgb_means)
         self.ppg_buffer.append(ppg_value)
         
-        # Need enough samples for analysis
+        # Need enough samples for the rPPG heart-rate analysis. SpO2 does NOT
+        # depend on that buffer -- it comes from external oximeter hardware -- so
+        # a fresh relayed reading still surfaces during the warm-up window.
         if len(self.ppg_buffer) < self.fps * 3:  # 3 seconds minimum
             return PulseReading(
                 timestamp_ms=timestamp_ms,
@@ -174,7 +176,7 @@ class PulseOximetryService:
                 ppg_value=ppg_value,
                 heart_rate_bpm=None,
                 heart_rate_variability=None,
-                spo2_estimate=None,
+                spo2_estimate=self._current_hardware_spo2(timestamp_ms),
                 signal_quality=0.0
             )
         

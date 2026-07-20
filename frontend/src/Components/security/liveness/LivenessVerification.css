@@ -139,6 +139,26 @@
     font-size: 1.1rem;
 }
 
+/* BLE pulse oximeter pairing */
+.oximeter-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+}
+
+.oximeter-status.connected {
+    color: #00c897;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.oximeter-hint {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.8rem;
+}
+
 /* Challenge sequence progress */
 .challenge-progress {
     color: rgba(255, 255, 255, 0.7);

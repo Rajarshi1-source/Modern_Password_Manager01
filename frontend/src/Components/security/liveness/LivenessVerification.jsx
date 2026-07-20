@@ -14,6 +14,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import biometricLivenessService, { CameraUtils, TimingUtils } from '../../../services/biometricLivenessService';
+import { BleOximeter, isBleOximeterSupported } from '../../../services/bleOximeter';
 import GazeChallenge from './GazeChallenge';
 import ExpressionChallenge from './ExpressionChallenge';
 import PulseChallenge from './PulseChallenge';
@@ -27,6 +28,11 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const [error, setError] = useState(null);
     const [frameCount, setFrameCount] = useState(0);
     const [livenessIndicators, setLivenessIndicators] = useState({});
+    // SpO2 comes ONLY from a real paired oximeter (never the webcam): idle,
+    // connecting, connected, unsupported, error.
+    const [spo2Status, setSpo2Status] = useState(
+        isBleOximeterSupported() ? 'idle' : 'unsupported'
+    );
 
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
@@ -40,6 +46,8 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const challengeIndexRef = useRef(0);
     // Pending re-submit for a challenge the server hasn't consumed yet.
     const retryTimerRef = useRef(null);
+    // Paired BLE pulse oximeter (if the user connects one).
+    const oximeterRef = useRef(null);
     // Cancellation token bumped by cleanup(). An unmount/retry mid-init must
     // invalidate an initSession still awaiting startCamera()/startSession() —
     // the service generation guard only covers the WS ticket fetch.
@@ -254,11 +262,40 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         biometricLivenessService.completeSession();
     };
 
+    // Pair a BLE pulse oximeter (must be a user gesture) and relay each real
+    // reading to the backend. SpO2 is never derived from the webcam; with no
+    // device the tile stays hidden and SpO2 is excluded from scoring.
+    const connectOximeter = async () => {
+        if (!isBleOximeterSupported() || oximeterRef.current) return;
+        const oximeter = new BleOximeter();
+        oximeterRef.current = oximeter;
+        setSpo2Status('connecting');
+        try {
+            await oximeter.connect(
+                (reading) => biometricLivenessService.submitHardwareSpo2(reading.spo2, reading.quality),
+                () => setSpo2Status('idle') // device dropped
+            );
+            setSpo2Status('connected');
+        } catch {
+            // User cancelled the chooser, or pairing failed: stay honest (no SpO2).
+            oximeterRef.current = null;
+            setSpo2Status('error');
+        }
+    };
+
+    const disconnectOximeter = () => {
+        if (oximeterRef.current) {
+            oximeterRef.current.disconnect();
+            oximeterRef.current = null;
+        }
+    };
+
     const cleanup = () => {
         initAttemptRef.current++; // invalidate any in-flight initSession
         clearRetry();
         stopFrameCapture();
         releaseCamera();
+        disconnectOximeter();
         biometricLivenessService.disconnect();
     };
 
@@ -364,6 +401,31 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
                                 </div>
                             )}
                         </div>
+
+                        {spo2Status !== 'unsupported' && (
+                            <div className="oximeter-panel">
+                                {spo2Status === 'connected' ? (
+                                    <span className="oximeter-status connected">
+                                        ✓ Pulse oximeter connected
+                                        {livenessIndicators.pulse?.spo2 != null &&
+                                            ` — SpO₂ ${Math.round(livenessIndicators.pulse.spo2)}%`}
+                                    </span>
+                                ) : (
+                                    <button
+                                        className="btn-secondary"
+                                        onClick={connectOximeter}
+                                        disabled={spo2Status === 'connecting'}
+                                    >
+                                        {spo2Status === 'connecting'
+                                            ? 'Connecting…'
+                                            : 'Connect pulse oximeter (optional)'}
+                                    </button>
+                                )}
+                                {spo2Status === 'error' && (
+                                    <span className="oximeter-hint">Could not connect — SpO₂ stays off.</span>
+                                )}
+                            </div>
+                        )}
 
                         <div className="action-buttons">
                             <button className="btn-cancel" onClick={handleCancel}>

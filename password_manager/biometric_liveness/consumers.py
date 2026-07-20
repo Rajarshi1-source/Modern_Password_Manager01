@@ -72,6 +72,8 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             await self.handle_frame(content)
         elif msg_type == 'challenge_response':
             await self.handle_challenge_response(content)
+        elif msg_type == 'hardware_spo2':
+            await self.handle_hardware_spo2(content)
         elif msg_type == 'complete':
             await self.handle_complete()
         else:
@@ -149,6 +151,28 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             logger.error(f"Challenge response error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
     
+    async def handle_hardware_spo2(self, content):
+        """
+        Relay a real SpO2 reading from a client-paired BLE pulse oximeter.
+
+        The value is ingested into the session's pulse service (stamped on the
+        server clock); it is never derived from the webcam. Malformed / stale
+        readings are simply not stored (no SpO2), never fabricated.
+        """
+        try:
+            # thread_sensitive=False: per-session-locked, ORM-free ingest
+            # (see handle_frame) -- keep independent sessions off the single lane.
+            result = await sync_to_async(self.service.submit_hardware_spo2, thread_sensitive=False)(
+                self.session_id, content.get('spo2'), content.get('quality', 1.0)
+            )
+            if 'error' in result:
+                await self.send_json({'type': 'error', 'message': result['error']})
+                return
+            await self.send_json({'type': 'spo2_result', **result})
+        except Exception as e:
+            logger.error(f"Hardware SpO2 ingest error: {e}")
+            await self.send_json({'type': 'error', 'message': 'internal_error'})
+
     async def handle_complete(self):
         """Complete session and send final result."""
         try:

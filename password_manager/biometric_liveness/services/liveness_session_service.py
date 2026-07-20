@@ -969,6 +969,57 @@ class LivenessSessionService:
         summary['next_challenge'] = bool(remaining)
         return summary
 
+    @staticmethod
+    def _coerce_float(value) -> Optional[float]:
+        """Best-effort float coercion; None for non-numeric input."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @_with_session_lock
+    def submit_hardware_spo2(self, session_id: str, spo2_percent, quality=1.0) -> Dict:
+        """
+        Ingest a real SpO2 reading relayed from a client-connected BLE pulse
+        oximeter (GATT Pulse Oximeter Service 0x1822 / PLX). This is the ONLY
+        path by which SpO2 enters scoring -- it is never derived from the webcam.
+
+        The reading is stamped with the SERVER frame clock (``_now_ms``), NOT any
+        client-supplied timestamp, so the freshness check in the pulse service
+        compares it like-for-like against the streamed frames (a client cannot
+        keep a stale reading "fresh" by lying about its time). No device / a stale
+        or out-of-range reading simply means no SpO2: the tile hides and it drops
+        out of scoring -- never a fabricated value.
+        """
+        session = self.active_sessions.get(session_id)
+        # Same lifecycle-conflict marker the other mutators use (view -> 409).
+        if not session:
+            return {'error': 'Session not found', 'state_conflict': True}
+        if session.get('status') == 'completed':
+            return {'error': 'Session already completed', 'state_conflict': True}
+        if timezone.now() > session['expires_at']:
+            session['status'] = 'expired'
+            return {'error': 'Session expired', 'state_conflict': True}
+
+        svc = session.get('services')
+        if svc is None:
+            svc = self._new_session_services()
+            session['services'] = svc
+        pulse = svc['pulse']
+
+        spo2 = self._coerce_float(spo2_percent)
+        q = self._coerce_float(quality)
+        if spo2 is None or q is None:
+            # Missing/unparseable reading (device disconnected or a garbage
+            # sample): clear so a prior value cannot linger.
+            pulse.ingest_hardware_spo2(None)
+            return {'accepted': False}
+        # Server-owned timestamp keeps the SpO2 clock == the frame clock. The
+        # pulse service still validates range/quality/finiteness and rejects
+        # bad samples, so `accepted` reflects whether it was actually stored.
+        pulse.ingest_hardware_spo2(spo2, q, timestamp_ms=self._now_ms())
+        return {'accepted': pulse.has_hardware_spo2()}
+
     def get_capabilities(self) -> Dict:
         """
         Report which liveness modalities are genuinely operational server-side.
@@ -1016,12 +1067,16 @@ class LivenessSessionService:
                     'advisory_only': not deepfake_real,
                     'gates_verdict': deepfake_real,
                 },
-                # Hardware-gated: never provided by the server.
+                # Hardware-gated: never provided by the server. A client-paired
+                # BLE oximeter relays real readings (submit_hardware_spo2), which
+                # then feed the pulse modality; absent a device it stays excluded.
                 'spo2': {
                     'available': False,
                     'source': 'external_hardware',
                     'requires': 'ble_pulse_oximeter',
                     'gates_verdict': False,
+                    'note': 'Server never measures SpO2; a client-paired BLE '
+                            'oximeter can relay real readings that feed scoring.',
                 },
                 'thermal': {
                     'available': thermal_available,
