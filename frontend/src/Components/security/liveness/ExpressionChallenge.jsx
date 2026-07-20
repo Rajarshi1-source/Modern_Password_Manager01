@@ -71,30 +71,33 @@ const ExpressionChallenge = ({
         }
     }, [onComplete, expressions.length]);
 
-    // Pace the user through each expression, filling a progress bar then moving
-    // on. Completes after the last one.
+    // Fill the current expression's progress bar. The updater stays PURE (it
+    // only computes progress): advancing to the next expression is done in a
+    // separate effect below. Doing the advance inside this updater would let
+    // React 18 StrictMode's dev double-invocation enqueue setCurrentExpression
+    // twice and skip an expression.
     useEffect(() => {
         if (status !== 'active' || expressions.length === 0) return undefined;
         const tick = Math.max(20, Math.floor(holdMsPerExpression / 50));
         const progressTimer = setInterval(() => {
-            setCurrentProgress((prev) => {
-                if (prev < 100) return prev + 2;
-                // Expression held long enough — advance or finish.
-                setCurrentExpression((curr) => {
-                    const next = curr + 1;
-                    if (next >= expressions.length) {
-                        handleComplete();
-                        return curr;
-                    }
-                    return next;
-                });
-                return 0;
-            });
+            setCurrentProgress((prev) => (prev < 100 ? prev + 2 : 100));
         }, tick);
         return () => clearInterval(progressTimer);
-    }, [status, expressions.length, holdMsPerExpression, handleComplete]);
+    }, [status, expressions.length, holdMsPerExpression]);
 
-    const currentExp = expressions[currentExpression];
+    // When a bar fills, advance to the next expression (or finish). Kept out of
+    // the progress updater so that updater is pure (see above).
+    useEffect(() => {
+        if (status !== 'active' || currentProgress < 100) return;
+        if (currentExpression + 1 >= expressions.length) {
+            handleComplete();
+        } else {
+            setCurrentExpression((c) => c + 1);
+            setCurrentProgress(0);
+        }
+    }, [status, currentProgress, currentExpression, expressions.length, handleComplete]);
+
+    const currentExp = expressions.at(currentExpression);
 
     return (
         <div className="expression-challenge">
