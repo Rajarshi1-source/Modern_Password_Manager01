@@ -64,7 +64,7 @@ vi.mock('../../../../services/biometricLivenessService', () => {
 });
 
 import LivenessVerification from '../LivenessVerification';
-import livenessService from '../../../../services/biometricLivenessService';
+import livenessService, { CameraUtils } from '../../../../services/biometricLivenessService';
 
 describe('LivenessVerification challenge orchestration', () => {
     beforeEach(() => {
@@ -157,5 +157,21 @@ describe('LivenessVerification challenge orchestration', () => {
         // Once the server consumes it, the flow advances to the next challenge.
         act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 0 }); });
         expect(await screen.findByTestId('done-expression')).toBeInTheDocument();
+    });
+
+    it('releases the camera on completion, not only on cancel (privacy)', async () => {
+        render(<LivenessVerification />);
+
+        fireEvent.click(await screen.findByTestId('done-gaze'));
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 0 }); });
+        fireEvent.click(await screen.findByTestId('done-expression'));
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 1 }); });
+        fireEvent.click(await screen.findByTestId('done-pulse'));
+
+        // The webcam must not be released until the last challenge is consumed,
+        // then be released as soon as the session completes (no waiting for Close).
+        expect(CameraUtils.stopCamera).not.toHaveBeenCalled();
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 2 }); });
+        expect(CameraUtils.stopCamera).toHaveBeenCalledTimes(1);
     });
 });
