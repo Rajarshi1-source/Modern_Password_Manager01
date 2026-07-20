@@ -21,7 +21,8 @@ const CameraCapture = forwardRef(({
     const captureIntervalRef = useRef(null);
 
     const [isReady, setIsReady] = useState(false);
-    const [isFaceDetected, setIsFaceDetected] = useState(false);
+    // Face-detection wiring is not implemented yet, so there is no setter.
+    const [isFaceDetected] = useState(false);
 
     useImperativeHandle(ref, () => ({
         captureFrame: () => captureFrame(),
@@ -30,9 +31,12 @@ const CameraCapture = forwardRef(({
         getStream: () => streamRef.current,
     }));
 
+    // Mount-only: initCamera/cleanup are re-created each render, so listing them
+    // would re-open the camera on every render.
     useEffect(() => {
         initCamera();
         return () => cleanup();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const initCamera = async () => {

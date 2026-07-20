@@ -68,6 +68,11 @@
 .camera-container {
     position: relative;
     width: 100%;
+    /* Mounted outside .liveness-capture (so the ref/stream persist across
+       status changes), so it needs its own width cap to match that wrapper's
+       600px — otherwise the viewport-sized 4:3 camera pushes the challenge
+       prompt below the fold. */
+    max-width: 600px;
     aspect-ratio: 4/3;
     border-radius: 16px;
     overflow: hidden;

@@ -38,6 +38,8 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     // past — re-submitting a sequence would trip the server's replay guard).
     const challengesRef = useRef([]);
     const challengeIndexRef = useRef(0);
+    // Pending re-submit for a challenge the server hasn't consumed yet.
+    const retryTimerRef = useRef(null);
     // Cancellation token bumped by cleanup(). An unmount/retry mid-init must
     // invalidate an initSession still awaiting startCamera()/startSession() —
     // the service generation guard only covers the WS ticket fetch.
@@ -158,23 +160,32 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         }));
     }, []);
 
-    // Fires once per challenge when its on-screen prompt finishes. Notifies the
-    // server so it can score/close that challenge, then advances — or completes
-    // the session after the last one. Only the sequence number is sent: the
-    // client never reports its own gaze/expression track (the server scores its
-    // own observation of the streamed frames; a client-supplied track could be
-    // synthesized from the known targets and is ignored).
+    const clearRetry = () => {
+        if (retryTimerRef.current) {
+            clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = null;
+        }
+    };
+
+    // Fires once per challenge when its on-screen prompt finishes: submit the
+    // response. Only the sequence number is sent — the client never reports its
+    // own gaze/expression track (the server scores its own observation of the
+    // streamed frames; a client-supplied track could be synthesized from the
+    // known targets and is ignored). Advancing is deferred to
+    // handleChallengeResult so the UI only moves on once the SERVER has actually
+    // consumed the challenge.
     const handleChallengeComplete = useCallback((index) => {
         // Ignore a stale/duplicate completion for a challenge already advanced past.
         if (index !== challengeIndexRef.current) return;
-
         biometricLivenessService.submitChallengeResponse({ sequence: index });
+    }, []);
 
+    const advanceToNext = useCallback((index) => {
         const next = index + 1;
         challengeIndexRef.current = next;
         if (next >= challengesRef.current.length) {
-            // Last challenge done. Stop streaming BEFORE completing so no frame
-            // races the completion (the server rejects frames once completed).
+            // Last challenge consumed. Stop streaming BEFORE completing so no
+            // frame races the completion (the server rejects frames once done).
             stopFrameCapture();
             setStatus('processing');
             biometricLivenessService.completeSession();
@@ -183,17 +194,30 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         setChallengeIndex(next);
     }, []);
 
+    // Per-challenge outcome from the server. Advance ONLY when the challenge was
+    // actually consumed; a not-yet-consumed response (next_challenge: the gaze
+    // window isn't open yet, or no gaze was observed while it's still running)
+    // leaves the same sequence current server-side, so advancing here would skip
+    // the challenge and later fail completion with required_challenge_incomplete
+    // once gaze is measurable. Instead re-submit shortly — frames keep streaming
+    // and the window has a hard deadline after which the server consumes it, so
+    // this converges without looping forever.
     const handleChallengeResult = useCallback((data) => {
-        // Per-challenge outcome from the server. Today gaze is not yet scored
-        // server-side (no real estimator) and expression/pulse are acknowledged,
-        // so there's nothing actionable to surface; keep it for diagnostics and
-        // as the wiring point for retry/pass feedback once a real gaze estimator
-        // lands. The UI flow is driven by the local prompt completion above.
-        if (data && data.retryable) {
-            // eslint-disable-next-line no-console
-            console.debug('Liveness challenge retryable:', data);
+        const seq = data && data.sequence;
+        // Ignore results for a challenge we've already moved past.
+        if (seq == null || seq !== challengeIndexRef.current) return;
+        if (data.next_challenge) {
+            clearRetry();
+            retryTimerRef.current = setTimeout(() => {
+                if (seq === challengeIndexRef.current) {
+                    biometricLivenessService.submitChallengeResponse({ sequence: seq });
+                }
+            }, 500);
+            return;
         }
-    }, []);
+        clearRetry();
+        advanceToNext(seq);
+    }, [advanceToNext]);
 
     const handleSessionComplete = useCallback((data) => {
         stopFrameCapture();
@@ -218,6 +242,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
 
     const cleanup = () => {
         initAttemptRef.current++; // invalidate any in-flight initSession
+        clearRetry();
         stopFrameCapture();
         if (streamRef.current) {
             CameraUtils.stopCamera(streamRef.current);

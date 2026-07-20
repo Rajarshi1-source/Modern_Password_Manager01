@@ -74,17 +74,24 @@ describe('LivenessVerification challenge orchestration', () => {
     it('drives the challenge sequence, submits each with the right sequence, then completes', async () => {
         render(<LivenessVerification />);
 
-        // Gaze (sequence 0) is the first challenge.
+        // Gaze (sequence 0) is the first challenge. The UI advances only after
+        // the server confirms it consumed the challenge (challenge_result).
         fireEvent.click(await screen.findByTestId('done-gaze'));
         expect(livenessService.submitChallengeResponse).toHaveBeenNthCalledWith(1, { sequence: 0 });
+        expect(screen.queryByTestId('done-expression')).toBeNull(); // not advanced yet
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 0 }); });
 
         // Expression (sequence 1).
         fireEvent.click(await screen.findByTestId('done-expression'));
         expect(livenessService.submitChallengeResponse).toHaveBeenNthCalledWith(2, { sequence: 1 });
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 1 }); });
 
-        // Pulse (sequence 2) is last -> completes the session.
+        // Pulse (sequence 2) is last -> completes the session, but only once the
+        // server has consumed it.
         fireEvent.click(await screen.findByTestId('done-pulse'));
         expect(livenessService.submitChallengeResponse).toHaveBeenNthCalledWith(3, { sequence: 2 });
+        expect(livenessService.completeSession).not.toHaveBeenCalled();
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 2 }); });
         expect(livenessService.completeSession).toHaveBeenCalledTimes(1);
 
         // The final verdict from the server is rendered honestly, verbatim.
@@ -124,5 +131,31 @@ describe('LivenessVerification challenge orchestration', () => {
         expect(livenessService.connectWebSocket).toHaveBeenCalledTimes(1);
         expect(livenessService.connectWebSocket.mock.calls[0]).toHaveLength(5);
         expect(typeof livenessService.connectWebSocket.mock.calls[0][4]).toBe('function');
+    });
+
+    it('does not advance on a non-consumed response; re-submits the same sequence', async () => {
+        render(<LivenessVerification />);
+        fireEvent.click(await screen.findByTestId('done-gaze'));
+        expect(livenessService.submitChallengeResponse).toHaveBeenNthCalledWith(1, { sequence: 0 });
+
+        vi.useFakeTimers();
+        try {
+            // Server could not evaluate the challenge yet (window still open) ->
+            // must NOT advance past gaze.
+            act(() => {
+                livenessService.__callbacks.onChallengeResult({ sequence: 0, next_challenge: true });
+            });
+            expect(screen.queryByTestId('done-expression')).toBeNull();
+
+            // The retry timer re-submits the SAME sequence (0), not the next one.
+            act(() => { vi.advanceTimersByTime(600); });
+            expect(livenessService.submitChallengeResponse).toHaveBeenNthCalledWith(2, { sequence: 0 });
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // Once the server consumes it, the flow advances to the next challenge.
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 0 }); });
+        expect(await screen.findByTestId('done-expression')).toBeInTheDocument();
     });
 });
