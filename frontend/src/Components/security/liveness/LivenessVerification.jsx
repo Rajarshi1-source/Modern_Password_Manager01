@@ -1,17 +1,28 @@
 /**
  * LivenessVerification Component
- * 
- * Main UI for experimental biometric liveness verification.
- * Orchestrates camera capture, challenge display, and results.
+ *
+ * Main UI for experimental biometric liveness verification. Orchestrates camera
+ * capture, the interactive challenge sequence, and results.
+ *
+ * The camera frames are streamed to the backend the whole time; each challenge
+ * (gaze / expression / pulse) is rendered here only as a PROMPT. The actual
+ * liveness signals are measured server-side from those frames and scored against
+ * the server's randomized targets. When a challenge's prompt finishes we notify
+ * the server (submit_challenge_response) so it can score/close that challenge,
+ * then advance; after the last challenge we complete the session.
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import biometricLivenessService, { CameraUtils, TimingUtils } from '../../../services/biometricLivenessService';
+import GazeChallenge from './GazeChallenge';
+import ExpressionChallenge from './ExpressionChallenge';
+import PulseChallenge from './PulseChallenge';
 import './LivenessVerification.css';
 
 const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
-    const [status, setStatus] = useState('initializing'); // initializing, capturing, challenge, processing, complete
-    const [currentChallenge, setCurrentChallenge] = useState(null);
+    const [status, setStatus] = useState('initializing'); // initializing, challenge, processing, complete, error
+    const [challenges, setChallenges] = useState([]);
+    const [challengeIndex, setChallengeIndex] = useState(0);
     const [results, setResults] = useState(null);
     const [error, setError] = useState(null);
     const [frameCount, setFrameCount] = useState(0);
@@ -21,6 +32,12 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const canvasRef = useRef(null);
     const streamRef = useRef(null);
     const captureIntervalRef = useRef(null);
+    // Mirror the challenge list/index into refs so the once-per-challenge
+    // completion handler reads the current values without being re-created (and
+    // can guard against a duplicate completion for a challenge already advanced
+    // past — re-submitting a sequence would trip the server's replay guard).
+    const challengesRef = useRef([]);
+    const challengeIndexRef = useRef(0);
     // Cancellation token bumped by cleanup(). An unmount/retry mid-init must
     // invalidate an initSession still awaiting startCamera()/startSession() —
     // the service generation guard only covers the WS ticket fetch.
@@ -46,6 +63,10 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         const attempt = initAttemptRef.current;
         try {
             setStatus('initializing');
+            setResults(null);
+            setError(null);
+            setFrameCount(0);
+            setLivenessIndicators({});
 
             // Start camera
             if (videoRef.current) {
@@ -63,12 +84,13 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
 
             // Connect WebSocket (async: fetches a single-use ws-ticket first).
             // On failure it already set the 'error' status via handleError, so
-            // bail out rather than overwrite it with 'capturing'.
+            // bail out rather than overwrite it with the capturing state.
             const connected = await biometricLivenessService.connectWebSocket(
                 sessionData.session_id,
                 handleFrameResult,
                 handleSessionComplete,
-                handleError
+                handleError,
+                handleChallengeResult
             );
             if (attempt !== initAttemptRef.current) return;
             if (!connected) {
@@ -79,12 +101,16 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
                 return;
             }
 
-            // Set first challenge
-            if (sessionData.challenges && sessionData.challenges.length > 0) {
-                setCurrentChallenge(sessionData.challenges[0]);
-            }
+            // Set up the challenge sequence. The server returns the challenges in
+            // sequence order, so the array index doubles as the challenge's
+            // sequence number when we submit responses.
+            const nextChallenges = Array.isArray(sessionData.challenges) ? sessionData.challenges : [];
+            challengesRef.current = nextChallenges;
+            challengeIndexRef.current = 0;
+            setChallenges(nextChallenges);
+            setChallengeIndex(0);
 
-            setStatus('capturing');
+            setStatus('challenge');
             startFrameCapture();
         } catch (err) {
             // Superseded/unmounted attempt — the cleanup() that bumped the token
@@ -132,6 +158,43 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         }));
     }, []);
 
+    // Fires once per challenge when its on-screen prompt finishes. Notifies the
+    // server so it can score/close that challenge, then advances — or completes
+    // the session after the last one. Only the sequence number is sent: the
+    // client never reports its own gaze/expression track (the server scores its
+    // own observation of the streamed frames; a client-supplied track could be
+    // synthesized from the known targets and is ignored).
+    const handleChallengeComplete = useCallback((index) => {
+        // Ignore a stale/duplicate completion for a challenge already advanced past.
+        if (index !== challengeIndexRef.current) return;
+
+        biometricLivenessService.submitChallengeResponse({ sequence: index });
+
+        const next = index + 1;
+        challengeIndexRef.current = next;
+        if (next >= challengesRef.current.length) {
+            // Last challenge done. Stop streaming BEFORE completing so no frame
+            // races the completion (the server rejects frames once completed).
+            stopFrameCapture();
+            setStatus('processing');
+            biometricLivenessService.completeSession();
+            return;
+        }
+        setChallengeIndex(next);
+    }, []);
+
+    const handleChallengeResult = useCallback((data) => {
+        // Per-challenge outcome from the server. Today gaze is not yet scored
+        // server-side (no real estimator) and expression/pulse are acknowledged,
+        // so there's nothing actionable to surface; keep it for diagnostics and
+        // as the wiring point for retry/pass feedback once a real gaze estimator
+        // lands. The UI flow is driven by the local prompt completion above.
+        if (data && data.retryable) {
+            // eslint-disable-next-line no-console
+            console.debug('Liveness challenge retryable:', data);
+        }
+    }, []);
+
     const handleSessionComplete = useCallback((data) => {
         stopFrameCapture();
         setResults(data);
@@ -147,7 +210,8 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         setStatus('error');
     }, []);
 
-    const handleCompleteClick = () => {
+    const handleManualComplete = () => {
+        stopFrameCapture();
         setStatus('processing');
         biometricLivenessService.completeSession();
     };
@@ -167,6 +231,59 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         if (onCancel) onCancel();
     };
 
+    const renderChallenge = () => {
+        const challenge = challenges[challengeIndex];
+        if (!challenge) {
+            // No/unknown challenge configured: fall back to a manual completion
+            // so a misconfigured session isn't a dead end.
+            return (
+                <div className="challenge-panel">
+                    <p>Look at the camera to capture liveness signals.</p>
+                    <button className="btn-complete" onClick={handleManualComplete}>
+                        Complete Verification
+                    </button>
+                </div>
+            );
+        }
+
+        // Keyed by index so each challenge remounts fresh (its internal timers
+        // reset) as the sequence advances.
+        const commonProps = {
+            challenge,
+            onComplete: () => handleChallengeComplete(challengeIndex),
+        };
+
+        switch (challenge.type) {
+            case 'gaze':
+                return <GazeChallenge key={challengeIndex} {...commonProps} />;
+            case 'expression':
+                return <ExpressionChallenge key={challengeIndex} {...commonProps} />;
+            case 'pulse':
+                return (
+                    <PulseChallenge
+                        key={challengeIndex}
+                        {...commonProps}
+                        pulseData={livenessIndicators.pulse}
+                    />
+                );
+            default:
+                // Unknown challenge type: acknowledge it and move on rather than
+                // stalling the sequence.
+                return (
+                    <div className="challenge-panel">
+                        <h3>{challenge.type} Challenge</h3>
+                        <p>{challenge.instruction}</p>
+                        <button
+                            className="btn-complete"
+                            onClick={() => handleChallengeComplete(challengeIndex)}
+                        >
+                            Continue
+                        </button>
+                    </div>
+                );
+        }
+    };
+
     // Render based on status
     const renderContent = () => {
         switch (status) {
@@ -178,24 +295,16 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
                     </div>
                 );
 
-            case 'capturing':
             case 'challenge':
                 return (
                     <div className="liveness-capture">
-                        <div className="camera-container">
-                            <video ref={videoRef} autoPlay playsInline muted />
-                            <canvas ref={canvasRef} style={{ display: 'none' }} />
-                            <div className="face-overlay">
-                                <div className="face-guide"></div>
-                            </div>
-                        </div>
-
-                        {currentChallenge && (
-                            <div className="challenge-panel">
-                                <h3>{currentChallenge.type} Challenge</h3>
-                                <p>{currentChallenge.instruction}</p>
+                        {challenges.length > 0 && (
+                            <div className="challenge-progress">
+                                Challenge {Math.min(challengeIndex + 1, challenges.length)} of {challenges.length}
                             </div>
                         )}
+
+                        {renderChallenge()}
 
                         <div className="indicators-panel">
                             <div className="indicator">
@@ -221,9 +330,6 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
                         </div>
 
                         <div className="action-buttons">
-                            <button className="btn-complete" onClick={handleCompleteClick}>
-                                Complete Verification
-                            </button>
                             <button className="btn-cancel" onClick={handleCancel}>
                                 Cancel
                             </button>
@@ -290,6 +396,21 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
             <div className="liveness-header">
                 <h1>🎭 Biometric Liveness Verification</h1>
                 <p>Experimental liveness checks — not a security guarantee</p>
+            </div>
+            {/* Camera elements are mounted for the whole session (not just the
+                capture view) so videoRef exists when initSession starts the
+                camera, and so the stream stays attached to the SAME element
+                across status changes instead of being lost on remount. Shown
+                only while capturing challenges. */}
+            <div
+                className="camera-container"
+                style={{ display: status === 'challenge' ? undefined : 'none' }}
+            >
+                <video ref={videoRef} autoPlay playsInline muted />
+                <canvas ref={canvasRef} style={{ display: 'none' }} />
+                <div className="face-overlay">
+                    <div className="face-guide"></div>
+                </div>
             </div>
             {renderContent()}
         </div>

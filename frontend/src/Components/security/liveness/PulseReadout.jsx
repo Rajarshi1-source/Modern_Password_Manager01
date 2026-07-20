@@ -19,13 +19,18 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
 
     useEffect(() => {
         if (pulseData) {
-            if (pulseData.heart_rate_bpm) setHeartRate(pulseData.heart_rate_bpm);
+            // Keys match the frame_result 'pulse' payload the backend streams:
+            // { heart_rate, spo2, quality }. heart_rate is null until enough
+            // frames resolve a rate from the rPPG signal.
+            if (pulseData.heart_rate) setHeartRate(pulseData.heart_rate);
             // Clear SpO2 when the backend reports none (device disconnected /
             // reading expired) so a stale value doesn't stay on screen.
             setSpo2(pulseData.spo2 ?? null);
-            if (pulseData.signal_quality) setSignalQuality(pulseData.signal_quality);
+            if (pulseData.quality != null) setSignalQuality(pulseData.quality);
 
-            // Add to waveform history
+            // Waveform history. The backend does not currently stream a
+            // per-frame PPG sample, so this stays empty (no waveform drawn)
+            // until such a sample is added; it renders gracefully when absent.
             if (pulseData.ppg_value !== undefined) {
                 setHistory(prev => {
                     const updated = [...prev, pulseData.ppg_value];

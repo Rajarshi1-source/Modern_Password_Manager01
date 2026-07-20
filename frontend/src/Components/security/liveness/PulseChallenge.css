@@ -1,0 +1,20 @@
+/* PulseChallenge.css - "stay still" pulse challenge styles.
+   Shared prompt classes (.challenge-header, .timer, .ready-screen, .btn-start,
+   .complete-screen, .success-icon) are defined once in GazeChallenge.css and
+   reused globally across the challenge components. */
+
+.pulse-challenge {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 1.5rem;
+    min-height: 400px;
+    display: flex;
+    flex-direction: column;
+}
+
+.pulse-instruction {
+    color: rgba(255, 255, 255, 0.85);
+    text-align: center;
+    font-size: 1rem;
+    margin: 0 0 1rem 0;
+}

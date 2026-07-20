@@ -1,0 +1,108 @@
+/**
+ * Tests for biometricLivenessService WebSocket message routing.
+ *
+ * The consumer sends a 'challenge_result' envelope after each
+ * submit_challenge_response, which the service previously dropped. These pin that
+ * challenge_result is delivered to the new onChallengeResult handler, that
+ * frame_result/session_complete still route correctly, and that a
+ * challenge_result is harmless when no handler was supplied (backward compat).
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../wsTicket', () => ({ getWsTicket: vi.fn() }));
+
+import { getWsTicket } from '../wsTicket';
+import livenessService from '../biometricLivenessService';
+
+describe('biometricLivenessService message routing', () => {
+    let sockets;
+    let originalWebSocket;
+
+    beforeEach(() => {
+        sockets = [];
+        originalWebSocket = global.WebSocket;
+        class FakeWebSocket {
+            constructor(url) {
+                this.url = url;
+                this.readyState = 1; // OPEN
+                sockets.push(this);
+            }
+            close() {
+                this.readyState = 3;
+            }
+            send() {}
+        }
+        FakeWebSocket.OPEN = 1;
+        global.WebSocket = FakeWebSocket;
+        vi.clearAllMocks();
+    });
+
+    afterEach(() => {
+        livenessService.disconnect();
+        global.WebSocket = originalWebSocket;
+    });
+
+    const connect = async (handlers) => {
+        getWsTicket.mockResolvedValueOnce('tkt');
+        const ok = await livenessService.connectWebSocket(
+            's1',
+            handlers.onFrame,
+            handlers.onComplete,
+            handlers.onError,
+            handlers.onChallenge
+        );
+        expect(ok).toBe(true);
+        return sockets[0];
+    };
+
+    it('routes a challenge_result envelope to onChallengeResult', async () => {
+        const onChallenge = vi.fn();
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError: vi.fn(), onChallenge,
+        });
+
+        ws.onmessage({
+            data: JSON.stringify({
+                type: 'challenge_result',
+                challenge_type: 'gaze',
+                sequence: 0,
+                passed: false,
+                reason: 'no_gaze_observed',
+            }),
+        });
+
+        expect(onChallenge).toHaveBeenCalledWith(
+            expect.objectContaining({ type: 'challenge_result', challenge_type: 'gaze', sequence: 0 })
+        );
+    });
+
+    it('still routes frame_result and session_complete to their handlers', async () => {
+        const onFrame = vi.fn();
+        const onComplete = vi.fn();
+        const ws = await connect({
+            onFrame, onComplete, onError: vi.fn(), onChallenge: vi.fn(),
+        });
+
+        ws.onmessage({
+            data: JSON.stringify({ type: 'frame_result', results: { pulse: { heart_rate: 72 } }, current_challenge: 0 }),
+        });
+        expect(onFrame).toHaveBeenCalledWith(expect.objectContaining({ type: 'frame_result' }));
+
+        ws.onmessage({
+            data: JSON.stringify({ type: 'session_complete', is_verified: false, verdict: 'INSUFFICIENT_SIGNAL' }),
+        });
+        expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_complete' }));
+    });
+
+    it('does not throw when a challenge_result arrives and no handler was provided', async () => {
+        // Legacy 4-arg call (no onChallengeResult) must stay backward-compatible.
+        getWsTicket.mockResolvedValueOnce('tkt');
+        const ok = await livenessService.connectWebSocket('s2', vi.fn(), vi.fn(), vi.fn());
+        expect(ok).toBe(true);
+        const ws = sockets[0];
+
+        expect(() =>
+            ws.onmessage({ data: JSON.stringify({ type: 'challenge_result', sequence: 0 }) })
+        ).not.toThrow();
+    });
+});
