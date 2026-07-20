@@ -21,6 +21,7 @@ class BiometricLivenessService {
     this.sessionId = null;
     this.onFrameResult = null;
     this.onSessionComplete = null;
+    this.onChallengeResult = null;
     // Bumped by every connect/disconnect so an in-flight ticket fetch that has
     // been superseded doesn't open a stale socket.
     this.wsConnectGeneration = 0;
@@ -66,14 +67,19 @@ class BiometricLivenessService {
    * enablement only — connecting the socket does NOT make the anti-spoofing
    * claims real.
    *
+   * @param {function} [onChallengeResult] optional handler for the server's
+   *   per-challenge outcome (challenge_result envelope): whether the challenge
+   *   was scored/consumed and, once a real gaze estimator lands, whether it
+   *   passed. Optional so existing callers keep working.
    * @returns {Promise<boolean>} true once the socket was created and handlers
    *   attached; false if the ticket fetch or socket construction failed, or the
    *   attempt was superseded. Callers must abort their "connected" flow on false.
    */
-  async connectWebSocket(sessionId, onFrameResult, onComplete, onError) {
+  async connectWebSocket(sessionId, onFrameResult, onComplete, onError, onChallengeResult) {
     const generation = ++this.wsConnectGeneration;
     this.onFrameResult = onFrameResult;
     this.onSessionComplete = onComplete;
+    this.onChallengeResult = onChallengeResult;
 
     let ticket;
     try {
@@ -117,6 +123,8 @@ class BiometricLivenessService {
 
       if (data.type === 'frame_result' && this.onFrameResult) {
         this.onFrameResult(data);
+      } else if (data.type === 'challenge_result' && this.onChallengeResult) {
+        this.onChallengeResult(data);
       } else if (data.type === 'session_complete' && this.onSessionComplete) {
         this.onSessionComplete(data);
       } else if (data.type === 'error' && onError) {

@@ -1,11 +1,18 @@
 /**
  * ExpressionChallenge Component
- * 
- * Micro-expression challenge for liveness verification.
- * Prompts user to make specific facial expressions.
+ *
+ * Micro-expression challenge for liveness verification. Prompts the user to make
+ * a short sequence of facial expressions.
+ *
+ * As with the gaze challenge, the prompt is rendered here but the expression
+ * signal is captured SERVER-SIDE from the streamed camera frames (face-mesh
+ * action units). This component only tells the user what to do and paces the
+ * sequence; it does not itself measure the face. Expression is currently
+ * captured-but-not-scored (it does not gate the verdict) until the real
+ * MediaPipe action-unit path lands.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './ExpressionChallenge.css';
 
 const EXPRESSIONS = [
@@ -17,94 +24,75 @@ const EXPRESSIONS = [
     { id: 'right_turn', label: 'Turn Right', emoji: '👉', instruction: 'Turn your head slightly right' },
 ];
 
+// The backend labels expressions with action-unit names (e.g. 'happy'); map
+// them onto the prompts this component knows how to render.
+const SERVER_EXPRESSION_ALIASES = {
+    happy: 'smile',
+    smile: 'smile',
+    surprise: 'surprise',
+    surprised: 'surprise',
+    blink: 'blink',
+    neutral: 'neutral',
+    left_turn: 'left_turn',
+    right_turn: 'right_turn',
+};
+
+const resolveExpressionIds = (requested) => {
+    if (!Array.isArray(requested) || requested.length === 0) {
+        return ['smile', 'blink', 'neutral'];
+    }
+    const ids = requested
+        .map((e) => SERVER_EXPRESSION_ALIASES[String(e).toLowerCase()])
+        .filter(Boolean);
+    return ids.length > 0 ? ids : ['smile', 'blink', 'neutral'];
+};
+
 const ExpressionChallenge = ({
+    challenge,
     onComplete,
-    onExpressionDetected,
-    expressionTypes = ['smile', 'blink', 'neutral'],
-    duration = 15000,
+    autoStart = true,
+    holdMsPerExpression = 3000,
 }) => {
+    const requestedIds = resolveExpressionIds(challenge?.data?.expressions);
+    const expressions = EXPRESSIONS.filter((e) => requestedIds.includes(e.id));
+
     const [currentExpression, setCurrentExpression] = useState(0);
-    const [expressions, setExpressions] = useState([]);
-    const [timeLeft, setTimeLeft] = useState(duration / 1000);
-    const [status, setStatus] = useState('ready'); // ready, active, complete
-    const [detectedExpressions, setDetectedExpressions] = useState([]);
     const [currentProgress, setCurrentProgress] = useState(0);
+    const [status, setStatus] = useState(autoStart ? 'active' : 'ready');
 
-    useEffect(() => {
-        // Filter expressions based on requested types
-        const selected = EXPRESSIONS.filter(e => expressionTypes.includes(e.id));
-        setExpressions(selected);
-    }, [expressionTypes]);
-
-    useEffect(() => {
-        if (status !== 'active') return;
-
-        const timer = setInterval(() => {
-            setTimeLeft(prev => {
-                if (prev <= 1) {
-                    clearInterval(timer);
-                    handleComplete();
-                    return 0;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-
-        return () => clearInterval(timer);
-    }, [status]);
-
-    useEffect(() => {
-        if (status !== 'active' || expressions.length === 0) return;
-
-        // Progress bar animation
-        const progressTimer = setInterval(() => {
-            setCurrentProgress(prev => {
-                if (prev >= 100) {
-                    // Move to next expression
-                    setCurrentExpression(curr => {
-                        const next = curr + 1;
-                        if (next >= expressions.length) {
-                            handleComplete();
-                            return curr;
-                        }
-                        return next;
-                    });
-                    return 0;
-                }
-                return prev + 2;
-            });
-        }, 50);
-
-        return () => clearInterval(progressTimer);
-    }, [status, expressions]);
-
-    const handleStart = () => {
-        setStatus('active');
-        setCurrentProgress(0);
-    };
+    const completedRef = useRef(false);
 
     const handleComplete = useCallback(() => {
+        if (completedRef.current) return;
+        completedRef.current = true;
         setStatus('complete');
         if (onComplete) {
-            onComplete({
-                success: detectedExpressions.length > 0,
-                expressionsCompleted: detectedExpressions.length,
-                totalExpressions: expressions.length,
-                data: detectedExpressions,
-            });
+            onComplete({ success: true, expressionsShown: expressions.length });
         }
-    }, [onComplete, detectedExpressions, expressions.length]);
+    }, [onComplete, expressions.length]);
 
-    const recordExpression = (expressionType, score) => {
-        const event = {
-            timestamp: Date.now(),
-            type: expressionType,
-            score,
-            expected: expressions[currentExpression]?.id,
-        };
-        setDetectedExpressions(prev => [...prev, event]);
-        if (onExpressionDetected) onExpressionDetected(event);
-    };
+    // Pace the user through each expression, filling a progress bar then moving
+    // on. Completes after the last one.
+    useEffect(() => {
+        if (status !== 'active' || expressions.length === 0) return undefined;
+        const tick = Math.max(20, Math.floor(holdMsPerExpression / 50));
+        const progressTimer = setInterval(() => {
+            setCurrentProgress((prev) => {
+                if (prev < 100) return prev + 2;
+                // Expression held long enough — advance or finish.
+                setCurrentExpression((curr) => {
+                    const next = curr + 1;
+                    if (next >= expressions.length) {
+                        handleComplete();
+                        return curr;
+                    }
+                    return next;
+                });
+                return 0;
+            });
+        }, tick);
+        return () => clearInterval(progressTimer);
+    }, [status, expressions.length, holdMsPerExpression, handleComplete]);
 
     const currentExp = expressions[currentExpression];
 
@@ -112,16 +100,13 @@ const ExpressionChallenge = ({
         <div className="expression-challenge">
             <div className="challenge-header">
                 <h3>🎭 Expression Challenge</h3>
-                {status === 'active' && (
-                    <div className="timer">{timeLeft}s</div>
-                )}
             </div>
 
             {status === 'ready' && (
                 <div className="ready-screen">
-                    <p>You'll be asked to make {expressions.length} facial expressions.</p>
+                    <p>You&apos;ll be asked to make {expressions.length} facial expressions.</p>
                     <p className="hint">Try to be natural and hold each expression briefly.</p>
-                    <button className="btn-start" onClick={handleStart}>
+                    <button className="btn-start" onClick={() => setStatus('active')}>
                         Start Challenge
                     </button>
                 </div>
@@ -140,10 +125,7 @@ const ExpressionChallenge = ({
                     </div>
 
                     <div className="expression-progress">
-                        <div
-                            className="progress-fill"
-                            style={{ width: `${currentProgress}%` }}
-                        />
+                        <div className="progress-fill" style={{ width: `${currentProgress}%` }} />
                     </div>
 
                     <div className="expression-dots">
@@ -161,7 +143,7 @@ const ExpressionChallenge = ({
                 <div className="complete-screen">
                     <div className="success-icon">✓</div>
                     <h3>Challenge Complete!</h3>
-                    <p>{expressions.length} expressions analyzed</p>
+                    <p>{expressions.length} expressions recorded</p>
                 </div>
             )}
         </div>

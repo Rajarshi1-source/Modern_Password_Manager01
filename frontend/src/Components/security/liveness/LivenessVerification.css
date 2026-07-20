@@ -134,6 +134,16 @@
     font-size: 1.1rem;
 }
 
+/* Challenge sequence progress */
+.challenge-progress {
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.85rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    text-align: center;
+    width: 100%;
+}
+
 /* Indicators Panel */
 .indicators-panel {
     display: flex;
