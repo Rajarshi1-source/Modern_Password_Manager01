@@ -7,7 +7,7 @@
  * stays hidden unless such a reading arrives.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './PulseReadout.css';
 
 const PulseReadout = ({ pulseData, isActive = true }) => {
@@ -40,11 +40,7 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
         }
     }, [pulseData]);
 
-    useEffect(() => {
-        drawWaveform();
-    }, [history]);
-
-    const drawWaveform = () => {
+    const drawWaveform = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas || history.length < 2) return;
 
@@ -88,7 +84,11 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
         ctx.closePath();
         ctx.fillStyle = gradient;
         ctx.fill();
-    };
+    }, [history, isActive]);
+
+    useEffect(() => {
+        drawWaveform();
+    }, [drawWaveform]);
 
     const getHeartRateStatus = () => {
         if (!heartRate) return 'measuring';

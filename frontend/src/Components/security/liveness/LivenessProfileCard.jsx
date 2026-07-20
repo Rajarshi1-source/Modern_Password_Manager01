@@ -36,6 +36,8 @@ const LivenessProfileCard = ({ onStartVerification }) => {
 
     const toggleSetting = async (key) => {
         if (!settings) return;
+        // `key` is a fixed setting name from the toggle controls, not user input.
+        // eslint-disable-next-line security/detect-object-injection
         const updated = { ...settings, [key]: !settings[key] };
         try {
             await biometricLivenessService.updateSettings(updated);
