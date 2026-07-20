@@ -232,7 +232,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     };
 
     const renderChallenge = () => {
-        const challenge = challenges[challengeIndex];
+        const challenge = challenges.at(challengeIndex);
         if (!challenge) {
             // No/unknown challenge configured: fall back to a manual completion
             // so a misconfigured session isn't a dead end.
