@@ -153,6 +153,16 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         }
     };
 
+    // Release the webcam. Called as soon as frames are no longer needed (on
+    // completion) so the camera doesn't stay live through the processing/result
+    // screens -- a privacy concern for a biometric feature. Idempotent.
+    const releaseCamera = () => {
+        if (streamRef.current) {
+            CameraUtils.stopCamera(streamRef.current);
+            streamRef.current = null;
+        }
+    };
+
     const handleFrameResult = useCallback((data) => {
         setLivenessIndicators(prev => ({
             ...prev,
@@ -185,8 +195,10 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         challengeIndexRef.current = next;
         if (next >= challengesRef.current.length) {
             // Last challenge consumed. Stop streaming BEFORE completing so no
-            // frame races the completion (the server rejects frames once done).
+            // frame races the completion (the server rejects frames once done),
+            // and release the webcam now that no more frames are needed.
             stopFrameCapture();
+            releaseCamera();
             setStatus('processing');
             biometricLivenessService.completeSession();
             return;
@@ -221,6 +233,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
 
     const handleSessionComplete = useCallback((data) => {
         stopFrameCapture();
+        releaseCamera(); // ensure the webcam is off on the result screen
         setResults(data);
         setStatus('complete');
 
@@ -236,6 +249,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
 
     const handleManualComplete = () => {
         stopFrameCapture();
+        releaseCamera();
         setStatus('processing');
         biometricLivenessService.completeSession();
     };
@@ -244,10 +258,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         initAttemptRef.current++; // invalidate any in-flight initSession
         clearRetry();
         stopFrameCapture();
-        if (streamRef.current) {
-            CameraUtils.stopCamera(streamRef.current);
-            streamRef.current = null;
-        }
+        releaseCamera();
         biometricLivenessService.disconnect();
     };
 
