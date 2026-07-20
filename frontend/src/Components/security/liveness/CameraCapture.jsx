@@ -19,6 +19,9 @@ const CameraCapture = forwardRef(({
     const canvasRef = useRef(null);
     const streamRef = useRef(null);
     const captureIntervalRef = useRef(null);
+    // False once unmounted, so a getUserMedia() that resolves after unmount can
+    // stop its stream instead of leaving the camera live.
+    const mountedRef = useRef(false);
 
     const [isReady, setIsReady] = useState(false);
     // Face-detection wiring is not implemented yet, so there is no setter.
@@ -34,8 +37,12 @@ const CameraCapture = forwardRef(({
     // Mount-only: initCamera/cleanup are re-created each render, so listing them
     // would re-open the camera on every render.
     useEffect(() => {
+        mountedRef.current = true;
         initCamera();
-        return () => cleanup();
+        return () => {
+            mountedRef.current = false;
+            cleanup();
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -52,6 +59,13 @@ const CameraCapture = forwardRef(({
             };
 
             const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            if (!mountedRef.current) {
+                // Unmounted while getUserMedia was pending: stop the stream
+                // instead of assigning it, otherwise the camera stays live
+                // (cleanup already ran with no stream to stop).
+                stream.getTracks().forEach((track) => track.stop());
+                return;
+            }
             streamRef.current = stream;
 
             if (videoRef.current) {

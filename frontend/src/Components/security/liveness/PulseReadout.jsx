@@ -21,8 +21,9 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
         if (pulseData) {
             // Keys match the frame_result 'pulse' payload the backend streams:
             // { heart_rate, spo2, quality }. heart_rate is null until enough
-            // frames resolve a rate from the rPPG signal.
-            if (pulseData.heart_rate) setHeartRate(pulseData.heart_rate);
+            // frames resolve a rate. Clear on null (signal lost) so a stale rate
+            // doesn't linger on screen -- mirrors the SpO2 handling below.
+            setHeartRate(pulseData.heart_rate ?? null);
             // Clear SpO2 when the backend reports none (device disconnected /
             // reading expired) so a stale value doesn't stay on screen.
             setSpo2(pulseData.spo2 ?? null);
