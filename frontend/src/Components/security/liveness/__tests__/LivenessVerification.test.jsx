@@ -10,7 +10,26 @@
  * child prompts' internal pacing.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+
+// Mock the BLE oximeter so the pairing UI is available and a "device" can be
+// connected/dropped deterministically. The class tracks its latest instance so
+// tests can assert disconnect() and re-pairing.
+vi.mock('../../../../services/bleOximeter', () => {
+    class MockBleOximeter {
+        constructor() {
+            MockBleOximeter.last = this;
+            this.disconnect = vi.fn();
+        }
+        connect(onReading, onDisconnect) {
+            this.onReading = onReading;
+            this.onDisconnect = onDisconnect;
+            return Promise.resolve({});
+        }
+    }
+    MockBleOximeter.last = null;
+    return { isBleOximeterSupported: () => true, BleOximeter: MockBleOximeter };
+});
 
 // Stub the interactive challenge children with a single button that fires
 // onComplete, so we can step through the sequence deterministically.
@@ -65,11 +84,24 @@ vi.mock('../../../../services/biometricLivenessService', () => {
 
 import LivenessVerification from '../LivenessVerification';
 import livenessService, { CameraUtils } from '../../../../services/biometricLivenessService';
+import { BleOximeter as MockBleOximeter } from '../../../../services/bleOximeter';
 
 describe('LivenessVerification challenge orchestration', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        MockBleOximeter.last = null;
     });
+
+    // Walk the mocked challenge sequence to completion, driving the server's
+    // per-challenge consumption (advance is server-gated).
+    const runToCompletion = async () => {
+        fireEvent.click(await screen.findByTestId('done-gaze'));
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 0 }); });
+        fireEvent.click(await screen.findByTestId('done-expression'));
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 1 }); });
+        fireEvent.click(await screen.findByTestId('done-pulse'));
+        act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 2 }); });
+    };
 
     it('drives the challenge sequence, submits each with the right sequence, then completes', async () => {
         render(<LivenessVerification />);
@@ -173,5 +205,29 @@ describe('LivenessVerification challenge orchestration', () => {
         expect(CameraUtils.stopCamera).not.toHaveBeenCalled();
         act(() => { livenessService.__callbacks.onChallengeResult({ sequence: 2 }); });
         expect(CameraUtils.stopCamera).toHaveBeenCalledTimes(1);
+    });
+
+    it('disconnects the oximeter on completion so a late reading cannot error the result screen', async () => {
+        render(<LivenessVerification />);
+        // Pair an oximeter, then run to completion.
+        fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
+        await screen.findByText(/Pulse oximeter connected/i);
+        const oximeter = MockBleOximeter.last;
+
+        await runToCompletion();
+
+        expect(oximeter.disconnect).toHaveBeenCalled();
+    });
+
+    it('clears the oximeter ref on a device drop so the user can reconnect', async () => {
+        render(<LivenessVerification />);
+        fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
+        await screen.findByText(/Pulse oximeter connected/i);
+        const first = MockBleOximeter.last;
+
+        // Device drops -> the connect button returns and a fresh instance can pair.
+        act(() => { first.onDisconnect(); });
+        fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
+        await waitFor(() => expect(MockBleOximeter.last).not.toBe(first));
     });
 });
