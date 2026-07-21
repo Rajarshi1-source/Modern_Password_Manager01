@@ -1014,11 +1014,13 @@ class LivenessSessionService:
             # sample): clear so a prior value cannot linger.
             pulse.ingest_hardware_spo2(None)
             return {'accepted': False}
-        # Server-owned timestamp keeps the SpO2 clock == the frame clock. The
-        # pulse service still validates range/quality/finiteness and rejects
-        # bad samples, so `accepted` reflects whether it was actually stored.
-        pulse.ingest_hardware_spo2(spo2, q, timestamp_ms=self._now_ms())
-        return {'accepted': pulse.has_hardware_spo2()}
+        # Server-owned timestamp keeps the SpO2 clock == the frame clock. Report
+        # `accepted` from the SAME read path scoring uses (_current_hardware_spo2):
+        # a stored-but-below-MIN_SPO2_QUALITY reading can never surface or gate, so
+        # accepted must reflect "would actually count now", not merely "stored".
+        now_ms = self._now_ms()
+        pulse.ingest_hardware_spo2(spo2, q, timestamp_ms=now_ms)
+        return {'accepted': pulse._current_hardware_spo2(now_ms) is not None}
 
     def get_capabilities(self) -> Dict:
         """
