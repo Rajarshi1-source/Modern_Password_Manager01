@@ -171,6 +171,17 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         }
     };
 
+    // Disconnect the BLE oximeter. Called as soon as readings are no longer
+    // needed (on completion / cleanup) so it can't relay a hardware_spo2 message
+    // after 'complete' -- the backend would reject it and the resulting error
+    // frame would overwrite the result screen. Idempotent.
+    const disconnectOximeter = () => {
+        if (oximeterRef.current) {
+            oximeterRef.current.disconnect();
+            oximeterRef.current = null;
+        }
+    };
+
     const handleFrameResult = useCallback((data) => {
         setLivenessIndicators(prev => ({
             ...prev,
@@ -202,11 +213,13 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         const next = index + 1;
         challengeIndexRef.current = next;
         if (next >= challengesRef.current.length) {
-            // Last challenge consumed. Stop streaming BEFORE completing so no
-            // frame races the completion (the server rejects frames once done),
-            // and release the webcam now that no more frames are needed.
+            // Last challenge consumed. Stop streaming/relaying BEFORE completing
+            // so no frame or SpO2 message races the completion (the server
+            // rejects both once done, and a rejection error would clobber the
+            // result screen), and release the webcam now that it's unneeded.
             stopFrameCapture();
             releaseCamera();
+            disconnectOximeter();
             setStatus('processing');
             biometricLivenessService.completeSession();
             return;
@@ -242,6 +255,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const handleSessionComplete = useCallback((data) => {
         stopFrameCapture();
         releaseCamera(); // ensure the webcam is off on the result screen
+        disconnectOximeter(); // and stop the oximeter relaying past completion
         setResults(data);
         setStatus('complete');
 
@@ -258,6 +272,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const handleManualComplete = () => {
         stopFrameCapture();
         releaseCamera();
+        disconnectOximeter();
         setStatus('processing');
         biometricLivenessService.completeSession();
     };
@@ -273,20 +288,18 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         try {
             await oximeter.connect(
                 (reading) => biometricLivenessService.submitHardwareSpo2(reading.spo2, reading.quality),
-                () => setSpo2Status('idle') // device dropped
+                () => {
+                    // Device dropped: clear the ref so the reconnect button can
+                    // create a fresh instance (the guard blocks while it is set).
+                    oximeterRef.current = null;
+                    setSpo2Status('idle');
+                }
             );
             setSpo2Status('connected');
         } catch {
             // User cancelled the chooser, or pairing failed: stay honest (no SpO2).
             oximeterRef.current = null;
             setSpo2Status('error');
-        }
-    };
-
-    const disconnectOximeter = () => {
-        if (oximeterRef.current) {
-            oximeterRef.current.disconnect();
-            oximeterRef.current = null;
         }
     };
 

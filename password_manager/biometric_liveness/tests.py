@@ -1385,16 +1385,19 @@ class HardwareSpo2RelayTests(TestCase):
     fabricated from the webcam, is server-clock stamped, and is capability-gated."""
 
     def setUp(self):
+        """Default to no gaze estimator so scoring/completion stay deterministic."""
         cap = patch.object(GazeTrackingService, 'has_real_gaze_model', return_value=False)
         cap.start()
         self.addCleanup(cap.stop)
         self.service = LivenessSessionService()
 
     def _session(self):
+        """Create a session and return (session_id, session dict)."""
         sid = self.service.create_session(user_id=1)['session_id']
         return sid, self.service.active_sessions[sid]
 
     def test_relayed_spo2_is_ingested_and_fresh(self):
+        """A relayed reading is stored and reads back fresh at a later frame time."""
         sid, session = self._session()
         out = self.service.submit_hardware_spo2(sid, 98.0, 0.9)
         self.assertTrue(out['accepted'])
@@ -1405,6 +1408,7 @@ class HardwareSpo2RelayTests(TestCase):
             pulse._current_hardware_spo2(LivenessSessionService._now_ms()), 98.0)
 
     def test_relayed_spo2_surfaces_on_the_pulse_reading(self):
+        """The reading appears on the PulseReading even during the rPPG warm-up."""
         # Even during the rPPG warm-up (buffer < 3s), the external reading shows.
         sid, session = self._session()
         self.service.submit_hardware_spo2(sid, 97.0, 0.9)
@@ -1414,8 +1418,8 @@ class HardwareSpo2RelayTests(TestCase):
         self.assertEqual(reading.spo2_estimate, 97.0)
 
     def test_spo2_is_stamped_on_the_server_clock_not_the_client(self):
-        # The API accepts no client timestamp: the stored ts is the server clock,
-        # so a client cannot keep a stale reading "fresh" by lying about its time.
+        """The stored timestamp is the server clock; no client timestamp is accepted."""
+        # A client cannot keep a stale reading "fresh" by lying about its time.
         sid, session = self._session()
         before = LivenessSessionService._now_ms()
         self.service.submit_hardware_spo2(sid, 96.0, 0.9)
@@ -1425,12 +1429,14 @@ class HardwareSpo2RelayTests(TestCase):
         self.assertLessEqual(ts, LivenessSessionService._now_ms())
 
     def test_out_of_range_spo2_is_rejected_not_clamped(self):
+        """An impossible SpO2 (>100) is rejected outright, not clamped into range."""
         sid, session = self._session()
         out = self.service.submit_hardware_spo2(sid, 150.0, 0.9)
         self.assertFalse(out['accepted'])
         self.assertFalse(session['services']['pulse'].has_hardware_spo2())
 
     def test_none_clears_a_prior_reading(self):
+        """Relaying None (device disconnect) clears a previously stored reading."""
         sid, session = self._session()
         self.service.submit_hardware_spo2(sid, 98.0, 0.9)
         out = self.service.submit_hardware_spo2(sid, None)
@@ -1438,11 +1444,13 @@ class HardwareSpo2RelayTests(TestCase):
         self.assertFalse(session['services']['pulse'].has_hardware_spo2())
 
     def test_non_numeric_spo2_is_rejected(self):
+        """A non-numeric SpO2 payload is coerced to None and rejected, not crashed."""
         sid, _ = self._session()
         out = self.service.submit_hardware_spo2(sid, 'not-a-number', 0.9)
         self.assertFalse(out['accepted'])
 
     def test_completed_session_rejects_spo2(self):
+        """A completed session rejects late SpO2 with a state-conflict marker."""
         sid, session = self._session()
         session['status'] = 'completed'
         out = self.service.submit_hardware_spo2(sid, 98.0, 0.9)
@@ -1450,11 +1458,13 @@ class HardwareSpo2RelayTests(TestCase):
         self.assertTrue(out.get('state_conflict'))
 
     def test_unknown_session_rejects_spo2(self):
+        """An unknown session id is rejected with 'Session not found'."""
         out = self.service.submit_hardware_spo2('no-such-session', 98.0, 0.9)
         self.assertEqual(out.get('error'), 'Session not found')
         self.assertTrue(out.get('state_conflict'))
 
     def test_spo2_capability_reports_external_hardware_only(self):
+        """Capabilities report SpO2 as external-hardware-only (server never measures it)."""
         caps = self.service.get_capabilities()
         spo2 = caps['modalities']['spo2']
         self.assertFalse(spo2['available'])  # server never measures it
@@ -1465,6 +1475,7 @@ class RppgSpo2HonestyTests(TestCase):
     """SpO2 is never derived from a webcam (removes the 110-25*R fabrication)."""
 
     def test_rppg_never_fabricates_spo2(self):
+        """The rPPG extractor returns no SpO2, even with a full RGB buffer."""
         extractor = RPPGExtractor()
         # Even with a full RGB buffer, no SpO2 is invented from the webcam.
         for _ in range(extractor.fps * 4):

@@ -109,33 +109,41 @@ export class BleOximeter {
         const device = await navigator.bluetooth.requestDevice({
             filters: [{ services: [PULSE_OXIMETER_SERVICE] }],
         });
-        this.device = device;
-
-        this._onDisconnected = () => {
-            // On disconnect, relay a null reading so a stale value is cleared.
-            if (onReading) onReading({ spo2: null, quality: 0 });
-            if (onDisconnect) onDisconnect();
-        };
-        device.addEventListener('gattserverdisconnected', this._onDisconnected);
-
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(PULSE_OXIMETER_SERVICE);
-        // Prefer continuous measurement; fall back to spot-check.
-        let characteristic;
         try {
-            characteristic = await service.getCharacteristic(PLX_CONTINUOUS_MEASUREMENT);
-        } catch {
-            characteristic = await service.getCharacteristic(PLX_SPOT_CHECK_MEASUREMENT);
-        }
-        this.characteristic = characteristic;
+            this.device = device;
 
-        this._onValueChanged = (event) => {
-            const view = event.target.value;
-            if (onReading) onReading(readingFromMeasurement(view));
-        };
-        characteristic.addEventListener('characteristicvaluechanged', this._onValueChanged);
-        await characteristic.startNotifications();
-        return device;
+            this._onDisconnected = () => {
+                // On disconnect, relay a null reading so a stale value is cleared.
+                if (onReading) onReading({ spo2: null, quality: 0 });
+                if (onDisconnect) onDisconnect();
+            };
+            device.addEventListener('gattserverdisconnected', this._onDisconnected);
+
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService(PULSE_OXIMETER_SERVICE);
+            // Prefer continuous measurement; fall back to spot-check.
+            let characteristic;
+            try {
+                characteristic = await service.getCharacteristic(PLX_CONTINUOUS_MEASUREMENT);
+            } catch {
+                characteristic = await service.getCharacteristic(PLX_SPOT_CHECK_MEASUREMENT);
+            }
+            this.characteristic = characteristic;
+
+            this._onValueChanged = (event) => {
+                const view = event.target.value;
+                if (onReading) onReading(readingFromMeasurement(view));
+            };
+            characteristic.addEventListener('characteristicvaluechanged', this._onValueChanged);
+            await characteristic.startNotifications();
+            return device;
+        } catch (err) {
+            // A post-connect step failed (service/characteristic/notify): tear
+            // down the half-open GATT connection + listeners before rethrowing,
+            // so we never leave the radio connected to a device we can't use.
+            await this.disconnect();
+            throw err;
+        }
     }
 
     /** Stop notifications and disconnect. Idempotent; safe to call if never connected. */

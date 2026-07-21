@@ -65,6 +65,7 @@ describe('BleOximeter pairing + relay', () => {
 
     const mockBluetooth = () => {
         const charListeners = {};
+        const deviceListeners = {};
         const characteristic = {
             addEventListener: vi.fn((type, cb) => { charListeners[type] = cb; }),
             removeEventListener: vi.fn(),
@@ -80,12 +81,12 @@ describe('BleOximeter pairing + relay', () => {
         };
         const device = {
             gatt,
-            addEventListener: vi.fn(),
+            addEventListener: vi.fn((type, cb) => { deviceListeners[type] = cb; }),
             removeEventListener: vi.fn(),
         };
         const bluetooth = { requestDevice: vi.fn().mockResolvedValue(device) };
         Object.defineProperty(navigator, 'bluetooth', { value: bluetooth, configurable: true });
-        return { bluetooth, device, service, characteristic, charListeners };
+        return { bluetooth, device, service, gatt, characteristic, charListeners, deviceListeners };
     };
 
     it('reports support based on the Web Bluetooth API presence', () => {
@@ -116,6 +117,29 @@ describe('BleOximeter pairing + relay', () => {
 
         await oximeter.disconnect();
         expect(characteristic.stopNotifications).toHaveBeenCalled();
+    });
+
+    it('relays a cleared reading and notifies on a device-initiated disconnect', async () => {
+        const { deviceListeners } = mockBluetooth();
+        const onReading = vi.fn();
+        const onDisconnect = vi.fn();
+        const oximeter = new BleOximeter();
+        await oximeter.connect(onReading, onDisconnect);
+
+        // The device drops (gattserverdisconnected). SpO2 must clear + notify.
+        deviceListeners.gattserverdisconnected();
+        expect(onReading).toHaveBeenCalledWith({ spo2: null, quality: 0 });
+        expect(onDisconnect).toHaveBeenCalled();
+    });
+
+    it('tears down the GATT connection if a post-connect step fails', async () => {
+        const { gatt } = mockBluetooth();
+        gatt.getPrimaryService.mockRejectedValueOnce(new Error('no service'));
+        const oximeter = new BleOximeter();
+
+        await expect(oximeter.connect(vi.fn())).rejects.toThrow('no service');
+        // The half-open GATT connection is torn down rather than left dangling.
+        expect(gatt.disconnect).toHaveBeenCalled();
     });
 
     it('throws when Web Bluetooth is unavailable', async () => {
