@@ -41,7 +41,8 @@ describe('SFLOAT / PLX parsing', () => {
     });
 
     it('returns nulls for a too-short measurement', () => {
-        expect(parsePlxMeasurement(viewOf([0x00, 0x01]))).toEqual({ spo2: null, pulseRate: null });
+        expect(parsePlxMeasurement(viewOf([0x00, 0x01])))
+            .toEqual({ spo2: null, pulseRate: null, status: null });
     });
 
     it('normalizes a valid reading to quality 1, and NaN/out-of-range to cleared', () => {
@@ -50,6 +51,20 @@ describe('SFLOAT / PLX parsing', () => {
         // NaN SpO2 -> cleared
         expect(readingFromMeasurement(viewOf([0x00, 0xff, 0x07, 0x48, 0x00])))
             .toEqual({ spo2: null, quality: 0 });
+    });
+
+    it('honors the device Measurement Status: invalid -> cleared, questionable -> reduced quality', () => {
+        // Continuous (0x2A5F) flags 0x04 = Measurement Status present; status at
+        // byte 5 (no fast/slow fields). SpO2 98 [0x62,0x00], PR 72 [0x48,0x00].
+        // Invalid Measurement Detected = bit 15 = 0x8000 -> [0x00, 0x80].
+        expect(readingFromMeasurement(viewOf([0x04, 0x62, 0x00, 0x48, 0x00, 0x00, 0x80])))
+            .toEqual({ spo2: null, quality: 0 });
+        // Questionable Measurement Detected = bit 14 = 0x4000 -> [0x00, 0x40].
+        expect(readingFromMeasurement(viewOf([0x04, 0x62, 0x00, 0x48, 0x00, 0x00, 0x40])))
+            .toEqual({ spo2: 98, quality: 0.5 });
+        // Fully-qualified (no adverse bits) stays full quality.
+        expect(readingFromMeasurement(viewOf([0x04, 0x62, 0x00, 0x48, 0x00, 0x00, 0x01])))
+            .toEqual({ spo2: 98, quality: 1 });
     });
 });
 
