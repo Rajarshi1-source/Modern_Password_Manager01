@@ -77,6 +77,10 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
             setError(null);
             setFrameCount(0);
             setLivenessIndicators({});
+            // A prior attempt may have left the oximeter torn down (handleError/
+            // cleanup clear the ref but not the status). Reset it so a retry
+            // shows the Connect button again instead of a stale "connected".
+            setSpo2Status(isBleOximeterSupported() ? 'idle' : 'unsupported');
 
             // Start camera
             if (videoRef.current) {
