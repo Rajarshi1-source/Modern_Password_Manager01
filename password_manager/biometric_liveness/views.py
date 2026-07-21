@@ -322,6 +322,39 @@ def submit_challenge_response(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def submit_hardware_spo2(request):
+    """Relay a real BLE pulse-oximeter SpO2 reading into the session (REST).
+
+    Shares the exact server-side path as the WS ``hardware_spo2`` message
+    (``submit_hardware_spo2`` -> ``ingest_hardware_spo2``, stamped on the server
+    clock). SpO2 is never derived from the webcam; a bad/absent/stale reading is
+    dropped, never fabricated. ``accepted`` reports whether it was actually stored.
+    """
+    try:
+        session_id = request.data.get('session_id')
+        if not session_id:
+            return Response({'error': 'Missing session_id'}, status=status.HTTP_400_BAD_REQUEST)
+        if not _user_owns_session(request, session_id):
+            return Response({'error': 'not_found'}, status=status.HTTP_404_NOT_FOUND)
+
+        service = get_session_service()
+        result = service.submit_hardware_spo2(
+            session_id, request.data.get('spo2'), request.data.get('quality', 1.0)
+        )
+        if 'error' in result:
+            # Same status semantics as submit_challenge_response: a session-
+            # lifecycle conflict is 409, a genuine bad request stays 400.
+            conflict = result.pop('state_conflict', False)
+            return Response(result, status=status.HTTP_409_CONFLICT if conflict
+                            else status.HTTP_400_BAD_REQUEST)
+        return Response(result)
+    except Exception as e:
+        logger.error(f"Error ingesting hardware SpO2: {e}")
+        return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def complete_session(request):
     """Complete session and get final verdict."""
     try:
