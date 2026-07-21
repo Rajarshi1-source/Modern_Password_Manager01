@@ -1474,6 +1474,16 @@ class HardwareSpo2RelayTests(TestCase):
         self.assertFalse(out['accepted'])
         self.assertFalse(session['services']['pulse'].has_hardware_spo2())
 
+    def test_below_threshold_quality_reading_is_not_accepted(self):
+        """`accepted` reflects the read path (quality/freshness), not just storage:
+        a reading below MIN_SPO2_QUALITY is stored but can never surface/gate, so
+        accepted must be False rather than claim otherwise."""
+        sid, session = self._session()
+        out = self.service.submit_hardware_spo2(sid, 98.0, 0.1)  # quality < 0.3 floor
+        self.assertFalse(out['accepted'])
+        # It IS stored (range/finiteness valid) -- the quality gate excludes it.
+        self.assertTrue(session['services']['pulse'].has_hardware_spo2())
+
     def test_none_clears_a_prior_reading(self):
         """Relaying None (device disconnect) clears a previously stored reading."""
         sid, session = self._session()
