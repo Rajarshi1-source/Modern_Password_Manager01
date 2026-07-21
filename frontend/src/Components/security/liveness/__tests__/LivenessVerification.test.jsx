@@ -288,4 +288,20 @@ describe('LivenessVerification challenge orchestration', () => {
         expect(oximeter.disconnect).toHaveBeenCalled();
         expect(CameraUtils.stopCamera).toHaveBeenCalled();
     });
+
+    it('resets the oximeter status on retry so the user can re-pair', async () => {
+        render(<LivenessVerification />);
+        await screen.findByTestId('done-gaze');
+        fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
+        await screen.findByText(/Pulse oximeter connected/i);
+
+        // Session errors (oximeter torn down, ref cleared, but status was stale).
+        act(() => { livenessService.__callbacks.onError('internal_error'); });
+
+        // Retry re-inits: the panel must offer the Connect button again, not a
+        // stale "connected" that hides it and silently drops hardware SpO2.
+        fireEvent.click(await screen.findByText(/Try Again/i));
+        expect((await screen.findAllByText(/Connect pulse oximeter/i)).length).toBeGreaterThan(0);
+        expect(screen.queryByText(/Pulse oximeter connected/i)).toBeNull();
+    });
 });
