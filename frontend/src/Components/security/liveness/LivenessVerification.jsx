@@ -176,9 +176,12 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     // after 'complete' -- the backend would reject it and the resulting error
     // frame would overwrite the result screen. Idempotent.
     const disconnectOximeter = () => {
-        if (oximeterRef.current) {
-            oximeterRef.current.disconnect();
+        const oximeter = oximeterRef.current;
+        if (oximeter) {
+            // Clear the ref BEFORE disconnecting so any callback that fires
+            // during teardown sees it is no longer the active instance and bails.
             oximeterRef.current = null;
+            oximeter.disconnect();
         }
     };
 
@@ -285,21 +288,33 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         const oximeter = new BleOximeter();
         oximeterRef.current = oximeter;
         setSpo2Status('connecting');
+        // Every async callback is guarded by `oximeterRef.current === oximeter`
+        // so a superseded/torn-down connection can't relay a stale reading (the
+        // backend would reject it post-completion and error the result screen)
+        // or clobber a newer connection's ref.
         try {
             await oximeter.connect(
-                (reading) => biometricLivenessService.submitHardwareSpo2(reading.spo2, reading.quality),
+                (reading) => {
+                    if (oximeterRef.current === oximeter) {
+                        biometricLivenessService.submitHardwareSpo2(reading.spo2, reading.quality);
+                    }
+                },
                 () => {
                     // Device dropped: clear the ref so the reconnect button can
                     // create a fresh instance (the guard blocks while it is set).
-                    oximeterRef.current = null;
-                    setSpo2Status('idle');
+                    if (oximeterRef.current === oximeter) {
+                        oximeterRef.current = null;
+                        setSpo2Status('idle');
+                    }
                 }
             );
-            setSpo2Status('connected');
+            if (oximeterRef.current === oximeter) setSpo2Status('connected');
         } catch {
             // User cancelled the chooser, or pairing failed: stay honest (no SpO2).
-            oximeterRef.current = null;
-            setSpo2Status('error');
+            if (oximeterRef.current === oximeter) {
+                oximeterRef.current = null;
+                setSpo2Status('error');
+            }
         }
     };
 

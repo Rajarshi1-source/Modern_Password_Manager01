@@ -69,6 +69,7 @@ vi.mock('../../../../services/biometricLivenessService', () => {
             }),
             sendFrame: vi.fn(),
             submitChallengeResponse: vi.fn(),
+            submitHardwareSpo2: vi.fn(),
             completeSession: vi.fn(),
             disconnect: vi.fn(),
             __callbacks: callbacks,
@@ -229,5 +230,20 @@ describe('LivenessVerification challenge orchestration', () => {
         act(() => { first.onDisconnect(); });
         fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
         await waitFor(() => expect(MockBleOximeter.last).not.toBe(first));
+    });
+
+    it('ignores a reading from an oximeter after its connection is torn down', async () => {
+        render(<LivenessVerification />);
+        fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
+        await screen.findByText(/Pulse oximeter connected/i);
+        const oximeter = MockBleOximeter.last;
+
+        // Completion tears down the connection (ref cleared).
+        await runToCompletion();
+
+        // A late BLE notification for the torn-down connection must NOT relay --
+        // otherwise the backend would reject it post-completion and error the screen.
+        act(() => { oximeter.onReading({ spo2: 98, quality: 1 }); });
+        expect(livenessService.submitHardwareSpo2).not.toHaveBeenCalled();
     });
 });
