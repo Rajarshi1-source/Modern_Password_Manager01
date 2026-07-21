@@ -483,6 +483,45 @@ class LivenessAPITests(APITestCase):
         # The orphaned in-memory session was discarded, not left holding a slot.
         self.assertEqual(len(service.active_sessions), before)
 
+    def test_hardware_spo2_rest_relay_accepts_a_reading(self):
+        """The REST relay shares the WS path: a real reading is ingested + accepted."""
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_hardware_spo2'),
+            {'session_id': session_id, 'spo2': 98.0, 'quality': 0.9}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.data['accepted'])
+
+    def test_hardware_spo2_rest_rejects_non_owner(self):
+        """A user cannot relay SpO2 into another user's session."""
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        other = User.objects.create_user(
+            username='dave', email='dave@example.com', password='testpass123')
+        self.client.force_authenticate(user=other)
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_hardware_spo2'),
+            {'session_id': session_id, 'spo2': 98.0}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_hardware_spo2_rest_on_completed_session_returns_409(self):
+        """SpO2 relayed to a terminal session is a 409 lifecycle conflict, not 400."""
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        self.client.post(
+            reverse('biometric_liveness:complete_session'),
+            {'session_id': session_id}, format='json')
+        resp = self.client.post(
+            reverse('biometric_liveness:submit_hardware_spo2'),
+            {'session_id': session_id, 'spo2': 98.0}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        # The internal routing marker must not leak into the client payload.
+        self.assertNotIn('state_conflict', resp.data)
+
     def test_persist_session_result_writes_status_and_verdict(self):
         """The shared persistence helper writes status AND the nuanced verdict.
 
@@ -1469,6 +1508,30 @@ class HardwareSpo2RelayTests(TestCase):
         spo2 = caps['modalities']['spo2']
         self.assertFalse(spo2['available'])  # server never measures it
         self.assertEqual(spo2['requires'], 'ble_pulse_oximeter')
+
+    def test_healthy_spo2_raises_and_abnormal_lowers_the_pulse_score(self):
+        """A present SpO2 actually MOVES the pulse liveness score -- higher when
+        healthy, lower when abnormal -- proving it gates the verdict, not just
+        displays. When absent it is excluded (not neutral-filled)."""
+        from .services.pulse_oximetry_service import PulseReading
+        pulse = PulseOximetryService()
+
+        def readings(spo2):
+            # Identical HR (72) -> hr_range 1.0 but hr_variability 0.5, so the
+            # SpO2 component actually shifts the averaged consistency score.
+            return [
+                PulseReading(timestamp_ms=i * 33.0, frame_number=i,
+                             rgb_means=(0.0, 0.0, 0.0), ppg_value=0.0,
+                             heart_rate_bpm=72.0, heart_rate_variability=30.0,
+                             spo2_estimate=spo2, signal_quality=0.8)
+                for i in range(10)
+            ]
+
+        score_none = pulse.get_liveness_score(readings(None))
+        score_healthy = pulse.get_liveness_score(readings(98.0))
+        score_abnormal = pulse.get_liveness_score(readings(80.0))
+        self.assertGreater(score_healthy, score_none)
+        self.assertLess(score_abnormal, score_none)
 
 
 class RppgSpo2HonestyTests(TestCase):

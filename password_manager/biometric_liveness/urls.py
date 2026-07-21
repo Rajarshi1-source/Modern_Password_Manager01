@@ -21,6 +21,9 @@ urlpatterns = [
     # Challenges
     path('challenge/', views.get_challenge, name='get_challenge'),
     path('challenge/respond/', views.submit_challenge_response, name='submit_challenge_response'),
+
+    # Hardware SpO2 relay (BLE pulse oximeter); shares submit_hardware_spo2 with WS.
+    path('session/spo2/', views.submit_hardware_spo2, name='submit_hardware_spo2'),
     
     # Capabilities (which modalities are genuinely operational)
     path('capabilities/', views.get_capabilities, name='get_capabilities'),
