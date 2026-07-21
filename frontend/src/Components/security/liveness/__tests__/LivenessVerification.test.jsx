@@ -274,4 +274,18 @@ describe('LivenessVerification challenge orchestration', () => {
         await act(async () => { oximeter.resolveConnect({}); });
         expect(oximeter.disconnect).toHaveBeenCalledTimes(2);
     });
+
+    it('tears down camera + oximeter when the session errors out', async () => {
+        render(<LivenessVerification />);
+        await screen.findByTestId('done-gaze'); // in the challenge view
+        fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
+        await screen.findByText(/Pulse oximeter connected/i);
+        const oximeter = MockBleOximeter.last;
+
+        // A WS-level error terminates the session -> capture must stop, not keep
+        // streaming behind the "Verification Error" screen.
+        act(() => { livenessService.__callbacks.onError('internal_error'); });
+        expect(oximeter.disconnect).toHaveBeenCalled();
+        expect(CameraUtils.stopCamera).toHaveBeenCalled();
+    });
 });

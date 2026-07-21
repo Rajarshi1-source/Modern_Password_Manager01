@@ -147,6 +147,25 @@ describe('BleOximeter pairing + relay', () => {
         expect(onDisconnect).toHaveBeenCalled();
     });
 
+    it('falls back to the spot-check characteristic and decodes it (spotCheck path)', async () => {
+        const { service, characteristic, charListeners } = mockBluetooth();
+        // Continuous characteristic is unavailable -> fall back to spot-check.
+        service.getCharacteristic
+            .mockRejectedValueOnce(new Error('not found'))
+            .mockResolvedValueOnce(characteristic);
+        const onReading = vi.fn();
+        const oximeter = new BleOximeter();
+
+        await oximeter.connect(onReading);
+
+        // Spot-check (0x2A5E) flags 0x02 = Measurement Status present, at byte 5;
+        // status 0x4000 = Questionable -> reduced quality. SpO2 98 [0x62,0x00].
+        charListeners.characteristicvaluechanged({
+            target: { value: viewOf([0x02, 0x62, 0x00, 0x48, 0x00, 0x00, 0x40]) },
+        });
+        expect(onReading).toHaveBeenCalledWith({ spo2: 98, quality: 0.5 });
+    });
+
     it('tears down the GATT connection if a post-connect step fails', async () => {
         const { gatt } = mockBluetooth();
         gatt.getPrimaryService.mockRejectedValueOnce(new Error('no service'));
