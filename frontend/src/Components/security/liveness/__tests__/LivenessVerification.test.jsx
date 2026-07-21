@@ -24,10 +24,17 @@ vi.mock('../../../../services/bleOximeter', () => {
         connect(onReading, onDisconnect) {
             this.onReading = onReading;
             this.onDisconnect = onDisconnect;
+            // When asked, keep connect() pending so a test can supersede it and
+            // then resolve it late (simulating a slow picker / GATT handshake).
+            if (MockBleOximeter.deferNextConnect) {
+                MockBleOximeter.deferNextConnect = false;
+                return new Promise((resolve) => { this.resolveConnect = resolve; });
+            }
             return Promise.resolve({});
         }
     }
     MockBleOximeter.last = null;
+    MockBleOximeter.deferNextConnect = false;
     return { isBleOximeterSupported: () => true, BleOximeter: MockBleOximeter };
 });
 
@@ -91,6 +98,7 @@ describe('LivenessVerification challenge orchestration', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         MockBleOximeter.last = null;
+        MockBleOximeter.deferNextConnect = false;
     });
 
     // Walk the mocked challenge sequence to completion, driving the server's
@@ -245,5 +253,25 @@ describe('LivenessVerification challenge orchestration', () => {
         // otherwise the backend would reject it post-completion and error the screen.
         act(() => { oximeter.onReading({ spo2: 98, quality: 1 }); });
         expect(livenessService.submitHardwareSpo2).not.toHaveBeenCalled();
+    });
+
+    it('releases a connection that resolves after being superseded (no orphaned GATT)', async () => {
+        render(<LivenessVerification />);
+        await screen.findByTestId('done-gaze'); // in the challenge view
+
+        // Start pairing but keep connect() pending (slow picker / GATT handshake).
+        MockBleOximeter.deferNextConnect = true;
+        fireEvent.click((await screen.findAllByText(/Connect pulse oximeter/i))[0]);
+        const oximeter = MockBleOximeter.last;
+
+        // The session completes while the connect() is still in flight ->
+        // disconnectOximeter() clears the ref (1st disconnect call).
+        await runToCompletion();
+        expect(oximeter.disconnect).toHaveBeenCalledTimes(1);
+
+        // The pending connect() now resolves successfully. Since the instance was
+        // superseded, it must be disconnected rather than left dangling.
+        await act(async () => { oximeter.resolveConnect({}); });
+        expect(oximeter.disconnect).toHaveBeenCalledTimes(2);
     });
 });
