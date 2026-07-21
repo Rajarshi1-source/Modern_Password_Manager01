@@ -268,6 +268,12 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     }, [onComplete]);
 
     const handleError = useCallback((message) => {
+        // A session-terminating error is a terminal state like completion: stop
+        // all biometric capture (frames, camera, oximeter) before showing the
+        // error screen, so nothing keeps streaming behind it.
+        stopFrameCapture();
+        releaseCamera();
+        disconnectOximeter();
         setError(message);
         setStatus('error');
     }, []);
