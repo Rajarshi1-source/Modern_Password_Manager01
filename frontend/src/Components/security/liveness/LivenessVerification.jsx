@@ -308,9 +308,18 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
                     }
                 }
             );
-            if (oximeterRef.current === oximeter) setSpo2Status('connected');
+            if (oximeterRef.current === oximeter) {
+                setSpo2Status('connected');
+            } else {
+                // Superseded (e.g. the session completed) while the picker / GATT
+                // handshake was still pending: the connection succeeded after the
+                // fact, so release it rather than leaving the radio open with no
+                // reference left to close it.
+                oximeter.disconnect();
+            }
         } catch {
             // User cancelled the chooser, or pairing failed: stay honest (no SpO2).
+            // A superseded rejection already tore itself down inside connect().
             if (oximeterRef.current === oximeter) {
                 oximeterRef.current = null;
                 setSpo2Status('error');
