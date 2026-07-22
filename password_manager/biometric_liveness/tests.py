@@ -782,6 +782,201 @@ class LivenessAPITests(APITestCase):
         self.assertIn('next_challenge', resp.data)
 
 
+class PersistOutboxTests(TestCase):
+    """DB-backed persist outbox: the last-resort net behind the broker retry."""
+
+    def setUp(self):
+        """Create the owning user for real LivenessSession rows."""
+        self.user = User.objects.create_user(
+            username='outboxuser', email='outbox@example.com',
+            password='testpass123')
+
+    def _result(self, sid, verdict='HIGH_CONFIDENCE_LIVE', is_verified=True):
+        """Build a frozen SessionResult for the given session id."""
+        from .services.liveness_session_service import SessionResult
+        return SessionResult(
+            session_id=sid, is_verified=is_verified, overall_liveness_score=0.9,
+            deepfake_probability=0.01, confidence=0.4, micro_expression_score=0.0,
+            gaze_tracking_score=0.9, pulse_oximetry_score=0.8, thermal_score=0.0,
+            texture_artifact_score=0.99, total_frames_processed=10,
+            duration_ms=1000.0, verdict=verdict, details={})
+
+    def _payload(self, sid, **kwargs):
+        """Build the JSON-safe persistence payload for the given session id."""
+        from .views import _liveness_result_payload
+        return _liveness_result_payload(self._result(sid, **kwargs))
+
+    def test_broker_enqueue_failure_writes_outbox_row(self):
+        """DB error + broker enqueue failure records the verdict in the outbox."""
+        from .views import persist_session_result
+        from .models import LivenessPersistOutbox
+        from django.db import DatabaseError
+        result = self._result(str(uuid.uuid4()), verdict='INSUFFICIENT_SIGNAL',
+                              is_verified=False)
+        with patch.object(LivenessSession.objects, 'get', side_effect=DatabaseError('boom')), \
+             patch('biometric_liveness.tasks.retry_persist_liveness_result.delay',
+                   side_effect=Exception('broker down')):
+            persist_session_result(result)  # must not raise
+        row = LivenessPersistOutbox.objects.get(session_id=result.session_id)
+        self.assertEqual(row.status, 'pending')
+        self.assertEqual(row.payload['verdict'], 'INSUFFICIENT_SIGNAL')
+        self.assertEqual(row.payload['session_id'], result.session_id)
+
+    def test_outbox_not_written_when_enqueue_succeeds(self):
+        """A successful broker enqueue must NOT also write an outbox row."""
+        from .views import persist_session_result
+        from .models import LivenessPersistOutbox
+        from django.db import DatabaseError
+        result = self._result(str(uuid.uuid4()))
+        with patch.object(LivenessSession.objects, 'get', side_effect=DatabaseError('boom')), \
+             patch('biometric_liveness.tasks.retry_persist_liveness_result.delay'):
+            persist_session_result(result)
+        self.assertFalse(LivenessPersistOutbox.objects.exists())
+
+    def test_outbox_write_failure_still_does_not_raise(self):
+        """Even with DB, broker AND the outbox write down, persist must not 500."""
+        from .views import persist_session_result
+        from .models import LivenessPersistOutbox
+        from django.db import DatabaseError
+        result = self._result(str(uuid.uuid4()))
+        with patch.object(LivenessSession.objects, 'get', side_effect=DatabaseError('boom')), \
+             patch('biometric_liveness.tasks.retry_persist_liveness_result.delay',
+                   side_effect=Exception('broker down')), \
+             patch.object(LivenessPersistOutbox.objects, 'update_or_create',
+                          side_effect=DatabaseError('still down')):
+            persist_session_result(result)  # must not raise
+
+    def test_retry_exhaustion_records_outbox_row(self):
+        """Exhausted broker retries fall through to the outbox, not silent loss."""
+        from .models import LivenessPersistOutbox
+        from .tasks import retry_persist_liveness_result
+        from celery.exceptions import MaxRetriesExceededError
+        from django.db import DatabaseError
+        payload = self._payload(str(uuid.uuid4()))
+        with patch('biometric_liveness.views.apply_liveness_result',
+                   side_effect=DatabaseError('boom')), \
+             patch.object(retry_persist_liveness_result, 'retry',
+                          side_effect=MaxRetriesExceededError()):
+            retry_persist_liveness_result.apply(args=[payload])
+        row = LivenessPersistOutbox.objects.get(session_id=payload['session_id'])
+        self.assertEqual(row.status, 'pending')
+        self.assertIn('exhausted', row.last_error)
+
+    def test_retry_with_budget_left_does_not_record_outbox(self):
+        """A transient failure with retries remaining stays on the broker layer."""
+        from .models import LivenessPersistOutbox
+        from .tasks import retry_persist_liveness_result
+        from celery.exceptions import Retry
+        from django.db import DatabaseError
+        payload = self._payload(str(uuid.uuid4()))
+        with patch('biometric_liveness.views.apply_liveness_result',
+                   side_effect=DatabaseError('boom')), \
+             patch.object(retry_persist_liveness_result, 'retry',
+                          side_effect=Retry()):
+            retry_persist_liveness_result.apply(args=[payload])
+        self.assertFalse(LivenessPersistOutbox.objects.exists())
+
+    def test_drain_applies_and_deletes_row(self):
+        """The sweeper writes the verdict onto the row and deletes the record."""
+        from .models import LivenessPersistOutbox
+        from .tasks import drain_liveness_persist_outbox
+        row = LivenessSession.objects.create(user=self.user, context='login')
+        LivenessPersistOutbox.objects.create(
+            session_id=row.id, payload=self._payload(str(row.id)))
+        drained = drain_liveness_persist_outbox.apply().get()
+        self.assertEqual(drained, 1)
+        row.refresh_from_db()
+        self.assertEqual(row.status, 'passed')
+        self.assertEqual(row.verdict, 'HIGH_CONFIDENCE_LIVE')
+        self.assertEqual(row.overall_liveness_score, 0.9)
+        # Applied rows are deleted -- nothing biometric lingers in the outbox.
+        self.assertFalse(LivenessPersistOutbox.objects.exists())
+
+    def test_drain_is_idempotent_against_duplicate_apply(self):
+        """A row racing a broker retry (both applying) converges on one verdict."""
+        from .views import apply_liveness_result
+        from .models import LivenessPersistOutbox
+        from .tasks import drain_liveness_persist_outbox
+        row = LivenessSession.objects.create(user=self.user, context='login')
+        payload = self._payload(str(row.id))
+        apply_liveness_result(payload)  # the broker retry got there first
+        LivenessPersistOutbox.objects.create(session_id=row.id, payload=payload)
+        drained = drain_liveness_persist_outbox.apply().get()
+        self.assertEqual(drained, 1)
+        row.refresh_from_db()
+        self.assertEqual(row.status, 'passed')
+        self.assertFalse(LivenessPersistOutbox.objects.exists())
+
+    def test_drain_drops_row_for_deleted_session(self):
+        """A payload whose session row is gone is dropped, not retried forever."""
+        from .models import LivenessPersistOutbox
+        from .tasks import drain_liveness_persist_outbox
+        orphan = str(uuid.uuid4())
+        LivenessPersistOutbox.objects.create(
+            session_id=orphan, payload=self._payload(orphan))
+        drained = drain_liveness_persist_outbox.apply().get()
+        self.assertEqual(drained, 0)
+        # Permanent failure: the record is removed (a deleted session's verdict
+        # has no home, and retaining it would be a privacy liability).
+        self.assertFalse(LivenessPersistOutbox.objects.exists())
+
+    def test_drain_transient_failure_keeps_row_and_counts_attempt(self):
+        """A transient DB failure leaves the row pending with attempts+1."""
+        from .models import LivenessPersistOutbox
+        from .tasks import drain_liveness_persist_outbox
+        from django.db import DatabaseError
+        sid = str(uuid.uuid4())
+        LivenessPersistOutbox.objects.create(
+            session_id=sid, payload=self._payload(sid))
+        with patch('biometric_liveness.views.apply_liveness_result',
+                   side_effect=DatabaseError('flaky')):
+            drained = drain_liveness_persist_outbox.apply().get()
+        self.assertEqual(drained, 0)
+        row = LivenessPersistOutbox.objects.get(session_id=sid)
+        self.assertEqual(row.status, 'pending')
+        self.assertEqual(row.attempts, 1)
+        self.assertIn('flaky', row.last_error)
+
+    def test_drain_abandons_row_after_max_attempts(self):
+        """Attempts exhausting the cap abandon the row; later sweeps skip it."""
+        from django.conf import settings as dj_settings
+        from .models import LivenessPersistOutbox
+        from .tasks import drain_liveness_persist_outbox
+        from django.db import DatabaseError
+        sid = str(uuid.uuid4())
+        LivenessPersistOutbox.objects.create(
+            session_id=sid, payload=self._payload(sid), attempts=1)
+        capped = {**dj_settings.BIOMETRIC_LIVENESS, 'OUTBOX_MAX_ATTEMPTS': 2}
+        with override_settings(BIOMETRIC_LIVENESS=capped):
+            with patch('biometric_liveness.views.apply_liveness_result',
+                       side_effect=DatabaseError('down')) as mock_apply:
+                drain_liveness_persist_outbox.apply().get()
+                row = LivenessPersistOutbox.objects.get(session_id=sid)
+                self.assertEqual(row.status, 'abandoned')
+                self.assertEqual(row.attempts, 2)
+                # An abandoned row is excluded from subsequent sweeps.
+                drain_liveness_persist_outbox.apply().get()
+                self.assertEqual(mock_apply.call_count, 1)
+
+    def test_duplicate_record_updates_single_row(self):
+        """Re-recording a session's verdict updates ONE row and resets retries."""
+        from .views import _record_persist_outbox
+        from .models import LivenessPersistOutbox
+        sid = str(uuid.uuid4())
+        payload = self._payload(sid)
+        _record_persist_outbox(payload, reason='first')
+        # Simulate a row that had already burned attempts / been abandoned.
+        LivenessPersistOutbox.objects.filter(session_id=sid).update(
+            attempts=7, status='abandoned')
+        _record_persist_outbox(payload, reason='second')
+        rows = LivenessPersistOutbox.objects.filter(session_id=sid)
+        self.assertEqual(rows.count(), 1)
+        row = rows.get()
+        self.assertEqual(row.status, 'pending')
+        self.assertEqual(row.attempts, 0)
+        self.assertEqual(row.last_error, 'second')
+
+
 class ChallengeResponseFlowTests(TestCase):
     """Gaze cognitive challenge-response is scored and gates the verdict."""
 

@@ -103,17 +103,53 @@ def apply_liveness_result(payload: dict) -> None:
     session.save()
 
 
+def _record_persist_outbox(payload: dict, reason: str = '') -> None:
+    """
+    Write a verdict to the DB-backed persist outbox -- the LAST-RESORT net.
+
+    Reached only when the broker retry layer is unavailable (enqueue failed) or
+    exhausted its retries. By then the original DatabaseError may have been
+    row-level/partial (lock timeout, deadlock on the session row) or a blip
+    that has since recovered, so an INSERT into this separate table can still
+    succeed; the beat sweeper (tasks.drain_liveness_persist_outbox) then
+    re-applies it idempotently. update_or_create keeps ONE row per session
+    (re-recording the same frozen verdict must not grow the table) and resets
+    attempts/status so a fresh record gets fresh retries. Best-effort: during a
+    FULL DB outage this write fails too -- log and return (the client already
+    holds its verdict; identical terminal behavior to before this layer
+    existed, so the net can only add durability, never a new failure mode).
+    """
+    try:
+        from .models import LivenessPersistOutbox
+        LivenessPersistOutbox.objects.update_or_create(
+            session_id=payload['session_id'],
+            defaults={
+                'payload': payload,
+                'status': 'pending',
+                'attempts': 0,
+                'last_error': reason[:500],
+            },
+        )
+        logger.warning(
+            f"Recorded liveness verdict for {payload['session_id']} in the persist outbox ({reason})")
+    except Exception:
+        logger.exception(
+            f"Could not record liveness persist-outbox row for {payload.get('session_id')}")
+
+
 def _enqueue_persist_retry(payload: dict) -> None:
     """
     Hand a verdict to the durable retry queue.
 
     The queue (Celery broker) is a SEPARATE service from the app DB, so a queued
     verdict survives a transient DB failure and is applied once the DB recovers --
-    this is why the durable layer is the broker, not a DB-backed pending table (a
-    DB row cannot be written during the very DB outage it would be protecting
-    against). Best-effort: if even the enqueue fails (broker unreachable) we have
-    logged, the client already holds its verdict, and the in-memory session stays
-    terminal for the retention window -- never propagate a 500 here.
+    this is why the PRIMARY durable layer is the broker, not a DB-backed pending
+    table (a DB row cannot be written during the very DB outage it would be
+    protecting against). If even the enqueue fails (broker unreachable), fall
+    through to the DB-backed outbox as the last-resort net -- the original
+    DB error may have been partial or already recovered, so that write can
+    still land. Never propagate a 500 here: the client already holds its
+    verdict, and the in-memory session stays terminal for the retention window.
     """
     try:
         from .tasks import retry_persist_liveness_result
@@ -121,6 +157,7 @@ def _enqueue_persist_retry(payload: dict) -> None:
     except Exception:
         logger.exception(
             f"Could not enqueue liveness persistence retry for {payload['session_id']}")
+        _record_persist_outbox(payload, reason='broker enqueue failed')
 
 
 def persist_session_result(result) -> None:
