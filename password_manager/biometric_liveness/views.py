@@ -328,7 +328,9 @@ def submit_hardware_spo2(request):
     Shares the exact server-side path as the WS ``hardware_spo2`` message
     (``submit_hardware_spo2`` -> ``ingest_hardware_spo2``, stamped on the server
     clock). SpO2 is never derived from the webcam; a bad/absent/stale reading is
-    dropped, never fabricated. ``accepted`` reports whether it was actually stored.
+    dropped, never fabricated. ``accepted`` reports whether the reading currently
+    passes both the quality floor and freshness window (not merely that it was
+    stored) -- i.e. whether it would actually surface and gate right now.
     """
     try:
         session_id = request.data.get('session_id')

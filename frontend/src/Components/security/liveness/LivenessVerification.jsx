@@ -189,6 +189,17 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         }
     };
 
+    // Stop ALL biometric capture (frames, camera, oximeter). Called from every
+    // terminal/transition path so none can forget one -- the duplication of this
+    // triplet is what produced past "termination path forgot to disconnect"
+    // findings. Stable (useCallback []) so the callbacks that list it as a dep
+    // don't churn; the leaf helpers it calls only touch refs.
+    const haltCapture = useCallback(() => {
+        stopFrameCapture();
+        releaseCamera();
+        disconnectOximeter();
+    }, []);
+
     const handleFrameResult = useCallback((data) => {
         setLivenessIndicators(prev => ({
             ...prev,
@@ -220,19 +231,16 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
         const next = index + 1;
         challengeIndexRef.current = next;
         if (next >= challengesRef.current.length) {
-            // Last challenge consumed. Stop streaming/relaying BEFORE completing
-            // so no frame or SpO2 message races the completion (the server
-            // rejects both once done, and a rejection error would clobber the
-            // result screen), and release the webcam now that it's unneeded.
-            stopFrameCapture();
-            releaseCamera();
-            disconnectOximeter();
+            // Last challenge consumed. Stop capture BEFORE completing so no frame
+            // or SpO2 message races the completion (the server rejects both once
+            // done, and a rejection error would clobber the result screen).
+            haltCapture();
             setStatus('processing');
             biometricLivenessService.completeSession();
             return;
         }
         setChallengeIndex(next);
-    }, []);
+    }, [haltCapture]);
 
     // Per-challenge outcome from the server. Advance ONLY when the challenge was
     // actually consumed; a not-yet-consumed response (next_challenge: the gaze
@@ -260,32 +268,25 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     }, [advanceToNext]);
 
     const handleSessionComplete = useCallback((data) => {
-        stopFrameCapture();
-        releaseCamera(); // ensure the webcam is off on the result screen
-        disconnectOximeter(); // and stop the oximeter relaying past completion
+        haltCapture(); // camera off + oximeter stopped on the result screen
         setResults(data);
         setStatus('complete');
 
         if (onComplete) {
             onComplete(data);
         }
-    }, [onComplete]);
+    }, [onComplete, haltCapture]);
 
     const handleError = useCallback((message) => {
         // A session-terminating error is a terminal state like completion: stop
-        // all biometric capture (frames, camera, oximeter) before showing the
-        // error screen, so nothing keeps streaming behind it.
-        stopFrameCapture();
-        releaseCamera();
-        disconnectOximeter();
+        // all biometric capture before showing the error screen.
+        haltCapture();
         setError(message);
         setStatus('error');
-    }, []);
+    }, [haltCapture]);
 
     const handleManualComplete = () => {
-        stopFrameCapture();
-        releaseCamera();
-        disconnectOximeter();
+        haltCapture();
         setStatus('processing');
         biometricLivenessService.completeSession();
     };
@@ -340,9 +341,7 @@ const LivenessVerification = ({ onComplete, onCancel, context = 'login' }) => {
     const cleanup = () => {
         initAttemptRef.current++; // invalidate any in-flight initSession
         clearRetry();
-        stopFrameCapture();
-        releaseCamera();
-        disconnectOximeter();
+        haltCapture();
         biometricLivenessService.disconnect();
     };
 
