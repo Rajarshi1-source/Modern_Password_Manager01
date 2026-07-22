@@ -2187,6 +2187,13 @@ BIOMETRIC_LIVENESS = {
     'THERMAL_ENABLED': os.environ.get('LIVENESS_THERMAL_ENABLED', 'False').lower() == 'true',
     'THERMAL_MIN_TEMP_C': _liveness_float_env('LIVENESS_THERMAL_MIN', '35.0', minimum=0.0, maximum=100.0),
     'THERMAL_MAX_TEMP_C': _liveness_float_env('LIVENESS_THERMAL_MAX', '38.0', minimum=0.0, maximum=100.0),
+
+    # Last-resort DB-backed persist outbox (swept by
+    # biometric_liveness.tasks.drain_liveness_persist_outbox). Attempts are
+    # per row; the batch bounds one sweep's work. Positive-only: a zero batch
+    # would never drain, a zero attempt cap would abandon instantly.
+    'OUTBOX_MAX_ATTEMPTS': _liveness_int_env('LIVENESS_OUTBOX_MAX_ATTEMPTS', '1000', minimum=1),
+    'OUTBOX_DRAIN_BATCH': _liveness_int_env('LIVENESS_OUTBOX_DRAIN_BATCH', '500', minimum=1),
 }
 
 # =============================================================================

@@ -343,6 +343,18 @@ app.conf.update(
         },
 
         # =================================================================
+        # Biometric Liveness
+        # =================================================================
+
+        # Drain the last-resort persist outbox: verdicts whose inline DB write
+        # AND broker retry path both failed. Idempotent re-apply; rows are
+        # deleted on success, so a healthy system sweeps an empty table.
+        'biometric-liveness-drain-persist-outbox': {
+            'task': 'biometric_liveness.tasks.drain_liveness_persist_outbox',
+            'schedule': crontab(minute='*/5'),
+        },
+
+        # =================================================================
         # Predictive Password Expiration (zero-knowledge)
         # =================================================================
 

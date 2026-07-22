@@ -667,6 +667,67 @@ class GazeTrackingData(models.Model):
         return f"GazeData({self.gaze_x:.2f}, {self.gaze_y:.2f})"
 
 
+class LivenessPersistOutbox(models.Model):
+    """
+    Last-resort pending-persist record for a finalized liveness verdict.
+
+    Layered durability for mirroring a completed session's verdict onto its
+    LivenessSession row: (1) the inline write at completion; (2) on a transient
+    DatabaseError, the Celery broker retry task -- the broker is a SEPARATE
+    service from the app DB, so it stays writable during the very DB outage
+    that broke the inline write, which is why the broker (not this table) is
+    the PRIMARY durable layer; (3) this outbox row, written only when the
+    broker layer itself fails (enqueue error, or retries exhausted). By that
+    point the original DatabaseError may have been row-level/partial (lock
+    timeout, deadlock) or a blip that has since recovered, so an INSERT into
+    this separate table can still succeed. The beat-scheduled sweeper
+    (tasks.drain_liveness_persist_outbox) re-applies pending rows idempotently
+    and DELETES them on success -- the LivenessSession row itself is the
+    durable audit record; this row is purely transport, so nothing biometric
+    lingers here once applied.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('abandoned', 'Abandoned'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session_id = models.UUIDField(
+        unique=True,
+        help_text="LivenessSession id the payload belongs to (one record per session)"
+    )
+    payload = models.JSONField(
+        help_text="JSON-safe verdict payload (views._liveness_result_payload)"
+    )
+    status = models.CharField(
+        max_length=12,
+        choices=STATUS_CHOICES,
+        default='pending',
+        help_text="pending = awaiting re-apply; abandoned = attempts exhausted, kept for operator inspection"
+    )
+    attempts = models.IntegerField(
+        default=0,
+        help_text="Failed drain attempts so far"
+    )
+    last_error = models.TextField(
+        blank=True,
+        help_text="Most recent failure (why the row is still here)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Liveness Persist Outbox Record"
+        verbose_name_plural = "Liveness Persist Outbox Records"
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['status', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"PersistOutbox({self.session_id}, {self.status}, attempts={self.attempts})"
+
+
 class MicroExpressionEvent(models.Model):
     """
     Detected micro-expression during liveness verification.
