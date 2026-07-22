@@ -56,12 +56,18 @@ def retry_persist_liveness_result(self, payload):
         countdown = min(_MAX_RETRY_COUNTDOWN, 60 * (2 ** self.request.retries))
         try:
             raise self.retry(exc=exc, countdown=countdown) from exc
-        except MaxRetriesExceededError:
+        except (MaxRetriesExceededError, DatabaseError):
             # Broker retries are exhausted (a multi-hour outage). Fall through
             # to the DB-backed outbox as the last-resort net: by now the DB may
             # be back (or the failure was row-level all along), and the beat
             # sweeper keeps re-applying idempotently. Best-effort -- if this
             # write fails too, the loss is logged, same as pre-outbox behavior.
+            # NB BOTH classes must be caught: when retry() is given exc=,
+            # Celery re-raises THAT original exception on exhaustion
+            # (raise_with_context(exc) in Task.retry) instead of raising
+            # MaxRetriesExceededError -- catching only the latter would skip
+            # this net in a real worker and lose the verdict on the final
+            # retry. Retry (budget remaining) is neither and still propagates.
             _record_persist_outbox(
                 payload, reason=f'broker retries exhausted: {exc}')
 

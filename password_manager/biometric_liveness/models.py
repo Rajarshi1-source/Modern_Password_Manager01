@@ -684,7 +684,9 @@ class LivenessPersistOutbox(models.Model):
     (tasks.drain_liveness_persist_outbox) re-applies pending rows idempotently
     and DELETES them on success -- the LivenessSession row itself is the
     durable audit record; this row is purely transport, so nothing biometric
-    lingers here once applied.
+    lingers here once applied. The session link CASCADES so that deleting the
+    session (or its user) instantly removes any still-pending OR abandoned
+    payload -- biometric-derived data must never outlive its session.
     """
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -692,9 +694,14 @@ class LivenessPersistOutbox(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    session_id = models.UUIDField(
-        unique=True,
-        help_text="LivenessSession id the payload belongs to (one record per session)"
+    # OneToOne (one record per session), CASCADE (payload never outlives the
+    # session). The attname stays `session_id`, so callers keep passing and
+    # reading raw UUIDs (update_or_create(session_id=...), row.session_id).
+    session = models.OneToOneField(
+        LivenessSession,
+        on_delete=models.CASCADE,
+        related_name='persist_outbox',
+        help_text="Session the payload belongs to (one record per session)"
     )
     payload = models.JSONField(
         help_text="JSON-safe verdict payload (views._liveness_result_payload)"
