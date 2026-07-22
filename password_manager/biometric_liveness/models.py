@@ -688,10 +688,10 @@ class LivenessPersistOutbox(models.Model):
     session (or its user) instantly removes any still-pending OR abandoned
     payload -- biometric-derived data must never outlive its session.
     """
-    STATUS_CHOICES = [
+    STATUS_CHOICES = (
         ('pending', 'Pending'),
         ('abandoned', 'Abandoned'),
-    ]
+    )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     # OneToOne (one record per session), CASCADE (payload never outlives the
