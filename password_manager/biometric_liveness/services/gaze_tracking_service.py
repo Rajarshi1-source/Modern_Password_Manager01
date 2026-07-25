@@ -109,17 +109,22 @@ class GazeTrackingService:
         logger.info("GazeTrackingService initialized")
 
     def _init_gaze_model(self):
-        """Lazily load the shared gaze estimation model (idempotent)."""
-        # A trained gaze estimation model (e.g. L2CS / MediaPipe-iris) is loaded
-        # here in a later step (wrap the load in try/except then) and MUST be
-        # stored on the CLASS -- GazeTrackingService._gaze_model -- not on self,
-        # so the capabilities singleton and every per-session instance report the
-        # same has_real_gaze_model() state. Until it exists no model is loaded and
-        # has_real_gaze_model() reports False everywhere.
+        """Lazily bind the shared face landmarker as the gaze estimator (idempotent)."""
+        # The real gaze estimator is the shared MediaPipe Tasks FaceLandmarker
+        # (iris landmarks 468-477). Stored on the CLASS -- per the round-23
+        # contract -- so the capabilities singleton and every per-session
+        # instance report the same has_real_gaze_model() state. The loader owns
+        # the double-checked load lock AND a load-attempted sentinel, so this
+        # call is lock-free on every frame whether the model is loaded or
+        # permanently absent (the round-29 constraint). Without the model asset
+        # configured, get_face_landmarker() returns None and gaze stays
+        # unavailable everywhere -- never a placeholder.
         if GazeTrackingService._gaze_model is not None:
             return
-        # Real model load lands here; assign GazeTrackingService._gaze_model.
-        return
+        from ..ml_models.face_landmarker import get_face_landmarker
+        model = get_face_landmarker()
+        if model is not None:
+            GazeTrackingService._gaze_model = model
 
     def has_real_gaze_model(self) -> bool:
         """
@@ -152,94 +157,118 @@ class GazeTrackingService:
         """
         self._init_gaze_model()
 
-        # Do not fabricate a gaze position. Without a trained estimator the
-        # eye-region/direction code below is placeholder (previously returned
-        # random coordinates), so we report "no observation" until a real model
-        # is present. Gaze then simply does not contribute to the verdict.
+        # Do not fabricate a gaze position. Without the real landmarker loaded
+        # there is nothing to measure with, so we report "no observation" and
+        # gaze simply does not contribute to the verdict.
         if not self.has_real_gaze_model():
             return None
 
         try:
-            # Extract eye regions
-            left_eye, right_eye = self._extract_eye_regions(frame, face_landmarks)
-            
-            if left_eye is None or right_eye is None:
+            # Reuse landmarks already extracted this frame (the expression
+            # analyzer runs the same shared landmarker) when they carry the
+            # iris ring (478-point set); otherwise run the landmarker here.
+            # Never fall back to anything that does not measure the real eyes.
+            landmarks = None
+            if face_landmarks is not None and len(face_landmarks) >= 478:
+                landmarks = np.asarray(face_landmarks)
+            else:
+                from ..ml_models.face_landmarker import detect_face
+                detection = detect_face(frame)
+                if detection is not None:
+                    landmarks, _ = detection
+            if landmarks is None:
                 return None
-            
-            # Estimate gaze direction
-            gaze_x, gaze_y, confidence = self._compute_gaze_direction(
-                left_eye, right_eye, frame
-            )
-            
+
+            gaze = self._gaze_from_landmarks(landmarks)
+            if gaze is None:
+                return None
+            gaze_x, gaze_y, confidence = gaze
+
             # Determine if fixation or saccade
             is_fixation = self._classify_gaze_event(gaze_x, gaze_y)
-            
-            # Estimate pupil diameter if possible
-            pupil_diameter = self._estimate_pupil_diameter(left_eye, right_eye)
-            
+
             gaze_point = GazePoint(
                 x=gaze_x,
                 y=gaze_y,
                 timestamp_ms=self._get_current_time_ms(),
                 confidence=confidence,
                 is_fixation=is_fixation,
-                pupil_diameter=pupil_diameter
+                # No real pupil detector (iris diameter is not pupil diameter);
+                # report nothing rather than inventing a measurement.
+                pupil_diameter=None,
             )
-            
+
             self.gaze_history.append(gaze_point)
             return gaze_point
-            
+
         except Exception as e:
             logger.error(f"Gaze estimation failed: {e}")
             return None
-    
-    def _extract_eye_regions(
-        self, 
-        frame: np.ndarray,
-        landmarks: Optional[np.ndarray]
-    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """Extract left and right eye regions from frame."""
-        if landmarks is None:
-            return None, None
-        
-        # Would extract eye regions based on landmark positions
-        # Returning placeholder for now
-        h, w = frame.shape[:2]
-        eye_size = 64
-        
-        # Approximate eye positions
-        left_center = (int(w * 0.35), int(h * 0.4))
-        right_center = (int(w * 0.65), int(h * 0.4))
-        
-        left_eye = frame[
-            max(0, left_center[1]-eye_size//2):left_center[1]+eye_size//2,
-            max(0, left_center[0]-eye_size//2):left_center[0]+eye_size//2
-        ]
-        right_eye = frame[
-            max(0, right_center[1]-eye_size//2):right_center[1]+eye_size//2,
-            max(0, right_center[0]-eye_size//2):right_center[0]+eye_size//2
-        ]
-        
-        return left_eye, right_eye
-    
-    def _compute_gaze_direction(
-        self,
-        left_eye: np.ndarray,
-        right_eye: np.ndarray,
-        frame: np.ndarray
-    ) -> Tuple[float, float, float]:
-        """
-        Compute normalized gaze direction from eye regions.
 
-        Real inference (through the trained model in _gaze_model) lands with the
-        gaze estimator. There is deliberately NO placeholder: returning invented
-        coordinates here would let fabricated gaze gate a liveness verdict the
-        moment a model object is assigned, even though nothing was measured.
+    # MediaPipe FaceMesh indices (478-point set with iris refinement).
+    # "Eye A"/"Eye B" rather than left/right: side naming differs between
+    # references, and nothing verdict-relevant depends on which is which --
+    # only that the two eyes are measured consistently.
+    _EYE_A = {'iris': 468, 'corner1': 33, 'corner2': 133, 'top': 159, 'bottom': 145}
+    _EYE_B = {'iris': 473, 'corner1': 362, 'corner2': 263, 'top': 386, 'bottom': 374}
+
+    @classmethod
+    def _gaze_from_landmarks(
+        cls, landmarks: np.ndarray
+    ) -> Optional[Tuple[float, float, float]]:
         """
-        raise NotImplementedError(
-            'No trained gaze estimator is wired up; gaze inference is unavailable.'
-        )
-    
+        Normalized gaze point from iris-in-socket geometry -- a REAL measurement.
+
+        For each eye, the iris center's position between the eye corners
+        (horizontal) and between the lids (vertical) tracks where the eye is
+        pointed; averaging both eyes cancels head-pose noise to first order.
+        Coordinates are IMAGE-space (uncalibrated): per-user calibration and
+        any client mirror-flip handling are tracked follow-ups -- they affect
+        sensitivity/orientation of a real measurement, not whether one exists.
+
+        Confidence derives from measurement conditions (eye openness and the
+        iris staying inside the socket bounds), so occluded/blinking frames
+        score low instead of being trusted equally.
+
+        Returns (gaze_x, gaze_y, confidence) in [0, 1], or None when the
+        geometry is degenerate (closed eyes, zero-size face, missing iris ring).
+        """
+        lm = np.asarray(landmarks, dtype=np.float64)
+        if lm.ndim != 2 or lm.shape[0] < 478:
+            return None
+
+        def eye_ratios(idx):
+            iris = lm[idx['iris']]
+            c1, c2 = lm[idx['corner1']], lm[idx['corner2']]
+            top, bottom = lm[idx['top']], lm[idx['bottom']]
+            x_lo, x_hi = min(c1[0], c2[0]), max(c1[0], c2[0])
+            width = x_hi - x_lo
+            height = bottom[1] - top[1]
+            if width < 1e-6 or height < 1e-6:
+                return None  # degenerate/closed eye: nothing to measure
+            hx = (iris[0] - x_lo) / width       # 0..1 across the eye opening
+            vy = (iris[1] - top[1]) / height    # 0..1 between the lids
+            openness = height / width           # ~0.25-0.4 for an open eye
+            return hx, vy, openness
+
+        a = eye_ratios(cls._EYE_A)
+        b = eye_ratios(cls._EYE_B)
+        if a is None or b is None:
+            return None
+
+        gaze_x = float(np.clip((a[0] + b[0]) / 2, 0.0, 1.0))
+        gaze_y = float(np.clip((a[1] + b[1]) / 2, 0.0, 1.0))
+
+        # Openness in a normal open-eye band and iris within the socket bounds
+        # => trustworthy sample; blinking or off-model geometry decays it.
+        openness = (a[2] + b[2]) / 2
+        open_score = float(np.clip(openness / 0.25, 0.0, 1.0))
+        in_bounds = all(-0.2 <= r <= 1.2 for r in (a[0], b[0], a[1], b[1]))
+        confidence = round(open_score * (1.0 if in_bounds else 0.4), 4)
+        if confidence <= 0.0:
+            return None
+        return gaze_x, gaze_y, confidence
+
     def _classify_gaze_event(self, gaze_x: float, gaze_y: float) -> bool:
         """Classify current gaze as fixation or saccade."""
         if len(self.gaze_history) < 2:
@@ -257,20 +286,7 @@ class GazeTrackingService:
         
         # Low velocity = fixation
         return velocity < 0.5  # Threshold in normalized units
-    
-    def _estimate_pupil_diameter(
-        self, 
-        left_eye: np.ndarray, 
-        right_eye: np.ndarray
-    ) -> Optional[float]:
-        """
-        Estimate pupil diameter (useful for cognitive load detection).
 
-        No real pupil detector is implemented, so report None rather than
-        inventing a measurement.
-        """
-        return None
-    
     def _get_current_time_ms(self) -> float:
         """Get current timestamp in milliseconds."""
         import time
@@ -386,16 +402,20 @@ class GazeTrackingService:
         self,
         task: CognitiveTask,
         gaze_data: List[GazePoint],
-        user_answer: Optional[str] = None
+        user_answer: Optional[str] = None,
+        challenge_start_ms: Optional[float] = None,
     ) -> TaskResult:
         """
         Validate user's gaze response to cognitive task.
-        
+
         Args:
             task: The cognitive task
             gaze_data: Recorded gaze points during task
             user_answer: User's explicit answer (for counting tasks)
-            
+            challenge_start_ms: Server epoch ms the challenge window opened. When
+                given, reaction_time_ms is the real latency from onset to the
+                first on-target gaze; omitted (legacy callers/tests) leaves it 0.
+
         Returns:
             Task validation result
         """
@@ -408,16 +428,15 @@ class GazeTrackingService:
                 gaze_path_similarity=0.0,
                 human_likelihood_score=0.0
             )
-        
+
         # Calculate metrics
         accuracy = self._calculate_gaze_accuracy(task, gaze_data)
         path_similarity = self._calculate_path_similarity(task, gaze_data)
-        # reaction_time_ms is not scored today. A real value is the latency from
-        # challenge onset to the first on-target gaze, which needs the challenge
-        # activation time (wired in with a real gaze estimator). Do NOT store the
-        # first sample's ABSOLUTE epoch timestamp here -- that is not a reaction
-        # time and would mislead any future consumer.
-        reaction_time = 0.0
+        # Real reaction latency: onset -> first on-target gaze. Only computed
+        # when the caller supplies the server-owned challenge start; otherwise 0
+        # (never the first sample's absolute epoch timestamp, which is not a
+        # reaction time).
+        reaction_time = self._calculate_reaction_time(task, gaze_data, challenge_start_ms)
         human_score = self._calculate_human_likelihood(gaze_data)
         
         # If the task has a correct answer, a matching answer is REQUIRED. A
@@ -451,29 +470,60 @@ class GazeTrackingService:
         )
     
     def _calculate_gaze_accuracy(
-        self, 
-        task: CognitiveTask, 
+        self,
+        task: CognitiveTask,
         gaze_data: List[GazePoint]
     ) -> float:
-        """Calculate how accurately user looked at targets."""
+        """
+        Fraction of targets the user actually looked at.
+
+        Each gaze sample can satisfy at most ONE target: with overlapping or
+        nearby targets, a single fixation must not tick off several of them, or
+        a stream that parks on one point would spuriously "hit" a cluster. A
+        matched sample is consumed so the next target needs a different one.
+        """
         if not task.target_positions or not gaze_data:
             return 0.0
-        
-        hits = 0
+
         threshold = 0.15  # Distance threshold for "looking at" target
-        
+        used = [False] * len(gaze_data)
+        hits = 0
+
         for target_x, target_y in task.target_positions:
-            # Check if any gaze point was near this target
-            for gaze in gaze_data:
+            for i, gaze in enumerate(gaze_data):
+                if used[i]:
+                    continue
                 distance = math.sqrt(
                     (gaze.x - target_x)**2 + (gaze.y - target_y)**2
                 )
                 if distance < threshold:
+                    used[i] = True
                     hits += 1
                     break
-        
+
         return hits / len(task.target_positions)
-    
+
+    def _calculate_reaction_time(
+        self,
+        task: CognitiveTask,
+        gaze_data: List[GazePoint],
+        challenge_start_ms: Optional[float],
+    ) -> float:
+        """
+        Latency (ms) from challenge onset to the first on-target gaze.
+
+        Returns 0.0 when the caller did not provide the onset time, or no sample
+        ever landed on a target. Never returns an absolute epoch timestamp.
+        """
+        if challenge_start_ms is None or not task.target_positions:
+            return 0.0
+        threshold = 0.15
+        for gaze in sorted(gaze_data, key=lambda g: g.timestamp_ms):
+            for target_x, target_y in task.target_positions:
+                if math.hypot(gaze.x - target_x, gaze.y - target_y) < threshold:
+                    return max(0.0, float(gaze.timestamp_ms - challenge_start_ms))
+        return 0.0
+
     def _calculate_path_similarity(
         self,
         task: CognitiveTask,
@@ -616,3 +666,35 @@ class GazeTrackingService:
         """Clear gaze history for new session."""
         self.gaze_history = []
         self.current_task = None
+
+    def snapshot_state(self) -> Dict:
+        """
+        JSON-safe per-session state for the cross-process session store.
+
+        Only gaze_history is per-session accumulator state (used by
+        _classify_gaze_event for velocity/fixation continuity). The loaded model
+        is a process-wide CLASS resource, so it is deliberately NOT snapshotted.
+        Bounded to the most recent samples so a serialized session stays small.
+        """
+        recent = self.gaze_history[-256:]
+        return {
+            'gaze_history': [
+                {
+                    'x': g.x, 'y': g.y, 'timestamp_ms': g.timestamp_ms,
+                    'confidence': g.confidence, 'is_fixation': g.is_fixation,
+                    'pupil_diameter': g.pupil_diameter,
+                }
+                for g in recent
+            ],
+        }
+
+    def restore_state(self, state: Dict) -> None:
+        """Rehydrate per-session gaze state produced by snapshot_state."""
+        self.gaze_history = [
+            GazePoint(
+                x=p['x'], y=p['y'], timestamp_ms=p['timestamp_ms'],
+                confidence=p['confidence'], is_fixation=p['is_fixation'],
+                pupil_diameter=p.get('pupil_diameter'),
+            )
+            for p in (state or {}).get('gaze_history', [])
+        ]

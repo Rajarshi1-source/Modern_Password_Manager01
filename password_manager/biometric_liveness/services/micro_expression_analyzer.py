@@ -111,71 +111,46 @@ class MicroExpressionAnalyzer:
         self.min_expression_duration_ms = self.config.get('min_duration_ms', 40)
         self.max_expression_duration_ms = self.config.get('max_duration_ms', 500)
         
-        # Initialize ML models lazily
-        self._face_mesh = None
-        self._au_model = None
-        
+        # Per-session temporal accumulators for the expression liveness score
+        # (blink dynamics + AU variation over the session). Populated by
+        # observe(); serialized by snapshot_state for the cross-process store.
+        self.au_history: List[Dict[int, float]] = []
+        self.au_timestamps: List[float] = []
+        self._prev_landmarks: Optional[np.ndarray] = None
+
         logger.info("MicroExpressionAnalyzer initialized")
-    
-    def _init_models(self):
-        """Lazy initialization of ML models."""
-        if self._face_mesh is None:
-            try:
-                import mediapipe as mp
-                from mediapipe.python.solutions import face_mesh
-                self._face_mesh = face_mesh.FaceMesh(
-                    static_image_mode=False,
-                    max_num_faces=1,
-                    refine_landmarks=True,
-                    min_detection_confidence=0.5,
-                    min_tracking_confidence=0.5
-                )
-                logger.info("MediaPipe FaceMesh initialized")
-            except ImportError:
-                logger.warning("MediaPipe not available, using fallback detection")
-                self._face_mesh = None
-    
+
+    def has_real_landmark_source(self) -> bool:
+        """
+        True only when the shared MediaPipe FaceLandmarker is actually loaded.
+
+        Same process-wide resource the gaze estimator uses, so the singleton and
+        every per-session instance agree. Without it, extract_landmarks yields
+        None and the expression modality stays unavailable and excluded from
+        scoring -- never a fabricated signal.
+        """
+        from ..ml_models.face_landmarker import get_face_landmarker
+        return get_face_landmarker() is not None
+
     def extract_landmarks(self, frame: np.ndarray) -> Optional[np.ndarray]:
         """
-        Extract facial landmarks from a video frame.
-        
+        Extract facial landmarks from a video frame via the shared landmarker.
+
         Args:
             frame: RGB image frame (H, W, 3)
-            
-        Returns:
-            Array of 468 landmarks (x, y, z) or None if no face detected
-        """
-        self._init_models()
-        
-        if self._face_mesh is None:
-            return self._fallback_landmark_detection(frame)
-        
-        try:
-            results = self._face_mesh.process(frame)
-            if results.multi_face_landmarks:
-                landmarks = results.multi_face_landmarks[0]
-                return np.array([
-                    [lm.x, lm.y, lm.z] 
-                    for lm in landmarks.landmark
-                ])
-        except Exception as e:
-            logger.error(f"Landmark extraction failed: {e}")
-        
-        return None
-    
-    def _fallback_landmark_detection(self, frame: np.ndarray) -> Optional[np.ndarray]:
-        """
-        No real landmark detector available (MediaPipe not loaded).
 
-        Returns None rather than fabricating landmarks. The placeholder removed
-        here (`np.random.rand(468, 3) * [w, h, 0.1]`) was pixel-scale, so it also
-        corrupted downstream ROI math that expects normalised coords (e.g. the
-        rPPG forehead crop) -- but normalising it would not have made it usable:
-        random points bear no relation to the face in the observed frame, so they
-        inject a fake biometric signal either way. Landmark-based checks are
-        simply unavailable until a real detector is present.
+        Returns:
+            Array of 478 landmarks (x, y, z), normalized, or None if no real
+            landmark source is loaded or no face is detected. The 478-point set
+            (468 face + 10 iris) is shared with the gaze estimator so a frame is
+            detected once. Never fabricates landmarks.
         """
-        return None
+        from ..ml_models.face_landmarker import detect_face
+        detection = detect_face(frame)
+        if detection is None:
+            return None
+        landmarks, _blendshapes = detection
+        return landmarks
     
     def extract_action_units(
         self, 
@@ -221,82 +196,241 @@ class MicroExpressionAnalyzer:
         # AU26: Jaw Drop
         aus[26] = self._calculate_au26_intensity(landmarks)
         
-        # AU45: Blink - requires temporal analysis
-        if prev_landmarks is not None:
-            aus[45] = self._calculate_blink_intensity(landmarks, prev_landmarks)
-        else:
-            aus[45] = 0.0
-        
+        # AU45: Blink - low eye-aspect-ratio (real geometry, no temporal needed)
+        aus[45] = self._calculate_blink_intensity(landmarks, prev_landmarks)
+
         return aus
-    
+
+    # MediaPipe FaceMesh canonical indices (468/478-point set).
+    _IDX = {
+        'eyeA_out': 33, 'eyeA_in': 133, 'eyeA_up': 159, 'eyeA_lo': 145,
+        'eyeB_in': 362, 'eyeB_out': 263, 'eyeB_up': 386, 'eyeB_lo': 374,
+        'brA_in': 107, 'brB_in': 336, 'brA_out': 70, 'brB_out': 300,
+        'mouth_l': 61, 'mouth_r': 291, 'lip_up_in': 13, 'lip_lo_in': 14,
+        'lip_up_out': 0, 'lip_lo_out': 17, 'nose_bridge': 6,
+    }
+
+    @staticmethod
+    def _pt(landmarks: np.ndarray, i: int) -> np.ndarray:
+        """Landmark i as a float point, or origin when the index is absent."""
+        if i < len(landmarks):
+            return np.asarray(landmarks[i], dtype=np.float64)
+        return np.zeros(3, dtype=np.float64)
+
+    def _iod(self, landmarks: np.ndarray) -> float:
+        """
+        Inter-ocular distance: the scale reference that makes AU intensities
+        invariant to face size/camera distance. ~0 for degenerate (all-zero)
+        landmarks, which makes every AU return 0.0 (no fabricated signal).
+        """
+        a = self._pt(landmarks, self._IDX['eyeA_out'])
+        b = self._pt(landmarks, self._IDX['eyeB_out'])
+        return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+
+    def _eye_aspect_ratio(self, landmarks: np.ndarray) -> Optional[float]:
+        """Mean vertical/horizontal opening of both eyes (~0.3 open, <0.15 shut)."""
+        def ear(out, inn, up, lo):
+            po, pi = self._pt(landmarks, out), self._pt(landmarks, inn)
+            pu, pl = self._pt(landmarks, up), self._pt(landmarks, lo)
+            width = np.hypot(po[0] - pi[0], po[1] - pi[1])
+            if width < 1e-6:
+                return None
+            return abs(pl[1] - pu[1]) / width
+        a = ear(self._IDX['eyeA_out'], self._IDX['eyeA_in'],
+                self._IDX['eyeA_up'], self._IDX['eyeA_lo'])
+        b = ear(self._IDX['eyeB_in'], self._IDX['eyeB_out'],
+                self._IDX['eyeB_up'], self._IDX['eyeB_lo'])
+        if a is None or b is None:
+            return None
+        return (a + b) / 2
+
     def _calculate_au1_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU1 (Inner Brow Raiser) intensity."""
-        # Landmark indices for inner brow (MediaPipe)
-        # Using approximate indices - would refine for production
-        inner_brow_l = landmarks[107] if len(landmarks) > 107 else landmarks[0]
-        inner_brow_r = landmarks[336] if len(landmarks) > 336 else landmarks[0]
-        nose_bridge = landmarks[6] if len(landmarks) > 6 else landmarks[0]
-        
-        # Calculate vertical displacement
-        brow_height = (inner_brow_l[1] + inner_brow_r[1]) / 2
-        ref_height = nose_bridge[1]
-        
-        # Normalize to 0-1 intensity
-        displacement = max(0, ref_height - brow_height)
-        return min(1.0, displacement * 5.0)  # Scaling factor
-    
+        """AU1 (Inner Brow Raiser): inner brows raised above the nose bridge."""
+        iod = self._iod(landmarks)
+        if iod < 1e-6:
+            return 0.0
+        brow = (self._pt(landmarks, self._IDX['brA_in'])[1]
+                + self._pt(landmarks, self._IDX['brB_in'])[1]) / 2
+        ref = self._pt(landmarks, self._IDX['nose_bridge'])[1]
+        # Raised brow sits higher (smaller y) than the bridge; scale by iod.
+        return float(np.clip((ref - brow) / iod - 0.35, 0.0, 1.0))
+
+    def _brow_eye_gap(self, landmarks: np.ndarray, brow_idx: int, eye_up_idx: int) -> float:
+        """Vertical brow-to-upper-lid gap, normalized by inter-ocular distance."""
+        iod = self._iod(landmarks)
+        if iod < 1e-6:
+            return 0.0
+        brow = self._pt(landmarks, brow_idx)
+        eye = self._pt(landmarks, eye_up_idx)
+        return abs(eye[1] - brow[1]) / iod
+
     def _calculate_au2_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU2 (Outer Brow Raiser) intensity."""
-        # Real geometry is not implemented yet, so return 0.0 (AU inactive) rather
-        # than a fabricated random intensity. A random value would inject a fake
-        # biometric signal the moment the expression scoring pipeline is wired --
-        # the same never-fabricate stance as _fallback_landmark_detection and
-        # GazeTrackingService._compute_gaze_direction. 0.0 matches the AU45=0.0
-        # "no signal" default used in extract_action_units.
-        return 0.0
-    
+        """AU2 (Outer Brow Raiser): outer brows lifted away from the eyes."""
+        gap = (self._brow_eye_gap(landmarks, self._IDX['brA_out'], self._IDX['eyeA_up'])
+               + self._brow_eye_gap(landmarks, self._IDX['brB_out'], self._IDX['eyeB_up'])) / 2
+        if gap <= 0.0:
+            return 0.0
+        return float(np.clip((gap - 0.45) / 0.4, 0.0, 1.0))
+
     def _calculate_au4_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU4 (Brow Lowerer) intensity."""
-        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
-        return 0.0
-    
+        """AU4 (Brow Lowerer): inner brows pulled DOWN toward the eyes."""
+        gap = (self._brow_eye_gap(landmarks, self._IDX['brA_in'], self._IDX['eyeA_up'])
+               + self._brow_eye_gap(landmarks, self._IDX['brB_in'], self._IDX['eyeB_up'])) / 2
+        if gap <= 0.0:
+            return 0.0
+        # Smaller gap => brow lowered. Below the neutral band => AU4 active.
+        return float(np.clip((0.30 - gap) / 0.25, 0.0, 1.0))
+
     def _calculate_au5_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU5 (Upper Lid Raiser) intensity."""
-        # Eye-aspect-ratio geometry not implemented; 0.0 (inactive), not
-        # fabricated -- see _calculate_au2_intensity.
-        return 0.0
-    
+        """AU5 (Upper Lid Raiser): eyes opened WIDER than neutral (high EAR)."""
+        ear = self._eye_aspect_ratio(landmarks)
+        if ear is None:
+            return 0.0
+        return float(np.clip((ear - 0.32) / 0.18, 0.0, 1.0))
+
     def _calculate_au6_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU6 (Cheek Raiser) intensity."""
-        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
-        return 0.0
-    
+        """
+        AU6 (Cheek Raiser): lower-lid raise that narrows the eye during a genuine
+        (Duchenne) smile -- approximated as eye narrowing that co-occurs with AU12.
+        """
+        ear = self._eye_aspect_ratio(landmarks)
+        if ear is None:
+            return 0.0
+        narrowing = float(np.clip((0.28 - ear) / 0.18, 0.0, 1.0))
+        return float(narrowing * self._calculate_au12_intensity(landmarks))
+
     def _calculate_au12_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU12 (Lip Corner Puller/Smile) intensity."""
-        # Lip-corner geometry not implemented; 0.0 (inactive), not fabricated --
-        # see _calculate_au2_intensity.
-        return 0.0
-    
+        """AU12 (Lip Corner Puller/Smile): mouth widened and corners raised."""
+        iod = self._iod(landmarks)
+        if iod < 1e-6:
+            return 0.0
+        l = self._pt(landmarks, self._IDX['mouth_l'])
+        r = self._pt(landmarks, self._IDX['mouth_r'])
+        up = self._pt(landmarks, self._IDX['lip_up_in'])
+        lo = self._pt(landmarks, self._IDX['lip_lo_in'])
+        width = np.hypot(l[0] - r[0], l[1] - r[1]) / iod
+        mouth_center_y = (up[1] + lo[1]) / 2
+        corner_y = (l[1] + r[1]) / 2
+        # Smile widens the mouth AND lifts the corners above the lip center.
+        raise_ratio = (mouth_center_y - corner_y) / iod
+        width_score = np.clip((width - 0.95) / 0.4, 0.0, 1.0)
+        raise_score = np.clip((raise_ratio + 0.02) / 0.12, 0.0, 1.0)
+        return float(np.clip(0.5 * width_score + 0.5 * raise_score, 0.0, 1.0))
+
     def _calculate_au25_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU25 (Lips Part) intensity."""
-        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
-        return 0.0
-    
+        """AU25 (Lips Part): inner-lip vertical gap."""
+        iod = self._iod(landmarks)
+        if iod < 1e-6:
+            return 0.0
+        up = self._pt(landmarks, self._IDX['lip_up_in'])
+        lo = self._pt(landmarks, self._IDX['lip_lo_in'])
+        gap = abs(lo[1] - up[1]) / iod
+        return float(np.clip((gap - 0.02) / 0.15, 0.0, 1.0))
+
     def _calculate_au26_intensity(self, landmarks: np.ndarray) -> float:
-        """Calculate AU26 (Jaw Drop) intensity."""
-        # Not implemented; 0.0 (inactive), not fabricated -- see _calculate_au2_intensity.
-        return 0.0
-    
+        """AU26 (Jaw Drop): large outer-lip vertical opening."""
+        iod = self._iod(landmarks)
+        if iod < 1e-6:
+            return 0.0
+        up = self._pt(landmarks, self._IDX['lip_up_out'])
+        lo = self._pt(landmarks, self._IDX['lip_lo_out'])
+        gap = abs(lo[1] - up[1]) / iod
+        return float(np.clip((gap - 0.25) / 0.35, 0.0, 1.0))
+
     def _calculate_blink_intensity(
-        self, 
-        landmarks: np.ndarray, 
-        prev_landmarks: np.ndarray
+        self,
+        landmarks: np.ndarray,
+        prev_landmarks: Optional[np.ndarray] = None
     ) -> float:
-        """Detect blink from eye aspect ratio change."""
-        # Eye-aspect-ratio blink geometry not implemented; 0.0 (no blink), not
-        # fabricated -- see _calculate_au2_intensity.
-        return 0.0
-    
+        """AU45 (Blink): eyes closed => low eye-aspect-ratio."""
+        ear = self._eye_aspect_ratio(landmarks)
+        if ear is None:
+            return 0.0
+        # EAR ~0.30 open, ~0.10 shut. Higher intensity as the eye closes.
+        return float(np.clip((0.22 - ear) / 0.15, 0.0, 1.0))
+
+    def observe(self, landmarks: np.ndarray, timestamp_ms: float) -> Dict[int, float]:
+        """
+        Extract AUs for a frame AND accumulate them for the session-level
+        expression liveness score. Uses the previous frame's landmarks for any
+        temporal AU and remembers the current ones. Returns the per-frame AUs.
+        """
+        aus = self.extract_action_units(landmarks, self._prev_landmarks)
+        if aus:
+            self.au_history.append(aus)
+            self.au_timestamps.append(float(timestamp_ms))
+            self._prev_landmarks = np.asarray(landmarks)
+        return aus
+
+    # Frames needed before the expression modality can score at all.
+    MIN_EXPRESSION_FRAMES = 15
+
+    def get_session_expression_score(self) -> Optional[float]:
+        """
+        Session-level expression LIVENESS score from accumulated AU dynamics.
+
+        Returns None -- so the modality is EXCLUDED, never defaulted to a passing
+        value -- when no real landmark source is loaded or too few frames were
+        observed. Otherwise scores temporal dynamics that a live face produces
+        and a static photo/screen cannot: at least one blink, and natural
+        variation in the brow/mouth AUs over the session. This is the real
+        liveness signal (a photo yields a flat, blink-free AU track), robust to
+        exact per-AU calibration.
+        """
+        if not self.has_real_landmark_source():
+            return None
+        if len(self.au_history) < self.MIN_EXPRESSION_FRAMES:
+            return None
+
+        # Blink dynamics: a live subject blinks; peaks in the AU45 track.
+        blink_track = [a.get(45, 0.0) for a in self.au_history]
+        blinked = any(v > 0.5 for v in blink_track)
+        blink_score = 1.0 if blinked else 0.0
+
+        # Facial motion: brow/mouth AUs vary over time on a live face; a still
+        # image gives a near-constant track (variance ~0).
+        motion_aus = (1, 2, 4, 12, 25, 26)
+        variances = []
+        for au in motion_aus:
+            track = [a.get(au, 0.0) for a in self.au_history]
+            variances.append(float(np.var(track)))
+        mean_var = float(np.mean(variances)) if variances else 0.0
+        # ~0.0025 std (0.05 intensity swing) already reads as clearly live.
+        motion_score = float(np.clip(mean_var / 0.0025, 0.0, 1.0))
+
+        return float(0.5 * blink_score + 0.5 * motion_score)
+
+    def snapshot_state(self) -> Dict:
+        """
+        JSON-safe per-session expression state for the cross-process store.
+
+        The AU history and previous-frame landmarks ARE the session accumulator
+        behind get_session_expression_score, so they must survive a REST<->WS
+        worker hand-off. Bounded to recent frames to keep the payload small; the
+        loaded landmarker is a process-wide resource and is not snapshotted.
+        """
+        return {
+            'au_history': [
+                {str(k): v for k, v in a.items()} for a in self.au_history[-512:]
+            ],
+            'au_timestamps': list(self.au_timestamps[-512:]),
+            'prev_landmarks': (
+                self._prev_landmarks.tolist()
+                if self._prev_landmarks is not None else None
+            ),
+        }
+
+    def restore_state(self, state: Dict) -> None:
+        """Rehydrate expression accumulators produced by snapshot_state."""
+        state = state or {}
+        self.au_history = [
+            {int(k): float(v) for k, v in a.items()}
+            for a in state.get('au_history', [])
+        ]
+        self.au_timestamps = list(state.get('au_timestamps', []))
+        prev = state.get('prev_landmarks')
+        self._prev_landmarks = np.asarray(prev) if prev is not None else None
+
     def detect_micro_expressions(
         self,
         au_sequence: List[Dict[int, float]],

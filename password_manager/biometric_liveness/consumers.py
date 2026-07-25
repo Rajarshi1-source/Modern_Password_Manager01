@@ -12,7 +12,9 @@ from channels.db import database_sync_to_async
 from asgiref.sync import sync_to_async
 
 from .frame_utils import decode_frame
-from .services.liveness_session_service import GazeChallengeIncompleteError
+from .services.liveness_session_service import (
+    GazeChallengeIncompleteError, SessionLockError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +124,10 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 'results': result.get('results', {}),
                 'current_challenge': result.get('current_challenge', 0),
             })
-            
+
+        except SessionLockError:
+            await self.send_json({'type': 'error', 'message': 'session_busy',
+                                  'retryable': True})
         except Exception as e:
             logger.error(f"Frame processing error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
@@ -147,6 +152,9 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 'challenge_type': challenge_type,
                 **result,
             })
+        except SessionLockError:
+            await self.send_json({'type': 'error', 'message': 'session_busy',
+                                  'retryable': True})
         except Exception as e:
             logger.error(f"Challenge response error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
@@ -169,6 +177,9 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 await self.send_json({'type': 'error', 'message': result['error']})
                 return
             await self.send_json({'type': 'spo2_result', **result})
+        except SessionLockError:
+            await self.send_json({'type': 'error', 'message': 'session_busy',
+                                  'retryable': True})
         except Exception as e:
             logger.error(f"Hardware SpO2 ingest error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
@@ -199,6 +210,9 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             # gaze challenge and retry rather than treat this as terminal.
             await self.send_json({'type': 'error',
                                   'message': 'required_challenge_incomplete',
+                                  'retryable': True})
+        except SessionLockError:
+            await self.send_json({'type': 'error', 'message': 'session_busy',
                                   'retryable': True})
         except ValueError as e:
             # Session not found / already completed / expired -> terminal state.
