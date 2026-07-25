@@ -113,6 +113,11 @@ PyYAML==6.0.2
 inflection==0.5.1
 uritemplate==4.1.1
 packaging==25.0
+# Build tooling, pulled in transitively. Floored at 83.0.0 for PYSEC-2026-3447
+# (a file could bypass an NFC exclusion rule and be packed into a source
+# distribution). A floor, not an ==: setuptools is a build requirement for other
+# packages, so an exact pin here risks conflicting with theirs.
+setuptools>=83.0.0
 
 # Encoding
 cffi>=2.0.0
