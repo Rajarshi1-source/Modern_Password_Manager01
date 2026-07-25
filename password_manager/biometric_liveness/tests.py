@@ -1903,6 +1903,11 @@ class _FakeRedis:
     def pexpire(self, name, ms):
         return True
 
+    def expire(self, name, seconds, nx=False, xx=False, gt=False, lt=False):
+        # TTL is not modelled here (see the class note); accept the Redis 7+
+        # EXPIRE NX kwargs so the terminal-save backfill path runs unchanged.
+        return 1 if name in self.kv else 0
+
     def sadd(self, name, *vals):
         s = self.sets.setdefault(name, set())
         added = 0
