@@ -348,6 +348,13 @@ class RedisSessionStore:
             # the session was last live, so a client polling complete cannot keep
             # a terminal blob resident indefinitely by re-completing.
             self.redis.set(self._KEY + session_id, blob, keepttl=True)
+            # KEEPTTL only PRESERVES an existing TTL; if the key had none -- it
+            # expired+evicted between load and this save, or a first save that is
+            # already terminal -- the blob would become PERSISTENT forever,
+            # breaking the retention bound. Backfill retention with NX so an
+            # existing countdown is untouched (no-op) but a TTL-less terminal
+            # blob still expires (Redis 7+ EXPIRE NX).
+            self.redis.expire(self._KEY + session_id, self.retention_seconds, nx=True)
         self._index_live(session_id, session, is_live)
 
     def delete(self, session_id: str) -> None:
