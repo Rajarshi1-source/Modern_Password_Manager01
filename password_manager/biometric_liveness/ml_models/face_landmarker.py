@@ -29,7 +29,9 @@ keep a small POOL of independent detector instances and hand one to each
 inference: a detector is still touched by exactly one thread at a time (the
 guarantee that matters), while sessions run concurrently up to the pool size.
 Each instance carries its own copy of the model weights, so the pool is sized
-modestly and is configurable via ``LIVENESS_FACE_LANDMARKER_POOL``.
+modestly and is configurable via ``BIOMETRIC_LIVENESS['FACE_LANDMARKER_POOL']``
+/ env ``LIVENESS_FACE_LANDMARKER_POOL`` (the same settings-key-and-env pairing
+as the model asset above -- this module reads the settings key).
 """
 
 import logging
