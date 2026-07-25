@@ -2194,6 +2194,22 @@ BIOMETRIC_LIVENESS = {
     # would never drain, a zero attempt cap would abandon instantly.
     'OUTBOX_MAX_ATTEMPTS': _liveness_int_env('LIVENESS_OUTBOX_MAX_ATTEMPTS', '1000', minimum=1),
     'OUTBOX_DRAIN_BATCH': _liveness_int_env('LIVENESS_OUTBOX_DRAIN_BATCH', '500', minimum=1),
+
+    # Real landmark source (MediaPipe Tasks FaceLandmarker .task asset). When
+    # set to a readable file, the gaze estimator and the micro-expression AU
+    # geometry become genuinely operational and gate the verdict; unset (the
+    # default) keeps both capability-gated OFF -- hidden and excluded, never a
+    # fabricated signal. Provisioning it requires a process restart (the loader
+    # short-circuits after one attempt).
+    'FACE_LANDMARKER_MODEL': os.environ.get('LIVENESS_FACE_LANDMARKER_MODEL', ''),
+
+    # Cross-process session store backend: 'memory' (default, per-worker dict --
+    # correct only single-process) or 'redis' (shared across REST/WS workers and
+    # replicas). Redis uses REDIS_URL. The in-memory path is byte-for-byte the
+    # prior behaviour so existing single-process deployments are unaffected.
+    'SESSION_STORE': os.environ.get('LIVENESS_SESSION_STORE', 'memory'),
+    'SESSION_STORE_REDIS_URL': os.environ.get(
+        'LIVENESS_SESSION_REDIS_URL', os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/3')),
 }
 
 # =============================================================================

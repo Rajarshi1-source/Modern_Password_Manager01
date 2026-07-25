@@ -1805,3 +1805,424 @@ class RppgSpo2HonestyTests(TestCase):
         self.assertEqual(extractor._calculate_spo2(), (None, 0.0))
         result = extractor.process_frame(np.full((120, 120, 3), 150, dtype=np.uint8))
         self.assertIsNone(result.get('spo2'))
+
+
+class _FakeRedis:
+    """
+    Minimal in-process Redis double for the session-store tests.
+
+    Implements only what RedisSessionStore uses (set with nx/px/ex, get, delete,
+    exists, pexpire, sadd/srem/scard/smembers), returning bytes like a real
+    from_url() client so the store's decode paths are exercised. TTL is not
+    simulated -- the tests are hermetic and assert state sharing/locking, not
+    expiry timing.
+    """
+
+    def __init__(self):
+        self.kv = {}
+        self.sets = {}
+
+    @staticmethod
+    def _b(v):
+        return v if isinstance(v, bytes) else str(v).encode('utf-8')
+
+    def set(self, name, value, nx=False, px=None, ex=None):
+        if nx and name in self.kv:
+            return None
+        self.kv[name] = self._b(value)
+        return True
+
+    def get(self, name):
+        return self.kv.get(name)
+
+    def delete(self, *names):
+        removed = 0
+        for name in names:
+            removed += self.kv.pop(name, None) is not None
+            removed += self.sets.pop(name, None) is not None
+        return removed
+
+    def exists(self, name):
+        return 1 if name in self.kv else 0
+
+    def pexpire(self, name, ms):
+        return True
+
+    def sadd(self, name, *vals):
+        s = self.sets.setdefault(name, set())
+        added = 0
+        for v in vals:
+            b = self._b(v)
+            if b not in s:
+                s.add(b)
+                added += 1
+        return added
+
+    def srem(self, name, *vals):
+        s = self.sets.get(name, set())
+        removed = 0
+        for v in vals:
+            b = self._b(v)
+            if b in s:
+                s.discard(b)
+                removed += 1
+        return removed
+
+    def scard(self, name):
+        return len(self.sets.get(name, set()))
+
+    def smembers(self, name):
+        return set(self.sets.get(name, set()))
+
+
+def _redis_service(fake, retention=420):
+    """A LivenessSessionService wired to a shared fake-Redis store."""
+    from .services.liveness_session_service import LivenessSessionService
+    from .services.session_store import RedisSessionStore
+    svc = LivenessSessionService()
+    svc._redis_store = RedisSessionStore(fake, svc._new_session_services, retention)
+    return svc
+
+
+class SessionStoreSerializationTests(TestCase):
+    """serialize/deserialize must round-trip every non-trivial session field."""
+
+    def test_round_trip_preserves_state(self):
+        from .services.session_store import serialize_session, deserialize_session
+        from .services.liveness_session_service import LivenessSessionService
+        from .services.gaze_tracking_service import GazePoint, TaskResult, CognitiveTaskType
+        from .services.pulse_oximetry_service import PulseReading
+        svc = LivenessSessionService()
+        info = svc.create_session(user_id=7, context='login')
+        sid = info['session_id']
+        session = svc.active_sessions[sid]
+        # Populate representative accumulator state across every serialized type.
+        session['frames_processed'] = 12
+        session['status'] = 'in_progress'
+        session['answered_challenges'] = {0, 2}
+        session['challenge_activated_ms'] = {0: 111.0, 1: 222.0}
+        session['failed_required_challenges'] = ['gaze']
+        session['pulse_readings'] = [PulseReading(
+            timestamp_ms=1.0, frame_number=1, rgb_means=(1.0, 2.0, 3.0),
+            ppg_value=0.5, heart_rate_bpm=72.0, heart_rate_variability=5.0,
+            spo2_estimate=98.0, signal_quality=0.9)]
+        session['gaze_track'] = [GazePoint(x=0.5, y=0.5, timestamp_ms=10.0,
+                                           confidence=0.8, is_fixation=True)]
+        session['gaze_task_results'] = [TaskResult(
+            task_type=CognitiveTaskType.FOLLOW_TARGET, is_passed=True,
+            accuracy_score=0.8, reaction_time_ms=300.0,
+            gaze_path_similarity=0.7, human_likelihood_score=0.9)]
+        session['deepfake_probs'] = [0.1, 0.2]
+        session['expression_score'] = 0.66
+
+        blob = serialize_session(session)
+        restored = deserialize_session(blob, svc._new_session_services)
+
+        self.assertEqual(restored['frames_processed'], 12)
+        self.assertEqual(restored['status'], 'in_progress')
+        # A set survives as a set (the replay guard depends on membership).
+        self.assertEqual(restored['answered_challenges'], {0, 2})
+        # challenge_activated_ms keys must come back as ints, not JSON strings.
+        self.assertEqual(restored['challenge_activated_ms'], {0: 111.0, 1: 222.0})
+        self.assertEqual(restored['failed_required_challenges'], ['gaze'])
+        self.assertEqual(restored['pulse_readings'][0].heart_rate_bpm, 72.0)
+        self.assertEqual(restored['gaze_track'][0].x, 0.5)
+        self.assertTrue(restored['gaze_task_results'][0].is_passed)
+        self.assertEqual(restored['expression_score'], 0.66)
+        # The randomized cognitive task survives so scoring stays reproducible.
+        gaze_ch = next(c for c in restored['challenges'] if c['type'] == 'gaze')
+        self.assertIsNotNone(gaze_ch['cognitive_task'])
+        self.assertEqual(gaze_ch['cognitive_task'].task_type,
+                         CognitiveTaskType.FOLLOW_TARGET)
+
+    def test_pulse_buffers_survive_round_trip(self):
+        """The rPPG accumulator (the actual pulse signal) must survive a hand-off."""
+        from .services.session_store import serialize_session, deserialize_session
+        from .services.liveness_session_service import LivenessSessionService
+        svc = LivenessSessionService()
+        info = svc.create_session(user_id=1)
+        sid = info['session_id']
+        session = svc.active_sessions[sid]
+        pulse = session['services']['pulse']
+        for i in range(20):
+            pulse.process_frame(np.full((64, 64, 3), 120, dtype=np.uint8), float(i))
+        depth = len(pulse.rgb_buffer)
+        self.assertGreater(depth, 0)
+        restored = deserialize_session(serialize_session(session),
+                                       svc._new_session_services)
+        self.assertEqual(len(restored['services']['pulse'].rgb_buffer), depth)
+
+
+class RedisSessionStoreCrossProcessTests(TestCase):
+    """The core claim: a session created by one worker is usable by another."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='xproc', email='x@example.com', password='pw')
+        self.fake = _FakeRedis()
+        # Two INDEPENDENT service instances over the SAME shared Redis -- stand-ins
+        # for the REST worker and the WS worker (different processes/replicas).
+        self.rest = _redis_service(self.fake)
+        self.ws = _redis_service(self.fake)
+
+    def _frame(self):
+        return np.full((64, 64, 3), 120, dtype=np.uint8)
+
+    def test_session_created_on_one_instance_is_processable_on_another(self):
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        # The WS instance -- which never saw create_session -- finds it and the
+        # frame counter accumulates ACROSS the process boundary.
+        r1 = self.ws.process_frame(sid, self._frame(), 1.0)
+        self.assertEqual(r1['frame_number'], 1)
+        r2 = self.rest.process_frame(sid, self._frame(), 2.0)
+        self.assertEqual(r2['frame_number'], 2)
+        self.assertNotIn(sid, self.rest._sessions_mem)  # nothing kept in-process
+
+    def test_replay_guard_survives_across_instances(self):
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        # Answer the expression challenge (seq 1) on the WS instance.
+        self.ws.process_frame(sid, self._frame(), 1.0)
+        first = self.ws.submit_challenge_response(sid, {'sequence': 1})
+        self.assertNotIn('error', first)
+        # The REST instance must see it as already answered (shared set).
+        again = self.rest.submit_challenge_response(sid, {'sequence': 1})
+        self.assertEqual(again.get('error'), 'Challenge already answered')
+
+    def test_completion_is_idempotent_across_instances(self):
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        for i in range(3):
+            self.ws.process_frame(sid, self._frame(), float(i))
+        first = self.rest.complete_session(sid)
+        # The WS instance re-completing returns the SAME frozen verdict, not a
+        # re-score or a state error (idempotent completion across processes).
+        second = self.ws.complete_session(sid)
+        self.assertEqual(first.verdict, second.verdict)
+        self.assertEqual(first.is_verified, second.is_verified)
+        self.assertEqual(first.overall_liveness_score, second.overall_liveness_score)
+
+    def test_lock_is_released_after_an_exception(self):
+        missing = 'does-not-exist'
+        with self.assertRaises(ValueError):
+            self.rest.complete_session(missing)
+        # The per-session lock must have been released in the finally, so a new
+        # caller can still acquire it (no leaked lock on the error path).
+        self.assertTrue(self.rest._redis_store.acquire(missing))
+
+    def test_capacity_counts_shared_live_sessions(self):
+        # A tiny global cap enforced across BOTH instances via the shared index.
+        from .services.liveness_session_service import SessionCapacityError
+        for s in (self.rest, self.ws):
+            s.config = {**s.config, 'MAX_ACTIVE_SESSIONS': 2}
+        self.rest.create_session(user_id=self.user.id)
+        self.ws.create_session(user_id=self.user.id)
+        with self.assertRaises(SessionCapacityError):
+            self.rest.create_session(user_id=self.user.id)
+
+    def test_discard_frees_a_capacity_slot_cross_instance(self):
+        from .services.liveness_session_service import SessionCapacityError
+        for s in (self.rest, self.ws):
+            s.config = {**s.config, 'MAX_ACTIVE_SESSIONS': 1}
+        info = self.rest.create_session(user_id=self.user.id)
+        with self.assertRaises(SessionCapacityError):
+            self.ws.create_session(user_id=self.user.id)
+        self.ws.discard_session(info['session_id'])  # freed on the other instance
+        self.assertIsNotNone(self.ws.create_session(user_id=self.user.id))
+
+
+class GazeEstimatorGeometryTests(TestCase):
+    """_gaze_from_landmarks is a real iris-in-socket measurement, not a stub."""
+
+    def _face(self, iris_a=(0.35, 0.375), iris_b=(0.65, 0.375), open_=True):
+        from .services.gaze_tracking_service import GazeTrackingService as G
+        lm = np.zeros((478, 3), dtype=np.float64)
+        bot = 0.40 if open_ else 0.375
+        # Eye A socket + iris
+        lm[G._EYE_A['corner1']] = [0.30, 0.375, 0]
+        lm[G._EYE_A['corner2']] = [0.40, 0.375, 0]
+        lm[G._EYE_A['top']] = [0.35, 0.35 if open_ else 0.375, 0]
+        lm[G._EYE_A['bottom']] = [0.35, bot, 0]
+        lm[G._EYE_A['iris']] = [iris_a[0], iris_a[1], 0]
+        # Eye B socket + iris
+        lm[G._EYE_B['corner1']] = [0.60, 0.375, 0]
+        lm[G._EYE_B['corner2']] = [0.70, 0.375, 0]
+        lm[G._EYE_B['top']] = [0.65, 0.35 if open_ else 0.375, 0]
+        lm[G._EYE_B['bottom']] = [0.65, bot, 0]
+        lm[G._EYE_B['iris']] = [iris_b[0], iris_b[1], 0]
+        return lm
+
+    def test_centered_iris_maps_to_center(self):
+        from .services.gaze_tracking_service import GazeTrackingService as G
+        gaze = G._gaze_from_landmarks(self._face())
+        self.assertIsNotNone(gaze)
+        x, y, conf = gaze
+        self.assertAlmostEqual(x, 0.5, places=2)
+        self.assertAlmostEqual(y, 0.5, places=2)
+        self.assertGreater(conf, 0.5)
+
+    def test_iris_shift_moves_gaze(self):
+        from .services.gaze_tracking_service import GazeTrackingService as G
+        left = G._gaze_from_landmarks(self._face(iris_a=(0.31, 0.375), iris_b=(0.61, 0.375)))
+        right = G._gaze_from_landmarks(self._face(iris_a=(0.39, 0.375), iris_b=(0.69, 0.375)))
+        self.assertLess(left[0], 0.3)   # iris toward inner corners -> low x
+        self.assertGreater(right[0], 0.7)
+
+    def test_closed_eye_is_not_measurable(self):
+        from .services.gaze_tracking_service import GazeTrackingService as G
+        self.assertIsNone(G._gaze_from_landmarks(self._face(open_=False)))
+
+    def test_too_few_landmarks_returns_none(self):
+        from .services.gaze_tracking_service import GazeTrackingService as G
+        self.assertIsNone(G._gaze_from_landmarks(np.zeros((468, 3))))
+
+    def test_estimate_gaze_none_without_model(self):
+        """No model loaded => estimate_gaze reports nothing (never fabricates)."""
+        from .services.gaze_tracking_service import GazeTrackingService
+        g = GazeTrackingService()
+        with patch.object(GazeTrackingService, '_gaze_model', None):
+            self.assertIsNone(g.estimate_gaze(self._face(), self._face()))
+
+    def test_reaction_time_from_challenge_start(self):
+        """With a challenge onset provided, reaction_time is a real latency."""
+        from .services.gaze_tracking_service import (
+            GazeTrackingService, CognitiveTask, CognitiveTaskType, GazePoint)
+        g = GazeTrackingService()
+        task = CognitiveTask(
+            task_type=CognitiveTaskType.FOLLOW_TARGET, instruction='x',
+            target_positions=[(0.5, 0.5)], time_limit_ms=5000, expected_sequence=[0])
+        pts = [GazePoint(x=0.5, y=0.5, timestamp_ms=1000.0 + i * 40.0,
+                         confidence=0.9, is_fixation=True) for i in range(6)]
+        res = g.validate_task_response(task, pts, challenge_start_ms=900.0)
+        # First on-target sample is at 1000ms, onset 900ms -> 100ms latency.
+        self.assertAlmostEqual(res.reaction_time_ms, 100.0, places=1)
+
+    def test_accuracy_dedupes_overlapping_targets(self):
+        """One gaze sample must not satisfy multiple overlapping targets."""
+        from .services.gaze_tracking_service import (
+            GazeTrackingService, CognitiveTask, CognitiveTaskType, GazePoint)
+        g = GazeTrackingService()
+        # Two identical targets, a single on-point gaze sample.
+        task = CognitiveTask(
+            task_type=CognitiveTaskType.FOLLOW_TARGET, instruction='x',
+            target_positions=[(0.5, 0.5), (0.5, 0.5)], time_limit_ms=5000,
+            expected_sequence=[0, 1])
+        one = [GazePoint(x=0.5, y=0.5, timestamp_ms=0.0, confidence=0.9, is_fixation=True)]
+        # Only one target can be credited by the single sample -> 0.5, not 1.0.
+        self.assertEqual(g._calculate_gaze_accuracy(task, one), 0.5)
+
+
+class ActionUnitGeometryTests(TestCase):
+    """AU intensities are real landmark geometry (deterministic), not random."""
+
+    def setUp(self):
+        self.analyzer = MicroExpressionAnalyzer()
+
+    def _neutral(self):
+        from .services.micro_expression_analyzer import MicroExpressionAnalyzer as M
+        lm = np.zeros((478, 3), dtype=np.float64)
+        idx = M._IDX
+        # Eyes open (EAR ~0.3), mouth closed, brows at a neutral gap.
+        lm[idx['eyeA_out']] = [0.30, 0.40, 0]
+        lm[idx['eyeA_in']] = [0.42, 0.40, 0]
+        lm[idx['eyeA_up']] = [0.36, 0.38, 0]
+        lm[idx['eyeA_lo']] = [0.36, 0.42, 0]
+        lm[idx['eyeB_in']] = [0.58, 0.40, 0]
+        lm[idx['eyeB_out']] = [0.70, 0.40, 0]
+        lm[idx['eyeB_up']] = [0.64, 0.38, 0]
+        lm[idx['eyeB_lo']] = [0.64, 0.42, 0]
+        lm[idx['brA_in']] = [0.38, 0.34, 0]
+        lm[idx['brB_in']] = [0.62, 0.34, 0]
+        lm[idx['brA_out']] = [0.30, 0.34, 0]
+        lm[idx['brB_out']] = [0.70, 0.34, 0]
+        lm[idx['mouth_l']] = [0.42, 0.62, 0]
+        lm[idx['mouth_r']] = [0.58, 0.62, 0]
+        lm[idx['lip_up_in']] = [0.50, 0.61, 0]
+        lm[idx['lip_lo_in']] = [0.50, 0.63, 0]
+        lm[idx['lip_up_out']] = [0.50, 0.60, 0]
+        lm[idx['lip_lo_out']] = [0.50, 0.64, 0]
+        lm[idx['nose_bridge']] = [0.50, 0.45, 0]
+        return lm
+
+    def test_determinism(self):
+        lm = self._neutral()
+        self.assertEqual(self.analyzer.extract_action_units(lm),
+                         self.analyzer.extract_action_units(lm))
+
+    def test_zeros_are_all_inactive(self):
+        aus = self.analyzer.extract_action_units(np.zeros((468, 3)))
+        for au in (1, 2, 4, 5, 6, 12, 25, 26, 45):
+            self.assertEqual(aus[au], 0.0)
+
+    def test_open_mouth_raises_au25_and_au26(self):
+        lm = self._neutral()
+        neutral = self.analyzer.extract_action_units(lm)
+        lm[MicroExpressionAnalyzer._IDX['lip_lo_in']] = [0.50, 0.70, 0]
+        lm[MicroExpressionAnalyzer._IDX['lip_lo_out']] = [0.50, 0.74, 0]
+        opened = self.analyzer.extract_action_units(lm)
+        self.assertGreater(opened[25], neutral[25])
+        self.assertGreater(opened[26], neutral[26])
+
+    def test_closed_eyes_raise_blink_au45(self):
+        lm = self._neutral()
+        # Collapse both eyes vertically (lids meet) -> low EAR -> blink.
+        for k in ('eyeA_up', 'eyeA_lo', 'eyeB_up', 'eyeB_lo'):
+            i = MicroExpressionAnalyzer._IDX[k]
+            lm[i] = [lm[i][0], 0.40, 0]
+        aus = self.analyzer.extract_action_units(lm)
+        self.assertGreater(aus[45], 0.5)
+
+
+class ExpressionGatingTests(TestCase):
+    """Micro-expression scores and gates ONLY with a real landmark source."""
+
+    def setUp(self):
+        self.analyzer = MicroExpressionAnalyzer()
+
+    def test_no_score_without_real_source(self):
+        # Enough frames, but no real landmarker => excluded (None), never a pass.
+        self.analyzer.au_history = [{45: 0.0, 12: 0.1} for _ in range(30)]
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=False):
+            self.assertIsNone(self.analyzer.get_session_expression_score())
+
+    def test_score_requires_minimum_frames(self):
+        self.analyzer.au_history = [{45: 0.0} for _ in range(3)]
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            self.assertIsNone(self.analyzer.get_session_expression_score())
+
+    def test_blink_and_motion_produce_a_score(self):
+        # A live track: a blink plus AU variation over time.
+        hist = []
+        for i in range(30):
+            hist.append({45: 1.0 if i == 15 else 0.0,
+                         12: 0.4 if i % 2 else 0.0, 1: 0.1 * (i % 3)})
+        self.analyzer.au_history = hist
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            score = self.analyzer.get_session_expression_score()
+        self.assertIsNotNone(score)
+        self.assertGreater(score, 0.5)  # blink (0.5) + real motion
+
+    def test_static_track_scores_low(self):
+        # A photo: no blink, flat AU track -> near-zero score, cannot gate.
+        self.analyzer.au_history = [{45: 0.0, 12: 0.0, 1: 0.0} for _ in range(30)]
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            score = self.analyzer.get_session_expression_score()
+        self.assertIsNotNone(score)
+        self.assertEqual(score, 0.0)
+
+    def test_capabilities_micro_expression_tracks_real_source(self):
+        from .services.liveness_session_service import LivenessSessionService
+        svc = LivenessSessionService()
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=False):
+            caps = svc.get_capabilities()
+        self.assertFalse(caps['modalities']['micro_expression']['gates_verdict'])
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            caps = svc.get_capabilities()
+        self.assertTrue(caps['modalities']['micro_expression']['gates_verdict'])

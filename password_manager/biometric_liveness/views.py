@@ -20,7 +20,7 @@ from django.utils.dateparse import parse_datetime
 from .frame_utils import decode_frame
 from .services import LivenessSessionService
 from .services.liveness_session_service import (
-    SessionCapacityError, GazeChallengeIncompleteError,
+    SessionCapacityError, GazeChallengeIncompleteError, SessionLockError,
 )
 from .models import LivenessProfile, LivenessSession, LivenessSettings
 
@@ -301,6 +301,9 @@ def submit_frame(request):
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
         
         return Response(result)
+    except SessionLockError:
+        return Response({'error': 'session_busy', 'retryable': True},
+                        status=status.HTTP_409_CONFLICT)
     except Exception as e:
         logger.error(f"Error processing frame: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -352,6 +355,9 @@ def submit_challenge_response(request):
             return Response(result, status=status.HTTP_409_CONFLICT if conflict
                             else status.HTTP_400_BAD_REQUEST)
         return Response(result)
+    except SessionLockError:
+        return Response({'error': 'session_busy', 'retryable': True},
+                        status=status.HTTP_409_CONFLICT)
     except Exception as e:
         logger.error(f"Error submitting response: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -387,6 +393,9 @@ def submit_hardware_spo2(request):
             return Response(result, status=status.HTTP_409_CONFLICT if conflict
                             else status.HTTP_400_BAD_REQUEST)
         return Response(result)
+    except SessionLockError:
+        return Response({'error': 'session_busy', 'retryable': True},
+                        status=status.HTTP_409_CONFLICT)
     except Exception as e:
         logger.error(f"Error ingesting hardware SpO2: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -419,6 +428,9 @@ def complete_session(request):
         # Distinct from the terminal errors below: the session is still live, so
         # the client should answer the gaze challenge and retry, not abandon it.
         return Response({'error': 'required_challenge_incomplete', 'retryable': True},
+                        status=status.HTTP_409_CONFLICT)
+    except SessionLockError:
+        return Response({'error': 'session_busy', 'retryable': True},
                         status=status.HTTP_409_CONFLICT)
     except ValueError as e:
         # Session not found / already completed / expired -> terminal state error.

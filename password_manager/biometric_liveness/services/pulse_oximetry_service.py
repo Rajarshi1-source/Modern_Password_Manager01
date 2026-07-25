@@ -508,3 +508,40 @@ class PulseOximetryService:
         # Clear any ingested hardware SpO2 so a reading from a previous session
         # cannot leak into the next one (this service is reused via reset()).
         self._clear_hardware_spo2()
+
+    def snapshot_state(self) -> Dict:
+        """
+        JSON-safe per-session rPPG state for the cross-process session store.
+
+        The rPPG buffers ARE the accumulated pulse signal, so they must survive
+        a hand-off between the REST worker and the WS worker or the heart-rate
+        estimate resets mid-session. deque(maxlen) is preserved on restore. The
+        ingested hardware SpO2 triple is carried too so a relayed oximeter
+        reading is not lost across processes (its server timestamp still gates
+        freshness on the far side).
+        """
+        return {
+            'rgb_buffer': [list(v) for v in self.rgb_buffer],
+            'ppg_buffer': list(self.ppg_buffer),
+            'timestamps': list(self.timestamps),
+            'frame_count': self.frame_count,
+            'current_hr': self.current_hr,
+            'current_spo2': self.current_spo2,
+            'hardware_spo2': self.hardware_spo2,
+            'hardware_spo2_quality': self.hardware_spo2_quality,
+            'hardware_spo2_timestamp_ms': self.hardware_spo2_timestamp_ms,
+        }
+
+    def restore_state(self, state: Dict) -> None:
+        """Rehydrate rPPG buffers/hardware SpO2 produced by snapshot_state."""
+        state = state or {}
+        self.rgb_buffer = deque(
+            (tuple(v) for v in state.get('rgb_buffer', [])), maxlen=self.window_size)
+        self.ppg_buffer = deque(state.get('ppg_buffer', []), maxlen=self.window_size)
+        self.timestamps = deque(state.get('timestamps', []), maxlen=self.window_size)
+        self.frame_count = state.get('frame_count', 0)
+        self.current_hr = state.get('current_hr')
+        self.current_spo2 = state.get('current_spo2')
+        self.hardware_spo2 = state.get('hardware_spo2')
+        self.hardware_spo2_quality = state.get('hardware_spo2_quality', 0.0)
+        self.hardware_spo2_timestamp_ms = state.get('hardware_spo2_timestamp_ms')

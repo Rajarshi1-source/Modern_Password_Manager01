@@ -27,7 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 class SessionCapacityError(Exception):
-    """Raised when the in-memory session store is at capacity (see MAX_ACTIVE_SESSIONS)."""
+    """Raised when the session store is at capacity (see MAX_ACTIVE_SESSIONS)."""
+
+
+class SessionLockError(Exception):
+    """
+    Raised when the cross-process (Redis) per-session lock could not be acquired.
+
+    Only reachable with the Redis backend: it means another worker is actively
+    mutating THIS session and did not release within the bounded spin. Same-
+    session concurrency is abnormal (a client runs one verification at a time),
+    so transports map it to a retryable conflict rather than a hard failure.
+    """
 
 
 class GazeChallengeIncompleteError(ValueError):
@@ -88,6 +99,12 @@ def _with_session_lock(method):
     """
     @functools.wraps(method)
     def wrapper(self, session_id, *args, **kwargs):
+        # Redis backend: acquire the CROSS-PROCESS lock, load the session, run,
+        # then persist and release -- so a REST worker and a WS worker cannot
+        # score the same session concurrently, and each other's mutations are
+        # durably shared (see _run_locked_redis).
+        if self._redis_store is not None:
+            return self._run_locked_redis(method, session_id, args, kwargs)
         if session_id not in self.active_sessions:
             # Nothing to serialize, and creating a lock here would let a caller
             # replaying unknown/evicted ids grow _session_locks unboundedly
@@ -162,14 +179,134 @@ class LivenessSessionService:
         })
         self.deepfake_detector = DeepfakeDetector()
         
-        # Session state
-        self.active_sessions: Dict[str, Dict] = {}
+        # Session state. In-memory backend keeps this dict (the default, and
+        # what the test-suite pokes directly); the Redis backend leaves it empty
+        # and shares state through Redis instead. active_sessions is a property
+        # so both backends present the same .get()/membership surface.
+        self._sessions_mem: Dict[str, Dict] = {}
         # Per-session locks (see _with_session_lock), guarded by _store_lock so
         # two threads racing on a brand-new session get the same lock object.
         self._store_lock = threading.Lock()
         self._session_locks: Dict[str, threading.RLock] = {}
+        # Redis txn: the session currently loaded for THIS thread's locked call,
+        # so active_sessions.get() returns it inside a _run_locked_redis body.
+        self._txn = threading.local()
+        self._redis_store = self._init_redis_store()
 
         logger.info("LivenessSessionService initialized")
+
+    # -- session store backend --------------------------------------------- #
+
+    class _RedisSessionView:
+        """
+        Minimal active_sessions facade for the Redis backend: resolves .get()
+        to the session loaded for the current thread's locked call. Only the 4
+        lock-decorated mutators read active_sessions under Redis; every other
+        access point is gated to a direct store call.
+        """
+        def __init__(self, txn):
+            self._txn = txn
+
+        def get(self, session_id, default=None):
+            cur = getattr(self._txn, 'session', None)
+            if cur is not None and cur.get('session_id') == session_id:
+                return cur
+            return default
+
+        def __contains__(self, session_id):
+            return self.get(session_id) is not None
+
+    @property
+    def active_sessions(self):
+        """The in-memory dict (memory backend) or a per-thread txn view (Redis)."""
+        if self._redis_store is None:
+            return self._sessions_mem
+        return self._RedisSessionView(self._txn)
+
+    def _init_redis_store(self):
+        """Build the Redis store when configured; otherwise None (in-memory)."""
+        backend = self.config.get('SESSION_STORE', 'memory')
+        if backend != 'redis':
+            return None
+        try:
+            import redis
+            from .session_store import RedisSessionStore
+            url = (self.config.get('SESSION_STORE_REDIS_URL')
+                   or 'redis://127.0.0.1:6379/3')
+            client = redis.Redis.from_url(url)
+            retention = (self.config.get('SESSION_TIMEOUT_SECONDS', 120)
+                         + self.SESSION_RETENTION_SECONDS)
+            store = RedisSessionStore(client, self._new_session_services, retention)
+            logger.info("Liveness session store backend: redis")
+            return store
+        except Exception:
+            logger.exception(
+                "Redis session store init failed; using in-memory backend")
+            return None
+
+    def _run_locked_redis(self, method, session_id, args, kwargs):
+        """
+        Cross-process locked execution: acquire -> load -> run -> save -> release.
+
+        Persists on exit even when the method raises (e.g. complete_session
+        flipping status to 'expired' before raising), so a partial terminal
+        transition is not lost. A None load means "not found": the method
+        returns/raises its own not-found path and nothing is saved.
+        """
+        store = self._redis_store
+        if not self._acquire_redis_lock(session_id):
+            raise SessionLockError(f'Could not lock liveness session {session_id}')
+        try:
+            session = store.load(session_id)
+            self._txn.session = session
+            try:
+                return method(self, session_id, *args, **kwargs)
+            finally:
+                if self._txn.session is not None:
+                    store.save(session_id, self._txn.session)
+                self._txn.session = None
+        finally:
+            store.release(session_id)
+
+    def _acquire_redis_lock(self, session_id: str) -> bool:
+        """Bounded spin for the per-session Redis lock (same-session ops are fast)."""
+        import time
+        for attempt in range(60):
+            if self._redis_store.acquire(session_id):
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _create_session_redis(self, session_id, session, user_id,
+                              max_sessions, max_user_sessions) -> None:
+        """
+        Atomic capacity-checked create on the Redis backend.
+
+        A short global create-lock makes the count+insert one critical section
+        (mirroring the in-memory _store_lock block) so two concurrent creators
+        cannot both pass the cap. count_live self-heals stale membership left by
+        a crashed worker. On failure to take the create-lock we fail closed with
+        SessionCapacityError rather than risk exceeding the cap.
+        """
+        import time
+        store = self._redis_store
+        acquired = False
+        for attempt in range(60):
+            if store.acquire_create_lock():
+                acquired = True
+                break
+            time.sleep(0.05)
+        if not acquired:
+            raise SessionCapacityError('Liveness session store busy')
+        try:
+            live, user_live = store.count_live(user_id)
+            if live >= max_sessions:
+                raise SessionCapacityError('Liveness session capacity reached')
+            if user_live >= max_user_sessions:
+                raise SessionCapacityError('User liveness session capacity reached')
+            store.save(session_id, session)
+        finally:
+            store.release_create_lock()
 
     def _session_lock(self, session_id: str) -> threading.RLock:
         """Get (or create) the lock guarding one session's state."""
@@ -182,24 +319,31 @@ class LivenessSessionService:
 
     def discard_session(self, session_id: str) -> None:
         """
-        Drop an in-memory session and its lock (e.g. when its DB row could not be
-        created). Without this, an orphaned session would hold a live capacity
-        slot until age-eviction. Membership mutation stays under _store_lock.
+        Drop a session and its lock (e.g. when its DB row could not be created).
+        Without this, an orphaned session would hold a live capacity slot until
+        age-eviction. Membership mutation stays under _store_lock (memory) or is
+        a direct Redis delete.
         """
+        if self._redis_store is not None:
+            self._redis_store.delete(session_id)
+            return
         with self._store_lock:
-            self.active_sessions.pop(session_id, None)
+            self._sessions_mem.pop(session_id, None)
             self._session_locks.pop(session_id, None)
 
     def owner_of(self, session_id: str) -> Optional[int]:
         """
-        Return the user_id that owns an in-memory session, or None if unknown.
+        Return the user_id that owns a session, or None if unknown.
 
-        Lets the hot per-frame REST path authorize against server-stamped
-        in-memory state instead of an ORM query per frame (see
+        Lets the hot per-frame REST path authorize against server-stamped store
+        state instead of an ORM query per frame (see
         views._owns_in_memory_session). create_session stamps user_id itself, so
-        this is authoritative and not client-forgeable.
+        this is authoritative and not client-forgeable. Under Redis this reads
+        only the user_id field (no detector rebuild) to stay cheap per frame.
         """
-        session = self.active_sessions.get(session_id)
+        if self._redis_store is not None:
+            return self._redis_store.owner_of(session_id)
+        session = self._sessions_mem.get(session_id)
         return session.get('user_id') if session else None
 
     @staticmethod
@@ -226,7 +370,13 @@ class LivenessSessionService:
         the terminal-state guards (status == 'completed'/'expired') must keep
         rejecting late frames and re-scoring attempts, which needs the entry to
         survive until the client can no longer plausibly be using it.
+
+        Redis backend: sessions carry a TTL (the retention window) and terminal
+        ones drop out of the live index on save, so there is nothing to age-evict
+        here -- Redis expiry does it.
         """
+        if self._redis_store is not None:
+            return
         now = timezone.now()
         cutoff = now - timedelta(seconds=self.SESSION_RETENTION_SECONDS)
         max_retained = self.config.get('MAX_RETAINED_SESSIONS', self.MAX_RETAINED_SESSIONS)
@@ -436,22 +586,29 @@ class LivenessSessionService:
         max_sessions = self.config.get('MAX_ACTIVE_SESSIONS', self.MAX_ACTIVE_SESSIONS)
         max_user_sessions = self.config.get(
             'MAX_USER_ACTIVE_SESSIONS', self.MAX_USER_ACTIVE_SESSIONS)
-        with self._store_lock:
-            # One pass counts total live (global cap) and this user's live
-            # (per-user cap): the per-user bound stops a single account from
-            # exhausting global capacity and denying everyone else.
-            live = 0
-            user_live = 0
-            for s in self.active_sessions.values():
-                if self._is_live(s, now):
-                    live += 1
-                    if s.get('user_id') == user_id:
-                        user_live += 1
-            if live >= max_sessions:
-                raise SessionCapacityError('Liveness session capacity reached')
-            if user_live >= max_user_sessions:
-                raise SessionCapacityError('User liveness session capacity reached')
-            self.active_sessions[session_id] = session
+
+        if self._redis_store is not None:
+            # Redis backend: the same check+insert atomicity via a short global
+            # create-lock and the shared live index (self-healing count).
+            self._create_session_redis(
+                session_id, session, user_id, max_sessions, max_user_sessions)
+        else:
+            with self._store_lock:
+                # One pass counts total live (global cap) and this user's live
+                # (per-user cap): the per-user bound stops a single account from
+                # exhausting global capacity and denying everyone else.
+                live = 0
+                user_live = 0
+                for s in self._sessions_mem.values():
+                    if self._is_live(s, now):
+                        live += 1
+                        if s.get('user_id') == user_id:
+                            user_live += 1
+                if live >= max_sessions:
+                    raise SessionCapacityError('Liveness session capacity reached')
+                if user_live >= max_user_sessions:
+                    raise SessionCapacityError('User liveness session capacity reached')
+                self._sessions_mem[session_id] = session
 
         logger.info(f"Created liveness session {session_id} for user {user_id}")
         
@@ -587,9 +744,11 @@ class LivenessSessionService:
         if face_landmarks is None:
             face_landmarks = svc['expression'].extract_landmarks(frame)
 
-        # Micro-expression analysis
+        # Micro-expression analysis. observe() extracts this frame's AUs AND
+        # accumulates them (with the server frame clock) for the session-level
+        # expression liveness score computed at completion.
         if face_landmarks is not None:
-            aus = svc['expression'].extract_action_units(face_landmarks)
+            aus = svc['expression'].observe(face_landmarks, self._now_ms())
             results['expression'] = {'action_units': aus}
             if aus:
                 session['expression_au_frames'] += 1
@@ -718,10 +877,18 @@ class LivenessSessionService:
             modality_scores['pulse'] = self.pulse_service.get_liveness_score(pulse_readings)
 
         # --- Micro-expression -------------------------------------------------
-        # A real expression score requires detected MicroExpression sequences and
-        # temporal analysis (Phase 2). Until that pipeline produces them, this
-        # modality reports no data and is excluded rather than guessed.
+        # Real expression liveness comes from accumulated AU dynamics (blink +
+        # facial motion), computed by the per-session analyzer ONLY when a real
+        # MediaPipe landmark source is loaded; otherwise it returns None and the
+        # modality is excluded (never defaulted to a passing value). A value
+        # pre-set on the session (e.g. by a test, or a future external scorer)
+        # takes precedence.
         expression_score = session.get('expression_score')
+        if expression_score is None:
+            svc = session.get('services') or {}
+            expression_svc = svc.get('expression')
+            if expression_svc is not None:
+                expression_score = expression_svc.get_session_expression_score()
         if expression_score is not None:
             modality_scores['expression'] = expression_score
 
@@ -926,7 +1093,8 @@ class LivenessSessionService:
                         self._record_failed_required_challenge(session, challenge)
                 else:
                     result = svc['gaze'].validate_task_response(
-                        task, window_track, response.get('answer')
+                        task, window_track, response.get('answer'),
+                        challenge_start_ms=activated_ms,
                     )
                     summary['passed'] = bool(result.is_passed)
                     summary['accuracy'] = float(result.accuracy_score)
@@ -1036,6 +1204,7 @@ class LivenessSessionService:
         deepfake_real = self.deepfake_detector.has_real_model()
         thermal_available = self.thermal_service.is_available()
         gaze_real = self.gaze_service.has_real_gaze_model()
+        expression_real = self.expression_analyzer.has_real_landmark_source()
         return {
             'modalities': {
                 # Camera-based checks: the server implements them; the client
@@ -1054,13 +1223,15 @@ class LivenessSessionService:
                     'available': True, 'source': 'camera', 'gates_verdict': True,
                     'note': 'Heart rate only; SpO2 is never derived from webcam.',
                 },
-                # Captured today but not yet scored: complete_session only scores
-                # expression once session['expression_score'] is populated, which
-                # lands in a later Phase 2 step. gates_verdict=False matches the
-                # scorer until then.
+                # Real landmark source required: with the shared MediaPipe
+                # FaceLandmarker loaded, per-session AU dynamics (blink + facial
+                # motion) score and gate the verdict; without it, landmarks are
+                # unavailable so it neither captures nor gates.
                 'micro_expression': {
-                    'available': True, 'source': 'camera', 'gates_verdict': False,
-                    'note': 'Captured but not yet scored; gates the verdict in a later Phase 2 step.',
+                    'available': expression_real, 'source': 'camera',
+                    'gates_verdict': expression_real,
+                    'note': 'AU dynamics (blink + facial motion) score liveness '
+                            'only with a real landmark source loaded.',
                 },
                 # Model-gated: heuristic output is advisory until a real model loads.
                 'deepfake': {
@@ -1093,10 +1264,13 @@ class LivenessSessionService:
 
     def get_session_status(self, session_id: str) -> Optional[Dict]:
         """Get current session status."""
-        session = self.active_sessions.get(session_id)
+        if self._redis_store is not None:
+            session = self._redis_store.load(session_id)
+        else:
+            session = self._sessions_mem.get(session_id)
         if not session:
             return None
-        
+
         return {
             'session_id': session_id,
             'status': session['status'],
