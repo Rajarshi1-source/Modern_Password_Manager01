@@ -256,6 +256,10 @@ def start_session(request):
             raise
 
         return Response(session_info, status=status.HTTP_201_CREATED)
+    except SessionLockError:
+        # Store busy (could not take the create-lock) -- transient, retry.
+        return Response({'error': 'session_busy', 'retryable': True},
+                        status=status.HTTP_409_CONFLICT)
     except SessionCapacityError:
         logger.warning("Liveness session capacity reached; rejecting new session")
         return Response({'error': 'capacity_reached'},

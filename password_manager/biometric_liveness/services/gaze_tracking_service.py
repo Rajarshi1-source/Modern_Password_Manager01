@@ -659,8 +659,11 @@ class GazeTrackingService:
                 path_similarity_weight * result.gaze_path_similarity
             )
             scores.append(score)
-        
-        return np.mean(scores)
+
+        # float() so the score is JSON-native: np.mean yields np.float64, which
+        # json.dumps cannot serialize -- it would break persisting a completed
+        # verdict on the Redis session store and the Celery retry payload.
+        return float(np.mean(scores))
     
     def clear_history(self):
         """Clear gaze history for new session."""
@@ -689,12 +692,22 @@ class GazeTrackingService:
         }
 
     def restore_state(self, state: Dict) -> None:
-        """Rehydrate per-session gaze state produced by snapshot_state."""
-        self.gaze_history = [
-            GazePoint(
-                x=p['x'], y=p['y'], timestamp_ms=p['timestamp_ms'],
-                confidence=p['confidence'], is_fixation=p['is_fixation'],
-                pupil_diameter=p.get('pupil_diameter'),
-            )
-            for p in (state or {}).get('gaze_history', [])
-        ]
+        """
+        Rehydrate per-session gaze state produced by snapshot_state.
+
+        Tolerant of malformed/older entries (a rolling deploy can put two code
+        versions on the same Redis): a bad point is skipped rather than failing
+        the whole restore -- gaze history is a soft, best-effort accumulator, so
+        degrading it beats 500-ing the request.
+        """
+        restored = []
+        for p in (state or {}).get('gaze_history', []):
+            try:
+                restored.append(GazePoint(
+                    x=p['x'], y=p['y'], timestamp_ms=p['timestamp_ms'],
+                    confidence=p['confidence'], is_fixation=p['is_fixation'],
+                    pupil_diameter=p.get('pupil_diameter'),
+                ))
+            except (KeyError, TypeError):
+                continue
+        self.gaze_history = restored

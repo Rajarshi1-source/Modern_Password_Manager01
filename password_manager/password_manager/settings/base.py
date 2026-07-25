@@ -2145,6 +2145,22 @@ def _liveness_float_env(env_var, default, *, minimum, maximum):
     return value
 
 
+def _liveness_session_store():
+    """
+    Resolve and validate the session-store backend name, failing fast.
+
+    A typo (e.g. 'Redis', 'redis ') would otherwise silently fall back to the
+    per-worker in-memory store -- exactly the multi-process incorrectness the
+    Redis backend exists to fix -- with no startup signal.
+    """
+    from django.core.exceptions import ImproperlyConfigured
+    raw = os.environ.get('LIVENESS_SESSION_STORE', 'memory').strip().lower()
+    if raw not in ('memory', 'redis'):
+        raise ImproperlyConfigured(
+            f"LIVENESS_SESSION_STORE must be 'memory' or 'redis', got {raw!r}")
+    return raw
+
+
 BIOMETRIC_LIVENESS = {
     # Feature toggle
     'ENABLED': os.environ.get('BIOMETRIC_LIVENESS_ENABLED', 'False').lower() == 'true',
@@ -2203,11 +2219,20 @@ BIOMETRIC_LIVENESS = {
     # short-circuits after one attempt).
     'FACE_LANDMARKER_MODEL': os.environ.get('LIVENESS_FACE_LANDMARKER_MODEL', ''),
 
+    # Whether the gaze estimator is CALIBRATED to screen-target space. The
+    # FaceLandmarker measures iris-in-socket position, which is not yet mapped to
+    # the challenge's screen-fraction targets, so scoring it against them is
+    # unreliable and must NOT gate the verdict (it could falsely veto a real
+    # user). Until per-user calibration lands, gaze is measured and recorded but
+    # excluded from scoring. Off by default; do NOT enable without a validated
+    # iris->screen mapping.
+    'GAZE_CALIBRATED': os.environ.get('LIVENESS_GAZE_CALIBRATED', 'False').lower() == 'true',
+
     # Cross-process session store backend: 'memory' (default, per-worker dict --
     # correct only single-process) or 'redis' (shared across REST/WS workers and
     # replicas). Redis uses REDIS_URL. The in-memory path is byte-for-byte the
     # prior behaviour so existing single-process deployments are unaffected.
-    'SESSION_STORE': os.environ.get('LIVENESS_SESSION_STORE', 'memory'),
+    'SESSION_STORE': _liveness_session_store(),
     'SESSION_STORE_REDIS_URL': os.environ.get(
         'LIVENESS_SESSION_REDIS_URL', os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/3')),
 }

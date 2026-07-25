@@ -495,8 +495,11 @@ class PulseOximetryService:
         
         # Combined score
         score = (validation['consistency_score'] * 0.6 + avg_quality * 0.4)
-        
-        return min(1.0, max(0.0, score))
+
+        # float() so the score is JSON-native (avg_quality is np.mean -> np.float64),
+        # else json.dumps breaks persisting a completed verdict (Redis store /
+        # Celery retry payload).
+        return float(min(1.0, max(0.0, score)))
     
     def reset(self):
         """Reset buffers for new session."""

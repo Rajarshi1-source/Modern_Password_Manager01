@@ -469,6 +469,24 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(resp.data['error'], 'required_challenge_incomplete')
         self.assertTrue(resp.data.get('retryable'))
 
+    def test_session_busy_maps_to_retryable_409(self):
+        """A cross-process lock timeout (SessionLockError) maps to a retryable
+        409 session_busy, not a 500 -- so the client retries rather than fails.
+        The WS consumer emits the same session_busy envelope (symmetric handler).
+        """
+        from .services.liveness_session_service import SessionLockError
+        start = self.client.post(
+            reverse('biometric_liveness:start_session'), {'context': 'login'})
+        session_id = start.data['session_id']
+        with patch('biometric_liveness.views.get_session_service') as gss:
+            gss.return_value.complete_session.side_effect = SessionLockError('busy')
+            resp = self.client.post(
+                reverse('biometric_liveness:complete_session'),
+                {'session_id': session_id}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(resp.data['error'], 'session_busy')
+        self.assertTrue(resp.data.get('retryable'))
+
     def test_start_session_db_failure_discards_in_memory_session(self):
         """A DB-create failure must not leak the in-memory session's capacity slot."""
         from django.db import DatabaseError
@@ -1051,10 +1069,14 @@ class ChallengeResponseFlowTests(TestCase):
         return gaze_ch, now_ms
 
     def _stub_gaze(self, session, passed):
-        """Give the session one server-observed gaze sample inside the challenge
-        window, and a deterministic challenge verdict (bypasses the estimator,
-        which is capability-gated)."""
+        """Put gaze in the fully-gating state (loaded estimator + calibrated) with
+        one server-observed sample inside the window and a deterministic verdict,
+        bypassing the real estimator. Enabling calibration here is what lets gaze
+        contribute to the verdict (see _gaze_gates_verdict); without it gaze is
+        measured but excluded."""
         from .services.gaze_tracking_service import GazePoint, TaskResult, CognitiveTaskType
+        session['services']['gaze'].has_real_gaze_model = lambda: True
+        self.service.config = {**self.service.config, 'GAZE_CALIBRATED': True}
         _, now_ms = self._open_gaze_window(session)
         session['gaze_track'] = [GazePoint(x=0.5, y=0.5, timestamp_ms=now_ms + 10.0,
                                            confidence=0.9, is_fixation=True)]
@@ -1101,8 +1123,21 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertFalse(gaze['gates_verdict'])
 
     def test_capabilities_gaze_available_with_estimator(self):
-        """With a real estimator, gaze reports available and gating."""
+        """With a real estimator gaze reports available; it gates only calibrated.
+
+        The estimator measures iris position (available), but its output is not
+        yet mapped to screen-target space, so it must not gate the verdict until
+        calibration -- else an uncalibrated measurement could falsely veto a real
+        user.
+        """
         self.service.gaze_service.has_real_gaze_model = lambda: True
+        # Estimator present but NOT calibrated: available, does not gate.
+        self.service.config = {**self.service.config, 'GAZE_CALIBRATED': False}
+        gaze = self.service.get_capabilities()['modalities']['gaze']
+        self.assertTrue(gaze['available'])
+        self.assertFalse(gaze['gates_verdict'])
+        # Calibrated: now it gates.
+        self.service.config = {**self.service.config, 'GAZE_CALIBRATED': True}
         gaze = self.service.get_capabilities()['modalities']['gaze']
         self.assertTrue(gaze['available'])
         self.assertTrue(gaze['gates_verdict'])
@@ -1201,8 +1236,10 @@ class ChallengeResponseFlowTests(TestCase):
         """
         sid = self.service.create_session(user_id=1)['session_id']
         session = self.service.active_sessions[sid]
-        # Real estimator present, but the gaze challenge is never answered.
+        # Gaze fully gates (estimator loaded + calibrated), but the gaze challenge
+        # is never answered.
         session['services']['gaze'].has_real_gaze_model = lambda: True
+        self.service.config = {**self.service.config, 'GAZE_CALIBRATED': True}
         self._inject_pulse(session)
         session['expression_score'] = 0.95
         from .services.liveness_session_service import GazeChallengeIncompleteError
@@ -1220,6 +1257,18 @@ class ChallengeResponseFlowTests(TestCase):
         session['expression_score'] = 0.95
         # has_real_gaze_model() is False by default -> must NOT raise.
         result = self.service.complete_session(sid)
+        self.assertNotIn('gaze', result.details['modalities_present'])
+
+    def test_unanswered_gaze_does_not_block_when_uncalibrated(self):
+        """Estimator loaded but NOT calibrated: gaze doesn't gate, so an
+        unanswered gaze challenge must not block completion (no false reject)."""
+        sid = self.service.create_session(user_id=1)['session_id']
+        session = self.service.active_sessions[sid]
+        session['services']['gaze'].has_real_gaze_model = lambda: True
+        # GAZE_CALIBRATED stays False (default) -> gaze measured but not gating.
+        self._inject_pulse(session)
+        session['expression_score'] = 0.95
+        result = self.service.complete_session(sid)  # must NOT raise
         self.assertNotIn('gaze', result.details['modalities_present'])
 
     def test_pending_response_does_not_open_next_window(self):
@@ -1518,12 +1567,13 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertTrue(retry['passed'])
 
     def test_skipped_gaze_vetoes_when_gaze_is_measurable(self):
-        """With gaze measurable, letting the window lapse is a skip, not a gap."""
+        """With gaze fully gating, letting the window lapse is a skip, not a gap."""
         sid = self.service.create_session(user_id=1)['session_id']
         session = self.service.active_sessions[sid]
         gaze_ch, _ = self._open_gaze_window(session)
-        # Pretend a real estimator is loaded, but observe no gaze at all.
+        # Estimator loaded AND calibrated (gaze gates), but observe no gaze at all.
         session['services']['gaze'].has_real_gaze_model = lambda: True
+        self.service.config = {**self.service.config, 'GAZE_CALIBRATED': True}
         stale = (LivenessSessionService._now_ms()
                  - gaze_ch['cognitive_task'].time_limit_ms
                  - LivenessSessionService.CHALLENGE_RESPONSE_GRACE_MS - 1000)
@@ -1581,10 +1631,15 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertEqual(len(session['gaze_task_results']), 0)
 
     def test_late_challenge_response_rejected(self):
-        """A response arriving long after the window closed cannot pass."""
+        """A response arriving long after the window closed cannot pass.
+
+        Gaze does NOT gate here (default: no estimator/calibration), so this also
+        pins the capability-off invariant: an expired window is a capability gap,
+        not a skip, and must not veto -- do NOT call _stub_gaze, which would turn
+        gaze into a fully-gating modality and flip the expired window to a veto.
+        """
         sid = self.service.create_session(user_id=1)['session_id']
         session = self.service.active_sessions[sid]
-        self._stub_gaze(session, passed=True)
         gaze_ch = next(c for c in session['challenges'] if c['type'] == 'gaze')
         # Backdate activation so the window (plus arrival grace) has closed.
         stale = (LivenessSessionService._now_ms()
@@ -1595,9 +1650,9 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertFalse(out['passed'])
         self.assertEqual(out['reason'], 'challenge_window_expired')
         self.assertEqual(len(session['gaze_task_results']), 0)
-        # Gaze is NOT measurable here (no estimator), so an expired window is a
-        # capability gap, not a skip: it must not veto. Vetoing on an
-        # unmeasurable modality would fail every session in the gated state.
+        # Gaze does not gate the verdict here, so an expired window is a
+        # capability gap, not a skip: it must not veto. Vetoing when gaze does
+        # not gate would fail every session in that state.
         self.assertEqual(session['failed_required_challenges'], [])
 
     def test_unstarted_challenge_cannot_pass(self):
@@ -1826,7 +1881,7 @@ class _FakeRedis:
     def _b(v):
         return v if isinstance(v, bytes) else str(v).encode('utf-8')
 
-    def set(self, name, value, nx=False, px=None, ex=None):
+    def set(self, name, value, nx=False, px=None, ex=None, keepttl=False):
         if nx and name in self.kv:
             return None
         self.kv[name] = self._b(value)
@@ -1873,6 +1928,25 @@ class _FakeRedis:
 
     def smembers(self, name):
         return set(self.sets.get(name, set()))
+
+    def pipeline(self):
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    """Queues calls and executes them in order (matches redis-py's pipeline use
+    in count_live: buffered EXISTS then execute())."""
+
+    def __init__(self, client):
+        self._client = client
+        self._queue = []
+
+    def exists(self, name):
+        self._queue.append(('exists', (name,)))
+        return self
+
+    def execute(self):
+        return [getattr(self._client, op)(*args) for op, args in self._queue]
 
 
 def _redis_service(fake, retention=420):
@@ -2031,6 +2105,53 @@ class RedisSessionStoreCrossProcessTests(TestCase):
         self.ws.discard_session(info['session_id'])  # freed on the other instance
         self.assertIsNotNone(self.ws.create_session(user_id=self.user.id))
 
+    def test_lock_contention_raises_session_lock_error(self):
+        """When another worker holds the per-session lock, a mutating call fails
+        with the retryable SessionLockError rather than mutating concurrently."""
+        from .services.liveness_session_service import SessionLockError
+        from .services.session_store import RedisSessionStore
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        # A different holder already owns the lock; the fake set(nx=True) refuses.
+        self.fake.set(RedisSessionStore._LOCK + sid, 'other-worker', nx=True, px=15000)
+        # Skip the real 3s spin -- we only assert the give-up behaviour.
+        with patch('time.sleep', lambda *_a, **_k: None):
+            with self.assertRaises(SessionLockError):
+                self.rest.process_frame(sid, self._frame(), 1.0)
+
+    def test_completion_with_real_scores_persists_over_redis(self):
+        """A completed verdict carrying real modality scores must serialize.
+
+        gaze/pulse get_liveness_score derive from np.mean -> np.float64; if that
+        leaks into SessionResult, json.dumps raises inside _run_locked_redis's
+        save and the most important write (the frozen verdict) is lost with a
+        500. This seeds real gaze+pulse signal (the 3-frame cross-process test
+        yields an empty INSUFFICIENT_SIGNAL, so it never exercised this) and
+        asserts completion persists and reads back identically on the other
+        instance.
+        """
+        from .services.gaze_tracking_service import TaskResult, CognitiveTaskType
+        from .services.pulse_oximetry_service import PulseReading
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        session = self.rest._redis_store.load(sid)
+        session['gaze_task_results'] = [TaskResult(
+            task_type=CognitiveTaskType.FOLLOW_TARGET, is_passed=True,
+            accuracy_score=0.9, reaction_time_ms=100.0,
+            gaze_path_similarity=0.8, human_likelihood_score=0.9)]
+        session['pulse_readings'] = [PulseReading(
+            timestamp_ms=i * 33.0, frame_number=i, rgb_means=(0., 0., 0.),
+            ppg_value=0.0, heart_rate_bpm=72.0, heart_rate_variability=30.0,
+            spo2_estimate=None, signal_quality=0.8) for i in range(6)]
+        self.rest._redis_store.save(sid, session)
+        result = self.rest.complete_session(sid)  # must not raise on serialize
+        self.assertIn('gaze', result.details['modalities_present'])
+        self.assertIn('pulse', result.details['modalities_present'])
+        # The frozen verdict round-trips to the other instance (proof it saved).
+        reread = self.ws.complete_session(sid)
+        self.assertEqual(reread.overall_liveness_score, result.overall_liveness_score)
+        self.assertEqual(reread.verdict, result.verdict)
+
 
 class GazeEstimatorGeometryTests(TestCase):
     """_gaze_from_landmarks is a real iris-in-socket measurement, not a stub."""
@@ -2180,15 +2301,24 @@ class ExpressionGatingTests(TestCase):
     def setUp(self):
         self.analyzer = MicroExpressionAnalyzer()
 
+    def _seed(self, history):
+        """Populate au_history AND the sticky derived facts exactly as observe()
+        would, so scoring reads the same source-of-truth (blink flag + frame
+        count) that survives a Redis hand-off -- not the truncatable list."""
+        self.analyzer.au_history = list(history)
+        self.analyzer.au_timestamps = [float(i) for i in range(len(history))]
+        self.analyzer._au_frames_seen = len(history)
+        self.analyzer._blinked = any(a.get(45, 0.0) > 0.5 for a in history)
+
     def test_no_score_without_real_source(self):
         # Enough frames, but no real landmarker => excluded (None), never a pass.
-        self.analyzer.au_history = [{45: 0.0, 12: 0.1} for _ in range(30)]
+        self._seed([{45: 0.0, 12: 0.1} for _ in range(30)])
         with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
                           return_value=False):
             self.assertIsNone(self.analyzer.get_session_expression_score())
 
     def test_score_requires_minimum_frames(self):
-        self.analyzer.au_history = [{45: 0.0} for _ in range(3)]
+        self._seed([{45: 0.0} for _ in range(3)])
         with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
                           return_value=True):
             self.assertIsNone(self.analyzer.get_session_expression_score())
@@ -2199,7 +2329,7 @@ class ExpressionGatingTests(TestCase):
         for i in range(30):
             hist.append({45: 1.0 if i == 15 else 0.0,
                          12: 0.4 if i % 2 else 0.0, 1: 0.1 * (i % 3)})
-        self.analyzer.au_history = hist
+        self._seed(hist)
         with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
                           return_value=True):
             score = self.analyzer.get_session_expression_score()
@@ -2208,12 +2338,30 @@ class ExpressionGatingTests(TestCase):
 
     def test_static_track_scores_low(self):
         # A photo: no blink, flat AU track -> near-zero score, cannot gate.
-        self.analyzer.au_history = [{45: 0.0, 12: 0.0, 1: 0.0} for _ in range(30)]
+        self._seed([{45: 0.0, 12: 0.0, 1: 0.0} for _ in range(30)])
         with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
                           return_value=True):
             score = self.analyzer.get_session_expression_score()
         self.assertIsNotNone(score)
         self.assertEqual(score, 0.0)
+
+    def test_blink_survives_history_truncation(self):
+        """A blink observed before the bounded window must still score across a
+        snapshot/restore (the sticky flag, not the truncated list, is read)."""
+        from .services.session_store import serialize_session
+        # Blink at frame 0, then enough later frames to push it out of a small
+        # window; the sticky flag must persist through snapshot_state/restore.
+        blink_first = [{45: 1.0, 12: 0.0}] + [{45: 0.0, 12: 0.4 if i % 2 else 0.0}
+                                              for i in range(30)]
+        self._seed(blink_first)
+        snap = self.analyzer.snapshot_state()
+        fresh = MicroExpressionAnalyzer()
+        fresh.restore_state(snap)
+        self.assertTrue(fresh._blinked)
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            score = fresh.get_session_expression_score()
+        self.assertGreaterEqual(score, 0.5)  # blink component preserved
 
     def test_capabilities_micro_expression_tracks_real_source(self):
         from .services.liveness_session_service import LivenessSessionService
