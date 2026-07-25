@@ -168,9 +168,26 @@ def _session_result_from_json(d) -> Optional[object]:
 
 
 def _services_to_json(services: Optional[Dict]) -> Dict:
-    """Snapshot the stateful detectors (pulse/gaze/expression). Deepfake and
-    thermal hold no verdict-relevant per-session state, so they are rebuilt
-    fresh rather than serialized."""
+    """
+    Snapshot the stateful detectors (pulse/gaze/expression).
+
+    Deepfake and thermal are deliberately NOT snapshotted:
+
+    * thermal -- scoring calls ``get_liveness_score(session['thermal_readings'])``
+      on the shared singleton, a stateless call over readings the session dict
+      already carries, so the per-session instance holds nothing the verdict
+      reads.
+    * deepfake -- the values that reach the verdict (``deepfake_probs`` /
+      ``deepfake_model_probs``) live in the session dict and ARE serialized. The
+      detector's own ``frame_history`` is a bounded 30-frame window of raw ROI
+      PIXELS feeding one advisory sub-score (temporal consistency, 25% of the
+      heuristic probability that by design never gates). Serializing megabytes of
+      pixels on every locked save -- i.e. every frame -- would dwarf the session
+      blob and throttle the hot path far worse than the divergence it removes;
+      the window refills within 3 frames after a worker hand-off. Its
+      ``analysis_history`` is unbounded and read only by ``get_overall_verdict``,
+      which the session service never calls.
+    """
     if not services:
         return {}
     out = {}

@@ -1963,6 +1963,28 @@ def _redis_service(fake, retention=420):
     return svc
 
 
+class SessionStoreBackendSelectionTests(TestCase):
+    """An explicitly requested Redis backend must never degrade silently."""
+
+    def test_misconfigured_redis_backend_fails_fast(self):
+        """SESSION_STORE='redis' + an unusable client raises instead of falling
+        back to the per-worker dict (which would reintroduce the cross-process
+        bug the backend exists to fix, with only a log line as evidence)."""
+        from django.core.exceptions import ImproperlyConfigured
+        from django.conf import settings as dj_settings
+        from .services.liveness_session_service import LivenessSessionService
+        cfg = {**dj_settings.BIOMETRIC_LIVENESS, 'SESSION_STORE': 'redis'}
+        with override_settings(BIOMETRIC_LIVENESS=cfg):
+            with patch('redis.Redis.from_url', side_effect=ValueError('bad url')):
+                with self.assertRaises(ImproperlyConfigured):
+                    LivenessSessionService()
+
+    def test_memory_backend_is_the_default(self):
+        """Unconfigured (or 'memory') keeps the in-memory store -- no Redis."""
+        from .services.liveness_session_service import LivenessSessionService
+        self.assertIsNone(LivenessSessionService()._redis_store)
+
+
 class SessionStoreSerializationTests(TestCase):
     """serialize/deserialize must round-trip every non-trivial session field."""
 
@@ -2204,10 +2226,17 @@ class GazeEstimatorGeometryTests(TestCase):
         self.assertIsNone(G._gaze_from_landmarks(np.zeros((468, 3))))
 
     def test_estimate_gaze_none_without_model(self):
-        """No model loaded => estimate_gaze reports nothing (never fabricates)."""
+        """No model loaded => estimate_gaze reports nothing (never fabricates).
+
+        Patches the CAPABILITY predicate, not the cached _gaze_model: estimate_gaze
+        calls _init_gaze_model, which re-resolves the class attribute from
+        get_face_landmarker() -- so patching the cache alone would flap in an
+        environment where a FaceLandmarker asset is actually provisioned.
+        """
         from .services.gaze_tracking_service import GazeTrackingService
         g = GazeTrackingService()
-        with patch.object(GazeTrackingService, '_gaze_model', None):
+        with patch.object(GazeTrackingService, 'has_real_gaze_model',
+                          return_value=False):
             self.assertIsNone(g.estimate_gaze(self._face(), self._face()))
 
     def test_reaction_time_from_challenge_start(self):
