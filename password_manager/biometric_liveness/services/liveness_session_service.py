@@ -271,7 +271,7 @@ class LivenessSessionService:
     def _acquire_redis_lock(self, session_id: str) -> bool:
         """Bounded spin for the per-session Redis lock (same-session ops are fast)."""
         import time
-        for attempt in range(60):
+        for _attempt in range(60):
             if self._redis_store.acquire(session_id):
                 return True
             time.sleep(0.05)
@@ -285,19 +285,21 @@ class LivenessSessionService:
         A short global create-lock makes the count+insert one critical section
         (mirroring the in-memory _store_lock block) so two concurrent creators
         cannot both pass the cap. count_live self-heals stale membership left by
-        a crashed worker. On failure to take the create-lock we fail closed with
-        SessionCapacityError rather than risk exceeding the cap.
+        a crashed worker (pipelined, so its round trips do not serialize creates).
+        Failing to TAKE the create-lock is a transient store-busy condition, NOT
+        capacity exhaustion, so it raises the retryable SessionLockError -- a
+        client should retry, not be told the system is full.
         """
         import time
         store = self._redis_store
         acquired = False
-        for attempt in range(60):
+        for _attempt in range(60):
             if store.acquire_create_lock():
                 acquired = True
                 break
             time.sleep(0.05)
         if not acquired:
-            raise SessionCapacityError('Liveness session store busy')
+            raise SessionLockError('Liveness session store busy')
         try:
             live, user_live = store.count_live(user_id)
             if live >= max_sessions:
@@ -442,9 +444,27 @@ class LivenessSessionService:
         if ctype in required:
             session.setdefault('failed_required_challenges', []).append(ctype)
 
+    def _gaze_gates_verdict(self, gaze_service) -> bool:
+        """
+        True only when gaze may CONTRIBUTE TO THE VERDICT (positively or as veto).
+
+        Requires both a loaded estimator (real iris measurement) AND calibration.
+        The estimator measures iris-in-socket position, which is NOT yet mapped to
+        the challenge's screen-fraction target space, so scoring it against those
+        targets is unreliable: a legitimate user's gaze mostly misses the hit
+        radius and would be vetoed to SUSPECTED_FAKE. Until per-user calibration
+        lands (GAZE_CALIBRATED), gaze is MEASURED and recorded but excluded from
+        the verdict -- the capability-gated 'present but not yet verified' state,
+        never a fabricated pass or a false reject. Measurement (estimate_gaze) and
+        capability advertising of `available` stay keyed on has_real_gaze_model.
+        """
+        return (gaze_service is not None
+                and gaze_service.has_real_gaze_model()
+                and bool(self.config.get('GAZE_CALIBRATED', False)))
+
     def _required_gaze_unanswered(self, session: Dict) -> bool:
         """
-        True if a REQUIRED, MEASURABLE gaze challenge has no recorded response.
+        True if a REQUIRED, VERDICT-GATING gaze challenge has no recorded response.
 
         The failed-challenge veto only covers challenges that were attempted and
         failed (see _record_failed_required_challenge). A client that never calls
@@ -453,16 +473,16 @@ class LivenessSessionService:
         required challenge scored via an explicit response; expression/pulse are
         accumulated passively from frames.
 
-        Gated on the SAME capability check as the veto: when no estimator is
-        loaded gaze cannot be measured, so a missing response is a capability gap
-        (absent modality), not a skip, and must not block completion -- otherwise
-        every session would fail in the current capability-gated state.
+        Gated on the SAME capability check as the veto (_gaze_gates_verdict): when
+        gaze does not gate the verdict (no estimator, or estimator present but not
+        calibrated), a missing response is not a skip and must not block
+        completion -- otherwise every session would fail in that state.
         """
         required = self.config.get('REQUIRED_CHALLENGES', ['gaze', 'expression', 'pulse'])
         if 'gaze' not in required:
             return False
         gaze = (session.get('services') or {}).get('gaze')
-        if gaze is None or not gaze.has_real_gaze_model():
+        if not self._gaze_gates_verdict(gaze):
             return False
         answered = session.get('answered_challenges', set())
         return any(
@@ -1048,10 +1068,13 @@ class LivenessSessionService:
             if svc is None:
                 svc = self._new_session_services()
                 session['services'] = svc
-            # Whether gaze can be measured at all right now. When it cannot, a
-            # missing track is a capability gap (absent modality); when it can,
-            # a missing track means the user did not do the challenge.
-            gaze_capable = svc['gaze'].has_real_gaze_model()
+            # Whether gaze may gate the verdict at all right now: a loaded
+            # estimator AND calibration (see _gaze_gates_verdict). When it does
+            # not gate, gaze is still measured/reported but neither a pass nor a
+            # failure touches the verdict, so an uncalibrated measurement cannot
+            # falsely veto a real user. When it does gate, a missing track means
+            # the user did not do the challenge.
+            gaze_gates = self._gaze_gates_verdict(svc['gaze'])
             # Score ONLY the server-observed gaze track (accumulated from the
             # submitted frames). A client-supplied track is ignored -- it can be
             # synthesized from the known target positions and would not prove
@@ -1067,10 +1090,10 @@ class LivenessSessionService:
             elif now_ms > activated_ms + task.time_limit_ms + self.CHALLENGE_RESPONSE_GRACE_MS:
                 summary['passed'] = False
                 summary['reason'] = 'challenge_window_expired'
-                # The window closed unanswered. With gaze measurable, that is a
-                # deliberate skip, not a capability gap -- veto it, or a client
-                # could dodge the challenge and still verify on other modalities.
-                if gaze_capable:
+                # The window closed unanswered. When gaze gates the verdict, that
+                # is a deliberate skip -- veto it, or a client could dodge the
+                # challenge and still verify on other modalities.
+                if gaze_gates:
                     self._record_failed_required_challenge(session, challenge)
             else:
                 # Cut the track to this challenge's own advertised window. The
@@ -1088,7 +1111,7 @@ class LivenessSessionService:
                     if now_ms <= deadline_ms:
                         # Still inside the window: too early to judge, retryable.
                         consume = False
-                    elif gaze_capable:
+                    elif gaze_gates:
                         # Window ran out with nothing observed -- same skip as above.
                         self._record_failed_required_challenge(session, challenge)
                 else:
@@ -1098,10 +1121,14 @@ class LivenessSessionService:
                     )
                     summary['passed'] = bool(result.is_passed)
                     summary['accuracy'] = float(result.accuracy_score)
-                    # Only a PASSED challenge counts as a live gaze signal. A
-                    # failed track (poor accuracy/human-likelihood, or a wrong
-                    # answer) must not contribute a partial score to the verdict.
-                    if result.is_passed:
+                    if not gaze_gates:
+                        # Measured but not verdict-gating (no calibration): report
+                        # the result, contribute nothing to the verdict.
+                        summary['reason'] = 'gaze_measured_not_gating'
+                    elif result.is_passed:
+                        # Only a PASSED challenge counts as a live gaze signal. A
+                        # failed track (poor accuracy/human-likelihood, or a wrong
+                        # answer) must not contribute a partial score.
                         session.setdefault('gaze_task_results', []).append(result)
                     else:
                         summary['reason'] = 'gaze_challenge_failed'
@@ -1204,20 +1231,22 @@ class LivenessSessionService:
         deepfake_real = self.deepfake_detector.has_real_model()
         thermal_available = self.thermal_service.is_available()
         gaze_real = self.gaze_service.has_real_gaze_model()
+        gaze_gates = self._gaze_gates_verdict(self.gaze_service)
         expression_real = self.expression_analyzer.has_real_landmark_source()
         return {
             'modalities': {
                 # Camera-based checks: the server implements them; the client
                 # still needs a working camera to supply frames.
-                # Gaze reports available only once a real estimator is loaded:
-                # without one estimate_gaze() returns nothing (unlike expression,
-                # which captures real AU frames), so advertising it as available
-                # would invite the client to render an unscoreable challenge.
+                # Gaze reports available once a real estimator is loaded (it then
+                # measures iris position every frame), but gates the verdict only
+                # once calibrated to screen-target space -- an uncalibrated
+                # measurement is recorded but excluded from scoring so it cannot
+                # falsely veto a real user (see _gaze_gates_verdict).
                 'gaze': {
                     'available': gaze_real, 'source': 'camera',
-                    'gates_verdict': gaze_real,
-                    'note': 'Server-observed gaze scored against the cognitive '
-                            'challenge; available and gating only with a real estimator.',
+                    'gates_verdict': gaze_gates,
+                    'note': 'Server-observed gaze; available with a real estimator, '
+                            'gates the verdict only once calibrated.',
                 },
                 'pulse_rppg': {
                     'available': True, 'source': 'camera', 'gates_verdict': True,

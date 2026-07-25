@@ -139,7 +139,10 @@ const PulseReadout = ({ pulseData, isActive = true }) => {
                 {spo2 != null && (
                     <div className={`vital-card ${getSpo2Status()}`}>
                         <div className="vital-icon">🩸</div>
-                        <div className="vital-value">
+                        {/* data-testid marks the actual SpO2 reading so the
+                            hardware E2E can wait for it to appear on a real
+                            oximeter and disappear on disconnect. */}
+                        <div className="vital-value" data-testid="spo2-value">
                             {`${Math.round(spo2)}`}
                         </div>
                         <div className="vital-unit">%</div>

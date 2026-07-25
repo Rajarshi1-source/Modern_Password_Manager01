@@ -117,6 +117,12 @@ class MicroExpressionAnalyzer:
         self.au_history: List[Dict[int, float]] = []
         self.au_timestamps: List[float] = []
         self._prev_landmarks: Optional[np.ndarray] = None
+        # Derived facts kept OUTSIDE the bounded au_history so a Redis hand-off
+        # (which re-truncates history to the recent window on every save) cannot
+        # erase a blink observed earlier in the session or shorten the frame
+        # count -- that would score the same session differently per backend.
+        self._blinked: bool = False
+        self._au_frames_seen: int = 0
 
         logger.info("MicroExpressionAnalyzer initialized")
 
@@ -304,13 +310,13 @@ class MicroExpressionAnalyzer:
         iod = self._iod(landmarks)
         if iod < 1e-6:
             return 0.0
-        l = self._pt(landmarks, self._IDX['mouth_l'])
+        left = self._pt(landmarks, self._IDX['mouth_l'])
         r = self._pt(landmarks, self._IDX['mouth_r'])
         up = self._pt(landmarks, self._IDX['lip_up_in'])
         lo = self._pt(landmarks, self._IDX['lip_lo_in'])
-        width = np.hypot(l[0] - r[0], l[1] - r[1]) / iod
+        width = np.hypot(left[0] - r[0], left[1] - r[1]) / iod
         mouth_center_y = (up[1] + lo[1]) / 2
-        corner_y = (l[1] + r[1]) / 2
+        corner_y = (left[1] + r[1]) / 2
         # Smile widens the mouth AND lifts the corners above the lip center.
         raise_ratio = (mouth_center_y - corner_y) / iod
         width_score = np.clip((width - 0.95) / 0.4, 0.0, 1.0)
@@ -360,6 +366,10 @@ class MicroExpressionAnalyzer:
             self.au_history.append(aus)
             self.au_timestamps.append(float(timestamp_ms))
             self._prev_landmarks = np.asarray(landmarks)
+            # Sticky derived facts (survive history truncation across a hand-off).
+            self._au_frames_seen += 1
+            if aus.get(45, 0.0) > 0.5:
+                self._blinked = True
         return aus
 
     # Frames needed before the expression modality can score at all.
@@ -379,13 +389,16 @@ class MicroExpressionAnalyzer:
         """
         if not self.has_real_landmark_source():
             return None
-        if len(self.au_history) < self.MIN_EXPRESSION_FRAMES:
+        # Use the sticky frame count, not len(au_history): the history is bounded
+        # and re-truncated on each Redis save, so counting it would under-report
+        # after a hand-off.
+        if self._au_frames_seen < self.MIN_EXPRESSION_FRAMES:
             return None
 
-        # Blink dynamics: a live subject blinks; peaks in the AU45 track.
-        blink_track = [a.get(45, 0.0) for a in self.au_history]
-        blinked = any(v > 0.5 for v in blink_track)
-        blink_score = 1.0 if blinked else 0.0
+        # Blink dynamics: a live subject blinks. Read the sticky flag rather than
+        # re-deriving from the (truncated) track, so a blink from early in the
+        # session is not lost across a worker hand-off.
+        blink_score = 1.0 if self._blinked else 0.0
 
         # Facial motion: brow/mouth AUs vary over time on a live face; a still
         # image gives a near-constant track (variance ~0).
@@ -414,6 +427,10 @@ class MicroExpressionAnalyzer:
                 {str(k): v for k, v in a.items()} for a in self.au_history[-512:]
             ],
             'au_timestamps': list(self.au_timestamps[-512:]),
+            # Derived from the FULL history, so window truncation cannot rewrite
+            # the blink evidence or the frame count on the far side of a hand-off.
+            'blinked': self._blinked,
+            'au_frames_seen': self._au_frames_seen,
             'prev_landmarks': (
                 self._prev_landmarks.tolist()
                 if self._prev_landmarks is not None else None
@@ -428,6 +445,10 @@ class MicroExpressionAnalyzer:
             for a in state.get('au_history', [])
         ]
         self.au_timestamps = list(state.get('au_timestamps', []))
+        self._blinked = bool(state.get('blinked', False))
+        # Fall back to the restored history length for snapshots written before
+        # this field existed (rolling deploy).
+        self._au_frames_seen = int(state.get('au_frames_seen', len(self.au_history)))
         prev = state.get('prev_landmarks')
         self._prev_landmarks = np.asarray(prev) if prev is not None else None
 

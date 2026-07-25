@@ -62,38 +62,48 @@ def get_face_landmarker():
     with _LOAD_LOCK:
         if _LANDMARKER is not None or _LOAD_ATTEMPTED:
             return _LANDMARKER
-        _LOAD_ATTEMPTED = True
-        path = _model_path()
-        if not path:
-            logger.info(
-                "No FaceLandmarker model configured; landmark-based liveness "
-                "modalities stay unavailable")
-            return None
-        if not os.path.isfile(path):
-            logger.warning(
-                f"FaceLandmarker model not found at {path}; landmark-based "
-                "liveness modalities stay unavailable")
-            return None
         try:
-            from mediapipe.tasks.python import BaseOptions
-            from mediapipe.tasks.python import vision
-            options = vision.FaceLandmarkerOptions(
-                base_options=BaseOptions(model_asset_path=path),
-                output_face_blendshapes=True,
-                num_faces=1,
-                # IMAGE mode: frames arrive over REST and WS from multiple
-                # transports, so a strictly monotonic video timestamp cannot be
-                # guaranteed per detector instance.
-                running_mode=vision.RunningMode.IMAGE,
-            )
-            _LANDMARKER = vision.FaceLandmarker.create_from_options(options)
-            logger.info(f"FaceLandmarker loaded from {path}")
-        except Exception:
-            logger.exception(
-                "FaceLandmarker load failed; landmark-based liveness "
-                "modalities stay unavailable")
-            _LANDMARKER = None
-        return _LANDMARKER
+            path = _model_path()
+            if not path:
+                logger.info(
+                    "No FaceLandmarker model configured; landmark-based liveness "
+                    "modalities stay unavailable")
+                return None
+            if not os.path.isfile(path):
+                logger.warning(
+                    f"FaceLandmarker model not found at {path}; landmark-based "
+                    "liveness modalities stay unavailable")
+                return None
+            try:
+                from mediapipe.tasks.python import BaseOptions
+                from mediapipe.tasks.python import vision
+                options = vision.FaceLandmarkerOptions(
+                    base_options=BaseOptions(model_asset_path=path),
+                    output_face_blendshapes=True,
+                    num_faces=1,
+                    # IMAGE mode: frames arrive over REST and WS from multiple
+                    # transports, so a strictly monotonic video timestamp cannot be
+                    # guaranteed per detector instance.
+                    running_mode=vision.RunningMode.IMAGE,
+                )
+                _LANDMARKER = vision.FaceLandmarker.create_from_options(options)
+                logger.info(f"FaceLandmarker loaded from {path}")
+            except Exception:
+                logger.exception(
+                    "FaceLandmarker load failed; landmark-based liveness "
+                    "modalities stay unavailable")
+                _LANDMARKER = None
+            return _LANDMARKER
+        finally:
+            # Set the one-shot sentinel only AFTER the attempt resolves. Setting
+            # it before the (hundreds-of-ms) create_from_options would make the
+            # lock-free fast path return None to concurrent callers mid-load, so
+            # gaze/expression would report unavailable on a process that does
+            # have the model. Other threads instead block on _LOAD_LOCK until the
+            # load finishes, then see the loaded model. The round-29 invariant
+            # still holds: after this one-time attempt the fast path is lock-free
+            # for both the loaded and permanently-absent cases.
+            _LOAD_ATTEMPTED = True
 
 
 def detect_face(

@@ -228,7 +228,11 @@ def serialize_session(session: Dict) -> str:
         'result': _session_result_to_json(session.get('result')),
         'services': _services_to_json(session.get('services')),
     }
-    return json.dumps(data)
+    # default=float is a belt-and-braces guard: the score producers are fixed at
+    # source to return native floats, but a numpy scalar nested in
+    # details['modality_scores'] (or added by future code) must never break the
+    # single most important write in the flow -- persisting a completed verdict.
+    return json.dumps(data, default=float)
 
 
 def deserialize_session(blob: str, build_services: Callable[[], Dict]) -> Dict:
@@ -321,12 +325,30 @@ class RedisSessionStore:
             blob = blob.decode('utf-8')
         return deserialize_session(blob, self._build_services)
 
+    @staticmethod
+    def _is_live(session: Dict) -> bool:
+        """Pending/in_progress and not past its deadline."""
+        from django.utils import timezone
+        return (
+            session.get('status') in ('pending', 'in_progress')
+            and session.get('expires_at') is not None
+            and session['expires_at'] > timezone.now()
+        )
+
     def save(self, session_id: str, session: Dict) -> None:
         blob = serialize_session(session)
-        # Refresh the retention TTL on every write so an active session never
-        # expires mid-flight; terminal ones simply stop being written.
-        self.redis.set(self._KEY + session_id, blob, ex=self.retention_seconds)
-        self._index_live(session_id, session)
+        is_live = self._is_live(session)
+        if is_live:
+            # Refresh the retention TTL while live so an active session never
+            # expires mid-flight.
+            self.redis.set(self._KEY + session_id, blob, ex=self.retention_seconds)
+        else:
+            # Terminal (or past-deadline): persist the frozen verdict but do NOT
+            # renew the retention window -- keepttl lets it count down from when
+            # the session was last live, so a client polling complete cannot keep
+            # a terminal blob resident indefinitely by re-completing.
+            self.redis.set(self._KEY + session_id, blob, keepttl=True)
+        self._index_live(session_id, session, is_live)
 
     def delete(self, session_id: str) -> None:
         uid = self._local_user.get(session_id)
@@ -359,16 +381,10 @@ class RedisSessionStore:
             self._local.user = cache
         return cache
 
-    def _index_live(self, session_id: str, session: Dict) -> None:
+    def _index_live(self, session_id: str, session: Dict, is_live: bool) -> None:
         """Keep the live sets in sync with the session's current liveness."""
-        from django.utils import timezone
         uid = session.get('user_id')
         self._local_user[session_id] = uid
-        is_live = (
-            session.get('status') in ('pending', 'in_progress')
-            and session.get('expires_at') is not None
-            and session['expires_at'] > timezone.now()
-        )
         ukey = self._ULIVE + str(uid)
         if is_live:
             self.redis.sadd(self._LIVE, session_id)
@@ -422,10 +438,19 @@ class RedisSessionStore:
         session key TTLs out; drop those (key gone => not live) so they do not
         inflate the capacity count forever.
         """
-        global_ids = {self._as_str(x) for x in self.redis.smembers(self._LIVE)}
-        stale = [sid for sid in global_ids if not self.redis.exists(self._KEY + sid)]
-        for sid in stale:
-            self.redis.srem(self._LIVE, sid)
+        global_ids = [self._as_str(x) for x in self.redis.smembers(self._LIVE)]
+        if global_ids:
+            # Pipeline the existence checks into ONE round trip rather than one
+            # EXISTS per member -- this runs while the global create-lock is held,
+            # so N sequential round trips would serialize all cluster-wide creates
+            # behind it.
+            pipe = self.redis.pipeline()
+            for sid in global_ids:
+                pipe.exists(self._KEY + sid)
+            present = pipe.execute()
+            stale = [sid for sid, ok in zip(global_ids, present) if not ok]
+            if stale:
+                self.redis.srem(self._LIVE, *stale)
         live = self.redis.scard(self._LIVE)
         user_live = self.redis.scard(self._ULIVE + str(user_id))
         return live, user_live

@@ -21,8 +21,10 @@
  *      the device; automation cannot dismiss the native chooser, so a human
  *      selects the oximeter when prompted.)
  *   3. Start a verification, click "Connect pulse oximeter", pick the device.
- *   4. Confirm the SpO2 tile appears with a plausible value (90–100%) and that
- *      completing the session shows SpO2 contributing to the pulse modality.
+ *   4. Confirm the SpO2 tile appears with a plausible real-device value
+ *      (70–100% -- a liveness check validates a genuine reading, not health, so
+ *      it must not reject a real sub-90 reading) and that completing the session
+ *      shows SpO2 contributing to the pulse modality.
  *   5. Disconnect the oximeter mid-session; confirm the SpO2 tile clears (the
  *      reading is never fabricated or left stale) and the session continues.
  *
