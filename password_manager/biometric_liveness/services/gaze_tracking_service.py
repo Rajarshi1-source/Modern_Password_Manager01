@@ -429,15 +429,21 @@ class GazeTrackingService:
                 human_likelihood_score=0.0
             )
 
+        # Order the track ONCE. Path similarity and reaction time both need
+        # time-ordered samples, and accuracy's one-sample-per-target consumption
+        # is likewise better spent oldest-first; sorting per metric repeated the
+        # same O(n log n) over a track that can hold a whole challenge window.
+        ordered = sorted(gaze_data, key=lambda g: g.timestamp_ms)
+
         # Calculate metrics
-        accuracy = self._calculate_gaze_accuracy(task, gaze_data)
-        path_similarity = self._calculate_path_similarity(task, gaze_data)
+        accuracy = self._calculate_gaze_accuracy(task, ordered)
+        path_similarity = self._calculate_path_similarity(task, ordered)
         # Real reaction latency: onset -> first on-target gaze. Only computed
         # when the caller supplies the server-owned challenge start; otherwise 0
         # (never the first sample's absolute epoch timestamp, which is not a
         # reaction time).
-        reaction_time = self._calculate_reaction_time(task, gaze_data, challenge_start_ms)
-        human_score = self._calculate_human_likelihood(gaze_data)
+        reaction_time = self._calculate_reaction_time(task, ordered, challenge_start_ms)
+        human_score = self._calculate_human_likelihood(ordered)
         
         # If the task has a correct answer, a matching answer is REQUIRED. A
         # missing/blank answer must not pass the cognitive part for free.
@@ -512,13 +518,16 @@ class GazeTrackingService:
         """
         Latency (ms) from challenge onset to the first on-target gaze.
 
+        ``gaze_data`` must already be time-ordered (validate_task_response sorts
+        once for every metric); "first" means first in that order.
+
         Returns 0.0 when the caller did not provide the onset time, or no sample
         ever landed on a target. Never returns an absolute epoch timestamp.
         """
         if challenge_start_ms is None or not task.target_positions:
             return 0.0
         threshold = 0.15
-        for gaze in sorted(gaze_data, key=lambda g: g.timestamp_ms):
+        for gaze in gaze_data:
             for target_x, target_y in task.target_positions:
                 if math.hypot(gaze.x - target_x, gaze.y - target_y) < threshold:
                     return max(0.0, float(gaze.timestamp_ms - challenge_start_ms))
@@ -537,12 +546,15 @@ class GazeTrackingService:
         matched only by a sample occurring after the previous target's match. A
         recorded or synthetic track that ignores the server-randomized order, or
         supplies no ordered movement, scores low. Returns the fraction matched.
+
+        ``gaze_data`` must already be time-ordered (validate_task_response sorts
+        once for every metric); the ordering IS the signal here.
         """
         order = task.expected_sequence
         if not order or not task.target_positions or len(gaze_data) < 2:
             return 0.0
 
-        points = sorted(gaze_data, key=lambda g: g.timestamp_ms)
+        points = gaze_data
         radius = 0.15
         matched = 0
         search_from = 0

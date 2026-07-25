@@ -32,6 +32,27 @@ def get_session_service():
     return LivenessSessionService()
 
 
+# Another worker holds this session's (or the create) lock. The lock is held for
+# a single fast session operation, so a 1s backoff is the right order of
+# magnitude -- long enough not to hot-loop, short enough that a live
+# verification does not visibly stall.
+_SESSION_BUSY_RETRY_AFTER = '1'
+
+
+def _session_busy_response():
+    """
+    Retryable 409 for cross-process lock contention.
+
+    The body flag is what our own client reads, but Retry-After lets generic
+    HTTP clients, SDK retry policies and proxies back off on their own instead
+    of retrying immediately in a tight loop.
+    """
+    response = Response({'error': 'session_busy', 'retryable': True},
+                        status=status.HTTP_409_CONFLICT)
+    response['Retry-After'] = _SESSION_BUSY_RETRY_AFTER
+    return response
+
+
 def _liveness_result_payload(result) -> dict:
     """
     Flatten a SessionResult into the primitive fields the row needs.
@@ -258,8 +279,7 @@ def start_session(request):
         return Response(session_info, status=status.HTTP_201_CREATED)
     except SessionLockError:
         # Store busy (could not take the create-lock) -- transient, retry.
-        return Response({'error': 'session_busy', 'retryable': True},
-                        status=status.HTTP_409_CONFLICT)
+        return _session_busy_response()
     except SessionCapacityError:
         logger.warning("Liveness session capacity reached; rejecting new session")
         return Response({'error': 'capacity_reached'},
@@ -306,8 +326,7 @@ def submit_frame(request):
         
         return Response(result)
     except SessionLockError:
-        return Response({'error': 'session_busy', 'retryable': True},
-                        status=status.HTTP_409_CONFLICT)
+        return _session_busy_response()
     except Exception as e:
         logger.error(f"Error processing frame: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -360,8 +379,7 @@ def submit_challenge_response(request):
                             else status.HTTP_400_BAD_REQUEST)
         return Response(result)
     except SessionLockError:
-        return Response({'error': 'session_busy', 'retryable': True},
-                        status=status.HTTP_409_CONFLICT)
+        return _session_busy_response()
     except Exception as e:
         logger.error(f"Error submitting response: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -398,8 +416,7 @@ def submit_hardware_spo2(request):
                             else status.HTTP_400_BAD_REQUEST)
         return Response(result)
     except SessionLockError:
-        return Response({'error': 'session_busy', 'retryable': True},
-                        status=status.HTTP_409_CONFLICT)
+        return _session_busy_response()
     except Exception as e:
         logger.error(f"Error ingesting hardware SpO2: {e}")
         return Response({'error': 'internal_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -434,8 +451,7 @@ def complete_session(request):
         return Response({'error': 'required_challenge_incomplete', 'retryable': True},
                         status=status.HTTP_409_CONFLICT)
     except SessionLockError:
-        return Response({'error': 'session_busy', 'retryable': True},
-                        status=status.HTTP_409_CONFLICT)
+        return _session_busy_response()
     except ValueError as e:
         # Session not found / already completed / expired -> terminal state error.
         # Do not echo the exception text to the client (CodeQL info-exposure).

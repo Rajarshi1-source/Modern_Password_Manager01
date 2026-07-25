@@ -11,6 +11,7 @@ from django.urls import reverse
 from rest_framework.test import APITestCase
 from rest_framework import status
 from unittest.mock import patch, MagicMock
+import os
 import unittest
 import numpy as np
 import uuid
@@ -486,6 +487,9 @@ class LivenessAPITests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_409_CONFLICT)
         self.assertEqual(resp.data['error'], 'session_busy')
         self.assertTrue(resp.data.get('retryable'))
+        # Retry-After lets generic HTTP clients/proxies back off on their own,
+        # rather than hot-looping because they cannot read our body flag.
+        self.assertEqual(resp['Retry-After'], '1')
 
     def test_start_session_db_failure_discards_in_memory_session(self):
         """A DB-create failure must not leak the in-memory session's capacity slot."""
@@ -1937,6 +1941,35 @@ class _FakeRedis:
     def pipeline(self):
         return _FakePipeline(self)
 
+    def register_script(self, script):
+        """
+        Emulate the two lock scripts the store registers.
+
+        There is no Lua interpreter here, so we match on the exact source the
+        store registers and implement the same semantics in Python. Matching on
+        identity (rather than reimplementing "some CAS") keeps the double honest:
+        adding a third script fails loudly instead of silently no-op'ing.
+        """
+        from .services.session_store import _RELEASE_LUA, _RENEW_LUA
+
+        if script == _RELEASE_LUA:
+            def release(keys, args):
+                key, token = keys[0], self._b(args[0])
+                if self.kv.get(key) == token:
+                    return self.delete(key)
+                return 0
+            return release
+
+        if script == _RENEW_LUA:
+            def renew(keys, args):
+                key, token = keys[0], self._b(args[0])
+                # TTL is not modelled (see the class note), so a renew of a key
+                # we still own simply succeeds.
+                return 1 if self.kv.get(key) == token else 0
+            return renew
+
+        raise AssertionError(f'_FakeRedis has no emulation for script: {script!r}')
+
 
 class _FakePipeline:
     """Queues calls and executes them in order (matches redis-py's pipeline use
@@ -1983,6 +2016,26 @@ class SessionStoreBackendSelectionTests(TestCase):
         """Unconfigured (or 'memory') keeps the in-memory store -- no Redis."""
         from .services.liveness_session_service import LivenessSessionService
         self.assertIsNone(LivenessSessionService()._redis_store)
+
+    def test_session_url_keeps_its_own_db_when_derived_from_redis_url(self):
+        """Deriving from a shared REDIS_URL must still pin the liveness database:
+        sharing the cache's db exposes in-flight sessions to its FLUSHDB and its
+        eviction policy, which would drop live verifications."""
+        from password_manager.settings.base import _liveness_session_redis_url
+        with patch.dict(os.environ, {'REDIS_URL': 'redis://cache-host:6379/0'},
+                        clear=False):
+            os.environ.pop('LIVENESS_SESSION_REDIS_URL', None)
+            self.assertEqual(_liveness_session_redis_url(),
+                             'redis://cache-host:6379/3')
+
+    def test_explicit_session_url_wins(self):
+        from password_manager.settings.base import _liveness_session_redis_url
+        with patch.dict(os.environ, {
+            'REDIS_URL': 'redis://cache-host:6379/0',
+            'LIVENESS_SESSION_REDIS_URL': 'rediss://liveness-host:6380/7',
+        }, clear=False):
+            self.assertEqual(_liveness_session_redis_url(),
+                             'rediss://liveness-host:6380/7')
 
 
 class SessionStoreSerializationTests(TestCase):
@@ -2145,6 +2198,50 @@ class RedisSessionStoreCrossProcessTests(TestCase):
         with patch('time.sleep', lambda *_a, **_k: None):
             with self.assertRaises(SessionLockError):
                 self.rest.process_frame(sid, self._frame(), 1.0)
+
+    def test_release_never_deletes_another_workers_lock(self):
+        """The release is a server-side compare-and-delete, so a holder whose
+        lease already expired and was re-acquired elsewhere cannot delete the
+        NEW owner's lock (which would let a third worker in concurrently)."""
+        from .services.session_store import RedisSessionStore
+        store = self.rest._redis_store
+        sid = 'lease-handover'
+        key = RedisSessionStore._LOCK + sid
+        self.assertTrue(store.acquire(sid))
+        # Simulate the lease expiring and another worker taking the lock.
+        self.fake.kv[key] = b'other-worker'
+        store.release(sid)
+        self.assertEqual(self.fake.kv.get(key), b'other-worker')
+
+    def test_save_is_fenced_on_still_holding_the_lease(self):
+        """If the lease is lost mid-operation, the worker's now-stale copy must
+        NOT be written over whichever worker owns the session -- the call fails
+        retryably instead of silently losing the other worker's frames."""
+        from .services.liveness_session_service import SessionLockError
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        self.ws.process_frame(sid, self._frame(), 1.0)  # the state to protect
+        with patch.object(type(self.rest._redis_store), 'renew', return_value=False):
+            with self.assertRaises(SessionLockError):
+                self.rest.process_frame(sid, self._frame(), 2.0)
+        # The other worker's frame count survived; ours was discarded.
+        self.assertEqual(self.ws.get_session_status(sid)['frames_processed'], 1)
+
+    def test_status_is_read_without_rebuilding_the_session(self):
+        """The polled status endpoint takes the metadata-only path: same answer,
+        no deserialize_session/detector construction."""
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        self.ws.process_frame(sid, self._frame(), 1.0)
+        with patch.object(type(self.rest._redis_store), 'load') as load:
+            status_payload = self.rest.get_session_status(sid)
+        load.assert_not_called()
+        self.assertEqual(status_payload['frames_processed'], 1)
+        self.assertEqual(status_payload['status'], 'in_progress')
+        self.assertFalse(status_payload['is_expired'])
+
+    def test_status_of_missing_session_is_none(self):
+        self.assertIsNone(self.rest.get_session_status('does-not-exist'))
 
     def test_completion_with_real_scores_persists_over_redis(self):
         """A completed verdict carrying real modality scores must serialize.

@@ -34,6 +34,24 @@ from django.utils.dateparse import parse_datetime
 logger = logging.getLogger(__name__)
 
 
+# Server-side compare-and-X for the session locks. Both run atomically inside
+# Redis, which is the whole point: a client-side GET-then-DELETE can delete a
+# lock that expired and was re-acquired by another worker between the two calls.
+_RELEASE_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+_RENEW_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('pexpire', KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+
 # --------------------------------------------------------------------------- #
 # Dataclass (de)serialization
 # --------------------------------------------------------------------------- #
@@ -187,6 +205,17 @@ def _services_to_json(services: Optional[Dict]) -> Dict:
       the window refills within 3 frames after a worker hand-off. Its
       ``analysis_history`` is unbounded and read only by ``get_overall_verdict``,
       which the session service never calls.
+
+    FUTURE COUPLING (deepfake): the "advisory" half of that argument holds only
+    while ``model_derived`` stays False on the heuristic path. If a trained
+    detector is wired in and reuses ``analyze_frame``'s ensemble -- which folds
+    ``temporal_score`` (i.e. ``frame_history``) into the same
+    ``fake_probability`` -- then a per-frame Redis hand-off, which resets that
+    window and pins ``temporal_score`` at its <3-frame default of 0.5, starts
+    moving a VERDICT-GATING number. Whoever lands that model must either derive
+    the model probability independently of ``frame_history`` or snapshot the
+    window here; leaving both as-is would silently make cross-worker scoring
+    differ from single-worker scoring.
     """
     if not services:
         return {}
@@ -314,6 +343,14 @@ class RedisSessionStore:
     TTL out of the session key, so no explicit age-eviction is needed. The live
     sets are self-healing: the capacity count drops ids whose session key no
     longer EXISTS (a crashed worker's leftover membership).
+
+    DEPLOYMENT MINIMUM: **Redis 7.0+**. The terminal-save path uses ``EXPIRE ...
+    NX`` to backfill a retention TTL without disturbing an existing countdown,
+    and the NX/XX/GT/LT arguments to EXPIRE only exist from 7.0. On an older
+    server that call errors instead of silently no-op'ing, so the requirement is
+    loud rather than latent -- but note the test double accepts the kwarg
+    without modelling TTL at all, so the suite passing is NOT evidence that the
+    target server is new enough.
     """
 
     _KEY = 'liveness:sess:'
@@ -331,6 +368,10 @@ class RedisSessionStore:
         # Per-session tokens for the currently-held lock on THIS thread, so
         # release only deletes a lock this call actually owns.
         self._local = threading.local()
+        # Registered once; redis-py computes the SHA lazily and EVALSHAs with an
+        # automatic EVAL fallback, so this costs no round trip at construction.
+        self._release_script = client.register_script(_RELEASE_LUA)
+        self._renew_script = client.register_script(_RENEW_LUA)
 
     # -- session read/write ------------------------------------------------- #
 
@@ -385,17 +426,47 @@ class RedisSessionStore:
         if uid is not None:
             self.redis.srem(self._ULIVE + str(uid), session_id)
 
-    def owner_of(self, session_id: str) -> Optional[int]:
-        """Read only the owning user_id (no detector rebuild) for the frame path."""
+    def _raw(self, session_id: str) -> Optional[Dict]:
+        """
+        Parse the stored JSON without rebuilding anything.
+
+        ``load`` is the expensive path: it runs deserialize_session, which calls
+        build_services() to construct a fresh detector set and then replays the
+        rPPG/gaze/expression accumulators into it. Read-only callers that want a
+        handful of scalar fields must not pay for that.
+        """
         blob = self.redis.get(self._KEY + session_id)
         if blob is None:
             return None
         if isinstance(blob, bytes):
             blob = blob.decode('utf-8')
         try:
-            return json.loads(blob).get('user_id')
+            data = json.loads(blob)
         except (ValueError, TypeError):
             return None
+        return data if isinstance(data, dict) else None
+
+    def owner_of(self, session_id: str) -> Optional[int]:
+        """Read only the owning user_id (no detector rebuild) for the frame path."""
+        data = self._raw(session_id)
+        return data.get('user_id') if data is not None else None
+
+    def status_of(self, session_id: str) -> Optional[Dict]:
+        """
+        Metadata-only read for the polled status endpoint (no detector rebuild).
+
+        Returns the same four fields get_session_status reports on, with
+        expires_at already parsed back to a datetime.
+        """
+        data = self._raw(session_id)
+        if data is None:
+            return None
+        return {
+            'status': data.get('status'),
+            'frames_processed': data.get('frames_processed', 0),
+            'current_challenge_idx': data.get('current_challenge_idx', 0),
+            'expires_at': _undt(data.get('expires_at')),
+        }
 
     @property
     def _local_user(self) -> Dict:
@@ -419,7 +490,7 @@ class RedisSessionStore:
             self.redis.srem(self._LIVE, session_id)
             self.redis.srem(ukey, session_id)
 
-    # -- per-session lock (SET NX PX + owned release) ----------------------- #
+    # -- per-session lock (SET NX PX + atomic owned release/renew) ---------- #
 
     def acquire(self, session_id: str) -> bool:
         token = uuid.uuid4().hex
@@ -431,18 +502,35 @@ class RedisSessionStore:
         return False
 
     def release(self, session_id: str) -> None:
+        """
+        Drop the lock, but ONLY if it still carries this thread's token.
+
+        The compare and the delete happen server-side in one Lua call. A
+        client-side GET-then-DELETE has a window in which the lease expires and
+        another worker acquires the lock between the two commands, so the
+        original holder deletes the NEW owner's lock and a third worker can then
+        enter the same session concurrently.
+        """
         token = self._tokens.pop(session_id, None)
         if token is None:
             return
-        # Owned release: only delete if the lock still carries our token. The
-        # get-then-delete window is bounded by lock_ttl_ms (>> a session op), and
-        # a real deployment can swap in a Lua compare-and-delete; the in-process
-        # RLock already serializes same-worker callers.
-        current = self.redis.get(self._LOCK + session_id)
-        if isinstance(current, bytes):
-            current = current.decode('utf-8')
-        if current == token:
-            self.redis.delete(self._LOCK + session_id)
+        self._release_script(keys=[self._LOCK + session_id], args=[token])
+
+    def renew(self, session_id: str) -> bool:
+        """
+        Extend this thread's lease, returning False if it was already lost.
+
+        Callers use the return value as a fencing check before writing: a False
+        means the lock expired mid-operation and some other worker may already
+        own (and have mutated) the session, so the caller's in-hand copy is
+        stale and must not be saved over the newer state. Also atomic, for the
+        same reason as release.
+        """
+        token = self._tokens.get(session_id)
+        if token is None:
+            return False
+        return bool(self._renew_script(
+            keys=[self._LOCK + session_id], args=[token, self.lock_ttl_ms]))
 
     @property
     def _tokens(self) -> Dict:
@@ -494,7 +582,9 @@ class RedisSessionStore:
         token = getattr(self._local, 'create_token', None)
         if token is None:
             return
-        current = self._as_str(self.redis.get(self._CREATE_LOCK))
-        if current == token:
-            self.redis.delete(self._CREATE_LOCK)
+        # Same atomic compare-and-delete as the per-session lock: releasing a
+        # create-lock that has already expired into another creator's hands
+        # would let two workers run the capacity check concurrently, which is
+        # exactly what this lock exists to prevent.
+        self._release_script(keys=[self._CREATE_LOCK], args=[token])
         self._local.create_token = None
