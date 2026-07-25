@@ -114,7 +114,7 @@ class MicroExpressionAnalyzer:
         # Per-session temporal accumulators for the expression liveness score
         # (blink dynamics + AU variation over the session). Populated by
         # observe(); serialized by snapshot_state for the cross-process store.
-        self.au_history: List[Dict[int, float]] = []
+        # (au_history is declared above with the other history buffers.)
         self.au_timestamps: List[float] = []
         self._prev_landmarks: Optional[np.ndarray] = None
         # Derived facts kept OUTSIDE the bounded au_history so a Redis hand-off

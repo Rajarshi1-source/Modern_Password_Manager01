@@ -224,7 +224,17 @@ class LivenessSessionService:
         return self._RedisSessionView(self._txn)
 
     def _init_redis_store(self):
-        """Build the Redis store when configured; otherwise None (in-memory)."""
+        """
+        Build the Redis store when configured; otherwise None (in-memory).
+
+        Fails FAST when the operator explicitly selected 'redis' but the client
+        cannot be built (redis not installed, malformed URL, bad TLS/auth
+        option). Silently falling back to the per-worker dict would reintroduce
+        the exact cross-process bug this backend exists to fix, with only a log
+        line as evidence -- the same reasoning as the fail-fast SESSION_STORE
+        validation in settings. NB from_url is lazy, so an unreachable server is
+        NOT detected here; this only rejects misconfiguration.
+        """
         backend = self.config.get('SESSION_STORE', 'memory')
         if backend != 'redis':
             return None
@@ -239,10 +249,12 @@ class LivenessSessionService:
             store = RedisSessionStore(client, self._new_session_services, retention)
             logger.info("Liveness session store backend: redis")
             return store
-        except Exception:
-            logger.exception(
-                "Redis session store init failed; using in-memory backend")
-            return None
+        except Exception as exc:
+            from django.core.exceptions import ImproperlyConfigured
+            raise ImproperlyConfigured(
+                'Liveness Redis session store could not be initialised; refusing '
+                'to fall back to the per-worker in-memory store'
+            ) from exc
 
     def _run_locked_redis(self, method, session_id, args, kwargs):
         """
