@@ -175,35 +175,45 @@ class MicroExpressionAnalyzer:
         """
         if landmarks is None:
             return {}
-        
+
+        # Two geometry primitives are shared by nearly every AU below: the
+        # inter-ocular scale reference (6 helpers) and the eye-aspect ratio (4,
+        # with AU6 pulling in the whole AU12 computation as well). Computing
+        # them once per frame and threading them through halves the per-frame
+        # trig on the hot path; each helper still computes its own when called
+        # standalone, so no value changes.
+        iod = self._iod(landmarks)
+        ear = self._eye_aspect_ratio(landmarks)
+
         aus = {}
-        
+
         # AU1: Inner Brow Raiser - vertical distance of inner brow points
-        aus[1] = self._calculate_au1_intensity(landmarks)
-        
+        aus[1] = self._calculate_au1_intensity(landmarks, iod=iod)
+
         # AU2: Outer Brow Raiser
-        aus[2] = self._calculate_au2_intensity(landmarks)
-        
+        aus[2] = self._calculate_au2_intensity(landmarks, iod=iod)
+
         # AU4: Brow Lowerer - brow depression
-        aus[4] = self._calculate_au4_intensity(landmarks)
-        
+        aus[4] = self._calculate_au4_intensity(landmarks, iod=iod)
+
         # AU5: Upper Lid Raiser - eye opening
-        aus[5] = self._calculate_au5_intensity(landmarks)
-        
-        # AU6: Cheek Raiser - crow's feet wrinkles
-        aus[6] = self._calculate_au6_intensity(landmarks)
-        
+        aus[5] = self._calculate_au5_intensity(landmarks, ear=ear)
+
         # AU12: Lip Corner Puller - smile
-        aus[12] = self._calculate_au12_intensity(landmarks)
-        
+        aus[12] = self._calculate_au12_intensity(landmarks, iod=iod)
+
+        # AU6: Cheek Raiser - crow's feet wrinkles. Duchenne-gated on AU12, so
+        # it reuses the value just computed rather than recomputing it.
+        aus[6] = self._calculate_au6_intensity(landmarks, ear=ear, au12=aus[12])
+
         # AU25: Lips Part - mouth opening
-        aus[25] = self._calculate_au25_intensity(landmarks)
-        
+        aus[25] = self._calculate_au25_intensity(landmarks, iod=iod)
+
         # AU26: Jaw Drop
-        aus[26] = self._calculate_au26_intensity(landmarks)
-        
+        aus[26] = self._calculate_au26_intensity(landmarks, iod=iod)
+
         # AU45: Blink - low eye-aspect-ratio (real geometry, no temporal needed)
-        aus[45] = self._calculate_blink_intensity(landmarks, prev_landmarks)
+        aus[45] = self._calculate_blink_intensity(landmarks, prev_landmarks, ear=ear)
 
         return aus
 
@@ -250,9 +260,11 @@ class MicroExpressionAnalyzer:
             return None
         return (a + b) / 2
 
-    def _calculate_au1_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au1_intensity(
+        self, landmarks: np.ndarray, iod: Optional[float] = None
+    ) -> float:
         """AU1 (Inner Brow Raiser): inner brows raised above the nose bridge."""
-        iod = self._iod(landmarks)
+        iod = self._iod(landmarks) if iod is None else iod
         if iod < 1e-6:
             return 0.0
         brow = (self._pt(landmarks, self._IDX['brA_in'])[1]
@@ -261,53 +273,67 @@ class MicroExpressionAnalyzer:
         # Raised brow sits higher (smaller y) than the bridge; scale by iod.
         return float(np.clip((ref - brow) / iod - 0.35, 0.0, 1.0))
 
-    def _brow_eye_gap(self, landmarks: np.ndarray, brow_idx: int, eye_up_idx: int) -> float:
+    def _brow_eye_gap(self, landmarks: np.ndarray, brow_idx: int, eye_up_idx: int,
+                      iod: Optional[float] = None) -> float:
         """Vertical brow-to-upper-lid gap, normalized by inter-ocular distance."""
-        iod = self._iod(landmarks)
+        iod = self._iod(landmarks) if iod is None else iod
         if iod < 1e-6:
             return 0.0
         brow = self._pt(landmarks, brow_idx)
         eye = self._pt(landmarks, eye_up_idx)
         return abs(eye[1] - brow[1]) / iod
 
-    def _calculate_au2_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au2_intensity(
+        self, landmarks: np.ndarray, iod: Optional[float] = None
+    ) -> float:
         """AU2 (Outer Brow Raiser): outer brows lifted away from the eyes."""
-        gap = (self._brow_eye_gap(landmarks, self._IDX['brA_out'], self._IDX['eyeA_up'])
-               + self._brow_eye_gap(landmarks, self._IDX['brB_out'], self._IDX['eyeB_up'])) / 2
+        gap = (self._brow_eye_gap(landmarks, self._IDX['brA_out'], self._IDX['eyeA_up'], iod)
+               + self._brow_eye_gap(landmarks, self._IDX['brB_out'], self._IDX['eyeB_up'], iod)) / 2
         if gap <= 0.0:
             return 0.0
         return float(np.clip((gap - 0.45) / 0.4, 0.0, 1.0))
 
-    def _calculate_au4_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au4_intensity(
+        self, landmarks: np.ndarray, iod: Optional[float] = None
+    ) -> float:
         """AU4 (Brow Lowerer): inner brows pulled DOWN toward the eyes."""
-        gap = (self._brow_eye_gap(landmarks, self._IDX['brA_in'], self._IDX['eyeA_up'])
-               + self._brow_eye_gap(landmarks, self._IDX['brB_in'], self._IDX['eyeB_up'])) / 2
+        gap = (self._brow_eye_gap(landmarks, self._IDX['brA_in'], self._IDX['eyeA_up'], iod)
+               + self._brow_eye_gap(landmarks, self._IDX['brB_in'], self._IDX['eyeB_up'], iod)) / 2
         if gap <= 0.0:
             return 0.0
         # Smaller gap => brow lowered. Below the neutral band => AU4 active.
         return float(np.clip((0.30 - gap) / 0.25, 0.0, 1.0))
 
-    def _calculate_au5_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au5_intensity(
+        self, landmarks: np.ndarray, ear: Optional[float] = None
+    ) -> float:
         """AU5 (Upper Lid Raiser): eyes opened WIDER than neutral (high EAR)."""
-        ear = self._eye_aspect_ratio(landmarks)
+        ear = self._eye_aspect_ratio(landmarks) if ear is None else ear
         if ear is None:
             return 0.0
         return float(np.clip((ear - 0.32) / 0.18, 0.0, 1.0))
 
-    def _calculate_au6_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au6_intensity(
+        self, landmarks: np.ndarray, ear: Optional[float] = None,
+        au12: Optional[float] = None
+    ) -> float:
         """
         AU6 (Cheek Raiser): lower-lid raise that narrows the eye during a genuine
         (Duchenne) smile -- approximated as eye narrowing that co-occurs with AU12.
         """
-        ear = self._eye_aspect_ratio(landmarks)
+        ear = self._eye_aspect_ratio(landmarks) if ear is None else ear
         if ear is None:
             return 0.0
         narrowing = float(np.clip((0.28 - ear) / 0.18, 0.0, 1.0))
-        return float(narrowing * self._calculate_au12_intensity(landmarks))
+        if au12 is None:
+            au12 = self._calculate_au12_intensity(landmarks)
+        return float(narrowing * au12)
 
-    def _calculate_au12_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au12_intensity(
+        self, landmarks: np.ndarray, iod: Optional[float] = None
+    ) -> float:
         """AU12 (Lip Corner Puller/Smile): mouth widened and corners raised."""
-        iod = self._iod(landmarks)
+        iod = self._iod(landmarks) if iod is None else iod
         if iod < 1e-6:
             return 0.0
         left = self._pt(landmarks, self._IDX['mouth_l'])
@@ -323,9 +349,11 @@ class MicroExpressionAnalyzer:
         raise_score = np.clip((raise_ratio + 0.02) / 0.12, 0.0, 1.0)
         return float(np.clip(0.5 * width_score + 0.5 * raise_score, 0.0, 1.0))
 
-    def _calculate_au25_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au25_intensity(
+        self, landmarks: np.ndarray, iod: Optional[float] = None
+    ) -> float:
         """AU25 (Lips Part): inner-lip vertical gap."""
-        iod = self._iod(landmarks)
+        iod = self._iod(landmarks) if iod is None else iod
         if iod < 1e-6:
             return 0.0
         up = self._pt(landmarks, self._IDX['lip_up_in'])
@@ -333,9 +361,11 @@ class MicroExpressionAnalyzer:
         gap = abs(lo[1] - up[1]) / iod
         return float(np.clip((gap - 0.02) / 0.15, 0.0, 1.0))
 
-    def _calculate_au26_intensity(self, landmarks: np.ndarray) -> float:
+    def _calculate_au26_intensity(
+        self, landmarks: np.ndarray, iod: Optional[float] = None
+    ) -> float:
         """AU26 (Jaw Drop): large outer-lip vertical opening."""
-        iod = self._iod(landmarks)
+        iod = self._iod(landmarks) if iod is None else iod
         if iod < 1e-6:
             return 0.0
         up = self._pt(landmarks, self._IDX['lip_up_out'])
@@ -346,10 +376,11 @@ class MicroExpressionAnalyzer:
     def _calculate_blink_intensity(
         self,
         landmarks: np.ndarray,
-        prev_landmarks: Optional[np.ndarray] = None
+        prev_landmarks: Optional[np.ndarray] = None,
+        ear: Optional[float] = None
     ) -> float:
         """AU45 (Blink): eyes closed => low eye-aspect-ratio."""
-        ear = self._eye_aspect_ratio(landmarks)
+        ear = self._eye_aspect_ratio(landmarks) if ear is None else ear
         if ear is None:
             return 0.0
         # EAR ~0.30 open, ~0.10 shut. Higher intensity as the eye closes.

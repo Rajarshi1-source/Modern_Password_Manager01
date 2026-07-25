@@ -232,8 +232,17 @@ class LivenessSessionService:
         option). Silently falling back to the per-worker dict would reintroduce
         the exact cross-process bug this backend exists to fix, with only a log
         line as evidence -- the same reasoning as the fail-fast SESSION_STORE
-        validation in settings. NB from_url is lazy, so an unreachable server is
-        NOT detected here; this only rejects misconfiguration.
+        validation in settings.
+
+        Two limits on how "fast" that is:
+
+        * "Startup" here means the first get_session_service() call, not Django
+          boot -- the service is lru_cache'd, so a misconfigured deployment
+          surfaces on the first request that touches liveness, as a 500, rather
+          than refusing to start. (The SESSION_STORE name check in settings DOES
+          run at import and so does fail the process outright.)
+        * from_url is lazy, so an unreachable or down server is NOT detected
+          here; this only rejects misconfiguration.
         """
         backend = self.config.get('SESSION_STORE', 'memory')
         if backend != 'redis':
@@ -264,24 +273,64 @@ class LivenessSessionService:
         flipping status to 'expired' before raising), so a partial terminal
         transition is not lost. A None load means "not found": the method
         returns/raises its own not-found path and nothing is saved.
+
+        The save is FENCED on the lease still being held (see _persist_txn): a
+        long-running call -- MediaPipe inference on a loaded box -- can outlive
+        the lock TTL, after which another worker may legitimately take the
+        session and mutate it. Writing our copy then would silently discard that
+        worker's frames (last-writer-wins on a whole-blob save).
         """
         store = self._redis_store
         if not self._acquire_redis_lock(session_id):
             raise SessionLockError(f'Could not lock liveness session {session_id}')
         try:
-            session = store.load(session_id)
-            self._txn.session = session
+            self._txn.session = store.load(session_id)
             try:
-                return method(self, session_id, *args, **kwargs)
-            finally:
-                if self._txn.session is not None:
-                    store.save(session_id, self._txn.session)
-                self._txn.session = None
+                result = method(self, session_id, *args, **kwargs)
+            except BaseException:
+                # Best-effort persist of a partial transition; a lost lease just
+                # skips the write rather than masking the in-flight exception.
+                self._persist_txn(session_id)
+                raise
+            if not self._persist_txn(session_id):
+                raise SessionLockError(
+                    f'Lost the lock on liveness session {session_id} mid-operation')
+            return result
         finally:
+            self._txn.session = None
             store.release(session_id)
 
+    def _persist_txn(self, session_id: str) -> bool:
+        """
+        Save the transaction's session iff we still hold the lease.
+
+        Returns False only when there WAS something to write and the lease had
+        already expired -- the caller turns that into a retryable error instead
+        of a silent overwrite. Nothing to write (a not-found load) is not a
+        failure.
+        """
+        pending = self._txn.session
+        if pending is None:
+            return True
+        self._txn.session = None
+        if not self._redis_store.renew(session_id):
+            logger.error(
+                "Liveness session %s: lock lease expired mid-operation; "
+                "discarding this worker's copy rather than overwriting whichever "
+                "worker holds the session now", session_id)
+            return False
+        self._redis_store.save(session_id, pending)
+        return True
+
     def _acquire_redis_lock(self, session_id: str) -> bool:
-        """Bounded spin for the per-session Redis lock (same-session ops are fast)."""
+        """
+        Bounded spin for the per-session Redis lock (same-session ops are fast).
+
+        The spin budget (3s) is deliberately far below the lock TTL (15s): a
+        caller gives up and returns a retryable 409 long before it could mistake
+        a live holder's lease for a stale one. A crashed holder therefore parks
+        callers for at most one spin each, then the TTL clears the lock.
+        """
         import time
         for _attempt in range(60):
             if self._redis_store.acquire(session_id):
@@ -1304,18 +1353,34 @@ class LivenessSessionService:
         }
 
     def get_session_status(self, session_id: str) -> Optional[Dict]:
-        """Get current session status."""
+        """
+        Get current session status.
+
+        Clients poll this, so the Redis path takes the metadata-only read rather
+        than store.load(): a full load would deserialize the whole blob, build a
+        fresh detector set and replay every accumulator, all to report four
+        scalars.
+        """
         if self._redis_store is not None:
-            session = self._redis_store.load(session_id)
+            meta = self._redis_store.status_of(session_id)
         else:
             session = self._sessions_mem.get(session_id)
-        if not session:
+            meta = {
+                'status': session['status'],
+                'frames_processed': session['frames_processed'],
+                'current_challenge_idx': session['current_challenge_idx'],
+                'expires_at': session['expires_at'],
+            } if session else None
+        if not meta:
             return None
 
+        expires_at = meta['expires_at']
         return {
             'session_id': session_id,
-            'status': session['status'],
-            'frames_processed': session['frames_processed'],
-            'current_challenge': session['current_challenge_idx'],
-            'is_expired': timezone.now() > session['expires_at'],
+            'status': meta['status'],
+            'frames_processed': meta['frames_processed'],
+            'current_challenge': meta['current_challenge_idx'],
+            # Fail closed on an unreadable deadline: a session whose expiry we
+            # cannot establish is reported expired, never as still open.
+            'is_expired': expires_at is None or timezone.now() > expires_at,
         }

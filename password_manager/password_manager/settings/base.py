@@ -2161,6 +2161,36 @@ def _liveness_session_store():
     return raw
 
 
+# Liveness sessions get their own Redis logical database. They are short-lived
+# but NOT disposable: an in-flight session holds the accumulated rPPG buffer,
+# gaze track and replay guard, and losing one mid-verification fails a real
+# user's login.
+_LIVENESS_SESSION_DB = 3
+
+
+def _liveness_session_redis_url():
+    """
+    Resolve the session-store URL, keeping liveness on its own logical database.
+
+    An explicit LIVENESS_SESSION_REDIS_URL always wins. Otherwise we derive from
+    the shared REDIS_URL but FORCE the liveness database index rather than
+    inheriting whichever db the cache/broker uses: the keys are liveness:-
+    prefixed so they never collide by name, but sharing a db means a cache
+    FLUSHDB or an eviction policy tuned for cache data (allkeys-lru) can drop
+    in-flight verification sessions -- a silent failure that looks like users
+    randomly losing their session.
+    """
+    explicit = os.environ.get('LIVENESS_SESSION_REDIS_URL')
+    if explicit:
+        return explicit
+    shared = os.environ.get('REDIS_URL')
+    if not shared:
+        return f'redis://127.0.0.1:6379/{_LIVENESS_SESSION_DB}'
+    from urllib.parse import urlsplit, urlunsplit
+    parts = urlsplit(shared)
+    return urlunsplit(parts._replace(path=f'/{_LIVENESS_SESSION_DB}'))
+
+
 BIOMETRIC_LIVENESS = {
     # Feature toggle
     'ENABLED': os.environ.get('BIOMETRIC_LIVENESS_ENABLED', 'False').lower() == 'true',
@@ -2219,6 +2249,13 @@ BIOMETRIC_LIVENESS = {
     # short-circuits after one attempt).
     'FACE_LANDMARKER_MODEL': os.environ.get('LIVENESS_FACE_LANDMARKER_MODEL', ''),
 
+    # How many independent FaceLandmarker instances to keep. One Tasks detector
+    # is not thread-safe, so this is the number of frames that can be analysed
+    # concurrently; a pool of 1 reproduces the old fully-serialized behaviour.
+    # Each instance carries its own copy of the model weights, so raise it
+    # against worker-thread count and memory, not arbitrarily.
+    'FACE_LANDMARKER_POOL': _liveness_int_env('LIVENESS_FACE_LANDMARKER_POOL', '4', minimum=1),
+
     # Whether the gaze estimator is CALIBRATED to screen-target space. The
     # FaceLandmarker measures iris-in-socket position, which is not yet mapped to
     # the challenge's screen-fraction targets, so scoring it against them is
@@ -2230,11 +2267,12 @@ BIOMETRIC_LIVENESS = {
 
     # Cross-process session store backend: 'memory' (default, per-worker dict --
     # correct only single-process) or 'redis' (shared across REST/WS workers and
-    # replicas). Redis uses REDIS_URL. The in-memory path is byte-for-byte the
-    # prior behaviour so existing single-process deployments are unaffected.
+    # replicas). Redis derives from REDIS_URL but on its own logical database
+    # (see _liveness_session_redis_url), and requires a Redis 7.0+ server. The
+    # in-memory path is byte-for-byte the prior behaviour so existing
+    # single-process deployments are unaffected.
     'SESSION_STORE': _liveness_session_store(),
-    'SESSION_STORE_REDIS_URL': os.environ.get(
-        'LIVENESS_SESSION_REDIS_URL', os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/3')),
+    'SESSION_STORE_REDIS_URL': _liveness_session_redis_url(),
 }
 
 # =============================================================================
