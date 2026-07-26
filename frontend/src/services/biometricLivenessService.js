@@ -22,6 +22,9 @@ class BiometricLivenessService {
     this.onFrameResult = null;
     this.onSessionComplete = null;
     this.onChallengeResult = null;
+    // Optional: transient (retryable) server conflicts. Left null by default so
+    // they degrade to a console warning rather than the terminal error screen.
+    this.onRetryableError = null;
     // Bumped by every connect/disconnect so an in-flight ticket fetch that has
     // been superseded doesn't open a stale socket.
     this.wsConnectGeneration = 0;
@@ -127,8 +130,18 @@ class BiometricLivenessService {
         this.onChallengeResult(data);
       } else if (data.type === 'session_complete' && this.onSessionComplete) {
         this.onSessionComplete(data);
-      } else if (data.type === 'error' && onError) {
-        onError(data.message);
+      } else if (data.type === 'error') {
+        // `retryable` marks a TRANSIENT conflict (session_busy: another worker
+        // briefly holds this session's cross-process lock). Routing it to
+        // onError would halt capture and drop the user into the terminal error
+        // screen over a collision that resolves in milliseconds, so it is
+        // reported separately and the session simply keeps streaming.
+        if (data.retryable) {
+          if (this.onRetryableError) this.onRetryableError(data.message);
+          else console.warn('Liveness transient error (retrying):', data.message);
+        } else if (onError) {
+          onError(data.message);
+        }
       }
     };
 
