@@ -243,6 +243,36 @@ describe('biometricLivenessService message routing', () => {
         }
     });
 
+    it('a streaming SpO2 reading never evicts a pending one-shot', async () => {
+        // submitHardwareSpo2 is deliberately NOT a tracked one-shot: readings
+        // arrive continuously, and _sendOneShot has a single pending slot, so
+        // routing them through it would evict a `complete` awaiting its verdict
+        // and leave it unretried -- the silent hang the retry path prevents.
+        vi.useFakeTimers();
+        try {
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError: vi.fn(), onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+
+            livenessService.completeSession();
+            livenessService.submitHardwareSpo2(98, 0.9);   // stream arrives meanwhile
+
+            ws.onmessage({
+                data: JSON.stringify({
+                    type: 'error', message: 'session_busy', retryable: true, op: 'complete',
+                }),
+            });
+            await vi.advanceTimersByTimeAsync(200);
+
+            // complete, spo2, then the RETRIED complete -- still tracked.
+            expect(ws.send).toHaveBeenCalledTimes(3);
+            expect(JSON.parse(ws.send.mock.calls[2][0])).toEqual({ type: 'complete' });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('still routes a non-retryable error to onError', async () => {
         const onError = vi.fn();
         const ws = await connect({
