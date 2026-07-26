@@ -1904,15 +1904,17 @@ class _FakeRedis:
     Minimal in-process Redis double for the session-store tests.
 
     Implements only what RedisSessionStore uses (set with nx/px/ex, get, delete,
-    exists, pexpire, sadd/srem/scard/smembers), returning bytes like a real
-    from_url() client so the store's decode paths are exercised. TTL is not
-    simulated -- the tests are hermetic and assert state sharing/locking, not
-    expiry timing.
+    exists, pexpire, sadd/srem/scard/smembers, and the ZSET commands backing the
+    live indexes), returning bytes like a real from_url() client so the store's
+    decode paths are exercised. Key TTL is not simulated -- the tests are
+    hermetic and assert state sharing/locking, not expiry timing. ZSET SCORES
+    are modelled faithfully, because the capacity count depends on them.
     """
 
     def __init__(self):
         self.kv = {}
         self.sets = {}
+        self.zsets = {}
 
     @staticmethod
     def _b(v):
@@ -1932,7 +1934,36 @@ class _FakeRedis:
         for name in names:
             removed += self.kv.pop(name, None) is not None
             removed += self.sets.pop(name, None) is not None
+            removed += self.zsets.pop(name, None) is not None
         return removed
+
+    # -- ZSET (live indexes, scored by session deadline) ------------------- #
+
+    def zadd(self, name, mapping):
+        z = self.zsets.setdefault(name, {})
+        added = 0
+        for member, score in mapping.items():
+            b = self._b(member)
+            if b not in z:
+                added += 1
+            z[b] = float(score)
+        return added
+
+    def zrem(self, name, *members):
+        z = self.zsets.get(name, {})
+        return sum(z.pop(self._b(m), None) is not None for m in members)
+
+    def zcard(self, name):
+        return len(self.zsets.get(name, {}))
+
+    def zremrangebyscore(self, name, minimum, maximum):
+        z = self.zsets.get(name, {})
+        lo = float('-inf') if minimum in ('-inf', b'-inf') else float(minimum)
+        hi = float('inf') if maximum in ('+inf', b'+inf') else float(maximum)
+        doomed = [m for m, s in z.items() if lo <= s <= hi]
+        for m in doomed:
+            del z[m]
+        return len(doomed)
 
     def exists(self, name):
         return 1 if name in self.kv else 0
@@ -2207,6 +2238,30 @@ class RedisSessionStoreCrossProcessTests(TestCase):
         self.ws.create_session(user_id=self.user.id)
         with self.assertRaises(SessionCapacityError):
             self.rest.create_session(user_id=self.user.id)
+
+    def test_abandoned_session_stops_counting_against_capacity(self):
+        """An abandoned session must free its slot at its DEADLINE, not at the
+        end of the retention window.
+
+        Nothing saves an abandoned session again, so it never leaves the live
+        index by the normal route. Counting it while its blob is merely retained
+        would lock the user out of new verifications for minutes -- the
+        in-memory backend never did that, because it counts with _is_live().
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+        from .services.liveness_session_service import SessionCapacityError
+        for s in (self.rest, self.ws):
+            s.config = {**s.config, 'MAX_USER_ACTIVE_SESSIONS': 1}
+        self.rest.create_session(user_id=self.user.id)
+        # Slot is held while the session is genuinely live.
+        with self.assertRaises(SessionCapacityError):
+            self.ws.create_session(user_id=self.user.id)
+        # Abandoned: the client never calls again, so nothing re-indexes it --
+        # only the clock moves. Advance past the session timeout (120s).
+        later = timezone.now() + timedelta(seconds=300)
+        with patch('django.utils.timezone.now', return_value=later):
+            self.assertIsNotNone(self.ws.create_session(user_id=self.user.id))
 
     def test_discard_frees_a_capacity_slot_cross_instance(self):
         from .services.liveness_session_service import SessionCapacityError

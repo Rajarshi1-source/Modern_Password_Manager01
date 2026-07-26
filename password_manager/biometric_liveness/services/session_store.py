@@ -334,15 +334,24 @@ class RedisSessionStore:
 
     Layout:
       liveness:sess:<id>          JSON session, TTL = retention window
-      liveness:live               SET of live (pending/in_progress) session ids
-      liveness:ulive:<user_id>    SET of that user's live session ids
+      liveness:live               ZSET of live session ids, scored by deadline
+      liveness:ulive:<user_id>    ZSET of that user's live ids, same scoring
       liveness:lock:<id>          per-session mutex (SET NX PX, token value)
       liveness:clock              global lock guarding create capacity check
 
-    Terminal/expired sessions are SREM'd from the live sets on save and left to
-    TTL out of the session key, so no explicit age-eviction is needed. The live
-    sets are self-healing: the capacity count drops ids whose session key no
-    longer EXISTS (a crashed worker's leftover membership).
+    The live indexes are ZSETs scored by the session's ``expires_at`` epoch, not
+    plain SETs, because membership has to expire on its OWN. A session leaves the
+    index when it is SAVED terminal -- but an ABANDONED one is never saved again,
+    so a set could only be pruned by asking whether the key still exists, and the
+    key outlives the deadline by the whole retention window. Those corpses then
+    counted against MAX_USER_ACTIVE_SESSIONS, locking a user out of new
+    verifications for minutes; the in-memory backend never did that, because it
+    counts with _is_live(). Scoring by deadline lets ZREMRANGEBYSCORE drop every
+    past-deadline id in one command, with no session blobs read -- so the count
+    matches _is_live() and the capacity check stays cheap under the create lock.
+    An id whose key has already TTL'd out is necessarily past its deadline too
+    (retention > session timeout), so the same prune covers a crashed worker's
+    leftover membership.
 
     DEPLOYMENT MINIMUM: **Redis 7.0+**. The terminal-save path uses ``EXPIRE ...
     NX`` to backfill a retention TTL without disturbing an existing countdown,
@@ -422,9 +431,9 @@ class RedisSessionStore:
             # the user live-index entry is not orphaned.
             uid = self.owner_of(session_id)
         self.redis.delete(self._KEY + session_id)
-        self.redis.srem(self._LIVE, session_id)
+        self.redis.zrem(self._LIVE, session_id)
         if uid is not None:
-            self.redis.srem(self._ULIVE + str(uid), session_id)
+            self.redis.zrem(self._ULIVE + str(uid), session_id)
 
     def _raw(self, session_id: str) -> Optional[Dict]:
         """
@@ -477,18 +486,24 @@ class RedisSessionStore:
         return cache
 
     def _index_live(self, session_id: str, session: Dict, is_live: bool) -> None:
-        """Keep the live sets in sync with the session's current liveness."""
+        """
+        Keep the live indexes in sync with the session's current liveness.
+
+        The score IS the deadline, which is what lets count_live drop members
+        that expired without anyone saving them again (see the class docstring).
+        """
         uid = session.get('user_id')
         self._local_user[session_id] = uid
         ukey = self._ULIVE + str(uid)
         if is_live:
-            self.redis.sadd(self._LIVE, session_id)
-            self.redis.sadd(ukey, session_id)
+            deadline = session['expires_at'].timestamp()
+            self.redis.zadd(self._LIVE, {session_id: deadline})
+            self.redis.zadd(ukey, {session_id: deadline})
             # Bound the index keys' lifetime to the retention window too.
             self.redis.pexpire(ukey, self.retention_seconds * 1000)
         else:
-            self.redis.srem(self._LIVE, session_id)
-            self.redis.srem(ukey, session_id)
+            self.redis.zrem(self._LIVE, session_id)
+            self.redis.zrem(ukey, session_id)
 
     # -- per-session lock (SET NX PX + atomic owned release/renew) ---------- #
 
@@ -544,29 +559,22 @@ class RedisSessionStore:
 
     def count_live(self, user_id: int) -> tuple:
         """
-        (global_live, user_live), self-healing stale membership.
+        (global_live, user_live), matching the in-memory backend's _is_live().
 
-        A crashed worker can leave a session id in the live sets after its
-        session key TTLs out; drop those (key gone => not live) so they do not
-        inflate the capacity count forever.
+        Drops every past-deadline id first. An ABANDONED session is never saved
+        again, so nothing else would ever remove it: it would keep consuming a
+        capacity slot for the whole retention window and could lock its owner out
+        of new verifications. Pruning by score costs two commands regardless of
+        index size and reads no session blobs -- this runs while the global
+        create-lock is held, so it must not scale with the number of live
+        sessions.
         """
-        global_ids = [self._as_str(x) for x in self.redis.smembers(self._LIVE)]
-        if global_ids:
-            # Pipeline the existence checks into ONE round trip rather than one
-            # EXISTS per member -- this runs while the global create-lock is held,
-            # so N sequential round trips would serialize all cluster-wide creates
-            # behind it.
-            pipe = self.redis.pipeline()
-            for sid in global_ids:
-                pipe.exists(self._KEY + sid)
-            present = pipe.execute()
-            stale = [sid for sid, ok in zip(global_ids, present, strict=True)
-                     if not ok]
-            if stale:
-                self.redis.srem(self._LIVE, *stale)
-        live = self.redis.scard(self._LIVE)
-        user_live = self.redis.scard(self._ULIVE + str(user_id))
-        return live, user_live
+        from django.utils import timezone
+        now = timezone.now().timestamp()
+        self.redis.zremrangebyscore(self._LIVE, '-inf', now)
+        ukey = self._ULIVE + str(user_id)
+        self.redis.zremrangebyscore(ukey, '-inf', now)
+        return self.redis.zcard(self._LIVE), self.redis.zcard(ukey)
 
     @staticmethod
     def _as_str(v):

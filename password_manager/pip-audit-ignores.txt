@@ -20,9 +20,11 @@
 # justification layer.
 
 # -----------------------------------------------------------------------------
-# Twisted DNS DoS — only fix is 26.4.0rc2; root requirements.txt still
-# resolves to 25.5.0 transitively. twisted.names is unused (grep -r).
-GHSA-grgv-6hw6-v9g4 exp:2026-07-25
+# (GHSA-grgv-6hw6-v9g4, Twisted DNS DoS — REMOVED, not renewed, on expiry
+# 2026-07-25. The suppression existed because the only fix was the 26.4.0rc2
+# pre-release; 26.4.0 has since shipped as a stable release and
+# requirements.txt has pinned `Twisted>=26.4.0` for this exact advisory since
+# 2026-05-27, so the finding is fixed rather than accepted. Nothing to renew.)
 
 # pyjwt advisory — disputed by the supplier ("key length is chosen by
 # the application"). Our usage in auth_module/services/jwt_service.py

@@ -15,11 +15,19 @@
  * Manual procedure (run with a real device):
  *   1. Pair a supported BLE pulse oximeter that advertises the PLX service
  *      (0x1822) and notifies PLX Continuous (0x2A5F) or Spot-check (0x2A5E).
- *   2. LIVENESS_BLE_HARDWARE=1 E2E_BASE_URL=<app> npx playwright test \
+ *   2. LIVENESS_BLE_HARDWARE=1 E2E_AUTH_TOKEN=<real access token> \
+ *        E2E_BASE_URL=<app> npx playwright test \
  *        e2e/liveness_ble_spo2.spec.js --project=chromium --headed
  *      (Web Bluetooth requires a headed Chromium and a user gesture to pick
  *      the device; automation cannot dismiss the native chooser, so a human
  *      selects the oximeter when prompted.)
+ *      E2E_AUTH_TOKEN is REQUIRED: /liveness-verification is guarded in
+ *      App.jsx by `!isAuthenticated ? <Navigate to="/" />`, and useAuth only
+ *      sets isAuthenticated after GET /api/auth/me/ succeeds. A fresh browser
+ *      context is anonymous, so without a REAL token the run silently lands on
+ *      the public page and times out waiting for a button that is not there --
+ *      it never exercises the BLE flow at all. A placeholder value will not do;
+ *      the backend has to accept it.
  *   3. Start a verification, click "Connect pulse oximeter", pick the device.
  *   4. Confirm the SpO2 tile appears with a plausible real-device value
  *      (70–100% -- a liveness check validates a genuine reading, not health, so
@@ -37,15 +45,31 @@
 import { test, expect } from '@playwright/test';
 
 const HARDWARE = process.env.LIVENESS_BLE_HARDWARE === '1';
+const AUTH_TOKEN = process.env.E2E_AUTH_TOKEN;
 
 test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
   test.skip(
     !HARDWARE,
     'Requires a real BLE pulse oximeter and Web Bluetooth; set LIVENESS_BLE_HARDWARE=1 to run.',
   );
+  // Fail loudly rather than "passing" against the public landing page.
+  test.skip(
+    HARDWARE && !AUTH_TOKEN,
+    'Set E2E_AUTH_TOKEN to a real access token: /liveness-verification is behind the auth guard.',
+  );
+
+  // Seed the access token useAuth bootstraps from, before any app script runs.
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript((token) => {
+      localStorage.setItem('accessToken', token);
+    }, AUTH_TOKEN);
+  });
 
   test('pairs an oximeter and surfaces a real SpO2 reading', async ({ page }) => {
     await page.goto('/liveness-verification');
+    // Assert we actually got past the guard; otherwise the failure below would
+    // read as "the oximeter button is missing" rather than "we were redirected".
+    await expect(page).toHaveURL(/liveness-verification/);
     await expect(
       page.getByRole('button', { name: /Connect pulse oximeter/i }),
     ).toBeVisible();

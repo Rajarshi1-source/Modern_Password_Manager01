@@ -94,6 +94,42 @@ describe('biometricLivenessService message routing', () => {
         expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_complete' }));
     });
 
+    it('does not route a retryable error to onError (transient lock conflict)', async () => {
+        // session_busy means another worker briefly holds the session's
+        // cross-process lock. onError halts capture and shows the terminal error
+        // screen, so treating it as fatal would abort a verification over a
+        // collision that clears in milliseconds.
+        const onError = vi.fn();
+        const onRetryable = vi.fn();
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+        });
+        livenessService.onRetryableError = onRetryable;
+
+        ws.onmessage({
+            data: JSON.stringify({
+                type: 'error', message: 'session_busy', retryable: true,
+            }),
+        });
+
+        expect(onError).not.toHaveBeenCalled();
+        expect(onRetryable).toHaveBeenCalledWith('session_busy');
+        livenessService.onRetryableError = null;
+    });
+
+    it('still routes a non-retryable error to onError', async () => {
+        const onError = vi.fn();
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+        });
+
+        ws.onmessage({
+            data: JSON.stringify({ type: 'error', message: 'internal_error' }),
+        });
+
+        expect(onError).toHaveBeenCalledWith('internal_error');
+    });
+
     it('does not throw when a challenge_result arrives and no handler was provided', async () => {
         // Legacy 4-arg call (no onChallengeResult) must stay backward-compatible.
         getWsTicket.mockResolvedValueOnce('tkt');
