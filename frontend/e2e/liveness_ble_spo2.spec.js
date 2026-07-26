@@ -71,6 +71,10 @@ test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
     // Operator powers off / unpairs the oximeter here (manual step). The tile
     // must clear rather than keep the last reading — SpO2 is never fabricated
     // or left stale once its hardware source is gone.
+    // Printed, not just commented: without it the wait looks like a hang and
+    // then fails as an opaque 30s timeout when the operator does nothing.
+    console.log('\n>>> MANUAL STEP: power off or unpair the oximeter now '
+      + '(30s) — the SpO2 tile must disappear.\n');
     await expect(page.getByTestId('spo2-value')).toBeHidden({ timeout: 30_000 });
   });
 });

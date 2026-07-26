@@ -15,7 +15,8 @@ Features:
 import logging
 import random
 import math
-from typing import Dict, List, Optional, Tuple
+from collections import deque
+from typing import ClassVar, Deque, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import numpy as np
@@ -80,6 +81,10 @@ class GazeTrackingService:
     DEFAULT_SACCADE_VELOCITY_THRESHOLD = 30  # deg/sec
     NATURAL_SACCADE_AMPLITUDE_RANGE = (2, 45)  # degrees
 
+    # Per-session gaze track window: the append cap and the snapshot cap are the
+    # same number so both backends hold identical history.
+    GAZE_HISTORY_POINTS = 256
+
     # The trained gaze estimator is a PROCESS-WIDE resource, held at CLASS scope
     # so every instance observes the same has_real_gaze_model() state: the
     # capabilities singleton (which get_capabilities queries but which never
@@ -99,7 +104,11 @@ class GazeTrackingService:
             config: Configuration options
         """
         self.config = config or {}
-        self.gaze_history: List[GazePoint] = []
+        # Bounded at the APPEND side, to the same window snapshot_state
+        # serializes, so an in-memory session and one handed off through Redis
+        # hold identical history. Scoring-neutral: _classify_gaze_event only
+        # reads the previous point, never the whole track.
+        self.gaze_history: Deque[GazePoint] = deque(maxlen=self.GAZE_HISTORY_POINTS)
         self.current_task: Optional[CognitiveTask] = None
 
         # Task parameters
@@ -209,8 +218,10 @@ class GazeTrackingService:
     # "Eye A"/"Eye B" rather than left/right: side naming differs between
     # references, and nothing verdict-relevant depends on which is which --
     # only that the two eyes are measured consistently.
-    _EYE_A = {'iris': 468, 'corner1': 33, 'corner2': 133, 'top': 159, 'bottom': 145}
-    _EYE_B = {'iris': 473, 'corner1': 362, 'corner2': 263, 'top': 386, 'bottom': 374}
+    _EYE_A: ClassVar[Dict[str, int]] = {
+        'iris': 468, 'corner1': 33, 'corner2': 133, 'top': 159, 'bottom': 145}
+    _EYE_B: ClassVar[Dict[str, int]] = {
+        'iris': 473, 'corner1': 362, 'corner2': 263, 'top': 386, 'bottom': 374}
 
     @classmethod
     def _gaze_from_landmarks(
@@ -679,7 +690,7 @@ class GazeTrackingService:
     
     def clear_history(self):
         """Clear gaze history for new session."""
-        self.gaze_history = []
+        self.gaze_history = deque(maxlen=self.GAZE_HISTORY_POINTS)
         self.current_task = None
 
     def snapshot_state(self) -> Dict:
@@ -689,9 +700,10 @@ class GazeTrackingService:
         Only gaze_history is per-session accumulator state (used by
         _classify_gaze_event for velocity/fixation continuity). The loaded model
         is a process-wide CLASS resource, so it is deliberately NOT snapshotted.
-        Bounded to the most recent samples so a serialized session stays small.
+        No truncation here -- gaze_history is already capped at
+        GAZE_HISTORY_POINTS on append, so the payload is bounded and the far side
+        receives exactly what this side holds.
         """
-        recent = self.gaze_history[-256:]
         return {
             'gaze_history': [
                 {
@@ -699,7 +711,7 @@ class GazeTrackingService:
                     'confidence': g.confidence, 'is_fixation': g.is_fixation,
                     'pupil_diameter': g.pupil_diameter,
                 }
-                for g in recent
+                for g in self.gaze_history
             ],
         }
 
@@ -722,4 +734,4 @@ class GazeTrackingService:
                 ))
             except (KeyError, TypeError):
                 continue
-        self.gaze_history = restored
+        self.gaze_history = deque(restored, maxlen=self.GAZE_HISTORY_POINTS)

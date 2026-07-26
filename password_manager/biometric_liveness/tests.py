@@ -15,6 +15,7 @@ import os
 import unittest
 import numpy as np
 import uuid
+from collections import deque
 
 try:
     from mediapipe.python.solutions import face_mesh as _mp_face_mesh
@@ -1634,6 +1635,38 @@ class ChallengeResponseFlowTests(TestCase):
         self.assertEqual(out['reason'], 'no_gaze_observed')
         self.assertEqual(len(session['gaze_task_results']), 0)
 
+    def test_gaze_track_prunes_beyond_any_scorable_window(self):
+        """Old samples are dropped, but everything a window can read survives.
+
+        Under Redis the whole session blob is rewritten on every frame, so an
+        unbounded track makes each per-frame write grow with the frame count.
+        Pruning is safe only because scoring reads just the CURRENT challenge's
+        [activation, activation + time_limit_ms]: retention is several windows
+        wide, so nothing scorable is ever discarded.
+        """
+        from .services.gaze_tracking_service import GazePoint
+        svc = self.service
+        sid = svc.create_session(user_id=1)['session_id']
+        session = svc.active_sessions[sid]
+        gaze_ch, now_ms = self._open_gaze_window(session)
+        retention = svc.GAZE_TRACK_RETENTION_MS
+        # Well past retention, plus one the open window must still score.
+        session['gaze_track'] = [
+            GazePoint(x=0.1, y=0.1, timestamp_ms=now_ms - retention - 5000.0,
+                      confidence=0.9, is_fixation=True),
+            GazePoint(x=0.5, y=0.5, timestamp_ms=now_ms + 10.0,
+                      confidence=0.9, is_fixation=True),
+        ]
+        fresh = GazePoint(x=0.6, y=0.6, timestamp_ms=now_ms + 20.0,
+                          confidence=0.9, is_fixation=True)
+        with patch.object(type(session['services']['gaze']), 'estimate_gaze',
+                          return_value=fresh):
+            svc.process_frame(sid, np.full((64, 64, 3), 120, dtype=np.uint8), 1.0)
+        stamps = [g.timestamp_ms for g in session['gaze_track']]
+        self.assertNotIn(now_ms - retention - 5000.0, stamps)   # ancient: pruned
+        self.assertIn(now_ms + 10.0, stamps)                    # in-window: kept
+        self.assertIn(fresh.timestamp_ms, stamps)
+
     def test_late_challenge_response_rejected(self):
         """A response arriving long after the window closed cannot pass.
 
@@ -2436,10 +2469,18 @@ class ExpressionGatingTests(TestCase):
         """Populate au_history AND the sticky derived facts exactly as observe()
         would, so scoring reads the same source-of-truth (blink flag + frame
         count) that survives a Redis hand-off -- not the truncatable list."""
-        self.analyzer.au_history = list(history)
-        self.analyzer.au_timestamps = [float(i) for i in range(len(history))]
+        self.analyzer.au_history = deque(
+            history, maxlen=MicroExpressionAnalyzer.AU_HISTORY_FRAMES)
+        self.analyzer.au_timestamps = deque(
+            (float(i) for i in range(len(history))),
+            maxlen=MicroExpressionAnalyzer.AU_HISTORY_FRAMES)
         self.analyzer._au_frames_seen = len(history)
-        self.analyzer._blinked = any(a.get(45, 0.0) > 0.5 for a in history)
+        # Same threshold observe() applies, read from the analyzer rather than
+        # re-typed here, so a retune cannot leave these tests asserting the old
+        # rule instead of failing.
+        self.analyzer._blinked = any(
+            a.get(45, 0.0) > MicroExpressionAnalyzer.BLINK_AU45_THRESHOLD
+            for a in history)
 
     def test_no_score_without_real_source(self):
         # Enough frames, but no real landmarker => excluded (None), never a pass.
@@ -2453,6 +2494,32 @@ class ExpressionGatingTests(TestCase):
         with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
                           return_value=True):
             self.assertIsNone(self.analyzer.get_session_expression_score())
+
+    def test_au_history_is_bounded_so_both_backends_score_alike(self):
+        """The motion score must not depend on which store the session lives in.
+
+        au_history used to grow without limit while snapshot_state truncated to
+        the recent window, so an in-memory session scored over every frame and a
+        Redis-handed-off one scored over only the tail -- the same session, two
+        verdicts. Bounding the append side to the snapshot window makes a
+        round-tripped analyzer score identically to the one that observed.
+        """
+        cap = MicroExpressionAnalyzer.AU_HISTORY_FRAMES
+        # Overrun the window, with an early blink that truncation would drop.
+        history = [{45: 0.9, 12: 0.4}] + [
+            {45: 0.0, 12: 0.1 + (i % 7) * 0.05} for i in range(cap + 200)]
+        self._seed(history)
+        self.assertEqual(len(self.analyzer.au_history), cap)
+
+        far_side = MicroExpressionAnalyzer()
+        far_side.restore_state(self.analyzer.snapshot_state())
+        self.assertEqual(len(far_side.au_history), cap)
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            self.assertEqual(self.analyzer.get_session_expression_score(),
+                             far_side.get_session_expression_score())
+        # The early blink survives via the sticky flag, not the truncated track.
+        self.assertTrue(far_side._blinked)
 
     def test_blink_and_motion_produce_a_score(self):
         # A live track: a blink plus AU variation over time.

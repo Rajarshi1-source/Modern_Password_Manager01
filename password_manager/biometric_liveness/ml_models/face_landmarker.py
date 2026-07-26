@@ -222,9 +222,17 @@ def detect_face(
 
 def _reset_for_tests() -> None:
     """Clear the cached landmarker/pool/attempt flag (test isolation only)."""
-    global _LANDMARKER, _LOAD_ATTEMPTED, _POOL, _POOL_SIZE
+    global _LANDMARKER, _LOAD_ATTEMPTED, _POOL_SIZE
     with _LOAD_LOCK:
         _LANDMARKER = None
         _LOAD_ATTEMPTED = False
-        _POOL = queue.Queue()
+        # Drain in place rather than rebinding _POOL: a detect_face still in
+        # flight returns its borrowed detector to whichever queue object it took
+        # it from, so rebinding would strand that detector in the orphaned queue
+        # and leave the fresh pool one instance short.
+        while True:
+            try:
+                _POOL.get_nowait()
+            except queue.Empty:
+                break
         _POOL_SIZE = 0

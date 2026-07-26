@@ -560,7 +560,8 @@ class RedisSessionStore:
             for sid in global_ids:
                 pipe.exists(self._KEY + sid)
             present = pipe.execute()
-            stale = [sid for sid, ok in zip(global_ids, present) if not ok]
+            stale = [sid for sid, ok in zip(global_ids, present, strict=True)
+                     if not ok]
             if stale:
                 self.redis.srem(self._LIVE, *stale)
         live = self.redis.scard(self._LIVE)

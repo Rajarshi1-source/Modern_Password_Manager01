@@ -142,6 +142,12 @@ class LivenessSessionService:
     # top of the task's own time limit. The gaze samples that get scored are
     # still cut strictly at the deadline, so this cannot buy extra track.
     CHALLENGE_RESPONSE_GRACE_MS = 2000
+    # How much gaze track to keep. Scoring reads only the CURRENT challenge's
+    # [activation, activation + time_limit_ms] window, and the longest task
+    # advertises 8000ms, so 30s is several windows of headroom past anything a
+    # challenge can ask for -- pruning beyond it cannot change a score, it only
+    # stops the per-frame Redis write from growing with the frame count.
+    GAZE_TRACK_RETENTION_MS = 30000
     # How long past its deadline a session is kept before eviction. The store is
     # a process-wide singleton, so entries must not accumulate for the worker's
     # lifetime; retention keeps the already-completed/expired guards effective
@@ -847,7 +853,18 @@ class LivenessSessionService:
                 'confidence': gaze_point.confidence,
             }
             session['gaze_samples'] += 1
-            session.setdefault('gaze_track', []).append(gaze_point)
+            track = session.setdefault('gaze_track', [])
+            track.append(gaze_point)
+            # Drop samples that no challenge window can ever read again. Scoring
+            # only ever looks at [activated_ms, activated_ms + time_limit_ms] of
+            # the CURRENT challenge, and activations advance monotonically, so a
+            # sample older than the longest window (plus slack) is dead weight --
+            # but under Redis it would still be re-serialized on EVERY frame,
+            # making each per-frame write grow with the frame count.
+            cutoff_ms = gaze_point.timestamp_ms - self.GAZE_TRACK_RETENTION_MS
+            if track[0].timestamp_ms < cutoff_ms:
+                session['gaze_track'] = [
+                    g for g in track if g.timestamp_ms >= cutoff_ms]
 
         # Pulse oximetry. Use a server-derived timestamp, not the client's: the
         # client must not define the pulse sampling clock (defense-in-depth). This
@@ -863,6 +880,16 @@ class LivenessSessionService:
             }
             # Only readings with a resolved heart rate count as real pulse signal.
             if pulse_reading.heart_rate_bpm is not None:
+                # NOT bounded, unlike gaze_track above. get_liveness_score reads
+                # EVERY reading -- mean/std of heart rate and mean signal quality
+                # -- so any cap changes the score a session verifies on. Capping
+                # it only at the serialization boundary would be worse still: the
+                # same session would then score differently on Redis than in
+                # memory, exactly the divergence the bounded detector
+                # accumulators were fixed to remove. Session lifetime bounds this
+                # (SESSION_TIMEOUT_SECONDS), so it is write amplification, not
+                # unbounded growth; narrowing the scoring window is a deliberate
+                # scoring change, not a serialization tweak.
                 session['pulse_readings'].append(pulse_reading)
 
         # Deepfake detection (heuristic output is advisory until a real model

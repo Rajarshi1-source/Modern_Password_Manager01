@@ -13,7 +13,8 @@ Features:
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from collections import deque
+from typing import ClassVar, Deque, Dict, List, Optional, Tuple
 import numpy as np
 from dataclasses import dataclass
 from enum import Enum
@@ -65,7 +66,17 @@ class MicroExpressionAnalyzer:
     """
     
     # Facial Action Units relevant for liveness detection
-    TRACKED_AUS = {
+    # Session AU-track window. The scoring window, the append cap and the
+    # snapshot cap are all this one number, so the motion score is computed over
+    # identical data whichever backend the session lives in.
+    AU_HISTORY_FRAMES = 512
+
+    # AU45 intensity above which a frame counts as a blink. Named so tests can
+    # seed the sticky flag from the same rule observe() applies, instead of
+    # duplicating the literal and silently drifting if it is ever retuned.
+    BLINK_AU45_THRESHOLD = 0.5
+
+    TRACKED_AUS: ClassVar[Dict[int, str]] = {
         1: 'Inner Brow Raiser',
         2: 'Outer Brow Raiser',
         4: 'Brow Lowerer',
@@ -86,7 +97,7 @@ class MicroExpressionAnalyzer:
     }
     
     # Expression to AU mappings
-    EXPRESSION_AU_MAP = {
+    EXPRESSION_AU_MAP: ClassVar[Dict[ExpressionType, List[int]]] = {
         ExpressionType.SURPRISE: [1, 2, 5, 26],
         ExpressionType.HAPPY: [6, 12],
         ExpressionType.SAD: [1, 4, 15, 17],
@@ -106,7 +117,13 @@ class MicroExpressionAnalyzer:
         self.config = config or {}
         self.frame_buffer: List[np.ndarray] = []
         self.landmark_history: List[np.ndarray] = []
-        self.au_history: List[Dict[int, float]] = []
+        # Bounded at the APPEND side, to the same window snapshot_state
+        # serializes. Appending without a cap while the snapshot truncated meant
+        # the motion score was computed over the whole session in-memory but
+        # over only the recent window after a Redis hand-off -- the same session
+        # scoring differently per backend. deque(maxlen) is the same pattern
+        # PulseOximetryService uses for its rPPG buffers.
+        self.au_history: Deque[Dict[int, float]] = deque(maxlen=self.AU_HISTORY_FRAMES)
         self.fps = self.config.get('fps', 30)
         self.min_expression_duration_ms = self.config.get('min_duration_ms', 40)
         self.max_expression_duration_ms = self.config.get('max_duration_ms', 500)
@@ -115,7 +132,7 @@ class MicroExpressionAnalyzer:
         # (blink dynamics + AU variation over the session). Populated by
         # observe(); serialized by snapshot_state for the cross-process store.
         # (au_history is declared above with the other history buffers.)
-        self.au_timestamps: List[float] = []
+        self.au_timestamps: Deque[float] = deque(maxlen=self.AU_HISTORY_FRAMES)
         self._prev_landmarks: Optional[np.ndarray] = None
         # Derived facts kept OUTSIDE the bounded au_history so a Redis hand-off
         # (which re-truncates history to the recent window on every save) cannot
@@ -218,7 +235,7 @@ class MicroExpressionAnalyzer:
         return aus
 
     # MediaPipe FaceMesh canonical indices (468/478-point set).
-    _IDX = {
+    _IDX: ClassVar[Dict[str, int]] = {
         'eyeA_out': 33, 'eyeA_in': 133, 'eyeA_up': 159, 'eyeA_lo': 145,
         'eyeB_in': 362, 'eyeB_out': 263, 'eyeB_up': 386, 'eyeB_lo': 374,
         'brA_in': 107, 'brB_in': 336, 'brA_out': 70, 'brB_out': 300,
@@ -399,7 +416,7 @@ class MicroExpressionAnalyzer:
             self._prev_landmarks = np.asarray(landmarks)
             # Sticky derived facts (survive history truncation across a hand-off).
             self._au_frames_seen += 1
-            if aus.get(45, 0.0) > 0.5:
+            if aus.get(45, 0.0) > self.BLINK_AU45_THRESHOLD:
                 self._blinked = True
         return aus
 
@@ -450,14 +467,16 @@ class MicroExpressionAnalyzer:
 
         The AU history and previous-frame landmarks ARE the session accumulator
         behind get_session_expression_score, so they must survive a REST<->WS
-        worker hand-off. Bounded to recent frames to keep the payload small; the
-        loaded landmarker is a process-wide resource and is not snapshotted.
+        worker hand-off. No truncation here: the accumulators are already capped
+        at AU_HISTORY_FRAMES on append, so the payload is bounded AND the far
+        side receives exactly what this side scored. The loaded landmarker is a
+        process-wide resource and is not snapshotted.
         """
         return {
             'au_history': [
-                {str(k): v for k, v in a.items()} for a in self.au_history[-512:]
+                {str(k): v for k, v in a.items()} for a in self.au_history
             ],
-            'au_timestamps': list(self.au_timestamps[-512:]),
+            'au_timestamps': list(self.au_timestamps),
             # Derived from the FULL history, so window truncation cannot rewrite
             # the blink evidence or the frame count on the far side of a hand-off.
             'blinked': self._blinked,
@@ -471,11 +490,12 @@ class MicroExpressionAnalyzer:
     def restore_state(self, state: Dict) -> None:
         """Rehydrate expression accumulators produced by snapshot_state."""
         state = state or {}
-        self.au_history = [
-            {int(k): float(v) for k, v in a.items()}
-            for a in state.get('au_history', [])
-        ]
-        self.au_timestamps = list(state.get('au_timestamps', []))
+        self.au_history = deque(
+            ({int(k): float(v) for k, v in a.items()}
+             for a in state.get('au_history', [])),
+            maxlen=self.AU_HISTORY_FRAMES)
+        self.au_timestamps = deque(
+            state.get('au_timestamps', []), maxlen=self.AU_HISTORY_FRAMES)
         self._blinked = bool(state.get('blinked', False))
         # Fall back to the restored history length for snapshots written before
         # this field existed (rolling deploy).
