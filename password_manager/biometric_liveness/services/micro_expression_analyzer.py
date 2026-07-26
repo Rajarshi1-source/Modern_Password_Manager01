@@ -481,10 +481,13 @@ class MicroExpressionAnalyzer:
             # the blink evidence or the frame count on the far side of a hand-off.
             'blinked': self._blinked,
             'au_frames_seen': self._au_frames_seen,
-            'prev_landmarks': (
-                self._prev_landmarks.tolist()
-                if self._prev_landmarks is not None else None
-            ),
+            # _prev_landmarks is deliberately NOT snapshotted. It is a hook for a
+            # future temporal AU, but nothing consumes it today --
+            # _calculate_blink_intensity takes the argument and ignores it (AU45
+            # is purely EAR-based), and no other calculator accepts it at all.
+            # Serializing it cost ~1.4k floats (478x3) on EVERY per-frame locked
+            # save, for state the far side never reads. observe() still keeps it
+            # in-process; whoever adds a temporal AU must add it back here.
         }
 
     def restore_state(self, state: Dict) -> None:
@@ -500,8 +503,8 @@ class MicroExpressionAnalyzer:
         # Fall back to the restored history length for snapshots written before
         # this field existed (rolling deploy).
         self._au_frames_seen = int(state.get('au_frames_seen', len(self.au_history)))
-        prev = state.get('prev_landmarks')
-        self._prev_landmarks = np.asarray(prev) if prev is not None else None
+        # 'prev_landmarks' may still be present in a blob written by an older
+        # worker mid-deploy; ignored, since no AU reads it (see snapshot_state).
 
     def detect_micro_expressions(
         self,

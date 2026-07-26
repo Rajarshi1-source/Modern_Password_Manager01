@@ -39,6 +39,9 @@ describe('biometricLivenessService message routing', () => {
 
     afterEach(() => {
         livenessService.disconnect();
+        // livenessService is a module singleton, so an assertion that throws
+        // mid-test would otherwise leak a spy into every later test.
+        livenessService.onRetryableError = null;
         global.WebSocket = originalWebSocket;
     });
 
@@ -114,7 +117,6 @@ describe('biometricLivenessService message routing', () => {
 
         expect(onError).not.toHaveBeenCalled();
         expect(onRetryable).toHaveBeenCalledWith('session_busy');
-        livenessService.onRetryableError = null;
     });
 
     it('re-sends a conflicted one-shot op instead of dropping it', async () => {

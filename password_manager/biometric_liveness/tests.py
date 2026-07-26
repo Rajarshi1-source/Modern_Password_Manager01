@@ -2537,6 +2537,23 @@ class ExpressionGatingTests(TestCase):
             a.get(45, 0.0) > MicroExpressionAnalyzer.BLINK_AU45_THRESHOLD
             for a in history)
 
+    def test_observe_bounds_the_au_history_it_appends(self):
+        """The cap has to live on the APPEND path, not just the snapshot.
+
+        Asserted through observe() rather than _seed: the helper builds an
+        already-bounded deque, so it would report the cap even if observe()
+        appended without limit -- which is exactly the regression at issue.
+        """
+        cap = MicroExpressionAnalyzer.AU_HISTORY_FRAMES
+        analyzer = MicroExpressionAnalyzer()
+        landmarks = np.zeros((478, 3), dtype=np.float64)
+        for i in range(cap + 5):
+            analyzer.observe(landmarks, float(i))
+        self.assertEqual(len(analyzer.au_history), cap)
+        self.assertEqual(len(analyzer.au_timestamps), cap)
+        # Oldest frames dropped, newest kept -- a window, not a truncated prefix.
+        self.assertEqual(analyzer.au_timestamps[-1], float(cap + 4))
+
     def test_no_score_without_real_source(self):
         # Enough frames, but no real landmarker => excluded (None), never a pass.
         self._seed([{45: 0.0, 12: 0.1} for _ in range(30)])
@@ -2564,7 +2581,6 @@ class ExpressionGatingTests(TestCase):
         history = [{45: 0.9, 12: 0.4}] + [
             {45: 0.0, 12: 0.1 + (i % 7) * 0.05} for i in range(cap + 200)]
         self._seed(history)
-        self.assertEqual(len(self.analyzer.au_history), cap)
 
         far_side = MicroExpressionAnalyzer()
         far_side.restore_state(self.analyzer.snapshot_state())

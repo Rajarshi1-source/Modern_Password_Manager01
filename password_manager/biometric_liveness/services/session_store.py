@@ -568,10 +568,6 @@ class RedisSessionStore:
         self.redis.zremrangebyscore(ukey, '-inf', now)
         return self.redis.zcard(self._LIVE), self.redis.zcard(ukey)
 
-    @staticmethod
-    def _as_str(v):
-        return v.decode('utf-8') if isinstance(v, bytes) else v
-
     def acquire_create_lock(self) -> bool:
         token = uuid.uuid4().hex
         ok = self.redis.set(self._CREATE_LOCK, token, nx=True, px=self.lock_ttl_ms)
