@@ -132,7 +132,7 @@ describe('biometricLivenessService message routing', () => {
             expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({ type: 'complete' });
 
             ws.onmessage({
-                data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true }),
+                data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true, op: 'complete' }),
             });
             await vi.advanceTimersByTimeAsync(200);
 
@@ -156,7 +156,7 @@ describe('biometricLivenessService message routing', () => {
             livenessService.completeSession();
 
             const busy = {
-                data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true }),
+                data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true, op: 'complete' }),
             };
             for (let i = 0; i < 5; i += 1) {
                 ws.onmessage(busy);
@@ -177,11 +177,68 @@ describe('biometricLivenessService message routing', () => {
 
         livenessService.sendFrame('AAAA', 64, 64, 1);
         ws.onmessage({
-            data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true }),
+            data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true, op: 'frame' }),
         });
 
         // Only the original frame; the next one is milliseconds away anyway.
         expect(ws.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not auto-resend on required_challenge_incomplete', async () => {
+        // Also retryable, but it means the USER must answer a challenge -- not
+        // that the server dropped the request. Resending would burn the retry
+        // budget on identical refusals and then report a terminal failure.
+        vi.useFakeTimers();
+        try {
+            const onError = vi.fn();
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+            livenessService.completeSession();
+
+            ws.onmessage({
+                data: JSON.stringify({
+                    type: 'error', message: 'required_challenge_incomplete', retryable: true,
+                }),
+            });
+            await vi.advanceTimersByTimeAsync(5_000);
+
+            expect(ws.send).toHaveBeenCalledTimes(1);   // the original only
+            expect(onError).not.toHaveBeenCalled();     // not terminal either
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('a conflicted frame does not consume the pending one-shot retry budget', async () => {
+        // A socket multiplexes frames and control ops. Without the `op`
+        // correlation, frame contention would spend the complete's attempts and
+        // escalate it to a terminal error prematurely.
+        vi.useFakeTimers();
+        try {
+            const onError = vi.fn();
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+            livenessService.completeSession();
+
+            const frameBusy = {
+                data: JSON.stringify({
+                    type: 'error', message: 'session_busy', retryable: true, op: 'frame',
+                }),
+            };
+            for (let i = 0; i < 6; i += 1) {
+                ws.onmessage(frameBusy);
+                await vi.advanceTimersByTimeAsync(5_000);
+            }
+
+            expect(ws.send).toHaveBeenCalledTimes(1);   // complete not re-sent
+            expect(onError).not.toHaveBeenCalled();     // nor escalated
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('still routes a non-retryable error to onError', async () => {

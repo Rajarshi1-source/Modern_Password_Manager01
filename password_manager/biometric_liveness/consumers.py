@@ -81,14 +81,20 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
         else:
             await self.send_json({'type': 'error', 'message': f'Unknown message type: {msg_type}'})
     
-    async def _send_session_busy(self):
+    async def _send_session_busy(self, op: str):
         """
         Retryable cross-process lock conflict, symmetric with the REST
         views._session_busy_response. Kept in one place so the WS envelope and
         the HTTP body cannot drift apart as the shape evolves.
+
+        ``op`` echoes the inbound message type that lost the race. Unlike REST,
+        a socket multiplexes several request kinds, so without it the client
+        cannot tell whether a conflicted frame or a conflicted `complete` came
+        back -- and it re-drives the latter. Correlating is cheaper than making
+        the client guess.
         """
         await self.send_json({'type': 'error', 'message': 'session_busy',
-                              'retryable': True})
+                              'retryable': True, 'op': op})
 
     async def handle_frame(self, content):
         """Process incoming video frame."""
@@ -135,7 +141,7 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
             })
 
         except SessionLockError:
-            await self._send_session_busy()
+            await self._send_session_busy('frame')
         except Exception as e:
             logger.error(f"Frame processing error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
@@ -161,7 +167,7 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 **result,
             })
         except SessionLockError:
-            await self._send_session_busy()
+            await self._send_session_busy('challenge_response')
         except Exception as e:
             logger.error(f"Challenge response error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
@@ -185,7 +191,7 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                 return
             await self.send_json({'type': 'spo2_result', **result})
         except SessionLockError:
-            await self._send_session_busy()
+            await self._send_session_busy('hardware_spo2')
         except Exception as e:
             logger.error(f"Hardware SpO2 ingest error: {e}")
             await self.send_json({'type': 'error', 'message': 'internal_error'})
@@ -218,7 +224,7 @@ class LivenessConsumer(AsyncJsonWebsocketConsumer):
                                   'message': 'required_challenge_incomplete',
                                   'retryable': True})
         except SessionLockError:
-            await self._send_session_busy()
+            await self._send_session_busy('complete')
         except ValueError as e:
             # Session not found / already completed / expired -> terminal state.
             # Do not echo the exception text back to the client.

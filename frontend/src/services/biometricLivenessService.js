@@ -152,13 +152,21 @@ class BiometricLivenessService {
       } else if (data.type === 'session_complete' && this.onSessionComplete) {
         this.onSessionComplete(data);
       } else if (data.type === 'error') {
-        // `retryable` marks a TRANSIENT conflict (session_busy: another worker
-        // briefly holds this session's cross-process lock). Routing it to
-        // onError would halt capture and drop the user into the terminal error
-        // screen over a collision that resolves in milliseconds.
+        // `retryable` marks a non-terminal error: the session is still usable,
+        // so routing it to onError would halt capture and drop the user into
+        // the error screen over something recoverable.
+        //
+        // But retryable does NOT mean "re-send this now". Only session_busy is
+        // the server saying it never processed the request. The other retryable
+        // error, required_challenge_incomplete, means the USER still has to
+        // answer a challenge -- auto-resending `complete` there just burns the
+        // retry budget on four identical refusals and then reports a terminal
+        // failure, when the correct behaviour is to wait for the user.
         if (data.retryable) {
           if (this.onRetryableError) this.onRetryableError(data.message);
-          this._retryPendingOneShot(data.message);
+          if (data.message === 'session_busy') {
+            this._retryPendingOneShot(data);
+          }
         } else if (onError) {
           onError(data.message);
         }
@@ -210,18 +218,27 @@ class BiometricLivenessService {
   }
 
   /** Re-send the pending one-shot op with bounded backoff, or give up loudly. */
-  _retryPendingOneShot(message) {
+  _retryPendingOneShot(data) {
     const pending = this._pendingOneShot;
     if (!pending) {
-      // A conflicted frame: lossy by design, the next one is milliseconds away.
-      console.warn('Liveness transient error (ignored):', message);
+      // A conflicted frame with nothing outstanding: lossy by design, the next
+      // one is milliseconds away.
+      console.warn('Liveness transient error (ignored):', data.message);
+      return;
+    }
+    // A socket multiplexes frames and control ops, so a session_busy is only
+    // ours if the server says which message lost the race. `op` is absent only
+    // when talking to a server older than this field; retrying then is still
+    // safe (the ops are idempotent) so we fall back rather than stall.
+    if (data.op !== undefined && data.op !== pending.payload.type) {
+      console.warn('Liveness transient error for', data.op, '(ignored)');
       return;
     }
     if (pending.attempts >= ONE_SHOT_RETRY_LIMIT) {
       // Sustained contention is no longer transient; surfacing it is better
       // than leaving the caller waiting on a result that will never arrive.
       this._pendingOneShot = null;
-      if (this._onError) this._onError(message);
+      if (this._onError) this._onError(data.message);
       return;
     }
     pending.attempts += 1;
