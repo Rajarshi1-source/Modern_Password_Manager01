@@ -425,11 +425,12 @@ class RedisSessionStore:
         self._index_live(session_id, session, is_live)
 
     def delete(self, session_id: str) -> None:
-        uid = self._local_user.get(session_id)
-        if uid is None:
-            # No cached owner (e.g. discard from a different worker): read it so
-            # the user live-index entry is not orphaned.
-            uid = self.owner_of(session_id)
+        # Read the owner rather than caching it per thread: delete() is the rare
+        # discard path (a failed DB create), so one extra GET here is cheaper
+        # than a per-thread map that every save appends to and nothing evicts --
+        # that grew by one entry per session for the life of a worker thread.
+        # Must run BEFORE the delete, while the blob is still readable.
+        uid = self.owner_of(session_id)
         self.redis.delete(self._KEY + session_id)
         self.redis.zrem(self._LIVE, session_id)
         if uid is not None:
@@ -477,14 +478,6 @@ class RedisSessionStore:
             'expires_at': _undt(data.get('expires_at')),
         }
 
-    @property
-    def _local_user(self) -> Dict:
-        cache = getattr(self._local, 'user', None)
-        if cache is None:
-            cache = {}
-            self._local.user = cache
-        return cache
-
     def _index_live(self, session_id: str, session: Dict, is_live: bool) -> None:
         """
         Keep the live indexes in sync with the session's current liveness.
@@ -493,7 +486,6 @@ class RedisSessionStore:
         that expired without anyone saving them again (see the class docstring).
         """
         uid = session.get('user_id')
-        self._local_user[session_id] = uid
         ukey = self._ULIVE + str(uid)
         if is_live:
             deadline = session['expires_at'].timestamp()

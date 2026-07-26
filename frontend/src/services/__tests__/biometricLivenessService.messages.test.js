@@ -117,6 +117,73 @@ describe('biometricLivenessService message routing', () => {
         livenessService.onRetryableError = null;
     });
 
+    it('re-sends a conflicted one-shot op instead of dropping it', async () => {
+        // session_busy means the server never processed the request. Nothing
+        // else re-drives a `complete`, so without a retry the UI waits forever
+        // on a verdict that will never be produced.
+        vi.useFakeTimers();
+        try {
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError: vi.fn(), onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+
+            livenessService.completeSession();
+            expect(JSON.parse(ws.send.mock.calls[0][0])).toEqual({ type: 'complete' });
+
+            ws.onmessage({
+                data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true }),
+            });
+            await vi.advanceTimersByTimeAsync(200);
+
+            expect(ws.send).toHaveBeenCalledTimes(2);
+            expect(JSON.parse(ws.send.mock.calls[1][0])).toEqual({ type: 'complete' });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('escalates to onError once a one-shot op stays conflicted', async () => {
+        // Sustained contention is not transient; better a visible failure than
+        // an indefinite spinner.
+        vi.useFakeTimers();
+        try {
+            const onError = vi.fn();
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+            livenessService.completeSession();
+
+            const busy = {
+                data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true }),
+            };
+            for (let i = 0; i < 5; i += 1) {
+                ws.onmessage(busy);
+                await vi.advanceTimersByTimeAsync(5_000);
+            }
+
+            expect(onError).toHaveBeenCalledWith('session_busy');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not retry a conflicted frame (lossy by design)', async () => {
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError: vi.fn(), onChallenge: vi.fn(),
+        });
+        ws.send = vi.fn();
+
+        livenessService.sendFrame('AAAA', 64, 64, 1);
+        ws.onmessage({
+            data: JSON.stringify({ type: 'error', message: 'session_busy', retryable: true }),
+        });
+
+        // Only the original frame; the next one is milliseconds away anyway.
+        expect(ws.send).toHaveBeenCalledTimes(1);
+    });
+
     it('still routes a non-retryable error to onError', async () => {
         const onError = vi.fn();
         const ws = await connect({

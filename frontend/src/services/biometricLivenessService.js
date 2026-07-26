@@ -15,6 +15,13 @@ import { getWsTicket } from './wsTicket';
 
 const API_BASE = '/api/liveness';
 
+// Bounded retry for one-shot control ops conflicted by session_busy. The server
+// holds a session lock only for a single fast operation, so 150/300/600/1200ms
+// covers ordinary contention; past that it is not transient and the caller is
+// told rather than left waiting.
+const ONE_SHOT_RETRY_LIMIT = 4;
+const ONE_SHOT_RETRY_BASE_MS = 150;
+
 class BiometricLivenessService {
   constructor() {
     this.ws = null;
@@ -25,6 +32,10 @@ class BiometricLivenessService {
     // Optional: transient (retryable) server conflicts. Left null by default so
     // they degrade to a console warning rather than the terminal error screen.
     this.onRetryableError = null;
+    // The last one-shot control op awaiting an answer, kept so a session_busy
+    // can re-send it (see _sendOneShot).
+    this._pendingOneShot = null;
+    this._onError = null;
     // Bumped by every connect/disconnect so an in-flight ticket fetch that has
     // been superseded doesn't open a stale socket.
     this.wsConnectGeneration = 0;
@@ -83,6 +94,10 @@ class BiometricLivenessService {
     this.onFrameResult = onFrameResult;
     this.onSessionComplete = onComplete;
     this.onChallengeResult = onChallengeResult;
+    // Kept so a one-shot op that stays conflicted after every retry can still
+    // escalate to the terminal error path instead of hanging.
+    this._onError = onError;
+    this._pendingOneShot = null;
 
     let ticket;
     try {
@@ -124,6 +139,12 @@ class BiometricLivenessService {
         return;
       }
 
+      // Any answer to the outstanding one-shot op retires it, so a later
+      // session_busy (from some other request) cannot resurrect it.
+      if (data.type === 'challenge_result' || data.type === 'session_complete') {
+        this._pendingOneShot = null;
+      }
+
       if (data.type === 'frame_result' && this.onFrameResult) {
         this.onFrameResult(data);
       } else if (data.type === 'challenge_result' && this.onChallengeResult) {
@@ -134,11 +155,10 @@ class BiometricLivenessService {
         // `retryable` marks a TRANSIENT conflict (session_busy: another worker
         // briefly holds this session's cross-process lock). Routing it to
         // onError would halt capture and drop the user into the terminal error
-        // screen over a collision that resolves in milliseconds, so it is
-        // reported separately and the session simply keeps streaming.
+        // screen over a collision that resolves in milliseconds.
         if (data.retryable) {
           if (this.onRetryableError) this.onRetryableError(data.message);
-          else console.warn('Liveness transient error (retrying):', data.message);
+          this._retryPendingOneShot(data.message);
         } else if (onError) {
           onError(data.message);
         }
@@ -173,15 +193,52 @@ class BiometricLivenessService {
   }
 
   /**
+   * Send a ONE-SHOT control op, remembering it so a session_busy can re-send it.
+   *
+   * Unlike a frame (another follows in ~33ms), nothing re-drives a conflicted
+   * `complete` or `challenge_response`: the UI would sit waiting for a result
+   * the server never produced. Re-sending is safe because session_busy means
+   * the request was NOT processed -- either the lock was never acquired, or the
+   * lease was lost and the save discarded. The server is idempotent for both
+   * anyway (re-completion returns the frozen verdict; answered_challenges
+   * rejects a replay), so a redundant retry cannot double-score.
+   */
+  _sendOneShot(payload) {
+    if (!(this.ws && this.ws.readyState === WebSocket.OPEN)) return;
+    this._pendingOneShot = { payload, attempts: 0 };
+    this.ws.send(JSON.stringify(payload));
+  }
+
+  /** Re-send the pending one-shot op with bounded backoff, or give up loudly. */
+  _retryPendingOneShot(message) {
+    const pending = this._pendingOneShot;
+    if (!pending) {
+      // A conflicted frame: lossy by design, the next one is milliseconds away.
+      console.warn('Liveness transient error (ignored):', message);
+      return;
+    }
+    if (pending.attempts >= ONE_SHOT_RETRY_LIMIT) {
+      // Sustained contention is no longer transient; surfacing it is better
+      // than leaving the caller waiting on a result that will never arrive.
+      this._pendingOneShot = null;
+      if (this._onError) this._onError(message);
+      return;
+    }
+    pending.attempts += 1;
+    const delay = ONE_SHOT_RETRY_BASE_MS * 2 ** (pending.attempts - 1);
+    setTimeout(() => {
+      // Superseded (completed, or the socket went away) while backing off.
+      if (this._pendingOneShot !== pending) return;
+      if (!(this.ws && this.ws.readyState === WebSocket.OPEN)) return;
+      this.ws.send(JSON.stringify(pending.payload));
+    }, delay);
+  }
+
+  /**
    * Submit challenge response via WebSocket
    */
   submitChallengeResponse(response) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'challenge_response',
-        response,
-      }));
-    }
+    this._sendOneShot({ type: 'challenge_response', response });
   }
 
   /**
@@ -200,9 +257,7 @@ class BiometricLivenessService {
    * Complete session via WebSocket
    */
   completeSession() {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: 'complete' }));
-    }
+    this._sendOneShot({ type: 'complete' });
   }
 
   /**
@@ -303,6 +358,8 @@ class BiometricLivenessService {
       this.ws = null;
     }
     this.sessionId = null;
+    // Drop any queued retry so it cannot fire against the next session.
+    this._pendingOneShot = null;
   }
 }
 
