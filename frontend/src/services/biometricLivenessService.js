@@ -263,6 +263,22 @@ class BiometricLivenessService {
    * session WebSocket. SpO2 is never derived from the webcam; this is the only
    * path it enters scoring. The backend stamps it on the server clock and
    * validates range/quality, so a bad reading is simply dropped (no SpO2).
+   *
+   * LOSSY ON CONFLICT, deliberately -- do NOT route this through _sendOneShot,
+   * despite the server sending a correlated session_busy for it:
+   *
+   *  - This is a STREAM, not a one-shot. It is called from the oximeter's GATT
+   *    notification callback, so a superseding reading follows within about a
+   *    second, exactly like frames. _sendOneShot has a single pending slot, so a
+   *    reading arriving while `complete` awaits its verdict would evict that
+   *    complete and it would never be retried -- reinstating the silent hang the
+   *    retry path exists to prevent.
+   *  - A retry would also re-stamp a stale sample. submit_hardware_spo2 stamps
+   *    on the SERVER clock at ingest, and the pulse service drops readings older
+   *    than MAX_SPO2_AGE_MS; resending seconds later would present an old
+   *    measurement as current, which is the one thing SpO2 handling must not do.
+   *
+   * A conflicted reading still logs via _retryPendingOneShot's no-pending path.
    */
   submitHardwareSpo2(spo2, quality = 1.0) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
