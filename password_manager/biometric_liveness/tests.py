@@ -1648,7 +1648,7 @@ class ChallengeResponseFlowTests(TestCase):
         svc = self.service
         sid = svc.create_session(user_id=1)['session_id']
         session = svc.active_sessions[sid]
-        gaze_ch, now_ms = self._open_gaze_window(session)
+        _gaze_ch, now_ms = self._open_gaze_window(session)
         retention = svc.GAZE_TRACK_RETENTION_MS
         # Well past retention, plus one the open window must still score.
         session['gaze_track'] = [
@@ -2002,9 +2002,6 @@ class _FakeRedis:
     def smembers(self, name):
         return set(self.sets.get(name, set()))
 
-    def pipeline(self):
-        return _FakePipeline(self)
-
     def register_script(self, script):
         """
         Emulate the two lock scripts the store registers.
@@ -2033,22 +2030,6 @@ class _FakeRedis:
             return renew
 
         raise AssertionError(f'_FakeRedis has no emulation for script: {script!r}')
-
-
-class _FakePipeline:
-    """Queues calls and executes them in order (matches redis-py's pipeline use
-    in count_live: buffered EXISTS then execute())."""
-
-    def __init__(self, client):
-        self._client = client
-        self._queue = []
-
-    def exists(self, name):
-        self._queue.append(('exists', (name,)))
-        return self
-
-    def execute(self):
-        return [getattr(self._client, op)(*args) for op, args in self._queue]
 
 
 def _redis_service(fake, retention=420):
@@ -2238,6 +2219,33 @@ class RedisSessionStoreCrossProcessTests(TestCase):
         self.ws.create_session(user_id=self.user.id)
         with self.assertRaises(SessionCapacityError):
             self.rest.create_session(user_id=self.user.id)
+
+    def test_owner_lookup_avoids_parsing_the_session_blob(self):
+        """Per-frame authorization must not scale with the session payload.
+
+        owner_of runs on every frame (views._owns_in_memory_session); reading
+        the whole blob there would mean two fetches and two JSON parses per
+        frame, of a payload that grows all session long.
+        """
+        from .services.session_store import RedisSessionStore
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        store = self.rest._redis_store
+        self.assertEqual(store.owner_of(sid), self.user.id)
+
+        # Prove the answer came from the side key, not the blob: corrupt the
+        # blob and the lookup must still succeed.
+        self.fake.kv[RedisSessionStore._KEY + sid] = b'not json'
+        self.assertEqual(store.owner_of(sid), self.user.id)
+
+    def test_owner_lookup_falls_back_when_the_side_key_is_absent(self):
+        """A session written by a worker older than the side key (or a terminal
+        one whose owner key aged out) must still authorize -- from the blob."""
+        from .services.session_store import RedisSessionStore
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        del self.fake.kv[RedisSessionStore._OWNER + sid]
+        self.assertEqual(self.rest._redis_store.owner_of(sid), self.user.id)
 
     def test_abandoned_session_stops_counting_against_capacity(self):
         """An abandoned session must free its slot at its DEADLINE, not at the
