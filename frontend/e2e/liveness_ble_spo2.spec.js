@@ -89,6 +89,9 @@ test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
 
   test('clears the SpO2 tile when the oximeter disconnects (no stale value)', async ({ page }) => {
     await page.goto('/liveness-verification');
+    // Same guard check as above: an auth redirect must not surface as an opaque
+    // "button not found" timeout.
+    await expect(page).toHaveURL(/liveness-verification/);
     await page.getByRole('button', { name: /Connect pulse oximeter/i }).click();
     await expect(page.getByTestId('spo2-value')).toBeVisible({ timeout: 30_000 });
 
