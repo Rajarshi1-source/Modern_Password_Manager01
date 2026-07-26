@@ -363,6 +363,7 @@ class RedisSessionStore:
     """
 
     _KEY = 'liveness:sess:'
+    _OWNER = 'liveness:owner:'
     _LIVE = 'liveness:live'
     _ULIVE = 'liveness:ulive:'
     _LOCK = 'liveness:lock:'
@@ -409,6 +410,15 @@ class RedisSessionStore:
             # Refresh the retention TTL while live so an active session never
             # expires mid-flight.
             self.redis.set(self._KEY + session_id, blob, ex=self.retention_seconds)
+            # Tiny side key carrying just the owner. The per-frame authorization
+            # check (views._owns_in_memory_session -> owner_of) would otherwise
+            # GET and json-parse the ENTIRE session blob on every frame, on top
+            # of the full load process_frame already does under the lock -- two
+            # fetches and two parses of a payload that grows all session.
+            uid = session.get('user_id')
+            if uid is not None:
+                self.redis.set(
+                    self._OWNER + session_id, uid, ex=self.retention_seconds)
         else:
             # Terminal (or past-deadline): persist the frozen verdict but do NOT
             # renew the retention window -- keepttl lets it count down from when
@@ -429,9 +439,9 @@ class RedisSessionStore:
         # discard path (a failed DB create), so one extra GET here is cheaper
         # than a per-thread map that every save appends to and nothing evicts --
         # that grew by one entry per session for the life of a worker thread.
-        # Must run BEFORE the delete, while the blob is still readable.
+        # Must run BEFORE the delete, while the owner is still readable.
         uid = self.owner_of(session_id)
-        self.redis.delete(self._KEY + session_id)
+        self.redis.delete(self._KEY + session_id, self._OWNER + session_id)
         self.redis.zrem(self._LIVE, session_id)
         if uid is not None:
             self.redis.zrem(self._ULIVE + str(uid), session_id)
@@ -457,7 +467,23 @@ class RedisSessionStore:
         return data if isinstance(data, dict) else None
 
     def owner_of(self, session_id: str) -> Optional[int]:
-        """Read only the owning user_id (no detector rebuild) for the frame path."""
+        """
+        The owning user_id, for the per-frame authorization check.
+
+        Served from the small side key written alongside a live session, so this
+        stays O(1) instead of scaling with the session blob. Falls back to
+        parsing the blob when that key is absent -- a session saved by a worker
+        older than the side key (rolling deploy), or a terminal one whose owner
+        key has aged out. Neither is on the frame hot path.
+        """
+        raw = self.redis.get(self._OWNER + session_id)
+        if raw is not None:
+            if isinstance(raw, bytes):
+                raw = raw.decode('utf-8')
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
         data = self._raw(session_id)
         return data.get('user_id') if data is not None else None
 

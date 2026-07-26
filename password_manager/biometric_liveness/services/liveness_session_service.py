@@ -287,6 +287,17 @@ class LivenessSessionService:
         worker's frames (last-writer-wins on a whole-blob save).
         """
         store = self._redis_store
+        # _txn is a single thread-local slot, so a locked method calling another
+        # one would have the inner finally clear the outer transaction and
+        # _persist_txn would then silently skip the outer save -- losing that
+        # session's frames with no error. No such call path exists (verified: no
+        # @_with_session_lock method invokes another), and same-session nesting
+        # would deadlock on SET NX anyway; this makes the invariant enforced
+        # rather than assumed, so adding one later fails loudly.
+        if getattr(self._txn, 'session', None) is not None:
+            raise SessionLockError(
+                'Re-entrant locked liveness session call; the outer '
+                'transaction would be lost')
         if not self._acquire_redis_lock(session_id):
             raise SessionLockError(f'Could not lock liveness session {session_id}')
         try:

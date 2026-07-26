@@ -85,6 +85,12 @@ class GazeTrackingService:
     # same number so both backends hold identical history.
     GAZE_HISTORY_POINTS = 256
 
+    # Normalized distance within which a gaze sample counts as ON a target.
+    # Shared by accuracy, reaction time and path similarity: all three describe
+    # the same "looked at target i" event, so if they disagreed a sample could
+    # score as on-target for one metric and off-target for another.
+    TARGET_HIT_RADIUS = 0.15
+
     # The trained gaze estimator is a PROCESS-WIDE resource, held at CLASS scope
     # so every instance observes the same has_real_gaze_model() state: the
     # capabilities singleton (which get_capabilities queries but which never
@@ -502,7 +508,7 @@ class GazeTrackingService:
         if not task.target_positions or not gaze_data:
             return 0.0
 
-        threshold = 0.15  # Distance threshold for "looking at" target
+        threshold = self.TARGET_HIT_RADIUS
         used = [False] * len(gaze_data)
         hits = 0
 
@@ -537,7 +543,7 @@ class GazeTrackingService:
         """
         if challenge_start_ms is None or not task.target_positions:
             return 0.0
-        threshold = 0.15
+        threshold = self.TARGET_HIT_RADIUS
         for gaze in gaze_data:
             for target_x, target_y in task.target_positions:
                 if math.hypot(gaze.x - target_x, gaze.y - target_y) < threshold:
@@ -566,7 +572,7 @@ class GazeTrackingService:
             return 0.0
 
         points = gaze_data
-        radius = 0.15
+        radius = self.TARGET_HIT_RADIUS
         matched = 0
         search_from = 0
         for ti in order:
