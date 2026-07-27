@@ -512,16 +512,21 @@ class RedisSessionStore:
         that expired without anyone saving them again (see the class docstring).
         """
         uid = session.get('user_id')
-        ukey = self._ULIVE + str(uid)
+        # Defensive: create_session always stamps user_id, but an unowned
+        # session must not create a 'liveness:ulive:None' bucket -- no
+        # count_live(user_id) would ever prune it by user.
+        ukey = self._ULIVE + str(uid) if uid is not None else None
         if is_live:
             deadline = session['expires_at'].timestamp()
             self.redis.zadd(self._LIVE, {session_id: deadline})
-            self.redis.zadd(ukey, {session_id: deadline})
-            # Bound the index keys' lifetime to the retention window too.
-            self.redis.pexpire(ukey, self.retention_seconds * 1000)
+            if ukey:
+                self.redis.zadd(ukey, {session_id: deadline})
+                # Bound the index keys' lifetime to the retention window too.
+                self.redis.pexpire(ukey, self.retention_seconds * 1000)
         else:
             self.redis.zrem(self._LIVE, session_id)
-            self.redis.zrem(ukey, session_id)
+            if ukey:
+                self.redis.zrem(ukey, session_id)
 
     # -- per-session lock (SET NX PX + atomic owned release/renew) ---------- #
 

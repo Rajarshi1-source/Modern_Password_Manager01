@@ -212,7 +212,15 @@ class BiometricLivenessService {
    * rejects a replay), so a redundant retry cannot double-score.
    */
   _sendOneShot(payload) {
-    if (!(this.ws && this.ws.readyState === WebSocket.OPEN)) return;
+    if (!(this.ws && this.ws.readyState === WebSocket.OPEN)) {
+      // Returning quietly would leave the caller waiting on a result that can
+      // never arrive -- onclose only logs, so a `complete` sent after the
+      // socket dropped would strand the UI in 'processing'. Same hang shape the
+      // retry path exists to prevent, just from a closed socket instead of a
+      // conflict.
+      if (this._onError) this._onError('WebSocket connection error');
+      return;
+    }
     this._pendingOneShot = { payload, attempts: 0 };
     this.ws.send(JSON.stringify(payload));
   }

@@ -2058,20 +2058,30 @@ class SessionStoreBackendSelectionTests(TestCase):
                     LivenessSessionService()
 
     def test_memory_backend_is_the_default(self):
-        """Unconfigured (or 'memory') keeps the in-memory store -- no Redis."""
+        """'memory' keeps the in-memory store -- no Redis.
+
+        Pins SESSION_STORE rather than reading the ambient value, which would
+        make this fail on a machine exporting LIVENESS_SESSION_STORE=redis.
+        """
+        from django.conf import settings as dj_settings
         from .services.liveness_session_service import LivenessSessionService
-        self.assertIsNone(LivenessSessionService()._redis_store)
+        cfg = {**dj_settings.BIOMETRIC_LIVENESS, 'SESSION_STORE': 'memory'}
+        with override_settings(BIOMETRIC_LIVENESS=cfg):
+            self.assertIsNone(LivenessSessionService()._redis_store)
 
     def test_session_url_keeps_its_own_db_when_derived_from_redis_url(self):
         """Deriving from a shared REDIS_URL must still pin the liveness database:
         sharing the cache's db exposes in-flight sessions to its FLUSHDB and its
         eviction policy, which would drop live verifications."""
-        from password_manager.settings.base import _liveness_session_redis_url
+        from password_manager.settings.base import (
+            _LIVENESS_SESSION_DB, _liveness_session_redis_url)
         with patch.dict(os.environ, {'REDIS_URL': 'redis://cache-host:6379/0'},
                         clear=False):
             os.environ.pop('LIVENESS_SESSION_REDIS_URL', None)
+            # Read the index from the source, so a retune cannot leave this
+            # asserting the old rule.
             self.assertEqual(_liveness_session_redis_url(),
-                             'redis://cache-host:6379/3')
+                             f'redis://cache-host:6379/{_LIVENESS_SESSION_DB}')
 
     def test_explicit_session_url_wins(self):
         from password_manager.settings.base import _liveness_session_redis_url

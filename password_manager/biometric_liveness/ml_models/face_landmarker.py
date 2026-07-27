@@ -232,7 +232,14 @@ def _reset_for_tests() -> None:
         # and leave the fresh pool one instance short.
         while True:
             try:
-                _POOL.get_nowait()
+                detector = _POOL.get_nowait()
             except queue.Empty:
                 break
+            # Release the native graph now rather than at GC; a long test run
+            # resets repeatedly and would otherwise stack up MediaPipe contexts.
+            try:
+                detector.close()
+            except Exception:
+                logger.debug("FaceLandmarker close failed during reset",
+                             exc_info=True)
         _POOL_SIZE = 0

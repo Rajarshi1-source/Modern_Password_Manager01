@@ -45,6 +45,17 @@ webdriver-manager==4.0.2
 #                at startup (security.yml SBOM step). Without the ceiling the
 #                prod install re-resolves setuptools past 81 and the SBOM step
 #                fails with `ModuleNotFoundError: No module named 'pkg_resources'`.
+#                DELIBERATE CONFLICT: requirements.txt floors setuptools at
+#                >=83.0.0 for PYSEC-2026-3447, and this ceiling overrides that
+#                for the prod install (Dockerfile.prod / security.yml, which
+#                resolve requirements-prod.txt under these constraints), so the
+#                image ships 80.x. Accepted because the advisory is an sdist
+#                MANIFEST.in exclusion bypass on normalization-preserving
+#                filesystems (macOS APFS/HFS+) — it only bites while BUILDING a
+#                source distribution, which the distroless wheel-install image
+#                never does. To retire the ceiling and take 83.x, move the SBOM
+#                step to cyclonedx-bom>=2 (its CLI dropped the pkg_resources
+#                import); do NOT simply raise it, that breaks SBOM generation.
 #   jaraco.context — Trivy #1549: path traversal in <6.0.1
 #   python-dotenv — Trivy #1556: symlink-follow CVE in <1.1.1 / older system wheel
 urllib3>=2.7.0
