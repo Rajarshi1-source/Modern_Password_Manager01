@@ -1908,7 +1908,9 @@ class _FakeRedis:
     live indexes), returning bytes like a real from_url() client so the store's
     decode paths are exercised. Key TTL is not simulated -- the tests are
     hermetic and assert state sharing/locking, not expiry timing. ZSET SCORES
-    are modelled faithfully, because the capacity count depends on them.
+    are modelled faithfully, because the capacity count depends on them, and so
+    is the SAVE script's TOKEN FENCE, because rejecting a stale writer is a
+    correctness property rather than a timing one.
     """
 
     def __init__(self):
@@ -2011,7 +2013,8 @@ class _FakeRedis:
         identity (rather than reimplementing "some CAS") keeps the double honest:
         adding a third script fails loudly instead of silently no-op'ing.
         """
-        from .services.session_store import _RELEASE_LUA, _RENEW_LUA
+        from .services.session_store import (
+            _RELEASE_LUA, _RENEW_LUA, _SAVE_LUA)
 
         if script == _RELEASE_LUA:
             def release(keys, args):
@@ -2028,6 +2031,29 @@ class _FakeRedis:
                 # we still own simply succeeds.
                 return 1 if self.kv.get(key) == token else 0
             return renew
+
+        if script == _SAVE_LUA:
+            def save(keys, args):
+                lock, blob_key, owner_key, live = keys[0], keys[1], keys[2], keys[3]
+                ukey = keys[4] if len(keys) > 4 else None
+                token, blob, is_live = args[0], args[1], args[2]
+                deadline, sid, owner = args[5], args[6], args[7]
+                # The fence: an empty token is the unfenced create path.
+                if token != '' and self.kv.get(lock) != self._b(token):
+                    return 0
+                self.kv[blob_key] = self._b(blob)
+                if is_live == '1':
+                    if owner != '':
+                        self.kv[owner_key] = self._b(owner)
+                    self.zadd(live, {sid: deadline})
+                    if ukey:
+                        self.zadd(ukey, {sid: deadline})
+                else:
+                    self.zrem(live, sid)
+                    if ukey:
+                        self.zrem(ukey, sid)
+                return 1
+            return save
 
         raise AssertionError(f'_FakeRedis has no emulation for script: {script!r}')
 
@@ -2368,6 +2394,41 @@ class RedisSessionStoreCrossProcessTests(TestCase):
     def test_status_of_missing_session_is_none(self):
         self.assertIsNone(self.rest.get_session_status('does-not-exist'))
 
+    def test_stale_writer_cannot_revert_a_newer_workers_save(self):
+        """The lease can lapse between the ownership check and the write.
+
+        Worker A renews, then stalls (GC pause, slow inference); its lease
+        expires, worker B legitimately takes the session and advances it. A's
+        whole-blob save must be REFUSED -- a client-side check followed by a
+        separate write would let it silently revert B's frames, replay guard or
+        frozen verdict. The fence lives inside the save script, so the check and
+        the write cannot be separated.
+        """
+        info = self.rest.create_session(user_id=self.user.id)
+        sid = info['session_id']
+        a_store, b_store = self.rest._redis_store, self.ws._redis_store
+
+        stale = a_store.load(sid)               # A's in-hand copy
+        self.assertTrue(a_store.acquire(sid))
+        # A's lease lapses. The double models no TTL, so drop the key directly;
+        # B then legitimately acquires and advances the session.
+        self.fake.delete('liveness:lock:' + sid)
+        self.assertTrue(b_store.acquire(sid))
+        newer = b_store.load(sid)
+        newer['frames_processed'] = 7
+        self.assertTrue(b_store.save(sid, newer))
+
+        stale['frames_processed'] = 1
+        self.assertFalse(a_store.save(sid, stale))
+        self.assertEqual(b_store.load(sid)['frames_processed'], 7)
+
+    def test_create_path_saves_without_a_per_session_lease(self):
+        """The fence must not break create, which holds the GLOBAL create-lock
+        and no per-session token -- an unconditional token check would make
+        every create a no-op write."""
+        info = self.rest.create_session(user_id=self.user.id)
+        self.assertIsNotNone(self.ws._redis_store.load(info['session_id']))
+
     def test_completion_with_real_scores_persists_over_redis(self):
         """A completed verdict carrying real modality scores must serialize.
 
@@ -2588,12 +2649,21 @@ class ExpressionGatingTests(TestCase):
             (float(i) for i in range(len(history))),
             maxlen=MicroExpressionAnalyzer.AU_HISTORY_FRAMES)
         self.analyzer._au_frames_seen = len(history)
-        # Same threshold observe() applies, read from the analyzer rather than
+        # Same rule observe() applies, read from the analyzer rather than
         # re-typed here, so a retune cannot leave these tests asserting the old
-        # rule instead of failing.
-        self.analyzer._blinked = any(
-            a.get(45, 0.0) > MicroExpressionAnalyzer.BLINK_AU45_THRESHOLD
-            for a in history)
+        # rule instead of failing. A blink needs an open->shut TRANSITION, so
+        # shut-ness alone (a closed-eye photo) must not set the flag.
+        blinked = False
+        eyes_open_seen = False
+        for a in history:
+            au45 = a.get(45, 0.0)
+            if au45 < MicroExpressionAnalyzer.BLINK_OPEN_AU45_MAX:
+                eyes_open_seen = True
+            elif (au45 > MicroExpressionAnalyzer.BLINK_AU45_THRESHOLD
+                    and eyes_open_seen):
+                blinked = True
+        self.analyzer._blinked = blinked
+        self.analyzer._eyes_open_seen = eyes_open_seen
 
     def test_observe_bounds_the_au_history_it_appends(self):
         """The cap has to live on the APPEND path, not just the snapshot.
@@ -2636,7 +2706,9 @@ class ExpressionGatingTests(TestCase):
         """
         cap = MicroExpressionAnalyzer.AU_HISTORY_FRAMES
         # Overrun the window, with an early blink that truncation would drop.
-        history = [{45: 0.9, 12: 0.4}] + [
+        # Open first, then shut: a blink is a TRANSITION, so a track that opens
+        # on a shut frame records nothing (see test_closed_eye_photo_earns_no_blink).
+        history = [{45: 0.0, 12: 0.4}, {45: 0.9, 12: 0.4}] + [
             {45: 0.0, 12: 0.1 + (i % 7) * 0.05} for i in range(cap + 200)]
         self._seed(history)
 
@@ -2663,6 +2735,34 @@ class ExpressionGatingTests(TestCase):
         self.assertIsNotNone(score)
         self.assertGreater(score, 0.5)  # blink (0.5) + real motion
 
+    def test_closed_eye_photo_earns_no_blink(self):
+        """A still image of a face with SHUT eyes must not score the blink half.
+
+        AU45 is a per-frame shut-ness measure, so every frame of such a photo
+        clears BLINK_AU45_THRESHOLD. Scoring that as a blink would hand a static
+        spoof 0.5 of the expression score while the modality claims to measure
+        temporal dynamics -- the fabricated signal this feature must never emit.
+        Driven through observe() rather than _seed so it pins the real rule.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 1.0, 12: 0.0}):
+            for i in range(30):
+                analyzer.observe(np.zeros((478, 3)), float(i))
+        self.assertFalse(analyzer._blinked)
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            self.assertEqual(analyzer.get_session_expression_score(), 0.0)
+
+    def test_open_then_shut_is_a_blink(self):
+        """The counterpart: a real open->shut transition still scores."""
+        analyzer = MicroExpressionAnalyzer()
+        for i, au45 in enumerate([0.0] * 5 + [1.0] * 2 + [0.0] * 5):
+            with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                              return_value={45: au45, 12: 0.0}):
+                analyzer.observe(np.zeros((478, 3)), float(i))
+        self.assertTrue(analyzer._blinked)
+
     def test_static_track_scores_low(self):
         # A photo: no blink, flat AU track -> near-zero score, cannot gate.
         self._seed([{45: 0.0, 12: 0.0, 1: 0.0} for _ in range(30)])
@@ -2676,10 +2776,11 @@ class ExpressionGatingTests(TestCase):
         """A blink observed before the bounded window must still score across a
         snapshot/restore (the sticky flag, not the truncated list, is read)."""
         from .services.session_store import serialize_session
-        # Blink at frame 0, then enough later frames to push it out of a small
-        # window; the sticky flag must persist through snapshot_state/restore.
-        blink_first = [{45: 1.0, 12: 0.0}] + [{45: 0.0, 12: 0.4 if i % 2 else 0.0}
-                                              for i in range(30)]
+        # Open then shut at the very start (the transition a blink requires),
+        # then enough later frames to push it out of a small window; the sticky
+        # flag must persist through snapshot_state/restore.
+        blink_first = [{45: 0.0, 12: 0.0}, {45: 1.0, 12: 0.0}]
+        blink_first += [{45: 0.0, 12: 0.4 if i % 2 else 0.0} for i in range(30)]
         self._seed(blink_first)
         snap = self.analyzer.snapshot_state()
         fresh = MicroExpressionAnalyzer()
