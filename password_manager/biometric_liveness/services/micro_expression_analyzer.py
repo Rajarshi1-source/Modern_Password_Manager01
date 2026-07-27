@@ -85,6 +85,21 @@ class MicroExpressionAnalyzer:
     # thresholds is hysteresis, so per-frame landmark noise cannot manufacture a
     # transition on a genuinely static face.
     BLINK_OPEN_AU45_MAX = 0.2
+    # How long after an open observation a shut one can still close a blink.
+    # The open evidence MUST expire: left sticky for the session, an open frame
+    # and an unrelated shut frame arriving much later -- after tracking loss,
+    # from a different face, or from a second still image -- combined into a
+    # "blink" that neither observation earned, which is a two-image replay for
+    # half the expression score. Bounded by the physiology instead (a human
+    # blink runs 100-400ms), so the two observations have to be close enough in
+    # SERVER time to be one continuous eyelid movement.
+    #
+    # HONEST LIMIT, do not overstate it: this stops UNRELATED observations from
+    # combining. It cannot authenticate that both frames show the same face, and
+    # no rule over per-frame eye geometry can distinguish a live blink from a
+    # crafted frame sequence delivered at video rate -- replay resistance is the
+    # deepfake modality's job and the gaze challenge-response's, not this one's.
+    BLINK_MAX_TRANSITION_MS = 400.0
 
     TRACKED_AUS: ClassVar[Dict[int, str]] = {
         1: 'Inner Brow Raiser',
@@ -149,9 +164,11 @@ class MicroExpressionAnalyzer:
         # erase a blink observed earlier in the session or shorten the frame
         # count -- that would score the same session differently per backend.
         self._blinked: bool = False
-        # Whether an OPEN-eye frame has been seen yet; the other half of the
-        # open->shut transition that _blinked requires (see BLINK_OPEN_AU45_MAX).
-        self._eyes_open_seen: bool = False
+        # Server timestamp of the most recent OPEN-eye frame, or None when there
+        # is no open observation a shut frame could still close a blink with --
+        # the other half of the transition _blinked requires. A timestamp rather
+        # than a flag so the evidence EXPIRES (see BLINK_MAX_TRANSITION_MS).
+        self._last_open_ms: Optional[float] = None
         self._au_frames_seen: int = 0
 
         logger.info("MicroExpressionAnalyzer initialized")
@@ -445,12 +462,21 @@ class MicroExpressionAnalyzer:
             # Sticky derived facts (survive history truncation across a hand-off).
             self._au_frames_seen += 1
             au45 = aus.get(45, 0.0)
+            now_ms = float(timestamp_ms)
             if au45 < self.BLINK_OPEN_AU45_MAX:
-                self._eyes_open_seen = True
-            elif au45 > self.BLINK_AU45_THRESHOLD and self._eyes_open_seen:
-                # Shut, and we have seen this face open: a real transition, not
-                # a photograph of someone with their eyes closed.
-                self._blinked = True
+                self._last_open_ms = now_ms
+            elif au45 > self.BLINK_AU45_THRESHOLD:
+                # Shut. It closes a blink only if the eyes were seen OPEN within
+                # the last BLINK_MAX_TRANSITION_MS of server time, i.e. the two
+                # observations are close enough to be one eyelid movement rather
+                # than two unrelated frames.
+                if (self._last_open_ms is not None
+                        and 0 <= now_ms - self._last_open_ms
+                        <= self.BLINK_MAX_TRANSITION_MS):
+                    self._blinked = True
+                # Consumed either way: the next blink needs a fresh open frame,
+                # so a long shut run cannot keep retrying against one open one.
+                self._last_open_ms = None
         return aus
 
     # Frames needed before the expression modality can score at all.
@@ -464,10 +490,18 @@ class MicroExpressionAnalyzer:
         value -- when no real landmark source is loaded or too few frames were
         observed. Otherwise scores temporal dynamics that a live face produces
         and a static photo/screen cannot: at least one open->shut blink
-        TRANSITION, and natural variation in the brow/mouth AUs over the
-        session. This is the real liveness signal (a photo yields a flat AU
-        track with no transition -- including a photo of closed eyes, which
-        shut-ness alone would have scored), robust to exact per-AU calibration.
+        TRANSITION within a blink's worth of server time, and natural variation
+        in the brow/mouth AUs over the session. This is the real liveness signal
+        (a photo yields a flat AU track with no transition -- including a photo
+        of closed eyes, which shut-ness alone would have scored, and a pair of
+        open/closed stills, which an unbounded transition would have scored),
+        robust to exact per-AU calibration.
+
+        NOT replay resistance: a recording of a real face blinking satisfies
+        every term here, and nothing in this modality checks that consecutive
+        frames show the same person. Defeating replay is the deepfake model's
+        job and the gaze challenge-response's. Do not let this score be
+        described as anti-spoof on its own.
         """
         if not self.has_real_landmark_source():
             return None
@@ -515,8 +549,9 @@ class MicroExpressionAnalyzer:
             # the blink evidence or the frame count on the far side of a hand-off.
             'blinked': self._blinked,
             # Half of an in-flight transition: without it, a hand-off between
-            # the open frame and the shut one would lose the blink.
-            'eyes_open_seen': self._eyes_open_seen,
+            # the open frame and the shut one would lose the blink. Carried as
+            # the timestamp so the far side applies the same expiry window.
+            'last_open_ms': self._last_open_ms,
             'au_frames_seen': self._au_frames_seen,
             # _prev_landmarks is deliberately NOT snapshotted. It is a hook for a
             # future temporal AU, but nothing consumes it today --
@@ -551,7 +586,15 @@ class MicroExpressionAnalyzer:
             raw_ts = []
         self.au_timestamps = deque(raw_ts, maxlen=self.AU_HISTORY_FRAMES)
         self._blinked = bool(state.get('blinked', False))
-        self._eyes_open_seen = bool(state.get('eyes_open_seen', False))
+        # A blob written by a worker older than this field simply starts with no
+        # open evidence: an in-flight transition is dropped across that one
+        # deploy and the subject blinks again. Fail-closed is the right side to
+        # err on for a liveness signal.
+        try:
+            raw_open = state.get('last_open_ms')
+            self._last_open_ms = None if raw_open is None else float(raw_open)
+        except (TypeError, ValueError):
+            self._last_open_ms = None
         # Fall back to the restored history length for snapshots written before
         # this field existed (rolling deploy).
         self._au_frames_seen = int(state.get('au_frames_seen', len(self.au_history)))
