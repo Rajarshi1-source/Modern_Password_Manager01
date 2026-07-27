@@ -129,6 +129,38 @@ def _pulse_reading_from_json(d):
     )
 
 
+def _thermal_reading_to_json(t) -> Dict:
+    """
+    ThermalReading -> JSON.
+
+    Nothing populates session['thermal_readings'] yet (no ingest path calls
+    process_thermal_frame), so this is pre-emptive: without it, the FIRST save
+    after a thermal ingest lands would raise TypeError, because json.dumps'
+    default=float cannot coerce a dataclass. Every other dataclass in the blob
+    already round-trips through a converter; this closes the one gap.
+    """
+    return {
+        'timestamp_ms': t.timestamp_ms, 'frame_number': t.frame_number,
+        'average_temp_c': t.average_temp_c, 'min_temp_c': t.min_temp_c,
+        'max_temp_c': t.max_temp_c,
+        'has_natural_gradient': t.has_natural_gradient,
+        'matches_living_tissue': t.matches_living_tissue,
+        'heat_map_features': dict(t.heat_map_features or {}),
+    }
+
+
+def _thermal_reading_from_json(d):
+    from .thermal_imaging_service import ThermalReading
+    return ThermalReading(
+        timestamp_ms=d['timestamp_ms'], frame_number=d['frame_number'],
+        average_temp_c=d['average_temp_c'], min_temp_c=d['min_temp_c'],
+        max_temp_c=d['max_temp_c'],
+        has_natural_gradient=d['has_natural_gradient'],
+        matches_living_tissue=d['matches_living_tissue'],
+        heat_map_features=d.get('heat_map_features', {}),
+    )
+
+
 def _task_result_to_json(r) -> Dict:
     return {
         'task_type': r.task_type.value, 'is_passed': r.is_passed,
@@ -262,7 +294,8 @@ def serialize_session(session: Dict) -> str:
         'gaze_samples': session.get('gaze_samples', 0),
         'gaze_track': [_gaze_point_to_json(g) for g in session.get('gaze_track', [])],
         'gaze_task_results': [_task_result_to_json(r) for r in session.get('gaze_task_results', [])],
-        'thermal_readings': list(session.get('thermal_readings', [])),
+        'thermal_readings': [
+            _thermal_reading_to_json(t) for t in session.get('thermal_readings', [])],
         # A set is not JSON-native; store as a list, restore as a set.
         'answered_challenges': sorted(session.get('answered_challenges', set())),
         # JSON object keys are strings; the service uses int sequence keys.
@@ -312,7 +345,8 @@ def deserialize_session(blob: str, build_services: Callable[[], Dict]) -> Dict:
         'gaze_samples': data.get('gaze_samples', 0),
         'gaze_track': [_gaze_point_from_json(g) for g in data.get('gaze_track', [])],
         'gaze_task_results': [_task_result_from_json(r) for r in data.get('gaze_task_results', [])],
-        'thermal_readings': list(data.get('thermal_readings', [])),
+        'thermal_readings': [
+            _thermal_reading_from_json(t) for t in data.get('thermal_readings', [])],
         'answered_challenges': set(data.get('answered_challenges', [])),
         'challenge_activated_ms': {
             int(k): v for k, v in data.get('challenge_activated_ms', {}).items()

@@ -2129,6 +2129,14 @@ class SessionStoreSerializationTests(TestCase):
             accuracy_score=0.8, reaction_time_ms=300.0,
             gaze_path_similarity=0.7, human_likelihood_score=0.9)]
         session['deepfake_probs'] = [0.1, 0.2]
+        # Pre-emptive: no ingest path populates this yet, but a raw dataclass
+        # here would make json.dumps(default=float) raise on the first save
+        # after one lands -- every other dataclass in the blob has a converter.
+        from .services.thermal_imaging_service import ThermalReading
+        session['thermal_readings'] = [ThermalReading(
+            timestamp_ms=5.0, frame_number=2, average_temp_c=36.5,
+            min_temp_c=35.2, max_temp_c=37.1, has_natural_gradient=True,
+            matches_living_tissue=True, heat_map_features={'forehead_mean': 36.4})]
         session['expression_score'] = 0.66
 
         blob = serialize_session(session)
@@ -2144,6 +2152,10 @@ class SessionStoreSerializationTests(TestCase):
         self.assertEqual(restored['pulse_readings'][0].heart_rate_bpm, 72.0)
         self.assertEqual(restored['gaze_track'][0].x, 0.5)
         self.assertTrue(restored['gaze_task_results'][0].is_passed)
+        # Restored as a ThermalReading, not a raw dict: get_liveness_score reads
+        # attributes off these.
+        self.assertEqual(restored['thermal_readings'][0].average_temp_c, 36.5)
+        self.assertTrue(restored['thermal_readings'][0].matches_living_tissue)
         self.assertEqual(restored['expression_score'], 0.66)
         # The randomized cognitive task survives so scoring stays reproducible.
         gaze_ch = next(c for c in restored['challenges'] if c['type'] == 'gaze')

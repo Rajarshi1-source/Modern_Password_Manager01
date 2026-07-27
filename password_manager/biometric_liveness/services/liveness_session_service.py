@@ -305,9 +305,19 @@ class LivenessSessionService:
             try:
                 result = method(self, session_id, *args, **kwargs)
             except BaseException:
-                # Best-effort persist of a partial transition; a lost lease just
-                # skips the write rather than masking the in-flight exception.
-                self._persist_txn(session_id)
+                # Best-effort persist of a partial transition. It must not
+                # MASK the in-flight exception: _persist_txn can itself raise
+                # (serializing a half-mutated session, or any Redis error), and
+                # that would propagate in place of the original -- so a
+                # ValueError('Session expired') would surface as a Redis 500
+                # instead of its own 4xx.
+                try:
+                    self._persist_txn(session_id)
+                except Exception:
+                    logger.exception(
+                        "Liveness session %s: best-effort persist of a partial "
+                        "transition failed; propagating the original error",
+                        session_id)
                 raise
             if not self._persist_txn(session_id):
                 raise SessionLockError(
