@@ -252,9 +252,16 @@ class BiometricLivenessService {
     pending.attempts += 1;
     const delay = ONE_SHOT_RETRY_BASE_MS * 2 ** (pending.attempts - 1);
     setTimeout(() => {
-      // Superseded (completed, or the socket went away) while backing off.
+      // Superseded (already answered) while backing off -- nothing to do.
       if (this._pendingOneShot !== pending) return;
-      if (!(this.ws && this.ws.readyState === WebSocket.OPEN)) return;
+      if (!(this.ws && this.ws.readyState === WebSocket.OPEN)) {
+        // Socket died during the backoff. Same reasoning as _sendOneShot:
+        // onclose only logs, so returning quietly here would strand the caller
+        // in 'processing' on a verdict that can never arrive.
+        this._pendingOneShot = null;
+        if (this._onError) this._onError('WebSocket connection error');
+        return;
+      }
       this.ws.send(JSON.stringify(pending.payload));
     }, delay);
   }
