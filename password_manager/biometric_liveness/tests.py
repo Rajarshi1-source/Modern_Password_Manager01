@@ -2520,6 +2520,27 @@ class ActionUnitGeometryTests(TestCase):
         for au in (1, 2, 4, 5, 6, 12, 25, 26, 45):
             self.assertEqual(aus[au], 0.0)
 
+    def test_brow_bands_are_uncalibrated_on_a_neutral_face(self):
+        """Characterization, NOT an endorsement: pins a known calibration risk.
+
+        The brow-gap bands were chosen from anatomy, never measured against real
+        MediaPipe output. On this fixture -- which the suite treats as neutral --
+        AU4 already reads 0.8 and AU2 reads 0.0. If real landmarks land in the
+        same range, AU4 saturates and AU2 pins on every frame, so neither varies
+        and get_session_expression_score's motion term quietly collapses to
+        AU1/12/25/26.
+
+        Latent today: expression only scores once has_real_landmark_source() is
+        true, i.e. after a FACE_LANDMARKER model is provisioned. This test exists
+        so that provisioning step cannot silently inherit the miscalibration --
+        re-measure the bands against recorded faces and update these numbers
+        deliberately. Do not "fix" it by nudging the constants until the numbers
+        look nicer; that fabricates calibration.
+        """
+        aus = self.analyzer.extract_action_units(self._neutral())
+        self.assertAlmostEqual(aus[4], 0.8, places=4)
+        self.assertAlmostEqual(aus[2], 0.0, places=4)
+
     def test_open_mouth_raises_au25_and_au26(self):
         lm = self._neutral()
         neutral = self.analyzer.extract_action_units(lm)
