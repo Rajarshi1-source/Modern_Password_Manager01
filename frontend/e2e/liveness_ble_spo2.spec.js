@@ -2,9 +2,15 @@
  * BLE pulse-oximeter SpO2 relay — hardware E2E
  * ============================================
  *
+ * SCOPE: the AUTOMATED assertions here cover the relay and the tile only --
+ * that a paired device makes the SpO2 reading appear, and that disconnecting
+ * clears it. Whether SpO2 then contributes to the pulse modality is step 4 of
+ * the manual procedure below, checked by the operator on the results screen;
+ * no assertion in this file verifies scoring.
+ *
  * The full round-trip — pair a real Bluetooth GATT Pulse Oximeter (service
  * 0x1822 / PLX), stream PLX measurements, relay them over the liveness session
- * WebSocket, and see the SpO2 tile update and feed scoring — needs a physical
+ * WebSocket, and see the SpO2 tile update — needs a physical
  * oximeter and a browser with Web Bluetooth granting a device. Neither exists
  * in headless CI, so this suite is SKIPPED unless LIVENESS_BLE_HARDWARE=1 is
  * set on a machine with a paired oximeter. The parsing / pairing / relay
@@ -15,7 +21,7 @@
  * Manual procedure (run with a real device):
  *   1. Pair a supported BLE pulse oximeter that advertises the PLX service
  *      (0x1822) and notifies PLX Continuous (0x2A5F) or Spot-check (0x2A5E).
- *   2. LIVENESS_BLE_HARDWARE=1 E2E_AUTH_TOKEN=<real access token> \
+ *   2. LIVENESS_BLE_HARDWARE=1 E2E_AUTH_TOKEN=<disposable test token> \
  *        E2E_BASE_URL=<app> npx playwright test \
  *        e2e/liveness_ble_spo2.spec.js --project=chromium --headed
  *      (Web Bluetooth requires a headed Chromium and a user gesture to pick
@@ -24,10 +30,14 @@
  *      E2E_AUTH_TOKEN is REQUIRED: /liveness-verification is guarded in
  *      App.jsx by `!isAuthenticated ? <Navigate to="/" />`, and useAuth only
  *      sets isAuthenticated after GET /api/auth/me/ succeeds. A fresh browser
- *      context is anonymous, so without a REAL token the run silently lands on
- *      the public page and times out waiting for a button that is not there --
- *      it never exercises the BLE flow at all. A placeholder value will not do;
- *      the backend has to accept it.
+ *      context is anonymous, so without a token the backend accepts, the run
+ *      silently lands on the public page and times out waiting for a button
+ *      that is not there -- it never exercises the BLE flow at all. A
+ *      placeholder value will not do.
+ *      Use a DISPOSABLE, short-lived, least-privileged account's token, never a
+ *      personal or long-lived one: it is seeded into page-readable
+ *      localStorage, so page scripts can read it, and Playwright traces/videos
+ *      of a failing run can retain it. Revoke it after the session.
  *   3. Start a verification, click "Connect pulse oximeter", pick the device.
  *   4. Confirm the SpO2 tile appears with a plausible real-device value
  *      (70–100% -- a liveness check validates a genuine reading, not health, so

@@ -348,6 +348,39 @@ describe('biometricLivenessService message routing', () => {
         }
     });
 
+    it('a late answer to an evicted op does not untrack its replacement', async () => {
+        // The server still answers the abandoned challenge_response. Clearing
+        // on ANY answer would untrack the complete, so its own session_busy
+        // would find nothing pending and merely log -- stranding the UI.
+        vi.useFakeTimers();
+        try {
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError: vi.fn(), onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+
+            livenessService.submitChallengeResponse({ sequence: 0 });
+            livenessService.completeSession();          // evicts the response
+
+            // Late answer for the ABANDONED op.
+            ws.onmessage({
+                data: JSON.stringify({ type: 'challenge_result', sequence: 0 }),
+            });
+            // ...then the complete conflicts and must still be retried.
+            ws.onmessage({
+                data: JSON.stringify({
+                    type: 'error', message: 'session_busy', retryable: true, op: 'complete',
+                }),
+            });
+            await vi.advanceTimersByTimeAsync(200);
+
+            expect(ws.send).toHaveBeenCalledTimes(3);
+            expect(JSON.parse(ws.send.mock.calls[2][0])).toEqual({ type: 'complete' });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('still routes a non-retryable error to onError', async () => {
         const onError = vi.fn();
         const ws = await connect({

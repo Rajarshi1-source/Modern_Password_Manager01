@@ -139,9 +139,16 @@ class BiometricLivenessService {
         return;
       }
 
-      // Any answer to the outstanding one-shot op retires it, so a later
-      // session_busy (from some other request) cannot resurrect it.
-      if (data.type === 'challenge_result' || data.type === 'session_complete') {
+      // An answer retires the outstanding op so a later session_busy cannot
+      // resurrect it -- but ONLY if it answers THAT op. Clearing on any answer
+      // breaks the eviction case: after `complete` supersedes an unanswered
+      // challenge_response, the server's late challenge_result for the
+      // abandoned one would untrack the complete, and its own session_busy
+      // would then find nothing pending and merely log, stranding the UI.
+      const ANSWERS = { challenge_result: 'challenge_response', session_complete: 'complete' };
+      const answered = ANSWERS[data.type];
+      if (answered && this._pendingOneShot
+          && this._pendingOneShot.payload.type === answered) {
         this._pendingOneShot = null;
       }
 
