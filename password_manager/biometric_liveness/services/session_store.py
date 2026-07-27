@@ -553,9 +553,18 @@ class RedisSessionStore:
         if is_live:
             deadline = session['expires_at'].timestamp()
             self.redis.zadd(self._LIVE, {session_id: deadline})
+            # Bound BOTH index keys' lifetime to the retention window. Without
+            # this the global ZSET has no TTL of its own: its members are only
+            # ever dropped by count_live's score prune, which runs under the
+            # create lock -- so a deployment that stops creating sessions leaves
+            # the key resident forever. ZADD does not disturb an existing TTL,
+            # hence the explicit refresh on every live save. This cannot expire a
+            # still-live member early: retention > SESSION_TIMEOUT_SECONDS and
+            # the refresh happens on the LATEST live save, so the key always
+            # outlives the deadline of every id still indexed.
+            self.redis.pexpire(self._LIVE, self.retention_seconds * 1000)
             if ukey:
                 self.redis.zadd(ukey, {session_id: deadline})
-                # Bound the index keys' lifetime to the retention window too.
                 self.redis.pexpire(ukey, self.retention_seconds * 1000)
         else:
             self.redis.zrem(self._LIVE, session_id)

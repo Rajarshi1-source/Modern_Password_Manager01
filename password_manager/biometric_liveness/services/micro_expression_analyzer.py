@@ -185,8 +185,12 @@ class MicroExpressionAnalyzer:
         
         Args:
             landmarks: Current frame landmarks
-            prev_landmarks: Previous frame landmarks for motion analysis
-            
+            prev_landmarks: RESERVED hook for a future temporal AU. Accepted and
+                ignored today: every AU below is computed from the current frame
+                alone (AU45 included -- it is purely EAR-based). Kept in the
+                signature because observe() threads the previous frame's
+                landmarks through, so adding a temporal AU needs no plumbing.
+
         Returns:
             Dict mapping AU number to intensity (0-1)
         """
@@ -230,7 +234,7 @@ class MicroExpressionAnalyzer:
         aus[26] = self._calculate_au26_intensity(landmarks, iod=iod)
 
         # AU45: Blink - low eye-aspect-ratio (real geometry, no temporal needed)
-        aus[45] = self._calculate_blink_intensity(landmarks, prev_landmarks, ear=ear)
+        aus[45] = self._calculate_blink_intensity(landmarks, ear=ear)
 
         return aus
 
@@ -405,7 +409,6 @@ class MicroExpressionAnalyzer:
     def _calculate_blink_intensity(
         self,
         landmarks: np.ndarray,
-        prev_landmarks: Optional[np.ndarray] = None,
         ear: Optional[float] = None
     ) -> float:
         """AU45 (Blink): eyes closed => low eye-aspect-ratio."""
@@ -495,8 +498,8 @@ class MicroExpressionAnalyzer:
             'au_frames_seen': self._au_frames_seen,
             # _prev_landmarks is deliberately NOT snapshotted. It is a hook for a
             # future temporal AU, but nothing consumes it today --
-            # _calculate_blink_intensity takes the argument and ignores it (AU45
-            # is purely EAR-based), and no other calculator accepts it at all.
+            # extract_action_units accepts it and no calculator reads it (AU45 is
+            # purely EAR-based, and none of the others accept it at all).
             # Serializing it cost ~1.4k floats (478x3) on EVERY per-frame locked
             # save, for state the far side never reads. observe() still keeps it
             # in-process; whoever adds a temporal AU must add it back here.
