@@ -273,6 +273,22 @@ describe('biometricLivenessService message routing', () => {
         }
     });
 
+    it('surfaces an error when a one-shot lands on a closed socket', async () => {
+        // onclose only logs, so returning quietly here would strand the UI in
+        // 'processing' waiting for a verdict that can never arrive.
+        const onError = vi.fn();
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+        });
+        ws.readyState = 3;   // CLOSED
+        ws.send = vi.fn();
+
+        livenessService.completeSession();
+
+        expect(ws.send).not.toHaveBeenCalled();
+        expect(onError).toHaveBeenCalledWith('WebSocket connection error');
+    });
+
     it('still routes a non-retryable error to onError', async () => {
         const onError = vi.fn();
         const ws = await connect({

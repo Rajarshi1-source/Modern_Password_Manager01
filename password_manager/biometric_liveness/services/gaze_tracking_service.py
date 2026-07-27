@@ -170,11 +170,10 @@ class GazeTrackingService:
         Returns:
             Estimated gaze point or None
         """
-        self._init_gaze_model()
-
         # Do not fabricate a gaze position. Without the real landmarker loaded
         # there is nothing to measure with, so we report "no observation" and
-        # gaze simply does not contribute to the verdict.
+        # gaze simply does not contribute to the verdict. (has_real_gaze_model
+        # resolves the shared model itself, so no separate init call here.)
         if not self.has_real_gaze_model():
             return None
 
