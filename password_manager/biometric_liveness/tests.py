@@ -2034,9 +2034,16 @@ class _FakeRedis:
 
 def _redis_service(fake, retention=420):
     """A LivenessSessionService wired to a shared fake-Redis store."""
+    from django.conf import settings as dj_settings
     from .services.liveness_session_service import LivenessSessionService
     from .services.session_store import RedisSessionStore
-    svc = LivenessSessionService()
+    # Pin the backend for construction: on a box exporting
+    # LIVENESS_SESSION_STORE=redis, __init__ would build a real client (and
+    # raise ImproperlyConfigured if redis-py is absent) before the fake replaces
+    # it. The store under test is the one assigned below, not the ambient one.
+    cfg = {**dj_settings.BIOMETRIC_LIVENESS, 'SESSION_STORE': 'memory'}
+    with override_settings(BIOMETRIC_LIVENESS=cfg):
+        svc = LivenessSessionService()
     svc._redis_store = RedisSessionStore(fake, svc._new_session_services, retention)
     return svc
 

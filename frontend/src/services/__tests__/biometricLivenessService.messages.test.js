@@ -289,6 +289,34 @@ describe('biometricLivenessService message routing', () => {
         expect(onError).toHaveBeenCalledWith('WebSocket connection error');
     });
 
+    it('surfaces an error when the socket dies during retry backoff', async () => {
+        // The initial send escalates on a closed socket; the retry path must
+        // too, or a conflicted `complete` whose socket then drops strands the
+        // UI on a verdict that can never arrive.
+        vi.useFakeTimers();
+        try {
+            const onError = vi.fn();
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+            livenessService.completeSession();
+
+            ws.onmessage({
+                data: JSON.stringify({
+                    type: 'error', message: 'session_busy', retryable: true, op: 'complete',
+                }),
+            });
+            ws.readyState = 3;   // CLOSED mid-backoff
+            await vi.advanceTimersByTimeAsync(200);
+
+            expect(ws.send).toHaveBeenCalledTimes(1);   // retry not sent
+            expect(onError).toHaveBeenCalledWith('WebSocket connection error');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('still routes a non-retryable error to onError', async () => {
         const onError = vi.fn();
         const ws = await connect({

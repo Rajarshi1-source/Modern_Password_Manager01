@@ -300,6 +300,18 @@ class MicroExpressionAnalyzer:
         eye = self._pt(landmarks, eye_up_idx)
         return abs(eye[1] - brow[1]) / iod
 
+    # UNVALIDATED against real MediaPipe geometry -- the brow-gap bands below
+    # (AU2 neutral 0.45 IOD, AU4 neutral 0.30 IOD) were chosen from anatomy, not
+    # measured. The synthetic test fixture sits at a 0.10 IOD gap, which would
+    # put AU4 at 0.8 and AU2 at 0.0 on a NEUTRAL face; if real landmarks land in
+    # that range, AU4 saturates and AU2 pins every frame, so both contribute ~no
+    # variance and get_session_expression_score's motion term quietly narrows to
+    # AU1/12/25/26. That is latent, not live: expression is capability-gated on
+    # has_real_landmark_source(), so it scores nothing until a FACE_LANDMARKER
+    # model is provisioned. Whoever provisions one MUST re-measure these bands
+    # against recorded faces before trusting the motion score -- and must not
+    # simply retune them by eye, which would swap one unvalidated constant for
+    # another while looking authoritative.
     def _calculate_au2_intensity(
         self, landmarks: np.ndarray, iod: Optional[float] = None
     ) -> float:
