@@ -335,6 +335,11 @@ class LivenessSessionService:
         already expired -- the caller turns that into a retryable error instead
         of a silent overwrite. Nothing to write (a not-found load) is not a
         failure.
+
+        The renew is an early-out that extends the lease before the write and
+        names the failure precisely; it is NOT the fence. store.save() re-checks
+        the token and writes in the SAME server-side step, because a lease can
+        lapse between any client-side check and the write that follows it.
         """
         pending = self._txn.session
         if pending is None:
@@ -346,7 +351,12 @@ class LivenessSessionService:
                 "discarding this worker's copy rather than overwriting whichever "
                 "worker holds the session now", session_id)
             return False
-        self._redis_store.save(session_id, pending)
+        if not self._redis_store.save(session_id, pending):
+            logger.error(
+                "Liveness session %s: lease lapsed between the renew and the "
+                "write; the fenced save rejected this worker's copy rather than "
+                "reverting whichever worker holds the session now", session_id)
+            return False
         return True
 
     def _acquire_redis_lock(self, session_id: str) -> bool:

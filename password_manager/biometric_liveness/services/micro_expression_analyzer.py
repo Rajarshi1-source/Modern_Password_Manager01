@@ -71,10 +71,20 @@ class MicroExpressionAnalyzer:
     # identical data whichever backend the session lives in.
     AU_HISTORY_FRAMES = 512
 
-    # AU45 intensity above which a frame counts as a blink. Named so tests can
+    # AU45 intensity above which a frame counts as eyes-SHUT. Named so tests can
     # seed the sticky flag from the same rule observe() applies, instead of
     # duplicating the literal and silently drifting if it is ever retuned.
     BLINK_AU45_THRESHOLD = 0.5
+    # ...and below which they count as clearly OPEN. A blink is only recorded on
+    # an open->shut TRANSITION, so a still image of a face with closed eyes
+    # cannot earn the blink half of the expression score: it never presents an
+    # open frame, so there is no transition to observe. Scoring shut-ness alone
+    # would hand a static photo 0.5 while the docstring below claims a photo
+    # yields a "flat, blink-free AU track" -- exactly the kind of unearned
+    # signal this feature is not allowed to fabricate. The gap between the two
+    # thresholds is hysteresis, so per-frame landmark noise cannot manufacture a
+    # transition on a genuinely static face.
+    BLINK_OPEN_AU45_MAX = 0.2
 
     TRACKED_AUS: ClassVar[Dict[int, str]] = {
         1: 'Inner Brow Raiser',
@@ -139,6 +149,9 @@ class MicroExpressionAnalyzer:
         # erase a blink observed earlier in the session or shorten the frame
         # count -- that would score the same session differently per backend.
         self._blinked: bool = False
+        # Whether an OPEN-eye frame has been seen yet; the other half of the
+        # open->shut transition that _blinked requires (see BLINK_OPEN_AU45_MAX).
+        self._eyes_open_seen: bool = False
         self._au_frames_seen: int = 0
 
         logger.info("MicroExpressionAnalyzer initialized")
@@ -431,7 +444,12 @@ class MicroExpressionAnalyzer:
             self._prev_landmarks = np.asarray(landmarks)
             # Sticky derived facts (survive history truncation across a hand-off).
             self._au_frames_seen += 1
-            if aus.get(45, 0.0) > self.BLINK_AU45_THRESHOLD:
+            au45 = aus.get(45, 0.0)
+            if au45 < self.BLINK_OPEN_AU45_MAX:
+                self._eyes_open_seen = True
+            elif au45 > self.BLINK_AU45_THRESHOLD and self._eyes_open_seen:
+                # Shut, and we have seen this face open: a real transition, not
+                # a photograph of someone with their eyes closed.
                 self._blinked = True
         return aus
 
@@ -445,10 +463,11 @@ class MicroExpressionAnalyzer:
         Returns None -- so the modality is EXCLUDED, never defaulted to a passing
         value -- when no real landmark source is loaded or too few frames were
         observed. Otherwise scores temporal dynamics that a live face produces
-        and a static photo/screen cannot: at least one blink, and natural
-        variation in the brow/mouth AUs over the session. This is the real
-        liveness signal (a photo yields a flat, blink-free AU track), robust to
-        exact per-AU calibration.
+        and a static photo/screen cannot: at least one open->shut blink
+        TRANSITION, and natural variation in the brow/mouth AUs over the
+        session. This is the real liveness signal (a photo yields a flat AU
+        track with no transition -- including a photo of closed eyes, which
+        shut-ness alone would have scored), robust to exact per-AU calibration.
         """
         if not self.has_real_landmark_source():
             return None
@@ -495,6 +514,9 @@ class MicroExpressionAnalyzer:
             # Derived from the FULL history, so window truncation cannot rewrite
             # the blink evidence or the frame count on the far side of a hand-off.
             'blinked': self._blinked,
+            # Half of an in-flight transition: without it, a hand-off between
+            # the open frame and the shut one would lose the blink.
+            'eyes_open_seen': self._eyes_open_seen,
             'au_frames_seen': self._au_frames_seen,
             # _prev_landmarks is deliberately NOT snapshotted. It is a hook for a
             # future temporal AU, but nothing consumes it today --
@@ -508,13 +530,28 @@ class MicroExpressionAnalyzer:
     def restore_state(self, state: Dict) -> None:
         """Rehydrate expression accumulators produced by snapshot_state."""
         state = state or {}
-        self.au_history = deque(
-            ({int(k): float(v) for k, v in a.items()}
-             for a in state.get('au_history', [])),
-            maxlen=self.AU_HISTORY_FRAMES)
-        self.au_timestamps = deque(
-            state.get('au_timestamps', []), maxlen=self.AU_HISTORY_FRAMES)
+        # Tolerant of malformed/older entries, matching
+        # GazeTrackingService.restore_state: a rolling deploy can put two code
+        # versions on the same Redis, and the AU track is a soft accumulator, so
+        # skipping a bad frame beats 500-ing the request from deep inside
+        # deserialize_session. The container is checked too -- a non-list would
+        # otherwise raise from the comprehension itself, outside any guard.
+        raw_history = state.get('au_history')
+        if not isinstance(raw_history, (list, tuple)):
+            raw_history = []
+        restored = []
+        for a in raw_history:
+            try:
+                restored.append({int(k): float(v) for k, v in a.items()})
+            except (AttributeError, TypeError, ValueError):
+                continue
+        self.au_history = deque(restored, maxlen=self.AU_HISTORY_FRAMES)
+        raw_ts = state.get('au_timestamps')
+        if not isinstance(raw_ts, (list, tuple)):
+            raw_ts = []
+        self.au_timestamps = deque(raw_ts, maxlen=self.AU_HISTORY_FRAMES)
         self._blinked = bool(state.get('blinked', False))
+        self._eyes_open_seen = bool(state.get('eyes_open_seen', False))
         # Fall back to the restored history length for snapshots written before
         # this field existed (rolling deploy).
         self._au_frames_seen = int(state.get('au_frames_seen', len(self.au_history)))

@@ -730,7 +730,13 @@ class GazeTrackingService:
         degrading it beats 500-ing the request.
         """
         restored = []
-        for p in (state or {}).get('gaze_history', []):
+        # Guard the CONTAINER as well as each entry: a non-iterable (or a dict
+        # from a differently-shaped writer) would raise from the `for` itself,
+        # outside the per-entry guard below, and fail the whole request.
+        raw = (state or {}).get('gaze_history')
+        if not isinstance(raw, (list, tuple)):
+            raw = []
+        for p in raw:
             try:
                 restored.append(GazePoint(
                     x=p['x'], y=p['y'], timestamp_ms=p['timestamp_ms'],

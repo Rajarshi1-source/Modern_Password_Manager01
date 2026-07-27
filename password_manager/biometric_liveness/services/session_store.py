@@ -51,6 +51,50 @@ end
 return 0
 """
 
+# The whole session write, FENCED on the lock token and atomic.
+#
+# Checking ownership from the client and then writing is check-then-act: the
+# lease can lapse between the two, another worker can take the session and
+# persist newer state, and this worker's whole-blob write then silently reverts
+# it -- losing frames, the answered-challenge replay guard, detector
+# accumulators, or a completed verdict. Renewing first does not fix it; it only
+# narrows the window. The compare and every write therefore happen in one
+# server-side step, exactly as release/renew already do.
+#
+# It also collapses what used to be 5-6 sequential round trips (blob, owner,
+# two ZADDs, two PEXPIREs) into one, on a path that runs per frame.
+#
+# KEYS: 1 lock, 2 blob, 3 owner, 4 global live index, [5 per-user live index]
+# ARGV: 1 token ('' = unfenced, for the create path which holds the global
+#       create-lock and no per-session lease), 2 blob, 3 is_live ('1'/'0'),
+#       4 retention seconds, 5 retention ms, 6 deadline score, 7 session id,
+#       8 owner user id ('' = unowned)
+_SAVE_LUA = """
+if ARGV[1] ~= '' and redis.call('get', KEYS[1]) ~= ARGV[1] then
+    return 0
+end
+if ARGV[3] == '1' then
+    redis.call('set', KEYS[2], ARGV[2], 'EX', ARGV[4])
+    if ARGV[8] ~= '' then
+        redis.call('set', KEYS[3], ARGV[8], 'EX', ARGV[4])
+    end
+    redis.call('zadd', KEYS[4], ARGV[6], ARGV[7])
+    redis.call('pexpire', KEYS[4], ARGV[5])
+    if KEYS[5] then
+        redis.call('zadd', KEYS[5], ARGV[6], ARGV[7])
+        redis.call('pexpire', KEYS[5], ARGV[5])
+    end
+else
+    redis.call('set', KEYS[2], ARGV[2], 'KEEPTTL')
+    redis.call('expire', KEYS[2], ARGV[4], 'NX')
+    redis.call('zrem', KEYS[4], ARGV[7])
+    if KEYS[5] then
+        redis.call('zrem', KEYS[5], ARGV[7])
+    end
+end
+return 1
+"""
+
 
 # --------------------------------------------------------------------------- #
 # Dataclass (de)serialization
@@ -418,6 +462,7 @@ class RedisSessionStore:
         # automatic EVAL fallback, so this costs no round trip at construction.
         self._release_script = client.register_script(_RELEASE_LUA)
         self._renew_script = client.register_script(_RENEW_LUA)
+        self._save_script = client.register_script(_SAVE_LUA)
 
     # -- session read/write ------------------------------------------------- #
 
@@ -439,36 +484,57 @@ class RedisSessionStore:
             and session['expires_at'] > timezone.now()
         )
 
-    def save(self, session_id: str, session: Dict) -> None:
+    def save(self, session_id: str, session: Dict) -> bool:
+        """
+        Persist the session, but ONLY if this thread still holds its lease.
+
+        Returns False when the lease was lost, meaning nothing was written and
+        the caller's in-hand copy is stale (another worker owns the session and
+        may already have advanced it). The create path holds the global
+        create-lock instead of a per-session lease, so it saves unfenced.
+
+        What each branch writes, unchanged from when this was six client-side
+        commands -- see _SAVE_LUA for why it is now one:
+          * live: refresh the retention TTL so an active session never expires
+            mid-flight, and write the tiny owner side key. The per-frame
+            authorization check (views._owns_in_memory_session -> owner_of)
+            would otherwise GET and json-parse the ENTIRE session blob on every
+            frame, on top of the full load process_frame already does under the
+            lock -- two fetches and two parses of a payload that grows all
+            session.
+          * terminal (or past-deadline): persist the frozen verdict but do NOT
+            renew the retention window -- KEEPTTL lets it count down from when
+            the session was last live, so a client polling complete cannot keep
+            a terminal blob resident indefinitely by re-completing. KEEPTTL only
+            PRESERVES an existing TTL though; if the key had none -- it
+            expired+evicted between load and this save, or a first save that is
+            already terminal -- the blob would become PERSISTENT forever,
+            breaking the retention bound. EXPIRE ... NX backfills retention
+            without disturbing an existing countdown (Redis 7+).
+        """
         blob = serialize_session(session)
         is_live = self._is_live(session)
-        if is_live:
-            # Refresh the retention TTL while live so an active session never
-            # expires mid-flight.
-            self.redis.set(self._KEY + session_id, blob, ex=self.retention_seconds)
-            # Tiny side key carrying just the owner. The per-frame authorization
-            # check (views._owns_in_memory_session -> owner_of) would otherwise
-            # GET and json-parse the ENTIRE session blob on every frame, on top
-            # of the full load process_frame already does under the lock -- two
-            # fetches and two parses of a payload that grows all session.
-            uid = session.get('user_id')
-            if uid is not None:
-                self.redis.set(
-                    self._OWNER + session_id, uid, ex=self.retention_seconds)
-        else:
-            # Terminal (or past-deadline): persist the frozen verdict but do NOT
-            # renew the retention window -- keepttl lets it count down from when
-            # the session was last live, so a client polling complete cannot keep
-            # a terminal blob resident indefinitely by re-completing.
-            self.redis.set(self._KEY + session_id, blob, keepttl=True)
-            # KEEPTTL only PRESERVES an existing TTL; if the key had none -- it
-            # expired+evicted between load and this save, or a first save that is
-            # already terminal -- the blob would become PERSISTENT forever,
-            # breaking the retention bound. Backfill retention with NX so an
-            # existing countdown is untouched (no-op) but a TTL-less terminal
-            # blob still expires (Redis 7+ EXPIRE NX).
-            self.redis.expire(self._KEY + session_id, self.retention_seconds, nx=True)
-        self._index_live(session_id, session, is_live)
+        uid = session.get('user_id')
+        keys = [self._LOCK + session_id, self._KEY + session_id,
+                self._OWNER + session_id, self._LIVE]
+        # Defensive: create_session always stamps user_id, but an unowned
+        # session must not create a 'liveness:ulive:None' bucket -- no
+        # count_live(user_id) would ever prune it by user.
+        if uid is not None:
+            keys.append(self._ULIVE + str(uid))
+        # The score IS the deadline, which is what lets count_live drop members
+        # that expired without anyone saving them again (see the class
+        # docstring). Bounding both index keys by the retention window cannot
+        # expire a still-live member early: retention > SESSION_TIMEOUT_SECONDS
+        # and the refresh happens on the LATEST live save, so a key always
+        # outlives the deadline of every id still indexed.
+        deadline = session['expires_at'].timestamp() if is_live else 0
+        return bool(self._save_script(
+            keys=keys,
+            args=[self._tokens.get(session_id, ''), blob,
+                  '1' if is_live else '0', self.retention_seconds,
+                  self.retention_seconds * 1000, deadline, session_id,
+                  '' if uid is None else uid]))
 
     def delete(self, session_id: str) -> None:
         # Read the owner rather than caching it per thread: delete() is the rare
@@ -539,39 +605,6 @@ class RedisSessionStore:
             'current_challenge_idx': data.get('current_challenge_idx', 0),
             'expires_at': _undt(data.get('expires_at')),
         }
-
-    def _index_live(self, session_id: str, session: Dict, is_live: bool) -> None:
-        """
-        Keep the live indexes in sync with the session's current liveness.
-
-        The score IS the deadline, which is what lets count_live drop members
-        that expired without anyone saving them again (see the class docstring).
-        """
-        uid = session.get('user_id')
-        # Defensive: create_session always stamps user_id, but an unowned
-        # session must not create a 'liveness:ulive:None' bucket -- no
-        # count_live(user_id) would ever prune it by user.
-        ukey = self._ULIVE + str(uid) if uid is not None else None
-        if is_live:
-            deadline = session['expires_at'].timestamp()
-            self.redis.zadd(self._LIVE, {session_id: deadline})
-            # Bound BOTH index keys' lifetime to the retention window. Without
-            # this the global ZSET has no TTL of its own: its members are only
-            # ever dropped by count_live's score prune, which runs under the
-            # create lock -- so a deployment that stops creating sessions leaves
-            # the key resident forever. ZADD does not disturb an existing TTL,
-            # hence the explicit refresh on every live save. This cannot expire a
-            # still-live member early: retention > SESSION_TIMEOUT_SECONDS and
-            # the refresh happens on the LATEST live save, so the key always
-            # outlives the deadline of every id still indexed.
-            self.redis.pexpire(self._LIVE, self.retention_seconds * 1000)
-            if ukey:
-                self.redis.zadd(ukey, {session_id: deadline})
-                self.redis.pexpire(ukey, self.retention_seconds * 1000)
-        else:
-            self.redis.zrem(self._LIVE, session_id)
-            if ukey:
-                self.redis.zrem(ukey, session_id)
 
     # -- per-session lock (SET NX PX + atomic owned release/renew) ---------- #
 
