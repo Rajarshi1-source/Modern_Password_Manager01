@@ -221,6 +221,17 @@ class BiometricLivenessService {
       if (this._onError) this._onError('WebSocket connection error');
       return;
     }
+    // Only one op is tracked at a time, so sending a second while the first is
+    // still unanswered abandons it: its retry timer will find _pendingOneShot
+    // changed and stop. That is acceptable ONLY because the replacement is
+    // itself tracked and escalates on failure -- in practice `complete`
+    // superseding an answered-and-conflicted `challenge_response`, which is the
+    // user moving on. Do NOT send a one-shot AFTER `complete`: evicting the
+    // complete would leave the UI in 'processing' with nothing to re-drive it.
+    if (this._pendingOneShot) {
+      console.warn('Liveness: abandoning unanswered',
+                   this._pendingOneShot.payload.type, 'for', payload.type);
+    }
     this._pendingOneShot = { payload, attempts: 0 };
     this.ws.send(JSON.stringify(payload));
   }
@@ -252,7 +263,9 @@ class BiometricLivenessService {
     pending.attempts += 1;
     const delay = ONE_SHOT_RETRY_BASE_MS * 2 ** (pending.attempts - 1);
     setTimeout(() => {
-      // Superseded (already answered) while backing off -- nothing to do.
+      // No longer the tracked op: answered, disconnected, or replaced by a
+      // later one-shot (which _sendOneShot logs and which is itself tracked).
+      // Nothing to re-drive in any of those cases.
       if (this._pendingOneShot !== pending) return;
       if (!(this.ws && this.ws.readyState === WebSocket.OPEN)) {
         // Socket died during the backoff. Same reasoning as _sendOneShot:

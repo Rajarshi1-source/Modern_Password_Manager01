@@ -317,6 +317,37 @@ describe('biometricLivenessService message routing', () => {
         }
     });
 
+    it('a replacement one-shot stays tracked after evicting the previous op', async () => {
+        // Only one op is tracked, so `complete` abandons an unanswered
+        // challenge_response. That is tolerable only while the replacement is
+        // itself retried/escalated -- otherwise eviction is another silent drop.
+        vi.useFakeTimers();
+        try {
+            const onError = vi.fn();
+            const ws = await connect({
+                onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+            });
+            ws.send = vi.fn();
+
+            livenessService.submitChallengeResponse({ sequence: 0 });
+            livenessService.completeSession();          // evicts the response
+
+            ws.onmessage({
+                data: JSON.stringify({
+                    type: 'error', message: 'session_busy', retryable: true, op: 'complete',
+                }),
+            });
+            await vi.advanceTimersByTimeAsync(200);
+
+            // challenge_response, complete, then the RETRIED complete.
+            expect(ws.send).toHaveBeenCalledTimes(3);
+            expect(JSON.parse(ws.send.mock.calls[2][0])).toEqual({ type: 'complete' });
+            expect(onError).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('still routes a non-retryable error to onError', async () => {
         const onError = vi.fn();
         const ws = await connect({
