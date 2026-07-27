@@ -2179,7 +2179,11 @@ def _liveness_session_redis_url():
     FLUSHDB or an eviction policy tuned for cache data (allkeys-lru) can drop
     in-flight verification sessions -- a silent failure that looks like users
     randomly losing their session.
+
+    Deriving is only possible for redis://+rediss://, where the db index IS the
+    URL path. Any other scheme must be configured explicitly (see below).
     """
+    from django.core.exceptions import ImproperlyConfigured
     explicit = os.environ.get('LIVENESS_SESSION_REDIS_URL')
     if explicit:
         return explicit
@@ -2188,6 +2192,24 @@ def _liveness_session_redis_url():
         return f'redis://127.0.0.1:6379/{_LIVENESS_SESSION_DB}'
     from urllib.parse import urlsplit, urlunsplit
     parts = urlsplit(shared)
+    if parts.scheme not in ('redis', 'rediss'):
+        # Only a TCP redis URL carries the db index in its PATH. A unix:// URL
+        # carries the SOCKET PATH there, so rewriting it would turn
+        # unix:///var/run/redis/redis.sock into unix:///3 -- a socket that does
+        # not exist, which redis-py accepts at from_url() and only fails on the
+        # first command, i.e. mid-verification for a real user. There is nothing
+        # safe to derive, so demand the explicit URL -- but ONLY when the Redis
+        # backend is actually selected: settings are imported by every
+        # deployment, and a memory-store box must not fail to boot over a URL it
+        # never reads.
+        if _liveness_session_store() == 'redis':
+            raise ImproperlyConfigured(
+                'LIVENESS_SESSION_REDIS_URL must be set explicitly when '
+                f"REDIS_URL uses the '{parts.scheme}' scheme: the liveness "
+                'session store cannot derive its own logical database from it, '
+                'and sharing the cache/broker db risks a FLUSHDB or an LRU '
+                'eviction dropping in-flight verifications.')
+        return None
     return urlunsplit(parts._replace(path=f'/{_LIVENESS_SESSION_DB}'))
 
 

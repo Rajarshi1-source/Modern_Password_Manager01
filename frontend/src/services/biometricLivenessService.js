@@ -263,8 +263,11 @@ class BiometricLivenessService {
     if (pending.attempts >= ONE_SHOT_RETRY_LIMIT) {
       // Sustained contention is no longer transient; surfacing it is better
       // than leaving the caller waiting on a result that will never arrive.
+      // Pass PROSE, not data.message: LivenessVerification renders whatever
+      // arrives here straight into the error screen, and only session_busy
+      // reaches this branch, so the wire code would read as 'session_busy'.
       this._pendingOneShot = null;
-      if (this._onError) this._onError(data.message);
+      if (this._onError) this._onError('Verification is busy; please try again');
       return;
     }
     pending.attempts += 1;
