@@ -284,7 +284,8 @@ describe('LivenessVerification challenge orchestration', () => {
 
         // A WS-level error terminates the session -> capture must stop, not keep
         // streaming behind the "Verification Error" screen.
-        act(() => { livenessService.__callbacks.onError('internal_error'); });
+        // The prose the service delivers now; it never emits raw wire codes.
+        act(() => { livenessService.__callbacks.onError('Verification failed unexpectedly; please try again'); });
         expect(oximeter.disconnect).toHaveBeenCalled();
         expect(CameraUtils.stopCamera).toHaveBeenCalled();
     });
@@ -296,11 +297,14 @@ describe('LivenessVerification challenge orchestration', () => {
         await screen.findByText(/Pulse oximeter connected/i);
 
         // Session errors (oximeter torn down, ref cleared, but status was stale).
-        act(() => { livenessService.__callbacks.onError('internal_error'); });
+        // The prose the service delivers now; it never emits raw wire codes.
+        act(() => { livenessService.__callbacks.onError('Verification failed unexpectedly; please try again'); });
 
         // Retry re-inits: the panel must offer the Connect button again, not a
         // stale "connected" that hides it and silently drops hardware SpO2.
-        fireEvent.click(await screen.findByText(/Try Again/i));
+        // By role: the error copy itself ends in "please try again", so a bare
+        // text query now matches the message as well as the button.
+        fireEvent.click(await screen.findByRole('button', { name: /Try Again/i }));
         expect((await screen.findAllByText(/Connect pulse oximeter/i)).length).toBeGreaterThan(0);
         expect(screen.queryByText(/Pulse oximeter connected/i)).toBeNull();
     });
