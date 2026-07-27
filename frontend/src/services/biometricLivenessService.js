@@ -22,6 +22,37 @@ const API_BASE = '/api/liveness';
 const ONE_SHOT_RETRY_LIMIT = 4;
 const ONE_SHOT_RETRY_BASE_MS = 150;
 
+// A server `error` frame's `message` arrives in one of two shapes: a snake_case
+// WIRE CODE minted by the consumer for something the user must not read
+// verbatim ('internal_error', 'invalid_session_state'), or already-human prose
+// from the service/decode layer ('Session expired', 'Invalid frame encoding',
+// 'Missing frame data'). LivenessVerification renders whatever reaches onError
+// straight into its error screen, so codes MUST be translated -- and prose must
+// NOT be, or a specific, actionable message would be flattened into a vague one.
+const ERROR_COPY = {
+  session_busy: 'Verification is busy; please try again',
+  internal_error: 'Verification failed unexpectedly; please try again',
+  invalid_session_state:
+    'This verification session is no longer active; please start again',
+};
+const GENERIC_ERROR = 'Verification failed; please try again';
+// Every wire code is a bare lowercase identifier; every prose message the server
+// sends carries spaces and a capital. Shape-testing the UNMAPPED ones is the
+// point of this guard, more than the map itself: a code added server-side after
+// this client shipped (say 'session_revoked') would otherwise print raw on the
+// error screen, which is exactly the bug being fixed.
+const WIRE_CODE_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+
+function humanizeError(message) {
+  if (typeof message !== 'string' || !message) return GENERIC_ERROR;
+  // hasOwnProperty, not truthiness: a message of 'constructor' would otherwise
+  // resolve off the prototype and hand a function to the error screen.
+  if (Object.prototype.hasOwnProperty.call(ERROR_COPY, message)) {
+    return ERROR_COPY[message];
+  }
+  return WIRE_CODE_RE.test(message) ? GENERIC_ERROR : message;
+}
+
 class BiometricLivenessService {
   constructor() {
     this.ws = null;
@@ -170,12 +201,15 @@ class BiometricLivenessService {
         // retry budget on four identical refusals and then reports a terminal
         // failure, when the correct behaviour is to wait for the user.
         if (data.retryable) {
+          // Raw code by design: onRetryableError is a programmatic hook (null
+          // by default, never wired to the error screen), so a caller can
+          // switch on the code. Only onError feeds rendered copy.
           if (this.onRetryableError) this.onRetryableError(data.message);
           if (data.message === 'session_busy') {
             this._retryPendingOneShot(data);
           }
         } else if (onError) {
-          onError(data.message);
+          onError(humanizeError(data.message));
         }
       }
     };
@@ -263,11 +297,11 @@ class BiometricLivenessService {
     if (pending.attempts >= ONE_SHOT_RETRY_LIMIT) {
       // Sustained contention is no longer transient; surfacing it is better
       // than leaving the caller waiting on a result that will never arrive.
-      // Pass PROSE, not data.message: LivenessVerification renders whatever
-      // arrives here straight into the error screen, and only session_busy
-      // reaches this branch, so the wire code would read as 'session_busy'.
+      // Through humanizeError, like every other rendered error: only
+      // session_busy reaches this branch, so passing data.message straight
+      // through would put the wire code on the user's error screen.
       this._pendingOneShot = null;
-      if (this._onError) this._onError('Verification is busy; please try again');
+      if (this._onError) this._onError(humanizeError(data.message));
       return;
     }
     pending.attempts += 1;

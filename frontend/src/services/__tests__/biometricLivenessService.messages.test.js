@@ -393,7 +393,41 @@ describe('biometricLivenessService message routing', () => {
             data: JSON.stringify({ type: 'error', message: 'internal_error' }),
         });
 
-        expect(onError).toHaveBeenCalledWith('internal_error');
+        // Translated, not raw: this string is rendered verbatim on the error
+        // screen, so the wire code must never reach it.
+        expect(onError).toHaveBeenCalledWith(
+            'Verification failed unexpectedly; please try again');
+    });
+
+    it('passes server prose through untranslated', async () => {
+        // The service and decode layers already send human copy ('Session
+        // expired', 'Invalid frame encoding'). Flattening those into the
+        // generic string would throw away the specific, actionable reason.
+        const onError = vi.fn();
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+        });
+
+        ws.onmessage({
+            data: JSON.stringify({ type: 'error', message: 'Session expired' }),
+        });
+
+        expect(onError).toHaveBeenCalledWith('Session expired');
+    });
+
+    it('falls back to generic copy for an unmapped wire code', async () => {
+        // The guard that matters: a code minted server-side after this client
+        // shipped must not print raw on the error screen.
+        const onError = vi.fn();
+        const ws = await connect({
+            onFrame: vi.fn(), onComplete: vi.fn(), onError, onChallenge: vi.fn(),
+        });
+
+        ws.onmessage({
+            data: JSON.stringify({ type: 'error', message: 'session_revoked' }),
+        });
+
+        expect(onError).toHaveBeenCalledWith('Verification failed; please try again');
     });
 
     it('does not throw when a challenge_result arrives and no handler was provided', async () => {
