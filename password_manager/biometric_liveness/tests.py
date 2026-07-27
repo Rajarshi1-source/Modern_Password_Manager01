@@ -2651,19 +2651,26 @@ class ExpressionGatingTests(TestCase):
         self.analyzer._au_frames_seen = len(history)
         # Same rule observe() applies, read from the analyzer rather than
         # re-typed here, so a retune cannot leave these tests asserting the old
-        # rule instead of failing. A blink needs an open->shut TRANSITION, so
-        # shut-ness alone (a closed-eye photo) must not set the flag.
+        # rule instead of failing. A blink needs an open->shut TRANSITION inside
+        # BLINK_MAX_TRANSITION_MS, so neither shut-ness alone (a closed-eye
+        # photo) nor an open frame paired with a much later shut one (two
+        # stills) sets the flag. Timestamps here are the 1ms-apart ones assigned
+        # above, so seeded transitions are contiguous unless a test says
+        # otherwise.
         blinked = False
-        eyes_open_seen = False
-        for a in history:
+        last_open_ms = None
+        for i, a in enumerate(history):
             au45 = a.get(45, 0.0)
             if au45 < MicroExpressionAnalyzer.BLINK_OPEN_AU45_MAX:
-                eyes_open_seen = True
-            elif (au45 > MicroExpressionAnalyzer.BLINK_AU45_THRESHOLD
-                    and eyes_open_seen):
-                blinked = True
+                last_open_ms = float(i)
+            elif au45 > MicroExpressionAnalyzer.BLINK_AU45_THRESHOLD:
+                if (last_open_ms is not None
+                        and 0 <= float(i) - last_open_ms
+                        <= MicroExpressionAnalyzer.BLINK_MAX_TRANSITION_MS):
+                    blinked = True
+                last_open_ms = None
         self.analyzer._blinked = blinked
-        self.analyzer._eyes_open_seen = eyes_open_seen
+        self.analyzer._last_open_ms = last_open_ms
 
     def test_observe_bounds_the_au_history_it_appends(self):
         """The cap has to live on the APPEND path, not just the snapshot.
@@ -2760,8 +2767,45 @@ class ExpressionGatingTests(TestCase):
         for i, au45 in enumerate([0.0] * 5 + [1.0] * 2 + [0.0] * 5):
             with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
                               return_value={45: au45, 12: 0.0}):
-                analyzer.observe(np.zeros((478, 3)), float(i))
+                analyzer.observe(np.zeros((478, 3)), 33.0 * i)
         self.assertTrue(analyzer._blinked)
+
+    def test_two_unrelated_stills_do_not_make_a_blink(self):
+        """An open still and a MUCH later shut still are not one eyelid movement.
+
+        Sticky open-evidence let a two-image replay -- show an open-eyed photo,
+        then a closed-eyed one -- collect the full blink component without any
+        continuous transition. The same shape covers tracking loss and a swapped
+        face. Open evidence therefore expires: only a shut frame arriving within
+        BLINK_MAX_TRANSITION_MS of an open one closes a blink.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        gap = MicroExpressionAnalyzer.BLINK_MAX_TRANSITION_MS * 10
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 0.0, 12: 0.0}):
+            for i in range(15):                       # still #1: eyes open
+                analyzer.observe(np.zeros((478, 3)), 33.0 * i)
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 1.0, 12: 0.3}):
+            for i in range(15):                       # still #2: eyes shut
+                analyzer.observe(np.zeros((478, 3)), gap + 33.0 * i)
+        self.assertFalse(analyzer._blinked)
+        with patch.object(MicroExpressionAnalyzer, 'has_real_landmark_source',
+                          return_value=True):
+            score = analyzer.get_session_expression_score()
+        # The blink half now contributes NOTHING to this replay (0.5 * 0.0).
+        #
+        # The remaining 0.5 is CHARACTERIZATION, NOT ENDORSEMENT: the AU-motion
+        # half still reads two distinct stills as "natural variation" and
+        # saturates, because a step between two constant tracks has far more
+        # variance than the 0.0025 that term treats as clearly live. So a
+        # two-image replay still scores 0.5 on this modality by another route.
+        # Not fixed here: telling step variation from gradual facial motion
+        # needs recorded faces to calibrate against, exactly like the AU2/AU4
+        # brow bands, and guessing a constant would be fabricated validation.
+        # Pinned so it cannot be silently inherited when a FACE_LANDMARKER_MODEL
+        # is provisioned -- see the model-provisioning checklist.
+        self.assertEqual(score, 0.5)
 
     def test_static_track_scores_low(self):
         # A photo: no blink, flat AU track -> near-zero score, cannot gate.
