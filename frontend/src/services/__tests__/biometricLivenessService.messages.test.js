@@ -165,7 +165,9 @@ describe('biometricLivenessService message routing', () => {
                 await vi.advanceTimersByTimeAsync(5_000);
             }
 
-            expect(onError).toHaveBeenCalledWith('session_busy');
+            // Prose, not the wire code: this string is rendered verbatim on the
+            // error screen.
+            expect(onError).toHaveBeenCalledWith('Verification is busy; please try again');
         } finally {
             vi.useRealTimers();
         }

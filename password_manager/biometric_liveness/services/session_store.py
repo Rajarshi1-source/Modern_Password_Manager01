@@ -404,11 +404,13 @@ class RedisSessionStore:
     _CREATE_LOCK = 'liveness:clock'
 
     def __init__(self, client, build_services: Callable[[], Dict],
-                 retention_seconds: int, lock_ttl_ms: int = 15000):
+                 retention_seconds: int, lock_ttl_ms: int = 15000,
+                 create_lock_ttl_ms: int = 2000):
         self.redis = client
         self._build_services = build_services
         self.retention_seconds = retention_seconds
         self.lock_ttl_ms = lock_ttl_ms
+        self.create_lock_ttl_ms = create_lock_ttl_ms
         # Per-session tokens for the currently-held lock on THIS thread, so
         # release only deletes a lock this call actually owns.
         self._local = threading.local()
@@ -643,8 +645,22 @@ class RedisSessionStore:
         return self.redis.zcard(self._LIVE), self.redis.zcard(ukey)
 
     def acquire_create_lock(self) -> bool:
+        """
+        Take the global create-lock, on a MUCH shorter lease than a session's.
+
+        This is cluster-wide: while it is held, no worker anywhere can create a
+        session. Its critical section is only count_live + save (a handful of
+        Redis commands, no DB write and no detector construction -- those happen
+        outside), so it is a millisecond-scale section, whereas a per-session
+        lease has to cover MediaPipe inference on a loaded box. Reusing the 15s
+        session lease here would let one worker dying mid-create stall ALL
+        creation for 15s -- and since callers spin for only 3s, every one of
+        them would give up with session_busy. A 2s lease keeps that inside the
+        spin window while still leaving ~20x headroom over the section itself.
+        """
         token = uuid.uuid4().hex
-        ok = self.redis.set(self._CREATE_LOCK, token, nx=True, px=self.lock_ttl_ms)
+        ok = self.redis.set(
+            self._CREATE_LOCK, token, nx=True, px=self.create_lock_ttl_ms)
         if ok:
             self._local.create_token = token
         return bool(ok)
