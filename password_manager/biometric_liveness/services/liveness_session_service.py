@@ -870,6 +870,12 @@ class LivenessSessionService:
             results['expression'] = {'action_units': aus}
             if aus:
                 session['expression_au_frames'] += 1
+        else:
+            # No face in this frame. The gap must invalidate any pending
+            # open-eye evidence, otherwise an open frame and a shut frame from
+            # a replayed image either side of the dropout still close a blink
+            # inside the transition window (see note_tracking_loss).
+            svc['expression'].note_tracking_loss()
 
         # Gaze tracking (server-observed). estimate_gaze only returns a point
         # when a real gaze estimator is loaded; that sample -- not any client-

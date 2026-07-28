@@ -176,7 +176,11 @@ class BiometricLivenessService {
       // challenge_response, the server's late challenge_result for the
       // abandoned one would untrack the complete, and its own session_busy
       // would then find nothing pending and merely log, stranding the UI.
-      const ANSWERS = { challenge_result: 'challenge_response', session_complete: 'complete' };
+      // Null-prototype: data.type is server input, and a plain literal would
+      // resolve 'toString' (and friends) to an inherited function, making
+      // `answered` truthy for a type that maps to nothing. Same reason
+      // humanizeError looks its map up with hasOwnProperty.
+      const ANSWERS = { __proto__: null, challenge_result: 'challenge_response', session_complete: 'complete' };
       const answered = ANSWERS[data.type];
       if (answered && this._pendingOneShot
           && this._pendingOneShot.payload.type === answered) {

@@ -305,7 +305,7 @@ class MicroExpressionAnalyzer:
             return abs(pl[1] - pu[1]) / width
         a = ear(self._IDX['eyeA_out'], self._IDX['eyeA_in'],
                 self._IDX['eyeA_up'], self._IDX['eyeA_lo'])
-        b = ear(self._IDX['eyeB_in'], self._IDX['eyeB_out'],
+        b = ear(self._IDX['eyeB_out'], self._IDX['eyeB_in'],
                 self._IDX['eyeB_up'], self._IDX['eyeB_lo'])
         if a is None or b is None:
             return None
@@ -455,6 +455,10 @@ class MicroExpressionAnalyzer:
         temporal AU and remembers the current ones. Returns the per-frame AUs.
         """
         aus = self.extract_action_units(landmarks, self._prev_landmarks)
+        if not aus:
+            # Landmarks that yield no AUs tell us nothing about the eyes, which
+            # is a tracking gap by another name -- same treatment.
+            self.note_tracking_loss()
         if aus:
             self.au_history.append(aus)
             self.au_timestamps.append(float(timestamp_ms))
@@ -478,6 +482,23 @@ class MicroExpressionAnalyzer:
                 # so a long shut run cannot keep retrying against one open one.
                 self._last_open_ms = None
         return aus
+
+    def note_tracking_loss(self) -> None:
+        """
+        Discard pending open-eye evidence because a frame showed no face.
+
+        MUST be called for every frame the detector could not read, or the
+        BLINK_MAX_TRANSITION_MS window alone is not enough: an open frame, a
+        frame where tracking is lost, and a shut frame from a replayed image or
+        a different subject can all land inside 400ms, and the shut one would
+        close a "blink" that was never one continuous eyelid movement. Real
+        eyelid closure does not lose the face, so a detection GAP between the
+        open and shut observations is evidence AGAINST a blink, not neutral.
+
+        Still does not prove the two frames show the SAME face -- nothing here
+        compares identity (see BLINK_MAX_TRANSITION_MS).
+        """
+        self._last_open_ms = None
 
     # Frames needed before the expression modality can score at all.
     MIN_EXPRESSION_FRAMES = 15

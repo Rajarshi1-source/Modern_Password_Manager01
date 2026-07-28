@@ -536,12 +536,31 @@ class PulseOximetryService:
         }
 
     def restore_state(self, state: Dict) -> None:
-        """Rehydrate rPPG buffers/hardware SpO2 produced by snapshot_state."""
+        """
+        Rehydrate rPPG buffers/hardware SpO2 produced by snapshot_state.
+
+        Tolerant of malformed/older shapes for the same reason as
+        GazeTrackingService.restore_state and MicroExpressionAnalyzer's: a
+        rolling deploy can put two code versions on one Redis, and these are
+        soft accumulators, so degrading one beats raising TypeError out of
+        deque() and failing the whole deserialize_session -- i.e. the request,
+        not just the pulse buffers.
+        """
         state = state or {}
-        self.rgb_buffer = deque(
-            (tuple(v) for v in state.get('rgb_buffer', [])), maxlen=self.window_size)
-        self.ppg_buffer = deque(state.get('ppg_buffer', []), maxlen=self.window_size)
-        self.timestamps = deque(state.get('timestamps', []), maxlen=self.window_size)
+
+        def _seq(key):
+            raw = state.get(key)
+            return raw if isinstance(raw, (list, tuple)) else []
+
+        rgb = []
+        for v in _seq('rgb_buffer'):
+            try:
+                rgb.append(tuple(v))
+            except TypeError:
+                continue
+        self.rgb_buffer = deque(rgb, maxlen=self.window_size)
+        self.ppg_buffer = deque(_seq('ppg_buffer'), maxlen=self.window_size)
+        self.timestamps = deque(_seq('timestamps'), maxlen=self.window_size)
         self.frame_count = state.get('frame_count', 0)
         self.current_hr = state.get('current_hr')
         self.current_spo2 = state.get('current_spo2')

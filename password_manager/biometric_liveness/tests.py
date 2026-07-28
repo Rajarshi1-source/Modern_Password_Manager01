@@ -2807,6 +2807,42 @@ class ExpressionGatingTests(TestCase):
         # is provisioned -- see the model-provisioning checklist.
         self.assertEqual(score, 0.5)
 
+    def test_tracking_loss_discards_pending_open_eye_evidence(self):
+        """A dropout between the open and shut frames is not a blink.
+
+        The 400ms window alone was bypassable: an open frame, a frame where the
+        detector finds no face, and a shut frame from a replayed image can all
+        land inside it, and the shut one closed a "blink" that was never one
+        continuous eyelid movement. Real closure does not lose the face, so the
+        gap is evidence AGAINST a blink.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 0.0, 12: 0.0}):
+            analyzer.observe(np.zeros((478, 3)), 1000.0)      # eyes open
+        self.assertIsNotNone(analyzer._last_open_ms)
+        analyzer.note_tracking_loss()                          # no face
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 1.0, 12: 0.0}):
+            analyzer.observe(np.zeros((478, 3)), 1200.0)      # shut, <400ms
+        self.assertFalse(analyzer._blinked)
+
+    def test_process_frame_reports_tracking_loss_to_the_analyzer(self):
+        """The guard is worthless unless the frame path actually calls it."""
+        from .services.liveness_session_service import LivenessSessionService
+        user = User.objects.create_user(
+            username='trackloss', email='tl@example.com', password='pw')
+        svc = LivenessSessionService()
+        sid = svc.create_session(user_id=user.id)['session_id']
+        analyzer = svc._sessions_mem[sid]['services']['expression']
+        analyzer._last_open_ms = 1000.0
+        with patch.object(MicroExpressionAnalyzer, 'extract_landmarks',
+                          return_value=None):
+            # A frame the landmarker cannot read must clear the pending
+            # open-eye evidence, not leave it for a later shut frame.
+            svc.process_frame(sid, np.full((64, 64, 3), 120, dtype=np.uint8), 1.0)
+        self.assertIsNone(analyzer._last_open_ms)
+
     def test_static_track_scores_low(self):
         # A photo: no blink, flat AU track -> near-zero score, cannot gate.
         self._seed([{45: 0.0, 12: 0.0, 1: 0.0} for _ in range(30)])
