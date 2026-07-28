@@ -62,14 +62,19 @@ test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
     !HARDWARE,
     'Requires a real BLE pulse oximeter and Web Bluetooth; set LIVENESS_BLE_HARDWARE=1 to run.',
   );
-  // Fail loudly rather than "passing" against the public landing page.
-  test.skip(
-    HARDWARE && !AUTH_TOKEN,
-    'Set E2E_AUTH_TOKEN to a real access token: /liveness-verification is behind the auth guard.',
-  );
-
   // Seed the access token useAuth bootstraps from, before any app script runs.
   test.beforeEach(async ({ page }) => {
+    // THROW, don't skip: reaching here means the operator asked for a hardware
+    // run, so a missing token is their error, not an absent capability. A skip
+    // scrolls past unnoticed and looks like the suite ran.
+    if (!AUTH_TOKEN) {
+      throw new Error(
+        'E2E_AUTH_TOKEN is required for a hardware run: /liveness-verification '
+        + 'is behind the auth guard, so without it the run lands on the public '
+        + 'page and never exercises BLE. Use a disposable, short-lived, '
+        + 'least-privileged token (see the header).',
+      );
+    }
     await page.addInitScript((token) => {
       localStorage.setItem('accessToken', token);
     }, AUTH_TOKEN);
