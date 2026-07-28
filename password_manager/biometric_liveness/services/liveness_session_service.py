@@ -41,6 +41,19 @@ class SessionLockError(Exception):
     """
 
 
+class ReentrantSessionCallError(RuntimeError):
+    """
+    A lock-decorated session method invoked another one; the outer txn is lost.
+
+    Deliberately NOT a SessionLockError. That type means "another worker holds
+    this session, try again", and the transports turn it into a retryable 409 --
+    which would tell the client to back off and retry a PROGRAMMING error that
+    can never succeed, while hiding the real defect behind a routine-looking
+    conflict. As a RuntimeError this reaches the generic handler instead: a
+    logged 500, which is what an invariant violation should look like.
+    """
+
+
 class GazeChallengeIncompleteError(ValueError):
     """
     Completion attempted while a required, measurable gaze challenge is unanswered.
@@ -295,7 +308,7 @@ class LivenessSessionService:
         # would deadlock on SET NX anyway; this makes the invariant enforced
         # rather than assumed, so adding one later fails loudly.
         if getattr(self._txn, 'session', None) is not None:
-            raise SessionLockError(
+            raise ReentrantSessionCallError(
                 'Re-entrant locked liveness session call; the outer '
                 'transaction would be lost')
         if not self._acquire_redis_lock(session_id):
@@ -408,7 +421,14 @@ class LivenessSessionService:
                 raise SessionCapacityError('Liveness session capacity reached')
             if user_live >= max_user_sessions:
                 raise SessionCapacityError('User liveness session capacity reached')
-            store.save(session_id, session)
+            # save() returns False when its fence rejected the write. The create
+            # path is unfenced (no per-session lease yet), so this cannot fire
+            # today -- but silently ignoring it would hand back a session_id
+            # whose blob was never stored, and every later frame would 404 from
+            # owner_of/load with nothing pointing at the cause.
+            if not store.save(session_id, session):
+                raise SessionLockError(
+                    'Liveness session store rejected the create write')
         finally:
             store.release_create_lock()
 
