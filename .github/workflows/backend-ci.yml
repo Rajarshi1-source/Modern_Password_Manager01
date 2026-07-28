@@ -219,6 +219,11 @@ jobs:
           DB_PASSWORD: postgres
           REDIS_URL: redis://localhost:6379/0
           CELERY_BROKER_URL: redis://localhost:6379/1
+          # Opts the liveness store's TTL tests in against the redis:7 service
+          # above. Its own scratch db: those tests flushdb, and db 0/1 hold the
+          # cache and the broker. The suite skips these when it is unset, so a
+          # local run needs no Redis.
+          LIVENESS_TEST_REDIS_URL: redis://localhost:6379/9
         run: pytest --cov=. --cov-report=xml --cov-report=html -x
         continue-on-error: true
       
