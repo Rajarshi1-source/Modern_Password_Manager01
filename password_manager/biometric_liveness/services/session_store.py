@@ -246,17 +246,27 @@ def _session_result_from_json(d) -> Optional[object]:
     if d is None:
         return None
     from .liveness_session_service import SessionResult
+    # .get() with explicit defaults, matching the detectors' tolerant
+    # restore_state: this runs on the FROZEN-VERDICT read path, so a field added
+    # or renamed on either side of a rolling deploy must not KeyError every load
+    # of a blob the other version wrote. Defaults fail CLOSED -- an unverified,
+    # zero-score INSUFFICIENT_SIGNAL result -- so a partial blob can never read
+    # back as a pass.
     return SessionResult(
-        session_id=d['session_id'], is_verified=d['is_verified'],
-        overall_liveness_score=d['overall_liveness_score'],
-        deepfake_probability=d['deepfake_probability'], confidence=d['confidence'],
-        micro_expression_score=d['micro_expression_score'],
-        gaze_tracking_score=d['gaze_tracking_score'],
-        pulse_oximetry_score=d['pulse_oximetry_score'],
-        thermal_score=d['thermal_score'],
-        texture_artifact_score=d['texture_artifact_score'],
-        total_frames_processed=d['total_frames_processed'],
-        duration_ms=d['duration_ms'], verdict=d['verdict'], details=d['details'],
+        session_id=d.get('session_id', ''),
+        is_verified=d.get('is_verified', False),
+        overall_liveness_score=d.get('overall_liveness_score', 0.0),
+        deepfake_probability=d.get('deepfake_probability', 0.0),
+        confidence=d.get('confidence', 0.0),
+        micro_expression_score=d.get('micro_expression_score', 0.0),
+        gaze_tracking_score=d.get('gaze_tracking_score', 0.0),
+        pulse_oximetry_score=d.get('pulse_oximetry_score', 0.0),
+        thermal_score=d.get('thermal_score', 0.0),
+        texture_artifact_score=d.get('texture_artifact_score', 0.0),
+        total_frames_processed=d.get('total_frames_processed', 0),
+        duration_ms=d.get('duration_ms', 0.0),
+        verdict=d.get('verdict', 'INSUFFICIENT_SIGNAL'),
+        details=d.get('details') or {},
         completed_at=_undt(d.get('completed_at')),
     )
 

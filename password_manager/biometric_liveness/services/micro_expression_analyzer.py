@@ -100,6 +100,22 @@ class MicroExpressionAnalyzer:
     # crafted frame sequence delivered at video rate -- replay resistance is the
     # deepfake modality's job and the gaze challenge-response's, not this one's.
     BLINK_MAX_TRANSITION_MS = 400.0
+    # Frame-to-frame face-continuity bounds, checked between the previous
+    # observed frame and this one. Without them the transition window still
+    # accepted an open frame from one face and a shut frame from ANOTHER, so long
+    # as they arrived within 400ms with no dropout in between -- a cross-face or
+    # two-image sequence read as one eyelid movement. Coarse on purpose: a real
+    # head neither changes apparent size by a quarter nor slides half an
+    # inter-ocular distance in one frame, while a cut between two faces
+    # routinely does both. Erring loose matters more than erring tight -- a
+    # fast-moving real user just loses that blink and blinks again.
+    #
+    # HONEST LIMIT: this compares GEOMETRY, not identity. Two stills of the SAME
+    # person, one open-eyed and one closed-eyed, have near-identical geometry and
+    # still pass; catching that needs a face-identity model, which is the
+    # deepfake modality's job (see BLINK_MAX_TRANSITION_MS).
+    FACE_CONTINUITY_MAX_SCALE_RATIO = 1.25
+    FACE_CONTINUITY_MAX_SHIFT_IOD = 0.5
 
     TRACKED_AUS: ClassVar[Dict[int, str]] = {
         1: 'Inner Brow Raiser',
@@ -263,8 +279,15 @@ class MicroExpressionAnalyzer:
         # AU26: Jaw Drop
         aus[26] = self._calculate_au26_intensity(landmarks, iod=iod)
 
-        # AU45: Blink - low eye-aspect-ratio (real geometry, no temporal needed)
-        aus[45] = self._calculate_blink_intensity(landmarks, ear=ear)
+        # AU45: Blink - low eye-aspect-ratio (real geometry, no temporal needed).
+        # OMITTED when the eye geometry was not measurable (degenerate socket ->
+        # ear is None). Reporting 0.0 there would read as "eyes clearly OPEN" and
+        # manufacture the open-eye evidence a blink is closed against, out of a
+        # frame where openness was never measured -- the same unearned signal
+        # note_tracking_loss exists to discard. Absent means UNKNOWN; observe()
+        # treats it as a tracking gap.
+        if ear is not None:
+            aus[45] = self._calculate_blink_intensity(landmarks, ear=ear)
 
         return aus
 
@@ -460,14 +483,27 @@ class MicroExpressionAnalyzer:
             # is a tracking gap by another name -- same treatment.
             self.note_tracking_loss()
         if aus:
+            # Must be read BEFORE _prev_landmarks is overwritten below.
+            track_broken = self._face_track_broken(landmarks)
             self.au_history.append(aus)
             self.au_timestamps.append(float(timestamp_ms))
             self._prev_landmarks = np.asarray(landmarks)
             # Sticky derived facts (survive history truncation across a hand-off).
             self._au_frames_seen += 1
-            au45 = aus.get(45, 0.0)
+            if track_broken:
+                # Visibly a different face than the previous frame, so whatever
+                # open eye is pending belongs to someone else and must not pair
+                # with this frame's shut eye. An OPEN reading below still records
+                # fresh evidence -- this frame is fine, its predecessor is what
+                # cannot be built on.
+                self.note_tracking_loss()
+            au45 = aus.get(45)
             now_ms = float(timestamp_ms)
-            if au45 < self.BLINK_OPEN_AU45_MAX:
+            if au45 is None:
+                # Eye openness was not measurable this frame (see
+                # extract_action_units): unknown, NOT open.
+                self.note_tracking_loss()
+            elif au45 < self.BLINK_OPEN_AU45_MAX:
                 self._last_open_ms = now_ms
             elif au45 > self.BLINK_AU45_THRESHOLD:
                 # Shut. It closes a blink only if the eyes were seen OPEN within
@@ -482,6 +518,40 @@ class MicroExpressionAnalyzer:
                 # so a long shut run cannot keep retrying against one open one.
                 self._last_open_ms = None
         return aus
+
+    def _face_centre(self, landmarks: np.ndarray):
+        """Midpoint of the two outer eye corners -- the same pair _iod spans."""
+        a = self._pt(landmarks, self._IDX['eyeA_out'])
+        b = self._pt(landmarks, self._IDX['eyeB_out'])
+        return (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
+
+    def _face_track_broken(self, landmarks: np.ndarray) -> bool:
+        """
+        True when this frame's face cannot be a continuation of the last one's.
+
+        Compares scale (inter-ocular distance) and position, both normalised by
+        IOD so the test is invariant to face size and camera distance. See
+        FACE_CONTINUITY_MAX_SCALE_RATIO for the bounds and for what this does
+        NOT establish (identity).
+
+        Degenerate geometry returns False rather than True: with no measurable
+        IOD there is no evidence of a BREAK either, and that frame is already
+        handled upstream -- an unmeasurable eye socket omits AU45, which observe()
+        treats as a tracking gap. Returning True here would double-count it and
+        make a genuinely unmeasurable frame indistinguishable from a face swap.
+        """
+        prev = self._prev_landmarks
+        if prev is None:
+            return False
+        iod_now, iod_prev = self._iod(landmarks), self._iod(prev)
+        if iod_now < 1e-6 or iod_prev < 1e-6:
+            return False
+        if (max(iod_now / iod_prev, iod_prev / iod_now)
+                > self.FACE_CONTINUITY_MAX_SCALE_RATIO):
+            return True
+        (cx, cy), (px, py) = self._face_centre(landmarks), self._face_centre(prev)
+        shift = float(np.hypot(cx - px, cy - py))
+        return shift / iod_prev > self.FACE_CONTINUITY_MAX_SHIFT_IOD
 
     def note_tracking_loss(self) -> None:
         """
