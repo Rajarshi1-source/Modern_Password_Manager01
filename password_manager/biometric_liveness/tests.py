@@ -2849,6 +2849,29 @@ class ExpressionGatingTests(TestCase):
             analyzer.observe(self._face(cx=0.2, iod=0.18), 1200.0)
         self.assertFalse(analyzer._blinked)
 
+    def test_face_continuity_survives_a_worker_handoff(self):
+        """The continuity check must outlive snapshot/restore.
+
+        Under Redis the analyzer is rebuilt from the blob on EVERY locked call,
+        so a check reading only in-process landmarks answers "no break" for
+        every frame -- silently disabling itself on the one backend where
+        consecutive frames can be handled by different workers. Carrying the
+        derived scalars keeps a cross-face pair from closing a blink across the
+        hand-off.
+        """
+        near = MicroExpressionAnalyzer()
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 0.0, 12: 0.0}):
+            near.observe(self._face(cx=0.5, iod=0.40), 1000.0)     # face A, open
+
+        far = MicroExpressionAnalyzer()                            # other worker
+        far.restore_state(near.snapshot_state())
+        self.assertIsNotNone(far._last_open_ms)   # the pending half crosses over
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 1.0, 12: 0.0}):
+            far.observe(self._face(cx=0.2, iod=0.18), 1200.0)      # face B, shut
+        self.assertFalse(far._blinked)
+
     def test_same_face_blink_survives_the_continuity_check(self):
         """The counterpart: normal head motion must still score a blink."""
         analyzer = MicroExpressionAnalyzer()

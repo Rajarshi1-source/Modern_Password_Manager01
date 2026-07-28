@@ -175,6 +175,12 @@ class MicroExpressionAnalyzer:
         # (au_history is declared above with the other history buffers.)
         self.au_timestamps: Deque[float] = deque(maxlen=self.AU_HISTORY_FRAMES)
         self._prev_landmarks: Optional[np.ndarray] = None
+        # The previous frame's geometry, reduced to the only two things
+        # _face_track_broken reads. Kept as scalars rather than the landmark
+        # array because these DO cross a worker hand-off (see snapshot_state)
+        # and 478x3 floats per save would not be worth it.
+        self._prev_iod: Optional[float] = None
+        self._prev_centre = None
         # Derived facts kept OUTSIDE the bounded au_history so a Redis hand-off
         # (which re-truncates history to the recent window on every save) cannot
         # erase a blink observed earlier in the session or shorten the frame
@@ -488,6 +494,8 @@ class MicroExpressionAnalyzer:
             self.au_history.append(aus)
             self.au_timestamps.append(float(timestamp_ms))
             self._prev_landmarks = np.asarray(landmarks)
+            self._prev_iod = self._iod(landmarks)
+            self._prev_centre = self._face_centre(landmarks)
             # Sticky derived facts (survive history truncation across a hand-off).
             self._au_frames_seen += 1
             if track_broken:
@@ -539,17 +547,23 @@ class MicroExpressionAnalyzer:
         handled upstream -- an unmeasurable eye socket omits AU45, which observe()
         treats as a tracking gap. Returning True here would double-count it and
         make a genuinely unmeasurable frame indistinguishable from a face swap.
+
+        Reads the two SNAPSHOTTED scalars, never _prev_landmarks: under Redis the
+        analyzer is rebuilt from the blob on every locked call, so anything not
+        carried in snapshot_state is None on arrival and this check would answer
+        "no break" for every frame -- silently disabling itself on exactly the
+        backend that makes cross-worker hand-offs possible.
         """
-        prev = self._prev_landmarks
-        if prev is None:
+        iod_prev, centre_prev = self._prev_iod, self._prev_centre
+        if iod_prev is None or centre_prev is None:
             return False
-        iod_now, iod_prev = self._iod(landmarks), self._iod(prev)
+        iod_now = self._iod(landmarks)
         if iod_now < 1e-6 or iod_prev < 1e-6:
             return False
         if (max(iod_now / iod_prev, iod_prev / iod_now)
                 > self.FACE_CONTINUITY_MAX_SCALE_RATIO):
             return True
-        (cx, cy), (px, py) = self._face_centre(landmarks), self._face_centre(prev)
+        (cx, cy), (px, py) = self._face_centre(landmarks), centre_prev
         shift = float(np.hypot(cx - px, cy - py))
         return shift / iod_prev > self.FACE_CONTINUITY_MAX_SHIFT_IOD
 
@@ -644,13 +658,20 @@ class MicroExpressionAnalyzer:
             # the timestamp so the far side applies the same expiry window.
             'last_open_ms': self._last_open_ms,
             'au_frames_seen': self._au_frames_seen,
-            # _prev_landmarks is deliberately NOT snapshotted. It is a hook for a
-            # future temporal AU, but nothing consumes it today --
-            # extract_action_units accepts it and no calculator reads it (AU45 is
-            # purely EAR-based, and none of the others accept it at all).
-            # Serializing it cost ~1.4k floats (478x3) on EVERY per-frame locked
-            # save, for state the far side never reads. observe() still keeps it
-            # in-process; whoever adds a temporal AU must add it back here.
+            # The face-continuity summary MUST cross the hand-off. Under Redis
+            # the analyzer is rebuilt from this blob on every locked call, so
+            # anything omitted here is None on arrival -- and _face_track_broken
+            # answering "no break" for every frame would silently disable the
+            # cross-face guard on the one backend where consecutive frames can
+            # be handled by different workers.
+            'prev_iod': self._prev_iod,
+            'prev_centre': list(self._prev_centre) if self._prev_centre else None,
+            # The full _prev_landmarks ARRAY is still not snapshotted: it is only
+            # a hook for a future temporal AU (extract_action_units accepts it,
+            # no calculator reads it), and ~1.4k floats (478x3) on EVERY
+            # per-frame save is not worth carrying for that. The two scalars
+            # above are what the continuity check actually reads; whoever adds a
+            # temporal AU must add the array back here.
         }
 
     def restore_state(self, state: Dict) -> None:
@@ -695,6 +716,21 @@ class MicroExpressionAnalyzer:
                 state.get('au_frames_seen', len(self.au_history)))
         except (TypeError, ValueError):
             self._au_frames_seen = len(self.au_history)
+        # Continuity summary. Anything unusable restores as None, which makes the
+        # next frame's check abstain rather than pass -- the same fail-closed
+        # side as an older blob that predates these fields.
+        try:
+            raw_iod = state.get('prev_iod')
+            self._prev_iod = None if raw_iod is None else float(raw_iod)
+        except (TypeError, ValueError):
+            self._prev_iod = None
+        raw_centre = state.get('prev_centre')
+        self._prev_centre = None
+        if isinstance(raw_centre, (list, tuple)) and len(raw_centre) == 2:
+            try:
+                self._prev_centre = (float(raw_centre[0]), float(raw_centre[1]))
+            except (TypeError, ValueError):
+                self._prev_centre = None
         # 'prev_landmarks' may still be present in a blob written by an older
         # worker mid-deploy; ignored, since no AU reads it (see snapshot_state).
 

@@ -561,9 +561,24 @@ class PulseOximetryService:
         self.rgb_buffer = deque(rgb, maxlen=self.window_size)
         self.ppg_buffer = deque(_seq('ppg_buffer'), maxlen=self.window_size)
         self.timestamps = deque(_seq('timestamps'), maxlen=self.window_size)
-        self.frame_count = state.get('frame_count', 0)
+        def _num(key, default):
+            """Coerce, or fall back -- a bad scalar must not raise LATER.
+
+            frame_count restores fine untouched and then raises TypeError on the
+            next `self.frame_count += 1` in process_frame, failing a frame
+            request one layer away from this guard; hardware_spo2_quality has the
+            same shape via its MIN_SPO2_QUALITY comparison.
+            """
+            try:
+                return type(default)(state.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        self.frame_count = _num('frame_count', 0)
         self.current_hr = state.get('current_hr')
         self.current_spo2 = state.get('current_spo2')
+        # These three stay raw: _current_hardware_spo2 already np.isfinite-guards
+        # the value and the timestamp before either is used.
         self.hardware_spo2 = state.get('hardware_spo2')
-        self.hardware_spo2_quality = state.get('hardware_spo2_quality', 0.0)
+        self.hardware_spo2_quality = _num('hardware_spo2_quality', 0.0)
         self.hardware_spo2_timestamp_ms = state.get('hardware_spo2_timestamp_ms')
