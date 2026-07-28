@@ -2807,6 +2807,29 @@ class ExpressionGatingTests(TestCase):
         # is provisioned -- see the model-provisioning checklist.
         self.assertEqual(score, 0.5)
 
+    def test_restore_state_degrades_instead_of_raising_on_a_malformed_blob(self):
+        """Every field must survive a rolling deploy that changed the shape.
+
+        restore_state runs deep inside deserialize_session, so ANY escaping
+        exception fails the whole request rather than just the accumulator. One
+        unguarded coercion is enough to break that contract, so all of them are
+        pinned together here.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        analyzer.restore_state({
+            'au_history': 'not-a-list',       # non-iterable container
+            'au_timestamps': 42,              # ditto
+            'au_frames_seen': 'twelve',       # non-numeric
+            'last_open_ms': 'not-a-number',   # non-numeric
+            'blinked': True,
+        })
+        self.assertEqual(len(analyzer.au_history), 0)
+        self.assertEqual(analyzer._au_frames_seen, 0)
+        self.assertIsNone(analyzer._last_open_ms)
+        # A bad entry inside a good container is skipped, not fatal.
+        analyzer.restore_state({'au_history': [{'45': 1.0}, 'junk', {'12': 0.5}]})
+        self.assertEqual(len(analyzer.au_history), 2)
+
     def test_tracking_loss_discards_pending_open_eye_evidence(self):
         """A dropout between the open and shut frames is not a blink.
 

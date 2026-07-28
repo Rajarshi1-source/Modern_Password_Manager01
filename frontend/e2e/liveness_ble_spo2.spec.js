@@ -50,6 +50,17 @@
  *   - No device paired  => no SpO2 tile, SpO2 excluded from scoring.
  *   - Device paired      => SpO2 tile shows the relayed reading.
  *   - Device disconnected => SpO2 tile clears (no stale/fabricated value).
+ *
+ * WHERE THE TILE COMES FROM, because it is deliberately NOT local device state:
+ * the reading goes device -> submitHardwareSpo2 over the session WebSocket ->
+ * ingest_hardware_spo2 (range/quality/freshness validated, stamped on the server
+ * clock) -> the next frame_result's pulse.spo2 -> PulseReadout. So `spo2-value`
+ * appears only once the BACKEND has accepted a reading AND frames are streaming
+ * in the pulse challenge, which is what makes it a real round-trip assertion.
+ * Do NOT "fix" a slow-appearing tile by rendering the oximeter's own state: a
+ * reading the server rejected as out-of-range, stale or low-quality must show
+ * nothing, and sourcing it locally would put an unvalidated number on screen --
+ * the exact fabrication this feature exists to avoid.
  */
 
 import { test, expect } from '@playwright/test';

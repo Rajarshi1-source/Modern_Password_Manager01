@@ -617,8 +617,14 @@ class MicroExpressionAnalyzer:
         except (TypeError, ValueError):
             self._last_open_ms = None
         # Fall back to the restored history length for snapshots written before
-        # this field existed (rolling deploy).
-        self._au_frames_seen = int(state.get('au_frames_seen', len(self.au_history)))
+        # this field existed (rolling deploy) -- or whose value is unusable, so
+        # this coercion cannot be the one thing that still raises out of an
+        # otherwise tolerant restore.
+        try:
+            self._au_frames_seen = int(
+                state.get('au_frames_seen', len(self.au_history)))
+        except (TypeError, ValueError):
+            self._au_frames_seen = len(self.au_history)
         # 'prev_landmarks' may still be present in a blob written by an older
         # worker mid-deploy; ignored, since no AU reads it (see snapshot_state).
 
