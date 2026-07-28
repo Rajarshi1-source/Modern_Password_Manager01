@@ -2468,6 +2468,31 @@ class RedisSessionStoreCrossProcessTests(TestCase):
         self.assertEqual(reread.verdict, result.verdict)
 
 
+class PulseRestoreStateToleranceTests(TestCase):
+    """A malformed pulse blob must degrade, not raise a frame LATER."""
+
+    def test_malformed_scalars_and_buffers_degrade(self):
+        from .services.pulse_oximetry_service import PulseOximetryService
+        svc = PulseOximetryService()
+        svc.restore_state({
+            'rgb_buffer': 'not-a-list',
+            'ppg_buffer': [1.0, 'junk', 2.0],
+            'timestamps': [1.0, None, 3.0],
+            'frame_count': 'twelve',
+            'hardware_spo2': 'ninety',
+            'hardware_spo2_quality': 'high',
+            'hardware_spo2_timestamp_ms': 'not-a-number',
+        })
+        self.assertEqual(list(svc.ppg_buffer), [1.0, 2.0])   # junk skipped
+        self.assertEqual(list(svc.timestamps), [1.0, 3.0])
+        self.assertEqual(svc.frame_count, 0)
+        self.assertIsNone(svc.hardware_spo2)
+        self.assertIsNone(svc.hardware_spo2_timestamp_ms)
+        # The deferred failure this guards: a non-numeric stored timestamp used
+        # to survive restore and raise at `timestamp_ms - ts` on the next frame.
+        self.assertIsNone(svc._current_hardware_spo2(1000.0))
+
+
 @unittest.skipUnless(
     os.environ.get('LIVENESS_TEST_REDIS_URL'),
     'Set LIVENESS_TEST_REDIS_URL to a scratch Redis 7+ database to run the '

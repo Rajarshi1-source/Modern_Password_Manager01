@@ -401,7 +401,11 @@ class PulseOximetryService:
             return None
         ts = self.hardware_spo2_timestamp_ms
         # No / non-finite timestamp => freshness cannot be verified. Fail safe.
-        if ts is None or not np.isfinite(timestamp_ms):
+        # BOTH sides: this used to test only the ARGUMENT, so a stored timestamp
+        # that was not a number passed the None check and blew up on the
+        # subtraction below. restore_state coerces it to float-or-None, which is
+        # what keeps np.isfinite(ts) itself safe to call here.
+        if ts is None or not np.isfinite(ts) or not np.isfinite(timestamp_ms):
             return None
         age_ms = timestamp_ms - ts
         # Reject stale (too old) and impossible (future-dated) readings.
@@ -559,8 +563,20 @@ class PulseOximetryService:
             except TypeError:
                 continue
         self.rgb_buffer = deque(rgb, maxlen=self.window_size)
-        self.ppg_buffer = deque(_seq('ppg_buffer'), maxlen=self.window_size)
-        self.timestamps = deque(_seq('timestamps'), maxlen=self.window_size)
+        def _floats(key):
+            """Numeric entries only: both buffers reach np.array() arithmetic in
+            _calculate_heart_rate, which is another raise a layer away."""
+            out = []
+            for v in _seq(key):
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    continue
+            return out
+
+        self.ppg_buffer = deque(_floats('ppg_buffer'), maxlen=self.window_size)
+        self.timestamps = deque(_floats('timestamps'), maxlen=self.window_size)
+
         def _num(key, default):
             """Coerce, or fall back -- a bad scalar must not raise LATER.
 
@@ -574,11 +590,26 @@ class PulseOximetryService:
             except (TypeError, ValueError):
                 return default
 
+        def _opt_num(key):
+            """Optional numeric: None stays None, anything unusable becomes None.
+
+            Do NOT leave these raw on the strength of _current_hardware_spo2's
+            guard -- that checks np.isfinite on the timestamp ARGUMENT it is
+            passed, while the STORED timestamp is only tested for None. A
+            non-numeric one therefore survives and raises at `age_ms =
+            timestamp_ms - ts` on the next frame, and the stored SpO2 value is
+            not finite-checked at all before it flows into a PulseReading and on
+            into the score's averaging.
+            """
+            raw = state.get(key)
+            try:
+                return None if raw is None else float(raw)
+            except (TypeError, ValueError):
+                return None
+
         self.frame_count = _num('frame_count', 0)
-        self.current_hr = state.get('current_hr')
-        self.current_spo2 = state.get('current_spo2')
-        # These three stay raw: _current_hardware_spo2 already np.isfinite-guards
-        # the value and the timestamp before either is used.
-        self.hardware_spo2 = state.get('hardware_spo2')
+        self.current_hr = _opt_num('current_hr')
+        self.current_spo2 = _opt_num('current_spo2')
+        self.hardware_spo2 = _opt_num('hardware_spo2')
         self.hardware_spo2_quality = _num('hardware_spo2_quality', 0.0)
-        self.hardware_spo2_timestamp_ms = state.get('hardware_spo2_timestamp_ms')
+        self.hardware_spo2_timestamp_ms = _opt_num('hardware_spo2_timestamp_ms')
