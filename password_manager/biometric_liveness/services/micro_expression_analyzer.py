@@ -696,7 +696,19 @@ class MicroExpressionAnalyzer:
         restored = []
         for a in raw_history:
             try:
-                restored.append({int(k): float(v) for k, v in a.items()})
+                values = {}
+                for k, v in a.items():
+                    value = float(v)
+                    # float() happily accepts NaN and Infinity, and JSON
+                    # round-trips both. Either poisons the motion score's
+                    # np.var: NaN makes the whole session score NaN, and a huge
+                    # value saturates the variance to a FULL motion pass. Every
+                    # AU this class emits is np.clip'd to [0, 1], so bounding to
+                    # that domain rejects nothing a real snapshot can contain.
+                    if not np.isfinite(value) or not 0.0 <= value <= 1.0:
+                        raise ValueError
+                    values[int(k)] = value
+                restored.append(values)
             except (AttributeError, TypeError, ValueError):
                 continue
         self.au_history = deque(restored, maxlen=self.AU_HISTORY_FRAMES)
@@ -704,7 +716,11 @@ class MicroExpressionAnalyzer:
         if not isinstance(raw_ts, (list, tuple)):
             raw_ts = []
         self.au_timestamps = deque(raw_ts, maxlen=self.AU_HISTORY_FRAMES)
-        self._blinked = bool(state.get('blinked', False))
+        # `is True`, NOT bool(): every non-empty string is truthy, so a blob
+        # carrying the STRING 'false' would restore _blinked as True and hand
+        # out the blink half of the score for free. Of all the fields here this
+        # is the one that must never fail open.
+        self._blinked = state.get('blinked') is True
         # A blob written by a worker older than this field simply starts with no
         # open evidence: an in-flight transition is dropped across that one
         # deploy and the subject blinks again. Fail-closed is the right side to
@@ -712,6 +728,8 @@ class MicroExpressionAnalyzer:
         try:
             raw_open = state.get('last_open_ms')
             self._last_open_ms = None if raw_open is None else float(raw_open)
+            if self._last_open_ms is not None and not np.isfinite(self._last_open_ms):
+                self._last_open_ms = None
         except (TypeError, ValueError):
             self._last_open_ms = None
         # Fall back to the restored history length for snapshots written before
@@ -726,16 +744,24 @@ class MicroExpressionAnalyzer:
         # Continuity summary. Anything unusable restores as None, which makes the
         # next frame's check abstain rather than pass -- the same fail-closed
         # side as an older blob that predates these fields.
+        # NaN is the dangerous one here, not junk: every comparison against it is
+        # False, so a NaN prev_iod walks straight past _face_track_broken's
+        # `< 1e-6` guard and then answers "no break" for ANY face -- silently
+        # disabling the cross-face check exactly as the missing snapshot did.
         try:
             raw_iod = state.get('prev_iod')
             self._prev_iod = None if raw_iod is None else float(raw_iod)
+            if self._prev_iod is not None and not np.isfinite(self._prev_iod):
+                self._prev_iod = None
         except (TypeError, ValueError):
             self._prev_iod = None
         raw_centre = state.get('prev_centre')
         self._prev_centre = None
         if isinstance(raw_centre, (list, tuple)) and len(raw_centre) == 2:
             try:
-                self._prev_centre = (float(raw_centre[0]), float(raw_centre[1]))
+                centre = (float(raw_centre[0]), float(raw_centre[1]))
+                if all(np.isfinite(c) for c in centre):
+                    self._prev_centre = centre
             except (TypeError, ValueError):
                 self._prev_centre = None
         # 'prev_landmarks' may still be present in a blob written by an older
