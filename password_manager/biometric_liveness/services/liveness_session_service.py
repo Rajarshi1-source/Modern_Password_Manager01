@@ -383,7 +383,11 @@ class LivenessSessionService:
         A short global create-lock makes the count+insert one critical section
         (mirroring the in-memory _store_lock block) so two concurrent creators
         cannot both pass the cap. count_live self-heals stale membership left by
-        a crashed worker (pipelined, so its round trips do not serialize creates).
+        a crashed worker in a CONSTANT number of commands (it prunes by score,
+        reading no session blobs), so this critical section does not grow with
+        the number of live sessions. Those commands are sequential, not
+        pipelined -- the section is short enough that the create-lock carries its
+        own much shorter lease instead (see acquire_create_lock).
         Failing to TAKE the create-lock is a transient store-busy condition, NOT
         capacity exhaustion, so it raises the retryable SessionLockError -- a
         client should retry, not be told the system is full.
