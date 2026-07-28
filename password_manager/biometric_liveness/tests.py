@@ -108,8 +108,11 @@ class MicroExpressionAnalyzerTests(TestCase):
         # No randomness anywhere in the AU pipeline: identical across calls.
         self.assertEqual(first, second)
         # The not-yet-implemented AUs report inactive (0.0), not a random intensity.
-        for au in (2, 4, 5, 6, 12, 25, 26, 45):
+        for au in (2, 4, 5, 6, 12, 25, 26):
             self.assertEqual(first[au], 0.0)
+        # AU45 is absent rather than 0.0 on unmeasurable geometry -- also not a
+        # fabricated value, and deliberately distinguishable from "open".
+        self.assertNotIn(45, first)
 
     def test_asymmetry_is_deterministic_not_fabricated(self):
         """The asymmetry stub must return a fixed 0.0, not a random value.
@@ -2590,8 +2593,12 @@ class ActionUnitGeometryTests(TestCase):
 
     def test_zeros_are_all_inactive(self):
         aus = self.analyzer.extract_action_units(np.zeros((468, 3)))
-        for au in (1, 2, 4, 5, 6, 12, 25, 26, 45):
+        for au in (1, 2, 4, 5, 6, 12, 25, 26):
             self.assertEqual(aus[au], 0.0)
+        # AU45 is OMITTED, not 0.0: degenerate geometry means eye openness was
+        # never measured, and reporting 0.0 there would read as "eyes clearly
+        # open" and seed the evidence a blink is closed against.
+        self.assertNotIn(45, aus)
 
     def test_brow_bands_are_uncalibrated_on_a_neutral_face(self):
         """Characterization, NOT an endorsement: pins a known calibration risk.
@@ -2640,38 +2647,23 @@ class ExpressionGatingTests(TestCase):
         self.analyzer = MicroExpressionAnalyzer()
 
     def _seed(self, history):
-        """Populate au_history AND the sticky derived facts exactly as observe()
-        would, so scoring reads the same source-of-truth (blink flag + frame
-        count) that survives a Redis hand-off -- not the truncatable list."""
-        self.analyzer.au_history = deque(
-            history, maxlen=MicroExpressionAnalyzer.AU_HISTORY_FRAMES)
-        self.analyzer.au_timestamps = deque(
-            (float(i) for i in range(len(history))),
-            maxlen=MicroExpressionAnalyzer.AU_HISTORY_FRAMES)
-        self.analyzer._au_frames_seen = len(history)
-        # Same rule observe() applies, read from the analyzer rather than
-        # re-typed here, so a retune cannot leave these tests asserting the old
-        # rule instead of failing. A blink needs an open->shut TRANSITION inside
-        # BLINK_MAX_TRANSITION_MS, so neither shut-ness alone (a closed-eye
-        # photo) nor an open frame paired with a much later shut one (two
-        # stills) sets the flag. Timestamps here are the 1ms-apart ones assigned
-        # above, so seeded transitions are contiguous unless a test says
-        # otherwise.
-        blinked = False
-        last_open_ms = None
-        for i, a in enumerate(history):
-            au45 = a.get(45, 0.0)
-            if au45 < MicroExpressionAnalyzer.BLINK_OPEN_AU45_MAX:
-                last_open_ms = float(i)
-            elif au45 > MicroExpressionAnalyzer.BLINK_AU45_THRESHOLD:
-                if (last_open_ms is not None
-                        and 0 <= float(i) - last_open_ms
-                        <= MicroExpressionAnalyzer.BLINK_MAX_TRANSITION_MS):
-                    blinked = True
-                last_open_ms = None
-        self.analyzer._blinked = blinked
-        self.analyzer._last_open_ms = last_open_ms
+        """
+        Populate the analyzer by REPLAYING history through observe().
 
+        Deliberately not a re-implementation of the blink rule: this helper used
+        to derive `_blinked` itself, which meant every seeded test kept asserting
+        against a COPY of the rule and would silently miss a change to the real
+        one -- and the rule has since gained two more terms (an expiry window and
+        a tracking-gap reset). Driving the production path is the only way the
+        seeded state and the scored state cannot drift apart.
+
+        Timestamps are 1ms apart, so seeded transitions are contiguous unless a
+        test spaces them itself.
+        """
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          side_effect=list(history)):
+            for i in range(len(history)):
+                self.analyzer.observe(np.zeros((478, 3)), float(i))
     def test_observe_bounds_the_au_history_it_appends(self):
         """The cap has to live on the APPEND path, not just the snapshot.
 
@@ -2829,6 +2821,57 @@ class ExpressionGatingTests(TestCase):
         # A bad entry inside a good container is skipped, not fatal.
         analyzer.restore_state({'au_history': [{'45': 1.0}, 'junk', {'12': 0.5}]})
         self.assertEqual(len(analyzer.au_history), 2)
+
+    @staticmethod
+    def _face(cx=0.5, iod=0.4):
+        """A minimal landmark set with a measurable, positionable IOD."""
+        lm = np.zeros((478, 3), dtype=np.float64)
+        lm[MicroExpressionAnalyzer._IDX['eyeA_out']] = [cx - iod / 2, 0.375, 0.0]
+        lm[MicroExpressionAnalyzer._IDX['eyeB_out']] = [cx + iod / 2, 0.375, 0.0]
+        return lm
+
+    def test_cross_face_frames_do_not_form_a_blink(self):
+        """An open eye on one face and a shut eye on ANOTHER is not a blink.
+
+        The transition window bounds time, and note_tracking_loss covers a
+        dropout, but a cut straight from one continuously-detected face to a
+        different one has neither -- so the shut frame closed a blink built on a
+        stranger's open eye. Continuity is now checked frame to frame.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 0.0, 12: 0.0}):
+            analyzer.observe(self._face(cx=0.5, iod=0.40), 1000.0)   # face A, open
+        self.assertIsNotNone(analyzer._last_open_ms)
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 1.0, 12: 0.0}):
+            # Face B: much larger and offset -- no real head does this in 200ms.
+            analyzer.observe(self._face(cx=0.2, iod=0.18), 1200.0)
+        self.assertFalse(analyzer._blinked)
+
+    def test_same_face_blink_survives_the_continuity_check(self):
+        """The counterpart: normal head motion must still score a blink."""
+        analyzer = MicroExpressionAnalyzer()
+        for i, au45 in enumerate([0.0, 0.0, 0.3, 1.0]):
+            with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                              return_value={45: au45, 12: 0.0}):
+                # Drifting slightly, as a real face does between frames.
+                analyzer.observe(self._face(cx=0.5 + 0.01 * i, iod=0.40), 33.0 * i)
+        self.assertTrue(analyzer._blinked)
+
+    def test_unmeasurable_eye_geometry_is_not_treated_as_open(self):
+        """AU45 absent means UNKNOWN, and unknown must not seed open evidence.
+
+        A degenerate socket makes _eye_aspect_ratio return None; reporting that
+        as AU45 = 0.0 would read as "eyes clearly open" and manufacture the
+        evidence a later shut frame closes a blink against.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        degenerate = np.zeros((478, 3), dtype=np.float64)
+        aus = analyzer.extract_action_units(degenerate)
+        self.assertNotIn(45, aus)          # omitted, not 0.0
+        analyzer.observe(degenerate, 1000.0)
+        self.assertIsNone(analyzer._last_open_ms)
 
     def test_tracking_loss_discards_pending_open_eye_evidence(self):
         """A dropout between the open and shut frames is not a blink.
