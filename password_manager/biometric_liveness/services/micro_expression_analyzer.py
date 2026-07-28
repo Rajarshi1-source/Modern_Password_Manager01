@@ -110,10 +110,17 @@ class MicroExpressionAnalyzer:
     # routinely does both. Erring loose matters more than erring tight -- a
     # fast-moving real user just loses that blink and blinks again.
     #
-    # HONEST LIMIT: this compares GEOMETRY, not identity. Two stills of the SAME
-    # person, one open-eyed and one closed-eyed, have near-identical geometry and
-    # still pass; catching that needs a face-identity model, which is the
-    # deepfake modality's job (see BLINK_MAX_TRANSITION_MS).
+    # HONEST LIMIT -- it is SCALE AND POSITION ONLY, not identity. Anything
+    # presented at the same size in the same place reads as one track: two
+    # stills of the same person (open-eyed, closed-eyed), and equally two
+    # DIFFERENT subjects whose faces happen to be aligned. Separating those is
+    # face RE-IDENTIFICATION, which needs an identity model -- the deepfake
+    # modality's job; a landmark-similarity tolerance guessed by eye would be
+    # fabricated validation, the same reason the AU2/AU4 brow bands were left
+    # uncalibrated rather than retuned. Pinned by
+    # test_aligned_different_faces_still_form_a_blink and listed on the
+    # model-provisioning checklist, because it only becomes reachable once a
+    # FACE_LANDMARKER_MODEL makes this modality gate at all.
     FACE_CONTINUITY_MAX_SCALE_RATIO = 1.25
     FACE_CONTINUITY_MAX_SHIFT_IOD = 0.5
 

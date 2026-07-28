@@ -2915,12 +2915,45 @@ class ExpressionGatingTests(TestCase):
         self.assertEqual(len(analyzer.au_history), 2)
 
     @staticmethod
-    def _face(cx=0.5, iod=0.4):
-        """A minimal landmark set with a measurable, positionable IOD."""
+    def _face(cx=0.5, iod=0.4, mouth=0.10):
+        """A minimal landmark set with a measurable, positionable IOD.
+
+        `mouth` varies a feature the continuity check does NOT look at, so two
+        faces can be made same-size and same-position but visibly different.
+        """
         lm = np.zeros((478, 3), dtype=np.float64)
         lm[MicroExpressionAnalyzer._IDX['eyeA_out']] = [cx - iod / 2, 0.375, 0.0]
         lm[MicroExpressionAnalyzer._IDX['eyeB_out']] = [cx + iod / 2, 0.375, 0.0]
+        lm[MicroExpressionAnalyzer._IDX['mouth_l']] = [cx - mouth, 0.60, 0.0]
+        lm[MicroExpressionAnalyzer._IDX['mouth_r']] = [cx + mouth, 0.60, 0.0]
         return lm
+
+    def test_aligned_different_faces_still_form_a_blink(self):
+        """CHARACTERIZATION, NOT ENDORSEMENT: the limit of geometry-only continuity.
+
+        _face_track_broken compares inter-ocular SCALE and face-CENTRE only, so
+        two different subjects (or two replayed stills) presented at the same
+        size and position are indistinguishable from one continuous track, and
+        the blink component is credited. Separating them is face
+        RE-IDENTIFICATION; picking a landmark-similarity tolerance by eye would
+        be the fabricated validation this feature exists to avoid (the AU2/AU4
+        brow bands were refused on the same grounds), so the bypass is pinned
+        here instead of papered over.
+
+        LATENT TODAY: micro_expression reports available=False/gates_verdict=
+        False until a FACE_LANDMARKER_MODEL is provisioned, so this earns
+        nothing right now. Provisioning that asset makes it LIVE -- see the
+        model-provisioning checklist. Whoever adds an identity or anti-replay
+        capability must flip this assertion deliberately.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 0.0, 12: 0.0}):
+            analyzer.observe(self._face(mouth=0.10), 1000.0)   # subject A, open
+        with patch.object(MicroExpressionAnalyzer, 'extract_action_units',
+                          return_value={45: 1.0, 12: 0.0}):
+            analyzer.observe(self._face(mouth=0.24), 1200.0)   # subject B, shut
+        self.assertTrue(analyzer._blinked)
 
     def test_cross_face_frames_do_not_form_a_blink(self):
         """An open eye on one face and a shut eye on ANOTHER is not a blink.
