@@ -445,9 +445,10 @@ class RedisSessionStore:
     NX`` to backfill a retention TTL without disturbing an existing countdown,
     and the NX/XX/GT/LT arguments to EXPIRE only exist from 7.0. On an older
     server that call errors instead of silently no-op'ing, so the requirement is
-    loud rather than latent -- but note the test double accepts the kwarg
-    without modelling TTL at all, so the suite passing is NOT evidence that the
-    target server is new enough.
+    loud rather than latent. The HERMETIC suite cannot see that -- its double
+    accepts the kwarg and models no TTL -- so the retention semantics are
+    covered separately by RedisTerminalSaveRetentionTests, which runs this store
+    against the real redis:7 service container in backend-ci.yml.
     """
 
     _KEY = 'liveness:sess:'

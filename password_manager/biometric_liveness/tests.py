@@ -1909,8 +1909,10 @@ class _FakeRedis:
     Implements only what RedisSessionStore uses (set with nx/px/ex, get, delete,
     exists, pexpire, sadd/srem/scard/smembers, and the ZSET commands backing the
     live indexes), returning bytes like a real from_url() client so the store's
-    decode paths are exercised. Key TTL is not simulated -- the tests are
-    hermetic and assert state sharing/locking, not expiry timing. ZSET SCORES
+    decode paths are exercised. Key TTL is not simulated -- these tests are
+    hermetic and assert state sharing/locking, not expiry timing; the retention
+    semantics that DO depend on TTL (terminal-save KEEPTTL + EXPIRE ... NX) are
+    covered against a real server by RedisTerminalSaveRetentionTests. ZSET SCORES
     are modelled faithfully, because the capacity count depends on them, and so
     is the SAVE script's TOKEN FENCE, because rejecting a stale writer is a
     correctness property rather than a timing one.
@@ -2464,6 +2466,71 @@ class RedisSessionStoreCrossProcessTests(TestCase):
         reread = self.ws.complete_session(sid)
         self.assertEqual(reread.overall_liveness_score, result.overall_liveness_score)
         self.assertEqual(reread.verdict, result.verdict)
+
+
+@unittest.skipUnless(
+    os.environ.get('LIVENESS_TEST_REDIS_URL'),
+    'Set LIVENESS_TEST_REDIS_URL to a scratch Redis 7+ database to run the '
+    'real-server TTL tests (CI does; see backend-ci.yml).')
+class RedisTerminalSaveRetentionTests(TestCase):
+    """
+    The TTL invariants _FakeRedis cannot model, run against a REAL Redis.
+
+    The double accepts ``ex``/``px``/``keepttl`` and the ``EXPIRE ... NX`` kwargs
+    but models no expiry at all, so the terminal-save branch passes there no
+    matter what it does -- and that branch carries two claims the store depends
+    on: KEEPTTL lets a frozen verdict keep counting down from when the session
+    was last live (so re-completing cannot keep a terminal blob resident
+    forever), and EXPIRE ... NX backfills retention when the key has NO TTL
+    (so a terminal blob can never become permanent).
+
+    Running the real RedisSessionStore against a live server also makes the
+    store's documented **Redis 7.0+** floor real rather than latent: the NX
+    argument to EXPIRE only exists from 7.0 and errors on an older server, so
+    these fail loudly there instead of silently no-op'ing.
+    """
+
+    RETENTION = 420
+
+    def setUp(self):
+        import redis
+        self.client = redis.Redis.from_url(os.environ['LIVENESS_TEST_REDIS_URL'])
+        self.client.flushdb()
+        self.addCleanup(self.client.flushdb)
+        self.user = User.objects.create_user(
+            username='ttl', email='ttl@example.com', password='pw')
+        # Same helper the hermetic tests use; it takes any client, fake or real.
+        self.svc = _redis_service(self.client, retention=self.RETENTION)
+        self.store = self.svc._redis_store
+        self.sid = self.svc.create_session(user_id=self.user.id)['session_id']
+        self.key = self.store._KEY + self.sid
+
+    def _save_terminal(self):
+        session = self.store.load(self.sid)
+        session['status'] = 'completed'
+        self.assertTrue(self.store.save(self.sid, session))
+
+    def test_live_save_sets_the_retention_ttl(self):
+        self.assertAlmostEqual(self.client.ttl(self.key), self.RETENTION, delta=5)
+
+    def test_terminal_save_keeps_an_existing_countdown(self):
+        # Stands in for a session that has been resident a while. KEEPTTL must
+        # leave the countdown alone, AND the NX on the backfill must not
+        # overwrite it -- NX means "only if there is no TTL". Without either,
+        # this would jump back to the full retention window and a client could
+        # keep a terminal blob alive indefinitely by re-completing.
+        self.client.expire(self.key, 30)
+        self._save_terminal()
+        self.assertAlmostEqual(self.client.ttl(self.key), 30, delta=5)
+
+    def test_terminal_save_backfills_a_missing_ttl(self):
+        # The key has no TTL: it expired and was rewritten between load and
+        # save, or the first save was already terminal. KEEPTTL alone would
+        # leave it PERSISTENT forever and break the retention bound.
+        self.client.persist(self.key)
+        self.assertEqual(self.client.ttl(self.key), -1)   # -1 == no expiry
+        self._save_terminal()
+        self.assertAlmostEqual(self.client.ttl(self.key), self.RETENTION, delta=5)
 
 
 class GazeEstimatorGeometryTests(TestCase):
