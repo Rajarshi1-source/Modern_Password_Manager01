@@ -2914,6 +2914,34 @@ class ExpressionGatingTests(TestCase):
         analyzer.restore_state({'au_history': [{'45': 1.0}, 'junk', {'12': 0.5}]})
         self.assertEqual(len(analyzer.au_history), 2)
 
+    def test_restore_state_cannot_be_talked_into_failing_open(self):
+        """The restore paths that GRANT credit must reject junk, not coerce it.
+
+        Three of these are fail-OPEN if merely coerced: a truthy non-bool hands
+        out the blink half; a NaN prev_iod slips past _face_track_broken's
+        `< 1e-6` guard (every comparison with NaN is False) and disables the
+        cross-face check for any face; and an out-of-domain AU saturates the
+        motion variance into a full pass. NaN AU additionally makes the whole
+        session score NaN.
+        """
+        analyzer = MicroExpressionAnalyzer()
+        analyzer.restore_state({
+            'blinked': 'false',                  # truthy string, not a bool
+            'prev_iod': float('nan'),
+            'prev_centre': [float('inf'), 0.375],
+            'last_open_ms': float('nan'),
+            'au_history': [{'12': float('nan')}, {'12': 1e9}, {'12': 0.4}],
+            'au_frames_seen': 3,
+        })
+        self.assertFalse(analyzer._blinked)
+        self.assertIsNone(analyzer._prev_iod)
+        self.assertIsNone(analyzer._prev_centre)
+        self.assertIsNone(analyzer._last_open_ms)
+        self.assertEqual(list(analyzer.au_history), [{12: 0.4}])   # only the sane one
+        # With prev_iod discarded the continuity check abstains rather than
+        # answering "no break" for a face it never actually compared.
+        self.assertFalse(analyzer._face_track_broken(self._face()))
+
     @staticmethod
     def _face(cx=0.5, iod=0.4, mouth=0.10):
         """A minimal landmark set with a measurable, positionable IOD.
