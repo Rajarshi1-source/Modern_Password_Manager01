@@ -13,14 +13,22 @@
 
 FROM alpine:3.21
 
-# tor — the daemon itself. It creates the `tor` user and drops privileges on
-# its own via the `User` directive in torrc; busybox supplies the `nc` the
-# health check uses.
+# tor — the daemon itself; busybox supplies the `nc` the health check uses.
 RUN apk add --no-cache tor
 
 COPY docker/tor/torrc.template /etc/tor/torrc.template
 COPY docker/tor/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Pre-create the volume mount points owned by `tor`, with the 0700 that Tor
+# demands of a HiddenServiceDir. Docker seeds a fresh named volume from the
+# image's directory ownership, so the container never needs root to fix
+# permissions — which is what lets it run entirely as an unprivileged user
+# below (Trivy DS-0002 / Semgrep missing-user-entrypoint).
+RUN mkdir -p /var/lib/tor/data /var/lib/tor/hidden_service /var/lib/tor-shared \
+    && chown -R tor:tor /var/lib/tor /var/lib/tor-shared \
+    && chmod 0700 /var/lib/tor/data /var/lib/tor/hidden_service \
+    && chmod 0755 /var/lib/tor-shared
 
 # The SOCKS port (client egress, used by the loopback self-check) and the
 # control port (read-only state queries). Neither is published to the host in
@@ -32,5 +40,10 @@ EXPOSE 9050 9051
 # backend gates on, so a healthy container means a usable capability.
 HEALTHCHECK --interval=15s --timeout=10s --start-period=180s --retries=10 \
     CMD /usr/local/bin/entrypoint.sh healthcheck
+
+# Never root. The entrypoint already branches on uid and skips the chown that
+# is unnecessary here, and torrc omits its `User` directive when it is not
+# root, so the daemon runs as this user throughout.
+USER tor
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

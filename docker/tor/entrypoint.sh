@@ -26,6 +26,14 @@ TORRC=/tmp/torrc
 if [ "${1:-}" = "healthcheck" ]; then
     # Ask Tor how far it has bootstrapped. Anything other than 100% means the
     # capability is not usable yet, so the container is not healthy yet.
+    # A hostname that never appeared means the onion service is not published,
+    # so the container is not healthy even if Tor itself bootstrapped fine.
+    # Without this the publish failure is invisible: the backend just reports
+    # no_onion_address with nothing pointing at the cause.
+    if [ -f "${SHARED_DIR}/hostname.failed" ]; then
+        echo "tor: hidden service hostname was never published" >&2
+        exit 1
+    fi
     response=$(printf 'AUTHENTICATE "%s"\r\nGETINFO status/bootstrap-phase\r\nQUIT\r\n' \
         "${TOR_CONTROL_PASSWORD}" | nc 127.0.0.1 9051 2>/dev/null || true)
     echo "${response}" | grep -q "PROGRESS=100" || exit 1
@@ -64,9 +72,20 @@ fi
 chmod 0700 "${HS_DIR}" "${DATA_DIR}"
 
 # ---------------------------------------------------------------------------
-# Render torrc. `tor --hash-password` prints the salted hash on its last line.
+# Render torrc.
+#
+# Set TOR_CONTROL_PASSWORD_HASH (output of `tor --hash-password` run
+# elsewhere) to avoid the plaintext appearing on Tor's command line, where
+# /proc/<pid>/cmdline exposes it to anything in this container for the
+# duration of the call. TOR_CONTROL_PASSWORD is still required either way:
+# the health check below authenticates with it, and AUTHENTICATE takes the
+# plaintext, not the hash.
 # ---------------------------------------------------------------------------
-hashed=$(tor --hash-password "${TOR_CONTROL_PASSWORD}" 2>/dev/null | tail -n 1)
+if [ -n "${TOR_CONTROL_PASSWORD_HASH:-}" ]; then
+    hashed="${TOR_CONTROL_PASSWORD_HASH}"
+else
+    hashed=$(tor --hash-password "${TOR_CONTROL_PASSWORD}" 2>/dev/null | tail -n 1)
+fi
 if [ -z "${hashed}" ]; then
     echo "tor: failed to hash the control password" >&2
     exit 1
@@ -87,11 +106,17 @@ chmod 0600 "${TORRC}"
 # Tor creates the file during startup, after we exec it.
 # ---------------------------------------------------------------------------
 (
+    # Clear any marker from a previous run before retrying.
+    rm -f "${SHARED_DIR}/hostname.failed"
     attempts=0
     while [ ! -s "${HS_DIR}/hostname" ]; do
         attempts=$((attempts + 1))
         if [ "${attempts}" -gt 300 ]; then
             echo "tor: hidden service hostname never appeared" >&2
+            # exit only ends this subshell, so leave a marker the health check
+            # inspects — otherwise the container stays "healthy" forever with
+            # no onion address published.
+            touch "${SHARED_DIR}/hostname.failed"
             exit 1
         fi
         sleep 1

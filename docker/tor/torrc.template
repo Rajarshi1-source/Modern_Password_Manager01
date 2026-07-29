@@ -17,6 +17,16 @@ DataDirectory /var/lib/tor/data
 # answers. Bound to the container network only — never published to the host.
 SocksPort 0.0.0.0:9050
 
+# An open SOCKS proxy is usable by anything that shares this network, so
+# restrict it explicitly rather than relying on topology alone. These are the
+# RFC1918 ranges container networks draw from; narrow them to the exact
+# backend subnet if it is known. The trailing reject is what makes this an
+# allow-list — without it Tor's default would accept everything.
+SocksPolicy accept 10.0.0.0/8
+SocksPolicy accept 172.16.0.0/12
+SocksPolicy accept 192.168.0.0/16
+SocksPolicy reject *
+
 # Control port. The backend uses it read-only: bootstrap progress, circuit
 # state, hidden-service configuration. Password-authenticated.
 ControlPort 0.0.0.0:9051

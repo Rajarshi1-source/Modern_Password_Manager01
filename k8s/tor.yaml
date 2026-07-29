@@ -35,21 +35,20 @@ spec:
     requests:
       storage: 1Gi
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: tor-secrets
-  namespace: password-manager
-  labels:
-    app: password-manager
-    component: tor
-type: Opaque
-stringData:
-  # Replace before applying. The control port is password-authenticated; the
-  # container refuses to start without this, because an unauthenticated control
-  # port would let anything in the namespace reconfigure Tor.
-  TOR_CONTROL_PASSWORD: "CHANGE_ME_TOR_CONTROL_PASSWORD"
----
+# -----------------------------------------------------------------------------
+# tor-secrets is deliberately NOT defined here.
+#
+# A committed placeholder is a real credential: applying the manifest unedited
+# would give the namespace a control-port password that is public in this
+# repository, which is equivalent to an unauthenticated control port for
+# anything that can reach tor-service:9051. Create it out of band instead:
+#
+#   kubectl -n password-manager create secret generic tor-secrets \
+#     --from-literal=TOR_CONTROL_PASSWORD="$(openssl rand -base64 32)"
+#
+# (or point an ExternalSecret/SealedSecret at the same key). The tor container
+# refuses to start without it.
+# -----------------------------------------------------------------------------
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -239,6 +238,12 @@ spec:
         # The leading dot matches the generated address without hardcoding it.
         - name: ALLOWED_HOSTS
           value: "$(ALLOWED_HOSTS),.onion"
+        # Tor publishes this service on port 80 and encrypts the circuit end
+        # to end, so the production HTTPS redirect must be off here: it would
+        # send every anonymous request to an https:// endpoint that does not
+        # exist. Clearnet listeners keep the default. See settings/base.py.
+        - name: SECURE_SSL_REDIRECT
+          value: "false"
         volumeMounts:
         - name: media-files
           mountPath: /app/media
@@ -303,11 +308,19 @@ spec:
     targetPort: 8443
 ---
 # =============================================================================
-# NetworkPolicy — only the tor pod may reach the onion ingress
+# NetworkPolicies
 # =============================================================================
-# Without this the onion ingress port is reachable from any pod in the
-# namespace, and "arrived on port 8443" would stop being evidence of anonymous
-# ingress. This policy is what backs that claim inside the cluster.
+# k8s/network-policy.yaml applies a namespace-wide default-deny for BOTH
+# ingress and egress, and its postgres/redis policies admit only
+# component: backend|websocket|celery-*. So every flow this feature needs must
+# be granted explicitly here, or the Tor path cannot become healthy at all.
+# Policies are additive, so these grants live with the opt-in feature instead
+# of editing the base manifest.
+#
+# The first policy is also a security control, not just connectivity: it is
+# what makes "arrived on port 8443" evidence of anonymous ingress inside the
+# cluster, since pod IPs are dynamic and cannot be listed in configuration
+# (which is what TOR_ONION_INGRESS_TRUSTED_PEERS does under docker-compose).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -329,6 +342,176 @@ spec:
         matchLabels:
           app: password-manager
           component: tor
+    ports:
+    - protocol: TCP
+      port: 8443
+---
+# The onion ingress listener needs the same backing services as the clearnet
+# backend, plus the Tor control/SOCKS ports.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-onion-egress
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend-onion
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: backend-onion
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          component: database
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          component: cache
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          component: tor
+    ports:
+    - protocol: TCP
+      port: 9050
+    - protocol: TCP
+      port: 9051
+---
+# Postgres and Redis admit only the components listed in the base manifest;
+# backend-onion is not among them, so it is added here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-from-backend-onion
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend-onion
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: database
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          component: backend-onion
+    ports:
+    - protocol: TCP
+      port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-from-backend-onion
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend-onion
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: cache
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          component: backend-onion
+    ports:
+    - protocol: TCP
+      port: 6379
+---
+# The clearnet backend reads Tor state so it can show users the .onion
+# address; without this its capability probe cannot reach the control port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-egress-to-tor
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: backend
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          component: tor
+    ports:
+    - protocol: TCP
+      port: 9050
+    - protocol: TCP
+      port: 9051
+---
+# Tor itself: its ports are reachable only from the two backends (the SOCKS
+# port is an open proxy to anything that can reach it), and it must be able to
+# egress to the Tor network and forward into the onion ingress listener.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tor-policy
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: tor
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: tor
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          component: backend
+    - podSelector:
+        matchLabels:
+          component: backend-onion
+    ports:
+    - protocol: TCP
+      port: 9050
+    - protocol: TCP
+      port: 9051
+  egress:
+  # Relays live on arbitrary addresses and ORPorts across the public internet,
+  # so this cannot be narrowed to a host or port list — it is inherent to
+  # running a Tor client. DNS is already granted namespace-wide by
+  # k8s/network-policy.yaml.
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+  - to:
+    - podSelector:
+        matchLabels:
+          component: backend-onion
     ports:
     - protocol: TCP
       port: 8443

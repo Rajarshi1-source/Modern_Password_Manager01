@@ -363,6 +363,11 @@ class DarkProtocolHealthView(APIView):
     own .onion through the Tor SOCKS proxy. That is the end-to-end proof the
     service is reachable, and it is opt-in because a cold descriptor fetch can
     take tens of seconds.
+
+    The self-check is restricted to staff: it blocks a request worker for up
+    to SELF_CHECK_TIMEOUT_SECONDS, and the result is cached, so letting any
+    authenticated user force a cache miss would hand them a cheap way to tie
+    up workers. It is an operator diagnostic, not user-facing data.
     """
     permission_classes = [IsAuthenticated]
     throttle_classes = [DarkProtocolRateThrottle]
@@ -372,7 +377,8 @@ class DarkProtocolHealthView(APIView):
         service = get_dark_protocol_service()
         health_status = service.get_network_status()
 
-        if str(request.query_params.get('verify', '')).lower() in ('1', 'true', 'yes'):
+        wants_verify = str(request.query_params.get('verify', '')).lower() in ('1', 'true', 'yes')
+        if wants_verify and getattr(request.user, 'is_staff', False):
             health_status['self_check'] = service.tor.check_onion_reachable().to_dict()
 
         return Response(health_status)

@@ -192,18 +192,38 @@ services:
       - media_volume:/app/media
       - tor_shared:/var/lib/tor-shared:ro
     environment:
-      - DEBUG=${DEBUG:-True}
+      # Never DEBUG on the onion surface: this listener answers anonymous
+      # clients, and a debug traceback would hand them settings and SQL.
+      - DEBUG=false
+      # Tor encrypts the circuit end to end and publishes this service on port
+      # 80, so an https:// redirect would point anonymous clients at an
+      # endpoint that does not exist. See the SECURE_SSL_REDIRECT comment in
+      # settings/base.py — this override is for the onion listener only.
+      - SECURE_SSL_REDIRECT=false
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       # The leading dot matches every subdomain, which is how the generated
       # .onion address is accepted without knowing it in advance. Django
       # rejects any other Host, and a rejected Host is never onion ingress.
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1},.onion
       - USE_REDIS_CHANNELS=${USE_REDIS_CHANNELS:-false}
       - USE_REDIS_CACHE=${USE_REDIS_CACHE:-false}
+      - OIDC_RP_CLIENT_ID=${OIDC_RP_CLIENT_ID:-}
+      - OIDC_RP_CLIENT_SECRET=${OIDC_RP_CLIENT_SECRET:-}
+      - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
+      - OIDC_VERIFY_SSL=${OIDC_VERIFY_SSL:-True}
+      - OIDC_USE_NONCE=${OIDC_USE_NONCE:-True}
       - TOR_ENABLED=true
+      # Compose puts every service on one bridge network, so "listens on 8443
+      # with no published port" keeps the listener off the host but NOT away
+      # from sibling containers. This pins the only peer whose connections may
+      # be treated as onion ingress; without it a compromised sibling could
+      # present the onion Host on 8443 and be labelled anonymous.
+      - TOR_ONION_INGRESS_TRUSTED_PEERS=tor
       - TOR_CONTROL_HOST=tor
       - TOR_CONTROL_PORT=9051
       - "TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:?Set TOR_CONTROL_PASSWORD in .env to use the tor profile}"

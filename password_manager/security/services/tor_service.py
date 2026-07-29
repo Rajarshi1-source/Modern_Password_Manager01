@@ -86,6 +86,7 @@ def _default_config() -> Dict[str, Any]:
         'ONION_HOSTNAME': '',
         'ONION_HOSTNAME_FILE': '',
         'ONION_INGRESS_PORT': 0,
+        'ONION_INGRESS_TRUSTED_PEERS': '',
         'CAPABILITY_TTL_SECONDS': 15,
         'CONTROL_TIMEOUT_SECONDS': 5,
         'SELF_CHECK_PATH': '/api/security/dark-protocol/ping/',
@@ -413,10 +414,16 @@ class TorService:
             if fresh and not force_refresh:
                 return self._cached
 
-            capability = self._probe(config)
+        # Probe OUTSIDE the lock. request_is_onion_ingress sits on the vault
+        # request path, so holding the lock across a control-port round trip
+        # would queue every request thread behind one wedged daemon. Two
+        # threads racing a cache miss may both probe; a duplicate read-only
+        # GETINFO is far cheaper than serialising the request pool.
+        capability = self._probe(config)
+        with self._lock:
             self._cached = capability
             self._cached_at = time.monotonic()
-            return capability
+        return capability
 
     def get_circuit_relays(self) -> List[Dict[str, Any]]:
         """Relays of the currently built circuits, read live from Tor.
@@ -471,14 +478,20 @@ class TorService:
     def request_is_onion_ingress(self, request) -> bool:
         """True when THIS request arrived over our onion service.
 
-        Two independent conditions must hold:
+        Three conditions must hold, and none of them is client-supplied:
 
-        1. The request was served on ``ONION_INGRESS_PORT``. This is the
-           load-bearing one: that port is bound to the internal container
-           network and is reachable only by the Tor daemon, never published to
-           the host, so arriving on it is a network fact a remote client
-           cannot arrange.
-        2. The Host header equals our published onion address, which is what a
+        1. The request was served on ``ONION_INGRESS_PORT`` — a port with no
+           published host mapping, so it is unreachable from outside the
+           deployment.
+        2. The peer address is one of ``ONION_INGRESS_TRUSTED_PEERS``, when
+           configured. Condition 1 alone is NOT exclusivity: docker-compose
+           puts every service on one bridge network, so a sibling container
+           can reach 8443 directly and present the onion Host. This check is
+           what makes "only the Tor daemon can produce onion ingress" true
+           there. In Kubernetes the NetworkPolicy in k8s/tor.yaml enforces the
+           same restriction at the network layer, where pod IPs are dynamic
+           and cannot be listed here.
+        3. The Host header equals our published onion address, which is what a
            client reaching the onion sends.
 
         A header such as ``X-Onion-Ingress`` is deliberately NOT trusted:
@@ -500,12 +513,55 @@ class TorService:
         if served_port != int(ingress_port):
             return False
 
+        if not self._peer_is_trusted(config, request):
+            return False
+
         capability = self.get_capability()
         if not capability.anonymity_active or not capability.onion_address:
             return False
 
         host = _request_host(request)
         return bool(host) and host == capability.onion_address
+
+    def _peer_is_trusted(self, config: Dict[str, Any], request) -> bool:
+        """Whether the connecting peer may produce onion ingress.
+
+        Entries may be IP addresses or hostnames (docker-compose service names
+        resolve to the container's address). Resolution failures reject rather
+        than admit: a name that will not resolve is not evidence the peer is
+        the Tor daemon.
+
+        An empty setting means "not enforced here" — Kubernetes relies on its
+        NetworkPolicy instead, because pod IPs cannot be enumerated in
+        configuration. It is set in docker-compose, where nothing else
+        restricts sibling containers.
+        """
+        raw = str(config.get('ONION_INGRESS_TRUSTED_PEERS') or '').strip()
+        if not raw:
+            return True
+
+        peer = str((getattr(request, 'META', None) or {}).get('REMOTE_ADDR') or '').strip()
+        if not peer:
+            return False
+
+        import socket
+
+        for entry in raw.split(','):
+            candidate = entry.strip()
+            if not candidate:
+                continue
+            if candidate == peer:
+                return True
+            try:
+                # Resolve every address the name maps to: a compose service can
+                # answer on more than one, and matching only the first would
+                # reject legitimate ingress.
+                infos = socket.getaddrinfo(candidate, None)
+            except OSError:
+                continue
+            if any(info[4][0] == peer for info in infos):
+                return True
+        return False
 
     # -------------------------------------------------------------------
     # End-to-end self check
@@ -582,6 +638,12 @@ class TorService:
 
         started = time.monotonic()
         try:
+            # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
+            # http:// is correct here and https:// would be wrong: the request
+            # goes to a .onion over the Tor SOCKS proxy, and Tor encrypts that
+            # circuit end to end with the service's own keys. There is no
+            # clearnet hop for TLS to protect, and onion services do not
+            # normally hold CA-issued certificates.
             response = requests.get(url, proxies=proxies, timeout=timeout, allow_redirects=False)
         except Exception as exc:
             # PySocks raises on a missing/refused proxy; requests raises on

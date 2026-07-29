@@ -72,7 +72,7 @@ httpx>=0.27.0
 #              onion descriptor). Without it the capability reports Unavailable.
 #   PySocks  — SOCKS5 support for requests, used by the onion loopback
 #              self-check (socks5h, so the .onion resolves inside Tor).
-stem>=1.8.2
+stem==1.8.2
 PySocks==1.7.1
 
 # AWS & Cloud Storage

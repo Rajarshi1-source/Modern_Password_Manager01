@@ -53,7 +53,11 @@ data:
   TOR_CONTROL_PORT: "9051"
   TOR_SOCKS_HOST: "tor-service"
   TOR_SOCKS_PORT: "9050"
-  TOR_ONION_HOSTNAME_FILE: "/var/lib/tor-shared/hostname"
+  # Set this to the address printed by the provisioning step in k8s/tor.yaml.
+  # There is no hostname-file equivalent here: that file lives on the tor pod's
+  # own volume and backend pods cannot read it, so pointing at a path they do
+  # not have would only produce an unreadable-file warning on every probe.
+  # TOR_ONION_HOSTNAME: "<56-char-address>.onion"
   # The port the onion service forwards to. Reachable only from the tor pod
   # via NetworkPolicy — that is what makes onion ingress detectable.
   TOR_ONION_INGRESS_PORT: "8443"
