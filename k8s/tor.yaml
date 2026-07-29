@@ -562,6 +562,13 @@ spec:
         - 169.254.0.0/16
     ports:
     - protocol: TCP
+  # TOR_ONION_TARGET names the Service, while this rule selects the pods behind
+  # it. That relies on the CNI evaluating egress policy AFTER kube-proxy's
+  # Service DNAT, which is the same thing the existing backend -> postgres rule
+  # in k8s/network-policy.yaml already depends on (it selects
+  # component: database while the app connects to postgres-service). Selecting
+  # pods is more precise than allowing a Service CIDR, so this follows the
+  # established pattern rather than widening it.
   - to:
     - podSelector:
         matchLabels:

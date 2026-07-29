@@ -679,12 +679,15 @@ class TorService:
 
         started = time.monotonic()
         try:
-            # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
             # http:// is correct here and https:// would be wrong: the request
             # goes to a .onion over the Tor SOCKS proxy, and Tor encrypts that
             # circuit end to end with the service's own keys. There is no
             # clearnet hop for TLS to protect, and onion services do not
             # normally hold CA-issued certificates.
+            # The suppression must sit on the line immediately above the
+            # finding — with the rationale in between it never applied, which
+            # is why the alert kept reappearing.
+            # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
             response = requests.get(url, proxies=proxies, timeout=timeout, allow_redirects=False)
         except Exception as exc:
             # PySocks raises on a missing/refused proxy; requests raises on
