@@ -195,11 +195,11 @@ services:
       # Never DEBUG on the onion surface: this listener answers anonymous
       # clients, and a debug traceback would hand them settings and SQL.
       - DEBUG=false
-      # Tor encrypts the circuit end to end and publishes this service on port
-      # 80, so an https:// redirect would point anonymous clients at an
-      # endpoint that does not exist. See the SECURE_SSL_REDIRECT comment in
-      # settings/base.py — this override is for the onion listener only.
-      - SECURE_SSL_REDIRECT=false
+      # Declares this process as the onion ingress listener, which exempts it
+      # from the HTTPS-coupled settings (redirect, Secure cookies, HSTS). Tor
+      # publishes on port 80 and encrypts the circuit end to end, so those
+      # would break the path rather than protect it. See settings/base.py.
+      - ONION_LISTENER=true
       - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
       - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0

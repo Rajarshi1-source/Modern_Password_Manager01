@@ -171,6 +171,28 @@ spec:
     port: 9051
     targetPort: 9051
 ---
+# Headless companion to the service above. Its DNS name resolves to the tor
+# POD IPs rather than a virtual ClusterIP, which is what the backend's
+# trusted-peer check needs: the source address of an onion request is the
+# pod's own, so resolving the ClusterIP would never match.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tor-headless
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: tor
+spec:
+  clusterIP: None
+  selector:
+    app: password-manager
+    component: tor
+  ports:
+  - name: control
+    port: 9051
+    targetPort: 9051
+---
 # =============================================================================
 # Onion ingress listener
 # =============================================================================
@@ -238,12 +260,18 @@ spec:
         # The leading dot matches the generated address without hardcoding it.
         - name: ALLOWED_HOSTS
           value: "$(ALLOWED_HOSTS),.onion"
-        # Tor publishes this service on port 80 and encrypts the circuit end
-        # to end, so the production HTTPS redirect must be off here: it would
-        # send every anonymous request to an https:// endpoint that does not
-        # exist. Clearnet listeners keep the default. See settings/base.py.
-        - name: SECURE_SSL_REDIRECT
-          value: "false"
+        # Declares this process as the onion ingress listener, which exempts it
+        # from the HTTPS-coupled settings (redirect, Secure cookies, HSTS).
+        # Tor publishes on port 80 and encrypts the circuit end to end, so
+        # those would break the path rather than protect it. Clearnet
+        # listeners must never set this. See settings/base.py.
+        - name: ONION_LISTENER
+          value: "true"
+        # Headless service, not the ClusterIP one: the source address of the
+        # traffic is the tor POD's, so this must resolve to pod IPs. An empty
+        # list fails closed, so this is required for onion ingress to work.
+        - name: TOR_ONION_INGRESS_TRUSTED_PEERS
+          value: "tor-headless.password-manager.svc.cluster.local"
         volumeMounts:
         - name: media-files
           mountPath: /app/media
@@ -258,17 +286,34 @@ spec:
           limits:
             memory: "2Gi"
             cpu: "1000m"
+        # exec, not httpGet, and deliberately so. An httpGet probe is delivered
+        # by the kubelet from the node address, which the ingress NetworkPolicy
+        # below does not admit — and widening that policy to let probes through
+        # would also widen the very restriction that makes "arrived on 8443"
+        # evidence of onion ingress. Whether a given CNI enforces policy on
+        # kubelet probes varies; an exec probe over loopback does not depend on
+        # that at all, because the traffic never touches the pod network.
+        #
+        # This checks that Daphne is accepting connections, not that a request
+        # succeeds end to end: an HTTP probe to 127.0.0.1 would be rejected by
+        # ALLOWED_HOSTS, which lists the public names and .onion. The clearnet
+        # backend Deployment continues to run the full /live/ and /ready/
+        # checks against the same image and code.
         livenessProbe:
-          httpGet:
-            path: /live/
-            port: 8443
+          exec:
+            command:
+            - python
+            - -c
+            - "import socket; socket.create_connection(('127.0.0.1', 8443), 5).close()"
           initialDelaySeconds: 60
           periodSeconds: 30
           timeoutSeconds: 10
         readinessProbe:
-          httpGet:
-            path: /ready/
-            port: 8443
+          exec:
+            command:
+            - python
+            - -c
+            - "import socket; socket.create_connection(('127.0.0.1', 8443), 5).close()"
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -500,12 +545,21 @@ spec:
       port: 9051
   egress:
   # Relays live on arbitrary addresses and ORPorts across the public internet,
-  # so this cannot be narrowed to a host or port list — it is inherent to
-  # running a Tor client. DNS is already granted namespace-wide by
+  # so the destination cannot be narrowed to a host or port list — that is
+  # inherent to running a Tor client. What it CAN exclude is the cluster
+  # itself: without these, anything able to reach the SOCKS port could use Tor
+  # as a pivot to internal services. Adjust the ranges to the cluster's pod and
+  # service CIDRs. The explicit backend-onion grant below is a separate rule,
+  # so it still applies. DNS is granted namespace-wide by
   # k8s/network-policy.yaml.
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 169.254.0.0/16
     ports:
     - protocol: TCP
   - to:
