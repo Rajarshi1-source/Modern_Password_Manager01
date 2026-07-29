@@ -1093,6 +1093,13 @@ SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 # must move together and each one alone is a footgun on a clearnet listener.
 # Setting it declares what the process is; the consequences below follow from
 # that, and a clearnet listener can never be half-configured by accident.
+#
+# DEPLOYMENT CONSTRAINT: it applies to the WHOLE process, so it may only be
+# set on a process that serves onion traffic EXCLUSIVELY. Setting it on a
+# process that also answers clearnet requests would drop the HTTPS redirect
+# and the Secure cookie flags for those requests too. Both deployments honour
+# this by running a dedicated listener (`backend-onion` in docker-compose,
+# the backend-onion Deployment in k8s/tor.yaml) that has no clearnet route.
 ONION_LISTENER = os.environ.get('ONION_LISTENER', 'False').lower() == 'true'
 
 # Force HTTPS in production

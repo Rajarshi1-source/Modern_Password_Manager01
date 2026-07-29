@@ -46,6 +46,12 @@ spec:
 #   kubectl -n password-manager create secret generic tor-secrets \
 #     --from-literal=TOR_CONTROL_PASSWORD="$(openssl rand -base64 32)"
 #
+# Optionally add TOR_CONTROL_PASSWORD_HASH (the output of
+# `tor --hash-password <secret>`) to the same secret, which keeps the
+# plaintext off Tor's argv at startup. The plaintext key is still required:
+# the health check authenticates with it, and AUTHENTICATE takes the
+# plaintext, not the hash.
+#
 # (or point an ExternalSecret/SealedSecret at the same key). The tor container
 # refuses to start without it.
 # -----------------------------------------------------------------------------

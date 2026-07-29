@@ -131,7 +131,6 @@ class VaultOperationResult:
     error_message: Optional[str] = None
     error_code: Optional[str] = None
     latency_ms: int = 0
-    path_used: Optional[str] = None
     status_code: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -156,6 +155,15 @@ class VaultOperationResult:
 # Operations are dispatched to the genuine vault views, so ownership scoping,
 # permissions, serializer validation and audit logging are the vault's own -
 # there is no second implementation of vault access here to drift out of sync.
+
+class InvalidVaultPayload(ValueError):
+    """A payload this endpoint can reject before touching the vault.
+
+    Distinct from a bare ValueError so the boundary below cannot relabel an
+    error raised INSIDE the dispatched vault view (a serializer, a UUID
+    conversion) as the caller's fault and swallow its traceback.
+    """
+
 
 VAULT_OPERATION_ROUTES: Dict[str, Dict[str, Any]] = {
     'vault_list': {'method': 'GET', 'route': 'api-vault-list'},
@@ -714,7 +722,7 @@ class DarkProtocolService:
 
         try:
             status_code, data = self._dispatch_vault_operation(request, route, payload or {})
-        except ValueError as exc:
+        except InvalidVaultPayload as exc:
             # A malformed payload (e.g. a detail operation with no id) is the
             # caller's error, so it must not surface as an internal failure.
             return VaultOperationResult(
@@ -789,7 +797,7 @@ class DarkProtocolService:
         if route.get('needs_id'):
             item_id = payload.get('id') or payload.get('item_id')
             if not item_id:
-                raise ValueError('id is required for this operation')
+                raise InvalidVaultPayload('id is required for this operation')
             path = reverse(route['route'], args=[str(item_id)])
         else:
             path = reverse(route['route'])
@@ -956,13 +964,15 @@ class DarkProtocolService:
             last_seen_at__gt=five_min_ago,
         ).count()
 
-        recent_health = NetworkHealth.objects.filter(
+        # Aggregated in the database: this endpoint is polled by the
+        # dashboard, and the previous form ran exists() + count() and pulled
+        # every recent row into memory to average it.
+        from django.db.models import Avg
+
+        avg_latency = NetworkHealth.objects.filter(
             checked_at__gt=five_min_ago,
             is_reachable=True,
-        )
-        avg_latency = 0
-        if recent_health.exists():
-            avg_latency = sum(h.latency_ms for h in recent_health) / recent_health.count()
+        ).aggregate(value=Avg('latency_ms'))['value'] or 0
 
         return {
             'anonymity_active': capability.anonymity_active,
@@ -984,7 +994,7 @@ class DarkProtocolService:
             'checked_at': now.isoformat(),
         }
 
-    def get_available_nodes(self, node_type: str = None) -> List[Dict[str, Any]]:
+    def get_available_nodes(self, node_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """Relays of the live Tor circuits carrying this deployment's traffic.
 
         This used to return rows from ``DarkProtocolNode``, which described

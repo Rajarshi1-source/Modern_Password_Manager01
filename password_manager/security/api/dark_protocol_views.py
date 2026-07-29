@@ -522,12 +522,18 @@ class DarkProtocolVaultProxyView(APIView):
                 ),
             )
 
+        # Always 200 for the envelope, with the vault's own status as a field.
+        # Echoing the inner status broke vault_delete: the vault's destroy()
+        # answers 204 No Content, and a 204 carrying an envelope body is a
+        # contradiction — clients (including response.json() in
+        # darkProtocolService) read 204 as "no body" and would see nothing.
         return Response({
             'success': True,
             'operation_id': result.operation_id,
+            'status_code': result.status_code,
             'data': result.response_data,
             'latency_ms': result.latency_ms,
-        }, status=result.status_code or status.HTTP_200_OK)
+        })
 
 
 # =============================================================================

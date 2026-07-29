@@ -162,6 +162,11 @@ services:
       # No default: an unauthenticated control port would let anything on this
       # network reconfigure Tor, so the container refuses to start without it.
       - "TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:?Set TOR_CONTROL_PASSWORD in .env to use the tor profile}"
+      # Optional. Set to the output of `tor --hash-password <secret>` run
+      # outside the container to keep the plaintext off Tor's argv at startup.
+      # The plaintext above is still required: the health check authenticates
+      # with it, and AUTHENTICATE takes the plaintext.
+      - TOR_CONTROL_PASSWORD_HASH=${TOR_CONTROL_PASSWORD_HASH:-}
       - TOR_ONION_TARGET=backend-onion:8443
     volumes:
       # Private to this container: holds the hidden-service private key.
