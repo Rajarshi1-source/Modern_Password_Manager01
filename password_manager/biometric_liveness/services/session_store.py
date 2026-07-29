@@ -495,14 +495,22 @@ class RedisSessionStore:
             and session['expires_at'] > timezone.now()
         )
 
-    def save(self, session_id: str, session: Dict) -> bool:
+    def save(self, session_id: str, session: Dict, *, fenced: bool = True) -> bool:
         """
         Persist the session, but ONLY if this thread still holds its lease.
 
         Returns False when the lease was lost, meaning nothing was written and
         the caller's in-hand copy is stale (another worker owns the session and
-        may already have advanced it). The create path holds the global
-        create-lock instead of a per-session lease, so it saves unfenced.
+        may already have advanced it).
+
+        ``fenced=False`` is how a caller SAYS it is writing without a
+        per-session lease -- the create path, which holds the global create-lock
+        instead. It must be explicit: inferring it from a missing token would
+        make "deliberately unfenced" and "the lease is gone" the same thing, and
+        the second case -- a save from a thread that never acquired, or one
+        issued after release() -- would then silently become a full-blob
+        overwrite of whatever worker owns the session now. That is precisely
+        what the fence exists to reject, so it is refused loudly instead.
 
         What each branch writes, unchanged from when this was six client-side
         commands -- see _SAVE_LUA for why it is now one:
@@ -540,9 +548,16 @@ class RedisSessionStore:
         # and the refresh happens on the LATEST live save, so a key always
         # outlives the deadline of every id still indexed.
         deadline = session['expires_at'].timestamp() if is_live else 0
+        token = self._tokens.get(session_id)
+        if fenced and token is None:
+            logger.error(
+                "Liveness session %s: fenced save with no lease held; refusing "
+                "the write rather than overwriting the session's current owner",
+                session_id)
+            return False
         return bool(self._save_script(
             keys=keys,
-            args=[self._tokens.get(session_id, ''), blob,
+            args=['' if not fenced else token, blob,
                   '1' if is_live else '0', self.retention_seconds,
                   self.retention_seconds * 1000, deadline, session_id,
                   '' if uid is None else uid]))
@@ -672,6 +687,12 @@ class RedisSessionStore:
     def count_live(self, user_id: int) -> tuple:
         """
         (global_live, user_live), matching the in-memory backend's _is_live().
+
+        Prunes the GLOBAL index and the caller's OWN per-user index only. Another
+        user's abandoned members survive until that user next creates a session
+        or their index key's TTL lapses, so their per-user count can read high
+        for up to the retention window -- bounded, but do not read this as the
+        whole index self-healing on every call.
 
         Drops every past-deadline id first. An ABANDONED session is never saved
         again, so nothing else would ever remove it: it would keep consuming a

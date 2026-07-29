@@ -715,7 +715,20 @@ class MicroExpressionAnalyzer:
         raw_ts = state.get('au_timestamps')
         if not isinstance(raw_ts, (list, tuple)):
             raw_ts = []
-        self.au_timestamps = deque(raw_ts, maxlen=self.AU_HISTORY_FRAMES)
+        # Coerced like every neighbour here. Latent today -- nothing scores off
+        # these (detect_micro_expressions, the only consumer that does
+        # arithmetic on them, has no callers) -- but leaving the one unvalidated
+        # field in a method whose whole contract is tolerance is how the next
+        # wiring inherits a raise from a path built to degrade.
+        stamps = []
+        for t in raw_ts:
+            try:
+                value = float(t)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                stamps.append(value)
+        self.au_timestamps = deque(stamps, maxlen=self.AU_HISTORY_FRAMES)
         # `is True`, NOT bool(): every non-empty string is truthy, so a blob
         # carrying the STRING 'false' would restore _blinked as True and hand
         # out the blink half of the score for free. Of all the fields here this

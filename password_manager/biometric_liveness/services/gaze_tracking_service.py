@@ -736,13 +736,27 @@ class GazeTrackingService:
         raw = (state or {}).get('gaze_history')
         if not isinstance(raw, (list, tuple)):
             raw = []
+        def _finite(value):
+            """float() accepts NaN/Infinity and json round-trips both, so a
+            bare conversion would admit numbers that poison the fixation and
+            dispersion arithmetic downstream while looking validated."""
+            out = float(value)
+            if not np.isfinite(out):
+                raise ValueError
+            return out
+
         for p in raw:
             try:
                 restored.append(GazePoint(
-                    x=p['x'], y=p['y'], timestamp_ms=p['timestamp_ms'],
-                    confidence=p['confidence'], is_fixation=p['is_fixation'],
+                    x=_finite(p['x']), y=_finite(p['y']),
+                    timestamp_ms=_finite(p['timestamp_ms']),
+                    confidence=_finite(p['confidence']),
+                    # `is True`, not truthiness: is_fixation is COUNTED
+                    # (`sum(1 for g in gaze_data if g.is_fixation)`), so the
+                    # string 'false' would restore as a fixation.
+                    is_fixation=p['is_fixation'] is True,
                     pupil_diameter=p.get('pupil_diameter'),
                 ))
-            except (KeyError, TypeError):
+            except (KeyError, TypeError, ValueError):
                 continue
         self.gaze_history = deque(restored, maxlen=self.GAZE_HISTORY_POINTS)

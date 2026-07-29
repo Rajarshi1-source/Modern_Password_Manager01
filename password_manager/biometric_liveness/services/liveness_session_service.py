@@ -426,7 +426,10 @@ class LivenessSessionService:
             # today -- but silently ignoring it would hand back a session_id
             # whose blob was never stored, and every later frame would 404 from
             # owner_of/load with nothing pointing at the cause.
-            if not store.save(session_id, session):
+            # fenced=False is the CREATE contract, stated rather than inferred:
+            # this path holds the global create-lock and has no per-session
+            # lease, so the store must not mistake it for a lost one.
+            if not store.save(session_id, session, fenced=False):
                 raise SessionLockError(
                     'Liveness session store rejected the create write')
         finally:
