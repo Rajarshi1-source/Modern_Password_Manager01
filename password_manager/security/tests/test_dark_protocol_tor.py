@@ -189,6 +189,47 @@ class TorCapabilityTests(_TorTestMixin, TestCase):
         self.assertEqual(capability.bootstrap_progress, 45)
 
     @override_settings(TOR=_tor_settings())
+    def test_out_of_range_bootstrap_is_rejected_not_clamped(self):
+        """An uninterpretable progress value must not become "bootstrapped".
+
+        This used to clamp, so 101 became 100 and granted the capability —
+        turning an answer we cannot interpret into the most permissive one it
+        could have meant.
+        """
+        controller = _FakeController(bootstrap='NOTICE BOOTSTRAP PROGRESS=101 TAG=done')
+        capability = self._service(controller).get_capability()
+
+        self.assertEqual(capability.bootstrap_progress, 0)
+        self.assertFalse(capability.bootstrapped)
+        self.assertFalse(capability.anonymity_active)
+
+    @override_settings(TOR=_tor_settings(CAPABILITY_TTL_SECONDS=300))
+    def test_probe_invalidated_mid_flight_does_not_repopulate_the_cache(self):
+        """A probe that started before reset_cache() must not publish after it.
+
+        Probes run outside the lock so a wedged daemon cannot serialise the
+        request pool; the cost is that an in-flight answer can land after an
+        invalidation and silently restore state that was deliberately cleared.
+        """
+        service = self._service()
+
+        # Invalidate while the probe is "in flight", from inside the probe.
+        original_probe = service._probe
+
+        def _probe_then_invalidate(config):
+            result = original_probe(config)
+            service.reset_cache()
+            return result
+
+        with patch.object(service, '_probe', side_effect=_probe_then_invalidate):
+            capability = service.get_capability()
+
+        # The caller still gets what the probe actually read...
+        self.assertTrue(capability.anonymity_active)
+        # ...but the cleared cache stays cleared.
+        self.assertIsNone(service._cached)
+
+    @override_settings(TOR=_tor_settings())
     def test_no_circuit_is_not_active(self):
         controller = _FakeController(circuit_established='0')
         capability = self._service(controller).get_capability()
