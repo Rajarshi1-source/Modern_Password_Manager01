@@ -110,6 +110,10 @@ class _FakeCircuit:
 ONION = 'a' * 56 + '.onion'
 OTHER_ONION = 'b' * 56 + '.onion'
 
+# Stands in for the Tor daemon's address. Requests that claim onion ingress
+# must come from it, so the API tests below present it as REMOTE_ADDR.
+TRUSTED_PEER = '10.1.2.3'
+
 TOR_SETTINGS = {
     'ENABLED': True,
     'CONTROL_HOST': '127.0.0.1',
@@ -117,6 +121,9 @@ TOR_SETTINGS = {
     'CONTROL_PASSWORD': 'secret',
     'ONION_HOSTNAME': ONION,
     'ONION_INGRESS_PORT': 8443,
+    # Required: an empty peer list fails closed, so the shared settings pin a
+    # peer that the request helpers below present as REMOTE_ADDR.
+    'ONION_INGRESS_TRUSTED_PEERS': TRUSTED_PEER,
     # No caching between assertions: each test drives a distinct daemon state
     # and must observe it, not a previous test's answer.
     'CAPABILITY_TTL_SECONDS': 0,
@@ -232,6 +239,24 @@ class TorCapabilityTests(_TorTestMixin, TestCase):
         self.assertFalse(capability.anonymity_active)
         self.assertEqual(capability.reason, 'no_onion_address')
 
+    @override_settings(TOR=_tor_settings())
+    def test_stale_configured_hostname_conflicting_with_tor_is_rejected(self):
+        """A configured address wins over discovery, so it must not go stale.
+
+        If ONION_HOSTNAME is left pointing at an address Tor no longer serves,
+        advertising it as active sends clients somewhere that does not answer
+        while the UI reports available. When both sources exist they must agree.
+        """
+        controller = _FakeController(
+            hidden_service_dirs=(),
+            onions_current=OTHER_ONION.replace('.onion', ''),
+        )
+        capability = self._service(controller).get_capability()
+
+        self.assertFalse(capability.anonymity_active)
+        self.assertEqual(capability.reason, 'onion_address_mismatch')
+        self.assertIsNone(capability.onion_address)
+
     @override_settings(TOR=_tor_settings(ONION_HOSTNAME='', CAPABILITY_TTL_SECONDS=0))
     def test_ephemeral_onion_from_control_port_is_accepted(self):
         """Onions created over the control port carry no .onion suffix."""
@@ -306,7 +331,7 @@ class TorCircuitRelayTests(_TorTestMixin, TestCase):
 class OnionIngressTests(_TorTestMixin, TestCase):
     """Only a request that really came through the onion counts as anonymous."""
 
-    def _request(self, port=8443, host=ONION, peer='10.1.2.3'):
+    def _request(self, port=8443, host=ONION, peer=TRUSTED_PEER):
         class _Request:
             def __init__(self, port, host, peer):
                 self._port = port
@@ -358,12 +383,23 @@ class OnionIngressTests(_TorTestMixin, TestCase):
         service = self._service(controller)
         self.assertFalse(service.request_is_onion_ingress(self._request()))
 
-    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.1.2.3'))
+    @override_settings(TOR=_tor_settings())
     def test_trusted_peer_on_ingress_port_is_anonymous(self):
         service = self._service()
-        self.assertTrue(service.request_is_onion_ingress(self._request(peer='10.1.2.3')))
+        self.assertTrue(service.request_is_onion_ingress(self._request(peer=TRUSTED_PEER)))
 
-    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.1.2.3'))
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS=''))
+    def test_unconfigured_trusted_peers_fails_closed(self):
+        """No configured peer list means nothing has been verified.
+
+        Treating "unset" as "trust everyone" would let a deployment that
+        forgot this setting report connections as anonymous without checking
+        anything — the middle state this feature must not have.
+        """
+        service = self._service()
+        self.assertFalse(service.request_is_onion_ingress(self._request()))
+
+    @override_settings(TOR=_tor_settings())
     def test_untrusted_peer_is_not_anonymous(self):
         """A sibling container on the same network is not the Tor daemon.
 
@@ -375,7 +411,7 @@ class OnionIngressTests(_TorTestMixin, TestCase):
         service = self._service()
         self.assertFalse(service.request_is_onion_ingress(self._request(peer='10.9.9.9')))
 
-    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.1.2.3'))
+    @override_settings(TOR=_tor_settings())
     def test_missing_peer_address_is_not_anonymous(self):
         """No REMOTE_ADDR means no evidence, which must not read as trusted."""
         service = self._service()
@@ -566,6 +602,7 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
                 SERVER_PORT='8443',
                 HTTP_HOST=ONION,
                 HTTP_AUTHORIZATION=self._bearer(),
+                REMOTE_ADDR=TRUSTED_PEER,
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
@@ -599,6 +636,7 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
                 SERVER_PORT='8443',
                 HTTP_HOST=ONION,
                 HTTP_AUTHORIZATION=self._bearer(),
+                REMOTE_ADDR=TRUSTED_PEER,
             )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
@@ -618,6 +656,7 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
                 SERVER_PORT='8443',
                 HTTP_HOST=ONION,
                 HTTP_AUTHORIZATION=self._bearer(),
+                REMOTE_ADDR=TRUSTED_PEER,
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -635,6 +674,7 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
                 SERVER_PORT='8443',
                 HTTP_HOST=ONION,
                 HTTP_AUTHORIZATION=self._bearer(),
+                REMOTE_ADDR=TRUSTED_PEER,
             )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

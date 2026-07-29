@@ -1087,18 +1087,32 @@ SECURE_HSTS_PRELOAD = True
 X_FRAME_OPTIONS = 'DENY'
 SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
+# Is THIS process the Tor onion ingress listener?
+#
+# One flag rather than three separate override knobs, because these settings
+# must move together and each one alone is a footgun on a clearnet listener.
+# Setting it declares what the process is; the consequences below follow from
+# that, and a clearnet listener can never be half-configured by accident.
+ONION_LISTENER = os.environ.get('ONION_LISTENER', 'False').lower() == 'true'
+
 # Force HTTPS in production
 if not DEBUG:
-    # Overridable for the Tor onion ingress listener ONLY. An onion service is
-    # reached over a circuit Tor encrypts end to end and which never leaves the
-    # network, so there is no clearnet hop for TLS to protect; meanwhile Tor
-    # publishes the service on port 80, so redirecting to https:// would send
-    # every anonymous request to an endpoint that does not exist and break the
-    # feature outright. Clearnet listeners must leave this at the default.
-    SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True').lower() == 'true'
+    # The onion listener is exempt from the HTTPS-coupled settings, and only it.
+    # Tor publishes the service on port 80 and encrypts the circuit end to end
+    # with the service's own keys, so:
+    #   * redirecting to https:// would send every anonymous request to an
+    #     endpoint that does not exist, breaking the feature outright;
+    #   * Secure cookies would never be sent by the browser over http://,
+    #     silently breaking session and CSRF flows;
+    #   * HSTS is meaningless here (RFC 6797 forbids honouring it over
+    #     non-secure transport) and would be ignored anyway.
+    # There is no clearnet hop for TLS to protect on this path.
+    SECURE_SSL_REDIRECT = not ONION_LISTENER
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = not ONION_LISTENER
+    CSRF_COOKIE_SECURE = not ONION_LISTENER
+    if ONION_LISTENER:
+        SECURE_HSTS_SECONDS = 0
 
 # ==============================================================================
 # ENHANCED CORS SETTINGS FOR JWT-BASED SPA

@@ -277,6 +277,26 @@ class TorService:
             # which actually connects to the address through Tor.
             published = bool(address) and self._hidden_service_configured(controller)
 
+            # A configured ONION_HOSTNAME wins over discovery, so a stale value
+            # left in configuration would be advertised as live while Tor
+            # actually serves a different address - clients would be sent
+            # somewhere that does not answer, with the UI reporting available.
+            # When both sources exist they must agree; when only one does there
+            # is nothing to cross-check and the single source stands.
+            if published and self._address_conflicts(config, controller, address):
+                return replace(
+                    TorCapability(
+                        configured=True,
+                        controller_reachable=True,
+                        bootstrapped=bootstrapped,
+                        bootstrap_progress=progress,
+                        circuit_established=circuit,
+                        onion_address=None,
+                        checked_at=now,
+                    ),
+                    reason='onion_address_mismatch',
+                )
+
             capability = TorCapability(
                 configured=True,
                 controller_reachable=True,
@@ -383,6 +403,23 @@ class TorService:
             if candidate:
                 return candidate
         return None
+
+    def _address_conflicts(self, config: Dict[str, Any], controller, address: str) -> bool:
+        """True when a configured hostname disagrees with what Tor serves.
+
+        Only meaningful when ONION_HOSTNAME is set AND this process can also
+        discover an address (a readable hostname file, or an ephemeral onion on
+        the control port). Kubernetes backend pods have neither, so there is
+        nothing to compare and this correctly returns False rather than
+        inventing a conflict.
+        """
+        if not _valid_onion(config.get('ONION_HOSTNAME')):
+            return False
+
+        discovered = self._resolve_onion_address(
+            {**config, 'ONION_HOSTNAME': ''}, controller
+        )
+        return bool(discovered) and discovered != address
 
     # -------------------------------------------------------------------
     # Public capability API
@@ -526,19 +563,23 @@ class TorService:
     def _peer_is_trusted(self, config: Dict[str, Any], request) -> bool:
         """Whether the connecting peer may produce onion ingress.
 
-        Entries may be IP addresses or hostnames (docker-compose service names
-        resolve to the container's address). Resolution failures reject rather
-        than admit: a name that will not resolve is not evidence the peer is
-        the Tor daemon.
+        Entries may be IP addresses or hostnames. A hostname is resolved at
+        check time, which is what makes this workable on both platforms:
+        docker-compose service names resolve to the container address, and a
+        Kubernetes HEADLESS service resolves to the current pod IPs (a normal
+        ClusterIP would not — the source address of the traffic is the pod's,
+        not the service's).
 
-        An empty setting means "not enforced here" — Kubernetes relies on its
-        NetworkPolicy instead, because pod IPs cannot be enumerated in
-        configuration. It is set in docker-compose, where nothing else
-        restricts sibling containers.
+        An empty list FAILS CLOSED. Treating "nothing configured" as "trust
+        every caller" would mean a deployment that forgot this setting reports
+        connections as anonymous without having verified anything, which is
+        precisely the middle state this feature must not have. A NetworkPolicy
+        is a good second layer but cannot be observed from here, so it is not
+        a substitute for checking.
         """
         raw = str(config.get('ONION_INGRESS_TRUSTED_PEERS') or '').strip()
         if not raw:
-            return True
+            return False
 
         peer = str((getattr(request, 'META', None) or {}).get('REMOTE_ADDR') or '').strip()
         if not peer:
