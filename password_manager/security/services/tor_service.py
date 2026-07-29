@@ -199,6 +199,11 @@ class TorService:
         self._cached_at: float = 0.0
         self._cached_reach: Optional[OnionReachability] = None
         self._cached_reach_at: float = 0.0
+        # Bumped by reset_cache(). Probes run outside the lock, so a probe
+        # that started before an invalidation must not publish its (now stale)
+        # answer afterwards — it would repopulate a cache that was
+        # deliberately cleared, or overwrite a newer result with an older one.
+        self._generation: int = 0
 
     # -------------------------------------------------------------------
     # Control-port probing
@@ -333,9 +338,16 @@ class TorService:
             progress = int(match.group(1))
         except (TypeError, ValueError):
             return 0
-        # Clamp rather than trust: a value outside 0-100 is a parse we do not
-        # understand, and >=100 is what grants "bootstrapped".
-        return max(0, min(100, progress))
+        # REJECT out of range, do not clamp. This previously clamped, so a
+        # value of 101 became 100 and thereby granted "bootstrapped" — while
+        # the comment beside it said an out-of-range value is a parse we do
+        # not understand. Clamping turned an answer we cannot interpret into
+        # the most permissive one it could have meant; 0 is the reading
+        # consistent with this module's fail-closed contract.
+        # (The regex matches \d+, so a negative can never appear here.)
+        if not 0 <= progress <= 100:
+            return 0
+        return progress
 
     def _read_circuit_established(self, controller) -> bool:
         """Tor's own answer to "can I currently build/use circuits?"."""
@@ -450,6 +462,7 @@ class TorService:
             )
             if fresh and not force_refresh:
                 return self._cached
+            generation = self._generation
 
         # Probe OUTSIDE the lock. request_is_onion_ingress sits on the vault
         # request path, so holding the lock across a control-port round trip
@@ -458,8 +471,11 @@ class TorService:
         # GETINFO is far cheaper than serialising the request pool.
         capability = self._probe(config)
         with self._lock:
-            self._cached = capability
-            self._cached_at = time.monotonic()
+            # Publish only if nothing invalidated the cache while we probed.
+            # The caller still receives what this probe actually read.
+            if generation == self._generation:
+                self._cached = capability
+                self._cached_at = time.monotonic()
         return capability
 
     def get_circuit_relays(self) -> List[Dict[str, Any]]:
@@ -593,6 +609,19 @@ class TorService:
                 continue
             if candidate == peer:
                 return True
+            if _is_ip_literal(candidate):
+                # An IP entry that did not match above cannot match after
+                # resolution either, so skip the resolver entirely: a
+                # deployment configured with IPs never performs a lookup on
+                # this path.
+                continue
+            # DELIBERATELY NOT CACHED. Caching hostname->IP here would remove
+            # this lookup from the request path, but container and pod IPs are
+            # recycled: after the Tor daemon restarts, a cached address can be
+            # reassigned to a DIFFERENT workload, which would then be accepted
+            # as the Tor daemon. That is a fail-open, and a slower check is
+            # strictly better than one that can be wrong. Configure IP entries
+            # (above) if the resolution cost matters.
             try:
                 # Resolve every address the name maps to: a compose service can
                 # answer on more than one, and matching only the first would
@@ -650,11 +679,16 @@ class TorService:
             )
             if fresh and not force_refresh:
                 return self._cached_reach
+            generation = self._generation
 
         result = self._probe_reachability(config, now)
         with self._lock:
-            self._cached_reach = result
-            self._cached_reach_at = time.monotonic()
+            # Same generation guard as get_capability: this probe is slow
+            # (a cold rendezvous takes tens of seconds), so the window in
+            # which an invalidation can land underneath it is much wider.
+            if generation == self._generation:
+                self._cached_reach = result
+                self._cached_reach_at = time.monotonic()
         return result
 
     def _probe_reachability(self, config: Dict[str, Any], now: str) -> OnionReachability:
@@ -687,8 +721,20 @@ class TorService:
             # The suppression must sit on the line immediately above the
             # finding — with the rationale in between it never applied, which
             # is why the alert kept reappearing.
+            # stream=True in a context manager: this check only reads the
+            # status line, and `timeout` bounds each socket operation rather
+            # than the whole transfer, so downloading the body would let a
+            # slow-drip or oversized response stall the probe indefinitely.
+            # The connection is closed on exit without consuming the body.
             # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
-            response = requests.get(url, proxies=proxies, timeout=timeout, allow_redirects=False)
+            with requests.get(
+                url,
+                proxies=proxies,
+                timeout=timeout,
+                allow_redirects=False,
+                stream=True,
+            ) as response:
+                status_code = int(getattr(response, 'status_code', 0) or 0)
         except Exception as exc:
             # PySocks raises on a missing/refused proxy; requests raises on
             # rendezvous failure. Both mean "not reachable through Tor".
@@ -701,7 +747,7 @@ class TorService:
         # response. A 404 still means the onion is published and serving.
         return OnionReachability(
             reachable=True,
-            status_code=int(getattr(response, 'status_code', 0) or 0),
+            status_code=status_code,
             latency_ms=latency_ms,
             reason=None,
             checked_at=now,
@@ -714,6 +760,10 @@ class TorService:
             self._cached_at = 0.0
             self._cached_reach = None
             self._cached_reach_at = 0.0
+            # Any probe already in flight now belongs to the previous
+            # generation and will be discarded rather than repopulating the
+            # cache we just cleared.
+            self._generation += 1
 
 
 # =============================================================================
@@ -733,6 +783,17 @@ def _first_missing(capability: TorCapability) -> Optional[str]:
     if not capability.onion_published:
         return 'onion_not_published'
     return None
+
+
+def _is_ip_literal(value: str) -> bool:
+    """True when the string is already an IP address, so no lookup is needed."""
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _valid_onion(value: Any) -> Optional[str]:
