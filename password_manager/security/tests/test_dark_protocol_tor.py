@@ -14,7 +14,7 @@ passes here is a test of the code path a real daemon would take.
 @author Password Manager Team
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -25,6 +25,7 @@ from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from security.services import tor_service as tor_module
+from security.services.dark_protocol_service import DarkProtocolService
 from security.services.tor_service import TorService, get_tor_service
 
 User = get_user_model()
@@ -366,6 +367,102 @@ class TorCircuitRelayTests(_TorTestMixin, TestCase):
 
 
 # =============================================================================
+# Loopback self-check
+# =============================================================================
+
+class OnionSelfCheckTests(_TorTestMixin, TestCase):
+    """The self-check is the only end-to-end proof the descriptor is published.
+
+    /health/?verify=1 exposes it to staff, so its fail-closed reasons are
+    pinned here the same way the capability answers are.
+    """
+
+    @override_settings(TOR=_tor_settings())
+    def test_socks_proxies_use_socks5h_so_the_onion_resolves_inside_tor(self):
+        """socks5h, not socks5: the 'h' is what makes .onion resolvable.
+
+        With plain socks5 the local resolver would be asked for the .onion,
+        fail, and leak the lookup.
+        """
+        proxies = self._service().socks_proxies()
+
+        self.assertEqual(proxies['http'], 'socks5h://127.0.0.1:9050')
+        self.assertEqual(proxies['https'], 'socks5h://127.0.0.1:9050')
+
+    @override_settings(TOR={'ENABLED': False})
+    def test_socks_proxies_absent_when_disabled(self):
+        self.assertIsNone(TorService().socks_proxies())
+
+    @override_settings(TOR={'ENABLED': False})
+    def test_self_check_not_configured(self):
+        result = TorService().check_onion_reachable()
+
+        self.assertFalse(result.reachable)
+        self.assertEqual(result.reason, 'not_configured')
+
+    @override_settings(TOR=_tor_settings(SOCKS_PORT=0))
+    def test_self_check_without_socks_configured(self):
+        result = self._service().check_onion_reachable()
+
+        self.assertFalse(result.reachable)
+        self.assertEqual(result.reason, 'socks_not_configured')
+
+    @override_settings(TOR=_tor_settings(ONION_HOSTNAME='', ONION_HOSTNAME_FILE=''))
+    def test_self_check_without_an_address(self):
+        controller = _FakeController(hidden_service_dirs=(), onions_current='')
+        result = self._service(controller).check_onion_reachable()
+
+        self.assertFalse(result.reachable)
+        self.assertEqual(result.reason, 'no_onion_address')
+
+    @override_settings(TOR=_tor_settings())
+    def test_rendezvous_failure_is_unreachable(self):
+        service = self._service()
+        with patch('requests.get', side_effect=OSError('no route to host')):
+            result = service.check_onion_reachable()
+
+        self.assertFalse(result.reachable)
+        self.assertEqual(result.reason, 'unreachable')
+
+    @override_settings(TOR=_tor_settings())
+    def test_any_http_status_counts_as_reachable(self):
+        """A 404 still proves the rendezvous completed and our service answered.
+
+        The check is about reachability, not about the endpoint's response.
+        """
+        service = self._service()
+        response = MagicMock(status_code=404)
+        response.__enter__ = lambda self_: self_
+        response.__exit__ = lambda self_, *exc: False
+
+        with patch('requests.get', return_value=response) as get:
+            result = service.check_onion_reachable()
+
+        self.assertTrue(result.reachable)
+        self.assertEqual(result.status_code, 404)
+        # The body must never be downloaded: `timeout` bounds each socket
+        # operation, not the transfer, so a slow-drip response would otherwise
+        # stall the probe.
+        self.assertTrue(get.call_args.kwargs['stream'])
+
+    @override_settings(TOR=_tor_settings(SELF_CHECK_TTL_SECONDS=300))
+    def test_self_check_result_is_cached(self):
+        service = self._service()
+        response = MagicMock(status_code=200)
+        response.__enter__ = lambda self_: self_
+        response.__exit__ = lambda self_, *exc: False
+
+        with patch('requests.get', return_value=response) as get:
+            service.check_onion_reachable()
+            service.check_onion_reachable()
+            self.assertEqual(get.call_count, 1, 'second call should hit the cache')
+
+            service.reset_cache()
+            service.check_onion_reachable()
+            self.assertEqual(get.call_count, 2, 'reset_cache must force a re-probe')
+
+
+# =============================================================================
 # Onion ingress detection
 # =============================================================================
 
@@ -683,6 +780,37 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         # The view echoes the term it actually received.
         self.assertEqual(response.data['data']['query'], 'example-term')
+
+    @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
+    def test_envelope_keeps_a_body_when_the_vault_answers_204(self):
+        """The envelope is always 200, with the vault's status as a field.
+
+        vault_delete dispatches to the vault's destroy(), which answers 204 No
+        Content. Echoing that status would produce a 204 carrying an envelope
+        body — a contradiction, and clients (including response.json() in
+        darkProtocolService) read 204 as "no body" and would see nothing.
+        """
+        with patch.object(TorService, '_open_controller', return_value=_FakeController()), \
+                patch.object(tor_module, '_StemController', object()), \
+                patch.object(
+                    DarkProtocolService, '_dispatch_vault_operation',
+                    return_value=(204, None),
+                ):
+            get_tor_service().reset_cache()
+            response = self.client.post(
+                reverse('dark-protocol-vault-proxy'),
+                {'operation': 'vault_delete', 'payload': {'id': 'abc'}},
+                format='json',
+                SERVER_PORT='8443',
+                HTTP_HOST=ONION,
+                HTTP_AUTHORIZATION=self._bearer(),
+                REMOTE_ADDR=TRUSTED_PEER,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['success'])
+        # The vault's own status is preserved, just not as the envelope's.
+        self.assertEqual(response.data['status_code'], 204)
 
     @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
     def test_onion_request_with_unknown_operation_is_rejected(self):

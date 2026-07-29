@@ -75,11 +75,19 @@ chmod 0700 "${HS_DIR}" "${DATA_DIR}"
 # Render torrc.
 #
 # Set TOR_CONTROL_PASSWORD_HASH (output of `tor --hash-password` run
-# elsewhere) to avoid the plaintext appearing on Tor's command line, where
-# /proc/<pid>/cmdline exposes it to anything in this container for the
-# duration of the call. TOR_CONTROL_PASSWORD is still required either way:
-# the health check below authenticates with it, and AUTHENTICATE takes the
-# plaintext, not the hash.
+# elsewhere) to keep the plaintext off Tor's command line, where
+# /proc/<pid>/cmdline exposes it for the duration of the call.
+#
+# Scope, stated honestly rather than overclaimed: TOR_CONTROL_PASSWORD is
+# REQUIRED either way, because the health check above authenticates with it
+# and AUTHENTICATE takes the plaintext, not the hash. So the secret is in this
+# container's environment regardless, readable via /proc/<pid>/environ by the
+# same processes that could read argv — everything here runs as the same
+# unprivileged `tor` user. Using the hash removes one exposure of a secret
+# that is still present; it does not remove the secret. Eliminating it
+# entirely would mean cookie authentication, which cannot work for the
+# Kubernetes backend pods that must authenticate across the network.
+# tor has no stdin or environment option for --hash-password.
 # ---------------------------------------------------------------------------
 if [ -n "${TOR_CONTROL_PASSWORD_HASH:-}" ]; then
     hashed="${TOR_CONTROL_PASSWORD_HASH}"
