@@ -591,21 +591,21 @@ class PulseOximetryService:
                 return default
 
         def _opt_num(key):
-            """Optional numeric: None stays None, anything unusable becomes None.
+            """Optional FINITE numeric: None stays None, anything else -> None.
 
-            Do NOT leave these raw on the strength of _current_hardware_spo2's
-            guard -- that checks np.isfinite on the timestamp ARGUMENT it is
-            passed, while the STORED timestamp is only tested for None. A
-            non-numeric one therefore survives and raises at `age_ms =
-            timestamp_ms - ts` on the next frame, and the stored SpO2 value is
-            not finite-checked at all before it flows into a PulseReading and on
-            into the score's averaging.
+            Do NOT leave these raw on the strength of a downstream guard.
+            _current_hardware_spo2 checks the timestamp, but never the SpO2
+            VALUE, so a NaN one is returned straight into PulseReading and on
+            into np.mean during scoring. And float() accepts NaN/Infinity, which
+            json round-trips, so converting without the isfinite test would let
+            the same value through under the appearance of validation.
             """
             raw = state.get(key)
             try:
-                return None if raw is None else float(raw)
+                value = None if raw is None else float(raw)
             except (TypeError, ValueError):
                 return None
+            return value if value is None or np.isfinite(value) else None
 
         self.frame_count = _num('frame_count', 0)
         self.current_hr = _opt_num('current_hr')
