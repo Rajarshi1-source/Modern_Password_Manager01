@@ -557,11 +557,17 @@ class OnionIngressTests(_TorTestMixin, TestCase):
         del request.META['REMOTE_ADDR']
         self.assertFalse(service.request_is_onion_ingress(request))
 
-    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='no-such-host.invalid'))
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='tor-host.example'))
     def test_unresolvable_trusted_peer_rejects(self):
-        """A name that will not resolve is not evidence the peer is Tor."""
+        """A name that will not resolve is not evidence the peer is Tor.
+
+        getaddrinfo is patched rather than relying on a .invalid lookup: the
+        real call would make this test's duration depend on the CI resolver,
+        and a wildcard-hijacking resolver would exercise a different path.
+        """
         service = self._service()
-        self.assertFalse(service.request_is_onion_ingress(self._request()))
+        with patch('socket.getaddrinfo', side_effect=OSError('name resolution failed')):
+            self.assertFalse(service.request_is_onion_ingress(self._request()))
 
     @override_settings(TOR=_tor_settings())
     def test_disallowed_host_is_not_anonymous(self):
@@ -856,3 +862,38 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         response = self.client.get(reverse('dark-protocol-ping'))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class OnionIngressPortSourceTests(_TorTestMixin, TestCase):
+    """The ingress port must come from the server, never from the client."""
+
+    @override_settings(TOR=_tor_settings(), USE_X_FORWARDED_PORT=True)
+    def test_forwarded_port_header_cannot_claim_onion_ingress(self):
+        """X-Forwarded-Port must not be able to name the ingress port.
+
+        request.get_port() returns that header when USE_X_FORWARDED_PORT is
+        enabled. Since the port IS the network fact the onion-ingress check
+        rests on, it is read from SERVER_PORT directly — otherwise a clearnet
+        request could assert its own ingress port the day that unrelated
+        setting is turned on.
+        """
+        class _ForwardedRequest:
+            META = {
+                'SERVER_PORT': '8000',            # actually served on clearnet
+                'HTTP_X_FORWARDED_PORT': '8443',  # client claims the onion port
+                'HTTP_HOST': ONION,
+                'REMOTE_ADDR': TRUSTED_PEER,
+            }
+
+            def get_port(self):
+                # What Django returns with USE_X_FORWARDED_PORT enabled: the
+                # HEADER value, not SERVER_PORT. The double must model this or
+                # the test passes against a get_port()-based implementation
+                # too, and pins nothing.
+                return self.META['HTTP_X_FORWARDED_PORT']
+
+            def get_host(self):
+                return ONION
+
+        service = self._service()
+        self.assertFalse(service.request_is_onion_ingress(_ForwardedRequest()))

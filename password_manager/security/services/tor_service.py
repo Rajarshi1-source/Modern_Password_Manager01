@@ -199,6 +199,8 @@ class TorService:
         self._cached_at: float = 0.0
         self._cached_reach: Optional[OnionReachability] = None
         self._cached_reach_at: float = 0.0
+        self._cached_relays: Optional[List[Dict[str, Any]]] = None
+        self._cached_relays_at: float = 0.0
         # Bumped by reset_cache(). Probes run outside the lock, so a probe
         # that started before an invalidation must not publish its (now stale)
         # answer afterwards — it would repopulate a cache that was
@@ -489,6 +491,18 @@ class TorService:
         if not config.get('ENABLED') or _StemController is None:
             return []
 
+        # Cached on the same TTL as the capability probe. /nodes/ and /health/
+        # are both polled by the dashboard, and without this each poll opened
+        # and authenticated a fresh control connection per widget.
+        ttl = _positive_number(config.get('CAPABILITY_TTL_SECONDS'), 15)
+        with self._lock:
+            if (
+                self._cached_relays is not None
+                and (time.monotonic() - self._cached_relays_at) < ttl
+            ):
+                return list(self._cached_relays)
+            generation = self._generation
+
         controller = self._open_controller(config)
         if controller is None:
             return []
@@ -522,6 +536,13 @@ class TorService:
                     'fingerprint': (fingerprint[:8] if fingerprint else None),
                     'purpose': str(getattr(circuit, 'purpose', '') or '').lower() or None,
                 })
+
+        with self._lock:
+            # Same generation guard as the other caches: a read that started
+            # before reset_cache() must not repopulate it.
+            if generation == self._generation:
+                self._cached_relays = list(relays)
+                self._cached_relays_at = time.monotonic()
         return relays
 
     # -------------------------------------------------------------------
@@ -718,16 +739,19 @@ class TorService:
             # circuit end to end with the service's own keys. There is no
             # clearnet hop for TLS to protect, and onion services do not
             # normally hold CA-issued certificates.
-            # The suppression must sit on the line immediately above the
-            # finding — with the rationale in between it never applied, which
-            # is why the alert kept reappearing.
+            # The suppression must sit immediately above the line the scanner
+            # REPORTS, and for this rule that is the `url` ARGUMENT, not the
+            # call line — hence the comment inside the parentheses. Two earlier
+            # placements (above the rationale, then above the call) both failed
+            # for this reason.
+            #
             # stream=True in a context manager: this check only reads the
             # status line, and `timeout` bounds each socket operation rather
             # than the whole transfer, so downloading the body would let a
             # slow-drip or oversized response stall the probe indefinitely.
             # The connection is closed on exit without consuming the body.
-            # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
             with requests.get(
+                # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
                 url,
                 proxies=proxies,
                 timeout=timeout,
@@ -760,6 +784,8 @@ class TorService:
             self._cached_at = 0.0
             self._cached_reach = None
             self._cached_reach_at = 0.0
+            self._cached_relays = None
+            self._cached_relays_at = 0.0
             # Any probe already in flight now belongs to the previous
             # generation and will be discarded rather than repopulating the
             # cache we just cleared.
@@ -829,11 +855,17 @@ def _positive_number(value: Any, default: float) -> float:
 
 
 def _request_port(request) -> Optional[int]:
-    """The TCP port this request was served on, or None."""
-    try:
-        port = request.get_port()
-    except Exception:
-        port = (getattr(request, 'META', None) or {}).get('SERVER_PORT')
+    """The TCP port this process actually served the request on, or None.
+
+    Reads SERVER_PORT directly rather than calling ``request.get_port()``:
+    get_port() returns the X-Forwarded-Port header when USE_X_FORWARDED_PORT
+    is enabled, and this value is the network FACT the onion-ingress check
+    rests on. Sourcing it from a client-settable header would let a request
+    name its own ingress port, and would silently do so the day an unrelated
+    setting is turned on. (Same reason SECURE_PROXY_SSL_HEADER is disabled on
+    the onion listener.)
+    """
+    port = (getattr(request, 'META', None) or {}).get('SERVER_PORT')
     try:
         return int(str(port).strip())
     except (TypeError, ValueError):

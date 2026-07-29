@@ -34,6 +34,10 @@ spec:
   resources:
     requests:
       storage: 1Gi
+  # Set explicitly, as every sibling PVC in k8s/deployment.yaml does: a cluster
+  # with no default StorageClass would otherwise leave this claim unbound and
+  # the Tor daemon unable to start.
+  storageClassName: standard  # Change to your storage class
 ---
 # -----------------------------------------------------------------------------
 # tor-secrets is deliberately NOT defined here.
@@ -334,7 +338,10 @@ spec:
       volumes:
       - name: media-files
         persistentVolumeClaim:
-          claimName: media-files
+          # media-pvc is the claim defined in k8s/deployment.yaml; the volume's
+          # own name is media-files. Referencing the volume name here left the
+          # pod waiting on a PVC that does not exist.
+          claimName: media-pvc
       - name: tmp
         emptyDir: {}
       - name: app-logs

@@ -141,6 +141,7 @@ class VaultOperationResult:
             'error_message': self.error_message,
             'error_code': self.error_code,
             'latency_ms': self.latency_ms,
+            'status_code': self.status_code,
         }
 
 
