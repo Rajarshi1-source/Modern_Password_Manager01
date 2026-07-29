@@ -1108,11 +1108,19 @@ if not DEBUG:
     #     non-secure transport) and would be ignored anyway.
     # There is no clearnet hop for TLS to protect on this path.
     SECURE_SSL_REDIRECT = not ONION_LISTENER
-    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SESSION_COOKIE_SECURE = not ONION_LISTENER
     CSRF_COOKIE_SECURE = not ONION_LISTENER
     if ONION_LISTENER:
         SECURE_HSTS_SECONDS = 0
+        # No trusted proxy sits in front of the onion listener: Tor connects
+        # straight to this process, so X-Forwarded-Proto is fully attacker
+        # controlled. Honouring it would let any client flip
+        # request.is_secure() to True and drive CSRF referer checking and any
+        # is_secure()-dependent logic from a header they chose. Clearnet
+        # listeners keep the header because nginx sets it there.
+        SECURE_PROXY_SSL_HEADER = None
+    else:
+        SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # ==============================================================================
 # ENHANCED CORS SETTINGS FOR JWT-BASED SPA
