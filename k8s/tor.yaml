@@ -1,0 +1,334 @@
+# =============================================================================
+# Tor — real anonymity transport for Dark Protocol (opt-in)
+# =============================================================================
+# Apply this alongside the main manifests to give the cluster a Tor daemon that
+# publishes the backend as a v3 onion service, then set TOR_ENABLED="true" in
+# k8s/configmap.yaml. Without it the Dark Protocol feature reports Unavailable,
+# which is the honest state for a cluster with no anonymity transport.
+#
+# Provisioning the address:
+#   1. kubectl apply -f k8s/tor.yaml
+#   2. kubectl -n password-manager exec deploy/tor -- cat /var/lib/tor/hidden_service/hostname
+#   3. Put that value in the app-config ConfigMap as TOR_ONION_HOSTNAME and set
+#      TOR_ENABLED="true", then restart the backend deployments.
+#
+# Step 3 is explicit rather than a shared volume because the hostname file
+# lives in the tor pod's PVC, and ReadWriteMany is not available on every
+# cluster. The backend prefers TOR_ONION_HOSTNAME over the file for exactly
+# this reason.
+#
+# The PVC is what keeps the .onion address stable across restarts: it holds the
+# hidden-service private key. Deleting it issues a new address.
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tor-data
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: tor
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tor-secrets
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: tor
+type: Opaque
+stringData:
+  # Replace before applying. The control port is password-authenticated; the
+  # container refuses to start without this, because an unauthenticated control
+  # port would let anything in the namespace reconfigure Tor.
+  TOR_CONTROL_PASSWORD: "CHANGE_ME_TOR_CONTROL_PASSWORD"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tor
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: tor
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: two daemons must not publish the same onion
+    # descriptor from the same key at once, and the PVC is ReadWriteOnce.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: password-manager
+      component: tor
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: tor
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 10080
+        runAsGroup: 10080
+        # fsGroup gives the pod ownership of the PVC, which is why the
+        # entrypoint has nothing to chown when it runs unprivileged here.
+        fsGroup: 10080
+      containers:
+      - name: tor
+        image: ghcr.io/yourusername/password-manager/tor:${GITHUB_SHA}
+        imagePullPolicy: Always
+        env:
+        - name: TOR_ONION_TARGET
+          value: "backend-onion-service:8443"
+        envFrom:
+        - secretRef:
+            name: tor-secrets
+        ports:
+        - containerPort: 9050
+          name: socks
+        - containerPort: 9051
+          name: control
+        volumeMounts:
+        - name: tor-data
+          mountPath: /var/lib/tor
+        - name: tor-shared
+          mountPath: /var/lib/tor-shared
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10080
+          runAsGroup: 10080
+          # torrc is rendered into /tmp, which is an emptyDir, so the root
+          # filesystem itself stays read-only.
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        # Bootstrapping a circuit from a cold start is slow, hence the long
+        # start period. The probe asks Tor the same question the backend gates
+        # on, so "ready" means the capability is genuinely usable.
+        readinessProbe:
+          exec:
+            command: ["/usr/local/bin/entrypoint.sh", "healthcheck"]
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 20
+        livenessProbe:
+          exec:
+            command: ["/usr/local/bin/entrypoint.sh", "healthcheck"]
+          initialDelaySeconds: 300
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 5
+      volumes:
+      - name: tor-data
+        persistentVolumeClaim:
+          claimName: tor-data
+      - name: tor-shared
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tor-service
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: tor
+spec:
+  # ClusterIP only. Neither port may ever be exposed outside the cluster: the
+  # SOCKS port is an open proxy to anything that can reach it, and the control
+  # port reconfigures the daemon.
+  type: ClusterIP
+  selector:
+    app: password-manager
+    component: tor
+  ports:
+  - name: socks
+    port: 9050
+    targetPort: 9050
+  - name: control
+    port: 9051
+    targetPort: 9051
+---
+# =============================================================================
+# Onion ingress listener
+# =============================================================================
+# The same backend image on a different port, with NO Ingress and NO
+# LoadBalancer in front of it. That is the whole point: port 8443 is reachable
+# only from the tor pod, so a request arriving on it came through the onion
+# service. The backend treats arriving on this port as the proof of anonymous
+# ingress, which is why it must never be published.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-onion
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend-onion
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: password-manager
+      component: backend-onion
+  template:
+    metadata:
+      labels:
+        app: password-manager
+        component: backend-onion
+    spec:
+      serviceAccountName: password-manager-sa
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+      - name: backend
+        image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+        imagePullPolicy: Always
+        command:
+        - daphne
+        - password_manager.asgi:application
+        - --bind
+        - 0.0.0.0
+        - --port
+        - "8443"
+        ports:
+        - containerPort: 8443
+        envFrom:
+        - configMapRef:
+            name: app-config
+        - secretRef:
+            name: app-secrets
+        - secretRef:
+            name: tor-secrets
+        env:
+        # ALLOWED_HOSTS from app-config lists the clearnet domains; the onion
+        # address has to be accepted here too or Django rejects the Host header
+        # and the request is (correctly) never treated as onion ingress.
+        # The leading dot matches the generated address without hardcoding it.
+        - name: ALLOWED_HOSTS
+          value: "$(ALLOWED_HOSTS),.onion"
+        volumeMounts:
+        - name: media-files
+          mountPath: /app/media
+        - name: tmp
+          mountPath: /tmp
+        - name: app-logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /live/
+            port: 8443
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready/
+            port: 8443
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          runAsGroup: 10001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: media-files
+        persistentVolumeClaim:
+          claimName: media-files
+      - name: tmp
+        emptyDir: {}
+      - name: app-logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-onion-service
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend-onion
+spec:
+  type: ClusterIP
+  selector:
+    app: password-manager
+    component: backend-onion
+  ports:
+  - name: http
+    port: 8443
+    targetPort: 8443
+---
+# =============================================================================
+# NetworkPolicy — only the tor pod may reach the onion ingress
+# =============================================================================
+# Without this the onion ingress port is reachable from any pod in the
+# namespace, and "arrived on port 8443" would stop being evidence of anonymous
+# ingress. This policy is what backs that claim inside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-onion-ingress
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: backend-onion
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: backend-onion
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: password-manager
+          component: tor
+    ports:
+    - protocol: TCP
+      port: 8443

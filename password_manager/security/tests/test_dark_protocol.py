@@ -331,12 +331,22 @@ class DarkProtocolAPITests(APITestCase):
         self.assertFalse(response.data.get('has_active_session', False))
     
     def test_get_network_health(self):
-        """Test getting network health status."""
+        """Health leads with the Tor-verified anonymity verdict.
+
+        This used to assert a top-level `active_nodes`, which counted local
+        database rows and read as the size of an anonymity network. Those
+        counters now live under `obfuscation_layer`, and the headline is
+        whether anonymity is genuinely available — which, with no Tor daemon
+        configured in the test environment, is False.
+        """
         url = reverse('dark-protocol-health')
         response = self.client.get(url)
-        
+
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('active_nodes', response.data)
+        self.assertIn('anonymity_active', response.data)
+        self.assertFalse(response.data['anonymity_active'])
+        self.assertEqual(response.data['status'], 'unavailable')
+        self.assertIn('active_records', response.data['obfuscation_layer'])
     
     def test_get_stats(self):
         """Test getting usage statistics."""

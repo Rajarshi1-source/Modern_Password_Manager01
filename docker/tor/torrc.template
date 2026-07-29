@@ -1,0 +1,37 @@
+# =============================================================================
+# torrc template — rendered by entrypoint.sh at container start
+# =============================================================================
+# __HASHED_PASSWORD__ is substituted with the output of `tor --hash-password`
+# so the control password never has to be stored hashed in the repository.
+# =============================================================================
+
+# Substituted with `User tor` when the entrypoint runs as root (docker-compose),
+# and with a comment when it already runs as an unprivileged uid (Kubernetes),
+# where there is no user to switch to.
+__USER_DIRECTIVE__
+
+DataDirectory /var/lib/tor/data
+
+# SOCKS proxy. Used by the backend's loopback self-check, which fetches our own
+# .onion through Tor to prove the descriptor is published and the service
+# answers. Bound to the container network only — never published to the host.
+SocksPort 0.0.0.0:9050
+
+# Control port. The backend uses it read-only: bootstrap progress, circuit
+# state, hidden-service configuration. Password-authenticated.
+ControlPort 0.0.0.0:9051
+HashedControlPassword __HASHED_PASSWORD__
+
+# The v3 onion service. Its private key lives in this directory, which is a
+# volume private to this container — the backend is never given access to it;
+# it only receives a copy of the public `hostname` file.
+HiddenServiceDir /var/lib/tor/hidden_service
+HiddenServiceVersion 3
+
+# Forward to the dedicated onion ingress listener, NOT the clearnet backend
+# port. That separation is what lets the backend tell an anonymous request from
+# a clearnet one: the ingress port is reachable only from this container, so
+# arriving on it is a network fact a remote client cannot fake.
+HiddenServicePort 80 __ONION_TARGET__
+
+Log notice stdout

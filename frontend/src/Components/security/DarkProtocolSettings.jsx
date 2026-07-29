@@ -2,12 +2,16 @@
  * Dark Protocol Settings Component
  * ==================================
  * 
- * Configuration UI for the experimental Dark Protocol vault-access demo.
+ * Configuration UI for Dark Protocol vault access.
  * Provides controls for routing settings and network preferences.
  *
- * NOTE: transport is simulated on a single server — these controls tune a demo
- * and do NOT deliver real anonymity or censorship resistance.
- * 
+ * SCOPE: every control on this panel tunes the OBFUSCATION layer — cover
+ * traffic, padding, bundling and rotation, which run inside this deployment
+ * and add traffic-analysis resistance. None of them provides anonymity or
+ * turns it on: anonymity comes from reaching the backend over its Tor v3
+ * onion service, which is reported on the dashboard and cannot be configured
+ * from here.
+ *
  * @author Password Manager Team
  * @created 2026-02-02
  */
@@ -313,7 +317,11 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                             />
                             <span className="dp-checkbox-label">Use Bridge Nodes</span>
                         </label>
-                        <p className="dp-setting-desc">Simulated bridge-node routing (demo — does not bypass censorship)</p>
+                        <p className="dp-setting-desc">
+                            Routes through the obfuscation layer&apos;s bridge records. These are
+                            not Tor bridges and do not bypass censorship — reaching a blocked
+                            network is Tor&apos;s job, configured on the daemon.
+                        </p>
                     </div>
 
                     <div className="dp-setting-row checkbox">

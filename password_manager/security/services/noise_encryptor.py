@@ -2,7 +2,15 @@
 Noise Encryptor
 ===============
 
-Makes dark protocol traffic indistinguishable from random noise.
+Makes dark protocol payload BYTES statistically indistinguishable from random,
+via encryption plus variable-length padding.
+
+Scope, stated precisely because the distinction matters: this hides the
+CONTENT and the exact SIZE of a payload. It does not make the traffic itself
+unobservable - timing, volume and direction remain visible to anyone watching
+the link, which is why this is one layer of traffic-analysis resistance rather
+than anonymity. The anonymity comes from carrying that traffic over a Tor v3
+onion circuit (see `tor_service.py`).
 
 Features:
 - Variable-length padding

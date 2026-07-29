@@ -87,6 +87,11 @@ services:
       - ./password_manager:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
+      # Read-only: lets the clearnet backend report the .onion address so a
+      # user browsing over clearnet can see where anonymous access lives.
+      # Empty until the tor profile has run, in which case the capability
+      # correctly reports that no onion address is available.
+      - tor_shared:/var/lib/tor-shared:ro
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
@@ -109,6 +114,103 @@ services:
       - OIDC_OP_BASE_URL=${OIDC_OP_BASE_URL:-https://accounts.google.com}
       - OIDC_VERIFY_SSL=${OIDC_VERIFY_SSL:-True}
       - OIDC_USE_NONCE=${OIDC_USE_NONCE:-True}
+      # Tor: off by default. Set TOR_ENABLED=true in .env alongside
+      # `--profile tor` so this clearnet listener can read live Tor state and
+      # show users the .onion address. It can never report ITS OWN requests as
+      # anonymous: they arrive on port 8000, not the onion ingress port.
+      - TOR_ENABLED=${TOR_ENABLED:-false}
+      - TOR_CONTROL_HOST=tor
+      - TOR_CONTROL_PORT=9051
+      - TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:-}
+      - TOR_SOCKS_HOST=tor
+      - TOR_SOCKS_PORT=9050
+      - TOR_ONION_HOSTNAME_FILE=/var/lib/tor-shared/hostname
+      - TOR_ONION_INGRESS_PORT=8443
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # ===========================================================================
+  # 🧅 Tor — real anonymity transport for Dark Protocol (opt-in)
+  # ===========================================================================
+  # Start with:  docker compose --profile tor up
+  #
+  # Publishes the backend as a Tor v3 onion service, so a client reaching the
+  # .onion address gets a circuit that terminates inside Tor: no exit node, and
+  # the backend never sees the client IP. Without this profile the Dark
+  # Protocol feature reports Unavailable rather than claiming anonymity it
+  # cannot provide.
+  #
+  # Two services come up together: `tor` (the daemon) and `backend-onion` (a
+  # dedicated ingress listener the onion service forwards to). They are
+  # separate so the backend can tell an onion request from a clearnet one by
+  # the port it arrived on — see TOR['ONION_INGRESS_PORT'].
+  tor:
+    build:
+      context: .
+      dockerfile: docker/tor/Dockerfile
+    container_name: password_manager_tor
+    profiles: ["tor"]
+    environment:
+      # No default: an unauthenticated control port would let anything on this
+      # network reconfigure Tor, so the container refuses to start without it.
+      - "TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:?Set TOR_CONTROL_PASSWORD in .env to use the tor profile}"
+      - TOR_ONION_TARGET=backend-onion:8443
+    volumes:
+      # Private to this container: holds the hidden-service private key.
+      - tor_data:/var/lib/tor
+      # Shared, public: only the .onion hostname is copied here for the backend.
+      - tor_shared:/var/lib/tor-shared
+    # Deliberately no `ports:` — the SOCKS and control ports stay on the
+    # internal network. Publishing them would expose an unauthenticated proxy
+    # and a control channel to the host.
+    networks:
+      - password_manager_network
+    restart: unless-stopped
+
+  # Onion ingress listener. Same image and code as `backend`; the only thing
+  # that makes it special is that it is reachable ONLY from the tor container
+  # (no `ports:` mapping), which is what makes "this request came in over the
+  # onion service" a fact rather than a client-supplied claim.
+  backend-onion:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    container_name: password_manager_backend_onion
+    profiles: ["tor"]
+    command: daphne -b 0.0.0.0 -p 8443 password_manager.asgi:application
+    volumes:
+      - ./password_manager:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+      - tor_shared:/var/lib/tor-shared:ro
+    environment:
+      - DEBUG=${DEBUG:-True}
+      - "SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}"
+      - DATABASE_URL=postgresql://${DB_USER:-pm_user}:${DB_PASSWORD:-password123}@postgres:5432/${DB_NAME:-password_manager}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379/0
+      # The leading dot matches every subdomain, which is how the generated
+      # .onion address is accepted without knowing it in advance. Django
+      # rejects any other Host, and a rejected Host is never onion ingress.
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1},.onion
+      - USE_REDIS_CHANNELS=${USE_REDIS_CHANNELS:-false}
+      - USE_REDIS_CACHE=${USE_REDIS_CACHE:-false}
+      - TOR_ENABLED=true
+      - TOR_CONTROL_HOST=tor
+      - TOR_CONTROL_PORT=9051
+      - "TOR_CONTROL_PASSWORD=${TOR_CONTROL_PASSWORD:?Set TOR_CONTROL_PASSWORD in .env to use the tor profile}"
+      - TOR_SOCKS_HOST=tor
+      - TOR_SOCKS_PORT=9050
+      - TOR_ONION_HOSTNAME_FILE=/var/lib/tor-shared/hostname
+      - TOR_ONION_INGRESS_PORT=8443
     depends_on:
       postgres:
         condition: service_healthy
@@ -255,6 +357,15 @@ volumes:
   static_volume:
     driver: local
   media_volume:
+    driver: local
+  # Hidden-service private key and Tor state. Private to the tor container.
+  # Persisting it is what keeps the .onion address stable across restarts;
+  # deleting this volume issues a new address.
+  tor_data:
+    driver: local
+  # Public .onion hostname only, so the backend can learn the address it
+  # should expect without ever seeing the service's private key.
+  tor_shared:
     driver: local
 
 networks:

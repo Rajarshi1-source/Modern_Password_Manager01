@@ -1,13 +1,17 @@
 /**
  * Dark Protocol Dashboard
  * ========================
- * 
- * Main dashboard for the experimental Dark Protocol vault-access demo.
- * Shows connection status, network health, and session info.
  *
- * NOTE: transport is simulated on a single server — this is a demo and does
- * NOT deliver real anonymity or censorship resistance.
- * 
+ * Main dashboard for anonymous vault access over Tor.
+ *
+ * The dashboard leads with one question — is anonymity actually available
+ * right now? — and takes the answer from the server's capability report,
+ * which is verified against a running Tor daemon. Everything else on the page
+ * (cover-traffic sessions, routes, counters) describes the obfuscation layer
+ * and is labelled as such, so it can never be read as evidence of anonymity.
+ *
+ * A failed capability fetch renders as Unavailable, not as available.
+ *
  * @author Password Manager Team
  * @created 2026-02-02
  */
@@ -16,9 +20,25 @@ import React, { useState, useEffect, useCallback } from 'react';
 import darkProtocolService from '../../services/darkProtocolService';
 import './DarkProtocolDashboard.css';
 
+// Reasons the server can give for anonymity being unavailable, rendered as
+// something an operator or user can act on. An unrecognised reason falls
+// through to its raw token rather than being hidden, so a new server-side
+// reason is visible rather than silently reported as "unknown problem".
+const UNAVAILABLE_REASONS = Object.assign(Object.create(null), {
+    not_configured: 'No Tor transport is configured for this deployment.',
+    stem_unavailable: 'The Tor control library is not installed on the server.',
+    controller_unreachable: 'The Tor daemon is not reachable.',
+    not_bootstrapped: 'Tor is still bootstrapping.',
+    no_circuit: 'Tor has not established a circuit yet.',
+    no_onion_address: 'No onion service address has been provisioned.',
+    onion_not_published: 'The onion service descriptor is not published.',
+    probe_failed: 'The Tor capability check failed.',
+});
+
 const DarkProtocolDashboard = () => {
     // State
     const [config, setConfig] = useState(null);
+    const [capabilities, setCapabilities] = useState(null);
     const [session, setSession] = useState(null);
     const [networkHealth, setNetworkHealth] = useState(null);
     const [stats, setStats] = useState(null);
@@ -46,7 +66,10 @@ const DarkProtocolDashboard = () => {
         setError(null);
 
         try {
-            const [configData, sessionData, healthData, statsData, nodesData, routesData] = await Promise.all([
+            const [capabilityData, configData, sessionData, healthData, statsData, nodesData, routesData] = await Promise.all([
+                // Fails closed: a rejected capability fetch leaves `capabilities`
+                // null, which every consumer below reads as "not available".
+                darkProtocolService.getCapabilities().catch(() => null),
                 darkProtocolService.getConfig(),
                 darkProtocolService.getSession(),
                 darkProtocolService.getNetworkHealth(),
@@ -55,6 +78,7 @@ const DarkProtocolDashboard = () => {
                 darkProtocolService.getRoutes(),
             ]);
 
+            setCapabilities(capabilityData);
             setConfig(configData);
             setSession(sessionData);
             setNetworkHealth(healthData);
@@ -149,6 +173,15 @@ const DarkProtocolDashboard = () => {
         }
     };
 
+    // Anonymity is a server-verified fact, never an inference from local
+    // state. Absent capabilities => unavailable.
+    const anonymity = capabilities?.anonymity || null;
+    const anonymityAvailable = anonymity?.available === true;
+    const connectionIsAnonymous = anonymity?.current_connection_is_anonymous === true;
+    const unavailableReason = anonymity?.reason
+        ? (UNAVAILABLE_REASONS[anonymity.reason] || anonymity.reason)
+        : 'The capability report could not be loaded.';
+
     const formatBytes = (bytes) => {
         if (bytes === 0) return '0 B';
         const k = 1024;
@@ -176,7 +209,7 @@ const DarkProtocolDashboard = () => {
                     <div className="dp-icon">🌑</div>
                     <div className="dp-title">
                         <h1>Dark Protocol Network</h1>
-                        <p>Experimental vault-access demo</p>
+                        <p>Vault access over the Tor network as a v3 onion service</p>
                     </div>
                 </div>
                 <div className="dp-header-right">
@@ -205,14 +238,59 @@ const DarkProtocolDashboard = () => {
                 </div>
             )}
 
-            {/* Connection Status */}
+            {/* Anonymity status — the headline claim, and the only one on this
+                page that describes anonymity. Everything below it describes the
+                obfuscation layer. */}
+            <div className={`dp-anonymity-banner ${anonymityAvailable ? 'available' : 'unavailable'}`}>
+                <div className="dp-anonymity-header">
+                    <span className="dp-anonymity-icon">{anonymityAvailable ? '🧅' : '⛔'}</span>
+                    <h3>
+                        {anonymityAvailable
+                            ? 'Anonymous access available'
+                            : 'Anonymous access unavailable'}
+                    </h3>
+                </div>
+
+                {anonymityAvailable ? (
+                    <div className="dp-anonymity-body">
+                        <p>
+                            This deployment is published as a Tor v3 onion service. Reaching it
+                            over the address below keeps the connection inside the Tor network —
+                            there is no exit node, and this server does not learn your IP address.
+                        </p>
+                        {anonymity?.onion_address && (
+                            <div className="dp-onion-address">
+                                <label>Onion address</label>
+                                <code>{anonymity.onion_address}</code>
+                            </div>
+                        )}
+                        <p className={`dp-current-connection ${connectionIsAnonymous ? 'anonymous' : 'clearnet'}`}>
+                            {connectionIsAnonymous
+                                ? 'This connection arrived over the onion service, so vault access is anonymous.'
+                                : 'This connection did not arrive over the onion service. Vault operations through Dark Protocol are refused until you connect via the onion address.'}
+                        </p>
+                    </div>
+                ) : (
+                    <div className="dp-anonymity-body">
+                        <p>{unavailableReason}</p>
+                        <p>
+                            Cover traffic and padding remain available, but they are
+                            traffic-analysis resistance only — not anonymity. No feature on this
+                            page will hide your IP address until the Tor transport is active.
+                        </p>
+                    </div>
+                )}
+            </div>
+
+            {/* Cover-traffic session status. Deliberately NOT labelled
+                "Protected": a session here is padding, not anonymity. */}
             <div className="dp-connection-section">
                 <div className={`dp-connection-status ${connectionState}`}>
                     <div className="dp-status-indicator"></div>
                     <div className="dp-status-text">
-                        <h3>Connection Status</h3>
+                        <h3>Cover-traffic session</h3>
                         <span className="dp-status-value">
-                            {connectionState === 'connected' ? 'Protected' :
+                            {connectionState === 'connected' ? 'Active' :
                                 connectionState === 'connecting' ? 'Connecting...' :
                                     'Not Connected'}
                         </span>
@@ -277,39 +355,53 @@ const DarkProtocolDashboard = () => {
             {/* Network Health */}
             <div className="dp-network-section">
                 <div className="dp-network-card">
-                    <h3>🌐 Network Health</h3>
+                    <h3>🧅 Tor circuits</h3>
                     <div className="dp-health-stats">
                         <div className="dp-health-item">
-                            <div className="dp-health-value">{networkHealth?.active_nodes || 0}</div>
-                            <div className="dp-health-label">Active Nodes</div>
+                            <div className="dp-health-value">{networkHealth?.circuits?.built || 0}</div>
+                            <div className="dp-health-label">Built Circuits</div>
                         </div>
                         <div className="dp-health-item">
-                            <div className="dp-health-value">{networkHealth?.health_percentage?.toFixed(0) || 0}%</div>
-                            <div className="dp-health-label">Network Health</div>
+                            <div className="dp-health-value">{networkHealth?.circuits?.relays || 0}</div>
+                            <div className="dp-health-label">Relays</div>
                         </div>
                         <div className="dp-health-item">
-                            <div className="dp-health-value">{networkHealth?.average_latency_ms || 0}ms</div>
-                            <div className="dp-health-label">Avg Latency</div>
+                            <div className="dp-health-value">
+                                {networkHealth?.tor?.bootstrap_progress ?? 0}%
+                            </div>
+                            <div className="dp-health-label">Tor Bootstrap</div>
                         </div>
                     </div>
 
-                    {/* Node Distribution */}
+                    {/* Real relays of the live circuits. Empty when Tor is down —
+                        an empty list is the honest answer, and this panel says so
+                        rather than rendering a placeholder topology. */}
                     <div className="dp-node-distribution">
-                        <h4>Node Distribution</h4>
-                        <div className="dp-distribution-bars">
-                            {Object.entries(networkHealth?.node_distribution || {}).map(([type, count]) => (
-                                <div key={type} className="dp-distribution-item">
-                                    <span className="dp-dist-label">{type}</span>
-                                    <div className="dp-dist-bar">
-                                        <div
-                                            className={`dp-dist-fill dp-dist-${type}`}
-                                            style={{ width: `${Math.min(100, count * 10)}%` }}
-                                        ></div>
+                        <h4>Circuit relays</h4>
+                        {nodes.length === 0 ? (
+                            <p className="dp-empty-note">
+                                No live circuit to report.
+                            </p>
+                        ) : (
+                            <div className="dp-relay-list">
+                                {nodes.map((relay, index) => (
+                                    <div key={`${relay.circuit_id}-${index}`} className="dp-relay-item">
+                                        <span className={`dp-relay-position dp-relay-${relay.position}`}>
+                                            {relay.position}
+                                        </span>
+                                        <span className="dp-relay-nickname">{relay.nickname || 'unknown'}</span>
+                                        <span className="dp-relay-fingerprint">{relay.fingerprint || ''}</span>
                                     </div>
-                                    <span className="dp-dist-count">{count}</span>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </div>
+                        )}
+                        {/* Stated explicitly because "no exit node" is a real
+                            property of onion-service circuits, and the relay
+                            positions above are what demonstrate it. */}
+                        <p className="dp-empty-note">
+                            Onion-service circuits end at a rendezvous point inside Tor — there is
+                            no exit node.
+                        </p>
                     </div>
                 </div>
 
