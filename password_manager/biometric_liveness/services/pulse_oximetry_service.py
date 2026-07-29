@@ -586,9 +586,17 @@ class PulseOximetryService:
             same shape via its MIN_SPO2_QUALITY comparison.
             """
             try:
-                return type(default)(state.get(key, default))
+                value = type(default)(state.get(key, default))
             except (TypeError, ValueError):
                 return default
+            # NaN converts cleanly and then DEFEATS every comparison it reaches.
+            # `NaN < MIN_SPO2_QUALITY` is False, so a NaN quality reads as an
+            # ACCEPTABLE reading and lets the stored SpO2 surface with no
+            # verified quality behind it -- fail-open, and the same shape
+            # _opt_num guards below.
+            if isinstance(value, float) and not np.isfinite(value):
+                return default
+            return value
 
         def _opt_num(key):
             """Optional FINITE numeric: None stays None, anything else -> None.

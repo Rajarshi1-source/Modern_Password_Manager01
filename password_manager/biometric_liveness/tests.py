@@ -2606,6 +2606,15 @@ class PulseRestoreStateToleranceTests(TestCase):
         self.assertIsNone(svc.hardware_spo2)
         self.assertIsNone(svc.hardware_spo2_timestamp_ms)
         self.assertIsNone(svc._current_hardware_spo2(1100.0))
+        # A NaN QUALITY is the fail-open twin: it converts cleanly and then
+        # defeats the gate, because `NaN < MIN_SPO2_QUALITY` is False -- so an
+        # otherwise-valid stored SpO2 would surface with no verified quality
+        # reading behind it.
+        svc.restore_state({'hardware_spo2': 97.0,
+                           'hardware_spo2_quality': float('nan'),
+                           'hardware_spo2_timestamp_ms': 1000.0})
+        self.assertEqual(svc.hardware_spo2_quality, 0.0)
+        self.assertIsNone(svc._current_hardware_spo2(1100.0))
         # The deferred failure this guards: a non-numeric stored timestamp used
         # to survive restore and raise at `timestamp_ms - ts` on the next frame.
         self.assertIsNone(svc._current_hardware_spo2(1000.0))
