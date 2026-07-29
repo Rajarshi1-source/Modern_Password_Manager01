@@ -2,25 +2,39 @@
 Dark Protocol Service
 =====================
 
-Core orchestrator for the anonymous vault access network.
+Core orchestrator for anonymous vault access.
 
-Provides:
-- Session establishment with multi-layer encryption
-- Path selection and rotation
-- Traffic bundling (real + decoy operations)
-- Censorship detection and circumvention
+Where the anonymity actually comes from
+---------------------------------------
+From Tor, and only from Tor. The backend is published as a v3 onion service
+(see `tor_service.py`); a client that reaches it over that onion gets a circuit
+that terminates inside the Tor network - no exit node - and the backend never
+learns the client's IP. `tor_service` verifies that live, and this module
+refuses to act anonymously when it cannot.
+
+The garlic bundling, noise encryption and cover traffic in this package are an
+obfuscation layer that rides ON TOP of that circuit: padding and traffic shape
+for traffic-analysis resistance. They run inside a single Django deployment and
+are NOT an anonymity network on their own - the "nodes" they route between are
+rows in this database, not peers on a wire. Nothing here may report anonymity
+on the strength of that layer alone.
 
 @author Password Manager Team
 @created 2026-02-02
 """
 
+import io
+import json
 import secrets
 import logging
 import hashlib
+import sys
 from datetime import timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
+from urllib.parse import urlencode
 from django.conf import settings
+from django.urls import NoReverseMatch, resolve, reverse
 from django.utils import timezone
 from django.db import transaction
 
@@ -102,22 +116,56 @@ class EncryptedBundle:
 
 @dataclass
 class VaultOperationResult:
-    """Result of a proxied vault operation."""
+    """Result of a vault operation executed under a verified anonymous ingress.
+
+    ``error_code`` is a stable machine-readable token that the API layer maps
+    to an HTTP status and the UI maps to a message. It exists because the
+    refusal reasons are meaningfully different to a caller - "Tor is down" is
+    an outage, "you came over clearnet" is a routing mistake the client can fix
+    by using the .onion address - and because an exception string must never be
+    the thing a client parses.
+    """
     success: bool
     operation_id: str
     response_data: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
+    error_code: Optional[str] = None
     latency_ms: int = 0
     path_used: Optional[str] = None
-    
+    status_code: Optional[int] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'success': self.success,
             'operation_id': self.operation_id,
             'response_data': self.response_data,
             'error_message': self.error_message,
+            'error_code': self.error_code,
             'latency_ms': self.latency_ms,
         }
+
+
+# =============================================================================
+# Vault operation routing
+# =============================================================================
+# A FIXED map from the operation names this endpoint accepts to the real vault
+# API. It is fixed on purpose: the caller never supplies a path, so this
+# endpoint cannot be pointed at an arbitrary internal URL, and it cannot be
+# pointed back at itself.
+#
+# Operations are dispatched to the genuine vault views, so ownership scoping,
+# permissions, serializer validation and audit logging are the vault's own -
+# there is no second implementation of vault access here to drift out of sync.
+
+VAULT_OPERATION_ROUTES: Dict[str, Dict[str, Any]] = {
+    'vault_list': {'method': 'GET', 'route': 'api-vault-list'},
+    'vault_get': {'method': 'GET', 'route': 'api-vault-detail', 'needs_id': True},
+    'vault_create': {'method': 'POST', 'route': 'api-vault-list'},
+    'vault_update': {'method': 'PUT', 'route': 'api-vault-detail', 'needs_id': True},
+    'vault_delete': {'method': 'DELETE', 'route': 'api-vault-detail', 'needs_id': True},
+    'vault_search': {'method': 'POST', 'route': 'vault-search'},
+    'vault_sync': {'method': 'POST', 'route': 'vault-sync'},
+}
 
 
 # =============================================================================
@@ -164,7 +212,79 @@ class DarkProtocolService:
             from .cover_traffic_generator import CoverTrafficGenerator
             self._cover_generator = CoverTrafficGenerator()
         return self._cover_generator
-    
+
+    @property
+    def tor(self):
+        """The Tor capability layer - the only source of the anonymity verdict."""
+        from .tor_service import get_tor_service
+        return get_tor_service()
+
+    # =========================================================================
+    # Capability Reporting
+    # =========================================================================
+
+    def get_capabilities(self, request=None) -> Dict[str, Any]:
+        """Report what Dark Protocol can genuinely do right now.
+
+        Mirrors the liveness capability model: a property is advertised only
+        when the capability behind it is present and verified, and the claims
+        are written so they can be repeated verbatim in the UI without
+        overstating anything.
+
+        ``request`` is optional so operators can query the deployment-level
+        capability; when supplied, the answer also says whether THIS connection
+        is anonymous, which is the only thing that governs vault access.
+        """
+        capability = self.tor.get_capability()
+        dark_config = get_dark_protocol_config()
+        onion_ingress = bool(request is not None and self.tor.request_is_onion_ingress(request))
+
+        return {
+            'anonymity': {
+                'transport': 'tor_v3_onion',
+                'available': capability.anonymity_active,
+                'reason': capability.reason,
+                'onion_address': capability.onion_address if capability.anonymity_active else None,
+                'current_connection_is_anonymous': onion_ingress,
+                'details': capability.to_dict(),
+            },
+            # Obfuscation is configuration, not capability: these run in-process
+            # and are honest about being padding rather than anonymity.
+            'obfuscation': {
+                'cover_traffic': {
+                    'enabled': bool(dark_config.get('COVER_TRAFFIC_ENABLED')),
+                    'gates_anonymity': False,
+                    'note': 'Padding and traffic shaping over the Tor circuit; '
+                            'raises the cost of traffic analysis. Not anonymity '
+                            'on its own.',
+                },
+                'garlic_bundling': {
+                    'enabled': True,
+                    'gates_anonymity': False,
+                    'note': 'Multi-layer encryption and bundling applied within '
+                            'this deployment. The relays it names are local '
+                            'records, not independent peers.',
+                },
+            },
+            'vault_proxy': {
+                'available': capability.anonymity_active and onion_ingress,
+                'requires': 'onion_ingress',
+                'note': 'Vault operations are served anonymously only for '
+                        'requests that arrived over the onion service.',
+            },
+            'claims': [
+                'Vault access over the Tor network as a v3 onion service.',
+                'No exit node: the circuit terminates inside Tor at this service.',
+                'The server does not learn the client IP address of onion connections.',
+                'Cover traffic and padding add traffic-analysis resistance.',
+            ],
+            'limitations': [
+                'Does not defeat an adversary observing the whole network.',
+                'An authenticated account still identifies the user to this service.',
+                'Anonymity applies to connections over the onion address only.',
+            ],
+        }
+
     # =========================================================================
     # Configuration Management
     # =========================================================================
@@ -518,87 +638,241 @@ class DarkProtocolService:
         operation: str,
         payload: Dict[str, Any],
         session_id: str = None,
+        request=None,
     ) -> VaultOperationResult:
         """
-        Proxy a vault operation through the dark protocol network.
-        
+        Execute a vault operation for a client that reached us anonymously.
+
+        This used to bundle the operation, "send" it through the garlic router
+        and return an acknowledgement the router invented - the operation never
+        travelled anywhere and no vault data was ever touched. That is removed.
+
+        What replaces it is the honest version of the same promise:
+
+        1. Refuse unless Tor is live and our onion service is published.
+        2. Refuse unless THIS request arrived over that onion service. The
+           anonymity is a property of how the client reached us, so a clearnet
+           request cannot be made anonymous by anything done after it arrives -
+           and it is never silently served as though it were.
+        3. Otherwise dispatch to the real vault API and return real data.
+
+        There is deliberately no fallback between 2 and 3: a client that wants
+        anonymous vault access must use the .onion address, which the refusal
+        hands back to it.
+
         Args:
             user: The user performing the operation
-            operation: The vault operation type
-            payload: The operation payload
-            session_id: Optional session ID (uses active session if not provided)
-            
+            operation: The vault operation name (see VAULT_OPERATION_ROUTES)
+            payload: The operation payload, forwarded to the vault view
+            session_id: Optional garlic session, used for traffic accounting
+            request: The inbound request; required, as the ingress check is
+                the entire basis for calling this operation anonymous
+
         Returns:
-            VaultOperationResult with response data
+            VaultOperationResult with real vault data, or a refusal.
         """
         operation_id = secrets.token_hex(16)
         start_time = timezone.now()
-        
+
+        capability = self.tor.get_capability()
+        if not capability.anonymity_active:
+            return VaultOperationResult(
+                success=False,
+                operation_id=operation_id,
+                error_code='tor_unavailable',
+                error_message=(
+                    'Anonymous vault access is unavailable: '
+                    f'{capability.reason or "tor_unavailable"}'
+                ),
+            )
+
+        if request is None or not self.tor.request_is_onion_ingress(request):
+            return VaultOperationResult(
+                success=False,
+                operation_id=operation_id,
+                error_code='clearnet_ingress_refused',
+                error_message=(
+                    'This request did not arrive over the onion service, so it '
+                    'is not anonymous. Reach the vault over the .onion address '
+                    'to use anonymous access.'
+                ),
+            )
+
+        route = VAULT_OPERATION_ROUTES.get(operation)
+        if route is None:
+            return VaultOperationResult(
+                success=False,
+                operation_id=operation_id,
+                error_code='unsupported_operation',
+                error_message=f'Unsupported operation: {operation}',
+            )
+
         try:
-            # Get or establish session
-            if session_id:
-                session = GarlicSession.objects.get(
-                    session_id=session_id,
-                    user=user,
-                    status='active',
-                )
-            else:
-                session = self.get_active_session(user)
-                if not session:
-                    result = self.establish_session(user)
-                    if not result.success:
-                        return VaultOperationResult(
-                            success=False,
-                            operation_id=operation_id,
-                            error_message=result.error_message,
-                        )
-                    session = result.session
-            
-            # Bundle the operation
-            bundle = self._create_operation_bundle(
-                session=session,
-                operation=operation,
-                payload=payload,
+            status_code, data = self._dispatch_vault_operation(request, route, payload or {})
+        except ValueError as exc:
+            # A malformed payload (e.g. a detail operation with no id) is the
+            # caller's error, so it must not surface as an internal failure.
+            return VaultOperationResult(
+                success=False,
+                operation_id=operation_id,
+                error_code='invalid_payload',
+                error_message=str(exc),
             )
-            
-            # Apply noise encryption
-            noisy_bundle = self.noise_encryptor.apply_noise(bundle)
-            
-            # Send through garlic router
-            response = self.garlic_router.send_bundle(
-                session=session,
-                bundle=noisy_bundle,
+        except NoReverseMatch:
+            # The vault URL names moved. Surfacing this as a refusal rather
+            # than a 500 keeps the failure legible, and it is a deploy-time
+            # defect that the routing test pins.
+            logger.exception("Vault route missing for operation %s", operation)
+            return VaultOperationResult(
+                success=False,
+                operation_id=operation_id,
+                error_code='route_unavailable',
+                error_message='Vault route unavailable',
             )
-            
-            # Update session statistics
-            session.bytes_sent += len(noisy_bundle.encrypted_data)
+        except Exception:
+            logger.exception("Anonymous vault operation failed: %s", operation)
+            return VaultOperationResult(
+                success=False,
+                operation_id=operation_id,
+                error_code='operation_failed',
+                error_message='Vault operation failed',
+            )
+
+        latency_ms = int((timezone.now() - start_time).total_seconds() * 1000)
+        self._record_operation_traffic(user, session_id, payload)
+
+        return VaultOperationResult(
+            success=200 <= status_code < 300,
+            operation_id=operation_id,
+            response_data=data,
+            status_code=status_code,
+            error_code=None if 200 <= status_code < 300 else 'vault_error',
+            latency_ms=latency_ms,
+        )
+
+    def _dispatch_vault_operation(
+        self,
+        request,
+        route: Dict[str, Any],
+        payload: Dict[str, Any],
+    ) -> Tuple[int, Any]:
+        """Call the real vault view in-process and return (status, data).
+
+        The inner request is built from the outer one so the vault view
+        authenticates and authorises exactly as it would for a direct call.
+
+        How the inner request authenticates, precisely: this project's
+        DEFAULT_AUTHENTICATION_CLASSES contains only JWTAuthentication, so the
+        load-bearing mechanism is the ``Authorization`` header, which is
+        carried over with the rest of META. The vault view therefore verifies
+        the caller's token itself rather than trusting anything decided here.
+        ``inner.user`` is set as well so that a deployment which re-enables
+        SessionAuthentication continues to resolve the same user; it is inert
+        under the current configuration.
+
+        Two properties make the dispatch safe:
+
+        * The path comes from VAULT_OPERATION_ROUTES via ``reverse()``, never
+          from the caller, so this cannot be aimed at an arbitrary URL.
+        * The outer request has already passed authentication, permissions and
+          CSRF in the normal middleware stack; the inner one is a continuation
+          of it, not a new entry point, which is why CSRF is not re-enforced on
+          it (re-enforcing would reject token-authenticated callers that never
+          carry a CSRF cookie).
+        """
+        method = route['method']
+        if route.get('needs_id'):
+            item_id = payload.get('id') or payload.get('item_id')
+            if not item_id:
+                raise ValueError('id is required for this operation')
+            path = reverse(route['route'], args=[str(item_id)])
+        else:
+            path = reverse(route['route'])
+
+        body = b''
+        query = ''
+        if method in ('GET', 'DELETE'):
+            # Only scalars survive into the query string; a nested structure
+            # has no unambiguous encoding, so dropping it is better than
+            # silently flattening it into something the view misreads.
+            query = urlencode({
+                key: value for key, value in payload.items()
+                if isinstance(value, (str, int, float, bool))
+            })
+        else:
+            body = json.dumps(payload).encode('utf-8')
+
+        environ = {
+            key: value for key, value in request.META.items()
+            if not key.startswith('wsgi.')
+        }
+        environ.update({
+            'REQUEST_METHOD': method,
+            'PATH_INFO': path,
+            'QUERY_STRING': query,
+            'CONTENT_TYPE': 'application/json',
+            'CONTENT_LENGTH': str(len(body)),
+            'wsgi.input': io.BytesIO(body),
+            'wsgi.errors': sys.stderr,
+            'wsgi.version': (1, 0),
+            'wsgi.multithread': True,
+            'wsgi.multiprocess': True,
+            'wsgi.run_once': False,
+            'wsgi.url_scheme': getattr(request, 'scheme', 'http'),
+        })
+
+        from django.core.handlers.wsgi import WSGIRequest
+
+        inner = WSGIRequest(environ)
+        inner.user = getattr(request, 'user', None)
+        session = getattr(request, 'session', None)
+        if session is not None:
+            inner.session = session
+        inner._dont_enforce_csrf_checks = True
+
+        match = resolve(path)
+        response = match.func(inner, *match.args, **match.kwargs)
+
+        if hasattr(response, 'render') and not getattr(response, 'is_rendered', True):
+            response.render()
+
+        status_code = int(getattr(response, 'status_code', 500))
+        if hasattr(response, 'data'):
+            return status_code, response.data
+        # A plain HttpResponse (e.g. a redirect) has no .data. Return the body
+        # only when it parses as JSON; raw bytes are not something the client
+        # of this endpoint can use.
+        try:
+            return status_code, json.loads(response.content.decode('utf-8'))
+        except Exception:
+            return status_code, None
+
+    def _record_operation_traffic(
+        self,
+        user,
+        session_id: Optional[str],
+        payload: Dict[str, Any],
+    ) -> None:
+        """Update garlic-session counters for an operation that really ran.
+
+        Accounting only. It feeds the cover-traffic layer's shaping and the
+        stats panel; it does not transport anything and no longer stands in
+        for a transport. Failures here must not fail the vault operation that
+        already succeeded.
+        """
+        if not session_id:
+            return
+        try:
+            session = GarlicSession.objects.filter(
+                session_id=session_id, user=user, status='active'
+            ).first()
+            if session is None:
+                return
+            session.bytes_sent += len(json.dumps(payload or {}).encode('utf-8'))
             session.messages_sent += 1
             session.save(update_fields=['bytes_sent', 'messages_sent', 'last_activity_at'])
-            
-            # Calculate latency
-            latency_ms = int((timezone.now() - start_time).total_seconds() * 1000)
-            
-            return VaultOperationResult(
-                success=True,
-                operation_id=operation_id,
-                response_data=response,
-                latency_ms=latency_ms,
-                path_used=session.session_id[:8],
-            )
-            
-        except GarlicSession.DoesNotExist:
-            return VaultOperationResult(
-                success=False,
-                operation_id=operation_id,
-                error_message="Session not found or expired",
-            )
-        except Exception as e:
-            logger.error(f"Vault operation proxy failed: {e}")
-            return VaultOperationResult(
-                success=False,
-                operation_id=operation_id,
-                error_message=str(e),
-            )
+        except Exception:
+            logger.exception("Failed to record dark protocol traffic accounting")
     
     def _create_operation_bundle(
         self,
@@ -645,63 +919,75 @@ class DarkProtocolService:
     # =========================================================================
     
     def get_network_status(self) -> Dict[str, Any]:
-        """Get overall network health status."""
+        """Report network status, led by whether anonymity is actually active.
+
+        ``anonymity_active`` is the headline and it comes from Tor alone. The
+        local relay counts that follow describe the in-process obfuscation
+        layer and are reported under their own key so they cannot be mistaken
+        for - or rendered as - the health of an anonymity network.
+        """
         now = timezone.now()
         five_min_ago = now - timedelta(minutes=5)
-        
+        capability = self.tor.get_capability()
+
+        relays = self.tor.get_circuit_relays() if capability.anonymity_active else []
+        circuits = len({relay['circuit_id'] for relay in relays if relay.get('circuit_id')})
+
+        # Local obfuscation-layer records. Kept, clearly labelled, because the
+        # cover-traffic scheduler reads them; they describe rows in this
+        # database, not peers reachable over a network.
         total_nodes = DarkProtocolNode.objects.count()
         active_nodes = DarkProtocolNode.objects.filter(
             status='active',
             last_seen_at__gt=five_min_ago,
         ).count()
-        
-        # Calculate average metrics
+
         recent_health = NetworkHealth.objects.filter(
             checked_at__gt=five_min_ago,
             is_reachable=True,
         )
-        
         avg_latency = 0
         if recent_health.exists():
             avg_latency = sum(h.latency_ms for h in recent_health) / recent_health.count()
-        
-        # Get node distribution by type
-        node_types = {}
-        for node_type, _ in DarkProtocolNode.NODE_TYPE_CHOICES if hasattr(DarkProtocolNode, 'NODE_TYPE_CHOICES') else []:
-            node_types[node_type] = DarkProtocolNode.objects.filter(
-                node_type=node_type, status='active'
-            ).count()
-        
+
         return {
-            'total_nodes': total_nodes,
-            'active_nodes': active_nodes,
-            'health_percentage': (active_nodes / total_nodes * 100) if total_nodes > 0 else 0,
-            'average_latency_ms': int(avg_latency),
-            'node_distribution': node_types,
+            'anonymity_active': capability.anonymity_active,
+            'transport': 'tor_v3_onion',
+            'status': 'active' if capability.anonymity_active else 'unavailable',
+            'reason': capability.reason,
+            'onion_address': capability.onion_address if capability.anonymity_active else None,
+            'tor': capability.to_dict(),
+            'circuits': {
+                'built': circuits,
+                'relays': len(relays),
+            },
+            'obfuscation_layer': {
+                'local_records': total_nodes,
+                'active_records': active_nodes,
+                'average_latency_ms': int(avg_latency),
+                'note': 'In-process cover-traffic layer. Not an anonymity network.',
+            },
             'checked_at': now.isoformat(),
         }
-    
+
     def get_available_nodes(self, node_type: str = None) -> List[Dict[str, Any]]:
-        """Get list of available nodes."""
-        nodes_qs = DarkProtocolNode.objects.filter(
-            status='active',
-            last_seen_at__gt=timezone.now() - timedelta(minutes=5),
-        )
-        
+        """Relays of the live Tor circuits carrying this deployment's traffic.
+
+        This used to return rows from ``DarkProtocolNode``, which described
+        relays that did not exist anywhere - a fabricated network topology
+        rendered as though it were real infrastructure. It now returns what Tor
+        reports, and an empty list when there is no live circuit to describe.
+
+        ``node_type`` filters by circuit position ('guard', 'middle',
+        'rendezvous'). There is no 'exit' position: onion-service circuits end
+        at a rendezvous point inside Tor, which is what makes "no exit node" a
+        true statement about this deployment rather than a slogan.
+        """
+        relays = self.tor.get_circuit_relays()
         if node_type:
-            nodes_qs = nodes_qs.filter(node_type=node_type)
-        
-        return [
-            {
-                'node_id': node.node_id,
-                'type': node.node_type,
-                'region': node.region,
-                'trust_score': node.trust_score,
-                'load_percentage': node.load_percentage,
-                'is_available': node.is_available,
-            }
-            for node in nodes_qs.order_by('-trust_score')[:50]
-        ]
+            wanted = str(node_type).strip().lower()
+            relays = [relay for relay in relays if relay.get('position') == wanted]
+        return relays
 
 
 # =============================================================================

@@ -67,6 +67,14 @@ idna==3.18
 urllib3==2.7.0
 dnspython==2.7.0
 
+# Tor transport for Dark Protocol anonymous vault access.
+#   stem     — reads live Tor state over the control port (bootstrap, circuits,
+#              onion descriptor). Without it the capability reports Unavailable.
+#   PySocks  — SOCKS5 support for requests, used by the onion loopback
+#              self-check (socks5h, so the .onion resolves inside Tor).
+stem>=1.8.2
+PySocks==1.7.1
+
 # AWS & Cloud Storage
 boto3>=1.34.0
 botocore>=1.34.0

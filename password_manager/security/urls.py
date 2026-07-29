@@ -402,9 +402,15 @@ urlpatterns = [
     # 🌑 Dark Protocol Network for Anonymous Vault Access
     # ==========================================================================
     
+    # Capability report (client gates its UI on this)
+    path('dark-protocol/capabilities/', dark_protocol_views.DarkProtocolCapabilitiesView.as_view(), name='dark-protocol-capabilities'),
+
+    # Onion loopback self-check target (answers only on the onion ingress)
+    path('dark-protocol/ping/', dark_protocol_views.DarkProtocolOnionPingView.as_view(), name='dark-protocol-ping'),
+
     # Configuration
     path('dark-protocol/config/', dark_protocol_views.DarkProtocolConfigView.as_view(), name='dark-protocol-config'),
-    
+
     # Session Management
     path('dark-protocol/session/', dark_protocol_views.DarkProtocolSessionView.as_view(), name='dark-protocol-session'),
     

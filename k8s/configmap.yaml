@@ -45,3 +45,16 @@ data:
   GUNICORN_THREADS: "2"
   CELERY_CONCURRENCY: "4"
 
+  # Tor — anonymity transport for Dark Protocol (see k8s/tor.yaml).
+  # "false" here means the cluster has no Tor daemon, so the feature reports
+  # Unavailable. Apply k8s/tor.yaml and flip this to "true" to enable it.
+  TOR_ENABLED: "false"
+  TOR_CONTROL_HOST: "tor-service"
+  TOR_CONTROL_PORT: "9051"
+  TOR_SOCKS_HOST: "tor-service"
+  TOR_SOCKS_PORT: "9050"
+  TOR_ONION_HOSTNAME_FILE: "/var/lib/tor-shared/hostname"
+  # The port the onion service forwards to. Reachable only from the tor pod
+  # via NetworkPolicy — that is what makes onion ingress detectable.
+  TOR_ONION_INGRESS_PORT: "8443"
+

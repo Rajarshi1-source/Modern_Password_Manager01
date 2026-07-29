@@ -1,18 +1,27 @@
 /**
  * Dark Protocol Service
  * =======================
- * 
- * Frontend service for the experimental Dark Protocol vault-access demo.
+ *
+ * Frontend service for anonymous vault access.
+ *
+ * Where the anonymity comes from: the backend is published as a Tor v3 onion
+ * service, and a client that reaches it over that .onion address gets a
+ * circuit terminating inside Tor — no exit node, and the server never learns
+ * the client IP. The server verifies that live against its Tor daemon and
+ * reports it through `getCapabilities()`.
+ *
+ * The garlic bundling and cover traffic here are padding layered on top of
+ * that circuit (traffic-analysis resistance); they run inside one deployment
+ * and are NOT anonymity on their own. Nothing in this UI may present them as
+ * such: when `capabilities.anonymity.available` is false, the feature shows
+ * Unavailable rather than implying protection that is not there.
  *
  * Features:
+ * - Capability reporting (gates the UI)
  * - Session management via REST API
  * - WebSocket connection for real-time communication
  * - Cover traffic generation (client-side)
  * - Connection state management
- *
- * NOTE: the dark-protocol transport is SIMULATED on a single Django server
- * (no distributed relay network, no outbound inter-node transport), so this is
- * a demo — it does NOT provide real anonymity or censorship resistance.
  *
  * @author Password Manager Team
  * @created 2026-02-02
@@ -194,11 +203,33 @@ export const getNetworkHealth = async () => {
     method: 'GET',
     headers: authHeaders(),
   });
-  
+
   if (!response.ok) {
     throw new Error('Failed to fetch network health');
   }
-  
+
+  return response.json();
+};
+
+/**
+ * Capability report — what Dark Protocol can genuinely do right now.
+ *
+ * The UI gates on this rather than on user configuration: `is_enabled` is a
+ * preference, while `anonymity.available` is a fact the server verified
+ * against a running Tor daemon. A failed fetch is deliberately treated as
+ * "unavailable" by callers rather than defaulting to available, so a
+ * capability endpoint that is down can never present the feature as active.
+ */
+export const getCapabilities = async () => {
+  const response = await fetch(`${DARK_PROTOCOL_BASE}/capabilities/`, {
+    method: 'GET',
+    headers: authHeaders(),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch dark protocol capabilities');
+  }
+
   return response.json();
 };
 
@@ -526,6 +557,9 @@ export default {
   establishSession,
   terminateSession,
   
+  // Capability
+  getCapabilities,
+
   // Network
   getNodes,
   getRoutes,

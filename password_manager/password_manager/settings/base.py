@@ -1938,8 +1938,15 @@ SECURITY_EMAIL = os.environ.get('SECURITY_EMAIL', 'security@securevault.com')
 # =============================================================================
 # 🌑 Dark Protocol Network Configuration
 # =============================================================================
-# Anonymous vault access using garlic routing and cover traffic
-# Provides government-level censorship resistance
+# Vault access over the Tor network as a v3 onion service (see the TOR block
+# below), with cover traffic and padding layered on top for traffic-analysis
+# resistance.
+#
+# The settings in THIS block configure that padding/obfuscation layer only.
+# They do not provide anonymity on their own: garlic bundling, cover traffic
+# and noise all run inside a single Django deployment, so with Tor disabled
+# there is no anonymity network and Dark Protocol reports Unavailable rather
+# than claiming a property it does not have.
 
 DARK_PROTOCOL = {
     # Feature toggle
@@ -1983,6 +1990,58 @@ DARK_PROTOCOL = {
     'SESSION_RETENTION_HOURS': int(os.environ.get('DARK_PROTOCOL_SESSION_RETENTION', '24')),
     'TRAFFIC_BUNDLE_RETENTION_HOURS': int(os.environ.get('DARK_PROTOCOL_BUNDLE_RETENTION', '24')),
     'HEALTH_RECORD_RETENTION_DAYS': int(os.environ.get('DARK_PROTOCOL_HEALTH_RETENTION', '7')),
+}
+
+# =============================================================================
+# 🧅 Tor Configuration (real anonymity transport for Dark Protocol)
+# =============================================================================
+# Dark Protocol's anonymity property is "the backend is published as a Tor v3
+# onion service and the client reached it over that onion" - no exit node, and
+# the backend never sees the client IP. Everything here describes how to reach
+# the local Tor daemon so `security.services.tor_service` can VERIFY that,
+# live, before the feature reports itself as active.
+#
+# Disabled by default: an unset TOR_ENABLED means no Tor daemon, which means
+# no anonymity, which the feature must report honestly as Unavailable.
+# `docker compose --profile tor up` provisions the daemon and sets these.
+
+TOR = {
+    'ENABLED': os.environ.get('TOR_ENABLED', 'False').lower() == 'true',
+
+    # Control port (or unix socket) used to read bootstrap state, circuits and
+    # the published onion descriptor. Read-only usage.
+    'CONTROL_HOST': os.environ.get('TOR_CONTROL_HOST', '127.0.0.1'),
+    'CONTROL_PORT': int(os.environ.get('TOR_CONTROL_PORT', '9051')),
+    'CONTROL_SOCKET': os.environ.get('TOR_CONTROL_SOCKET', ''),
+    'CONTROL_PASSWORD': os.environ.get('TOR_CONTROL_PASSWORD', ''),
+    'CONTROL_TIMEOUT_SECONDS': int(os.environ.get('TOR_CONTROL_TIMEOUT', '5')),
+
+    # SOCKS5 proxy, used for the loopback self-check that fetches our own
+    # .onion through Tor (socks5h, so the .onion resolves inside Tor).
+    'SOCKS_HOST': os.environ.get('TOR_SOCKS_HOST', '127.0.0.1'),
+    'SOCKS_PORT': int(os.environ.get('TOR_SOCKS_PORT', '9050')),
+
+    # Our published address. TOR_ONION_HOSTNAME wins when set; otherwise the
+    # hostname file Tor writes into its HiddenServiceDir is read.
+    'ONION_HOSTNAME': os.environ.get('TOR_ONION_HOSTNAME', ''),
+    'ONION_HOSTNAME_FILE': os.environ.get('TOR_ONION_HOSTNAME_FILE', ''),
+
+    # The port the onion service forwards to. It must be reachable ONLY from
+    # the Tor daemon (internal network, never published to the host): a
+    # request arriving on it is how the backend knows the client came through
+    # the onion. 0 disables onion-ingress detection entirely, in which case no
+    # request is ever treated as anonymous.
+    'ONION_INGRESS_PORT': int(os.environ.get('TOR_ONION_INGRESS_PORT', '0')),
+
+    # Capability probes are cached briefly so dashboard polling does not open
+    # a control connection per widget.
+    'CAPABILITY_TTL_SECONDS': int(os.environ.get('TOR_CAPABILITY_TTL', '15')),
+
+    # Loopback self-check: proves the descriptor is published and the service
+    # answers, by performing a real rendezvous with ourselves. Slow and cached.
+    'SELF_CHECK_PATH': os.environ.get('TOR_SELF_CHECK_PATH', '/api/security/dark-protocol/ping/'),
+    'SELF_CHECK_TIMEOUT_SECONDS': int(os.environ.get('TOR_SELF_CHECK_TIMEOUT', '60')),
+    'SELF_CHECK_TTL_SECONDS': int(os.environ.get('TOR_SELF_CHECK_TTL', '300')),
 }
 
 # =============================================================================

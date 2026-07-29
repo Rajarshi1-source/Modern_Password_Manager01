@@ -20,20 +20,18 @@ import logging
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.throttling import UserRateThrottle
 
-from django.db import transaction
 from django.utils import timezone
 
 from ..models.dark_protocol_models import (
-    DarkProtocolNode,
     GarlicSession,
     DarkProtocolConfig,
     RoutingPath,
-    NetworkHealth,
 )
 from ..services.dark_protocol_service import get_dark_protocol_service
+from ..services.tor_service import get_tor_service
 
 logger = logging.getLogger(__name__)
 
@@ -252,31 +250,39 @@ class DarkProtocolSessionView(APIView):
 
 class DarkProtocolNodesView(APIView):
     """
-    Available network nodes.
-    
-    GET: List available nodes (filtered by type if specified)
+    Relays of the live Tor circuits.
+
+    GET: List circuit relays (filtered by position if specified)
+
+    Previously this listed ``DarkProtocolNode`` rows - a table of relays that
+    existed only in the database. It now reports what Tor reports, and an empty
+    list with a reason when there is no live circuit.
     """
     permission_classes = [IsAuthenticated]
     throttle_classes = [DarkProtocolRateThrottle]
-    
+
     def get(self, request):
-        """Get available network nodes."""
+        """Get the relays currently carrying this deployment's Tor circuits."""
         node_type = request.query_params.get('type')
-        
+
         service = get_dark_protocol_service()
+        capability = service.tor.get_capability()
         nodes = service.get_available_nodes(node_type=node_type)
-        
-        # Get node distribution
-        distribution = {}
-        for nt, _ in [('entry', 'Entry'), ('relay', 'Relay'), ('destination', 'Destination'), ('bridge', 'Bridge')]:
-            distribution[nt] = DarkProtocolNode.objects.filter(
-                node_type=nt, status='active'
-            ).count()
-        
+
+        # Distribution over real circuit positions. Onion-service circuits have
+        # no exit hop, so 'exit' is deliberately absent from this breakdown.
+        distribution = {'guard': 0, 'middle': 0, 'rendezvous': 0}
+        for node in nodes:
+            position = node.get('position')
+            if position in distribution:
+                distribution[position] += 1
+
         return Response({
             'nodes': nodes,
             'total_count': len(nodes),
             'distribution': distribution,
+            'anonymity_active': capability.anonymity_active,
+            'reason': capability.reason,
         })
 
 
@@ -344,34 +350,85 @@ class DarkProtocolRouteView(APIView):
 
 class DarkProtocolHealthView(APIView):
     """
-    Network health status.
-    
-    GET: Get overall network health and metrics
+    Anonymity transport health.
+
+    GET: Report whether anonymous access is actually available.
+
+    "Active" here means Tor is bootstrapped, has a live circuit, and our onion
+    descriptor is published - all verified against the running daemon. Anything
+    less reports Unavailable with a reason. It never reports active on the
+    strength of the in-process cover-traffic layer.
+
+    ``?verify=1`` additionally performs the loopback self-check, fetching our
+    own .onion through the Tor SOCKS proxy. That is the end-to-end proof the
+    service is reachable, and it is opt-in because a cold descriptor fetch can
+    take tens of seconds.
     """
     permission_classes = [IsAuthenticated]
     throttle_classes = [DarkProtocolRateThrottle]
-    
+
     def get(self, request):
-        """Get network health status."""
+        """Get anonymity transport health."""
         service = get_dark_protocol_service()
         health_status = service.get_network_status()
-        
-        # Get recent health checks
-        recent_checks = NetworkHealth.objects.filter(
-            checked_at__gte=timezone.now() - timezone.timedelta(minutes=5)
-        ).select_related('node')
-        
-        reachable = recent_checks.filter(is_reachable=True).count()
-        total_checks = recent_checks.count()
-        
-        return Response({
-            **health_status,
-            'recent_checks': {
-                'total': total_checks,
-                'reachable': reachable,
-                'reachability_rate': reachable / total_checks if total_checks > 0 else 0,
-            },
-        })
+
+        if str(request.query_params.get('verify', '')).lower() in ('1', 'true', 'yes'):
+            health_status['self_check'] = service.tor.check_onion_reachable().to_dict()
+
+        return Response(health_status)
+
+
+# =============================================================================
+# Capabilities View
+# =============================================================================
+
+class DarkProtocolCapabilitiesView(APIView):
+    """
+    What Dark Protocol can genuinely do right now.
+
+    GET: Capability report for the client to gate its UI on.
+
+    The client renders anonymity features only when this says the capability is
+    present, so that a deployment without Tor shows Unavailable rather than a
+    dashboard implying protection that is not there.
+    """
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [DarkProtocolRateThrottle]
+
+    def get(self, request):
+        try:
+            service = get_dark_protocol_service()
+            return Response(service.get_capabilities(request=request))
+        except Exception:
+            # Keep the traceback; a capability probe failing is an operational
+            # signal, and the client must not receive an exception string.
+            logger.exception("Error getting dark protocol capabilities")
+            return Response(
+                {'error': 'internal_error'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+# =============================================================================
+# Onion Ping View
+# =============================================================================
+
+class DarkProtocolOnionPingView(APIView):
+    """
+    Reachability target for the onion loopback self-check.
+
+    Unauthenticated by necessity: the self-check runs as the deployment, not as
+    a user. It answers ONLY on the onion ingress and 404s everywhere else, so
+    it adds no clearnet surface and cannot be used to fingerprint the
+    deployment from the open internet.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [DarkProtocolRateThrottle]
+
+    def get(self, request):
+        if not get_tor_service().request_is_onion_ingress(request):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response({'ok': True})
 
 
 # =============================================================================
@@ -380,55 +437,91 @@ class DarkProtocolHealthView(APIView):
 
 class DarkProtocolVaultProxyView(APIView):
     """
-    Proxied vault operations through dark protocol.
-    
-    POST: Execute vault operation through anonymous network
+    Vault operations executed under a verified anonymous ingress.
+
+    POST: Execute a vault operation, but only for a request that actually
+    arrived over the onion service.
+
+    There is no clearnet fallback. If Tor is down, or the request came in over
+    clearnet, this refuses and says so - it does not serve the operation while
+    letting the client believe it was anonymous.
     """
     permission_classes = [IsAuthenticated]
     throttle_classes = [DarkProtocolRateThrottle]
-    
+
+    # Refusal reasons map to distinct statuses so a client can tell an outage
+    # from a routing mistake it can fix by using the .onion address.
+    ERROR_STATUS = {
+        'tor_unavailable': status.HTTP_503_SERVICE_UNAVAILABLE,
+        'clearnet_ingress_refused': status.HTTP_403_FORBIDDEN,
+        'unsupported_operation': status.HTTP_400_BAD_REQUEST,
+        'invalid_payload': status.HTTP_400_BAD_REQUEST,
+        'route_unavailable': status.HTTP_503_SERVICE_UNAVAILABLE,
+        'operation_failed': status.HTTP_500_INTERNAL_SERVER_ERROR,
+    }
+
     def post(self, request):
-        """Execute a vault operation through dark protocol."""
+        """Execute a vault operation over the anonymous ingress."""
         operation = request.data.get('operation')
         payload = request.data.get('payload', {})
         session_id = request.data.get('session_id')
-        
+
         if not operation:
             return Response({
                 'error': 'Operation is required',
+                'error_code': 'operation_required',
             }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Validate operation
-        valid_operations = [
-            'vault_list', 'vault_get', 'vault_create', 'vault_update',
-            'vault_delete', 'vault_search', 'vault_sync',
-        ]
-        
-        if operation not in valid_operations:
+
+        if not isinstance(payload, dict):
+            # An explicit `"payload": null` or a list would otherwise reach the
+            # dispatcher and fail deeper, away from the input that caused it.
             return Response({
-                'error': f'Invalid operation. Valid: {", ".join(valid_operations)}',
+                'error': 'payload must be an object',
+                'error_code': 'invalid_payload',
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
         service = get_dark_protocol_service()
         result = service.proxy_vault_operation(
             user=request.user,
             operation=operation,
             payload=payload,
             session_id=session_id,
+            request=request,
         )
-        
+
         if not result.success:
-            return Response({
+            body = {
                 'error': result.error_message,
+                'error_code': result.error_code,
                 'operation_id': result.operation_id,
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+            }
+            if result.error_code == 'clearnet_ingress_refused':
+                # Hand back where anonymous access actually lives, so the
+                # refusal is actionable rather than just a wall.
+                capability = service.tor.get_capability()
+                body['onion_address'] = capability.onion_address
+            if result.error_code == 'vault_error':
+                # The vault view answered with an error; pass its own status
+                # and body through rather than relabelling it.
+                return Response({
+                    'success': False,
+                    'error_code': 'vault_error',
+                    'operation_id': result.operation_id,
+                    'data': result.response_data,
+                }, status=result.status_code or status.HTTP_400_BAD_REQUEST)
+            return Response(
+                body,
+                status=self.ERROR_STATUS.get(
+                    result.error_code, status.HTTP_500_INTERNAL_SERVER_ERROR
+                ),
+            )
+
         return Response({
             'success': True,
             'operation_id': result.operation_id,
             'data': result.response_data,
             'latency_ms': result.latency_ms,
-        })
+        }, status=result.status_code or status.HTTP_200_OK)
 
 
 # =============================================================================
