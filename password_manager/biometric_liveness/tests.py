@@ -2079,6 +2079,51 @@ def _redis_service(fake, retention=420):
     return svc
 
 
+class LivenessRedisUrlDerivationTests(TestCase):
+    """Deriving the session-store URL must actually isolate the database."""
+
+    def _derive(self, redis_url=None, explicit=None, store='memory'):
+        from password_manager.settings import base
+        env = {}
+        if redis_url:
+            env['REDIS_URL'] = redis_url
+        if explicit:
+            env['LIVENESS_SESSION_REDIS_URL'] = explicit
+        env['LIVENESS_SESSION_STORE'] = store
+        with patch.dict(os.environ, env, clear=False):
+            for k in ('REDIS_URL', 'LIVENESS_SESSION_REDIS_URL'):
+                if k not in env:
+                    os.environ.pop(k, None)
+            return base._liveness_session_redis_url()
+
+    def test_path_db_is_forced(self):
+        self.assertEqual(self._derive('redis://cache:6379/0'),
+                         'redis://cache:6379/3')
+
+    def test_conflicting_db_query_param_is_stripped(self):
+        """redis-py gives `?db=` precedence over the path.
+
+        Rewriting only the path would return a URL that LOOKS isolated and
+        still opens the cache's database -- the FLUSHDB / LRU-eviction exposure
+        the whole helper exists to prevent, reintroduced silently.
+        """
+        import redis
+        derived = self._derive('redis://cache:6379/0?db=1')
+        self.assertNotIn('db=1', derived)
+        opened = redis.Redis.from_url(derived).connection_pool.connection_kwargs
+        self.assertEqual(opened['db'], 3)   # what the CLIENT actually opens
+
+    def test_other_query_params_survive(self):
+        derived = self._derive('rediss://cache:6380/0?db=1&ssl_cert_reqs=none')
+        self.assertIn('ssl_cert_reqs=none', derived)
+        self.assertNotIn('db=1', derived)
+
+    def test_explicit_url_still_wins_untouched(self):
+        self.assertEqual(
+            self._derive('redis://cache:6379/0?db=1', explicit='redis://h:1/9?db=7'),
+            'redis://h:1/9?db=7')
+
+
 class SessionStoreBackendSelectionTests(TestCase):
     """An explicitly requested Redis backend must never degrade silently."""
 
@@ -2488,6 +2533,15 @@ class PulseRestoreStateToleranceTests(TestCase):
         self.assertEqual(svc.frame_count, 0)
         self.assertIsNone(svc.hardware_spo2)
         self.assertIsNone(svc.hardware_spo2_timestamp_ms)
+        # NaN converts cleanly through float(), so without an isfinite test it
+        # would pass restore under the appearance of validation and reach
+        # PulseReading.spo2_estimate, then np.mean during scoring.
+        svc.restore_state({'hardware_spo2': float('nan'),
+                           'hardware_spo2_quality': 1.0,
+                           'hardware_spo2_timestamp_ms': float('inf')})
+        self.assertIsNone(svc.hardware_spo2)
+        self.assertIsNone(svc.hardware_spo2_timestamp_ms)
+        self.assertIsNone(svc._current_hardware_spo2(1100.0))
         # The deferred failure this guards: a non-numeric stored timestamp used
         # to survive restore and raise at `timestamp_ms - ts` on the next frame.
         self.assertIsNone(svc._current_hardware_spo2(1000.0))

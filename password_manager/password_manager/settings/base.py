@@ -2190,7 +2190,7 @@ def _liveness_session_redis_url():
     shared = os.environ.get('REDIS_URL')
     if not shared:
         return f'redis://127.0.0.1:6379/{_LIVENESS_SESSION_DB}'
-    from urllib.parse import urlsplit, urlunsplit
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
     parts = urlsplit(shared)
     if parts.scheme not in ('redis', 'rediss'):
         # Only a TCP redis URL carries the db index in its PATH. A unix:// URL
@@ -2210,7 +2210,17 @@ def _liveness_session_redis_url():
                 'and sharing the cache/broker db risks a FLUSHDB or an LRU '
                 'eviction dropping in-flight verifications.')
         return None
-    return urlunsplit(parts._replace(path=f'/{_LIVENESS_SESSION_DB}'))
+    # The db index has to come from the PATH alone. redis-py gives a `?db=` in
+    # the QUERY precedence over it (verified: from_url('redis://h/3?db=1') opens
+    # db 1), so rewriting only the path on a shared URL that carries one would
+    # hand back a URL that looks isolated and still opens the cache's database
+    # -- reintroducing exactly the FLUSHDB / LRU-eviction exposure this function
+    # exists to prevent. Everything else in the query is preserved.
+    query = urlencode(
+        [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+         if k.lower() != 'db'])
+    return urlunsplit(
+        parts._replace(path=f'/{_LIVENESS_SESSION_DB}', query=query))
 
 
 BIOMETRIC_LIVENESS = {
