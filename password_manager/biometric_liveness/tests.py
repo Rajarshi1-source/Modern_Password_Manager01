@@ -1273,7 +1273,11 @@ class ChallengeResponseFlowTests(TestCase):
         sid = self.service.create_session(user_id=1)['session_id']
         session = self.service.active_sessions[sid]
         session['services']['gaze'].has_real_gaze_model = lambda: True
-        # GAZE_CALIBRATED stays False (default) -> gaze measured but not gating.
+        # PINNED False, not merely defaulted: on a box whose config enables
+        # calibration this test flips from "must not raise" to
+        # GazeChallengeIncompleteError, which is the ambient-config flap the
+        # estimator stub already guards against.
+        self.service.config = {**self.service.config, 'GAZE_CALIBRATED': False}
         self._inject_pulse(session)
         session['expression_score'] = 0.95
         result = self.service.complete_session(sid)  # must NOT raise
@@ -2079,6 +2083,46 @@ def _redis_service(fake, retention=420):
     return svc
 
 
+def _memory_service():
+    """
+    A LivenessSessionService pinned to the IN-MEMORY backend.
+
+    For tests that reach into active_sessions / _sessions_mem: those structures
+    exist only on that backend, so on a box exporting
+    LIVENESS_SESSION_STORE=redis a bare LivenessSessionService() would fail them
+    for reasons unrelated to what they assert -- the same ambient-config hazard
+    _redis_service pins above. The backend is resolved once in __init__, so
+    constructing under the override is enough.
+    """
+    from django.conf import settings as dj_settings
+    from .services.liveness_session_service import LivenessSessionService
+    cfg = {**dj_settings.BIOMETRIC_LIVENESS, 'SESSION_STORE': 'memory'}
+    with override_settings(BIOMETRIC_LIVENESS=cfg):
+        return LivenessSessionService()
+
+
+class GazeRestoreStateToleranceTests(TestCase):
+    """The gaze accumulator restores from the same untrusted blob as the others."""
+
+    def test_malformed_points_are_dropped_not_coerced(self):
+        from .services.gaze_tracking_service import GazeTrackingService
+        svc = GazeTrackingService()
+        svc.restore_state({'gaze_history': [
+            {'x': float('nan'), 'y': 0.5, 'timestamp_ms': 1.0,
+             'confidence': 0.9, 'is_fixation': True},          # NaN coord
+            {'x': 0.5, 'y': 0.5, 'timestamp_ms': float('inf'),
+             'confidence': 0.9, 'is_fixation': True},          # non-finite ts
+            {'x': 'nope', 'y': 0.5, 'timestamp_ms': 1.0,
+             'confidence': 0.9, 'is_fixation': True},          # ValueError
+            {'x': 0.4, 'y': 0.6, 'timestamp_ms': 2.0,
+             'confidence': 0.8, 'is_fixation': 'false'},       # truthy string
+        ]})
+        self.assertEqual(len(svc.gaze_history), 1)   # only the last survives
+        # 'false' is a non-empty string: counted as a fixation under plain
+        # truthiness, and is_fixation IS counted (sum(1 for g if g.is_fixation)).
+        self.assertFalse(svc.gaze_history[0].is_fixation)
+
+
 class LivenessRedisUrlDerivationTests(TestCase):
     """Deriving the session-store URL must actually isolate the database."""
 
@@ -2184,7 +2228,7 @@ class SessionStoreSerializationTests(TestCase):
         from .services.liveness_session_service import LivenessSessionService
         from .services.gaze_tracking_service import GazePoint, TaskResult, CognitiveTaskType
         from .services.pulse_oximetry_service import PulseReading
-        svc = LivenessSessionService()
+        svc = _memory_service()          # reaches into active_sessions below
         info = svc.create_session(user_id=7, context='login')
         sid = info['session_id']
         session = svc.active_sessions[sid]
@@ -2242,8 +2286,7 @@ class SessionStoreSerializationTests(TestCase):
     def test_pulse_buffers_survive_round_trip(self):
         """The rPPG accumulator (the actual pulse signal) must survive a hand-off."""
         from .services.session_store import serialize_session, deserialize_session
-        from .services.liveness_session_service import LivenessSessionService
-        svc = LivenessSessionService()
+        svc = _memory_service()          # reaches into active_sessions below
         info = svc.create_session(user_id=1)
         sid = info['session_id']
         session = svc.active_sessions[sid]
@@ -2472,6 +2515,25 @@ class RedisSessionStoreCrossProcessTests(TestCase):
         self.assertFalse(a_store.save(sid, stale))
         self.assertEqual(b_store.load(sid)['frames_processed'], 7)
 
+    def test_fenced_save_without_a_lease_is_refused(self):
+        """A MISSING token must not read as "unfenced by intent".
+
+        The create path deliberately writes with no per-session lease. Inferring
+        that from an absent token made it indistinguishable from a lease that
+        was never taken or has already been released -- and those would then
+        become full-blob overwrites of whichever worker owns the session now,
+        which is exactly what the fence exists to reject.
+        """
+        sid = self.rest.create_session(user_id=self.user.id)['session_id']
+        store = self.ws._redis_store          # this instance never acquired it
+        session = store.load(sid)
+        session['frames_processed'] = 99
+
+        self.assertFalse(store.save(sid, session))            # refused, not written
+        self.assertEqual(store.load(sid)['frames_processed'], 0)
+        self.assertTrue(store.save(sid, session, fenced=False))   # stated intent
+        self.assertEqual(store.load(sid)['frames_processed'], 99)
+
     def test_create_path_saves_without_a_per_session_lease(self):
         """The fence must not break create, which holds the GLOBAL create-lock
         and no per-session token -- an unconditional token check would make
@@ -2503,7 +2565,9 @@ class RedisSessionStoreCrossProcessTests(TestCase):
             timestamp_ms=i * 33.0, frame_number=i, rgb_means=(0., 0., 0.),
             ppg_value=0.0, heart_rate_bpm=72.0, heart_rate_variability=30.0,
             spo2_estimate=None, signal_quality=0.8) for i in range(6)]
-        self.rest._redis_store.save(sid, session)
+        # Seeding out of band, with no lease held -- stated explicitly, since a
+        # fenced save without one is now refused rather than written unfenced.
+        self.rest._redis_store.save(sid, session, fenced=False)
         result = self.rest.complete_session(sid)  # must not raise on serialize
         self.assertIn('gaze', result.details['modalities_present'])
         self.assertIn('pulse', result.details['modalities_present'])
@@ -2587,7 +2651,8 @@ class RedisTerminalSaveRetentionTests(TestCase):
     def _save_terminal(self):
         session = self.store.load(self.sid)
         session['status'] = 'completed'
-        self.assertTrue(self.store.save(self.sid, session))
+        # No lease here: this drives the store directly, not a locked op.
+        self.assertTrue(self.store.save(self.sid, session, fenced=False))
 
     def test_live_save_sets_the_retention_ttl(self):
         self.assertAlmostEqual(self.client.ttl(self.key), self.RETENTION, delta=5)
@@ -3128,7 +3193,7 @@ class ExpressionGatingTests(TestCase):
         from .services.liveness_session_service import LivenessSessionService
         user = User.objects.create_user(
             username='trackloss', email='tl@example.com', password='pw')
-        svc = LivenessSessionService()
+        svc = _memory_service()          # reaches into _sessions_mem below
         sid = svc.create_session(user_id=user.id)['session_id']
         analyzer = svc._sessions_mem[sid]['services']['expression']
         analyzer._last_open_ms = 1000.0
