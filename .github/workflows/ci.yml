@@ -386,14 +386,16 @@ jobs:
           push: true
           tags: ${{ steps.meta-backend.outputs.tags }}
           labels: ${{ steps.meta-backend.outputs.labels }}
-          cache-from: type=gha
+          cache-from: type=gha,scope=backend
           # ignore-error=true: the GitHub Actions cache backend intermittently
           # 404s ("BlobNotFound") while *exporting* layers, and buildx treats a
           # failed cache export as a fatal build error even though the image
           # itself built fine. This flag makes a failed cache export non-fatal
           # so transient cache-service hiccups can't red the build gate; cache
           # is still written/read normally when the backend is healthy.
-          cache-to: type=gha,mode=max,ignore-error=true
+          # scope=<image>: without a distinct scope all three builds share the
+          # default buildkit scope and evict each other's exported layers.
+          cache-to: type=gha,mode=max,scope=backend,ignore-error=true
           platforms: linux/amd64,linux/arm64
       
       # Frontend Image
@@ -419,14 +421,9 @@ jobs:
             VITE_API_BASE_URL=${{ secrets.VITE_API_BASE_URL }}
             VITE_WS_URL=${{ secrets.VITE_WS_URL }}
             VITE_BLOCKCHAIN_ENABLED=${{ secrets.VITE_BLOCKCHAIN_ENABLED }}
-          cache-from: type=gha
-          # ignore-error=true: the GitHub Actions cache backend intermittently
-          # 404s ("BlobNotFound") while *exporting* layers, and buildx treats a
-          # failed cache export as a fatal build error even though the image
-          # itself built fine. This flag makes a failed cache export non-fatal
-          # so transient cache-service hiccups can't red the build gate; cache
-          # is still written/read normally when the backend is healthy.
-          cache-to: type=gha,mode=max,ignore-error=true
+          cache-from: type=gha,scope=frontend
+          # ignore-error=true: see the backend build above.
+          cache-to: type=gha,mode=max,scope=frontend,ignore-error=true
           platforms: linux/amd64,linux/arm64
 
       # Tor Image — anonymity transport for Dark Protocol.
@@ -451,8 +448,8 @@ jobs:
           push: true
           tags: ${{ steps.meta-tor.outputs.tags }}
           labels: ${{ steps.meta-tor.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max,ignore-error=true
+          cache-from: type=gha,scope=tor
+          cache-to: type=gha,mode=max,scope=tor,ignore-error=true
           platforms: linux/amd64,linux/arm64
 
   # ===========================================================================
