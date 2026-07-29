@@ -346,6 +346,13 @@ spec:
             name: app-config
         - secretRef:
             name: app-secrets
+        # Tor control password, so the clearnet backend can read live Tor state
+        # and show users the .onion address. Optional: the secret only exists
+        # when k8s/tor.yaml has been provisioned, and without it the capability
+        # simply reports unavailable rather than blocking pod startup.
+        - secretRef:
+            name: tor-secrets
+            optional: true
         env:
         - name: COLLECT_STATIC
           value: "true"

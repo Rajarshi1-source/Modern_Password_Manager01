@@ -161,9 +161,14 @@ VAULT_OPERATION_ROUTES: Dict[str, Dict[str, Any]] = {
     'vault_list': {'method': 'GET', 'route': 'api-vault-list'},
     'vault_get': {'method': 'GET', 'route': 'api-vault-detail', 'needs_id': True},
     'vault_create': {'method': 'POST', 'route': 'api-vault-list'},
-    'vault_update': {'method': 'PUT', 'route': 'api-vault-detail', 'needs_id': True},
+    # PATCH, not PUT: callers send the fields they are changing. The vault's
+    # update() validates with partial=False under PUT, so a partial payload
+    # would fail validation on fields the caller never intended to touch.
+    'vault_update': {'method': 'PATCH', 'route': 'api-vault-detail', 'needs_id': True},
     'vault_delete': {'method': 'DELETE', 'route': 'api-vault-detail', 'needs_id': True},
-    'vault_search': {'method': 'POST', 'route': 'vault-search'},
+    # GET, not POST: the search view reads its term from request.GET only, so
+    # a JSON body would arrive as an empty query and silently return nothing.
+    'vault_search': {'method': 'GET', 'route': 'vault-search'},
     'vault_sync': {'method': 'POST', 'route': 'vault-sync'},
 }
 
@@ -796,7 +801,11 @@ class DarkProtocolService:
             # has no unambiguous encoding, so dropping it is better than
             # silently flattening it into something the view misreads.
             query = urlencode({
-                key: value for key, value in payload.items()
+                # Booleans are lowercased: urlencode would render Python's
+                # True as "True", which DRF's BooleanField does not accept and
+                # a plain truthiness test reads as true even for "False".
+                key: ('true' if value is True else 'false' if value is False else value)
+                for key, value in payload.items()
                 if isinstance(value, (str, int, float, bool))
             })
         else:
@@ -863,14 +872,19 @@ class DarkProtocolService:
         if not session_id:
             return
         try:
-            session = GarlicSession.objects.filter(
+            # F() expressions: two concurrent operations on one session would
+            # otherwise both read the same bytes_sent and one increment would
+            # be lost. Also avoids fetching the row just to add to it.
+            from django.db.models import F
+
+            size = len(json.dumps(payload or {}).encode('utf-8'))
+            GarlicSession.objects.filter(
                 session_id=session_id, user=user, status='active'
-            ).first()
-            if session is None:
-                return
-            session.bytes_sent += len(json.dumps(payload or {}).encode('utf-8'))
-            session.messages_sent += 1
-            session.save(update_fields=['bytes_sent', 'messages_sent', 'last_activity_at'])
+            ).update(
+                bytes_sent=F('bytes_sent') + size,
+                messages_sent=F('messages_sent') + 1,
+                last_activity_at=timezone.now(),
+            )
         except Exception:
             logger.exception("Failed to record dark protocol traffic accounting")
     

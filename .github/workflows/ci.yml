@@ -53,12 +53,14 @@ jobs:
     outputs:
       backend_image: ${{ steps.names.outputs.backend }}
       frontend_image: ${{ steps.names.outputs.frontend }}
+      tor_image: ${{ steps.names.outputs.tor }}
     steps:
       - id: names
         run: |
           repo_lc="${GITHUB_REPOSITORY,,}"
           echo "backend=ghcr.io/${repo_lc}/backend" >> "$GITHUB_OUTPUT"
           echo "frontend=ghcr.io/${repo_lc}/frontend" >> "$GITHUB_OUTPUT"
+          echo "tor=ghcr.io/${repo_lc}/tor" >> "$GITHUB_OUTPUT"
 
   # ===========================================================================
   # Backend Tests
@@ -424,6 +426,32 @@ jobs:
           # itself built fine. This flag makes a failed cache export non-fatal
           # so transient cache-service hiccups can't red the build gate; cache
           # is still written/read normally when the backend is healthy.
+          cache-to: type=gha,mode=max,ignore-error=true
+          platforms: linux/amd64,linux/arm64
+
+      # Tor Image — anonymity transport for Dark Protocol.
+      # Built here because k8s/tor.yaml references it by tag; without this the
+      # Tor pod would sit in ImagePullBackOff and the feature would report
+      # Unavailable forever on the Kubernetes path.
+      - name: Extract metadata for Tor
+        id: meta-tor
+        uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
+        with:
+          images: ${{ needs.setup.outputs.tor_image }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push Tor image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: docker/tor/Dockerfile
+          push: true
+          tags: ${{ steps.meta-tor.outputs.tags }}
+          labels: ${{ steps.meta-tor.outputs.labels }}
+          cache-from: type=gha
           cache-to: type=gha,mode=max,ignore-error=true
           platforms: linux/amd64,linux/arm64
 

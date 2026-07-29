@@ -1089,7 +1089,13 @@ SECURE_REFERRER_POLICY = 'strict-origin-when-cross-origin'
 
 # Force HTTPS in production
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
+    # Overridable for the Tor onion ingress listener ONLY. An onion service is
+    # reached over a circuit Tor encrypts end to end and which never leaves the
+    # network, so there is no clearnet hop for TLS to protect; meanwhile Tor
+    # publishes the service on port 80, so redirecting to https:// would send
+    # every anonymous request to an endpoint that does not exist and break the
+    # feature outright. Clearnet listeners must leave this at the default.
+    SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True').lower() == 'true'
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
@@ -2032,6 +2038,13 @@ TOR = {
     # the onion. 0 disables onion-ingress detection entirely, in which case no
     # request is ever treated as anonymous.
     'ONION_INGRESS_PORT': int(os.environ.get('TOR_ONION_INGRESS_PORT', '0')),
+
+    # Peers whose connections may count as onion ingress (comma-separated
+    # hostnames or IPs). The ingress port alone is not exclusivity on a shared
+    # container network, so docker-compose pins this to the tor service.
+    # Kubernetes leaves it empty and enforces the same thing with a
+    # NetworkPolicy, since pod IPs cannot be listed in configuration.
+    'ONION_INGRESS_TRUSTED_PEERS': os.environ.get('TOR_ONION_INGRESS_TRUSTED_PEERS', ''),
 
     # Capability probes are cached briefly so dashboard polling does not open
     # a control connection per widget.

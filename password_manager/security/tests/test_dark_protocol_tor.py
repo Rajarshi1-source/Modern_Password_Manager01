@@ -306,12 +306,16 @@ class TorCircuitRelayTests(_TorTestMixin, TestCase):
 class OnionIngressTests(_TorTestMixin, TestCase):
     """Only a request that really came through the onion counts as anonymous."""
 
-    def _request(self, port=8443, host=ONION):
+    def _request(self, port=8443, host=ONION, peer='10.1.2.3'):
         class _Request:
-            def __init__(self, port, host):
+            def __init__(self, port, host, peer):
                 self._port = port
                 self._host = host
-                self.META = {'SERVER_PORT': str(port), 'HTTP_HOST': host}
+                self.META = {
+                    'SERVER_PORT': str(port),
+                    'HTTP_HOST': host,
+                    'REMOTE_ADDR': peer,
+                }
 
             def get_port(self):
                 return str(self._port)
@@ -319,7 +323,7 @@ class OnionIngressTests(_TorTestMixin, TestCase):
             def get_host(self):
                 return self._host
 
-        return _Request(port, host)
+        return _Request(port, host, peer)
 
     @override_settings(TOR=_tor_settings())
     def test_request_on_ingress_port_with_onion_host_is_anonymous(self):
@@ -352,6 +356,37 @@ class OnionIngressTests(_TorTestMixin, TestCase):
         """Right port, right host, dead Tor: still not anonymous."""
         controller = _FakeController(circuit_established='0')
         service = self._service(controller)
+        self.assertFalse(service.request_is_onion_ingress(self._request()))
+
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.1.2.3'))
+    def test_trusted_peer_on_ingress_port_is_anonymous(self):
+        service = self._service()
+        self.assertTrue(service.request_is_onion_ingress(self._request(peer='10.1.2.3')))
+
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.1.2.3'))
+    def test_untrusted_peer_is_not_anonymous(self):
+        """A sibling container on the same network is not the Tor daemon.
+
+        The ingress port has no published host mapping, but docker-compose
+        puts every service on one bridge network, so a compromised sibling can
+        still reach it and present the onion Host. Without this check that
+        request would be reported as anonymous.
+        """
+        service = self._service()
+        self.assertFalse(service.request_is_onion_ingress(self._request(peer='10.9.9.9')))
+
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.1.2.3'))
+    def test_missing_peer_address_is_not_anonymous(self):
+        """No REMOTE_ADDR means no evidence, which must not read as trusted."""
+        service = self._service()
+        request = self._request()
+        del request.META['REMOTE_ADDR']
+        self.assertFalse(service.request_is_onion_ingress(request))
+
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='no-such-host.invalid'))
+    def test_unresolvable_trusted_peer_rejects(self):
+        """A name that will not resolve is not evidence the peer is Tor."""
+        service = self._service()
         self.assertFalse(service.request_is_onion_ingress(self._request()))
 
     @override_settings(TOR=_tor_settings())
@@ -438,6 +473,26 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data['anonymity_active'])
         self.assertEqual(response.data['status'], 'unavailable')
+
+    @override_settings(TOR={'ENABLED': False})
+    def test_self_check_is_not_run_for_non_staff(self):
+        """?verify=1 blocks a worker for up to a minute; keep it to operators."""
+        with patch.object(TorService, 'check_onion_reachable') as check:
+            response = self.client.get(reverse('dark-protocol-health'), {'verify': '1'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('self_check', response.data)
+        check.assert_not_called()
+
+    @override_settings(TOR={'ENABLED': False})
+    def test_self_check_runs_for_staff(self):
+        self.user.is_staff = True
+        self.user.save(update_fields=['is_staff'])
+
+        response = self.client.get(reverse('dark-protocol-health'), {'verify': '1'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('self_check', response.data)
 
     @override_settings(TOR={'ENABLED': False})
     def test_nodes_are_empty_without_tor(self):
@@ -528,6 +583,27 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         self.assertIn('items', inner)
         self.assertEqual(inner.get('message'), 'Items retrieved successfully')
         self.assertNotIn('acknowledged', inner)
+
+    @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
+    def test_search_term_reaches_the_vault_view(self):
+        """The search view reads `q` from request.GET, so it must be dispatched
+        as a query parameter. Sending it as a JSON body silently produced an
+        empty query and results that looked like "no matches"."""
+        with patch.object(TorService, '_open_controller', return_value=_FakeController()), \
+                patch.object(tor_module, '_StemController', object()):
+            get_tor_service().reset_cache()
+            response = self.client.post(
+                reverse('dark-protocol-vault-proxy'),
+                {'operation': 'vault_search', 'payload': {'q': 'example-term'}},
+                format='json',
+                SERVER_PORT='8443',
+                HTTP_HOST=ONION,
+                HTTP_AUTHORIZATION=self._bearer(),
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        # The view echoes the term it actually received.
+        self.assertEqual(response.data['data']['query'], 'example-term')
 
     @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
     def test_onion_request_with_unknown_operation_is_rejected(self):
