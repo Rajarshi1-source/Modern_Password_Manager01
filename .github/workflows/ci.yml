@@ -725,16 +725,31 @@ jobs:
       # a stale image after every release.
       - name: Update Tor workload images (opt-in)
         if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
+        env:
+          # Via env rather than inline expansion so the shell never has workflow
+          # template output spliced into it.
+          BACKEND_IMAGE: ${{ needs.setup.outputs.backend_image }}
+          TOR_IMAGE: ${{ needs.setup.outputs.tor_image }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if kubectl get deployment/backend-onion -n password-manager >/dev/null 2>&1; then
-            kubectl set image deployment/backend-onion backend=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} -n password-manager
+          # `--ignore-not-found -o name` is what makes "absent" distinguishable
+          # from "could not tell": a missing Deployment exits 0 with empty
+          # output, while an RBAC denial or an unreachable API server still
+          # exits non-zero and fails the step under `set -e`. Suppressing the
+          # exit status instead (>/dev/null 2>&1) reported a permissions or
+          # connectivity failure as "not deployed" and let the deploy claim
+          # success while both workloads kept running stale images.
+          onion=$(kubectl get deployment/backend-onion -n password-manager --ignore-not-found -o name)
+          if [ -n "${onion}" ]; then
+            kubectl set image deployment/backend-onion "backend=${BACKEND_IMAGE}:${IMAGE_TAG}" -n password-manager
             kubectl rollout status deployment/backend-onion -n password-manager --timeout=600s
           else
             echo "backend-onion not deployed; skipping (Dark Protocol reports Unavailable)."
           fi
-          if kubectl get deployment/tor -n password-manager >/dev/null 2>&1; then
-            kubectl set image deployment/tor tor=${{ needs.setup.outputs.tor_image }}:${{ github.sha }} -n password-manager
+          tor=$(kubectl get deployment/tor -n password-manager --ignore-not-found -o name)
+          if [ -n "${tor}" ]; then
+            kubectl set image deployment/tor "tor=${TOR_IMAGE}:${IMAGE_TAG}" -n password-manager
             kubectl rollout status deployment/tor -n password-manager --timeout=600s
           else
             echo "tor not deployed; skipping (Dark Protocol reports Unavailable)."
