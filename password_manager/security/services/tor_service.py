@@ -304,6 +304,15 @@ class TorService:
                     reason='onion_address_mismatch',
                 )
 
+            # A self-check that has RUN and FAILED is direct evidence that the
+            # descriptor is not reachable, and it outranks the control port's
+            # "a hidden service is configured". This matters most on Kubernetes,
+            # where backend pods have no hostname file, so the mismatch check
+            # above is inert and an operator-supplied ONION_HOSTNAME is
+            # otherwise taken on trust.
+            if published and self._reachability_says_unreachable():
+                published = False
+
             capability = TorCapability(
                 configured=True,
                 controller_reachable=True,
@@ -417,6 +426,29 @@ class TorService:
             if candidate:
                 return candidate
         return None
+
+    def _reachability_says_unreachable(self) -> bool:
+        """True only when a self-check has actually run and found the onion dead.
+
+        Reads the CACHE and never triggers a probe: a cold rendezvous takes
+        tens of seconds and this runs on the capability path.
+
+        Deliberately not the inverse. A SUCCESSFUL self-check is not required
+        for ``onion_published``, because requiring it would report Unavailable
+        on a genuinely working deployment until the periodic task first ran —
+        a false answer in the other direction. What this closes is the case
+        where we have already learned the advertised address does not answer.
+
+        Only ``reason == 'unreachable'`` counts. The other reasons
+        ('not_configured', 'socks_not_configured', 'no_onion_address',
+        'requests_unavailable') mean the check could not be PERFORMED, which is
+        not evidence about the descriptor either way.
+        """
+        with self._lock:
+            result = self._cached_reach
+        if result is None:
+            return False
+        return result.reachable is False and result.reason == 'unreachable'
 
     def _address_conflicts(self, config: Dict[str, Any], controller, address: str) -> bool:
         """True when a configured hostname disagrees with what Tor serves.

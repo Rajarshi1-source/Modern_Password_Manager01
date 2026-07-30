@@ -69,7 +69,20 @@ if [ "$(id -u)" = "0" ]; then
 else
     user_directive="# running as an unprivileged uid; no user switch needed"
 fi
-chmod 0700 "${HS_DIR}" "${DATA_DIR}"
+# Tor refuses a group- or world-accessible HiddenServiceDir, so 0700 is
+# required, not cosmetic. In the normal path the mkdir above just created these
+# as our own uid, so this succeeds. It can only fail when the volume already
+# holds them owned by a DIFFERENT uid (a restored PVC, or a changed runAsUser):
+# POSIX allows chmod only to the owner, and fsGroup adjusts group ownership,
+# not the owner. Tor would then refuse to start anyway, so failing here is
+# correct — but say why, because a bare chmod error explains nothing.
+if ! chmod 0700 "${HS_DIR}" "${DATA_DIR}" 2>/dev/null; then
+    echo "tor: cannot set 0700 on ${HS_DIR} / ${DATA_DIR}." >&2
+    echo "tor: they exist owned by another uid (current uid $(id -u)); Tor" >&2
+    echo "tor: requires 0700 on HiddenServiceDir. Fix the volume ownership" >&2
+    echo "tor: (or keep runAsUser stable across deploys) and restart." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Render torrc.
