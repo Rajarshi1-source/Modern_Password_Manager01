@@ -16,7 +16,7 @@
  * @created 2026-02-02
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import darkProtocolService from '../../services/darkProtocolService';
 import './DarkProtocolDashboard.css';
 
@@ -54,16 +54,30 @@ const DarkProtocolDashboard = () => {
     const [error, setError] = useState(null);
     const [showSettings, setShowSettings] = useState(false);
 
+    // Capability fetches overlap: the 30s timer, the initial load, and the
+    // post-connect/disconnect refresh can all be in flight at once. Without a
+    // token the last response to ARRIVE wins, so a slow older "available" reply
+    // landing after a newer "unavailable" one would put the green banner back —
+    // reintroducing exactly the stale anonymity claim the refresh was added to
+    // prevent. Every write is stamped and only the newest is applied.
+    const capabilityGenerationRef = useRef(0);
+
     // Re-read only the capability report. Deliberately separate from loadData()
     // so it can run on a timer without the loading spinner or clearing errors,
     // and so a failure here cannot leave the banner asserting stale anonymity.
     const refreshCapabilities = useCallback(async () => {
+        const generation = ++capabilityGenerationRef.current;
         try {
-            setCapabilities(await darkProtocolService.getCapabilities());
+            const data = await darkProtocolService.getCapabilities();
+            if (generation === capabilityGenerationRef.current) {
+                setCapabilities(data);
+            }
         } catch {
             // Fail closed: an unreadable capability report is not evidence that
             // anonymity is available, so drop to the Unavailable state.
-            setCapabilities(null);
+            if (generation === capabilityGenerationRef.current) {
+                setCapabilities(null);
+            }
         }
     }, []);
 
@@ -90,6 +104,7 @@ const DarkProtocolDashboard = () => {
     const loadData = async () => {
         setLoading(true);
         setError(null);
+        const generation = ++capabilityGenerationRef.current;
 
         try {
             const [capabilityData, configData, sessionData, healthData, statsData, nodesData, routesData] = await Promise.all([
@@ -104,7 +119,9 @@ const DarkProtocolDashboard = () => {
                 darkProtocolService.getRoutes(),
             ]);
 
-            setCapabilities(capabilityData);
+            if (generation === capabilityGenerationRef.current) {
+                setCapabilities(capabilityData);
+            }
             setConfig(configData);
             setSession(sessionData);
             setNetworkHealth(healthData);
