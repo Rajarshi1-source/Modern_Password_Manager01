@@ -220,7 +220,7 @@ class TorService:
         if _StemController is None:
             return None
 
-        timeout = _positive_number(config.get('CONTROL_TIMEOUT_SECONDS'), 5)
+        timeout = _strictly_positive_number(config.get('CONTROL_TIMEOUT_SECONDS'), 5)
         socket_path = str(config.get('CONTROL_SOCKET') or '')
 
         try:
@@ -730,7 +730,7 @@ class TorService:
         if not path.startswith('/'):
             path = f'/{path}'
         url = f'http://{capability.onion_address}{path}'
-        timeout = _positive_number(config.get('SELF_CHECK_TIMEOUT_SECONDS'), 60)
+        timeout = _strictly_positive_number(config.get('SELF_CHECK_TIMEOUT_SECONDS'), 60)
 
         started = time.monotonic()
         try:
@@ -834,12 +834,18 @@ def _valid_onion(value: Any) -> Optional[str]:
 
 
 def _positive_number(value: Any, default: float) -> float:
-    """Coerce a configured number, falling back on anything unusable.
+    """Coerce a configured non-negative number, falling back on anything else.
 
     Configuration arrives from environment variables, so a non-numeric or
-    negative value is a realistic input. It must not become a zero timeout (no
-    timeout at all in some clients) or a negative TTL (a permanently stale
-    cache), so both fall back to the caller's default.
+    negative value is a realistic input and falls back to the caller's default.
+
+    ZERO IS ACCEPTED, and deliberately: 0 is meaningful for the values that use
+    this helper — a port of 0 means "no ingress port configured" (nothing is
+    ever treated as onion ingress) and a TTL of 0 means "never cache". Timeouts
+    are the exception, where 0 means a non-blocking socket rather than the
+    documented default, so they use `_strictly_positive_number` instead. An
+    earlier version of this docstring claimed this function prevented a zero
+    timeout; it never did, hence the split.
     """
     try:
         number = float(value)
@@ -852,6 +858,18 @@ def _positive_number(value: Any, default: float) -> float:
     if number < 0:
         return default
     return number
+
+
+def _strictly_positive_number(value: Any, default: float) -> float:
+    """Like `_positive_number`, but 0 also falls back to the default.
+
+    For a timeout, 0 is not "disabled" — it is a non-blocking socket that fails
+    instantly, so a stray `TOR_CONTROL_TIMEOUT=0` would turn every capability
+    probe into an immediate failure and report Tor as unavailable. Used only for
+    the two timeout settings.
+    """
+    number = _positive_number(value, default)
+    return number if number > 0 else default
 
 
 def _request_port(request) -> Optional[int]:

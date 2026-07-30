@@ -35,6 +35,11 @@ const UNAVAILABLE_REASONS = Object.assign(Object.create(null), {
     probe_failed: 'The Tor capability check failed.',
 });
 
+// How often the capability report is re-read while the dashboard is open. The
+// server caches its Tor probe for ~15s, so polling faster than this would only
+// re-read the same cached answer.
+const CAPABILITY_REFRESH_MS = 30000;
+
 const DarkProtocolDashboard = () => {
     // State
     const [config, setConfig] = useState(null);
@@ -49,6 +54,19 @@ const DarkProtocolDashboard = () => {
     const [error, setError] = useState(null);
     const [showSettings, setShowSettings] = useState(false);
 
+    // Re-read only the capability report. Deliberately separate from loadData()
+    // so it can run on a timer without the loading spinner or clearing errors,
+    // and so a failure here cannot leave the banner asserting stale anonymity.
+    const refreshCapabilities = useCallback(async () => {
+        try {
+            setCapabilities(await darkProtocolService.getCapabilities());
+        } catch {
+            // Fail closed: an unreadable capability report is not evidence that
+            // anonymity is available, so drop to the Unavailable state.
+            setCapabilities(null);
+        }
+    }, []);
+
     // Load initial data
     useEffect(() => {
         loadData();
@@ -56,10 +74,18 @@ const DarkProtocolDashboard = () => {
         // Subscribe to connection events
         const unsubscribe = darkProtocolService.addConnectionListener(handleConnectionEvent);
 
+        // Re-check the capability while the dashboard is open. Without this the
+        // banner is decided by the initial fetch alone, so a Tor daemon that
+        // later loses its bootstrap, circuit or descriptor would leave the page
+        // claiming anonymity is available until a full reload — the "middle
+        // state" this feature exists to eliminate.
+        const capabilityTimer = setInterval(refreshCapabilities, CAPABILITY_REFRESH_MS);
+
         return () => {
             unsubscribe();
+            clearInterval(capabilityTimer);
         };
-    }, []);
+    }, [refreshCapabilities]);
 
     const loadData = async () => {
         setLoading(true);
@@ -132,6 +158,10 @@ const DarkProtocolDashboard = () => {
             if (config?.cover_traffic_enabled) {
                 darkProtocolService.startCoverTraffic(config.cover_traffic_intensity);
             }
+
+            // Connection actions can change what the server reports, so do not
+            // wait for the next poll to find out.
+            await refreshCapabilities();
         } catch (err) {
             setError(err.message);
         } finally {
@@ -146,6 +176,7 @@ const DarkProtocolDashboard = () => {
             await darkProtocolService.terminateSession();
             setSession({ has_active_session: false });
             setConnectionState('disconnected');
+            await refreshCapabilities();
         } catch (err) {
             setError(err.message);
         } finally {
