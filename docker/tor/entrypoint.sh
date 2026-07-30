@@ -34,6 +34,17 @@ if [ "${1:-}" = "healthcheck" ]; then
         echo "tor: hidden service hostname was never published" >&2
         exit 1
     fi
+    # The marker above is only written after the publisher's 300s timeout, so on
+    # its own it let a misconfigured HiddenServiceDir report HEALTHY for five
+    # minutes: Tor bootstraps fine as a client, PROGRESS reaches 100, and the
+    # pod goes Ready while the backend still has no onion address. Requiring the
+    # published hostname makes readiness mean what it says from the first probe.
+    # The probe budgets absorb the normal startup window (readiness 30s + 20x15s;
+    # liveness does not even begin until 300s).
+    if [ ! -s "${SHARED_DIR}/hostname" ]; then
+        echo "tor: hidden service hostname is not published yet" >&2
+        exit 1
+    fi
     response=$(printf 'AUTHENTICATE "%s"\r\nGETINFO status/bootstrap-phase\r\nQUIT\r\n' \
         "${TOR_CONTROL_PASSWORD}" | nc 127.0.0.1 9051 2>/dev/null || true)
     echo "${response}" | grep -q "PROGRESS=100" || exit 1
