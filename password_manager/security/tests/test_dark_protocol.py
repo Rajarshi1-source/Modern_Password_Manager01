@@ -22,7 +22,7 @@ import secrets
 from datetime import timedelta
 from unittest.mock import Mock, patch, MagicMock
 
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.urls import reverse
@@ -330,14 +330,18 @@ class DarkProtocolAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data.get('has_active_session', False))
     
+    @override_settings(TOR={'ENABLED': False})
     def test_get_network_health(self):
         """Health leads with the Tor-verified anonymity verdict.
 
         This used to assert a top-level `active_nodes`, which counted local
         database rows and read as the size of an anonymity network. Those
         counters now live under `obfuscation_layer`, and the headline is
-        whether anonymity is genuinely available — which, with no Tor daemon
-        configured in the test environment, is False.
+        whether anonymity is genuinely available.
+
+        TOR['ENABLED'] is pinned rather than inherited: it comes from
+        os.environ, so a developer or runner with Tor enabled would flip the
+        verdict and fail this test for reasons unrelated to the code it covers.
         """
         url = reverse('dark-protocol-health')
         response = self.client.get(url)

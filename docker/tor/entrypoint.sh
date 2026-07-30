@@ -142,14 +142,27 @@ chmod 0600 "${TORRC}"
         fi
         sleep 1
     done
-    cp "${HS_DIR}/hostname" "${SHARED_DIR}/hostname.tmp"
     # Atomic rename: the backend polls this file, and a partial read would
     # fail the address shape check and be discarded — correct, but noisy.
-    mv "${SHARED_DIR}/hostname.tmp" "${SHARED_DIR}/hostname"
-    chmod 0644 "${SHARED_DIR}/hostname"
-    echo "tor: onion service published"
+    #
+    # Guarded as one unit, because `set -e` would otherwise abort the subshell
+    # on a cp/mv/chmod failure BEFORE the marker was written — leaving the
+    # container healthy with no hostname published, which is the exact
+    # invisibility the marker exists to remove. The timeout path above was
+    # covered; this path was not.
+    if cp "${HS_DIR}/hostname" "${SHARED_DIR}/hostname.tmp" \
+        && mv "${SHARED_DIR}/hostname.tmp" "${SHARED_DIR}/hostname" \
+        && chmod 0644 "${SHARED_DIR}/hostname"; then
+        echo "tor: onion service published"
+    else
+        echo "tor: failed to publish the onion hostname" >&2
+        touch "${SHARED_DIR}/hostname.failed"
+        exit 1
+    fi
 ) &
 
-# Started as root so it can bind and then drop to `tor` itself, per the `User`
-# directive in the rendered torrc.
+# The image ends with `USER tor`, so this is already unprivileged: the uid check
+# above took the non-root branch and torrc's `User` directive was rendered as a
+# comment. Tor binds only high ports (SOCKS/control/the onion target), none of
+# which need root.
 exec tor -f "${TORRC}"

@@ -289,7 +289,16 @@ const DarkProtocolDashboard = () => {
             {/* Anonymity status — the headline claim, and the only one on this
                 page that describes anonymity. Everything below it describes the
                 obfuscation layer. */}
-            <div className={`dp-anonymity-banner ${anonymityAvailable ? 'available' : 'unavailable'}`}>
+            {/* role/aria-live: this is the page's security headline and it flips
+                asynchronously on the 30s capability poll. Without a live region a
+                screen-reader user told "available" is never told when it drops to
+                "unavailable" — the verdict has to reach them too, not just
+                sighted users. */}
+            <div
+                role="status"
+                aria-live="polite"
+                className={`dp-anonymity-banner ${anonymityAvailable ? 'available' : 'unavailable'}`}
+            >
                 <div className="dp-anonymity-header">
                     <span className="dp-anonymity-icon">{anonymityAvailable ? '🧅' : '⛔'}</span>
                     <h3>
