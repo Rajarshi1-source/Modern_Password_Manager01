@@ -897,3 +897,26 @@ class OnionIngressPortSourceTests(_TorTestMixin, TestCase):
 
         service = self._service()
         self.assertFalse(service.request_is_onion_ingress(_ForwardedRequest()))
+
+
+class TimeoutCoercionTests(TestCase):
+    """A zero timeout must not become a non-blocking socket."""
+
+    def test_zero_timeout_falls_back_to_the_default(self):
+        """0 means "no timeout" to a reader but "fail instantly" to a socket.
+
+        `_positive_number` deliberately accepts 0 (a port of 0 disables ingress
+        detection, a TTL of 0 disables caching), so timeouts need the stricter
+        helper or a stray TOR_CONTROL_TIMEOUT=0 turns every probe into an
+        immediate failure and reports Tor as unavailable.
+        """
+        self.assertEqual(tor_module._strictly_positive_number(0, 5), 5)
+        self.assertEqual(tor_module._strictly_positive_number('0', 5), 5)
+        self.assertEqual(tor_module._strictly_positive_number(-1, 5), 5)
+        self.assertEqual(tor_module._strictly_positive_number('junk', 5), 5)
+        self.assertEqual(tor_module._strictly_positive_number(2, 5), 2)
+
+    def test_zero_still_means_disabled_or_uncached_elsewhere(self):
+        """The looser helper must keep accepting 0 — the tests rely on it."""
+        self.assertEqual(tor_module._positive_number(0, 15), 0)
+        self.assertEqual(tor_module._positive_number(0, 9050), 0)

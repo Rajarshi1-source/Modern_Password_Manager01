@@ -21,7 +21,7 @@ from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.throttling import UserRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 from django.utils import timezone
 
@@ -48,6 +48,23 @@ class DarkProtocolRateThrottle(UserRateThrottle):
 class DarkProtocolSessionThrottle(UserRateThrottle):
     """Stricter throttling for session establishment."""
     rate = '10/minute'
+
+
+class DarkProtocolPingThrottle(AnonRateThrottle):
+    """Own bucket for the unauthenticated onion ping.
+
+    The ping is the only AllowAny view here, so under the shared user-scoped
+    throttle its requests were keyed by the Tor daemon's IP — the same key every
+    other anonymous Dark Protocol request would use. Isolating it keeps an
+    operator diagnostic from consuming a bucket real traffic needs, and vice
+    versa.
+
+    Note this is NOT about the self-check misreporting: check_onion_reachable()
+    treats ANY HTTP status as proof the rendezvous completed, so even a 429
+    correctly reads as reachable.
+    """
+    scope = 'dark_protocol_ping'
+    rate = '120/minute'
 
 
 # =============================================================================
@@ -429,7 +446,7 @@ class DarkProtocolOnionPingView(APIView):
     deployment from the open internet.
     """
     permission_classes = [AllowAny]
-    throttle_classes = [DarkProtocolRateThrottle]
+    throttle_classes = [DarkProtocolPingThrottle]
 
     def get(self, request):
         if not get_tor_service().request_is_onion_ingress(request):

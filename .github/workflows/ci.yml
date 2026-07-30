@@ -716,6 +716,30 @@ jobs:
           kubectl rollout status deployment/backend -n password-manager --timeout=600s
           kubectl rollout status deployment/frontend -n password-manager --timeout=300s
       
+      # Dark Protocol's Tor workloads are OPT-IN: k8s/tor.yaml is applied by the
+      # operator and is not part of k8s/production/, so these Deployments may
+      # legitimately not exist. Update them only when they do — a cluster
+      # running without the anonymity transport is a supported state (the
+      # feature reports Unavailable), not a deploy failure. Skipping them
+      # entirely would leave backend-onion serving stale code and the tor pod on
+      # a stale image after every release.
+      - name: Update Tor workload images (opt-in)
+        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
+        run: |
+          set -euo pipefail
+          if kubectl get deployment/backend-onion -n password-manager >/dev/null 2>&1; then
+            kubectl set image deployment/backend-onion backend=${{ needs.setup.outputs.backend_image }}:${{ github.sha }} -n password-manager
+            kubectl rollout status deployment/backend-onion -n password-manager --timeout=600s
+          else
+            echo "backend-onion not deployed; skipping (Dark Protocol reports Unavailable)."
+          fi
+          if kubectl get deployment/tor -n password-manager >/dev/null 2>&1; then
+            kubectl set image deployment/tor tor=${{ needs.setup.outputs.tor_image }}:${{ github.sha }} -n password-manager
+            kubectl rollout status deployment/tor -n password-manager --timeout=600s
+          else
+            echo "tor not deployed; skipping (Dark Protocol reports Unavailable)."
+          fi
+
       - name: Run smoke tests
         if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         run: |
