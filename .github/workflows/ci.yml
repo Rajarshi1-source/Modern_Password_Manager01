@@ -373,14 +373,14 @@ jobs:
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
           images: ${{ needs.setup.outputs.backend_image }}
+          # `type=sha,format=long` as well as the default short one: every
+          # deploy step references `:${{ github.sha }}` (40 chars), while
+          # `type=sha` alone emits the SHORT sha, so the tag the deploy asks for
+          # was never pushed and the rollout failed with ImagePullBackOff.
+          # Additive, so anything consuming the short tag keeps working.
           tags: |
             type=ref,event=branch
             type=sha,prefix=
-            # Full-length SHA as well: every deploy step below references
-            # `:${{ github.sha }}` (40 chars), while `type=sha` defaults to the
-            # SHORT sha, so without this the tag the deploy asks for was never
-            # pushed and the rollout fails with ImagePullBackOff. Additive, so
-            # anything already consuming the short tag keeps working.
             type=sha,format=long,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
       
@@ -410,14 +410,14 @@ jobs:
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
           images: ${{ needs.setup.outputs.frontend_image }}
+          # `type=sha,format=long` as well as the default short one: every
+          # deploy step references `:${{ github.sha }}` (40 chars), while
+          # `type=sha` alone emits the SHORT sha, so the tag the deploy asks for
+          # was never pushed and the rollout failed with ImagePullBackOff.
+          # Additive, so anything consuming the short tag keeps working.
           tags: |
             type=ref,event=branch
             type=sha,prefix=
-            # Full-length SHA as well: every deploy step below references
-            # `:${{ github.sha }}` (40 chars), while `type=sha` defaults to the
-            # SHORT sha, so without this the tag the deploy asks for was never
-            # pushed and the rollout fails with ImagePullBackOff. Additive, so
-            # anything already consuming the short tag keeps working.
             type=sha,format=long,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
       
@@ -447,14 +447,14 @@ jobs:
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
           images: ${{ needs.setup.outputs.tor_image }}
+          # `type=sha,format=long` as well as the default short one: every
+          # deploy step references `:${{ github.sha }}` (40 chars), while
+          # `type=sha` alone emits the SHORT sha, so the tag the deploy asks for
+          # was never pushed and the rollout failed with ImagePullBackOff.
+          # Additive, so anything consuming the short tag keeps working.
           tags: |
             type=ref,event=branch
             type=sha,prefix=
-            # Full-length SHA as well: every deploy step below references
-            # `:${{ github.sha }}` (40 chars), while `type=sha` defaults to the
-            # SHORT sha, so without this the tag the deploy asks for was never
-            # pushed and the rollout fails with ImagePullBackOff. Additive, so
-            # anything already consuming the short tag keeps working.
             type=sha,format=long,prefix=
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 

@@ -6,8 +6,18 @@
 # k8s/configmap.yaml. Without it the Dark Protocol feature reports Unavailable,
 # which is the honest state for a cluster with no anonymity transport.
 #
+# IMAGE TAGS: both Deployments below reference ${GITHUB_SHA}, matching the
+# convention in k8s/deployment.yaml. kubectl performs NO shell expansion, so a
+# plain `kubectl apply -f k8s/tor.yaml` would create the pods with the literal
+# tag "${GITHUB_SHA}" and they would sit in InvalidImageName — and the CI step
+# that patches these images only runs when the Deployments already exist, so
+# the FIRST apply must carry a real tag. Pipe through envsubst, as the migrate
+# job does. Substitute the registry path CI publishes to:
+# ghcr.io/<owner>/<repo>/{tor,backend}, lowercased.
+#
 # Provisioning the address:
-#   1. kubectl apply -f k8s/tor.yaml
+#   1. export GITHUB_SHA=$(git rev-parse HEAD)   # or any pushed image tag
+#      envsubst < k8s/tor.yaml | kubectl apply -f -
 #   2. kubectl -n password-manager exec deploy/tor -- cat /var/lib/tor/hidden_service/hostname
 #   3. Put that value in the app-config ConfigMap as TOR_ONION_HOSTNAME and set
 #      TOR_ENABLED="true", then restart the backend deployments.
