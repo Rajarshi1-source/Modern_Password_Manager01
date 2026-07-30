@@ -18,15 +18,18 @@ from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
+from django.core.exceptions import DisallowedHost
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
+import time
+
 from security.services import tor_service as tor_module
 from security.services.dark_protocol_service import DarkProtocolService
-from security.services.tor_service import TorService, get_tor_service
+from security.services.tor_service import OnionReachability, TorService, get_tor_service
 
 User = get_user_model()
 
@@ -571,15 +574,18 @@ class OnionIngressTests(_TorTestMixin, TestCase):
 
     @override_settings(TOR=_tor_settings())
     def test_disallowed_host_is_not_anonymous(self):
-        """get_host() raises DisallowedHost for a Host outside ALLOWED_HOSTS."""
-        class _BadHostRequest:
-            META = {'SERVER_PORT': '8443'}
+        """get_host() raises DisallowedHost for a Host outside ALLOWED_HOSTS.
 
-            def get_port(self):
-                return '8443'
+        REMOTE_ADDR must be the trusted peer or the peer check rejects first and
+        get_host() is never reached — the assertion would then pass without
+        exercising the path it names. Raises Django's real DisallowedHost rather
+        than a bare Exception so the handling is pinned to the actual type.
+        """
+        class _BadHostRequest:
+            META = {'SERVER_PORT': '8443', 'REMOTE_ADDR': TRUSTED_PEER}
 
             def get_host(self):
-                raise Exception('DisallowedHost')
+                raise DisallowedHost('invalid host')
 
         service = self._service()
         self.assertFalse(service.request_is_onion_ingress(_BadHostRequest()))
@@ -920,3 +926,48 @@ class TimeoutCoercionTests(TestCase):
         """The looser helper must keep accepting 0 — the tests rely on it."""
         self.assertEqual(tor_module._positive_number(0, 15), 0)
         self.assertEqual(tor_module._positive_number(0, 9050), 0)
+
+
+class OnionReachabilityVetoTests(_TorTestMixin, TestCase):
+    """A self-check that ran and failed outranks the control port's answer."""
+
+    @override_settings(TOR=_tor_settings())
+    def test_failed_self_check_makes_the_onion_unpublished(self):
+        """Tor says a hidden service is configured; the address does not answer.
+
+        This is the Kubernetes shape: backend pods have no hostname file, so
+        the address-mismatch check is inert and an operator-supplied
+        ONION_HOSTNAME would otherwise be taken purely on trust.
+        """
+        service = self._service()
+        self.assertTrue(service.get_capability().anonymity_active)
+
+        # A real rendezvous attempt failed.
+        service._cached_reach = OnionReachability(
+            reachable=False, reason='unreachable', checked_at='now',
+        )
+        service._cached_reach_at = time.monotonic()
+
+        capability = service.get_capability(force_refresh=True)
+        self.assertFalse(capability.anonymity_active)
+        self.assertEqual(capability.reason, 'onion_not_published')
+
+    @override_settings(TOR=_tor_settings())
+    def test_uncheckable_self_check_is_not_treated_as_a_failure(self):
+        """"Could not perform the check" is not evidence the onion is dead.
+
+        Only reason == 'unreachable' means a rendezvous was attempted and
+        failed; the others mean the probe never got that far, and treating them
+        as failure would report Unavailable on a working deployment.
+        """
+        service = self._service()
+        for reason in ('not_configured', 'socks_not_configured',
+                       'no_onion_address', 'requests_unavailable'):
+            service._cached_reach = OnionReachability(
+                reachable=False, reason=reason, checked_at='now',
+            )
+            service._cached_reach_at = time.monotonic()
+            self.assertTrue(
+                service.get_capability(force_refresh=True).anonymity_active,
+                f'{reason} must not veto publication',
+            )

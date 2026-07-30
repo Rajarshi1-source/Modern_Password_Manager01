@@ -268,8 +268,19 @@ spec:
         # address has to be accepted here too or Django rejects the Host header
         # and the request is (correctly) never treated as onion ingress.
         # The leading dot matches the generated address without hardcoding it.
+        #
+        # The value has to be read in through configMapKeyRef FIRST: $(VAR)
+        # expansion only sees variables defined earlier in THIS env list, never
+        # ones injected by envFrom. Referencing $(ALLOWED_HOSTS) directly left
+        # Django with the literal string "$(ALLOWED_HOSTS),.onion", which
+        # silently dropped every clearnet host and added a junk entry.
+        - name: CLEARNET_ALLOWED_HOSTS
+          valueFrom:
+            configMapKeyRef:
+              name: app-config
+              key: ALLOWED_HOSTS
         - name: ALLOWED_HOSTS
-          value: "$(ALLOWED_HOSTS),.onion"
+          value: "$(CLEARNET_ALLOWED_HOSTS),.onion"
         # Declares this process as the onion ingress listener, which exempts it
         # from the HTTPS-coupled settings (redirect, Secure cookies, HSTS).
         # Tor publishes on port 80 and encrypts the circuit end to end, so
