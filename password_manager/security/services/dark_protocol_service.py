@@ -793,6 +793,32 @@ class DarkProtocolService:
           of it, not a new entry point, which is why CSRF is not re-enforced on
           it (re-enforcing would reject token-authenticated callers that never
           carry a CSRF cookie).
+
+        On deliberately NOT re-running MIDDLEWARE for the inner call
+        ------------------------------------------------------------
+        Calling the view directly skips the middleware chain, which was raised
+        in review. It is deliberate, and the stack was checked entry by entry:
+
+        * ``middleware.SecurityMiddleware`` (the only custom security gate)
+          does IP whitelisting and a device-timestamp update. Both are scoped
+          to the CONNECTION, not the path, and the outer request already
+          passed them with the same IP, user and device — re-running would
+          re-evaluate identical inputs and reach an identical verdict, while
+          writing the device timestamp twice.
+        * Prometheus, the four performance monitors: metrics. Re-running would
+          double-count one HTTP transaction.
+        * django SecurityMiddleware, SecurityHeaders, CORS, XFrameOptions,
+          CacheControl, VaultCompression: response shaping. The inner response
+          is unwrapped into this endpoint's envelope, so its headers are
+          discarded either way.
+        * Session and Authentication: ``inner.session``/``inner.user`` are
+          carried over above, and DRF re-authenticates the inner request from
+          the forwarded Authorization header regardless.
+
+        So re-running the stack would add duplicate accounting, not an
+        additional check. REVISIT THIS if a middleware is ever added that
+        authorises by PATH rather than by connection — that is the one shape
+        the argument above does not cover.
         """
         method = route['method']
         if route.get('needs_id'):

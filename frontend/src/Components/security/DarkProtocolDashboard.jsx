@@ -68,15 +68,30 @@ const DarkProtocolDashboard = () => {
     const refreshCapabilities = useCallback(async () => {
         const generation = ++capabilityGenerationRef.current;
         try {
-            const data = await darkProtocolService.getCapabilities();
+            // The circuit panel is refreshed with the banner, under the SAME
+            // token. Polling only the capability left the two contradicting
+            // each other: after Tor dropped, the banner read Unavailable while
+            // the panel below kept listing built circuits and relays until a
+            // reload. Both describe the same fact, so both move together.
+            const [data, health, nodesData] = await Promise.all([
+                darkProtocolService.getCapabilities(),
+                darkProtocolService.getNetworkHealth().catch(() => null),
+                darkProtocolService.getNodes().catch(() => null),
+            ]);
             if (generation === capabilityGenerationRef.current) {
                 setCapabilities(data);
+                setNetworkHealth(health);
+                setNodes(nodesData?.nodes || []);
             }
         } catch {
             // Fail closed: an unreadable capability report is not evidence that
-            // anonymity is available, so drop to the Unavailable state.
+            // anonymity is available, so drop to the Unavailable state — and
+            // clear the circuit panel with it rather than leaving it asserting
+            // relays we can no longer confirm.
             if (generation === capabilityGenerationRef.current) {
                 setCapabilities(null);
+                setNetworkHealth(null);
+                setNodes([]);
             }
         }
     }, []);

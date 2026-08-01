@@ -140,6 +140,13 @@ chmod 0600 "${TORRC}"
 (
     # Clear any marker from a previous run before retrying.
     rm -f "${SHARED_DIR}/hostname.failed"
+    # Drop the previous run's published address too. tor_shared is a PERSISTENT
+    # volume, so if tor_data was recreated (new hidden-service key) this file
+    # still holds the OLD address — and the healthcheck's -s test added last
+    # round would pass on it, so the pod would go Ready while the backend
+    # advertised an address Tor no longer serves. Removing it makes the window
+    # before the new copy lands fail closed rather than fail WRONG.
+    rm -f "${SHARED_DIR}/hostname"
     attempts=0
     while [ ! -s "${HS_DIR}/hostname" ]; do
         attempts=$((attempts + 1))
