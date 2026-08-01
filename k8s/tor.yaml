@@ -253,6 +253,11 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        # Same value the clearnet backend sets, and for the same reason: both
+        # Deployments mount media-pvc at /app/media. Without fsGroup the kubelet
+        # does not apply group ownership to the volume for THIS pod, so whether
+        # it can write depends on which pod happened to be scheduled first.
+        fsGroup: 10001
       containers:
       - name: backend
         image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}

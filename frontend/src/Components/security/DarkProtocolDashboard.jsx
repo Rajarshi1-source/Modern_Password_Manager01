@@ -134,14 +134,23 @@ const DarkProtocolDashboard = () => {
                 darkProtocolService.getRoutes(),
             ]);
 
+            // All three move under the SAME token, exactly as refreshCapabilities
+            // writes them. Guarding only the capability let a slow loadData that
+            // started FIRST resolve last and restore the health/relay data a
+            // newer poll had already cleared — so the banner read Unavailable
+            // while the panel below it still listed built circuits. That is the
+            // self-contradiction the token exists to prevent, just reached from
+            // the other direction.
             if (generation === capabilityGenerationRef.current) {
                 setCapabilities(capabilityData);
+                setNetworkHealth(healthData);
+                setNodes(nodesData.nodes || []);
             }
+            // Unrelated to the anonymity verdict, so not contended: these have a
+            // single writer and no polling counterpart.
             setConfig(configData);
             setSession(sessionData);
-            setNetworkHealth(healthData);
             setStats(statsData);
-            setNodes(nodesData.nodes || []);
             setRoutes(routesData.paths || []);
 
             if (sessionData.has_active_session) {
