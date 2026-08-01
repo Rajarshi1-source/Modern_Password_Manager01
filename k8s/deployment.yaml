@@ -346,14 +346,24 @@ spec:
             name: app-config
         - secretRef:
             name: app-secrets
+        env:
         # Tor control password, so the clearnet backend can read live Tor state
         # and show users the .onion address. Optional: the secret only exists
         # when k8s/tor.yaml has been provisioned, and without it the capability
         # simply reports unavailable rather than blocking pod startup.
-        - secretRef:
-            name: tor-secrets
-            optional: true
-        env:
+        #
+        # Single-key secretKeyRef, not envFrom: this pod authenticates with
+        # the PLAINTEXT password only (tor_service.py's controller.authenticate
+        # call). tor-secrets may also carry TOR_CONTROL_PASSWORD_HASH, which is
+        # for the tor daemon's own torrc (HashedControlPassword) -- this pod
+        # has no use for it, so envFrom would inject a credential it never
+        # reads into an environment where it doesn't need to be.
+        - name: TOR_CONTROL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tor-secrets
+              key: TOR_CONTROL_PASSWORD
+              optional: true
         - name: COLLECT_STATIC
           value: "true"
         volumeMounts:

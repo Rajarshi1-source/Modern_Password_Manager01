@@ -287,9 +287,20 @@ spec:
             name: app-config
         - secretRef:
             name: app-secrets
-        - secretRef:
-            name: tor-secrets
         env:
+        # Same scoping as the clearnet backend (k8s/deployment.yaml): this
+        # pod authenticates with the PLAINTEXT control password only, never
+        # the hash, so a single-key secretKeyRef keeps TOR_CONTROL_PASSWORD_HASH
+        # (if an operator set one, for the tor daemon's own torrc) out of an
+        # environment that has no use for it. Not optional: unlike the
+        # clearnet backend, this whole manifest is opt-in and only applied
+        # alongside a provisioned tor-secrets, so a missing secret here is a
+        # real misconfiguration, not the normal "Tor not set up" case.
+        - name: TOR_CONTROL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tor-secrets
+              key: TOR_CONTROL_PASSWORD
         # ALLOWED_HOSTS from app-config lists the clearnet domains; the onion
         # address has to be accepted here too or Django rejects the Host header
         # and the request is (correctly) never treated as onion ingress.
