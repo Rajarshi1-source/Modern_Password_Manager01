@@ -525,11 +525,25 @@ class NOAABuoyClient:
         return client
 
     async def close(self):
-        """Close the HTTP client."""
-        if self._client:
-            await self._client.aclose()
+        """Close the HTTP client.
+
+        Not currently called anywhere in production -- but it mutates the same
+        `_client` / `_client_loop` pair `_get_client()` does, so it needs the
+        same lock. Unguarded, this could await `aclose()` on the exact client a
+        concurrent `_get_client()` just handed to another caller (whose next
+        request then fails on a closed client), or clear `_client_loop` after
+        another thread published a fresh client, leaving the pair describing
+        no client at all while a live one is still in use.
+        """
+        with self._client_lock:
+            client = self._client
             self._client = None
             self._client_loop = None
+        # Detached under the lock, closed outside it -- same reason as the
+        # stale-close in _get_client(): awaiting while holding a threading
+        # lock would stall every other thread for the network teardown.
+        if client is not None and not client.is_closed:
+            await client.aclose()
     
     def _check_rate_limit(self, buoy_id: str) -> bool:
         """Check if we can make a request without exceeding rate limits."""

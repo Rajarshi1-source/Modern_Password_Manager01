@@ -539,7 +539,10 @@ class NOAAClientLoopSafetyTests(TestCase):
                 self.is_closed = True
 
         client = noaa_module.NOAABuoyClient()
-        barrier = threading.Barrier(threads)
+        # Bounded: an unbounded barrier hangs every other thread forever if one
+        # dies before reaching wait(), turning a bug into a stuck CI job
+        # instead of a failing test.
+        barrier = threading.Barrier(threads, timeout=10)
 
         def worker():
             async def main():
@@ -558,6 +561,59 @@ class NOAAClientLoopSafetyTests(TestCase):
             peak, 1,
             f"{peak} threads were inside the client-replacement block at once; "
             "the check and the store are not atomic across threads",
+        )
+
+    def test_close_does_not_wipe_a_client_published_during_its_own_await(self):
+        """close() must not silently drop a fresh client _get_client() built
+        while close() was mid-teardown of the old one.
+
+        Deterministic, not race-and-hope (round 22's lesson: a window this
+        narrow can pass on broken code by luck). Both coroutines run on ONE
+        loop via asyncio.gather, and the fake aclose() awaits, which is a real
+        cooperative yield point -- so the interleaving is forced, not merely
+        possible. Reproduces the exact ordering CodeRabbit described: close()
+        starts tearing down the old client, _get_client() runs concurrently
+        and publishes a replacement, close() finishes and must not overwrite
+        that replacement with None.
+        """
+        import asyncio
+        from security.services import noaa_api_client as noaa_module
+
+        class _SlowFakeClient:
+            def __init__(self, **kwargs):
+                self.is_closed = False
+
+            async def aclose(self):
+                await asyncio.sleep(0.05)
+                self.is_closed = True
+
+        async def scenario():
+            client = noaa_module.NOAABuoyClient()
+            old = _SlowFakeClient()
+            old.is_closed = True
+            client._client = old
+            # A different "loop" than the getter will use, so _get_client()
+            # is forced down the rebuild path rather than the fast path.
+            client._client_loop = None
+
+            async def closer():
+                await client.close()
+
+            async def getter():
+                # Let close() begin (and enter its await) first.
+                await asyncio.sleep(0.01)
+                with patch.object(noaa_module.httpx, 'AsyncClient', _SlowFakeClient):
+                    return await client._get_client()
+
+            _, fresh = await asyncio.gather(closer(), getter())
+            return client, fresh
+
+        client, fresh = asyncio.run(scenario())
+
+        self.assertIs(
+            client._client, fresh,
+            "close() overwrote the client _get_client() published while it "
+            "was awaiting the old one's teardown",
         )
 
 
