@@ -443,10 +443,24 @@ class TorService:
         ('not_configured', 'socks_not_configured', 'no_onion_address',
         'requests_unavailable') mean the check could not be PERFORMED, which is
         not evidence about the descriptor either way.
+
+        The evidence must also be CURRENT. ``check_onion_reachable`` applies
+        SELF_CHECK_TTL_SECONDS before reusing a cached answer, but it is never
+        called from the request path — only on explicit demand or from the
+        periodic task. Without the same bound here, one failed self-check
+        vetoed ``onion_published`` indefinitely, so a deployment whose onion had
+        since recovered kept reporting Unavailable until something happened to
+        call reset_cache(). That is the false answer in the OTHER direction that
+        the paragraph above refuses to accept, reached by a different route: an
+        expired failure is not evidence, so it stops vetoing.
         """
         with self._lock:
             result = self._cached_reach
+            checked_at = self._cached_reach_at
         if result is None:
+            return False
+        ttl = _positive_number(get_tor_config().get('SELF_CHECK_TTL_SECONDS'), 300)
+        if (time.monotonic() - checked_at) >= ttl:
             return False
         return result.reachable is False and result.reason == 'unreachable'
 
@@ -656,11 +670,14 @@ class TorService:
 
         import socket
 
+        # Parsed once: every comparison below is against this same peer.
+        peer_ip = _parse_ip(peer)
+
         for entry in raw.split(','):
             candidate = entry.strip()
             if not candidate:
                 continue
-            if candidate == peer:
+            if _same_address(candidate, peer_ip, peer):
                 return True
             if _is_ip_literal(candidate):
                 # An IP entry that did not match above cannot match after
@@ -682,7 +699,7 @@ class TorService:
                 infos = socket.getaddrinfo(candidate, None)
             except OSError:
                 continue
-            if any(info[4][0] == peer for info in infos):
+            if any(_same_address(info[4][0], peer_ip, peer) for info in infos):
                 return True
         return False
 
@@ -845,13 +862,44 @@ def _first_missing(capability: TorCapability) -> Optional[str]:
 
 def _is_ip_literal(value: str) -> bool:
     """True when the string is already an IP address, so no lookup is needed."""
+    return _parse_ip(value) is not None
+
+
+def _parse_ip(value: str):
+    """The address as an ipaddress object, or None when it is not an IP.
+
+    IPv4-mapped forms are unwrapped so the two spellings of one address compare
+    equal: a dual-stack listener reports an IPv4 client as ``::ffff:10.1.2.3``
+    while the resolver answers ``10.1.2.3`` for the same host, and
+    ``IPv6Address('::ffff:10.1.2.3') != IPv4Address('10.1.2.3')``.
+    """
     import ipaddress
 
     try:
-        ipaddress.ip_address(value)
+        parsed = ipaddress.ip_address(str(value).strip())
     except ValueError:
-        return False
-    return True
+        return None
+    return getattr(parsed, 'ipv4_mapped', None) or parsed
+
+
+def _same_address(candidate: str, peer_ip, peer_text: str) -> bool:
+    """Whether two addresses denote the same host.
+
+    Compared NUMERICALLY when both sides parse as IPs, because the textual
+    forms of one IPv6 address differ (``2001:db8::1`` vs
+    ``2001:db8:0:0:0:0:0:1``) — an operator writing the expanded form in
+    TOR_ONION_INGRESS_TRUSTED_PEERS would otherwise never match the compressed
+    REMOTE_ADDR, silently rejecting legitimate onion ingress on an IPv6 or
+    dual-stack deployment. Falls back to text equality only when a side is not
+    an IP at all, which keeps hostname entries working.
+
+    This is strictly NARROWER than the string comparison it replaces: numeric
+    equality can only ever match addresses that genuinely are the same one.
+    """
+    parsed = _parse_ip(candidate)
+    if parsed is not None and peer_ip is not None:
+        return parsed == peer_ip
+    return candidate == peer_text
 
 
 def _valid_onion(value: Any) -> Optional[str]:
