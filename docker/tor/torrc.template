@@ -49,6 +49,10 @@ HiddenServiceVersion 3
 # port. That separation is what lets the backend tell an anonymous request from
 # a clearnet one: the ingress port is reachable only from this container, so
 # arriving on it is a network fact a remote client cannot fake.
+#
+# __ONION_TARGET__ is an IP:port by the time it lands here -- entrypoint.sh
+# resolves it, because this directive does not accept a hostname (Tor parses
+# the target as an address or a unix socket, never a DNS name).
 HiddenServicePort 80 __ONION_TARGET__
 
 Log notice stdout

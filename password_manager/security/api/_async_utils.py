@@ -20,10 +20,13 @@ import concurrent.futures
 # if a future caller -- or an edit to an existing one -- forgets to bound
 # itself, or a dependency hangs past its own configured timeout (e.g. an OS
 # level TCP stall past httpx's budget). Set well above the worst legitimate
-# duration actually traced through this helper: a cold, uncached
-# get_healthy_buoys() sweep can sequentially probe every registered NOAA
-# buoy at up to httpx's 30s each.
-DEFAULT_TIMEOUT_SECONDS = 120
+# duration actually traced through this helper: ocean_entropy_views calls
+# get_healthy_buoys() with no region, which sequentially probes all 14
+# registered NOAA buoys (security/services/noaa_api_client.py::ALL_BUOYS) at
+# up to httpx's 30s each -- 420s worst case. A tighter bound would turn that
+# slow-but-legitimate sweep into a false failure, exactly the outer bound is
+# meant to prevent.
+DEFAULT_TIMEOUT_SECONDS = 450
 
 
 def run_async(coro, timeout: float = DEFAULT_TIMEOUT_SECONDS):

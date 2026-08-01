@@ -58,12 +58,13 @@ class RunAsyncTests(SimpleTestCase):
 
     def test_default_timeout_exceeds_every_traced_worst_case(self):
         """The default must stay generous enough not to truncate a legitimate
-        cold get_healthy_buoys() sweep (traced worst case ~14 buoys x httpx's
-        30s timeout each). Pinned so a future edit cannot quietly shrink it
-        below what real callers need without a deliberate decision.
+        cold get_healthy_buoys() sweep (traced worst case: all 14 registered
+        buoys x httpx's 30s timeout each = 420s). Pinned so a future edit
+        cannot quietly shrink it below what real callers need without a
+        deliberate decision.
         """
         from security.api._async_utils import DEFAULT_TIMEOUT_SECONDS
-        self.assertGreaterEqual(DEFAULT_TIMEOUT_SECONDS, 120)
+        self.assertGreaterEqual(DEFAULT_TIMEOUT_SECONDS, 420)
 
     def test_works_from_inside_an_already_running_loop(self):
         """The nested case (called from async code) must not deadlock."""

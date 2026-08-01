@@ -607,6 +607,30 @@ class OnionIngressTests(_TorTestMixin, TestCase):
             self.assertFalse(service.request_is_onion_ingress(self._request()))
 
     @override_settings(TOR=_tor_settings(
+        ONION_INGRESS_TRUSTED_PEERS='tor-host.example',
+        PEER_RESOLVE_TIMEOUT_SECONDS=0.2,
+    ))
+    def test_wedged_resolver_is_bounded_not_hung(self):
+        """A resolver that never returns must not block the request thread
+        forever. It is abandoned after PEER_RESOLVE_TIMEOUT_SECONDS and
+        treated as a failed resolution, the same as an OSError — a timeout
+        never reuses a stale answer, it only stops waiting on this request's
+        own fresh lookup, so it cannot widen what the check accepts.
+        """
+        def _hangs(*args, **kwargs):
+            time.sleep(1.0)
+            return [(0, 0, 0, '', (TRUSTED_PEER, 0))]
+
+        service = self._service()
+        with patch('socket.getaddrinfo', side_effect=_hangs):
+            start = time.monotonic()
+            result = service.request_is_onion_ingress(self._request())
+            elapsed = time.monotonic() - start
+
+        self.assertFalse(result)
+        self.assertLess(elapsed, 2.0, "the timeout did not actually bound the resolver")
+
+    @override_settings(TOR=_tor_settings(
         ONION_INGRESS_TRUSTED_PEERS='2001:db8:0:0:0:0:0:1'))
     def test_ipv6_peer_matches_regardless_of_spelling(self):
         """One IPv6 address has several textual forms; all denote one host.
@@ -986,6 +1010,25 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         response = self.client.get(reverse('dark-protocol-ping'))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
+    def test_onion_ping_succeeds_on_real_onion_ingress(self):
+        """The AllowAny self-check target answers {'ok': True} on real onion
+        ingress -- the success half of the contract the clearnet test above
+        only pins the failure half of."""
+        self.client.force_authenticate(user=None)
+        with patch.object(TorService, '_open_controller', return_value=_FakeController()), \
+                patch.object(tor_module, '_StemController', object()):
+            get_tor_service().reset_cache()
+            response = self.client.get(
+                reverse('dark-protocol-ping'),
+                SERVER_PORT='8443',
+                HTTP_HOST=ONION,
+                REMOTE_ADDR=TRUSTED_PEER,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, {'ok': True})
 
 
 class OnionIngressPortSourceTests(_TorTestMixin, TestCase):

@@ -2092,9 +2092,20 @@ TOR = {
     # Peers whose connections may count as onion ingress (comma-separated
     # hostnames or IPs). The ingress port alone is not exclusivity on a shared
     # container network, so docker-compose pins this to the tor service.
-    # Kubernetes leaves it empty and enforces the same thing with a
-    # NetworkPolicy, since pod IPs cannot be listed in configuration.
+    # REQUIRED on every platform, including Kubernetes: an empty list fails
+    # closed (see tor_service._peer_is_trusted), so a deployment that leaves
+    # this unset gets NO onion-ingress detection, not a NetworkPolicy
+    # substitute. Kubernetes names its headless tor Service here (its DNS
+    # resolves to the current pod IPs, unlike a ClusterIP); see
+    # k8s/tor.yaml's TOR_ONION_INGRESS_TRUSTED_PEERS. The NetworkPolicy there
+    # is a second layer, not a replacement for this check.
     'ONION_INGRESS_TRUSTED_PEERS': os.environ.get('TOR_ONION_INGRESS_TRUSTED_PEERS', ''),
+
+    # Caps how long a single hostname entry above may block the request
+    # thread while resolving. Not a cache TTL -- every request still resolves
+    # fresh -- so it does not reintroduce the recycled-IP staleness that rules
+    # out caching the answer itself (see tor_service._peer_is_trusted).
+    'PEER_RESOLVE_TIMEOUT_SECONDS': _tor_env_int('TOR_PEER_RESOLVE_TIMEOUT', 2),
 
     # Capability probes are cached briefly so dashboard polling does not open
     # a control connection per widget.
