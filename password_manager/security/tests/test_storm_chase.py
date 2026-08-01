@@ -289,6 +289,19 @@ class TestStormChaseService(TestCase):
         mock_storm_client.return_value = mock_noaa
         mock_ocean_client.return_value = mock_noaa
 
+        # `mock_storm_client`/`mock_ocean_client` only take effect for a NEW
+        # `get_noaa_client()` call. `self.service` was built in setUp(), which
+        # runs BEFORE this method's @patch is active, so it already captured
+        # the REAL client into `self.service._client` -- the two lines above
+        # patch a factory function that is never called again for this
+        # object. Same story for the module-level ocean-wave fallback
+        # singleton `get_ocean_provider()`, which may already exist from an
+        # earlier test. Stub both objects' client attribute directly so this
+        # test cannot silently fall through to the live NOAA API.
+        from security.services.ocean_wave_entropy_service import get_ocean_provider
+        self.service._client = mock_noaa
+        get_ocean_provider()._client = mock_noaa
+
         result = self.service.generate_storm_entropy(count=32)
 
         self.assertIsInstance(result, tuple)
@@ -530,6 +543,16 @@ class TestStormChaseIntegration(TestCase):
         mock_ocean_client.return_value = mock_noaa
 
         service = get_storm_chase_service()
+
+        # As in TestStormChaseService.test_generate_storm_entropy: this is a
+        # process-wide singleton that may already have been constructed (and
+        # so already captured a REAL, unmocked client) by an earlier test, at
+        # which point patching the get_noaa_client() FACTORY has no effect --
+        # `service.__init__` already ran. Stub the attribute directly on the
+        # actual objects this test exercises.
+        from security.services.ocean_wave_entropy_service import get_ocean_provider
+        service._client = mock_noaa
+        get_ocean_provider()._client = mock_noaa
 
         # Scan for storms
         alerts = service.scan_for_storms()
