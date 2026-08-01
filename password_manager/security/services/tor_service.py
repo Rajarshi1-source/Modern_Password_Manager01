@@ -685,13 +685,19 @@ class TorService:
                 # deployment configured with IPs never performs a lookup on
                 # this path.
                 continue
-            # DELIBERATELY NOT CACHED. Caching hostname->IP here would remove
-            # this lookup from the request path, but container and pod IPs are
-            # recycled: after the Tor daemon restarts, a cached address can be
-            # reassigned to a DIFFERENT workload, which would then be accepted
-            # as the Tor daemon. That is a fail-open, and a slower check is
-            # strictly better than one that can be wrong. Configure IP entries
-            # (above) if the resolution cost matters.
+            # DELIBERATELY NOT CACHED, and deliberately not bounded with a
+            # timeout either -- raised five times across this PR's review in
+            # slightly different framings (inline TTL cache, then a 1-2s TTL,
+            # then moving the resolution into the periodic self-check task
+            # with a short freshness window). Every framing has the SAME
+            # fail-open: container and pod IPs are RECYCLED, so any answer
+            # from BEFORE the Tor daemon's most recent restart can name a
+            # DIFFERENT workload that now owns that address, which would then
+            # be accepted as the Tor daemon -- whether that stale answer came
+            # from an inline cache or a background task makes no difference.
+            # A slower check that is never wrong beats a fast one that can be.
+            # Configure IP entries (above) if the resolution cost matters --
+            # they skip the resolver entirely, with nothing to go stale.
             try:
                 # Resolve every address the name maps to: a compose service can
                 # answer on more than one, and matching only the first would

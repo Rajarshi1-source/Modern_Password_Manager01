@@ -398,8 +398,91 @@ class TestNOAABuoyClientMocked(TestCase):
         for hour in range(24):
             region = client.get_region_for_hour(hour)
             regions_seen.add(region)
-        
+
         self.assertGreater(len(regions_seen), 1)
+
+
+class NOAAClientLoopSafetyTests(TestCase):
+    """`_get_client` rotates safely across event loops and under contention.
+
+    Regression coverage for two rounds of PR #454 review:
+      * a client cached across `asyncio.run()` calls raised "Event loop is
+        closed" / "<Event> is bound to a different event loop" (fixed by
+        tracking the loop the client was built on);
+      * `fetch_multiple_buoys` calls `_get_client()` from several concurrent
+        coroutines under one semaphore, and the ORIGINAL fix for the above
+        awaited the stale client's `.aclose()` before publishing the
+        replacement — leaving a window where multiple racing coroutines each
+        saw the same stale client, each built their OWN replacement, and
+        overwrote one another (leaking every replacement but the last).
+    """
+
+    def _client_and_fake_stale(self):
+        import asyncio
+        from security.services.noaa_api_client import NOAABuoyClient
+
+        client = NOAABuoyClient()
+
+        class _FakeClient:
+            def __init__(self):
+                self.is_closed = False
+                self.close_calls = 0
+
+            async def aclose(self):
+                await asyncio.sleep(0)  # force a real yield, like the real one
+                self.is_closed = True
+                self.close_calls += 1
+
+        stale = _FakeClient()
+        client._client = stale
+        client._client_loop = None  # different from the loop about to run
+        return client, stale
+
+    def test_rotates_to_a_fresh_client_per_loop(self):
+        """A new asyncio.run() must not reuse a client from a prior loop."""
+        import asyncio
+        from security.services.noaa_api_client import NOAABuoyClient
+
+        client = NOAABuoyClient()
+        seen = [id(asyncio.run(client._get_client())) for _ in range(3)]
+        self.assertEqual(len(set(seen)), 3, "each asyncio.run() must get its own client")
+
+    def test_reuses_the_same_client_within_one_loop(self):
+        """Multiple calls inside ONE loop must share a single client."""
+        import asyncio
+        from security.services.noaa_api_client import NOAABuoyClient
+
+        client = NOAABuoyClient()
+
+        async def three_calls():
+            a = await client._get_client()
+            b = await client._get_client()
+            c = await client._get_client()
+            return id(a), id(b), id(c)
+
+        a, b, c = asyncio.run(three_calls())
+        self.assertEqual(a, b)
+        self.assertEqual(b, c)
+
+    def test_concurrent_callers_do_not_race_the_replacement(self):
+        """8 coroutines racing _get_client() must converge on ONE new client.
+
+        Reproduces fetch_multiple_buoys's concurrency shape directly against
+        `_get_client()` rather than the network, so it is deterministic.
+        """
+        import asyncio
+
+        client, stale = self._client_and_fake_stale()
+
+        async def hammer():
+            return await asyncio.gather(*[client._get_client() for _ in range(8)])
+
+        results = asyncio.run(hammer())
+        self.assertEqual(
+            len({id(r) for r in results}), 1,
+            "concurrent callers received different replacement clients",
+        )
+        self.assertEqual(stale.close_calls, 1, "the stale client must be closed exactly once")
 
 
 # =============================================================================

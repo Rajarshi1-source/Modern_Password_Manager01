@@ -143,8 +143,12 @@ const DarkProtocolDashboard = () => {
             // the other direction.
             if (generation === capabilityGenerationRef.current) {
                 setCapabilities(capabilityData);
-                setNetworkHealth(healthData);
-                setNodes(nodesData.nodes || []);
+                // Fail closed the same way refreshCapabilities does: getCapabilities()
+                // above is the only one of the three catch()-ed to null on failure, so
+                // a failed capability read with successful health/node reads would
+                // otherwise show Unavailable next to a panel still listing live relays.
+                setNetworkHealth(capabilityData ? healthData : null);
+                setNodes(capabilityData ? (nodesData.nodes || []) : []);
             }
             // Unrelated to the anonymity verdict, so not contended: these have a
             // single writer and no polling counterpart.
