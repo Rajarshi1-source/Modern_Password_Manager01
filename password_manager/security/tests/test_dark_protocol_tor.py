@@ -357,6 +357,61 @@ class TorCircuitRelayTests(_TorTestMixin, TestCase):
         """The honest answer with no Tor is an empty list, never invented rows."""
         self.assertEqual(TorService().get_circuit_relays(), [])
 
+    @override_settings(TOR=_tor_settings(CAPABILITY_TTL_SECONDS=60))
+    def test_a_failed_relay_read_is_cached_like_a_successful_one(self):
+        """A down control port must not be re-dialled on every poll.
+
+        /nodes/ and /health/ are both polled by the dashboard, so without
+        caching the fail-closed answer an unreachable daemon is the WORST
+        case for load: each poll reopens a connection and pays
+        CONTROL_TIMEOUT_SECONDS again, exactly when Tor is least able to
+        serve it. get_capability already caches its failure on this TTL.
+        """
+        service = TorService()
+        opener = MagicMock(return_value=None)
+        with patch.object(TorService, '_open_controller', opener), \
+                patch.object(tor_module, '_StemController', object()):
+            self.assertEqual(service.get_circuit_relays(), [])
+            self.assertEqual(service.get_circuit_relays(), [])
+
+        self.assertEqual(
+            opener.call_count, 1,
+            "the failed read was not cached; the control port was re-dialled",
+        )
+
+    @override_settings(TOR=_tor_settings(CAPABILITY_TTL_SECONDS=60))
+    def test_a_failure_invalidated_mid_read_is_not_published(self):
+        """The generation guard must cover the failure path too.
+
+        Caching failures creates a publish-after-invalidate window that did
+        not exist while they were discarded: a read that started before
+        reset_cache() must not install its stale answer afterwards, or a
+        deliberate invalidation is silently undone for a whole TTL. Driven by
+        resetting DURING the read, since a sequential reset-then-read would
+        pass either way (it finds an empty cache regardless) -- that weaker
+        form was tried first and proved vacuous under mutation.
+        """
+        service = TorService()
+        calls = []
+
+        def _reset_then_fail(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                # Invalidate while this very read is in flight.
+                service.reset_cache()
+            return None
+
+        opener = MagicMock(side_effect=_reset_then_fail)
+        with patch.object(TorService, '_open_controller', opener), \
+                patch.object(tor_module, '_StemController', object()):
+            self.assertEqual(service.get_circuit_relays(), [])
+            self.assertEqual(service.get_circuit_relays(), [])
+
+        self.assertEqual(
+            opener.call_count, 2,
+            "an invalidated read published anyway; the second call served a stale failure",
+        )
+
     @override_settings(TOR=_tor_settings())
     def test_no_relay_is_ever_labelled_exit(self):
         """'No exit node' is a real property of onion circuits; keep it true."""

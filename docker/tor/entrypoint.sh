@@ -90,19 +90,42 @@ fi
 onion_target_host="${TOR_ONION_TARGET%:*}"
 onion_target_port="${TOR_ONION_TARGET##*:}"
 case "${onion_target_host}" in
-    *[!0-9.]*)
-        # Not a bare IPv4 literal -- resolve it. (nslookup would do a REVERSE
-        # lookup on an IP argument, so literals must skip this branch.)
-        nslookup_out=$(nslookup "${onion_target_host}" 2>/dev/null)
-        # busybox nslookup prints "Address:\t<server-ip>" for the resolver
-        # itself, then "Address: <answer-ip>" per record found -- the answer,
-        # if any, is always the LAST "Address" line.
-        resolved_host=$(printf '%s\n' "${nslookup_out}" | awk '/^Address/{ip=$NF} END{print ip}')
-        address_lines=$(printf '%s\n' "${nslookup_out}" | grep -c '^Address')
-        if [ -z "${resolved_host}" ] || [ "${address_lines}" -lt 2 ]; then
-            echo "tor: could not resolve TOR_ONION_TARGET host '${onion_target_host}'" >&2
-            exit 1
-        fi
+    \[*\]|*[!0-9.]*)
+        # A bracketed IPv6 literal is already in the form HiddenServicePort
+        # wants, so pass it straight through; anything else non-IPv4 is a name
+        # to resolve. (nslookup would do a REVERSE lookup on an IP argument,
+        # so literals must never reach the resolver.)
+        case "${onion_target_host}" in
+            \[*\]) resolved_host="${onion_target_host}" ;;
+            *)
+                nslookup_out=$(nslookup "${onion_target_host}" 2>/dev/null)
+                # Take the address from the ANSWER section only. busybox
+                # nslookup prints the resolver's own "Address:" line FIRST,
+                # before any "Name:" line, so keying off "Name:" is what keeps
+                # the DNS server's address from being mistaken for the answer
+                # -- pointing the onion service at kube-dns would be far worse
+                # than failing outright.
+                #
+                # Prefer IPv4: on a dual-stack cluster the answer may include
+                # an AAAA record, and a bare IPv6 address is NOT valid here --
+                # HiddenServicePort requires the bracketed [addr]:port form, so
+                # an unbracketed one fails Tor's config parser and the
+                # container never starts. Bracket it when it is all we have.
+                resolved_host=$(printf '%s\n' "${nslookup_out}" | awk '
+                    /^Name:/ { in_answer = 1 }
+                    in_answer && /^Address/ {
+                        addr = $NF
+                        if (addr ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { v4 = addr; exit }
+                        if (v6 == "") v6 = addr
+                    }
+                    END { if (v4 != "") print v4; else if (v6 != "") print "[" v6 "]" }
+                ')
+                if [ -z "${resolved_host}" ]; then
+                    echo "tor: could not resolve TOR_ONION_TARGET host '${onion_target_host}'" >&2
+                    exit 1
+                fi
+                ;;
+        esac
         ;;
     *)
         resolved_host="${onion_target_host}"
