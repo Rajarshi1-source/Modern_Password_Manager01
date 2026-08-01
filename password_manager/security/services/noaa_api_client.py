@@ -23,6 +23,7 @@ import re
 import asyncio
 import logging
 import hashlib
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
@@ -425,6 +426,12 @@ class NOAABuoyClient:
         # pool binds internal asyncio primitives (locks/events) to the loop it
         # first runs on; see `_get_client` for why this must be tracked.
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
+        # `get_noaa_client()` hands the SAME instance to every caller, and sync
+        # Django views reach it through `run_async` -> `asyncio.run` on their
+        # own worker thread. So two requests can be inside `_get_client`
+        # genuinely in parallel, on different threads AND different loops --
+        # a case the single-loop atomicity argument below does not cover.
+        self._client_lock = threading.Lock()
         self._cache: Dict[str, Tuple[BuoyReading, datetime]] = {}
         self._last_request_time: Dict[str, datetime] = {}
         self._request_count: int = 0
@@ -448,46 +455,74 @@ class NOAABuoyClient:
             raise RuntimeError("httpx not installed. Run: pip install httpx")
 
         loop = asyncio.get_running_loop()
-        if self._client is None or self._client.is_closed or self._client_loop is not loop:
-            stale = self._client
+        stale = None
+        stale_loop = None
 
-            # Publish the replacement BEFORE awaiting the stale client's
-            # close, not after. `fetch_multiple_buoys` calls this from several
-            # coroutines under a semaphore, and every statement up to the
-            # first `await` runs atomically on a single-threaded loop — so
-            # publishing first means any other coroutine racing in here sees
-            # the new client/loop immediately and takes the fast path below
-            # instead of re-entering this branch. Awaiting the close FIRST
-            # (the previous order) left `self._client` pointing at `stale`
-            # during that await, so several concurrent callers could each
-            # observe the same stale client, each build their OWN replacement,
-            # and overwrite one another — leaking every replacement but the
-            # last one this coroutine happened to finish.
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                headers={
-                    'User-Agent': 'PasswordManager-EntropyHarvester/1.0 (Educational/Research)',
-                    'Accept': 'text/plain',
-                }
-            )
-            self._client_loop = loop
+        # The check and the store must be ONE step. Publishing before the
+        # await (below) makes this safe against other coroutines on THIS
+        # loop, because statements up to the first `await` cannot be
+        # interleaved on a single-threaded loop — but that argument says
+        # nothing about another THREAD running its own loop, which is exactly
+        # what concurrent Django requests produce. Unguarded, two threads
+        # could each build a client and overwrite one another's store,
+        # leaving `_client` and `_client_loop` describing DIFFERENT loops and
+        # handing a caller a client bound to a loop it is not running on --
+        # the very "bound to a different event loop" failure the loop
+        # tracking exists to prevent.
+        with self._client_lock:
+            if self._client is None or self._client.is_closed or self._client_loop is not loop:
+                stale = self._client
+                stale_loop = self._client_loop
 
-            # Release the stale client rather than leaving it to GC, so this
-            # object owns the lifetime of every client it creates.
-            #
-            # Best-effort on purpose: the stale client belongs to a DIFFERENT
-            # loop which is usually already closed. Verified against the
-            # pinned httpx that aclose() from another loop returns cleanly
-            # even after a real pooled request, but a failure here must never
-            # propagate into a buoy fetch — that would turn the leak this is
-            # tidying into the outage it is meant to prevent. On error we
-            # simply drop the reference, which is the previous behaviour.
-            if stale is not None and not stale.is_closed:
-                try:
-                    await stale.aclose()
-                except Exception as exc:
-                    logger.debug("Discarding stale NOAA client without close: %s", exc)
-        return self._client
+                # Publish the replacement BEFORE awaiting the stale client's
+                # close, not after. `fetch_multiple_buoys` calls this from
+                # several coroutines under a semaphore; publishing first means
+                # any other coroutine racing in here sees the new client/loop
+                # immediately and takes the fast path instead of re-entering
+                # this branch. Awaiting the close FIRST (the original order)
+                # left `self._client` pointing at `stale` during that await,
+                # so several concurrent callers could each observe the same
+                # stale client, each build their OWN replacement, and
+                # overwrite one another.
+                self._client = httpx.AsyncClient(
+                    timeout=30.0,
+                    headers={
+                        'User-Agent': 'PasswordManager-EntropyHarvester/1.0 (Educational/Research)',
+                        'Accept': 'text/plain',
+                    }
+                )
+                self._client_loop = loop
+
+            # Read the client out UNDER the lock and return that local, never
+            # `self._client` again: another thread may replace it the instant
+            # this lock is released, and its client belongs to ITS loop.
+            client = self._client
+
+        # Closed OUTSIDE the lock: `aclose()` awaits, and holding a threading
+        # lock across an await would stall every other thread for the
+        # duration of a network teardown.
+        #
+        # Only when the stale client's own loop is finished with it. In the
+        # ordinary sequential case (`asyncio.run` per call) that loop is
+        # already closed, so this still releases the client rather than
+        # leaving it to GC. But when another thread is running that loop right
+        # now, the "stale" client is in ACTIVE use over there -- closing it
+        # would break that request. Dropping the reference instead leaks one
+        # client; closing it would cause an outage, and a leak is the lesser
+        # failure.
+        #
+        # Best-effort besides: a failure here must never propagate into a buoy
+        # fetch, or tidying a leak becomes the outage it was meant to prevent.
+        if (
+            stale is not None
+            and not stale.is_closed
+            and (stale_loop is None or stale_loop.is_closed())
+        ):
+            try:
+                await stale.aclose()
+            except Exception as exc:
+                logger.debug("Discarding stale NOAA client without close: %s", exc)
+        return client
 
     async def close(self):
         """Close the HTTP client."""

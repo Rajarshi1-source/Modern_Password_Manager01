@@ -33,8 +33,10 @@ no code path that reports the capability as present without having read a live
 answer from the Tor control port in this process, within the cache TTL.
 """
 
+import ipaddress
 import logging
 import re
+import socket
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FuturesTimeoutError
@@ -898,8 +900,11 @@ _PEER_RESOLVER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='tor-
 
 
 def _resolve_bounded(host: str, timeout: float):
-    """`socket.getaddrinfo(host, None)`, abandoned if it takes longer than `timeout`."""
-    import socket
+    """`socket.getaddrinfo(host, None)`, abandoned if it takes longer than `timeout`.
+
+    ``socket.getaddrinfo`` is looked up at call time, so tests patching it
+    still take effect.
+    """
     future = _PEER_RESOLVER_POOL.submit(socket.getaddrinfo, host, None)
     return future.result(timeout=timeout)
 
@@ -912,8 +917,6 @@ def _parse_ip(value: str):
     while the resolver answers ``10.1.2.3`` for the same host, and
     ``IPv6Address('::ffff:10.1.2.3') != IPv4Address('10.1.2.3')``.
     """
-    import ipaddress
-
     try:
         parsed = ipaddress.ip_address(str(value).strip())
     except ValueError:

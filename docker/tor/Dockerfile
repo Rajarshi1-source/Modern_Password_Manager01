@@ -13,7 +13,12 @@
 
 FROM alpine:3.21
 
-# tor — the daemon itself; busybox supplies the `nc` the health check uses.
+# tor — the daemon itself. Two busybox applets from the base image are also
+# load-bearing, so neither is incidental if this base ever changes: `nc`, which
+# the health check pipes its control-port query through, and `nslookup`, which
+# the entrypoint uses to resolve TOR_ONION_TARGET to an IP (HiddenServicePort
+# does not accept a DNS name). Alpine's busybox builds both; it does NOT build
+# `getent`, which is why the entrypoint uses nslookup for that lookup.
 RUN apk add --no-cache tor
 
 COPY docker/tor/torrc.template /etc/tor/torrc.template
