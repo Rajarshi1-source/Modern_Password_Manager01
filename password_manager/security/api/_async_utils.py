@@ -12,9 +12,22 @@ or two copies was a real risk that already happened once.
 import asyncio
 import concurrent.futures
 
+# A BACKSTOP, not a budget: every current caller already bounds itself
+# internally (the NOAA client's httpx timeout=30s, CosmicWatchClient.
+# collect_events' own timeout_seconds, the simulator's non-realistic-timing
+# path), so under normal operation this ceiling is never approached. It
+# exists only so the Django request thread is guaranteed to be released even
+# if a future caller -- or an edit to an existing one -- forgets to bound
+# itself, or a dependency hangs past its own configured timeout (e.g. an OS
+# level TCP stall past httpx's budget). Set well above the worst legitimate
+# duration actually traced through this helper: a cold, uncached
+# get_healthy_buoys() sweep can sequentially probe every registered NOAA
+# buoy at up to httpx's 30s each.
+DEFAULT_TIMEOUT_SECONDS = 120
 
-def run_async(coro):
-    """Run an async coroutine from a synchronous view.
+
+def run_async(coro, timeout: float = DEFAULT_TIMEOUT_SECONDS):
+    """Run an async coroutine from a synchronous view, with an outer bound.
 
     ``get_running_loop()`` rather than ``get_event_loop()``: the latter hands
     back whatever loop was last SET on this thread, which may already be
@@ -33,14 +46,19 @@ def run_async(coro):
     doing so swallows genuine application errors and, since the coroutine has
     already been consumed by then, reports the misleading "cannot reuse already
     awaited coroutine" in their place.
+
+    ``asyncio.TimeoutError`` on expiry is not caught here: every current call
+    site already sits inside its own ``except Exception`` (view-level), which
+    turns it into the same graceful failure response any other error gets —
+    no new error-handling path needed at any of the 16 call sites this wraps.
     """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         # Nothing running on this thread — the normal sync-view case.
-        return asyncio.run(coro)
+        return asyncio.run(asyncio.wait_for(coro, timeout=timeout))
     # Already inside a running loop: ``run_until_complete`` would raise "This
     # event loop is already running", and blocking it would deadlock. Hand the
     # coroutine to a worker thread that owns its own loop.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+        return pool.submit(asyncio.run, asyncio.wait_for(coro, timeout=timeout)).result()
