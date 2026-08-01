@@ -30,6 +30,41 @@ from rest_framework import status
 User = get_user_model()
 
 
+def _mock_storm_noaa_client():
+    """The 5-buoy mock NOAA client shared by the two full-flow tests below.
+
+    Deliberately extracts ONLY this fixture, not the singleton-wiring code
+    beside each call site: that wiring looks identical at a glance but is NOT
+    -- one call site's service is rebuilt per-test in setUp() and needs a
+    single cleanup, the other's is a process-wide singleton and needs two
+    (see each test's own comment). Merging those risks reintroducing the
+    exact poisoned-singleton bug earlier rounds spent real debugging time on;
+    the fixture below has no such asymmetry.
+    """
+    mock_readings = {}
+    for buoy_id in ['44013', '41049', '46026', '46001', '42039']:
+        reading = MagicMock()
+        reading.buoy_id = buoy_id
+        reading.timestamp = datetime.utcnow()
+        reading.wave_height_m = 1.5
+        reading.wind_speed_mps = 5.0
+        reading.pressure_hpa = 1013.0
+        reading.sea_temp_c = 18.0
+        reading.air_temp_c = 20.0
+        storm_status = MagicMock()
+        storm_status.is_storm = False
+        reading.detect_storm_conditions.return_value = storm_status
+        mock_readings[buoy_id] = reading
+
+    mock_noaa = MagicMock()
+    mock_noaa.fetch_multiple_buoys = AsyncMock(return_value=mock_readings)
+    mock_noaa.get_all_readings_async = AsyncMock(return_value=list(mock_readings.values()))
+    mock_noaa.buoy_info = {
+        bid: {'name': f'Buoy {bid}', 'region': 'atlantic'} for bid in mock_readings
+    }
+    return mock_noaa
+
+
 # =============================================================================
 # StormSeverity Tests
 # =============================================================================
@@ -265,27 +300,7 @@ class TestStormChaseService(TestCase):
         must be mocked so the test never touches the real NOAA API
         (offline buoys like 41010/41040 return 404 in CI).
         """
-        mock_readings = {}
-        for buoy_id in ['44013', '41049', '46026', '46001', '42039']:
-            reading = MagicMock()
-            reading.buoy_id = buoy_id
-            reading.timestamp = datetime.utcnow()
-            reading.wave_height_m = 1.5
-            reading.wind_speed_mps = 5.0
-            reading.pressure_hpa = 1013.0
-            reading.sea_temp_c = 18.0
-            reading.air_temp_c = 20.0
-            storm_status = MagicMock()
-            storm_status.is_storm = False
-            reading.detect_storm_conditions.return_value = storm_status
-            mock_readings[buoy_id] = reading
-
-        mock_noaa = MagicMock()
-        mock_noaa.fetch_multiple_buoys = AsyncMock(return_value=mock_readings)
-        mock_noaa.get_all_readings_async = AsyncMock(return_value=list(mock_readings.values()))
-        mock_noaa.buoy_info = {
-            bid: {'name': f'Buoy {bid}', 'region': 'atlantic'} for bid in mock_readings
-        }
+        mock_noaa = _mock_storm_noaa_client()
         mock_storm_client.return_value = mock_noaa
         mock_ocean_client.return_value = mock_noaa
 
@@ -526,27 +541,7 @@ class TestStormChaseIntegration(TestCase):
         """
         from security.services.storm_chase import get_storm_chase_service
 
-        mock_readings = {}
-        for buoy_id in ['44013', '41049', '46026', '46001', '42039']:
-            reading = MagicMock()
-            reading.buoy_id = buoy_id
-            reading.timestamp = datetime.utcnow()
-            reading.wave_height_m = 1.5
-            reading.wind_speed_mps = 5.0
-            reading.pressure_hpa = 1013.0
-            reading.sea_temp_c = 18.0
-            reading.air_temp_c = 20.0
-            storm_status = MagicMock()
-            storm_status.is_storm = False
-            reading.detect_storm_conditions.return_value = storm_status
-            mock_readings[buoy_id] = reading
-
-        mock_noaa = MagicMock()
-        mock_noaa.fetch_multiple_buoys = AsyncMock(return_value=mock_readings)
-        mock_noaa.get_all_readings_async = AsyncMock(return_value=list(mock_readings.values()))
-        mock_noaa.buoy_info = {
-            bid: {'name': f'Buoy {bid}', 'region': 'atlantic'} for bid in mock_readings
-        }
+        mock_noaa = _mock_storm_noaa_client()
         mock_storm_client.return_value = mock_noaa
         mock_ocean_client.return_value = mock_noaa
 
