@@ -464,6 +464,40 @@ class OnionSelfCheckTests(_TorTestMixin, TestCase):
             service.check_onion_reachable()
             self.assertEqual(get.call_count, 2, 'reset_cache must force a re-probe')
 
+    @override_settings(TOR=_tor_settings(SELF_CHECK_TTL_SECONDS=300))
+    def test_fresh_unreachable_result_vetoes_publication(self):
+        """A self-check that RAN and failed outranks "a service is configured"."""
+        service = self._service()
+        service._cached_reach = OnionReachability(reachable=False, reason='unreachable')
+        service._cached_reach_at = time.monotonic()
+        self.assertTrue(service._reachability_says_unreachable())
+
+    @override_settings(TOR=_tor_settings(SELF_CHECK_TTL_SECONDS=300))
+    def test_expired_unreachable_result_stops_vetoing(self):
+        """An old failure must not pin the feature to Unavailable forever.
+
+        check_onion_reachable applies the TTL, but it never runs on the request
+        path — only on demand or from the periodic task. Without the same bound
+        on the veto, one failed self-check kept forcing onion_published False
+        after the onion had recovered, reporting Unavailable on a working
+        deployment. That is the false answer in the other direction.
+        """
+        service = self._service()
+        service._cached_reach = OnionReachability(reachable=False, reason='unreachable')
+        service._cached_reach_at = time.monotonic() - 301
+        self.assertFalse(service._reachability_says_unreachable())
+
+    @override_settings(TOR=_tor_settings(SELF_CHECK_TTL_SECONDS=300))
+    def test_could_not_check_reasons_never_veto(self):
+        """"The check could not be performed" is not evidence about the descriptor."""
+        service = self._service()
+        service._cached_reach_at = time.monotonic()
+        for reason in ('not_configured', 'socks_not_configured',
+                       'no_onion_address', 'requests_unavailable'):
+            with self.subTest(reason=reason):
+                service._cached_reach = OnionReachability(reachable=False, reason=reason)
+                self.assertFalse(service._reachability_says_unreachable())
+
 
 # =============================================================================
 # Onion ingress detection
@@ -571,6 +605,45 @@ class OnionIngressTests(_TorTestMixin, TestCase):
         service = self._service()
         with patch('socket.getaddrinfo', side_effect=OSError('name resolution failed')):
             self.assertFalse(service.request_is_onion_ingress(self._request()))
+
+    @override_settings(TOR=_tor_settings(
+        ONION_INGRESS_TRUSTED_PEERS='2001:db8:0:0:0:0:0:1'))
+    def test_ipv6_peer_matches_regardless_of_spelling(self):
+        """One IPv6 address has several textual forms; all denote one host.
+
+        An operator writing the expanded form while REMOTE_ADDR carries the
+        compressed one would otherwise have legitimate onion ingress silently
+        rejected on an IPv6 deployment.
+        """
+        service = self._service()
+        self.assertTrue(
+            service.request_is_onion_ingress(self._request(peer='2001:db8::1'))
+        )
+
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.1.2.3'))
+    def test_ipv4_mapped_peer_matches_its_plain_form(self):
+        """A dual-stack listener reports an IPv4 client as ::ffff:10.1.2.3."""
+        service = self._service()
+        self.assertTrue(
+            service.request_is_onion_ingress(self._request(peer='::ffff:10.1.2.3'))
+        )
+
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='2001:db8::1'))
+    def test_a_different_ipv6_peer_is_still_rejected(self):
+        """Normalising the comparison must not widen what it accepts."""
+        service = self._service()
+        self.assertFalse(
+            service.request_is_onion_ingress(self._request(peer='2001:db8::2'))
+        )
+
+    @override_settings(TOR=_tor_settings(ONION_INGRESS_TRUSTED_PEERS='10.0.0.0/8'))
+    def test_a_cidr_entry_does_not_match_addresses_inside_it(self):
+        """Entries are exact peers, not ranges — a CIDR must not grant a subnet."""
+        service = self._service()
+        with patch('socket.getaddrinfo', side_effect=OSError('not a hostname')):
+            self.assertFalse(
+                service.request_is_onion_ingress(self._request(peer='10.1.2.3'))
+            )
 
     @override_settings(TOR=_tor_settings())
     def test_disallowed_host_is_not_anonymous(self):

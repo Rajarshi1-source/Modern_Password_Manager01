@@ -298,7 +298,11 @@
 .dp-relay-fingerprint {
     margin-left: auto;
     font-family: 'JetBrains Mono', 'Courier New', monospace;
-    color: #6b6b7e;
+    /* #6b6b7e scored 3.4:1 on this row, below WCAG AA (4.5:1) for 12px text.
+       This is the same muted token .dp-empty-note already uses, which clears
+       AA at 5.3:1 while staying dimmer than .dp-relay-nickname — so the
+       fingerprint reads as secondary without being unreadable. */
+    color: #8b8b9e;
     font-size: 0.75rem;
 }
 

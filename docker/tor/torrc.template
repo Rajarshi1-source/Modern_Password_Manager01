@@ -22,6 +22,13 @@ SocksPort 0.0.0.0:9050
 # RFC1918 ranges container networks draw from; narrow them to the exact
 # backend subnet if it is known. The trailing reject is what makes this an
 # allow-list — without it Tor's default would accept everything.
+#
+# It may also need WIDENING, and the symptom is easy to misread: a cluster that
+# allocates pod addresses outside these ranges (100.64.0.0/10 on some managed
+# node pools, or an IPv6-only pod network) has its backend rejected HERE, the
+# loopback self-check then reports the onion unreachable, and Dark Protocol
+# reports Unavailable on a deployment whose onion service is in fact working.
+# Add the cluster's pod CIDR if that is what you are seeing.
 SocksPolicy accept 10.0.0.0/8
 SocksPolicy accept 172.16.0.0/12
 SocksPolicy accept 192.168.0.0/16
