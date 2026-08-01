@@ -74,6 +74,43 @@ if [ -z "${TOR_ONION_TARGET:-}" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Tor's HiddenServicePort target must be an IP address (or a unix socket) --
+# it does not resolve hostnames itself, so writing the compose/k8s service
+# name straight into torrc (backend-onion:8443 / backend-onion-service:8443)
+# fails Tor's own config parser before it ever binds. Resolve it once here,
+# with busybox nslookup (the base alpine image ships it; getent is not built
+# into Alpine's busybox). This is not a security check -- unlike the
+# request-path peer resolution in tor_service.py, a stale answer here just
+# means a connection failure the onion self-check already surfaces as
+# Unavailable -- so there is nothing to gain from re-resolving per connection.
+# It does mean the resolved address must stay valid for the life of this
+# container; restart it if the backend service's address changes underneath
+# it.
+# ---------------------------------------------------------------------------
+onion_target_host="${TOR_ONION_TARGET%:*}"
+onion_target_port="${TOR_ONION_TARGET##*:}"
+case "${onion_target_host}" in
+    *[!0-9.]*)
+        # Not a bare IPv4 literal -- resolve it. (nslookup would do a REVERSE
+        # lookup on an IP argument, so literals must skip this branch.)
+        nslookup_out=$(nslookup "${onion_target_host}" 2>/dev/null)
+        # busybox nslookup prints "Address:\t<server-ip>" for the resolver
+        # itself, then "Address: <answer-ip>" per record found -- the answer,
+        # if any, is always the LAST "Address" line.
+        resolved_host=$(printf '%s\n' "${nslookup_out}" | awk '/^Address/{ip=$NF} END{print ip}')
+        address_lines=$(printf '%s\n' "${nslookup_out}" | grep -c '^Address')
+        if [ -z "${resolved_host}" ] || [ "${address_lines}" -lt 2 ]; then
+            echo "tor: could not resolve TOR_ONION_TARGET host '${onion_target_host}'" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        resolved_host="${onion_target_host}"
+        ;;
+esac
+TOR_ONION_TARGET="${resolved_host}:${onion_target_port}"
+
+# ---------------------------------------------------------------------------
 # Volume ownership and the privilege model, which differs by platform:
 #
 #   * docker-compose starts this as root, so we chown the volumes and let tor

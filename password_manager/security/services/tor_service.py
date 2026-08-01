@@ -36,6 +36,8 @@ answer from the Tor control port in this process, within the cache TTL.
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FuturesTimeoutError
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Lock
@@ -87,6 +89,7 @@ def _default_config() -> Dict[str, Any]:
         'ONION_HOSTNAME_FILE': '',
         'ONION_INGRESS_PORT': 0,
         'ONION_INGRESS_TRUSTED_PEERS': '',
+        'PEER_RESOLVE_TIMEOUT_SECONDS': 2,
         'CAPABILITY_TTL_SECONDS': 15,
         'CONTROL_TIMEOUT_SECONDS': 5,
         'SELF_CHECK_PATH': '/api/security/dark-protocol/ping/',
@@ -668,8 +671,6 @@ class TorService:
         if not peer:
             return False
 
-        import socket
-
         # Parsed once: every comparison below is against this same peer.
         peer_ip = _parse_ip(peer)
 
@@ -685,25 +686,26 @@ class TorService:
                 # deployment configured with IPs never performs a lookup on
                 # this path.
                 continue
-            # DELIBERATELY NOT CACHED, and deliberately not bounded with a
-            # timeout either -- raised five times across this PR's review in
-            # slightly different framings (inline TTL cache, then a 1-2s TTL,
-            # then moving the resolution into the periodic self-check task
-            # with a short freshness window). Every framing has the SAME
-            # fail-open: container and pod IPs are RECYCLED, so any answer
-            # from BEFORE the Tor daemon's most recent restart can name a
-            # DIFFERENT workload that now owns that address, which would then
-            # be accepted as the Tor daemon -- whether that stale answer came
-            # from an inline cache or a background task makes no difference.
-            # A slower check that is never wrong beats a fast one that can be.
+            # DELIBERATELY NOT CACHED -- raised five times across this PR's
+            # review in slightly different framings (inline TTL cache, then a
+            # 1-2s TTL, then moving the resolution into the periodic
+            # self-check task with a short freshness window). Every one of
+            # those framings has the SAME fail-open: container and pod IPs are
+            # RECYCLED, so any REUSED answer from before the Tor daemon's most
+            # recent restart can name a DIFFERENT workload that now owns that
+            # address. A resolution timeout does not have this problem: it
+            # never reuses an answer across requests, it only stops waiting
+            # for THIS request's own fresh lookup -- a timeout can only ever
+            # turn a slow answer into a rejection, never into a stale accept.
             # Configure IP entries (above) if the resolution cost matters --
-            # they skip the resolver entirely, with nothing to go stale.
+            # they skip the resolver entirely, with nothing to wait on.
             try:
                 # Resolve every address the name maps to: a compose service can
                 # answer on more than one, and matching only the first would
                 # reject legitimate ingress.
-                infos = socket.getaddrinfo(candidate, None)
-            except OSError:
+                timeout = _strictly_positive_number(config.get('PEER_RESOLVE_TIMEOUT_SECONDS'), 2)
+                infos = _resolve_bounded(candidate, timeout)
+            except (OSError, _FuturesTimeoutError):
                 continue
             if any(_same_address(info[4][0], peer_ip, peer) for info in infos):
                 return True
@@ -869,6 +871,22 @@ def _first_missing(capability: TorCapability) -> Optional[str]:
 def _is_ip_literal(value: str) -> bool:
     """True when the string is already an IP address, so no lookup is needed."""
     return _parse_ip(value) is not None
+
+
+# Bounds how long a single trusted-peer hostname resolution may block the
+# request thread (see _peer_is_trusted). Not a cache -- every call still
+# submits a fresh lookup -- so this has none of the recycled-IP staleness
+# that ruled out caching the RESULT of resolution (see the comment at the
+# call site). A worker that outruns the timeout is simply abandoned; nothing
+# reads its result, so it cannot hold the request thread open.
+_PEER_RESOLVER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='tor-peer-dns')
+
+
+def _resolve_bounded(host: str, timeout: float):
+    """`socket.getaddrinfo(host, None)`, abandoned if it takes longer than `timeout`."""
+    import socket
+    future = _PEER_RESOLVER_POOL.submit(socket.getaddrinfo, host, None)
+    return future.result(timeout=timeout)
 
 
 def _parse_ip(value: str):
