@@ -294,18 +294,21 @@ class TestStormChaseService(TestCase):
         # runs BEFORE this method's @patch is active, so it already captured
         # the REAL client into `self.service._client` -- the two lines above
         # patch a factory function that is never called again for this
-        # object. Same story for the module-level ocean-wave fallback
-        # singleton `get_ocean_provider()`, which may already exist from an
-        # earlier test. Stub both objects' client attribute directly so this
-        # test cannot silently fall through to the live NOAA API.
-        from security.services.ocean_wave_entropy_service import get_ocean_provider
+        # object. Stub it directly so this test cannot silently fall through
+        # to the live NOAA API.
+        from security.services import ocean_wave_entropy_service as ows
         self.service._client = mock_noaa
-        # get_ocean_provider() is a PROCESS-WIDE singleton, so this mock would
-        # otherwise outlive the test and leak into every later one. self.service
-        # is per-test (built in setUp) and needs no restore.
-        ocean_provider = get_ocean_provider()
-        self.addCleanup(setattr, ocean_provider, '_client', ocean_provider._client)
-        ocean_provider._client = mock_noaa
+        # The ocean-wave fallback goes through the PROCESS-WIDE
+        # get_ocean_provider() singleton. If this test is the first to touch it,
+        # OceanWaveEntropyProvider.__init__ runs while the decorator above has
+        # get_noaa_client patched, so the singleton captures a MagicMock as its
+        # client PERMANENTLY -- every later test then hits
+        # `await MagicMock()` -> TypeError. Restoring the previous _client is
+        # NOT enough, because in that ordering the "previous" value is already
+        # the mock. Dropping the singleton is what actually works: the next
+        # caller rebuilds it against the unpatched factory.
+        self.addCleanup(setattr, ows, '_ocean_provider', None)
+        ows.get_ocean_provider()._client = mock_noaa
 
         result = self.service.generate_storm_entropy(count=32)
 
@@ -547,23 +550,28 @@ class TestStormChaseIntegration(TestCase):
         mock_storm_client.return_value = mock_noaa
         mock_ocean_client.return_value = mock_noaa
 
+        # BOTH of these are process-wide singletons (unlike the test above,
+        # where the service is rebuilt per-test in setUp), and each one is
+        # broken by the patches above in a DIFFERENT direction:
+        #
+        #  * if the singleton already exists, its __init__ ran earlier and
+        #    captured the REAL client, so patching the get_noaa_client()
+        #    FACTORY does nothing and the test would hit the live NOAA API;
+        #  * if it does NOT exist yet, __init__ runs here under the patch and
+        #    captures a MagicMock PERMANENTLY, so every later test that awaits
+        #    that client dies with `object MagicMock can't be used in 'await'
+        #    expression`.
+        #
+        # Assigning _client covers the first case; dropping the singletons on
+        # cleanup covers the second. Restoring the previous _client does NOT,
+        # because in the second ordering the "previous" value is the mock.
+        from security.services import ocean_wave_entropy_service as ows
+        from security.services import storm_chase as sc
+        self.addCleanup(setattr, ows, '_ocean_provider', None)
+        self.addCleanup(setattr, sc, '_storm_chase_service', None)
         service = get_storm_chase_service()
-
-        # As in TestStormChaseService.test_generate_storm_entropy: this is a
-        # process-wide singleton that may already have been constructed (and
-        # so already captured a REAL, unmocked client) by an earlier test, at
-        # which point patching the get_noaa_client() FACTORY has no effect --
-        # `service.__init__` already ran. Stub the attribute directly on the
-        # actual objects this test exercises.
-        from security.services.ocean_wave_entropy_service import get_ocean_provider
-        # BOTH are process-wide singletons here (unlike the test above, where
-        # the service is built per-test in setUp), so both must be restored or
-        # the mocks leak into every test that runs after this one.
-        ocean_provider = get_ocean_provider()
-        self.addCleanup(setattr, service, '_client', service._client)
-        self.addCleanup(setattr, ocean_provider, '_client', ocean_provider._client)
         service._client = mock_noaa
-        ocean_provider._client = mock_noaa
+        ows.get_ocean_provider()._client = mock_noaa
 
         # Scan for storms
         alerts = service.scan_for_storms()
