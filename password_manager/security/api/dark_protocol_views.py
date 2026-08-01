@@ -498,7 +498,11 @@ class DarkProtocolVaultProxyView(APIView):
         payload = request.data.get('payload', {})
         session_id = request.data.get('session_id')
 
-        if not operation:
+        if not operation or not isinstance(operation, str):
+            # A non-string `operation` (e.g. `["vault_list"]`) is falsy-safe
+            # for a list literal too, but VAULT_OPERATION_ROUTES.get(operation)
+            # in proxy_vault_operation() would raise TypeError: unhashable
+            # type on anything unhashable, well past this 400 boundary.
             return Response({
                 'error': 'Operation is required',
                 'error_code': 'operation_required',

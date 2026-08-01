@@ -2040,21 +2040,42 @@ DARK_PROTOCOL = {
 # no anonymity, which the feature must report honestly as Unavailable.
 # `docker compose --profile tor up` provisions the daemon and sets these.
 
+
+def _tor_env_int(name: str, default: int) -> int:
+    """A malformed Tor env var must not be able to abort startup.
+
+    Every field below runs at import time, unconditionally, whether or not
+    TOR_ENABLED is set - so a bare `int(os.environ.get(...))` here crashes the
+    ENTIRE Django process on a stray non-numeric value, not just the Tor
+    capability. That contradicts the fail-closed contract `tor_service`
+    documents for itself ("degrades to capability absent"): a process that
+    never boots is not "absent", it takes the whole application down with it.
+    Falling back to the default here reduces a malformed value to the same
+    outcome `tor_service`'s own `_positive_number`/`_strictly_positive_number`
+    already produce for a bad value read back OUT of this dict - the layer
+    those helpers protect is useless if this layer already crashed first.
+    """
+    try:
+        return int(os.environ.get(name, str(default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 TOR = {
     'ENABLED': os.environ.get('TOR_ENABLED', 'False').lower() == 'true',
 
     # Control port (or unix socket) used to read bootstrap state, circuits and
     # the published onion descriptor. Read-only usage.
     'CONTROL_HOST': os.environ.get('TOR_CONTROL_HOST', '127.0.0.1'),
-    'CONTROL_PORT': int(os.environ.get('TOR_CONTROL_PORT', '9051')),
+    'CONTROL_PORT': _tor_env_int('TOR_CONTROL_PORT', 9051),
     'CONTROL_SOCKET': os.environ.get('TOR_CONTROL_SOCKET', ''),
     'CONTROL_PASSWORD': os.environ.get('TOR_CONTROL_PASSWORD', ''),
-    'CONTROL_TIMEOUT_SECONDS': int(os.environ.get('TOR_CONTROL_TIMEOUT', '5')),
+    'CONTROL_TIMEOUT_SECONDS': _tor_env_int('TOR_CONTROL_TIMEOUT', 5),
 
     # SOCKS5 proxy, used for the loopback self-check that fetches our own
     # .onion through Tor (socks5h, so the .onion resolves inside Tor).
     'SOCKS_HOST': os.environ.get('TOR_SOCKS_HOST', '127.0.0.1'),
-    'SOCKS_PORT': int(os.environ.get('TOR_SOCKS_PORT', '9050')),
+    'SOCKS_PORT': _tor_env_int('TOR_SOCKS_PORT', 9050),
 
     # Our published address. TOR_ONION_HOSTNAME wins when set; otherwise the
     # hostname file Tor writes into its HiddenServiceDir is read.
@@ -2066,7 +2087,7 @@ TOR = {
     # request arriving on it is how the backend knows the client came through
     # the onion. 0 disables onion-ingress detection entirely, in which case no
     # request is ever treated as anonymous.
-    'ONION_INGRESS_PORT': int(os.environ.get('TOR_ONION_INGRESS_PORT', '0')),
+    'ONION_INGRESS_PORT': _tor_env_int('TOR_ONION_INGRESS_PORT', 0),
 
     # Peers whose connections may count as onion ingress (comma-separated
     # hostnames or IPs). The ingress port alone is not exclusivity on a shared
@@ -2077,13 +2098,13 @@ TOR = {
 
     # Capability probes are cached briefly so dashboard polling does not open
     # a control connection per widget.
-    'CAPABILITY_TTL_SECONDS': int(os.environ.get('TOR_CAPABILITY_TTL', '15')),
+    'CAPABILITY_TTL_SECONDS': _tor_env_int('TOR_CAPABILITY_TTL', 15),
 
     # Loopback self-check: proves the descriptor is published and the service
     # answers, by performing a real rendezvous with ourselves. Slow and cached.
     'SELF_CHECK_PATH': os.environ.get('TOR_SELF_CHECK_PATH', '/api/security/dark-protocol/ping/'),
-    'SELF_CHECK_TIMEOUT_SECONDS': int(os.environ.get('TOR_SELF_CHECK_TIMEOUT', '60')),
-    'SELF_CHECK_TTL_SECONDS': int(os.environ.get('TOR_SELF_CHECK_TTL', '300')),
+    'SELF_CHECK_TIMEOUT_SECONDS': _tor_env_int('TOR_SELF_CHECK_TIMEOUT', 60),
+    'SELF_CHECK_TTL_SECONDS': _tor_env_int('TOR_SELF_CHECK_TTL', 300),
 }
 
 # =============================================================================
