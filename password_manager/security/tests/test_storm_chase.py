@@ -300,7 +300,12 @@ class TestStormChaseService(TestCase):
         # test cannot silently fall through to the live NOAA API.
         from security.services.ocean_wave_entropy_service import get_ocean_provider
         self.service._client = mock_noaa
-        get_ocean_provider()._client = mock_noaa
+        # get_ocean_provider() is a PROCESS-WIDE singleton, so this mock would
+        # otherwise outlive the test and leak into every later one. self.service
+        # is per-test (built in setUp) and needs no restore.
+        ocean_provider = get_ocean_provider()
+        self.addCleanup(setattr, ocean_provider, '_client', ocean_provider._client)
+        ocean_provider._client = mock_noaa
 
         result = self.service.generate_storm_entropy(count=32)
 
@@ -551,8 +556,14 @@ class TestStormChaseIntegration(TestCase):
         # `service.__init__` already ran. Stub the attribute directly on the
         # actual objects this test exercises.
         from security.services.ocean_wave_entropy_service import get_ocean_provider
+        # BOTH are process-wide singletons here (unlike the test above, where
+        # the service is built per-test in setUp), so both must be restored or
+        # the mocks leak into every test that runs after this one.
+        ocean_provider = get_ocean_provider()
+        self.addCleanup(setattr, service, '_client', service._client)
+        self.addCleanup(setattr, ocean_provider, '_client', ocean_provider._client)
         service._client = mock_noaa
-        get_ocean_provider()._client = mock_noaa
+        ocean_provider._client = mock_noaa
 
         # Scan for storms
         alerts = service.scan_for_storms()

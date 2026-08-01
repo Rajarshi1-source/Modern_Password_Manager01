@@ -449,9 +449,22 @@ class NOAABuoyClient:
 
         loop = asyncio.get_running_loop()
         if self._client is None or self._client.is_closed or self._client_loop is not loop:
-            # The stale client, if any, belongs to a DIFFERENT loop that may
-            # already be closed, so it cannot be awaited-closed from here;
-            # drop the reference and let its connections be reclaimed by GC.
+            # Release the stale client rather than leaving it to GC, so this
+            # object owns the lifetime of every client it creates.
+            #
+            # Best-effort on purpose: the stale client belongs to a DIFFERENT
+            # loop which is usually already closed. Verified against the
+            # pinned httpx that aclose() from another loop returns cleanly
+            # even after a real pooled request, but a failure here must never
+            # propagate into a buoy fetch — that would turn the leak this is
+            # tidying into the outage it is meant to prevent. On error we
+            # simply drop the reference, which is the previous behaviour.
+            stale = self._client
+            if stale is not None and not stale.is_closed:
+                try:
+                    await stale.aclose()
+                except Exception as exc:
+                    logger.debug("Discarding stale NOAA client without close: %s", exc)
             self._client = httpx.AsyncClient(
                 timeout=30.0,
                 headers={

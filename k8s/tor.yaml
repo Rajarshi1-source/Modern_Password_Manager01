@@ -205,6 +205,17 @@ metadata:
     component: tor
 spec:
   clusterIP: None
+  # Nothing ROUTES through this Service — the backends reach Tor at
+  # tor-service (see TOR_CONTROL_HOST/TOR_SOCKS_HOST in k8s/configmap.yaml).
+  # Its only job is to resolve the tor pod's IP for the trusted-peer check
+  # below, i.e. identity, not traffic. By default a headless Service drops
+  # not-ready pods from DNS, so a readiness flap (the probe also needs the
+  # control port to answer within 10s) would empty this record while Tor is
+  # still forwarding onion traffic perfectly well — and _peer_is_trusted
+  # would then reject genuine onion ingress as untrusted. Publishing the
+  # address regardless cannot send traffic anywhere, because no traffic uses
+  # this name.
+  publishNotReadyAddresses: true
   selector:
     app: password-manager
     component: tor
@@ -302,6 +313,17 @@ spec:
         # those would break the path rather than protect it. Clearnet
         # listeners must never set this. See settings/base.py.
         - name: ONION_LISTENER
+          value: "true"
+        # app-config ships TOR_ENABLED="false" as the clearnet default, and
+        # envFrom above would inherit it. This process exists ONLY to serve
+        # onion ingress, so there is no configuration in which it should be
+        # false: inheriting it makes request_is_onion_ingress() return False
+        # for every request and the listener refuse all vault operations,
+        # while the pod stays Ready and the probes pass. Pinned here so the
+        # listener does not depend on the operator also editing the ConfigMap.
+        # docker-compose.yml sets it inline on its backend-onion service for
+        # the same reason; this makes the two deployment paths agree.
+        - name: TOR_ENABLED
           value: "true"
         # Headless service, not the ClusterIP one: the source address of the
         # traffic is the tor POD's, so this must resolve to pod IPs. An empty
