@@ -602,6 +602,38 @@ jobs:
           kubectl rollout status deployment/backend -n password-manager-staging --timeout=300s
           kubectl rollout status deployment/frontend -n password-manager-staging --timeout=300s
 
+      # Same opt-in Tor handling as deploy-production. k8s/tor.yaml is applied
+      # by the operator and is not part of the staging manifests, so these
+      # Deployments may legitimately not exist — but when they DO, a release
+      # that skips them leaves staging Tor workloads on stale images.
+      - name: Update Tor workload images (opt-in)
+        env:
+          # Via env rather than inline expansion so the shell never has workflow
+          # template output spliced into it.
+          BACKEND_IMAGE: ${{ needs.setup.outputs.backend_image }}
+          TOR_IMAGE: ${{ needs.setup.outputs.tor_image }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # `--ignore-not-found -o name` distinguishes "absent" from "could not
+          # tell": a missing Deployment exits 0 with empty output, while an RBAC
+          # denial or an unreachable API server still exits non-zero and fails
+          # the step under `set -e`.
+          onion=$(kubectl get deployment/backend-onion -n password-manager-staging --ignore-not-found -o name)
+          if [ -n "${onion}" ]; then
+            kubectl set image deployment/backend-onion "backend=${BACKEND_IMAGE}:${IMAGE_TAG}" -n password-manager-staging
+            kubectl rollout status deployment/backend-onion -n password-manager-staging --timeout=300s
+          else
+            echo "backend-onion not deployed; skipping (Dark Protocol reports Unavailable)."
+          fi
+          tor=$(kubectl get deployment/tor -n password-manager-staging --ignore-not-found -o name)
+          if [ -n "${tor}" ]; then
+            kubectl set image deployment/tor "tor=${TOR_IMAGE}:${IMAGE_TAG}" -n password-manager-staging
+            kubectl rollout status deployment/tor -n password-manager-staging --timeout=300s
+          else
+            echo "tor not deployed; skipping (Dark Protocol reports Unavailable)."
+          fi
+
       - name: Verify deployment
         run: |
           kubectl get pods -n password-manager-staging
