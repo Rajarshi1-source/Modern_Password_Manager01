@@ -54,6 +54,22 @@ def run_async(coro, timeout: float = DEFAULT_TIMEOUT_SECONDS):
     site already sits inside its own ``except Exception`` (view-level), which
     turns it into the same graceful failure response any other error gets —
     no new error-handling path needed at any of the 16 call sites this wraps.
+
+    SCOPE OF THE TIMEOUT, stated exactly rather than overclaimed: ``timeout``
+    bounds COOPERATIVE async work. ``asyncio.wait_for`` cancels at an await
+    point, so a coroutine that blocks the thread synchronously (a bare
+    ``time.sleep``, an uninterruptible C call) runs to completion in BOTH
+    paths below and the caller waits for it. That is an asyncio invariant,
+    not something this helper can fix: bounding the worker future with
+    ``.result(timeout=...)`` was measured and does NOT release the caller,
+    because the pool's ``shutdown(wait=True)`` on block exit re-blocks on the
+    same thread — it only converts the wait into a misleading TimeoutError
+    that claims a bound it did not apply. Abandoning the thread instead
+    (``shutdown(wait=False)``) leaks a live thread per hang, trading a bounded
+    stall for eventual thread exhaustion. So the contract is: pass coroutines
+    whose blocking is done via awaitables. Every call site today satisfies
+    this (NOAA is httpx-async; the cosmic-ray ``time.sleep(2)`` is a fixed,
+    bounded hardware-init wait, not an unbounded one).
     """
     try:
         asyncio.get_running_loop()

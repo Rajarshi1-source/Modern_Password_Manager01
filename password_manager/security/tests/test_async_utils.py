@@ -76,3 +76,23 @@ class RunAsyncTests(SimpleTestCase):
             return run_async(fast())
 
         self.assertEqual(asyncio.run(outer()), 'ok')
+
+    def test_timeout_also_bounds_the_worker_thread_path(self):
+        """The nested path runs the coroutine on a worker thread, so its
+        timeout is enforced by a different code path than the plain one above
+        — it needs its own pin. Uses a cooperative hang (asyncio.sleep), which
+        is the contract run_async documents: wait_for cancels at await points.
+        """
+        async def hangs():
+            await asyncio.sleep(999)
+            return 'never'
+
+        async def outer():
+            return run_async(hangs(), timeout=0.2)
+
+        start = time.monotonic()
+        with self.assertRaises((asyncio.TimeoutError, TimeoutError)):
+            asyncio.run(outer())
+        elapsed = time.monotonic() - start
+
+        self.assertLess(elapsed, 5.0, "the timeout did not bound the worker thread path")

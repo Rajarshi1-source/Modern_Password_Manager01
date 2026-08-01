@@ -554,13 +554,19 @@ class TorService:
 
         controller = self._open_controller(config)
         if controller is None:
-            return []
+            # Cache the fail-closed answer too, on the same TTL as a success
+            # and as get_capability's own failure path. Otherwise a down
+            # control port is the WORST case for load: every /nodes/ and
+            # /health/ poll from every dashboard reopens a connection and
+            # pays CONTROL_TIMEOUT_SECONDS again, exactly when the daemon is
+            # least able to serve it.
+            return self._publish_relays([], generation)
 
         try:
             circuits = controller.get_circuits()
         except Exception:
             logger.exception("Failed to read Tor circuits")
-            return []
+            return self._publish_relays([], generation)
         finally:
             _close_quietly(controller)
 
@@ -586,9 +592,18 @@ class TorService:
                     'purpose': str(getattr(circuit, 'purpose', '') or '').lower() or None,
                 })
 
+        return self._publish_relays(relays, generation)
+
+    def _publish_relays(
+        self, relays: List[Dict[str, Any]], generation: int
+    ) -> List[Dict[str, Any]]:
+        """Cache a relay result and return it, honouring the generation guard.
+
+        Shared by the success and fail-closed paths so both are cached on the
+        same TTL. A read that started before ``reset_cache()`` must not
+        repopulate the cache, but its own caller still receives what it read.
+        """
         with self._lock:
-            # Same generation guard as the other caches: a read that started
-            # before reset_cache() must not repopulate it.
             if generation == self._generation:
                 self._cached_relays = list(relays)
                 self._cached_relays_at = time.monotonic()
