@@ -45,8 +45,20 @@ if [ "${1:-}" = "healthcheck" ]; then
         echo "tor: hidden service hostname is not published yet" >&2
         exit 1
     fi
+    # Tor's control protocol reads this as a QuotedString, where `\` and `"`
+    # must be escaped (backslash FIRST, or the escapes we add get re-escaped).
+    # Unescaped, a password containing `"` closes the string early and the
+    # command is malformed, while `\b` is read as a literal `b` — so the
+    # health check fails against a Tor that is bootstrapped and serving, the
+    # pod never goes Ready, and the feature reports Unavailable while the
+    # onion service works. `tor --hash-password` takes the plaintext on argv
+    # and is unaffected, which is what makes the mismatch confusing.
+    # A base64 secret (the documented `openssl rand -base64 32`) contains
+    # neither character, so this changes nothing on the documented path.
+    escaped_password=$(printf '%s' "${TOR_CONTROL_PASSWORD}" \
+        | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
     response=$(printf 'AUTHENTICATE "%s"\r\nGETINFO status/bootstrap-phase\r\nQUIT\r\n' \
-        "${TOR_CONTROL_PASSWORD}" | nc 127.0.0.1 9051 2>/dev/null || true)
+        "${escaped_password}" | nc 127.0.0.1 9051 2>/dev/null || true)
     echo "${response}" | grep -q "PROGRESS=100" || exit 1
     exit 0
 fi
