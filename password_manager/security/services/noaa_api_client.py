@@ -421,17 +421,37 @@ class NOAABuoyClient:
     
     def __init__(self):
         self._client: Optional['httpx.AsyncClient'] = None
+        # The loop `self._client` was built on. httpx.AsyncClient's connection
+        # pool binds internal asyncio primitives (locks/events) to the loop it
+        # first runs on; see `_get_client` for why this must be tracked.
+        self._client_loop: Optional[asyncio.AbstractEventLoop] = None
         self._cache: Dict[str, Tuple[BuoyReading, datetime]] = {}
         self._last_request_time: Dict[str, datetime] = {}
         self._request_count: int = 0
         self._request_count_reset: datetime = datetime.utcnow()
-    
+
     async def _get_client(self) -> 'httpx.AsyncClient':
-        """Get or create HTTP client."""
+        """Get or create an HTTP client bound to the CURRENT running loop.
+
+        A cached client that outlives the loop it was built on is not safe to
+        reuse: callers of this client typically go through `asyncio.run(...)`
+        per call (a sync Django view, or one `asyncio.run` per test method),
+        which tears down and replaces the event loop every time. Reusing one
+        `httpx.AsyncClient` instance across that boundary raises "Event loop
+        is closed" or "<Event> is bound to a different event loop" once its
+        connection pool's internal primitives are touched from the new loop.
+        Keying the cache on the running loop keeps the common case (many
+        buoys fetched within one `asyncio.run`) reusing a single client, while
+        transparently building a fresh one whenever the loop changes.
+        """
         if not HTTPX_AVAILABLE:
             raise RuntimeError("httpx not installed. Run: pip install httpx")
-        
-        if self._client is None or self._client.is_closed:
+
+        loop = asyncio.get_running_loop()
+        if self._client is None or self._client.is_closed or self._client_loop is not loop:
+            # The stale client, if any, belongs to a DIFFERENT loop that may
+            # already be closed, so it cannot be awaited-closed from here;
+            # drop the reference and let its connections be reclaimed by GC.
             self._client = httpx.AsyncClient(
                 timeout=30.0,
                 headers={
@@ -439,13 +459,15 @@ class NOAABuoyClient:
                     'Accept': 'text/plain',
                 }
             )
+            self._client_loop = loop
         return self._client
-    
+
     async def close(self):
         """Close the HTTP client."""
         if self._client:
             await self._client.aclose()
             self._client = None
+            self._client_loop = None
     
     def _check_rate_limit(self, buoy_id: str) -> bool:
         """Check if we can make a request without exceeding rate limits."""
