@@ -814,11 +814,16 @@ class DarkProtocolService:
         * Session and Authentication: ``inner.session``/``inner.user`` are
           carried over above, and DRF re-authenticates the inner request from
           the forwarded Authorization header regardless.
+        * ``middleware.CSRFExemptAuthMiddleware`` is the one entry keyed on the
+          PATH rather than the connection, so it is called out separately. It
+          only ever RELAXES a check (it marks ``/auth/`` paths CSRF-exempt), and
+          the inner request sets ``_dont_enforce_csrf_checks`` directly above,
+          so running it could not reach a stricter verdict than not running it.
 
         So re-running the stack would add duplicate accounting, not an
         additional check. REVISIT THIS if a middleware is ever added that
-        authorises by PATH rather than by connection — that is the one shape
-        the argument above does not cover.
+        ENFORCES by path rather than by connection — that is the one shape the
+        argument above does not cover.
         """
         method = route['method']
         if route.get('needs_id'):
