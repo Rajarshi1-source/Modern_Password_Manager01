@@ -444,8 +444,15 @@ class NOAAClientLoopSafetyTests(TestCase):
         from security.services.noaa_api_client import NOAABuoyClient
 
         client = NOAABuoyClient()
-        seen = [id(asyncio.run(client._get_client())) for _ in range(3)]
-        self.assertEqual(len(set(seen)), 3, "each asyncio.run() must get its own client")
+        # Hold the client OBJECTS, and only then compare identities. Taking
+        # id() of a value that is discarded immediately is unsound: CPython
+        # reuses the address of a freed object, so two genuinely different
+        # clients can report the same id() and the assertion fails for a
+        # reason that has nothing to do with the behaviour under test.
+        seen = [asyncio.run(client._get_client()) for _ in range(3)]
+        self.assertEqual(
+            len({id(c) for c in seen}), 3, "each asyncio.run() must get its own client",
+        )
 
     def test_reuses_the_same_client_within_one_loop(self):
         """Multiple calls inside ONE loop must share a single client."""
@@ -483,6 +490,75 @@ class NOAAClientLoopSafetyTests(TestCase):
             "concurrent callers received different replacement clients",
         )
         self.assertEqual(stale.close_calls, 1, "the stale client must be closed exactly once")
+
+    def test_client_replacement_is_mutually_exclusive_across_threads(self):
+        """Only ONE thread at a time may be inside the replacement block.
+
+        The tests above all run on a single loop, where "statements up to the
+        first await cannot interleave" makes the check-and-store effectively
+        atomic. That argument says nothing about a second THREAD running its
+        own loop — the ordinary production shape, since `get_noaa_client()` is
+        a process-wide singleton and sync Django views reach it through
+        `run_async` -> `asyncio.run` on a worker thread per request. Unguarded,
+        two threads interleave the `_client` / `_client_loop` stores and can
+        leave the pair describing DIFFERENT loops, handing a later caller a
+        client bound to a loop it is not running on — the exact "bound to a
+        different event loop" failure the loop tracking exists to prevent.
+
+        Asserted via mutual exclusion rather than by racing for a corrupted
+        result: the vulnerable window is a couple of bytecodes, so the GIL
+        almost never preempts inside it and a race-and-hope test passes just
+        as happily on unguarded code. Making the client constructor slow turns
+        the property into a deterministic one — without the lock every thread
+        is inside the block at once, with it exactly one is.
+        """
+        import asyncio
+        import threading
+        import time
+        from security.services import noaa_api_client as noaa_module
+
+        threads = 6
+        inside = 0
+        peak = 0
+        counter_lock = threading.Lock()
+
+        class _SlowClient:
+            """Stands in for httpx.AsyncClient, wide enough to observe overlap."""
+
+            def __init__(self, **kwargs):
+                nonlocal inside, peak
+                with counter_lock:
+                    inside += 1
+                    peak = max(peak, inside)
+                time.sleep(0.05)
+                with counter_lock:
+                    inside -= 1
+                self.is_closed = False
+
+            async def aclose(self):
+                self.is_closed = True
+
+        client = noaa_module.NOAABuoyClient()
+        barrier = threading.Barrier(threads)
+
+        def worker():
+            async def main():
+                barrier.wait()          # all threads enter together
+                return await client._get_client()
+            asyncio.run(main())
+
+        with patch.object(noaa_module.httpx, 'AsyncClient', _SlowClient):
+            workers = [threading.Thread(target=worker) for _ in range(threads)]
+            for t in workers:
+                t.start()
+            for t in workers:
+                t.join()
+
+        self.assertEqual(
+            peak, 1,
+            f"{peak} threads were inside the client-replacement block at once; "
+            "the check and the store are not atomic across threads",
+        )
 
 
 # =============================================================================

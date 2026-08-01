@@ -943,6 +943,34 @@ jobs:
 
           echo "Rollback completed!"
 
+      # The deploy job rolls backend-onion and tor FORWARD on every release, so
+      # a rollback that skips them leaves the onion listener serving the new
+      # image against reverted clearnet code and a reverted database — the
+      # anonymous path and the clearnet path running different code, which is
+      # exactly the divergence this feature must not have.
+      #
+      # No `deploy_enabled` gate here: unlike deploy-production, this job's
+      # Configure kubectl step hard-fails on a missing secret rather than
+      # emitting that output, so referencing it would silently skip the step
+      # every time.
+      - name: Rollback Tor workloads (opt-in)
+        run: |
+          set -euo pipefail
+          # Same absent-vs-unreachable distinction as the deploy steps:
+          # `--ignore-not-found -o name` exits 0 with empty output when the
+          # Deployment is simply not applied (a supported state), while an RBAC
+          # denial or an unreachable API server still exits non-zero and fails
+          # the step under `set -e`.
+          for dep in backend-onion tor; do
+            found=$(kubectl get "deployment/${dep}" -n password-manager --ignore-not-found -o name)
+            if [ -n "${found}" ]; then
+              kubectl rollout undo "deployment/${dep}" -n password-manager
+              kubectl rollout status "deployment/${dep}" -n password-manager --timeout=300s
+            else
+              echo "${dep} not deployed; skipping (Dark Protocol reports Unavailable)."
+            fi
+          done
+
       - name: Cleanup
         if: always()
         run: rm -f "${RUNNER_TEMP}/kubeconfig"

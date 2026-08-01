@@ -673,7 +673,7 @@ class OnionIngressTests(_TorTestMixin, TestCase):
         own fresh lookup, so it cannot widen what the check accepts.
         """
         def _hangs(*args, **kwargs):
-            time.sleep(1.0)
+            time.sleep(2.0)
             return [(0, 0, 0, '', (TRUSTED_PEER, 0))]
 
         service = self._service()
@@ -683,7 +683,11 @@ class OnionIngressTests(_TorTestMixin, TestCase):
             elapsed = time.monotonic() - start
 
         self.assertFalse(result)
-        self.assertLess(elapsed, 2.0, "the timeout did not actually bound the resolver")
+        # Must sit BETWEEN the 0.2s timeout and the resolver's own 2.0s sleep.
+        # An earlier version allowed 2.0s, which an UNBOUNDED lookup also
+        # satisfies (it returns at ~2.0s) — so the test passed on code with the
+        # bound removed and proved nothing about the property in its name.
+        self.assertLess(elapsed, 1.0, "the timeout did not actually bound the resolver")
 
     @override_settings(TOR=_tor_settings(
         ONION_INGRESS_TRUSTED_PEERS='2001:db8:0:0:0:0:0:1'))

@@ -176,6 +176,19 @@ services:
     # Deliberately no `ports:` — the SOCKS and control ports stay on the
     # internal network. Publishing them would expose an unauthenticated proxy
     # and a control channel to the host.
+    #
+    # The entrypoint resolves TOR_ONION_TARGET to an IP at startup (Tor's
+    # HiddenServicePort takes an address, not a DNS name) and refuses to start
+    # if the lookup fails. Compose's embedded DNS only answers for a service
+    # once its container exists, so without this the two could come up in
+    # either order and tor would exit on a name that becomes resolvable a
+    # moment later. `service_started` is the right condition, not
+    # `service_healthy`: what is needed here is a DNS record, which exists as
+    # soon as the container is on the network — waiting for readiness would
+    # deadlock, since backend-onion is only reachable through tor.
+    depends_on:
+      backend-onion:
+        condition: service_started
     networks:
       - password_manager_network
     restart: unless-stopped
