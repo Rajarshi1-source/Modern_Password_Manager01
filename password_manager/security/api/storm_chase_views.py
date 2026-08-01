@@ -15,8 +15,6 @@ Endpoints:
 @created 2026-01-30
 """
 
-import asyncio
-import concurrent.futures
 import logging
 from datetime import datetime
 from typing import Dict, Any
@@ -26,6 +24,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
+from security.api._async_utils import run_async
 from security.services.storm_chase import (
     get_storm_chase_service,
     StormChaseService,
@@ -33,38 +32,6 @@ from security.services.storm_chase import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def run_async(coro):
-    """Run an async coroutine from a synchronous view.
-
-    ``get_running_loop()`` rather than ``get_event_loop()``: the latter hands
-    back whatever loop was last SET on this thread, which may already be
-    CLOSED ("Event loop is closed"), and on Python 3.12+ raises when nothing is
-    set — precisely the state ``asyncio.run()`` leaves behind, which is how
-    ``StormChaseService._run_coro`` leaves it after every call in this very
-    module. ``get_running_loop()`` only ever reports a loop that is genuinely
-    running here, so a stale or closed one cannot be picked up at all.
-
-    ``asyncio.run`` also CLOSES the loop it creates; the previous
-    ``new_event_loop()`` + ``set_event_loop()`` fallback leaked one loop per
-    call and left it installed for whatever ran next.
-
-    Note the coroutine is never executed inside a ``try/except RuntimeError``:
-    doing so swallows genuine application errors and, since the coroutine has
-    already been consumed by then, reports the misleading "cannot reuse already
-    awaited coroutine" in their place.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # Nothing running on this thread — the normal sync-view case.
-        return asyncio.run(coro)
-    # Already inside a running loop: ``run_until_complete`` would raise "This
-    # event loop is already running", and blocking it would deadlock. Hand the
-    # coroutine to a worker thread that owns its own loop.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
 
 
 # =============================================================================

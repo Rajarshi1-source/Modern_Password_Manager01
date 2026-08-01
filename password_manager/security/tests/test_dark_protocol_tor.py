@@ -802,6 +802,23 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(response.data['error_code'], 'invalid_payload')
 
+    @override_settings(TOR={'ENABLED': False})
+    def test_vault_proxy_rejects_a_non_object_request_body(self):
+        """A top-level JSON array has no `.get()`.
+
+        Without the isinstance guard this reaches `request.data.get('operation')`
+        directly and raises AttributeError -> an unhandled 500, rather than the
+        400 a malformed client request should get.
+        """
+        response = self.client.post(
+            reverse('dark-protocol-vault-proxy'),
+            data='["not", "an", "object"]',
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['error_code'], 'invalid_payload')
+
     @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
     def test_onion_request_is_dispatched_to_the_real_vault(self):
         """The happy path: an onion request gets REAL vault data.

@@ -485,6 +485,15 @@ class DarkProtocolVaultProxyView(APIView):
 
     def post(self, request):
         """Execute a vault operation over the anonymous ingress."""
+        if not isinstance(request.data, dict):
+            # A top-level JSON array or scalar has no .get(), which would
+            # otherwise surface as an AttributeError -> 500 instead of the
+            # 400 a malformed client request should get.
+            return Response({
+                'error': 'Request body must be an object',
+                'error_code': 'invalid_payload',
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         operation = request.data.get('operation')
         payload = request.data.get('payload', {})
         session_id = request.data.get('session_id')

@@ -449,6 +449,29 @@ class NOAABuoyClient:
 
         loop = asyncio.get_running_loop()
         if self._client is None or self._client.is_closed or self._client_loop is not loop:
+            stale = self._client
+
+            # Publish the replacement BEFORE awaiting the stale client's
+            # close, not after. `fetch_multiple_buoys` calls this from several
+            # coroutines under a semaphore, and every statement up to the
+            # first `await` runs atomically on a single-threaded loop — so
+            # publishing first means any other coroutine racing in here sees
+            # the new client/loop immediately and takes the fast path below
+            # instead of re-entering this branch. Awaiting the close FIRST
+            # (the previous order) left `self._client` pointing at `stale`
+            # during that await, so several concurrent callers could each
+            # observe the same stale client, each build their OWN replacement,
+            # and overwrite one another — leaking every replacement but the
+            # last one this coroutine happened to finish.
+            self._client = httpx.AsyncClient(
+                timeout=30.0,
+                headers={
+                    'User-Agent': 'PasswordManager-EntropyHarvester/1.0 (Educational/Research)',
+                    'Accept': 'text/plain',
+                }
+            )
+            self._client_loop = loop
+
             # Release the stale client rather than leaving it to GC, so this
             # object owns the lifetime of every client it creates.
             #
@@ -459,20 +482,11 @@ class NOAABuoyClient:
             # propagate into a buoy fetch — that would turn the leak this is
             # tidying into the outage it is meant to prevent. On error we
             # simply drop the reference, which is the previous behaviour.
-            stale = self._client
             if stale is not None and not stale.is_closed:
                 try:
                     await stale.aclose()
                 except Exception as exc:
                     logger.debug("Discarding stale NOAA client without close: %s", exc)
-            self._client = httpx.AsyncClient(
-                timeout=30.0,
-                headers={
-                    'User-Agent': 'PasswordManager-EntropyHarvester/1.0 (Educational/Research)',
-                    'Accept': 'text/plain',
-                }
-            )
-            self._client_loop = loop
         return self._client
 
     async def close(self):
