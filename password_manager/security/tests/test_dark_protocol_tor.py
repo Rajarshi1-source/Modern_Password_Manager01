@@ -820,6 +820,34 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         self.assertEqual(response.data['error_code'], 'invalid_payload')
 
     @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
+    def test_vault_proxy_rejects_a_non_string_operation(self):
+        """A non-string `operation` (e.g. `["vault_list"]`) is truthy.
+
+        Without the isinstance guard it passes the `not operation` check at
+        the view and reaches `VAULT_OPERATION_ROUTES.get(operation)` in
+        proxy_vault_operation() (reachable only past the tor_unavailable and
+        clearnet_ingress_refused gates, hence the same onion-ingress setup as
+        the happy-path dispatch test), which raises TypeError: unhashable
+        type on anything unhashable -> an unhandled 500, not the 400 a
+        malformed client request should get.
+        """
+        with patch.object(TorService, '_open_controller', return_value=_FakeController()), \
+                patch.object(tor_module, '_StemController', object()):
+            get_tor_service().reset_cache()
+            response = self.client.post(
+                reverse('dark-protocol-vault-proxy'),
+                {'operation': ['vault_list'], 'payload': {}},
+                format='json',
+                SERVER_PORT='8443',
+                HTTP_HOST=ONION,
+                HTTP_AUTHORIZATION=self._bearer(),
+                REMOTE_ADDR=TRUSTED_PEER,
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['error_code'], 'operation_required')
+
+    @override_settings(TOR=_tor_settings(), ALLOWED_HOSTS=['testserver', ONION])
     def test_onion_request_is_dispatched_to_the_real_vault(self):
         """The happy path: an onion request gets REAL vault data.
 
