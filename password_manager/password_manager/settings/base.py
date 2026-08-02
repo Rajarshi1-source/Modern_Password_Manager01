@@ -716,6 +716,18 @@ csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
 if csrf_origins_env:
     CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()])
 
+# Deliberately no `http://*.onion` entry here for the onion listener. Every
+# DRF APIView is wrapped in Django's own `csrf_exempt` unconditionally by
+# `APIView.as_view()` ("session based authentication is explicitly CSRF
+# validated, all other authentication is CSRF exempt" -- rest_framework's own
+# source), so CsrfViewMiddleware never runs against dark_protocol_views.py or
+# any other API view here. DRF's OWN csrf enforcement lives inside
+# SessionAuthentication.enforce_csrf(), which never runs either:
+# DEFAULT_AUTHENTICATION_CLASSES below carries only JWTAuthentication.
+# CSRF_TRUSTED_ORIGINS is consulted by neither path, for clearnet OR onion
+# traffic, so adding an onion entry would change nothing. Revisit only if a
+# session-cookie-authenticated view is ever added under ONION_LISTENER.
+
 # NOTE: Logging configuration merged into Enhanced Logging block below
 
 # Authentication backends

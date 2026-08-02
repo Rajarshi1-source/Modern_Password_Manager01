@@ -163,6 +163,73 @@ class _TorTestMixin:
 # Capability probing
 # =============================================================================
 
+class TorControllerConnectTests(TestCase):
+    """`_open_controller()` exercised end-to-end, through the REAL connect.
+
+    Every other fixture in this file patches `_open_controller` itself (see
+    `_TorTestMixin._service`), so its own body -- including the round-24
+    bound on the connect phase -- has never actually run in any test until
+    this class. Patches `_StemController` at the from_port/from_socket_file
+    boundary instead, the same way stem itself is called (as attributes on
+    the class object, never instantiated directly).
+    """
+
+    def _stem_stub(self, build=None, connect_delay=0.0):
+        def _from_port(address='127.0.0.1', port=9051):
+            if connect_delay:
+                time.sleep(connect_delay)
+            return build() if build is not None else _FakeController()
+
+        class _Stub:
+            from_port = staticmethod(_from_port)
+            from_socket_file = staticmethod(lambda path='/var/run/tor/control': _from_port())
+
+        return _Stub
+
+    @override_settings(TOR=_tor_settings(CONTROL_TIMEOUT_SECONDS=0.1))
+    def test_a_stuck_connect_is_bounded_not_hung(self):
+        """A daemon that accepts the TCP connection but never completes the
+        handshake must not hang the calling thread. Neither stem's socket
+        constructors nor set_socket_timeout() (applied only AFTER they
+        return, to the ALREADY-connected controller) bound this phase --
+        _connect_bounded does.
+        """
+        stub = self._stem_stub(connect_delay=1.0)
+        with patch.object(tor_module, '_StemController', stub):
+            service = TorService()
+            start = time.monotonic()
+            capability = service.get_capability()
+            elapsed = time.monotonic() - start
+
+        self.assertFalse(capability.anonymity_active)
+        self.assertEqual(capability.reason, 'controller_unreachable')
+        self.assertLess(elapsed, 0.6, "the connect timeout did not bound _open_controller")
+
+    @override_settings(TOR=_tor_settings())
+    def test_real_connect_path_still_succeeds_end_to_end(self):
+        """Sanity check: the bound above must not make every connect fail
+        closed -- a fast, well-behaved daemon still produces a live
+        capability through the REAL _open_controller body."""
+        stub = self._stem_stub()
+        with patch.object(tor_module, '_StemController', stub):
+            capability = TorService().get_capability()
+
+        self.assertTrue(capability.anonymity_active)
+
+    @override_settings(TOR=_tor_settings())
+    def test_authentication_failure_fails_closed(self):
+        """A wrong CONTROL_PASSWORD must report unavailable, not raise, and
+        must close the connection _open_controller opened before failing."""
+        controller = _FakeController(auth_error=True)
+        stub = self._stem_stub(build=lambda: controller)
+        with patch.object(tor_module, '_StemController', stub):
+            capability = TorService().get_capability()
+
+        self.assertFalse(capability.anonymity_active)
+        self.assertEqual(capability.reason, 'controller_unreachable')
+        self.assertTrue(controller.closed)
+
+
 class TorCapabilityTests(_TorTestMixin, TestCase):
     """The capability answer must track the daemon, and fail closed otherwise."""
 

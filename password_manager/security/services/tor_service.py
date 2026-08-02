@@ -227,15 +227,27 @@ class TorService:
 
         timeout = _strictly_positive_number(config.get('CONTROL_TIMEOUT_SECONDS'), 5)
         socket_path = str(config.get('CONTROL_SOCKET') or '')
+        host = str(config.get('CONTROL_HOST') or '127.0.0.1')
+        port = int(config.get('CONTROL_PORT') or 9051)
+
+        def _connect():
+            if socket_path:
+                return _StemController.from_socket_file(path=socket_path)
+            return _StemController.from_port(address=host, port=port)
 
         try:
-            if socket_path:
-                controller = _StemController.from_socket_file(path=socket_path)
-            else:
-                controller = _StemController.from_port(
-                    address=str(config.get('CONTROL_HOST') or '127.0.0.1'),
-                    port=int(config.get('CONTROL_PORT') or 9051),
-                )
+            # Bounded: `from_socket_file`/`from_port` open a raw socket,
+            # connect(), and read stem's own initial handshake, all with NO
+            # timeout of their own (confirmed against stem 1.8.2's source --
+            # neither constructor accepts one, and _make_socket() never calls
+            # settimeout()). `controller.set_socket_timeout()` below cannot
+            # reach this: it configures the ALREADY-connected controller this
+            # try block is still trying to produce. A daemon that accepts the
+            # TCP connection but never completes the handshake (a network
+            # black hole, or a wedged process that hasn't reached accept())
+            # would otherwise hang this thread indefinitely -- reachable on
+            # every capability-cache miss via request_is_onion_ingress().
+            controller = _connect_bounded(_connect, timeout)
         except Exception as exc:
             logger.warning("Tor control connection failed: %s", type(exc).__name__)
             return None
@@ -888,6 +900,43 @@ def _first_missing(capability: TorCapability) -> Optional[str]:
 def _is_ip_literal(value: str) -> bool:
     """True when the string is already an IP address, so no lookup is needed."""
     return _parse_ip(value) is not None
+
+
+# Separate from _PEER_RESOLVER_POOL below on purpose: a burst of hung control
+# connects and a burst of hung peer lookups are independent failure modes,
+# and sharing one small pool would let either starve the other.
+_CONTROL_CONNECT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='tor-control-connect')
+
+
+def _close_late_controller(future) -> None:
+    """Close a controller that finished connecting AFTER its caller gave up.
+
+    Once `_connect_bounded` times out, nothing else holds a reference to the
+    connect attempt still running in the pool. If it eventually succeeds, its
+    Controller would otherwise never be closed -- an open control-port socket
+    leaked for the life of the process, once per timeout.
+    """
+    if future.cancelled() or future.exception() is not None:
+        return
+    _close_quietly(future.result())
+
+
+def _connect_bounded(connect_fn, timeout: float):
+    """Run a stem Controller constructor with a hard wall on the wait.
+
+    `connect_fn` performs the raw socket connect and stem's own initial
+    handshake read -- neither of which accepts a timeout of its own, so
+    without this a black-holed daemon blocks the calling thread indefinitely.
+    A worker that outruns `timeout` is abandoned, not killed (Python cannot
+    interrupt a blocked syscall in another thread); `_close_late_controller`
+    is what keeps an eventual late success from leaking its socket.
+    """
+    future = _CONTROL_CONNECT_POOL.submit(connect_fn)
+    try:
+        return future.result(timeout=timeout)
+    except _FuturesTimeoutError:
+        future.add_done_callback(_close_late_controller)
+        raise
 
 
 # Bounds how long a single trusted-peer hostname resolution may block the

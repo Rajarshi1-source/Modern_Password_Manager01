@@ -563,57 +563,79 @@ class NOAAClientLoopSafetyTests(TestCase):
             "the check and the store are not atomic across threads",
         )
 
-    def test_close_does_not_wipe_a_client_published_during_its_own_await(self):
-        """close() must not silently drop a fresh client _get_client() built
-        while close() was mid-teardown of the old one.
+    def test_close_and_get_client_are_mutually_exclusive_across_threads(self):
+        """close() must hold the SAME lock as _get_client(), not just call it.
 
-        Deterministic, not race-and-hope (round 22's lesson: a window this
-        narrow can pass on broken code by luck). Both coroutines run on ONE
-        loop via asyncio.gather, and the fake aclose() awaits, which is a real
-        cooperative yield point -- so the interleaving is forced, not merely
-        possible. Reproduces the exact ordering CodeRabbit described: close()
-        starts tearing down the old client, _get_client() runs concurrently
-        and publishes a replacement, close() finishes and must not overwrite
-        that replacement with None.
+        A first version of this test (since corrected) drove both coroutines
+        through `asyncio.gather` on one loop and asserted a fresh client
+        survives a concurrent `close()`. CodeRabbit caught that its own setup
+        (`old.is_closed = True`) made `close()` skip its await entirely, so
+        `closer()` finished before `getter()` ever started -- no interleaving
+        occurred, and the assertion held vacuously. Investigating further:
+        even with that line removed, the assertion holds unconditionally
+        given how close() orders its writes (detach-then-await, matching
+        _get_client()'s publish-before-await) -- on ONE event loop, three
+        plain attribute writes with no `await` between them cannot be
+        interleaved by another coroutine regardless of locking. So a same-loop
+        test cannot exercise what `_client_lock` in close() actually guards:
+        CROSS-THREAD safety, the same category round 22 established for
+        `_get_client()` alone -- close() and a concurrent `_get_client()` on a
+        DIFFERENT thread's loop must not interleave their reads/writes of
+        `_client` / `_client_loop`.
+
+        Verified via mutual exclusion, not a race for a corrupted result, for
+        the same reason as round 22: the vulnerable window is a handful of
+        bytecodes, so an unguarded race can pass by luck. `_get_client()`'s
+        replacement block is made artificially slow (there is nothing to slow
+        down inside close()'s own three-line body); if the lock is shared,
+        close() running on another thread must block for the ENTIRE slow
+        window before it can even start, not just happen not to corrupt
+        anything.
         """
         import asyncio
+        import threading
+        import time
         from security.services import noaa_api_client as noaa_module
 
-        class _SlowFakeClient:
+        class _SlowClient:
             def __init__(self, **kwargs):
+                time.sleep(0.15)
                 self.is_closed = False
 
             async def aclose(self):
-                await asyncio.sleep(0.05)
                 self.is_closed = True
 
-        async def scenario():
-            client = noaa_module.NOAABuoyClient()
-            old = _SlowFakeClient()
-            old.is_closed = True
-            client._client = old
-            # A different "loop" than the getter will use, so _get_client()
-            # is forced down the rebuild path rather than the fast path.
-            client._client_loop = None
+        client = noaa_module.NOAABuoyClient()
+        client._client = None
+        client._client_loop = None
 
-            async def closer():
-                await client.close()
+        started = threading.Event()
 
-            async def getter():
-                # Let close() begin (and enter its await) first.
-                await asyncio.sleep(0.01)
-                with patch.object(noaa_module.httpx, 'AsyncClient', _SlowFakeClient):
-                    return await client._get_client()
+        def get_client_worker():
+            async def main():
+                started.set()
+                return await client._get_client()
+            asyncio.run(main())
 
-            _, fresh = await asyncio.gather(closer(), getter())
-            return client, fresh
+        with patch.object(noaa_module.httpx, 'AsyncClient', _SlowClient):
+            t = threading.Thread(target=get_client_worker)
+            t.start()
+            started.wait(timeout=5)
+            # Give the getter thread a moment to actually be inside its
+            # (0.15s) critical section before racing close() against it.
+            time.sleep(0.03)
 
-        client, fresh = asyncio.run(scenario())
+            start = time.monotonic()
+            asyncio.run(client.close())
+            elapsed = time.monotonic() - start
 
-        self.assertIs(
-            client._client, fresh,
-            "close() overwrote the client _get_client() published while it "
-            "was awaiting the old one's teardown",
+            t.join(timeout=5)
+
+        self.assertGreater(
+            elapsed, 0.05,
+            f"close() returned after {elapsed:.3f}s while _get_client() should "
+            "still have been holding the lock for its slow client construction "
+            "-- close() is not actually serialized against it",
         )
 
 
