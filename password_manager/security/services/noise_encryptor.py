@@ -2,15 +2,23 @@
 Noise Encryptor
 ===============
 
-Makes dark protocol payload BYTES statistically indistinguishable from random,
-via encryption plus variable-length padding.
+Makes dark protocol payload BYTES computationally indistinguishable from
+random, via AES-GCM encryption plus padding. "Computationally", not
+"statistically": this is AES-GCM's designed security property under standard
+hardness assumptions (a correct, non-reused nonce and a secure block cipher),
+not an unconditional, information-theoretic guarantee.
 
 Scope, stated precisely because the distinction matters: this hides the
-CONTENT and the exact SIZE of a payload. It does not make the traffic itself
-unobservable - timing, volume and direction remain visible to anyone watching
-the link, which is why this is one layer of traffic-analysis resistance rather
-than anonymity. The anonymity comes from carrying that traffic over a Tor v3
-onion circuit (see `tor_service.py`).
+CONTENT of a payload, and REDUCES the precision of its observable size by
+bucketing into one of a small set of fixed block sizes (see BLOCK_SIZES) -
+it does not hide the size exactly, and that bucketing has a ceiling: a
+payload whose padded size already exceeds the largest block adds no further
+padding, so its length is visible beyond that point. It does not make the
+traffic itself unobservable - timing, volume and direction remain visible to
+anyone watching the link, which is why this is one layer of traffic-analysis
+resistance rather than anonymity. The anonymity comes from carrying that
+traffic over a Tor v3 onion circuit (see `tor_service.py`), which has its own
+stated scope and limits - it is not restated here.
 
 Features:
 - Variable-length padding
@@ -80,10 +88,14 @@ class NoisyBundle:
 class NoiseEncryptor:
     """
     Applies noise and obfuscation to traffic bundles.
-    
+
+    See the module docstring for the precise, non-overclaiming scope of what
+    this buys: computational (not statistical) indistinguishability of the
+    output bytes, and bucketed (not exact) size hiding with a ceiling at the
+    largest configured block size.
+
     Goals:
-    - Make traffic statistically indistinguishable from random
-    - Prevent size-based traffic analysis
+    - Reduce the precision of a payload's observable size (bucketed, bounded)
     - Add timing uncertainty
     - Normalize entropy distribution
     """
