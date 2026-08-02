@@ -542,8 +542,19 @@ class NOAABuoyClient:
         # Detached under the lock, closed outside it -- same reason as the
         # stale-close in _get_client(): awaiting while holding a threading
         # lock would stall every other thread for the network teardown.
+        #
+        # Best-effort, same as that stale-close: this client can belong to a
+        # DIFFERENT loop than the one close() is running on (whichever loop
+        # last called _get_client() built it), and aclose() can raise a
+        # loop-binding error in that case. A caller of close() is tearing
+        # down, not fetching a buoy, but a raised exception here still isn't
+        # this method's job to surface -- it would mask whatever the caller
+        # actually came here to do.
         if client is not None and not client.is_closed:
-            await client.aclose()
+            try:
+                await client.aclose()
+            except Exception as exc:
+                logger.debug("Discarding NOAA client without close: %s", exc)
     
     def _check_rate_limit(self, buoy_id: str) -> bool:
         """Check if we can make a request without exceeding rate limits."""
