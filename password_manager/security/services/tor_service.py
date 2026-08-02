@@ -710,6 +710,9 @@ class TorService:
 
         # Parsed once: every comparison below is against this same peer.
         peer_ip = _parse_ip(peer)
+        # Also read once: config does not change mid-call, so re-reading it
+        # per hostname entry is wasted work.
+        resolve_timeout = _strictly_positive_number(config.get('PEER_RESOLVE_TIMEOUT_SECONDS'), 2)
 
         for entry in raw.split(','):
             candidate = entry.strip()
@@ -740,8 +743,7 @@ class TorService:
                 # Resolve every address the name maps to: a compose service can
                 # answer on more than one, and matching only the first would
                 # reject legitimate ingress.
-                timeout = _strictly_positive_number(config.get('PEER_RESOLVE_TIMEOUT_SECONDS'), 2)
-                infos = _resolve_bounded(candidate, timeout)
+                infos = _resolve_bounded(candidate, resolve_timeout)
             except (OSError, _FuturesTimeoutError):
                 continue
             if any(_same_address(info[4][0], peer_ip, peer) for info in infos):
@@ -953,7 +955,18 @@ def _connect_bounded(connect_fn, timeout: float):
 # that ruled out caching the RESULT of resolution (see the comment at the
 # call site). A worker that outruns the timeout is simply abandoned; nothing
 # reads its result, so it cannot hold the request thread open.
-_PEER_RESOLVER_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='tor-peer-dns')
+#
+# Sized at 32 (Python's own ThreadPoolExecutor default ceiling for I/O-bound
+# work), not the 4 an earlier round picked without tracing load: a worker
+# stuck in a wedged getaddrinfo() is abandoned but never reclaimed, so a
+# small pool caps how many onion-ingress checks can be IN FLIGHT at once
+# during a resolver outage -- everything past that cap queues behind stuck
+# workers and times out before its own resolution ever starts, turning a
+# slow resolver into a full refusal of onion ingress. This is still
+# fail-closed either way; a larger pool only raises how much concurrent
+# traffic a resolver incident can absorb before that fail-closed state
+# is reached.
+_PEER_RESOLVER_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix='tor-peer-dns')
 
 
 def _resolve_bounded(host: str, timeout: float):

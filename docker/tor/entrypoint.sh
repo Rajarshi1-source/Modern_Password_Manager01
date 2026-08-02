@@ -134,13 +134,15 @@ esac
 TOR_ONION_TARGET="${resolved_host}:${onion_target_port}"
 
 # ---------------------------------------------------------------------------
-# Volume ownership and the privilege model, which differs by platform:
+# Volume ownership and the privilege model.
 #
-#   * docker-compose starts this as root, so we chown the volumes and let tor
-#     drop to the `tor` user itself via the `User` directive.
-#   * Kubernetes starts it as a non-root uid with fsGroup already owning the
-#     volumes, so there is nothing to chown and no user to switch to. Emitting
-#     `User tor` there would make tor fail at startup.
+# The shipped image ends with `USER tor` (docker/tor/Dockerfile), so on both
+# platforms this container starts already unprivileged: `id -u` is never 0
+# here, chown is skipped, and torrc's `User` directive renders as a comment
+# (Tor is already running as `tor`; the directive is for starting as root).
+# The `id -u = 0` branch below is a FALLBACK, not a live path in this image --
+# kept for a custom build that starts as root instead, where it chowns the
+# volumes and lets Tor drop to `tor` itself via that directive.
 #
 # Tor refuses to use a HiddenServiceDir that is group- or world-accessible, so
 # the 0700 is set explicitly rather than inherited from the volume.
@@ -192,6 +194,24 @@ else
 fi
 if [ -z "${hashed}" ]; then
     echo "tor: failed to hash the control password" >&2
+    exit 1
+fi
+# `tor --hash-password`'s own output can never contain these, so this only
+# ever rejects an operator-supplied TOR_CONTROL_PASSWORD_HASH. `|` breaks the
+# sed expression below (it is the delimiter); `&` and `\` are sed replacement
+# metacharacters that would corrupt the substituted value instead of erroring
+# -- silently producing a torrc nobody intended, from a typo in a Secret.
+case "${hashed}" in
+    *'|'*|*'&'*|*'\'*)
+        echo "tor: TOR_CONTROL_PASSWORD_HASH contains a character (|, &, or \\) that would corrupt the generated torrc" >&2
+        exit 1
+        ;;
+esac
+# A pattern glob can't rule out an embedded newline (it matches anything,
+# newline included), so check separately: one would inject an extra torrc
+# directive after the substitution.
+if [ "$(printf '%s' "${hashed}" | wc -l)" -ne 0 ]; then
+    echo "tor: TOR_CONTROL_PASSWORD_HASH must not contain a newline" >&2
     exit 1
 fi
 
