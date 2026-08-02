@@ -912,6 +912,35 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         self.assertEqual(response.data['nodes'], [])
         self.assertFalse(response.data['anonymity_active'])
 
+    @override_settings(TOR=_tor_settings())
+    def test_nodes_are_empty_when_onion_is_not_published(self):
+        """/nodes/ must not contradict /health/'s Unavailable verdict.
+
+        get_circuit_relays() is not filtered to onion-service circuits (Tor
+        can have OTHER built circuits — its own directory fetches, general
+        client use — while the onion descriptor is unpublished), so a build
+        with a live client-only circuit and no published hidden service is
+        exactly the state that used to leak through get_available_nodes():
+        anonymity_active False, but /nodes/ still listing relays.
+        """
+        controller = _FakeController(
+            circuit_established='1',
+            hidden_service_dirs=(),   # no configured hidden service
+            onions_current='',        # -> onion_published is False
+            circuits=[_FakeCircuit(path=[('AAAA', 'guardrelay')])],
+        )
+        with patch.object(TorService, '_open_controller', return_value=controller), \
+                patch.object(tor_module, '_StemController', object()):
+            get_tor_service().reset_cache()
+            response = self.client.get(reverse('dark-protocol-nodes'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['anonymity_active'])
+        self.assertEqual(
+            response.data['nodes'], [],
+            "relays were listed while anonymity_active is False",
+        )
+
     @override_settings(TOR={'ENABLED': False})
     def test_vault_proxy_refuses_when_tor_is_down(self):
         """The critical regression: this used to answer success with fake data."""

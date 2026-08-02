@@ -716,17 +716,38 @@ csrf_origins_env = os.environ.get('CSRF_TRUSTED_ORIGINS', '').strip()
 if csrf_origins_env:
     CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in csrf_origins_env.split(',') if origin.strip()])
 
-# Deliberately no `http://*.onion` entry here for the onion listener. Every
-# DRF APIView is wrapped in Django's own `csrf_exempt` unconditionally by
-# `APIView.as_view()` ("session based authentication is explicitly CSRF
+# Deliberately no `http://*.onion` entry here for the onion listener.
+#
+# The Dark Protocol / vault-proxy surface (dark_protocol_views.py and every
+# other DEFAULT_AUTHENTICATION_CLASSES-only view) is unaffected either way:
+# `APIView.as_view()` wraps every DRF view in Django's own `csrf_exempt`
+# unconditionally ("session based authentication is explicitly CSRF
 # validated, all other authentication is CSRF exempt" -- rest_framework's own
-# source), so CsrfViewMiddleware never runs against dark_protocol_views.py or
-# any other API view here. DRF's OWN csrf enforcement lives inside
-# SessionAuthentication.enforce_csrf(), which never runs either:
+# source), so CsrfViewMiddleware never runs against it, and DRF's OWN csrf
+# check (SessionAuthentication.enforce_csrf()) never runs either since
 # DEFAULT_AUTHENTICATION_CLASSES below carries only JWTAuthentication.
-# CSRF_TRUSTED_ORIGINS is consulted by neither path, for clearnet OR onion
-# traffic, so adding an onion entry would change nothing. Revisit only if a
-# session-cookie-authenticated view is ever added under ONION_LISTENER.
+#
+# `auth_module/quantum_recovery_views.py` DOES list SessionAuthentication
+# alongside JWTAuthentication (technically reachable through the onion
+# listener too -- backend-onion serves the whole app, not a route subset),
+# so DRF's csrf check genuinely CAN run there. It still needs no onion
+# entry: Django's CsrfViewMiddleware verifies a same-origin Origin header by
+# comparing it directly against request.get_host() BEFORE ever consulting
+# CSRF_TRUSTED_ORIGINS (see _origin_verified() in django.middleware.csrf) --
+# a request actually originating from this onion address passes without
+# this list having anything in it. CSRF_TRUSTED_ORIGINS only matters for a
+# DIFFERENT trusted origin submitting cross-site, and this deployment has no
+# separate onion-served frontend origin to grant that to.
+#
+# Do NOT add `http://*.onion` if this is revisited: unlike a real domain's
+# `*.example.com` (which the domain owner controls end to end), nobody
+# controls the `.onion` namespace -- it is derived per-service from a
+# keypair. Django's is_same_domain() matches ANY string ending in the
+# pattern, so this wildcard would trust an Origin claim from EVERY Tor
+# hidden service in existence, not just this deployment's own, weakening
+# CSRF for exactly the one path (SessionAuthentication) where it is real.
+# If a session-cookie flow ever needs to be reachable cross-origin over
+# Tor, trust that flow's SPECIFIC onion address, not the wildcard.
 
 # NOTE: Logging configuration merged into Enhanced Logging block below
 
@@ -2073,6 +2094,21 @@ def _tor_env_int(name: str, default: int) -> int:
         return default
 
 
+def _tor_env_float(name: str, default: float) -> float:
+    """Like `_tor_env_int`, for the three settings read downstream as timeouts.
+
+    `tor_service._positive_number`/`_strictly_positive_number` coerce via
+    `float()`, so a fractional timeout (`TOR_PEER_RESOLVE_TIMEOUT=0.5`) is a
+    legitimate, supported value one layer down -- but `int('0.5')` raises
+    ValueError, so reading it through `_tor_env_int` silently discarded any
+    sub-second override and fell back to the default instead.
+    """
+    try:
+        return float(os.environ.get(name, str(default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 TOR = {
     'ENABLED': os.environ.get('TOR_ENABLED', 'False').lower() == 'true',
 
@@ -2082,7 +2118,7 @@ TOR = {
     'CONTROL_PORT': _tor_env_int('TOR_CONTROL_PORT', 9051),
     'CONTROL_SOCKET': os.environ.get('TOR_CONTROL_SOCKET', ''),
     'CONTROL_PASSWORD': os.environ.get('TOR_CONTROL_PASSWORD', ''),
-    'CONTROL_TIMEOUT_SECONDS': _tor_env_int('TOR_CONTROL_TIMEOUT', 5),
+    'CONTROL_TIMEOUT_SECONDS': _tor_env_float('TOR_CONTROL_TIMEOUT', 5),
 
     # SOCKS5 proxy, used for the loopback self-check that fetches our own
     # .onion through Tor (socks5h, so the .onion resolves inside Tor).
@@ -2117,7 +2153,7 @@ TOR = {
     # thread while resolving. Not a cache TTL -- every request still resolves
     # fresh -- so it does not reintroduce the recycled-IP staleness that rules
     # out caching the answer itself (see tor_service._peer_is_trusted).
-    'PEER_RESOLVE_TIMEOUT_SECONDS': _tor_env_int('TOR_PEER_RESOLVE_TIMEOUT', 2),
+    'PEER_RESOLVE_TIMEOUT_SECONDS': _tor_env_float('TOR_PEER_RESOLVE_TIMEOUT', 2),
 
     # Capability probes are cached briefly so dashboard polling does not open
     # a control connection per widget.
@@ -2126,7 +2162,7 @@ TOR = {
     # Loopback self-check: proves the descriptor is published and the service
     # answers, by performing a real rendezvous with ourselves. Slow and cached.
     'SELF_CHECK_PATH': os.environ.get('TOR_SELF_CHECK_PATH', '/api/security/dark-protocol/ping/'),
-    'SELF_CHECK_TIMEOUT_SECONDS': _tor_env_int('TOR_SELF_CHECK_TIMEOUT', 60),
+    'SELF_CHECK_TIMEOUT_SECONDS': _tor_env_float('TOR_SELF_CHECK_TIMEOUT', 60),
     'SELF_CHECK_TTL_SECONDS': _tor_env_int('TOR_SELF_CHECK_TTL', 300),
 }
 

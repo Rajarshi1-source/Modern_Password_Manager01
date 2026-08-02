@@ -228,7 +228,15 @@ class TorService:
         timeout = _strictly_positive_number(config.get('CONTROL_TIMEOUT_SECONDS'), 5)
         socket_path = str(config.get('CONTROL_SOCKET') or '')
         host = str(config.get('CONTROL_HOST') or '127.0.0.1')
-        port = int(config.get('CONTROL_PORT') or 9051)
+        # _positive_number, not a bare int(): settings/base.py already coerces
+        # this safely via _tor_env_int for the environment path, but
+        # get_tor_config() takes settings.TOR verbatim (no validation at the
+        # merge), so a non-numeric override reaching this line directly would
+        # raise ValueError OUTSIDE the try block below and propagate out of
+        # _probe()/get_capability() into request_is_onion_ingress() on the
+        # vault request path -- the one bare-int() gap in a module whose every
+        # other numeric read already goes through this module's own helpers.
+        port = int(_positive_number(config.get('CONTROL_PORT'), 9051)) or 9051
 
         def _connect():
             if socket_path:
