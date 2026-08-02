@@ -893,7 +893,13 @@ class DarkProtocolService:
         # of this endpoint can use.
         try:
             return status_code, json.loads(response.content.decode('utf-8'))
-        except Exception:
+        except (AttributeError, UnicodeDecodeError, ValueError):
+            # AttributeError: a StreamingHttpResponse has no .content.
+            # UnicodeDecodeError: the body is not UTF-8 text.
+            # ValueError: json.JSONDecodeError (a ValueError subclass) -- the
+            # body decoded but is not JSON.
+            # Anything else is a real bug, not "this body doesn't parse", and
+            # must not be silently reported as an empty one.
             return status_code, None
 
     def _record_operation_traffic(

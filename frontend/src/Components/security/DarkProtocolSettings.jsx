@@ -159,7 +159,7 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                     <div className="dp-master-toggle">
                         <div className="dp-toggle-info">
                             <h3>Enable Dark Protocol</h3>
-                            <p>Route vault access through the experimental relay demo</p>
+                            <p>Adds cover traffic and padding over the Tor circuit. Anonymity comes from the onion service, not from this toggle.</p>
                         </div>
                         <label className="dp-switch">
                             <input
