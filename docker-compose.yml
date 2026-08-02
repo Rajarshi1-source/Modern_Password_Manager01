@@ -192,6 +192,13 @@ services:
     networks:
       - password_manager_network
     restart: unless-stopped
+    # This ordering only covers the two coming up TOGETHER. The resolved
+    # address is still fixed at THIS container's startup (see
+    # docker/tor/torrc.template), so recreating backend-onion alone later
+    # (`docker compose up -d --force-recreate backend-onion`) gives it a new
+    # container IP that tor keeps forwarding to the OLD one for -- both
+    # report healthy, but the onion service answers nothing. Restart tor too
+    # whenever backend-onion is recreated on its own.
 
   # Onion ingress listener. Same image and code as `backend`; the only thing
   # that makes it special is that it is reachable ONLY from the tor container

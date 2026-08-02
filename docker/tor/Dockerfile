@@ -30,6 +30,15 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh
 # image's directory ownership, so the container never needs root to fix
 # permissions — which is what lets it run entirely as an unprivileged user
 # below (Trivy DS-0002 / Semgrep missing-user-entrypoint).
+#
+# This seeding only happens once, when the named volume is first created --
+# Docker never re-applies it to a volume that already has content. So it
+# only reaches an EXISTING tor_data volume that was previously populated by
+# a root-owned container (entrypoint.sh's `id -u = 0` branch is a supported,
+# if non-default, fallback). If that ever applies to a real deployment,
+# either `chown -R tor:tor` the volume's contents once, or accept a fresh
+# .onion address by recreating the volume — this image cannot fix ownership
+# on its own once it is running as `tor`.
 RUN mkdir -p /var/lib/tor/data /var/lib/tor/hidden_service /var/lib/tor-shared \
     && chown -R tor:tor /var/lib/tor /var/lib/tor-shared \
     && chmod 0700 /var/lib/tor/data /var/lib/tor/hidden_service \
