@@ -915,7 +915,15 @@ def _is_ip_literal(value: str) -> bool:
 # Separate from _PEER_RESOLVER_POOL below on purpose: a burst of hung control
 # connects and a burst of hung peer lookups are independent failure modes,
 # and sharing one small pool would let either starve the other.
-_CONTROL_CONNECT_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix='tor-control-connect')
+#
+# Sized the same as _PEER_RESOLVER_POOL, and for the same reason: a worker
+# _connect_bounded abandons on timeout is never reclaimed, so a small pool
+# caps how many capability probes can be in flight at once. get_capability()
+# explicitly allows "two threads racing a cache miss may both probe" rather
+# than serialising behind a lock (see its own comment) -- so a control-port
+# outage during a cache expiry window can see several concurrent probes, not
+# just one, each needing its own worker here.
+_CONTROL_CONNECT_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix='tor-control-connect')
 
 
 def _close_late_controller(future) -> None:
