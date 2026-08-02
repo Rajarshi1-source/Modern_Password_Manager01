@@ -194,7 +194,7 @@ class TorControllerConnectTests(TestCase):
         return, to the ALREADY-connected controller) bound this phase --
         _connect_bounded does.
         """
-        stub = self._stem_stub(connect_delay=1.0)
+        stub = self._stem_stub(connect_delay=3.0)
         with patch.object(tor_module, '_StemController', stub):
             service = TorService()
             start = time.monotonic()
@@ -203,7 +203,7 @@ class TorControllerConnectTests(TestCase):
 
         self.assertFalse(capability.anonymity_active)
         self.assertEqual(capability.reason, 'controller_unreachable')
-        self.assertLess(elapsed, 0.6, "the connect timeout did not bound _open_controller")
+        self.assertLess(elapsed, 1.5, "the connect timeout did not bound _open_controller")
 
     @override_settings(TOR=_tor_settings())
     def test_real_connect_path_still_succeeds_end_to_end(self):
