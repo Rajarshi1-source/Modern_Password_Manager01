@@ -864,6 +864,7 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         # The test client does not arrive on the onion ingress port.
         self.assertFalse(response.data['anonymity']['current_connection_is_anonymous'])
         self.assertFalse(response.data['vault_proxy']['available'])
+        self.assertTrue(response.data['claims'])
 
     @override_settings(TOR={'ENABLED': False})
     def test_capabilities_report_unavailable_without_tor(self):
@@ -874,6 +875,10 @@ class DarkProtocolCapabilityApiTests(_TorTestMixin, APITestCase):
         self.assertEqual(response.data['anonymity']['reason'], 'not_configured')
         self.assertFalse(response.data['vault_proxy']['available'])
         self.assertIsNone(response.data['anonymity']['onion_address'])
+        # An anonymity claim must never be present when Tor is not active --
+        # a consumer that renders `claims` without also checking `available`
+        # must not be able to assert protection that does not exist.
+        self.assertEqual(response.data['claims'], [])
 
     @override_settings(TOR={'ENABLED': False})
     def test_health_reports_unavailable_without_tor(self):

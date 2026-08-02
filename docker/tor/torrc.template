@@ -52,7 +52,15 @@ HiddenServiceVersion 3
 #
 # __ONION_TARGET__ is an IP:port by the time it lands here -- entrypoint.sh
 # resolves it, because this directive does not accept a hostname (Tor parses
-# the target as an address or a unix socket, never a DNS name).
+# the target as an address or a unix socket, never a DNS name). Resolved ONCE
+# at this container's startup, not per-connection (see entrypoint.sh). Under
+# docker-compose that address is backend-onion's container IP, which Docker
+# reassigns if that container is recreated (Kubernetes does not have this
+# problem: TOR_ONION_TARGET names the Service there, and its ClusterIP is
+# stable across pod churn). Restart this tor container after recreating
+# backend-onion alone in compose, or the onion service keeps forwarding to
+# an address nothing is listening on anymore while both containers report
+# healthy.
 HiddenServicePort 80 __ONION_TARGET__
 
 Log notice stdout

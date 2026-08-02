@@ -286,12 +286,18 @@ class DarkProtocolService:
                 'note': 'Vault operations are served anonymously only for '
                         'requests that arrived over the onion service.',
             },
+            # Empty, not just unlisted, when Tor is not active: a future
+            # consumer that renders `claims` without also checking
+            # `anonymity.available` must not be able to assert protection a
+            # deployment does not currently have. The dashboard already gates
+            # on `available` itself, so this is defence in depth, the same
+            # discipline get_available_nodes() applies to its own relay list.
             'claims': [
                 'Vault access over the Tor network as a v3 onion service.',
                 'No exit node: the circuit terminates inside Tor at this service.',
                 'The server does not learn the client IP address of onion connections.',
                 'Cover traffic and padding add traffic-analysis resistance.',
-            ],
+            ] if capability.anonymity_active else [],
             'limitations': [
                 'Does not defeat an adversary observing the whole network.',
                 'An authenticated account still identifies the user to this service.',

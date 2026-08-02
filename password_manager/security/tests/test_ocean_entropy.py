@@ -633,9 +633,20 @@ class NOAAClientLoopSafetyTests(TestCase):
                 "_get_client() never entered its replacement block",
             )
 
-            start = time.monotonic()
-            asyncio.run(client.close())
-            elapsed = time.monotonic() - start
+            # Loop creation/teardown is not part of what this test measures --
+            # asyncio.run() does both inside its call, which would otherwise
+            # eat into the tight margin between the 0.05s threshold and the
+            # getter thread's 0.15s construction window on a loaded runner.
+            # close() has no cross-loop dependency of its own (unlike
+            # _get_client(), it does not track which loop it ran on), so a
+            # loop built here and never installed as "current" is equivalent.
+            loop = asyncio.new_event_loop()
+            try:
+                start = time.monotonic()
+                loop.run_until_complete(client.close())
+                elapsed = time.monotonic() - start
+            finally:
+                loop.close()
 
             t.join(timeout=5)
 
