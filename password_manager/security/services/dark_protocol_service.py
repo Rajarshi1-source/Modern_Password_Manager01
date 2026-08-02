@@ -1038,7 +1038,19 @@ class DarkProtocolService:
         'rendezvous'). There is no 'exit' position: onion-service circuits end
         at a rendezvous point inside Tor, which is what makes "no exit node" a
         true statement about this deployment rather than a slogan.
+
+        Gated on ``anonymity_active``, matching ``get_network_status()``.
+        ``get_circuit_relays()`` is not filtered to onion-service circuits (see
+        that method's own docstring), so Tor can have BUILT circuits -- and
+        this would return them -- while the onion descriptor is not published
+        and the headline capability is honestly Unavailable. Without the gate,
+        /nodes/ would show a populated relay list next to /health/'s Unavailable
+        banner: the exact self-contradicting UI the shared refresh-generation
+        token elsewhere in this file exists to prevent, reached through a
+        different, ungated call path.
         """
+        if not self.tor.get_capability().anonymity_active:
+            return []
         relays = self.tor.get_circuit_relays()
         if node_type:
             wanted = str(node_type).strip().lower()

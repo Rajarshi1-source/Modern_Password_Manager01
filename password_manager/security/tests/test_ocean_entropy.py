@@ -597,8 +597,19 @@ class NOAAClientLoopSafetyTests(TestCase):
         import time
         from security.services import noaa_api_client as noaa_module
 
+        constructing = threading.Event()
+
         class _SlowClient:
             def __init__(self, **kwargs):
+                # Set INSIDE _get_client()'s critical section (this
+                # constructor only runs while it holds _client_lock), so
+                # waiting on this proves the getter thread has actually
+                # ACQUIRED the lock -- not merely that its thread has started.
+                # A fixed sleep-then-race here would be a timing guess: on a
+                # loaded runner, close() could win the lock first and return
+                # fast, failing the assertion below for a scheduling reason
+                # that has nothing to do with whether the lock is shared.
+                constructing.set()
                 time.sleep(0.15)
                 self.is_closed = False
 
@@ -609,21 +620,18 @@ class NOAAClientLoopSafetyTests(TestCase):
         client._client = None
         client._client_loop = None
 
-        started = threading.Event()
-
         def get_client_worker():
             async def main():
-                started.set()
                 return await client._get_client()
             asyncio.run(main())
 
         with patch.object(noaa_module.httpx, 'AsyncClient', _SlowClient):
             t = threading.Thread(target=get_client_worker)
             t.start()
-            started.wait(timeout=5)
-            # Give the getter thread a moment to actually be inside its
-            # (0.15s) critical section before racing close() against it.
-            time.sleep(0.03)
+            self.assertTrue(
+                constructing.wait(timeout=5),
+                "_get_client() never entered its replacement block",
+            )
 
             start = time.monotonic()
             asyncio.run(client.close())
