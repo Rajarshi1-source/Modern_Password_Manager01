@@ -235,6 +235,13 @@ services:
       # .onion address is accepted without knowing it in advance. Django
       # rejects any other Host, and a rejected Host is never onion ingress.
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost,127.0.0.1},.onion
+      # No CSRF_TRUSTED_ORIGINS entry for the onion address, deliberately --
+      # see the identical comment in k8s/tor.yaml (same backend-onion
+      # container, same reasoning) and the full analysis in settings/base.py
+      # next to CSRF_TRUSTED_ORIGINS: every view these onion routes reach is
+      # JWT-only and DRF exempts it from CSRF entirely, so this setting is
+      # never consulted for them, and a `*.onion` wildcard would trust every
+      # Tor hidden service's Origin claim, not just this deployment's own.
       - USE_REDIS_CHANNELS=${USE_REDIS_CHANNELS:-false}
       - USE_REDIS_CACHE=${USE_REDIS_CACHE:-false}
       - OIDC_RP_CLIENT_ID=${OIDC_RP_CLIENT_ID:-}

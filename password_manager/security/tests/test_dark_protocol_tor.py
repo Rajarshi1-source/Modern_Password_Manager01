@@ -229,6 +229,34 @@ class TorControllerConnectTests(TestCase):
         self.assertEqual(capability.reason, 'controller_unreachable')
         self.assertTrue(controller.closed)
 
+    @override_settings(TOR=_tor_settings(CONTROL_SOCKET='/var/lib/tor/control'))
+    def test_control_socket_path_is_used_when_configured(self):
+        """CONTROL_SOCKET must route through from_socket_file, not from_port
+        -- the other real connect branch, previously untested.
+
+        from_port is made to fail here specifically so this cannot pass
+        vacuously: a stub where both branches succeed identically would pass
+        even if _open_controller ignored CONTROL_SOCKET and always dialled
+        from_port, proving nothing about which branch was actually taken.
+        """
+        received_path = {}
+
+        class _Stub:
+            @staticmethod
+            def from_port(address='127.0.0.1', port=9051):
+                raise AssertionError('from_port dialled despite CONTROL_SOCKET being set')
+
+            @staticmethod
+            def from_socket_file(path='/var/run/tor/control'):
+                received_path['path'] = path
+                return _FakeController()
+
+        with patch.object(tor_module, '_StemController', _Stub):
+            capability = TorService().get_capability()
+
+        self.assertTrue(capability.anonymity_active)
+        self.assertEqual(received_path.get('path'), '/var/lib/tor/control')
+
 
 class TorCapabilityTests(_TorTestMixin, TestCase):
     """The capability answer must track the daemon, and fail closed otherwise."""
