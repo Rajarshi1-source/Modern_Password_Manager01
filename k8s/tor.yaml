@@ -318,6 +318,20 @@ spec:
               key: ALLOWED_HOSTS
         - name: ALLOWED_HOSTS
           value: "$(CLEARNET_ALLOWED_HOSTS),.onion"
+        # No CSRF_TRUSTED_ORIGINS entry for the onion address, deliberately.
+        # Every view under security/api/dark_protocol_views.py -- including
+        # the vault proxy -- is a DRF APIView authenticated by JWTAuthentication
+        # only. DRF's APIView.as_view() wraps EVERY view in Django's
+        # csrf_exempt() unconditionally ("session based authentication is
+        # explicitly CSRF validated, all other authentication is CSRF exempt"
+        # -- DRF's own source), so CsrfViewMiddleware returns before it ever
+        # reaches the Origin/Referer check CSRF_TRUSTED_ORIGINS feeds. Adding
+        # an onion entry here would change nothing for these views, and (see
+        # settings/base.py, next to CSRF_TRUSTED_ORIGINS, for the full
+        # analysis) a wildcard entry would be actively unsafe: `.onion` is a
+        # shared namespace nobody controls the way a domain owner controls
+        # their own subdomains, so a `*.onion` pattern trusts an Origin claim
+        # from every Tor hidden service on earth, not just this one.
         # Declares this process as the onion ingress listener, which exempts it
         # from the HTTPS-coupled settings (redirect, Secure cookies, HSTS).
         # Tor publishes on port 80 and encrypts the circuit end to end, so

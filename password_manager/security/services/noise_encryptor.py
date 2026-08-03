@@ -10,12 +10,23 @@ not an unconditional, information-theoretic guarantee.
 
 Scope, stated precisely because the distinction matters: this hides the
 CONTENT of a payload, and REDUCES the precision of its observable size by
-bucketing into one of a small set of fixed block sizes (see BLOCK_SIZES) -
-it does not hide the size exactly, and that bucketing has a ceiling: a
-payload whose padded size already exceeds the largest block adds no further
-padding, so its length is visible beyond that point. It does not make the
-traffic itself unobservable - timing, volume and direction remain visible to
-anyone watching the link, which is why this is one layer of traffic-analysis
+bucketing the padded plaintext into one of a small set of fixed block sizes
+(see BLOCK_SIZES) before a further FIXED 36-byte envelope (12-byte nonce +
+16-byte GCM tag + 8-byte key hash) is appended on the wire. It does not hide
+the size exactly:
+  * A payload already at or beyond the largest block adds no further
+    padding (only the size prefix), so its length is visible past that
+    ceiling.
+  * A payload landing within 4 bytes of a block boundary (see
+    `_pad_to_block`'s `padding_needed` accounting) falls through to the
+    NEXT block size doubled, not the boundary block itself -- a narrow band
+    where the wire size overshoots the bucket a slightly larger payload
+    would land in.
+Neither behavior is exploited by this layer to leak anything on its own; both
+are documented here because a reader relying on "bucketed" as an exact
+guarantee would be wrong in these two cases. It does not make the traffic
+itself unobservable - timing, volume and direction remain visible to anyone
+watching the link, which is why this is one layer of traffic-analysis
 resistance rather than anonymity. The anonymity comes from carrying that
 traffic over a Tor v3 onion circuit (see `tor_service.py`), which has its own
 stated scope and limits - it is not restated here.
@@ -91,8 +102,9 @@ class NoiseEncryptor:
 
     See the module docstring for the precise, non-overclaiming scope of what
     this buys: computational (not statistical) indistinguishability of the
-    output bytes, and bucketed (not exact) size hiding with a ceiling at the
-    largest configured block size.
+    output bytes, and bucketed (not exact) size hiding -- with a ceiling at
+    the largest configured block size, and a narrow near-boundary band that
+    overshoots to the next block doubled instead of the boundary block.
 
     Goals:
     - Reduce the precision of a payload's observable size (bucketed, bounded)
