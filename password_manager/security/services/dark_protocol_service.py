@@ -866,6 +866,12 @@ class DarkProtocolService:
             'PATH_INFO': path,
             'QUERY_STRING': query,
             'CONTENT_TYPE': 'application/json',
+            # The envelope is always JSON, so the inner view's content
+            # negotiation must not depend on the outer client's Accept header
+            # -- a narrow inbound Accept (e.g. no json/*/* wildcard) would
+            # otherwise make DRF answer 406 for a response this endpoint
+            # always renders as JSON anyway.
+            'HTTP_ACCEPT': 'application/json',
             'CONTENT_LENGTH': str(len(body)),
             'wsgi.input': io.BytesIO(body),
             'wsgi.errors': sys.stderr,

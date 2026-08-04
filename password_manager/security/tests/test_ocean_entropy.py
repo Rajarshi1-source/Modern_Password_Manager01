@@ -441,7 +441,15 @@ class NOAAClientLoopSafetyTests(TestCase):
     def test_rotates_to_a_fresh_client_per_loop(self):
         """A new asyncio.run() must not reuse a client from a prior loop."""
         import asyncio
+        from security.services import noaa_api_client as noaa_module
         from security.services.noaa_api_client import NOAABuoyClient
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                self.is_closed = False
+
+            async def aclose(self):
+                self.is_closed = True
 
         client = NOAABuoyClient()
         # Hold the client OBJECTS, and only then compare identities. Taking
@@ -449,7 +457,12 @@ class NOAAClientLoopSafetyTests(TestCase):
         # reuses the address of a freed object, so two genuinely different
         # clients can report the same id() and the assertion fails for a
         # reason that has nothing to do with the behaviour under test.
-        seen = [asyncio.run(client._get_client()) for _ in range(3)]
+        #
+        # Patched so this builds fake clients instead of real httpx.AsyncClient
+        # instances -- unpatched, each would open a real connection pool that
+        # nothing in this test ever closes.
+        with patch.object(noaa_module.httpx, 'AsyncClient', _FakeClient):
+            seen = [asyncio.run(client._get_client()) for _ in range(3)]
         self.assertEqual(
             len({id(c) for c in seen}), 3, "each asyncio.run() must get its own client",
         )
@@ -478,13 +491,25 @@ class NOAAClientLoopSafetyTests(TestCase):
         `_get_client()` rather than the network, so it is deterministic.
         """
         import asyncio
+        from security.services import noaa_api_client as noaa_module
 
         client, stale = self._client_and_fake_stale()
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                self.is_closed = False
+
+            async def aclose(self):
+                self.is_closed = True
 
         async def hammer():
             return await asyncio.gather(*[client._get_client() for _ in range(8)])
 
-        results = asyncio.run(hammer())
+        # Patched for the same reason as test_rotates_to_a_fresh_client_per_loop:
+        # without it, the winning replacement is a real httpx.AsyncClient that
+        # this test never closes.
+        with patch.object(noaa_module.httpx, 'AsyncClient', _FakeClient):
+            results = asyncio.run(hammer())
         self.assertEqual(
             len({id(r) for r in results}), 1,
             "concurrent callers received different replacement clients",
@@ -543,12 +568,16 @@ class NOAAClientLoopSafetyTests(TestCase):
         # dies before reaching wait(), turning a bug into a stuck CI job
         # instead of a failing test.
         barrier = threading.Barrier(threads, timeout=10)
+        errors = []
 
         def worker():
             async def main():
                 barrier.wait()          # all threads enter together
                 return await client._get_client()
-            asyncio.run(main())
+            try:
+                asyncio.run(main())
+            except Exception as exc:  # noqa: BLE001 - surfaced on the main thread below
+                errors.append(exc)
 
         with patch.object(noaa_module.httpx, 'AsyncClient', _SlowClient):
             workers = [threading.Thread(target=worker) for _ in range(threads)]
@@ -557,6 +586,7 @@ class NOAAClientLoopSafetyTests(TestCase):
             for t in workers:
                 t.join()
 
+        self.assertEqual(errors, [], f"worker threads failed: {errors}")
         self.assertEqual(
             peak, 1,
             f"{peak} threads were inside the client-replacement block at once; "
@@ -649,6 +679,7 @@ class NOAAClientLoopSafetyTests(TestCase):
                 loop.close()
 
             t.join(timeout=5)
+            self.assertFalse(t.is_alive(), "_get_client() thread did not finish")
 
         self.assertGreater(
             elapsed, 0.05,
