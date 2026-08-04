@@ -830,6 +830,21 @@ class DarkProtocolService:
         additional check. REVISIT THIS if a middleware is ever added that
         ENFORCES by path rather than by connection — that is the one shape the
         argument above does not cover.
+
+        On NOT wrapping the inner dispatch in transaction.atomic()
+        ------------------------------------------------------------
+        Also raised in review: calling ``match.func`` directly bypasses the
+        per-request transaction Django's own request/response cycle applies
+        when ``DATABASES['default']['ATOMIC_REQUESTS']`` is ``True``. Checked
+        rather than assumed: that key is never set anywhere in this project's
+        settings (grepped every settings module), so it defaults to ``False``
+        and a REAL clearnet request to the same vault view is not wrapped in
+        a transaction either. Adding one here unconditionally would make the
+        onion path behave DIFFERENTLY from the clearnet path it is meant to
+        be indistinguishable from -- the opposite of this dispatcher's design
+        goal. REVISIT THIS if ``ATOMIC_REQUESTS`` is ever turned on for the
+        ``default`` database, since at that point the clearnet path gains the
+        wrapping and this one would need it too to stay in parity.
         """
         method = route['method']
         if route.get('needs_id'):
