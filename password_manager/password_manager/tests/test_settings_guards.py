@@ -517,3 +517,147 @@ class CertSigningSecretGuardTest(TestCase):
             # cert secrets intentionally unset — dev path
         })
         self.assertIn('SETTINGS_LOADED', stdout)
+
+
+class AuthRefreshCookieSamesiteGuardTest(TestCase):
+    """Dark Protocol / Tor CSRF review follow-up: production guard on
+    AUTH_REFRESH_COOKIE_SAMESITE.
+
+    ``SameSite=Strict`` is the only real CSRF defense on the HttpOnly
+    refresh-token cookie endpoints (Django's CsrfViewMiddleware never
+    runs on these JWT-authenticated DRF views). This guard fails
+    closed if a production deploy relaxes the env-overridable
+    AUTH_REFRESH_COOKIE_SAMESITE setting away from 'Strict', since
+    there is nothing else to catch that gap. Sits last in the chain,
+    so every earlier guard must be satisfied first.
+    """
+
+    _PRECEDING_GUARDS = {
+        'DEBUG': 'False',
+        'SECRET_KEY': 'test-secret',
+        'JWT_PRIVATE_KEY': 'jwt-secret-material',
+        'USE_REDIS_CHANNELS': 'True',
+        'USE_REDIS_CACHE': 'True',
+        'DATA_ENCRYPTION_KEY': 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+        'GENETIC_CERT_SECRET': 'genetic-cert-secret-material',
+        'QUANTUM_CERT_SECRET': 'quantum-cert-secret-material',
+    }
+
+    def test_guard_fires_in_production_with_lax_samesite(self):
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            'AUTH_REFRESH_COOKIE_SAMESITE': 'Lax',
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('AUTH_REFRESH_COOKIE_SAMESITE', stdout + stderr)
+
+    def test_guard_fires_in_production_with_none_samesite(self):
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            'AUTH_REFRESH_COOKIE_SAMESITE': 'None',
+        })
+        self.assertIn('SETTINGS_FAILED', stdout + stderr)
+        self.assertIn('AUTH_REFRESH_COOKIE_SAMESITE', stdout + stderr)
+
+    def test_guard_silent_when_explicitly_strict(self):
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            'AUTH_REFRESH_COOKIE_SAMESITE': 'Strict',
+        })
+        self.assertIn('SETTINGS_LOADED', stdout)
+
+    def test_guard_silent_when_unset_defaults_to_strict(self):
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            **self._PRECEDING_GUARDS,
+            # AUTH_REFRESH_COOKIE_SAMESITE intentionally unset — the
+            # base.py default of 'Strict' should satisfy the guard.
+        })
+        self.assertIn('SETTINGS_LOADED', stdout)
+
+    def test_guard_silent_in_debug_mode(self):
+        """Dev mode may need a relaxed value for plain-HTTP localhost
+        testing — no guard fire even with a non-Strict value."""
+        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+            'DEBUG': 'True',
+            'SECRET_KEY': 'dev-secret',
+            'AUTH_REFRESH_COOKIE_SAMESITE': 'Lax',
+        })
+        self.assertIn('SETTINGS_LOADED', stdout)
+
+    def test_guard_silent_during_manage_py_check(self):
+        """``manage.py check`` is exempt — same maintenance bypass as
+        every other production guard. Uses the same direct-subprocess
+        pattern as the other manage.py-check tests in this file,
+        since ``_run_settings_import_in_subprocess``'s fixed argv[1]
+        of 'password_manager.wsgi:application' can't simulate it."""
+        code = textwrap.dedent("""
+            import os, sys
+            sys.argv = ['manage.py', 'check']
+            sys.path.insert(0, os.getcwd())
+            os.environ['DJANGO_SETTINGS_MODULE'] = 'password_manager.settings'
+            try:
+                from django.conf import settings
+                _ = settings.DEBUG
+                print('SETTINGS_LOADED')
+            except Exception as e:
+                print('SETTINGS_FAILED:' + type(e).__name__ + ':' + str(e)[:200])
+        """)
+        env = os.environ.copy()
+        for k in (
+            'DEBUG', 'JWT_PRIVATE_KEY', 'USE_REDIS_CHANNELS',
+            'USE_REDIS_CACHE', 'DATA_ENCRYPTION_KEY',
+            'GENETIC_CERT_SECRET', 'QUANTUM_CERT_SECRET',
+            'AUTH_REFRESH_COOKIE_SAMESITE',
+        ):
+            env[k] = ''
+        env.update({
+            **self._PRECEDING_GUARDS,
+            'AUTH_REFRESH_COOKIE_SAMESITE': 'Lax',
+        })
+        cwd = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), '..', '..')
+        )
+        result = subprocess.run(
+            [sys.executable, '-c', code],
+            cwd=cwd, env=env,
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertIn('SETTINGS_LOADED', result.stdout)
+
+
+class SessionAuthenticationTripwireTest(TestCase):
+    """Dark Protocol / Tor CSRF review follow-up: pin that
+    ``SessionAuthentication`` is not a default DRF authentication
+    class.
+
+    The whole "CSRF is inert on these endpoints" analysis (see the
+    CSRF_TRUSTED_ORIGINS comment above ``AUTHENTICATION_BACKENDS`` in
+    base.py) rests on one fact: DEFAULT_AUTHENTICATION_CLASSES carries
+    only JWTAuthentication, so DRF's own
+    ``SessionAuthentication.enforce_csrf()`` never runs and every
+    ``APIView`` stays wrapped in DRF's unconditional ``csrf_exempt``.
+    If someone ever adds SessionAuthentication to the default list
+    (e.g. to support Django admin browsing of the API), every DRF view
+    would silently become cookie-authenticable and that whole argument
+    collapses with no visible failure — this test is the tripwire.
+
+    No subprocess needed: DEFAULT_AUTHENTICATION_CLASSES is a static
+    list, not env-driven, so checking the already-loaded settings is
+    sufficient and faster than a fresh subprocess import.
+    """
+
+    def test_session_authentication_not_a_default_auth_class(self):
+        from django.conf import settings
+
+        default_auth_classes = settings.REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES']
+        self.assertNotIn(
+            'rest_framework.authentication.SessionAuthentication',
+            default_auth_classes,
+            "SessionAuthentication must not be a default DRF auth class: "
+            "the settings/base.py CSRF_TRUSTED_ORIGINS comment and the "
+            "decision to leave CSRF middleware off rely on every "
+            "APIView's csrf_exempt wrapper being the only thing in play. "
+            "Adding SessionAuthentication here makes DRF's own CSRF "
+            "check run project-wide, which this deployment does not "
+            "defend against outside of quantum_recovery_views.py.",
+        )
