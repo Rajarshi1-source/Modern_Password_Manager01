@@ -239,7 +239,10 @@ export const useTypingPattern = ({
  * @param {boolean} [props.autoSubmit] - Auto-submit pattern to API (defaults to true)
  * @param {string} [props.apiEndpoint] - API endpoint for recording
  * @param {Function} [props.fingerprint] - Keyed password-fingerprint function
- * @param {number} [props.fpKeyVersion] - Fingerprint key era (from /adaptive/config/)
+ * @param {number} [props.fpKeyVersion] - Fingerprint key era (from /adaptive/config/).
+ *   Optional only in the sense that the prop itself can be omitted; if
+ *   `enabled` is true, `capturePattern` requires an integer >= 1 and throws
+ *   otherwise (fail-closed, see useTypingPattern above).
  */
 const TypingPatternCapture = ({
     inputRef,

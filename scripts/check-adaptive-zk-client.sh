@@ -18,8 +18,11 @@
 
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$REPO_ROOT"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || {
+  echo "::error::Could not resolve the repo root from ${BASH_SOURCE[0]}." >&2
+  exit 1
+}
+cd "$REPO_ROOT" || exit 1
 
 # v1 raw-password payload fields, and the deprecated server-side suggestion
 # endpoint (HTTP 410) whose only caller shape required POSTing the password.
@@ -35,6 +38,12 @@ if [ ${#CLIENT_DIRS[@]} -eq 0 ]; then
   exit 0
 fi
 
+# Fail closed on a real scan error. grep exits 0 for matches, 1 for "no
+# matches" (the clean, expected case), and 2+ for an actual problem (bad
+# pattern, unreadable file, etc.) — collapsing all of that into `|| true` would
+# let a scan that silently didn't run at all report "OK" instead of failing the
+# CI job. `$?` is read immediately after the assignment (not through `!`,
+# which would collapse it to a plain 0/1 and destroy the real code).
 hits="$(grep -rEn --binary-files=without-match "$PATTERN" "${CLIENT_DIRS[@]}" \
   --include='*.js' --include='*.jsx' --include='*.ts' --include='*.tsx' \
   --exclude-dir=node_modules \
@@ -42,7 +51,12 @@ hits="$(grep -rEn --binary-files=without-match "$PATTERN" "${CLIENT_DIRS[@]}" \
   --exclude-dir=__mocks__ \
   --exclude-dir=e2e \
   --exclude='*.test.*' \
-  --exclude='*.spec.*' || true)"
+  --exclude='*.spec.*')"
+grep_status=$?
+if [ "$grep_status" -gt 1 ]; then
+  echo "::error::grep failed while scanning for the ZK v1 contract (exit $grep_status)." >&2
+  exit 1
+fi
 
 if [ -n "$hits" ]; then
   echo "::error::Adaptive-password zero-knowledge violation in client code."

@@ -85,7 +85,9 @@ const detectInputMethod = () => {
  * @param {Function} [options.fingerprint] - Keyed password-fingerprint function
  * @param {number} [options.fpKeyVersion] - Fingerprint key era the `fingerprint`
  *   function was derived under (from GET /adaptive/config/); the server rejects
- *   a mismatch with HTTP 409.
+ *   a mismatch with HTTP 409. Optional only in the sense that the option can be
+ *   omitted; `endCapture` requires an integer >= 1 and throws otherwise
+ *   (fail-closed) once a capture actually completes.
  */
 export const useTypingPatternCapture = ({
     inputElement,

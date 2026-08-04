@@ -20,7 +20,7 @@ The Epigenetic Password Adaptation feature uses reinforcement learning and behav
 
 Everything the client sends is keyed by a fingerprint derived on the device:
 
-```
+```text
 fpKey       = Argon2id(masterPassword, salt = `${fingerprint_salt}:adaptive-fp`)
 fingerprint = base64url(HMAC-SHA256(fpKey, "adaptive-pw|" + password))[:24]
 ```
@@ -131,7 +131,7 @@ After 10+ typing sessions, the system will suggest adaptations:
 |----------|--------|-------------|
 | `/adaptive/preference-model/` | GET | Download the learned preference model (client generates suggestions locally) |
 | `/adaptive/suggest/` | POST | **Deprecated (HTTP 410)** — server-side suggestion removed; use the preference-model pull instead |
-| `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + substitution classes + masked previews; raw passwords rejected) |
+| `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + `fp_key_version` + substitution classes + masked previews; raw passwords rejected) |
 | `/adaptive/rollback/` | POST | Rollback to previous |
 
 ### Profile & History

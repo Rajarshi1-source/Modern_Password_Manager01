@@ -206,8 +206,10 @@ different key eras are never correlated as if they were the same password.
 - Filter every read path (`export_preference_model`, `get_adaptation_history`,
   `get_evolution_stats`, `get_typing_profile`) by the config's **current**
   `fp_key_version`.
-- New migration `0021_adaptive_fingerprint_salt`. Data migration: backfill a salt
-  for existing enabled configs.
+- New migration. Data migration: backfill a salt for existing enabled configs.
+  *(Shipped as `0024_adaptive_fingerprint_key_era.py` — the number in this plan
+  was a placeholder written before implementation; `0021`–`0023` were taken by
+  unrelated migrations that landed on `main` first.)*
 
 **Rotation endpoint:** `POST /adaptive/rotate-fingerprint-key/` → new salt,
 `fp_key_version += 1`. Old rows are retained but excluded from learning. Hook it
@@ -526,7 +528,7 @@ against fixtures and assert its return payload.
 
 ## 8. Sequencing and risk
 
-```
+```text
 Phase 1 (unblock) ──┬── Phase 2 (safety gate) ──┐
                     │                            ├── Phase 5 (ship)
                     └── Phase 3 (bandit) ── Phase 4 (memorability/errors) ──┘
