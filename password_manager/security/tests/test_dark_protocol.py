@@ -211,9 +211,84 @@ class NoiseEncryptorTests(TestCase):
     def test_generate_timing_noise(self):
         """Test timing noise generation."""
         delay = self.encryptor.generate_timing_noise()
-        
+
         self.assertGreater(delay, 0)
         self.assertLess(delay, 1000)  # Less than 1 second
+
+    def test_pad_to_block_lands_on_next_bucket_at_every_boundary(self):
+        """Round 31/32 review follow-up: a payload of EXACTLY a
+        BLOCK_SIZES value can't fit that bucket once the 4-byte length
+        prefix is counted (block_size bytes + 4 > block_size), so it
+        must move up to the next real bucket. Before the fix,
+        `_pad_to_block` special-cased this as "already big enough" and
+        returned block_size + 4 -- a unique, unbucketed wire size that
+        leaked exactly which payloads sat on a boundary. Pin that every
+        exact-boundary payload now lands on the true next bucket
+        instead."""
+        from security.services.noise_encryptor import BLOCK_SIZES
+
+        for i, block_size in enumerate(BLOCK_SIZES[:-1]):
+            data = secrets.token_bytes(block_size)
+            result = self.encryptor._pad_to_block(data, block_size)
+            expected_next_bucket = BLOCK_SIZES[i + 1]
+            self.assertEqual(
+                len(result), expected_next_bucket,
+                f"payload of exactly {block_size} bytes should land on "
+                f"the {expected_next_bucket} bucket, got {len(result)}",
+            )
+            # Must not be the old buggy "just add the prefix" value.
+            self.assertNotEqual(len(result), block_size + 4)
+
+    def test_pad_to_block_near_largest_block_does_not_double(self):
+        """Round 31 review follow-up: the largest configured block
+        (4096) has no next entry in BLOCK_SIZES to move up to, so a
+        payload landing in its last 4 bytes (4093-4095) used to fall
+        through to `block_size * 2` = 8192 -- doubling the wire size
+        for no reason, right at the ceiling where "just add the
+        prefix, no more padding possible" is already the documented,
+        correct answer for anything at or beyond 4096. Pin the
+        ceiling behavior instead of the doubling."""
+        from security.services.noise_encryptor import BLOCK_SIZES
+
+        largest_block = BLOCK_SIZES[-1]
+        for data_size in (largest_block - 3, largest_block - 2, largest_block - 1):
+            data = secrets.token_bytes(data_size)
+            result = self.encryptor._pad_to_block(data, largest_block)
+            self.assertEqual(len(result), data_size + 4)
+            self.assertNotEqual(len(result), largest_block * 2)
+
+    def test_pad_to_block_typical_case_still_lands_exactly_on_block(self):
+        """Regression guard: the fix must not disturb the common case
+        where the payload already comfortably fits (with the 4-byte
+        prefix) inside the selected block."""
+        from security.services.noise_encryptor import BLOCK_SIZES
+
+        for block_size in BLOCK_SIZES:
+            data = secrets.token_bytes(block_size - 4)
+            result = self.encryptor._pad_to_block(data, block_size)
+            self.assertEqual(len(result), block_size)
+
+    def test_pad_to_block_round_trip_at_every_boundary(self):
+        """Whatever wire size `_pad_to_block` picks, `_remove_block_padding`
+        must recover the exact original bytes -- pinned at every
+        boundary-adjacent size, not just the comfortable middle of a
+        bucket."""
+        from security.services.noise_encryptor import BLOCK_SIZES
+
+        offsets = (-3, -2, -1, 0, 1, 2, 3)
+        for block_size in BLOCK_SIZES:
+            for offset in offsets:
+                data_size = block_size + offset
+                if data_size < 0:
+                    continue
+                data = secrets.token_bytes(data_size)
+                padded = self.encryptor._pad_to_block(data, block_size)
+                recovered = self.encryptor._remove_block_padding(padded)
+                self.assertEqual(
+                    recovered, data,
+                    f"round-trip failed for data_size={data_size}, "
+                    f"block_size={block_size}",
+                )
 
 
 class CoverTrafficGeneratorTests(TestCase):

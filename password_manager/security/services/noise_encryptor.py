@@ -13,23 +13,21 @@ CONTENT of a payload, and REDUCES the precision of its observable size by
 bucketing the padded plaintext into one of a small set of fixed block sizes
 (see BLOCK_SIZES) before a further FIXED 36-byte envelope (12-byte nonce +
 16-byte GCM tag + 8-byte key hash) is appended on the wire. It does not hide
-the size exactly:
-  * A payload already at or beyond the largest block adds no further
-    padding (only the size prefix), so its length is visible past that
-    ceiling.
-  * A payload landing within 4 bytes of a block boundary (see
-    `_pad_to_block`'s `padding_needed` accounting) falls through to the
-    NEXT block size doubled, not the boundary block itself -- a narrow band
-    where the wire size overshoots the bucket a slightly larger payload
-    would land in.
-Neither behavior is exploited by this layer to leak anything on its own; both
-are documented here because a reader relying on "bucketed" as an exact
-guarantee would be wrong in these two cases. It does not make the traffic
-itself unobservable - timing, volume and direction remain visible to anyone
-watching the link, which is why this is one layer of traffic-analysis
-resistance rather than anonymity. The anonymity comes from carrying that
-traffic over a Tor v3 onion circuit (see `tor_service.py`), which has its own
-stated scope and limits - it is not restated here.
+the size exactly: a payload already at or beyond the largest block adds no
+further padding (only the size prefix), so its length is visible past that
+ceiling. `_pad_to_block` picks the smallest BLOCK_SIZES entry that still
+has room for the 4-byte length prefix once the entry it was handed doesn't
+(searching forward through BLOCK_SIZES rather than doubling), so every
+other payload lands on an exact bucket boundary with no narrow overshoot
+band.
+This behavior is not exploited by this layer to leak anything on its own; it
+is documented here because a reader relying on "bucketed" as an exact
+guarantee would be wrong past the largest block's ceiling. It does not make
+the traffic itself unobservable - timing, volume and direction remain
+visible to anyone watching the link, which is why this is one layer of
+traffic-analysis resistance rather than anonymity. The anonymity comes from
+carrying that traffic over a Tor v3 onion circuit (see `tor_service.py`),
+which has its own stated scope and limits - it is not restated here.
 
 Features:
 - Variable-length padding
@@ -103,8 +101,7 @@ class NoiseEncryptor:
     See the module docstring for the precise, non-overclaiming scope of what
     this buys: computational (not statistical) indistinguishability of the
     output bytes, and bucketed (not exact) size hiding -- with a ceiling at
-    the largest configured block size, and a narrow near-boundary band that
-    overshoots to the next block doubled instead of the boundary block.
+    the largest configured block size, past which length is visible.
 
     Goals:
     - Reduce the precision of a payload's observable size (bucketed, bounded)
@@ -305,23 +302,39 @@ class NoiseEncryptor:
         return BLOCK_SIZES[-1]
     
     def _pad_to_block(self, data: bytes, block_size: int) -> bytes:
-        """Pad data to exact block size."""
+        """Pad data to exact block size.
+
+        ``block_size`` itself is never a valid target once the 4-byte size
+        prefix is counted -- a payload of exactly ``block_size`` bytes
+        needs ``block_size + 4`` wire bytes minimum, so it must move up to
+        the next real bucket in BLOCK_SIZES, same as anything else that
+        doesn't leave room for the prefix. Searching BLOCK_SIZES for the
+        next bucket (instead of blindly doubling ``block_size``) matters
+        specifically near the top: doubling the largest configured size
+        (4096) produces 8192, a bucket that doesn't exist in BLOCK_SIZES,
+        for any payload from 4093-4095 bytes -- an unnecessary 2x blowup
+        right at the ceiling where "just add the prefix, no more padding
+        possible" (the same ceiling behavior already used for payloads at
+        or beyond the largest block) is the correct, minimal answer.
+        """
         current_size = len(data)
-        
-        if current_size >= block_size:
-            # Data larger than block, just add size prefix
-            return current_size.to_bytes(4, 'big') + data
-        
-        # Add padding to reach block size
         padding_needed = block_size - current_size - 4  # -4 for size prefix
-        
+
         if padding_needed < 0:
-            # Not enough room, use next block size
-            next_block = block_size * 2
+            # Data (plus the 4-byte prefix) doesn't fit in this bucket.
+            # Move up to the next larger configured bucket that CAN hold
+            # it; if none exists (already at/beyond the largest block),
+            # fall back to the no-further-padding ceiling behavior.
+            next_block = next(
+                (b for b in BLOCK_SIZES if b > block_size and current_size + 4 <= b),
+                None,
+            )
+            if next_block is None:
+                return current_size.to_bytes(4, 'big') + data
             padding_needed = next_block - current_size - 4
-        
+
         padding = os.urandom(padding_needed)
-        
+
         return current_size.to_bytes(4, 'big') + data + padding
     
     def _remove_block_padding(self, data: bytes) -> bytes:

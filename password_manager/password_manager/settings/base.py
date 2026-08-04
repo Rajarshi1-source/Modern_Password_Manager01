@@ -2967,3 +2967,39 @@ for _cert_env_name in ('GENETIC_CERT_SECRET', 'QUANTUM_CERT_SECRET'):
             "print(secrets.token_urlsafe(64))\"`` and set it in your "
             "deploy environment."
         )
+
+
+# =============================================================================
+# Dark Protocol / Tor CSRF review follow-up: production guard on
+# AUTH_REFRESH_COOKIE_SAMESITE
+# =============================================================================
+# ``cookie_auth_view.py`` documents ``SameSite=Strict`` as THE primary CSRF
+# defense for the HttpOnly refresh-token cookie (Django's CsrfViewMiddleware
+# never runs on these DRF views at all -- see the CSRF_TRUSTED_ORIGINS note
+# above). AUTH_REFRESH_COOKIE_SAMESITE is env-overridable so a deployment can
+# relax it for local HTTP testing, but that same knob would silently strip
+# the one real defense on this endpoint if a production deploy ever set it
+# to 'Lax' or 'None' -- there is no middleware-level CSRF check left to
+# catch the gap.
+#
+# Guard structure mirrors the other production guards above: skip in DEBUG
+# (dev may need a relaxed value), skip during TESTING, skip during
+# maintenance commands, fail closed otherwise.
+if (
+    not DEBUG
+    and not TESTING
+    and not _IS_MAINTENANCE_INVOCATION
+    and AUTH_REFRESH_COOKIE_SAMESITE != 'Strict'
+):
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        "AUTH_REFRESH_COOKIE_SAMESITE must be 'Strict' in production "
+        f"deploys (DEBUG=False), got {AUTH_REFRESH_COOKIE_SAMESITE!r}. "
+        "SameSite=Strict is the primary CSRF defense for the HttpOnly "
+        "refresh-token cookie -- Django's CSRF middleware never runs on "
+        "these JWT-authenticated DRF views, so relaxing this to 'Lax' or "
+        "'None' would remove the only real protection with nothing to "
+        "replace it. Leave AUTH_REFRESH_COOKIE_SAMESITE unset (it "
+        "defaults to 'Strict') unless a future cross-site OAuth-style "
+        "flow specifically requires a per-endpoint downgrade."
+    )
