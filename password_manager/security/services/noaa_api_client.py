@@ -511,6 +511,17 @@ class NOAABuoyClient:
         # client; closing it would cause an outage, and a leak is the lesser
         # failure.
         #
+        # Scheduling the close onto the owning loop instead of skipping it
+        # (e.g. `asyncio.run_coroutine_threadsafe(stale.aclose(), stale_loop)`)
+        # does NOT avoid the outage -- it just moves where the close runs.
+        # Empirically verified: closing an httpx.AsyncClient while another
+        # coroutine on its own loop is mid-`await` on a request through it
+        # raises `httpx.ReadError` on that coroutine, tearing down the
+        # in-flight response. The client is genuinely in use; there is no
+        # loop to schedule the close on that does not interrupt whoever is
+        # using it, short of that caller closing its own reference when IT
+        # finishes -- a larger restructuring than this leak justifies.
+        #
         # Best-effort besides: a failure here must never propagate into a buoy
         # fetch, or tidying a leak becomes the outage it was meant to prevent.
         if (
