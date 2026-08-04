@@ -661,11 +661,15 @@ class NOAAClientLoopSafetyTests(TestCase):
         client = noaa_module.NOAABuoyClient()
         client._client = None
         client._client_loop = None
+        errors = []
 
         def get_client_worker():
             async def main():
                 return await client._get_client()
-            asyncio.run(main())
+            try:
+                asyncio.run(main())
+            except Exception as exc:  # noqa: BLE001 - surfaced on the main thread below
+                errors.append(exc)
 
         with patch.object(noaa_module.httpx, 'AsyncClient', _SlowClient):
             t = threading.Thread(target=get_client_worker)
@@ -696,6 +700,7 @@ class NOAAClientLoopSafetyTests(TestCase):
             t.join(timeout=5)
             self.assertFalse(t.is_alive(), "_get_client() thread did not finish")
 
+        self.assertEqual(errors, [], f"_get_client() thread failed: {errors}")
         self.assertGreater(
             elapsed, 0.05,
             f"close() returned after {elapsed:.3f}s while _get_client() should "
