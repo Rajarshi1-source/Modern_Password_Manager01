@@ -83,6 +83,9 @@ const detectInputMethod = () => {
  * @param {Function} [options.onPatternCaptured] - Callback with captured pattern
  * @param {Function} [options.onError] - Error callback
  * @param {Function} [options.fingerprint] - Keyed password-fingerprint function
+ * @param {number} [options.fpKeyVersion] - Fingerprint key era the `fingerprint`
+ *   function was derived under (from GET /adaptive/config/); the server rejects
+ *   a mismatch with HTTP 409.
  */
 export const useTypingPatternCapture = ({
     inputElement,
@@ -90,6 +93,7 @@ export const useTypingPatternCapture = ({
     onPatternCaptured,
     onError,
     fingerprint,
+    fpKeyVersion,
 }) => {
     // State
     const [isCapturing, setIsCapturing] = useState(false);
@@ -176,10 +180,19 @@ export const useTypingPatternCapture = ({
                     'endCapture requires a fingerprint() function (zero-knowledge v2).'
                 );
             }
+            // Fail closed rather than guessing an era: recording under the wrong
+            // fp_key_version would write fingerprints from a dead key into a
+            // live profile, which no later request can detect or undo.
+            if (!Number.isInteger(fpKeyVersion) || fpKeyVersion < 1) {
+                throw new Error(
+                    'endCapture requires fpKeyVersion (see GET /adaptive/config/).'
+                );
+            }
 
             const { length_bucket } = extractFeatures(password);
             const pattern = {
                 schema_version: 2,
+                fp_key_version: fpKeyVersion,
                 password_fingerprint: await fingerprint(password),
                 length_bucket,
                 keystroke_timings: keystrokeTimings.current,
@@ -205,7 +218,7 @@ export const useTypingPatternCapture = ({
             resetSession();
             return null;
         }
-    }, [isCapturing, fingerprint, onPatternCaptured, onError, resetSession]);
+    }, [isCapturing, fingerprint, fpKeyVersion, onPatternCaptured, onError, resetSession]);
 
     // Attach event listeners to input element
     useEffect(() => {

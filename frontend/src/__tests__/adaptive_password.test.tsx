@@ -32,6 +32,9 @@ global.fetch = vi.fn();
 // mistake a base64url-looking literal for a real credential. The real value is
 // produced by cryptoService.passwordFingerprint at runtime.
 const FINGERPRINT_STUB = 'fp-not-a-real-fingerprint';
+// Fingerprint key era, as GET /adaptive/config/ reports it. Required alongside
+// the fingerprint fn on every v2 write (the server 409s on a mismatch).
+const FP_KEY_VERSION = 1;
 
 // The headless TypingPatternCapture attaches its capture/reset helpers directly
 // onto the password input DOM node at mount, so tests that drive capture read
@@ -133,6 +136,7 @@ describe('useTypingPatternCapture Hook', () => {
             inputElement: null,
             enabled: true,
             fingerprint,
+            fpKeyVersion: FP_KEY_VERSION,
             onPatternCaptured: mockCallback,
         }));
 
@@ -161,6 +165,7 @@ describe('useTypingPatternCapture Hook', () => {
         expect(patternData).toHaveProperty('backspace_positions');
         expect(patternData).toHaveProperty('device_type');
         expect(patternData).toHaveProperty('password_fingerprint');
+        expect(patternData).toHaveProperty('fp_key_version', FP_KEY_VERSION);
         expect(patternData).not.toHaveProperty('password');
         expect(JSON.stringify(patternData)).not.toContain('testpass');
     });
@@ -257,6 +262,7 @@ describe('TypingPatternCapture Component (headless)', () => {
                 inputRef={inputRef}
                 enabled
                 fingerprint={fingerprint}
+                fpKeyVersion={FP_KEY_VERSION}
                 onPatternCaptured={onPatternCaptured}
                 onSessionRecorded={onSessionRecorded}
             />
@@ -279,6 +285,7 @@ describe('TypingPatternCapture Component (headless)', () => {
         const pattern = onPatternCaptured.mock.calls[0][0];
         expect(pattern).toMatchObject({
             schema_version: 2,
+            fp_key_version: FP_KEY_VERSION,
             password_fingerprint: FINGERPRINT_STUB,
             length_bucket: expect.any(Number),
             keystroke_timings: expect.any(Array),

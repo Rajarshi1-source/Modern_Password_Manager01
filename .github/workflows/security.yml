@@ -8,6 +8,18 @@ on:
     - cron: "0 3 * * 1"  # weekly
 
 jobs:
+  adaptive-zk-guard:
+    name: Adaptive password zero-knowledge guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: No raw-password fields in adaptive client code
+        run: bash scripts/check-adaptive-zk-client.sh
+
   security:
     runs-on: ubuntu-latest
 
