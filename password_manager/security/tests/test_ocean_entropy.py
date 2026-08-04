@@ -470,7 +470,15 @@ class NOAAClientLoopSafetyTests(TestCase):
     def test_reuses_the_same_client_within_one_loop(self):
         """Multiple calls inside ONE loop must share a single client."""
         import asyncio
+        from security.services import noaa_api_client as noaa_module
         from security.services.noaa_api_client import NOAABuoyClient
+
+        class _FakeClient:
+            def __init__(self, **kwargs):
+                self.is_closed = False
+
+            async def aclose(self):
+                self.is_closed = True
 
         client = NOAABuoyClient()
 
@@ -480,7 +488,11 @@ class NOAAClientLoopSafetyTests(TestCase):
             c = await client._get_client()
             return id(a), id(b), id(c)
 
-        a, b, c = asyncio.run(three_calls())
+        # Patched for the same reason as the neighbouring tests in this class:
+        # unpatched, this builds a real httpx.AsyncClient and its connection
+        # pool that nothing here ever closes.
+        with patch.object(noaa_module.httpx, 'AsyncClient', _FakeClient):
+            a, b, c = asyncio.run(three_calls())
         self.assertEqual(a, b)
         self.assertEqual(b, c)
 
@@ -640,7 +652,7 @@ class NOAAClientLoopSafetyTests(TestCase):
                 # fast, failing the assertion below for a scheduling reason
                 # that has nothing to do with whether the lock is shared.
                 constructing.set()
-                time.sleep(0.15)
+                time.sleep(0.6)
                 self.is_closed = False
 
             async def aclose(self):
@@ -665,8 +677,11 @@ class NOAAClientLoopSafetyTests(TestCase):
 
             # Loop creation/teardown is not part of what this test measures --
             # asyncio.run() does both inside its call, which would otherwise
-            # eat into the tight margin between the 0.05s threshold and the
-            # getter thread's 0.15s construction window on a loaded runner.
+            # eat into the margin between the 0.05s threshold and the getter
+            # thread's construction window on a loaded runner. That window was
+            # widened from 0.15s to 0.6s (rounds 24/29 both had to correct
+            # this test for scheduling-noise flakiness; more headroom this
+            # time rather than a third narrow margin).
             # close() has no cross-loop dependency of its own (unlike
             # _get_client(), it does not track which loop it ran on), so a
             # loop built here and never installed as "current" is equivalent.
