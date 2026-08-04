@@ -111,6 +111,21 @@ case "${onion_target_host}" in
                 # HiddenServicePort requires the bracketed [addr]:port form, so
                 # an unbracketed one fails Tor's config parser and the
                 # container never starts. Bracket it when it is all we have.
+                #
+                # `addr = $NF` below is not a bug: it has been raised and
+                # re-verified as a false positive multiple times, on the claim
+                # that busybox can print an answer line as
+                # "Address 1: <ip> <hostname>" (numbered, trailing hostname),
+                # which would make $NF the hostname instead of the address.
+                # Fetched this image's ACTUAL busybox source (alpine:3.21,
+                # busybox 1.37.0): FEATURE_NSLOOKUP_BIG is compiled in, and
+                # that mode's answer-line printf is exactly
+                # "Name:\t%s\nAddress: %s\n" -- never numbered, never a
+                # trailing hostname. The numbered/hostname format only exists
+                # under `#if !ENABLE_FEATURE_NSLOOKUP_BIG`, which this image
+                # does not compile. If the base image or its busybox package
+                # ever changes, re-verify against the ACTUAL compiled source
+                # before "fixing" this.
                 resolved_host=$(printf '%s\n' "${nslookup_out}" | awk '
                     /^Name:/ { in_answer = 1 }
                     in_answer && /^Address/ {
