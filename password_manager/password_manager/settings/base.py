@@ -860,7 +860,16 @@ AUTH_REFRESH_COOKIE_SECURE = (
     os.environ.get('AUTH_REFRESH_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes')
     or not DEBUG
 )
-AUTH_REFRESH_COOKIE_SAMESITE = os.environ.get('AUTH_REFRESH_COOKIE_SAMESITE', 'Strict')
+# PR #464 review follow-up: normalize blank/whitespace-only the same way
+# JWT_PRIVATE_KEY / DATA_ENCRYPTION_KEY do below -- ``os.environ.get(key,
+# default)`` only falls back to ``default`` when the key is truly ABSENT,
+# not when it's present-but-blank (e.g. an unresolved CI template
+# interpolation). Without this, a blank value would flow through as the
+# literal SameSite attribute, and Django's ``set_cookie`` silently drops
+# a falsy SameSite value instead of erroring -- treat blank as "unset".
+AUTH_REFRESH_COOKIE_SAMESITE = (
+    os.environ.get('AUTH_REFRESH_COOKIE_SAMESITE') or ''
+).strip() or 'Strict'
 
 # JWT Settings
 SIMPLE_JWT = {
@@ -2985,11 +2994,20 @@ for _cert_env_name in ('GENETIC_CERT_SECRET', 'QUANTUM_CERT_SECRET'):
 # Guard structure mirrors the other production guards above: skip in DEBUG
 # (dev may need a relaxed value), skip during TESTING, skip during
 # maintenance commands, fail closed otherwise.
+#
+# PR #464 review (Codex): compare case-insensitively. Django's own
+# ``HttpResponse.set_cookie`` validates SameSite via
+# ``samesite.lower() not in ("lax", "none", "strict")`` and stores
+# whatever case was passed through unchanged -- browsers parse the
+# Set-Cookie SameSite attribute case-insensitively too. An exact
+# ``!= 'Strict'`` comparison would fail startup on a deploy that set
+# ``AUTH_REFRESH_COOKIE_SAMESITE=strict`` (or any other casing), even
+# though that value is functionally identical to 'Strict'.
 if (
     not DEBUG
     and not TESTING
     and not _IS_MAINTENANCE_INVOCATION
-    and AUTH_REFRESH_COOKIE_SAMESITE != 'Strict'
+    and AUTH_REFRESH_COOKIE_SAMESITE.strip().lower() != 'strict'
 ):
     from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured(

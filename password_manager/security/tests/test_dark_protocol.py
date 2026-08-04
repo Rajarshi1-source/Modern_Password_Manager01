@@ -209,11 +209,18 @@ class NoiseEncryptorTests(TestCase):
         self.assertGreater(entropy, 7.0)
     
     def test_generate_timing_noise(self):
-        """Test timing noise generation."""
+        """Test timing noise generation.
+
+        PR #464 review (CodeRabbit): both bounds are inclusive, not
+        exclusive -- ``base = int(random.expovariate(...))`` can floor
+        to 0, and ``min(base + uniform + spike, 1000)`` can hit the
+        1000 cap exactly, so a strict > / < assertion would
+        occasionally fail on valid output.
+        """
         delay = self.encryptor.generate_timing_noise()
 
-        self.assertGreater(delay, 0)
-        self.assertLess(delay, 1000)  # Less than 1 second
+        self.assertGreaterEqual(delay, 0)
+        self.assertLessEqual(delay, 1000)  # At most 1 second
 
     def test_pad_to_block_lands_on_next_bucket_at_every_boundary(self):
         """Round 31/32 review follow-up: a payload of EXACTLY a
