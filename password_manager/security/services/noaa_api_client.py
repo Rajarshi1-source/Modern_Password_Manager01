@@ -520,7 +520,7 @@ class NOAABuoyClient:
         ):
             try:
                 await stale.aclose()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - cleanup failure must not fail a fetch
                 logger.debug("Discarding stale NOAA client without close: %s", exc)
         return client
 
@@ -553,7 +553,7 @@ class NOAABuoyClient:
         if client is not None and not client.is_closed:
             try:
                 await client.aclose()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - cleanup failure must not mask teardown
                 logger.debug("Discarding NOAA client without close: %s", exc)
     
     def _check_rate_limit(self, buoy_id: str) -> bool:
