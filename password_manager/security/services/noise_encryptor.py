@@ -13,13 +13,16 @@ CONTENT of a payload, and REDUCES the precision of its observable size by
 bucketing the padded plaintext into one of a small set of fixed block sizes
 (see BLOCK_SIZES) before a further FIXED 36-byte envelope (12-byte nonce +
 16-byte GCM tag + 8-byte key hash) is appended on the wire. It does not hide
-the size exactly: a payload already at or beyond the largest block adds no
-further padding (only the size prefix), so its length is visible past that
-ceiling. `_pad_to_block` picks the smallest BLOCK_SIZES entry that still
-has room for the 4-byte length prefix once the entry it was handed doesn't
-(searching forward through BLOCK_SIZES rather than doubling), so every
-other payload lands on an exact bucket boundary with no narrow overshoot
-band.
+the size exactly: once `len(data) + 4` (the 4-byte length prefix included)
+exceeds the largest configured block, no further padding is added (only the
+size prefix), so length is visible past that ceiling -- this starts 4 bytes
+BELOW the largest block, not just at or above it, since a payload of exactly
+`BLOCK_SIZES[-1]` bytes already needs `BLOCK_SIZES[-1] + 4` wire bytes and
+has nowhere further to go. `_pad_to_block` picks the smallest BLOCK_SIZES
+entry that still has room for the 4-byte length prefix once the entry it was
+handed doesn't (searching forward through BLOCK_SIZES rather than doubling),
+so every payload below that ceiling lands on an exact bucket boundary with
+no narrow overshoot band.
 This behavior is not exploited by this layer to leak anything on its own; it
 is documented here because a reader relying on "bucketed" as an exact
 guarantee would be wrong past the largest block's ceiling. It does not make

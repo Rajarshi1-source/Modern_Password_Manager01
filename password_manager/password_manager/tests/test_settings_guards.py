@@ -128,6 +128,12 @@ def _run_settings_import_in_subprocess(env_overrides, argv0='gunicorn'):
         # "cert secret unset" test cases.
         'GENETIC_CERT_SECRET',
         'QUANTUM_CERT_SECRET',
+        # PR #464 review (CodeRabbit / Codex): seed so a host-level or
+        # .env export of AUTH_REFRESH_COOKIE_SAMESITE can't leak into
+        # the "unset defaults to Strict" test case below and make it
+        # test whatever the environment happens to have instead of
+        # the actual base.py default.
+        'AUTH_REFRESH_COOKIE_SAMESITE',
     ):
         env[k] = ''
     env.update(env_overrides)
@@ -566,8 +572,22 @@ class AuthRefreshCookieSamesiteGuardTest(TestCase):
         })
         self.assertIn('SETTINGS_LOADED', stdout)
 
+    def test_guard_silent_with_differently_cased_strict(self):
+        """PR #464 review (Codex): Django's own set_cookie() validates
+        SameSite via ``samesite.lower() not in (...)`` and browsers
+        parse it case-insensitively, so 'strict' (or any other casing)
+        is functionally identical to 'Strict' and must not fail
+        startup."""
+        for value in ('strict', 'STRICT', 'StRiCt'):
+            with self.subTest(value=value):
+                _rc, stdout, stderr = _run_settings_import_in_subprocess({
+                    **self._PRECEDING_GUARDS,
+                    'AUTH_REFRESH_COOKIE_SAMESITE': value,
+                })
+                self.assertIn('SETTINGS_LOADED', stdout, msg=stderr)
+
     def test_guard_silent_when_unset_defaults_to_strict(self):
-        _rc, stdout, stderr = _run_settings_import_in_subprocess({
+        _rc, stdout, _stderr = _run_settings_import_in_subprocess({
             **self._PRECEDING_GUARDS,
             # AUTH_REFRESH_COOKIE_SAMESITE intentionally unset — the
             # base.py default of 'Strict' should satisfy the guard.
