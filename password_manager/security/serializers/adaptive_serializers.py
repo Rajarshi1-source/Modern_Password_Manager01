@@ -372,6 +372,22 @@ class PlaintextRejected(APIException):
     default_code = 'plaintext_rejected'
 
 
+class FingerprintKeyEraMismatch(APIException):
+    """Raised when the client's fingerprint key era is not the server's.
+
+    Returns HTTP 409 (not 400) because nothing about the payload is malformed —
+    the client simply derived its fingerprints under a superseded salt and must
+    re-fetch ``/adaptive/config/`` and re-derive before retrying.
+    """
+
+    status_code = 409
+    default_detail = (
+        'Fingerprint key era mismatch. Re-fetch the adaptive config and '
+        're-derive the fingerprint key before retrying.'
+    )
+    default_code = 'fp_key_era_mismatch'
+
+
 def _fingerprint_field(**kwargs):
     """Build a CharField validating the base64url fingerprint charset/length."""
     return serializers.RegexField(
@@ -459,12 +475,55 @@ class SchemaVersionMixin:
         return value
 
 
+class FingerprintKeyVersionMixin:
+    """Require the payload's ``fp_key_version`` to match the user's current era.
+
+    A stale client that kept a pre-rotation fingerprint key would otherwise
+    write fingerprints from a dead era into a fresh profile, silently poisoning
+    every downstream correlation (rollback chains, and the Phase-3 behavioural
+    reward that joins two fingerprints).
+
+    Fail-closed on a missing context key: if a view forgets to supply the era,
+    every request is rejected rather than accepted under an unverified era. The
+    *deliberate* "user has no config" case is passed through as ``None`` so the
+    service's own opt-in gate produces its canonical 400 instead of a confusing
+    409 — nothing is persisted on that path either way.
+
+    Same declaration caveat as :class:`SchemaVersionMixin`: DRF's metaclass does
+    not collect declared fields from a plain mixin, so concrete serializers must
+    declare ``fp_key_version`` themselves.
+    """
+
+    #: Context key the view must populate.
+    FP_KEY_VERSION_CONTEXT_KEY = 'fp_key_version'
+
+    def validate_fp_key_version(self, value):
+        if self.FP_KEY_VERSION_CONTEXT_KEY not in self.context:
+            raise FingerprintKeyEraMismatch(
+                'Server could not determine the current fingerprint key era.'
+            )
+        expected = self.context[self.FP_KEY_VERSION_CONTEXT_KEY]
+        if expected is None:
+            # No AdaptivePasswordConfig row: the feature was never enabled for
+            # this user. Defer to the service's opt-in gate.
+            return value
+        if value != expected:
+            raise FingerprintKeyEraMismatch(
+                f'Fingerprint key era mismatch: client sent v{value}, server is '
+                f'on v{expected}. Re-fetch GET /api/security/adaptive/config/ '
+                f'and re-derive the fingerprint key before retrying.'
+            )
+        return value
+
+
 class TypingSessionInputV2Serializer(
-    RejectPlaintextMixin, SchemaVersionMixin, serializers.Serializer
+    RejectPlaintextMixin, SchemaVersionMixin, FingerprintKeyVersionMixin,
+    serializers.Serializer
 ):
     """v2 record-session input: fingerprint + coarse features, no password."""
 
     schema_version = serializers.IntegerField(required=True)
+    fp_key_version = serializers.IntegerField(min_value=1, required=True)
     password_fingerprint = _fingerprint_field(required=True)
     length_bucket = serializers.IntegerField(min_value=0, required=True)
     keystroke_timings = serializers.ListField(
@@ -496,11 +555,13 @@ class TypingSessionInputV2Serializer(
 
 
 class ApplyAdaptationV2Serializer(
-    RejectPlaintextMixin, SchemaVersionMixin, serializers.Serializer
+    RejectPlaintextMixin, SchemaVersionMixin, FingerprintKeyVersionMixin,
+    serializers.Serializer
 ):
     """v2 apply input: original/adapted fingerprints + class-level subs only."""
 
     schema_version = serializers.IntegerField(required=True)
+    fp_key_version = serializers.IntegerField(min_value=1, required=True)
     original_fingerprint = _fingerprint_field(required=True)
     adapted_fingerprint = _fingerprint_field(required=True)
     substitutions = serializers.ListField(child=serializers.DictField(), required=True)
@@ -547,6 +608,9 @@ class PreferenceModelSerializer(serializers.Serializer):
     """
 
     model_version = serializers.IntegerField()
+    # Echoed so a client holding a pre-rotation fingerprint key notices the era
+    # change on the model pull, not only when a write is rejected with 409.
+    fp_key_version = serializers.IntegerField()
     substitution_weights = serializers.DictField(
         child=serializers.DictField(child=serializers.FloatField())
     )

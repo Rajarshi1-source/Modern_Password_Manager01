@@ -422,6 +422,10 @@ class AdaptivePasswordService:
             user=self.user,
             password_fingerprint=password_fingerprint,
             length_bucket=length_bucket,
+            # Stamped from the server's own config, never from the request body.
+            # The client's fp_key_version is only ever *compared* (serializer
+            # 409), so a client cannot backdate a row into a dead era.
+            fp_key_version=config.fp_key_version,
             success=session_success,
             error_positions=pattern.error_positions,
             error_count=len(pattern.error_positions),
@@ -533,9 +537,16 @@ class AdaptivePasswordService:
         params — and never any password-derived data.
 
         Returns:
-            ``{model_version, substitution_weights, memorability_params}``.
+            ``{model_version, fp_key_version, substitution_weights,
+            memorability_params}``.
+
+        Note: the profile itself is deliberately NOT era-scoped. It holds
+        behavioural aggregates (WPM, error-prone positions, substitution-class
+        preferences) that describe the *user*, not any particular password, so
+        they stay valid across a fingerprint key rotation. Only the
+        fingerprint-keyed tables (TypingSession, PasswordAdaptation) are scoped.
         """
-        from ..models import UserTypingProfile
+        from ..models import AdaptivePasswordConfig, UserTypingProfile
 
         # Baseline weights from the shared leetspeak map (primary > secondary).
         substitution_weights: Dict[str, Dict[str, float]] = {}
@@ -588,8 +599,13 @@ class AdaptivePasswordService:
             },
         }
 
+        fp_key_version = AdaptivePasswordConfig.objects.filter(
+            user=self.user
+        ).values_list('fp_key_version', flat=True).first() or 1
+
         return {
             'model_version': model_version,
+            'fp_key_version': fp_key_version,
             'substitution_weights': substitution_weights,
             'memorability_params': memorability_params,
         }
@@ -652,10 +668,15 @@ class AdaptivePasswordService:
             with transaction.atomic():
                 # Chain by fingerprint: the previous *active* adaptation whose
                 # adapted fingerprint equals this original is the parent.
+                # Era-scoped: a pre-rotation row can never become the parent of a
+                # post-rotation adaptation. Its fingerprints were derived under a
+                # different key, so treating it as the chain head would link two
+                # unrelated passwords.
                 previous = (
                     PasswordAdaptation.objects.select_for_update()
                     .filter(
                         user=self.user,
+                        fp_key_version=config.fp_key_version,
                         adapted_fingerprint=original_fingerprint,
                         status='active',
                     )
@@ -682,6 +703,7 @@ class AdaptivePasswordService:
                     user=self.user,
                     original_fingerprint=original_fingerprint,
                     adapted_fingerprint=adapted_fingerprint,
+                    fp_key_version=config.fp_key_version,
                     original_masked=previews.get('original_masked', ''),
                     adapted_masked=previews.get('adapted_masked', ''),
                     previous_adaptation=previous,
@@ -731,12 +753,23 @@ class AdaptivePasswordService:
         Returns:
             Rollback result
         """
-        from ..models import PasswordAdaptation, UserTypingProfile
-        
+        from ..models import (
+            AdaptivePasswordConfig, PasswordAdaptation, UserTypingProfile
+        )
+
+        try:
+            config = AdaptivePasswordConfig.objects.get(user=self.user)
+        except AdaptivePasswordConfig.DoesNotExist:
+            return {'error': 'Adaptive passwords not configured'}
+
+        # Era-scoped: rows from a superseded fingerprint key era are retained for
+        # audit but must not be reactivated — their fingerprints no longer
+        # correspond to anything the client can derive.
         try:
             adaptation = PasswordAdaptation.objects.get(
                 id=adaptation_id,
                 user=self.user,
+                fp_key_version=config.fp_key_version,
             )
         except PasswordAdaptation.DoesNotExist:
             return {'error': 'Adaptation not found'}
@@ -774,11 +807,25 @@ class AdaptivePasswordService:
         }
     
     def get_adaptation_history(self) -> List[Dict]:
-        """Get user's adaptation history."""
-        from ..models import PasswordAdaptation
-        
+        """Get user's adaptation history for the CURRENT fingerprint key era.
+
+        Rows from superseded eras are deliberately omitted: their fingerprints
+        were derived under a different key, so presenting them as part of the
+        user's live adaptation chain would be misleading. They remain in the DB
+        and are still covered by the GDPR export/delete paths.
+        """
+        from ..models import AdaptivePasswordConfig, PasswordAdaptation
+
+        try:
+            fp_key_version = AdaptivePasswordConfig.objects.values_list(
+                'fp_key_version', flat=True
+            ).get(user=self.user)
+        except AdaptivePasswordConfig.DoesNotExist:
+            return []
+
         adaptations = PasswordAdaptation.objects.filter(
-            user=self.user
+            user=self.user,
+            fp_key_version=fp_key_version,
         ).order_by('-suggested_at')[:20]
         
         return [

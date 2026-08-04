@@ -1,2 +1,6 @@
 # Ensure GitHub Actions workflow files always use LF line endings
 .github/workflows/*.yml text eol=lf
+
+# Shell scripts must be LF: a CRLF checkout makes bash choke on the trailing
+# \r of every line ("$'\r': command not found") when CI runs them on Linux.
+*.sh text eol=lf

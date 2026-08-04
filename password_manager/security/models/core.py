@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
+import secrets
 import uuid
 
 # Create your models here.
@@ -993,7 +994,32 @@ class AdaptivePasswordConfig(models.Model):
         default=0.5,
         help_text="DP epsilon value (0.1=strong, 1.0=weak, 0.5=balanced)"
     )
-    
+
+    # Zero-knowledge fingerprint key material.
+    #
+    # The client derives its fingerprint key as
+    #   fpKey = Argon2id(masterPassword, salt = f"{fingerprint_salt}:adaptive-fp")
+    # (see frontend/src/services/cryptoService.js::_deriveFingerprintKeyBits).
+    # The salt is therefore NON-SECRET: inverting a stored fingerprint still
+    # requires the master password, which the server never receives. Shipping it
+    # over /adaptive/config/ leaks nothing — it only lets the client reproduce a
+    # stable key across devices and sessions.
+    fingerprint_salt = models.CharField(
+        max_length=64, blank=True, default='',
+        help_text=(
+            "Non-secret per-user salt seeding the CLIENT fingerprint KDF. "
+            "Useless without the master password (which is never transmitted)."
+        )
+    )
+    fp_key_version = models.PositiveIntegerField(
+        default=1,
+        help_text=(
+            "Fingerprint key era. Bumped when the salt is rotated (e.g. on "
+            "master-password change) so fingerprints from different key eras "
+            "are never correlated as if they described the same password."
+        )
+    )
+
     # Feature toggles
     auto_suggest_enabled = models.BooleanField(
         default=True,
@@ -1032,6 +1058,46 @@ class AdaptivePasswordConfig(models.Model):
         days_since = (timezone.now() - self.last_suggestion_at).days
         return days_since >= self.suggestion_frequency_days
 
+    @staticmethod
+    def new_fingerprint_salt():
+        """Mint a fresh non-secret fingerprint salt (128 bits, hex-encoded)."""
+        return secrets.token_hex(16)
+
+    def ensure_fingerprint_salt(self):
+        """Return this user's fingerprint salt, minting one if absent.
+
+        Idempotent on purpose: re-enabling the feature must NEVER mint a second
+        salt, because that silently re-bases every fingerprint the client has
+        already recorded (the stored rows would become unmatchable rather than
+        visibly wrong). Callers that want a deliberate re-base must go through
+        :meth:`rotate_fingerprint_key`, which bumps ``fp_key_version`` so the
+        break is explicit and old rows are excluded from learning.
+
+        Does NOT save — the caller decides the transaction boundary.
+        """
+        if not self.fingerprint_salt:
+            self.fingerprint_salt = self.new_fingerprint_salt()
+        return self.fingerprint_salt
+
+    def rotate_fingerprint_key(self):
+        """Re-base the client fingerprint key and open a new era.
+
+        Mints a new salt and bumps ``fp_key_version``. Every fingerprint the
+        client derives afterwards differs from the previous era's, so prior
+        TypingSession / PasswordAdaptation rows can no longer be correlated —
+        which is the intended, documented behaviour of a master-password change
+        (remediation plan §7). Old rows are retained for audit but are excluded
+        from learning by the era filters on the read paths.
+
+        Does NOT save — the caller decides the transaction boundary.
+
+        Returns:
+            The new ``fp_key_version``.
+        """
+        self.fingerprint_salt = self.new_fingerprint_salt()
+        self.fp_key_version += 1
+        return self.fp_key_version
+
 
 class TypingSession(models.Model):
     """
@@ -1056,6 +1122,10 @@ class TypingSession(models.Model):
         help_text="Client-keyed HMAC fingerprint (base64url); opaque to server")
     length_bucket = models.PositiveIntegerField(null=True, blank=True,
         help_text="Coarse length bucket = floor(len/4) (never the exact length)")
+    # Fingerprint key era this row was recorded under. Stamped from the user's
+    # AdaptivePasswordConfig (server-side), never from the request body.
+    fp_key_version = models.PositiveIntegerField(default=1,
+        help_text="Fingerprint key era (see AdaptivePasswordConfig.fp_key_version)")
 
     # Session outcome
     success = models.BooleanField(
@@ -1095,6 +1165,10 @@ class TypingSession(models.Model):
         indexes = [
             models.Index(fields=['user', '-created_at']),
             models.Index(fields=['user', 'password_fingerprint']),
+            # Era-scoped reads (stats, and the Phase-3 behavioural reward that
+            # compares sessions on two fingerprints within one era).
+            models.Index(fields=['user', 'fp_key_version'],
+                         name='typing_sess_user_fpver_idx'),
         ]
 
     def __str__(self):
@@ -1140,6 +1214,10 @@ class PasswordAdaptation(models.Model):
         help_text="Masked preview of the original password (e.g. ab***yz)")
     adapted_masked = models.CharField(max_length=64, blank=True, default='',
         help_text="Masked preview of the adapted password (e.g. a0***yz)")
+    # Fingerprint key era this row was recorded under. Stamped from the user's
+    # AdaptivePasswordConfig (server-side), never from the request body.
+    fp_key_version = models.PositiveIntegerField(default=1,
+        help_text="Fingerprint key era (see AdaptivePasswordConfig.fp_key_version)")
 
     # Linked list for rollback
     previous_adaptation = models.ForeignKey(
@@ -1189,22 +1267,29 @@ class PasswordAdaptation(models.Model):
             # (user, adapted_fingerprint, status='active').
             models.Index(fields=['user', 'adapted_fingerprint', 'status'],
                          name='pwad_user_adaptfp_status_idx'),
+            # Era-scoped history/stats reads.
+            models.Index(fields=['user', 'fp_key_version'],
+                         name='pwad_user_fpver_idx'),
         ]
         constraints = [
-            # At most one ACTIVE adaptation per (user, adapted_fingerprint) in the
-            # ZK v2 chain — prevents duplicate active heads for the same target.
+            # At most one ACTIVE adaptation per (user, era, adapted_fingerprint)
+            # in the ZK v2 chain — prevents duplicate active heads for the same
+            # target. Scoped by fp_key_version because a key rotation leaves the
+            # previous era's rows 'active' for audit: without the era column a
+            # (vanishingly unlikely, but confusing) cross-era fingerprint
+            # collision would surface as an IntegrityError on a brand-new chain.
             models.UniqueConstraint(
-                fields=['user', 'adapted_fingerprint'],
+                fields=['user', 'fp_key_version', 'adapted_fingerprint'],
                 condition=models.Q(status='active') & ~models.Q(adapted_fingerprint=''),
                 name='uniq_active_adapted_fp_per_user',
             ),
-            # At most one ACTIVE adaptation per (user, original_fingerprint) too,
-            # so two concurrent /apply/ calls from the same current head (to
+            # At most one ACTIVE adaptation per (user, era, original_fingerprint)
+            # too, so two concurrent /apply/ calls from the same current head (to
             # different targets) can't both commit and fork the rollback chain;
             # the second insert hits this constraint and is rejected. Empty
             # fingerprints (placeholder/pending rows) are excluded.
             models.UniqueConstraint(
-                fields=['user', 'original_fingerprint'],
+                fields=['user', 'fp_key_version', 'original_fingerprint'],
                 condition=models.Q(status='active') & ~models.Q(original_fingerprint=''),
                 name='uniq_active_original_fp_per_user',
             ),

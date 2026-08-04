@@ -92,6 +92,10 @@ const detectInputMethod = () => {
  * @param {boolean} options.enabled - Whether to capture patterns
  * @param {Function} options.onPatternCaptured - Callback with captured pattern
  * @param {Function} options.onError - Error callback
+ * @param {Function} options.fingerprint - Keyed password-fingerprint function
+ * @param {number} options.fpKeyVersion - Fingerprint key era the `fingerprint`
+ *   function was derived under (from GET /adaptive/config/). The server rejects
+ *   a mismatch with HTTP 409 rather than recording under the wrong era.
  */
 export const useTypingPattern = ({
     inputElement,
@@ -99,6 +103,7 @@ export const useTypingPattern = ({
     onPatternCaptured,
     onError,
     fingerprint,
+    fpKeyVersion,
 }) => {
     // Refs for tracking state
     const keystrokeTimings = useRef([]);
@@ -161,10 +166,19 @@ export const useTypingPattern = ({
                     'capturePattern requires a fingerprint() function (zero-knowledge v2).'
                 );
             }
+            // Fail closed rather than guessing an era: recording under the wrong
+            // fp_key_version would write fingerprints from a dead key into a
+            // live profile, which no later request can detect or undo.
+            if (!Number.isInteger(fpKeyVersion) || fpKeyVersion < 1) {
+                throw new Error(
+                    'capturePattern requires fpKeyVersion (see GET /adaptive/config/).'
+                );
+            }
 
             const { length_bucket } = extractFeatures(password);
             const pattern = {
                 schema_version: 2,
+                fp_key_version: fpKeyVersion,
                 password_fingerprint: await fingerprint(password),
                 length_bucket,
                 keystroke_timings: keystrokeTimings.current,
@@ -190,7 +204,7 @@ export const useTypingPattern = ({
             resetSession();
             return null;
         }
-    }, [enabled, fingerprint, onPatternCaptured, onError, resetSession]);
+    }, [enabled, fingerprint, fpKeyVersion, onPatternCaptured, onError, resetSession]);
 
     // Attach event listeners
     useEffect(() => {
@@ -225,6 +239,7 @@ export const useTypingPattern = ({
  * @param {boolean} [props.autoSubmit] - Auto-submit pattern to API (defaults to true)
  * @param {string} [props.apiEndpoint] - API endpoint for recording
  * @param {Function} [props.fingerprint] - Keyed password-fingerprint function
+ * @param {number} [props.fpKeyVersion] - Fingerprint key era (from /adaptive/config/)
  */
 const TypingPatternCapture = ({
     inputRef,
@@ -234,6 +249,7 @@ const TypingPatternCapture = ({
     autoSubmit = true,
     apiEndpoint = '/api/security/adaptive/record-session/',
     fingerprint,
+    fpKeyVersion,
 }) => {
     const [isRecording, setIsRecording] = useState(false);
     const [error, setError] = useState(null);
@@ -243,6 +259,7 @@ const TypingPatternCapture = ({
         inputElement: inputRef?.current,
         enabled,
         fingerprint,
+        fpKeyVersion,
         onPatternCaptured: async (pattern) => {
             if (onPatternCaptured) {
                 onPatternCaptured(pattern);
@@ -296,9 +313,52 @@ export default TypingPatternCapture;
 export const adaptivePasswordService = {
     /**
      * Check if adaptive passwords are enabled for user.
+     *
+     * Also the source of `fingerprint_salt` + `fp_key_version`, which the client
+     * needs before it can compute any fingerprint at all.
      */
     async getConfig() {
         const response = await axios.get('/api/security/adaptive/config/');
+        return response.data;
+    },
+
+    /**
+     * Build the keyed fingerprint function every other call site expects.
+     *
+     * Takes the caller's *unlocked* CryptoService instance rather than owning
+     * one, because deriving the key needs the in-memory master password, which
+     * only the unlocked session holds. The derived key is cached on that
+     * instance (Argon2id is expensive; the per-call HMAC is not).
+     *
+     * @param {import('../../services/cryptoService').CryptoService} cryptoService
+     *   An unlocked CryptoService.
+     * @param {string} fingerprintSalt - `fingerprint_salt` from {@link getConfig}.
+     * @returns {(password: string) => Promise<string>} Fingerprint function.
+     */
+    makeFingerprinter(cryptoService, fingerprintSalt) {
+        if (!cryptoService || typeof cryptoService.passwordFingerprint !== 'function') {
+            throw new Error('makeFingerprinter requires an unlocked CryptoService.');
+        }
+        if (typeof fingerprintSalt !== 'string' || fingerprintSalt.length === 0) {
+            throw new Error(
+                'makeFingerprinter requires the per-user fingerprint_salt from /adaptive/config/.'
+            );
+        }
+        return (password) => cryptoService.passwordFingerprint(password, fingerprintSalt);
+    },
+
+    /**
+     * Re-base the fingerprint key after a master-password change.
+     *
+     * Returns the new `{ fingerprint_salt, fp_key_version }`; the caller must
+     * rebuild its fingerprinter from them. Prior-era rows stay in the database
+     * for audit but drop out of history, stats and rollback.
+     */
+    async rotateFingerprintKey() {
+        const response = await axios.post(
+            '/api/security/adaptive/rotate-fingerprint-key/',
+            { confirm: true },
+        );
         return response.data;
     },
 
@@ -387,11 +447,23 @@ export const adaptivePasswordService = {
      * @param {Array} substitutions - Ranked subs from {@link suggestAdaptation}.
      * @param {Object} opts
      * @param {(pw: string) => Promise<string>} opts.fingerprint - Keyed fingerprint fn.
+     * @param {number} opts.fpKeyVersion - Era the fingerprint fn was derived under.
      * @param {number} [opts.memorabilityImprovement] - Optional client estimate.
      */
-    async applyAdaptation(originalPassword, substitutions, { fingerprint, memorabilityImprovement } = {}) {
+    async applyAdaptation(
+        originalPassword,
+        substitutions,
+        { fingerprint, fpKeyVersion, memorabilityImprovement } = {},
+    ) {
         if (typeof fingerprint !== 'function') {
             throw new Error('applyAdaptation requires a fingerprint() function (zero-knowledge v2).');
+        }
+        // Fail closed: an adaptation recorded under the wrong era would be
+        // chained onto — or orphaned from — the wrong rollback history.
+        if (!Number.isInteger(fpKeyVersion) || fpKeyVersion < 1) {
+            throw new Error(
+                'applyAdaptation requires fpKeyVersion (see GET /adaptive/config/).'
+            );
         }
 
         const adaptedPassword = applySubstitutions(originalPassword, substitutions);
@@ -412,6 +484,7 @@ export const adaptivePasswordService = {
 
         const response = await axios.post('/api/security/adaptive/apply/', {
             schema_version: 2,
+            fp_key_version: fpKeyVersion,
             original_fingerprint,
             adapted_fingerprint,
             substitutions: classes,

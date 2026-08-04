@@ -167,6 +167,8 @@ urlpatterns = [
     path('adaptive/config/', adaptive_password_views.get_adaptive_config, name='adaptive-config'),
     path('adaptive/enable/', adaptive_password_views.enable_adaptive_passwords, name='adaptive-enable'),
     path('adaptive/disable/', adaptive_password_views.disable_adaptive_passwords, name='adaptive-disable'),
+    # Re-base the client fingerprint key (call on master-password change).
+    path('adaptive/rotate-fingerprint-key/', adaptive_password_views.rotate_fingerprint_key, name='adaptive-rotate-fingerprint-key'),
     
     # Typing Session Recording
     path('adaptive/record-session/', adaptive_password_views.record_typing_session, name='adaptive-record-session'),

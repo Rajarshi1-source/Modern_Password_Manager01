@@ -23,6 +23,7 @@ from security.serializers.adaptive_serializers import (
     TypingSessionInputV2Serializer,
     ApplyAdaptationV2Serializer,
     PlaintextRejected,
+    FingerprintKeyEraMismatch,
 )
 
 # A valid client fingerprint: unpadded base64url, 24 chars (see PR-1).
@@ -77,10 +78,25 @@ class RejectPlaintextSerializerTests(TestCase):
 
 class V2FieldValidationTests(TestCase):
 
+    #: The user's current fingerprint key era, as the views supply it. Handed to
+    #: each serializer as a FRESH dict (see `_context`) — DRF exposes the very
+    #: object passed as `serializer.context`, so sharing one class-level dict
+    #: would let any test that mutates it leak into every later test.
+    #:
+    #: Every construction here goes through the helpers below so the context is
+    #: never accidentally omitted, which would fail closed with a 409
+    #: (FingerprintKeyEraMismatch) instead of exercising the field under test.
+    FP_KEY_VERSION = 1
+
+    def _context(self):
+        """A fresh serializer context (never shared between serializers)."""
+        return {'fp_key_version': self.FP_KEY_VERSION}
+
     def _base_record(self, **overrides):
         """Build a base valid v2 record-session payload."""
         data = {
             'schema_version': 2,
+            'fp_key_version': 1,
             'password_fingerprint': FP_ORIGINAL,
             'length_bucket': 3,
             'keystroke_timings': [100, 120, 90],
@@ -88,32 +104,45 @@ class V2FieldValidationTests(TestCase):
         data.update(overrides)
         return data
 
+    def _record_serializer(self, context=None, **overrides):
+        """Record serializer over a base payload, with the view's context."""
+        return TypingSessionInputV2Serializer(
+            data=self._base_record(**overrides),
+            context=self._context() if context is None else context,
+        )
+
+    def _apply_serializer(self, **overrides):
+        """Apply serializer over a base payload, with the view's context."""
+        data = {
+            'schema_version': 2,
+            'fp_key_version': 1,
+            'original_fingerprint': FP_ORIGINAL,
+            'adapted_fingerprint': FP_ADAPTED,
+            'substitutions': [{'from': 'o', 'to': '0'}],
+        }
+        data.update(overrides)
+        return ApplyAdaptationV2Serializer(data=data, context=self._context())
+
     def test_valid_record_payload(self):
         """Valid record payload."""
-        serializer = TypingSessionInputV2Serializer(data=self._base_record())
+        serializer = self._record_serializer()
         self.assertTrue(serializer.is_valid(), serializer.errors)
 
     def test_rejects_bad_fingerprint_charset(self):
         """Rejects bad fingerprint charset."""
-        serializer = TypingSessionInputV2Serializer(
-            data=self._base_record(password_fingerprint='not valid! chars')
-        )
+        serializer = self._record_serializer(password_fingerprint='not valid! chars')
         self.assertFalse(serializer.is_valid())
         self.assertIn('password_fingerprint', serializer.errors)
 
     def test_rejects_short_fingerprint(self):
         """Rejects short fingerprint."""
-        serializer = TypingSessionInputV2Serializer(
-            data=self._base_record(password_fingerprint='short')
-        )
+        serializer = self._record_serializer(password_fingerprint='short')
         self.assertFalse(serializer.is_valid())
         self.assertIn('password_fingerprint', serializer.errors)
 
     def test_rejects_wrong_schema_version(self):
         """Rejects wrong schema version."""
-        serializer = TypingSessionInputV2Serializer(
-            data=self._base_record(schema_version=1)
-        )
+        serializer = self._record_serializer(schema_version=1)
         self.assertFalse(serializer.is_valid())
         self.assertIn('schema_version', serializer.errors)
 
@@ -121,64 +150,70 @@ class V2FieldValidationTests(TestCase):
         """Rejects missing schema version."""
         payload = self._base_record()
         payload.pop('schema_version')
-        serializer = TypingSessionInputV2Serializer(data=payload)
+        serializer = TypingSessionInputV2Serializer(data=payload, context=self._context())
         self.assertFalse(serializer.is_valid())
         self.assertIn('schema_version', serializer.errors)
 
+    def test_rejects_missing_fp_key_version(self):
+        """A payload without fp_key_version is a 400, not a silent accept."""
+        payload = self._base_record()
+        payload.pop('fp_key_version')
+        serializer = TypingSessionInputV2Serializer(data=payload, context=self._context())
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('fp_key_version', serializer.errors)
+
+    def test_rejects_stale_fp_key_version_with_409(self):
+        """A superseded key era raises 409, not a validation error."""
+        # Client still on era 1; server has rotated to 7.
+        serializer = self._record_serializer(
+            context={'fp_key_version': 7}, fp_key_version=1
+        )
+        with self.assertRaises(FingerprintKeyEraMismatch) as ctx:
+            serializer.is_valid(raise_exception=True)
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_missing_context_fails_closed(self):
+        # If a view forgets to supply the era, reject rather than accept an
+        # unverified one. Guards against a future endpoint silently skipping it.
+        """Missing serializer context fails closed with 409."""
+        serializer = TypingSessionInputV2Serializer(data=self._base_record())
+        with self.assertRaises(FingerprintKeyEraMismatch):
+            serializer.is_valid(raise_exception=True)
+
     def test_apply_rejects_equal_fingerprints(self):
         """Apply rejects equal fingerprints."""
-        serializer = ApplyAdaptationV2Serializer(data={
-            'schema_version': 2,
-            'original_fingerprint': FP_ORIGINAL,
-            'adapted_fingerprint': FP_ORIGINAL,  # same → invalid
-            'substitutions': [{'from': 'o', 'to': '0'}],
-        })
+        serializer = self._apply_serializer(adapted_fingerprint=FP_ORIGINAL)
         self.assertFalse(serializer.is_valid())
 
     def test_apply_rejects_non_class_substitution(self):
         """Apply rejects non class substitution."""
-        serializer = ApplyAdaptationV2Serializer(data={
-            'schema_version': 2,
-            'original_fingerprint': FP_ORIGINAL,
-            'adapted_fingerprint': FP_ADAPTED,
-            'substitutions': [{'from': 'oo', 'to': '0'}],  # 'from' not single char
-        })
+        # 'from' not single char
+        serializer = self._apply_serializer(substitutions=[{'from': 'oo', 'to': '0'}])
         self.assertFalse(serializer.is_valid())
 
     def test_apply_rejects_extra_substitution_field(self):
         # Position/char metadata could reveal the password — reject extra keys.
         """Apply rejects extra substitution field."""
-        serializer = ApplyAdaptationV2Serializer(data={
-            'schema_version': 2,
-            'original_fingerprint': FP_ORIGINAL,
-            'adapted_fingerprint': FP_ADAPTED,
-            'substitutions': [{'from': 'o', 'to': '0', 'position': 3}],
-        })
+        serializer = self._apply_serializer(
+            substitutions=[{'from': 'o', 'to': '0', 'position': 3}]
+        )
         self.assertFalse(serializer.is_valid())
         self.assertIn('substitutions', serializer.errors)
 
     def test_apply_rejects_plaintext_preview(self):
         # A "preview" with no mask character is plaintext — reject it.
         """Apply rejects plaintext preview."""
-        serializer = ApplyAdaptationV2Serializer(data={
-            'schema_version': 2,
-            'original_fingerprint': FP_ORIGINAL,
-            'adapted_fingerprint': FP_ADAPTED,
-            'substitutions': [{'from': 'o', 'to': '0'}],
-            'previews': {'original_masked': 'password', 'adapted_masked': 'passw0rd'},
-        })
+        serializer = self._apply_serializer(
+            previews={'original_masked': 'password', 'adapted_masked': 'passw0rd'}
+        )
         self.assertFalse(serializer.is_valid())
         self.assertIn('previews', serializer.errors)
 
     def test_apply_accepts_masked_preview(self):
         """Apply accepts masked preview."""
-        serializer = ApplyAdaptationV2Serializer(data={
-            'schema_version': 2,
-            'original_fingerprint': FP_ORIGINAL,
-            'adapted_fingerprint': FP_ADAPTED,
-            'substitutions': [{'from': 'o', 'to': '0'}],
-            'previews': {'original_masked': 'pa***rd', 'adapted_masked': 'pa***rd'},
-        })
+        serializer = self._apply_serializer(
+            previews={'original_masked': 'pa***rd', 'adapted_masked': 'pa***rd'}
+        )
         self.assertTrue(serializer.is_valid(), serializer.errors)
 
 
@@ -408,6 +443,7 @@ class ZKV2APITests(APITestCase):
         self._enable()
         response = self.client.post('/api/security/adaptive/record-session/', {
             'schema_version': 2,
+            'fp_key_version': 1,
             'password_fingerprint': FP_ORIGINAL,
             'length_bucket': 3,
             'keystroke_timings': [100, 120, 90, 110],
@@ -454,6 +490,7 @@ class ZKV2APITests(APITestCase):
         self._enable()  # apply is gated on opt-in
         response = self.client.post('/api/security/adaptive/apply/', {
             'schema_version': 2,
+            'fp_key_version': 1,
             'original_fingerprint': FP_ORIGINAL,
             'adapted_fingerprint': FP_ADAPTED,
             'substitutions': [{'from': 'o', 'to': '0', 'confidence': 0.9}],

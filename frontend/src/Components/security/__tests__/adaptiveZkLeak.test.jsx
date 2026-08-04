@@ -16,6 +16,11 @@ vi.mock('axios');
 
 const SECRET = 'Sup3rSecret-Passw0rd!';
 
+// Fingerprint key era, as GET /adaptive/config/ reports it. Required on every
+// v2 write: the server rejects a mismatch with HTTP 409 rather than recording
+// fingerprints from a superseded key against a live profile.
+const FP_KEY_VERSION = 1;
+
 // Deterministic, non-leaking keyed-fingerprint stand-in (real impl:
 // cryptoService.passwordFingerprint). Differs per password; never contains it.
 const fingerprint = vi.fn(async (pw) =>
@@ -49,7 +54,14 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
     input.type = 'password';
     const inputRef = { current: input };
 
-    render(<TypingPatternCapture inputRef={inputRef} enabled fingerprint={fingerprint} />);
+    render(
+      <TypingPatternCapture
+        inputRef={inputRef}
+        enabled
+        fingerprint={fingerprint}
+        fpKeyVersion={FP_KEY_VERSION}
+      />
+    );
 
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
@@ -59,7 +71,11 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
 
     expect(axios.post).toHaveBeenCalledWith(
       expect.stringContaining('/adaptive/record-session/'),
-      expect.objectContaining({ schema_version: 2, password_fingerprint: expect.any(String) }),
+      expect.objectContaining({
+        schema_version: 2,
+        fp_key_version: FP_KEY_VERSION,
+        password_fingerprint: expect.any(String),
+      }),
       expect.any(Object)
     );
     const body = vi.mocked(axios.post).mock.calls[0][1];
@@ -82,7 +98,7 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
   it('applyAdaptation posts only fingerprints, masked previews, and classes', async () => {
     const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET);
     const result = await adaptivePasswordService.applyAdaptation(
-      SECRET, suggestion.substitutions, { fingerprint }
+      SECRET, suggestion.substitutions, { fingerprint, fpKeyVersion: FP_KEY_VERSION }
     );
 
     const body = vi.mocked(axios.post).mock.calls[0][1];
@@ -94,6 +110,7 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
     expect(JSON.stringify(body)).not.toContain(result.adaptedPassword);
     expect(body).toMatchObject({
       schema_version: 2,
+      fp_key_version: FP_KEY_VERSION,
       original_fingerprint: expect.any(String),
       adapted_fingerprint: expect.any(String),
     });
@@ -115,5 +132,80 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
     }
 
     assertNoSecret(vi.mocked(axios.post).mock.calls);
+  });
+});
+
+describe('adaptive ZK v2 — fingerprint key era', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(axios.post).mockResolvedValue({ data: { ok: true } });
+    vi.mocked(axios.get).mockResolvedValue({ data: PREFERENCE_MODEL });
+  });
+
+  it('record-session refuses to post without an era', async () => {
+    // Fail closed: recording under a guessed era would write fingerprints from
+    // a possibly-dead key into a live profile, which nothing downstream can
+    // detect or undo. Nothing must reach the wire.
+    const input = document.createElement('input');
+    input.type = 'password';
+    const inputRef = { current: input };
+    const onError = vi.fn();
+
+    render(
+      <TypingPatternCapture
+        inputRef={inputRef}
+        enabled
+        fingerprint={fingerprint}
+        onPatternCaptured={() => {}}
+        onError={onError}
+      />
+    );
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
+    let pattern;
+    await act(async () => {
+      pattern = await inputRef.current.captureTypingPattern(SECRET);
+    });
+
+    expect(pattern).toBeNull();
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('applyAdaptation refuses to post without an era', async () => {
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET);
+    vi.mocked(axios.post).mockClear();
+
+    await expect(
+      adaptivePasswordService.applyAdaptation(SECRET, suggestion.substitutions, {
+        fingerprint,
+      })
+    ).rejects.toThrow(/fpKeyVersion/);
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  it('makeFingerprinter binds the per-user salt and needs an unlocked service', () => {
+    const cryptoService = { passwordFingerprint: vi.fn(async () => 'fp-stub') };
+    const fp = adaptivePasswordService.makeFingerprinter(cryptoService, 'deadbeef');
+
+    fp(SECRET);
+    expect(cryptoService.passwordFingerprint).toHaveBeenCalledWith(SECRET, 'deadbeef');
+
+    expect(() => adaptivePasswordService.makeFingerprinter(null, 'deadbeef')).toThrow();
+    expect(() => adaptivePasswordService.makeFingerprinter(cryptoService, '')).toThrow();
+  });
+
+  it('rotateFingerprintKey sends an explicit confirmation', async () => {
+    vi.mocked(axios.post).mockResolvedValue({
+      data: { success: true, fingerprint_salt: 'cafebabe', fp_key_version: 2 },
+    });
+
+    const result = await adaptivePasswordService.rotateFingerprintKey();
+
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('/adaptive/rotate-fingerprint-key/'),
+      { confirm: true }
+    );
+    expect(result.fp_key_version).toBe(2);
   });
 });

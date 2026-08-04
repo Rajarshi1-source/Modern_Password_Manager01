@@ -313,8 +313,16 @@ class AdaptivePasswordConfigAdmin(admin.ModelAdmin):
         'allow_federated_learning',
     )
     search_fields = ('user__username', 'user__email')
-    readonly_fields = ('id', 'created_at', 'updated_at', 'consent_given_at')
-    
+    # fingerprint_salt / fp_key_version are read-only on purpose: editing either
+    # by hand re-bases the client's fingerprint key, silently orphaning every
+    # recorded session and adaptation. Rotation goes through
+    # POST /adaptive/rotate-fingerprint-key/, which bumps the era so the break
+    # is explicit and prior rows drop out of history/stats/rollback.
+    readonly_fields = (
+        'id', 'created_at', 'updated_at', 'consent_given_at',
+        'fingerprint_salt', 'fp_key_version',
+    )
+
     fieldsets = (
         ('User', {
             'fields': ('id', 'user')
@@ -325,6 +333,14 @@ class AdaptivePasswordConfigAdmin(admin.ModelAdmin):
                 'auto_suggest_enabled',
                 'suggestion_frequency_days',
             )
+        }),
+        ('Zero-Knowledge Fingerprint Key', {
+            'fields': ('fingerprint_salt', 'fp_key_version'),
+            'description': (
+                'Non-secret salt seeding the CLIENT-side Argon2id fingerprint '
+                'KDF (the master password is never transmitted). Read-only — '
+                'rotate via POST /api/security/adaptive/rotate-fingerprint-key/.'
+            ),
         }),
         ('Privacy Settings', {
             'fields': (
