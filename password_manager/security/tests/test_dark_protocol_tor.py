@@ -1276,6 +1276,26 @@ class TimeoutCoercionTests(TestCase):
         self.assertEqual(tor_module._positive_number(0, 15), 0)
         self.assertEqual(tor_module._positive_number(0, 9050), 0)
 
+    def test_settings_env_int_falls_back_on_malformed_value(self):
+        """settings/base.py's own coercion must not let a bad env var abort
+        Django startup -- tor_service's helpers above never see a value that
+        didn't already survive this earlier, harder crash."""
+        import os
+        from password_manager.settings.base import _tor_env_int
+
+        with patch.dict(os.environ, {'TOR_TEST_MALFORMED_INT': 'not-a-number'}):
+            self.assertEqual(_tor_env_int('TOR_TEST_MALFORMED_INT', 9051), 9051)
+
+    def test_settings_env_float_preserves_a_fractional_override(self):
+        """A fractional override (e.g. TOR_PEER_RESOLVE_TIMEOUT=0.5) is a
+        legitimate value one layer down, so the settings coercion must not
+        discard it the way `_tor_env_int` would."""
+        import os
+        from password_manager.settings.base import _tor_env_float
+
+        with patch.dict(os.environ, {'TOR_TEST_FRACTIONAL': '0.5'}):
+            self.assertEqual(_tor_env_float('TOR_TEST_FRACTIONAL', 2), 0.5)
+
 
 class OnionReachabilityVetoTests(_TorTestMixin, TestCase):
     """A self-check that ran and failed outranks the control port's answer."""

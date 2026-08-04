@@ -726,13 +726,9 @@ class TorService:
                 # deployment configured with IPs never performs a lookup on
                 # this path.
                 continue
-            # DELIBERATELY NOT CACHED -- raised five times across this PR's
-            # review in slightly different framings (inline TTL cache, then a
-            # 1-2s TTL, then moving the resolution into the periodic
-            # self-check task with a short freshness window). Every one of
-            # those framings has the SAME fail-open: container and pod IPs are
-            # RECYCLED, so any REUSED answer from before the Tor daemon's most
-            # recent restart can name a DIFFERENT workload that now owns that
+            # DELIBERATELY NOT CACHED: container and pod IPs are RECYCLED, so
+            # any REUSED answer from before the Tor daemon's most recent
+            # restart can name a DIFFERENT workload that now owns that
             # address. A resolution timeout does not have this problem: it
             # never reuses an answer across requests, it only stops waiting
             # for THIS request's own fresh lookup -- a timeout can only ever
@@ -837,9 +833,7 @@ class TorService:
             # normally hold CA-issued certificates.
             # The suppression must sit immediately above the line the scanner
             # REPORTS, and for this rule that is the `url` ARGUMENT, not the
-            # call line — hence the comment inside the parentheses. Two earlier
-            # placements (above the rationale, then above the call) both failed
-            # for this reason.
+            # call line — hence the comment inside the parentheses.
             #
             # stream=True in a context manager: this check only reads the
             # status line, and `timeout` bounds each socket operation rather
