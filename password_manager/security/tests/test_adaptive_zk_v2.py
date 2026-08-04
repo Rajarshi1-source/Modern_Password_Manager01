@@ -96,7 +96,7 @@ class V2FieldValidationTests(TestCase):
         """Build a base valid v2 record-session payload."""
         data = {
             'schema_version': 2,
-            'fp_key_version': 1,
+            'fp_key_version': self.FP_KEY_VERSION,
             'password_fingerprint': FP_ORIGINAL,
             'length_bucket': 3,
             'keystroke_timings': [100, 120, 90],
@@ -115,7 +115,7 @@ class V2FieldValidationTests(TestCase):
         """Apply serializer over a base payload, with the view's context."""
         data = {
             'schema_version': 2,
-            'fp_key_version': 1,
+            'fp_key_version': self.FP_KEY_VERSION,
             'original_fingerprint': FP_ORIGINAL,
             'adapted_fingerprint': FP_ADAPTED,
             'substitutions': [{'from': 'o', 'to': '0'}],

@@ -146,10 +146,16 @@ describe('adaptive ZK v2 — fingerprint key era', () => {
     // Fail closed: recording under a guessed era would write fingerprints from
     // a possibly-dead key into a live profile, which nothing downstream can
     // detect or undo. Nothing must reach the wire.
+    //
+    // Note: TypingPatternCapture (the component) does not accept an `onError`
+    // prop — internally it wires useTypingPattern's onError to its own local
+    // setError, which isn't observable from outside. The one guaranteed
+    // observable side effect on this path is console.error, which the catch
+    // block calls unconditionally before checking for an onError handler.
     const input = document.createElement('input');
     input.type = 'password';
     const inputRef = { current: input };
-    const onError = vi.fn();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     render(
       <TypingPatternCapture
@@ -157,7 +163,6 @@ describe('adaptive ZK v2 — fingerprint key era', () => {
         enabled
         fingerprint={fingerprint}
         onPatternCaptured={() => {}}
-        onError={onError}
       />
     );
 
@@ -170,6 +175,12 @@ describe('adaptive ZK v2 — fingerprint key era', () => {
 
     expect(pattern).toBeNull();
     expect(axios.post).not.toHaveBeenCalled();
+    // The fail-closed error must actually surface, not be swallowed silently.
+    expect(consoleError).toHaveBeenCalledWith(
+      'Error capturing pattern:',
+      expect.objectContaining({ message: expect.stringContaining('fpKeyVersion') })
+    );
+    consoleError.mockRestore();
   });
 
   it('applyAdaptation refuses to post without an era', async () => {

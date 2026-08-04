@@ -225,25 +225,43 @@ class FingerprintKeyEraTests(APITestCase):
     def test_era_is_stamped_from_the_server_not_the_payload(self):
         # The client value is only ever *compared*; the stored value comes from
         # the config. A client cannot backdate a row into a dead era.
+        #
+        # Note: the serializer rejects a payload/config mismatch (409) before
+        # either view ever runs, so the payload and the config are necessarily
+        # equal here — this test cannot distinguish "stamped from the payload"
+        # from "stamped from the config" on its own. It exists to catch a
+        # regression where the service reads a *stale* config value (e.g. one
+        # fetched before the request instead of the row fetched fresh in the
+        # service), which is why the assertion compares against a fresh
+        # refresh_from_db() read rather than the literal 5.
         self.config.fp_key_version = 5
         self.config.save(update_fields=['fp_key_version'])
 
-        self.client.post(
+        record_response = self.client.post(
             '/api/security/adaptive/record-session/',
             _record_payload(fp_key_version=5),
             format='json',
         )
-        self.client.post(
+        apply_response = self.client.post(
             '/api/security/adaptive/apply/',
             _apply_payload(fp_key_version=5),
             format='json',
         )
-
         self.assertEqual(
-            TypingSession.objects.get(user=self.user).fp_key_version, 5
+            record_response.status_code, status.HTTP_200_OK, record_response.data
         )
         self.assertEqual(
-            PasswordAdaptation.objects.get(user=self.user).fp_key_version, 5
+            apply_response.status_code, status.HTTP_200_OK, apply_response.data
+        )
+
+        self.config.refresh_from_db()
+        self.assertEqual(
+            TypingSession.objects.get(user=self.user).fp_key_version,
+            self.config.fp_key_version,
+        )
+        self.assertEqual(
+            PasswordAdaptation.objects.get(user=self.user).fp_key_version,
+            self.config.fp_key_version,
         )
 
     def test_plaintext_still_beats_the_era_check(self):
@@ -405,6 +423,10 @@ class AdaptiveFeatureFlagTests(APITestCase):
             ('get', '/api/security/adaptive/history/', None),
             ('get', '/api/security/adaptive/stats/', None),
             ('post', '/api/security/adaptive/rotate-fingerprint-key/', {'confirm': True}),
+            # Mutates adaptation state, so it's on the learning surface (not the
+            # GDPR surface asserted below) — the decorator must short-circuit
+            # before the view ever looks at adaptation_id.
+            ('post', '/api/security/adaptive/rollback/', {'adaptation_id': 1}),
         ]
         for method, url, payload in cases:
             with self.subTest(url=url):

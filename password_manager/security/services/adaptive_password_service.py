@@ -765,29 +765,45 @@ class AdaptivePasswordService:
         # Era-scoped: rows from a superseded fingerprint key era are retained for
         # audit but must not be reactivated — their fingerprints no longer
         # correspond to anything the client can derive.
+        #
+        # Atomic + row-locked, mirroring apply_adaptation_v2: releasing the
+        # child's 'active' slot and reactivating the parent must commit
+        # together, or a failure between the two saves would leave the chain
+        # with no active row at all. select_for_update() also serializes
+        # against a concurrent apply/rollback on the same chain, and the
+        # IntegrityError guard is the DB-level backstop for the era-scoped
+        # uniq_active_original_fp_per_user constraint.
         try:
-            adaptation = PasswordAdaptation.objects.get(
-                id=adaptation_id,
-                user=self.user,
-                fp_key_version=config.fp_key_version,
+            with transaction.atomic():
+                try:
+                    adaptation = PasswordAdaptation.objects.select_for_update().get(
+                        id=adaptation_id,
+                        user=self.user,
+                        fp_key_version=config.fp_key_version,
+                    )
+                except PasswordAdaptation.DoesNotExist:
+                    return {'error': 'Adaptation not found'}
+
+                if not adaptation.can_rollback():
+                    return {'error': 'Cannot rollback this adaptation'}
+
+                previous = adaptation.previous_adaptation
+
+                # Mark current as rolled back
+                adaptation.status = 'rolled_back'
+                adaptation.rolled_back_at = timezone.now()
+                adaptation.save(update_fields=['status', 'rolled_back_at'])
+
+                # Reactivate previous
+                previous.status = 'active'
+                previous.save(update_fields=['status'])
+        except IntegrityError:
+            logger.warning(
+                'Rollback rejected for user %s (active fingerprint clash)',
+                self.user.id,
             )
-        except PasswordAdaptation.DoesNotExist:
-            return {'error': 'Adaptation not found'}
-        
-        if not adaptation.can_rollback():
-            return {'error': 'Cannot rollback this adaptation'}
-        
-        previous = adaptation.previous_adaptation
-        
-        # Mark current as rolled back
-        adaptation.status = 'rolled_back'
-        adaptation.rolled_back_at = timezone.now()
-        adaptation.save()
-        
-        # Reactivate previous
-        previous.status = 'active'
-        previous.save()
-        
+            return {'error': 'An active adaptation for this fingerprint already exists.'}
+
         # Update typing profile to avoid same suggestion
         try:
             profile = UserTypingProfile.objects.get(user=self.user)
