@@ -450,6 +450,53 @@ Verified after this round: 1013 passed / 6 skipped (security backend suite,
 +5 from the 5 new tests — 4 for the race, 1 for the None-default backward-compat
 case), Django `check` clean, `makemigrations --check` clean.
 
+**Fourth review-fix round, on a CodeRabbit pass against the diff between
+`457633e` and `3ebd725` (i.e. reviewing the third round's own fix).** Two
+findings — one applied, one declined after tracing it through the actual
+current code rather than the general heuristic behind it.
+
+- **Applied: bound the salt-backfill's memory use.** The third round's own fix
+  already added `bulk_update(..., batch_size=500)`, but `batch_size` on
+  `bulk_update` only bounds how many rows go into each SQL statement — it does
+  nothing about how many model instances are held in memory *before* the first
+  UPDATE, and the code built that full list up front via
+  `list(Config.objects.using(db).filter(...))`. Fixed by iterating the
+  queryset with `.iterator(chunk_size=500)` and flushing a bounded buffer via
+  `bulk_update` as it fills, so peak memory is O(batch) instead of O(rows).
+  Verified end-to-end on a throwaway sqlite DB with 1203 pre-existing rows
+  (deliberately > 2 batch boundaries): every row got a unique 32-char hex
+  salt, and the reverse/re-forward cycle from the prior round's test still
+  passes unchanged.
+- **Declined: locking `AdaptivePasswordConfig` with `select_for_update()` in
+  `record_typing_session_v2`, `apply_adaptation_v2`, and `rollback_adaptation`.**
+  The claim was that the config read isn't locked against the write, so a
+  rotation committing in between "permits stale-era rows or rollback-chain
+  changes." Traced all three call sites against the exact current code
+  (line-by-line, not from memory) before deciding: in every one, `config` is
+  fetched **exactly once**, and that same in-memory `config.fp_key_version` is
+  reused for both the check (the third round's `expected_fp_key_version` fix)
+  and every subsequent read/write — there is no second database read that
+  could observe an intervening rotation. Since Postgres/MySQL both give
+  READ COMMITTED MVCC snapshots per statement (no torn reads), and the
+  rotation endpoint's own `select_for_update()` only blocks *other*
+  `select_for_update()` callers (not plain reads), the two possible outcomes
+  of a genuinely concurrent rotation are: the read happens before the
+  rotation commits (uses the pre-rotation era, which is *correct* — the
+  fingerprint really was derived under it) or after (uses the post-rotation
+  era, also correct, or caught by the mismatch check if it disagrees with what
+  the view validated). Could not construct a scenario where the current code
+  produces an inconsistent stamp or a corrupted chain. Concluded the suggested
+  lock would add real contention on `record_typing_session_v2` — a
+  per-keystroke-session hot path — against `rotate_fingerprint_key` and
+  against itself under concurrent devices, without closing a gap that exists.
+  This is the *pattern*, not the same finding, as trap 3/6's "verify the fix's
+  own mechanism" — here the reviewer's general heuristic ("reads before writes
+  should be locked") didn't survive contact with what the actual code does
+  with the value it reads.
+
+Verified after this round: 110 passed / 10 subtests (adaptive test files),
+Django `check` clean, `makemigrations --check` clean.
+
 ---
 
 ## 4. Phase 2 — Make the adaptation safe (C1)

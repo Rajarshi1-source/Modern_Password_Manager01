@@ -31,18 +31,30 @@ def backfill_fingerprint_salts(apps, schema_editor):
     manager: this project's ``DATABASE_ROUTERS`` (``PrimaryReplicaRouter``)
     routes reads to a ``replica`` database when one is configured, which would
     otherwise make the read below look at a different connection than the one
-    actually being migrated. ``bulk_update`` batches the writes instead of one
-    UPDATE per row.
+    actually being migrated.
+
+    Reads via ``.iterator()`` and flushes each ``bulk_update`` in bounded
+    batches, so peak memory stays O(batch) rather than O(rows) — passing
+    ``batch_size`` to ``bulk_update`` alone only bounds the size of each SQL
+    statement, not how many model instances are held in memory beforehand, so
+    materializing the whole queryset first (as an earlier version of this
+    migration did) would still load every matching row before issuing a
+    single UPDATE.
     """
     Config = apps.get_model('security', 'AdaptivePasswordConfig')
     db = schema_editor.connection.alias
-    configs = list(Config.objects.using(db).filter(fingerprint_salt=''))
-    for config in configs:
+    batch_size = 500
+    batch = []
+    for config in Config.objects.using(db).filter(fingerprint_salt='').iterator(
+        chunk_size=batch_size
+    ):
         config.fingerprint_salt = secrets.token_hex(16)
-    if configs:
-        Config.objects.using(db).bulk_update(
-            configs, ['fingerprint_salt'], batch_size=500
-        )
+        batch.append(config)
+        if len(batch) >= batch_size:
+            Config.objects.using(db).bulk_update(batch, ['fingerprint_salt'])
+            batch.clear()
+    if batch:
+        Config.objects.using(db).bulk_update(batch, ['fingerprint_salt'])
 
 
 class Migration(migrations.Migration):
