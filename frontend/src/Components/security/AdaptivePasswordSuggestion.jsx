@@ -411,6 +411,47 @@ const FooterInfo = styled.div`
   color: rgba(255, 255, 255, 0.5);
 `;
 
+// Phase 2 (gap C1): guess-resistance is the claim the feature previously made
+// without evidence, so it gets its own panel rather than a footnote.
+const StrengthPanel = styled.div`
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  margin-bottom: 24px;
+`;
+
+const StrengthHeading = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 10px;
+`;
+
+const StrengthRow = styled.div`
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: 'Fira Code', monospace;
+  font-size: 15px;
+  color: #fff;
+`;
+
+const StrengthDelta = styled.span`
+  font-size: 13px;
+  font-weight: 600;
+  color: ${props => (props.$improved ? '#10B981' : 'rgba(255, 255, 255, 0.6)')};
+`;
+
+const StrengthNote = styled.div`
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+`;
+
 // =============================================================================
 // Component
 // =============================================================================
@@ -477,11 +518,26 @@ const AdaptivePasswordSuggestion = ({
         adapted_preview,
         confidence_score,
         memorability_improvement,
+        guesses_log10_before,
+        guesses_log10_after,
+        guesses_log10_delta,
+        rejected_count = 0,
         reason,
     } = suggestion;
 
     const memorabilityBefore = 0.65; // Example - would come from API
     const memorabilityAfter = memorabilityBefore + (memorability_improvement || 0);
+
+    // The strength gate is what makes the "harder for attackers" claim true, so
+    // show the numbers rather than asserting it. Absent when a caller supplied
+    // a suggestion built before Phase 2 (or by a test fixture) — the panel is
+    // simply omitted then, never faked with a placeholder.
+    const hasStrengthReading =
+        typeof guesses_log10_before === 'number' && typeof guesses_log10_after === 'number';
+    const strengthDelta =
+        typeof guesses_log10_delta === 'number'
+            ? guesses_log10_delta
+            : (guesses_log10_after - guesses_log10_before);
 
     return (
         <Overlay onClick={onClose}>
@@ -543,6 +599,39 @@ const AdaptivePasswordSuggestion = ({
                             </SubstitutionItem>
                         ))}
                     </SubstitutionsList>
+
+                    {/* Guess-resistance (Phase 2 strength gate) */}
+                    {hasStrengthReading && (
+                        <StrengthPanel data-testid="adaptive-strength-panel">
+                            <StrengthHeading>
+                                <Shield size={16} />
+                                Guess-resistance (zxcvbn log&#8321;&#8320;)
+                            </StrengthHeading>
+                            <StrengthRow>
+                                <span data-testid="guesses-log10-before">
+                                    {guesses_log10_before.toFixed(2)}
+                                </span>
+                                <ArrowRight size={14} color="rgba(255,255,255,0.5)" />
+                                <span data-testid="guesses-log10-after">
+                                    {guesses_log10_after.toFixed(2)}
+                                </span>
+                                <StrengthDelta
+                                    $improved={strengthDelta > 0}
+                                    data-testid="guesses-log10-delta"
+                                >
+                                    {strengthDelta >= 0 ? '+' : ''}
+                                    {strengthDelta.toFixed(2)}
+                                </StrengthDelta>
+                            </StrengthRow>
+                            <StrengthNote>
+                                {strengthDelta > 0
+                                    ? 'This change makes the password harder to guess.'
+                                    : 'This change keeps the password exactly as hard to guess.'}
+                                {rejected_count > 0
+                                    && ` ${rejected_count} weaker substitution${rejected_count === 1 ? '' : 's'} were dropped.`}
+                            </StrengthNote>
+                        </StrengthPanel>
+                    )}
 
                     {/* Memorability Improvement */}
                     <ImprovementBadge>
