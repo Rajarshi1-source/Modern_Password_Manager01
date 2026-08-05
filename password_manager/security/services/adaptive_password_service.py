@@ -879,10 +879,13 @@ class AdaptivePasswordService:
         except AdaptivePasswordConfig.DoesNotExist:
             return []
 
+        # select_related: can_rollback() below reads self.previous_adaptation
+        # (a FK) on every 'active' row; without this, each such row issues its
+        # own lazy SELECT (N+1) instead of a single JOIN.
         adaptations = PasswordAdaptation.objects.filter(
             user=self.user,
             fp_key_version=fp_key_version,
-        ).order_by('-suggested_at')[:20]
+        ).select_related('previous_adaptation').order_by('-suggested_at')[:20]
         
         return [
             {
