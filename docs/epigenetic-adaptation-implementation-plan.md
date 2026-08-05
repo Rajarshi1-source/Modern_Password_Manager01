@@ -262,6 +262,91 @@ views in `adaptive_password_views.py`, reading `ADAPTIVE_PASSWORD['ENABLED']`.
 - **Leak test extension:** assert `/adaptive/config/` never returns anything
   password-derived, only the salt and version.
 
+### 1.6 As shipped — status and deviations
+
+**Status: SHIPPED.** [PR #465](https://github.com/Rajarshi1-source/Modern_Password_Manager01/pull/465),
+branch `feat/adaptive-zk-phase1-fingerprint-salt`. Two commits:
+`7119bad` (initial implementation) and `d6e0e89` (review-fix round, below).
+
+**Deviation from §1.1's read-path list.** This plan named
+`export_preference_model` and `get_typing_profile` as era-filtered targets.
+Re-derived at implementation time rather than taken on faith: both read
+`UserTypingProfile`, which holds behavioural aggregates (WPM, error-prone
+positions, substitution-class preferences) that describe the *user*, not any
+particular password — they stay valid across a rotation, and filtering them
+would be meaningless. **Only the two fingerprint-keyed tables
+(`TypingSession`, `PasswordAdaptation`) are era-scoped** — via
+`get_adaptation_history`, `get_evolution_stats`, the `apply_adaptation_v2`
+chain-parent lookup, and `rollback_adaptation`. Documented in the service's
+`export_preference_model` docstring. Any later phase that reads
+`UserTypingProfile` should follow this precedent, not §1.1's original wording.
+
+**Review-fix round (`d6e0e89`), on CodeRabbit findings against `7119bad`:**
+
+- `rollback_adaptation` (pre-existing code — not introduced by this PR, only
+  touched to add the era filter) mutated two `PasswordAdaptation` rows as
+  independent `.save()` calls with no transaction. A failure between them left
+  the chain with no active row at all, and reactivating the parent could raise
+  an unhandled `IntegrityError` against the era-scoped
+  `uniq_active_original_fp_per_user` constraint. Fixed to mirror
+  `apply_adaptation_v2`'s existing `transaction.atomic()` +
+  `select_for_update()` + `IntegrityError`-guard pattern in the same file.
+- `scripts/check-adaptive-zk-client.sh`'s `grep ... || true` collapsed "no
+  matches" (exit 1, clean) and a genuine scan failure (exit 2+: bad pattern,
+  unreadable file, wrong directory) into the same "OK" result for this CI
+  security gate — a fail-open bug in a check whose entire purpose is failing
+  closed. **CodeRabbit's own proposed rewrite for this
+  (`if ! hits=$(...); then grep_status=$?; ...`) was itself broken**: `!`
+  collapses the underlying command's exit code to a plain 0/1, so
+  `grep_status` inside the `then` branch was never grep's real status —
+  applying it as given made the guard report "grep failed" on every normal,
+  clean run. Caught only by testing the exact proposed pattern against a real
+  clean tree before adopting it, not by reading it. Fixed by reading `$?`
+  directly after the assignment (`hits="$(...)"; grep_status=$?`), which bash
+  preserves correctly. See [[darkprotocol-tor-phase3]] — "a reviewer's
+  suggested remedy for a real gap can itself be wrong; verify the fix's own
+  mechanism" is now a repeated pattern across two unrelated features.
+- A second CodeRabbit suggestion (assert `onError` was called on
+  `TypingPatternCapture`) rested on a premise that's false for this codebase:
+  the `TypingPatternCapture` *component* (as opposed to the
+  `useTypingPattern`/`useTypingPatternCapture` hooks) does not accept or
+  forward an `onError` prop at all — it always wires the hook's `onError` to
+  its own internal `setState`. Applying the suggested assertion literally
+  produces a test that can never pass. Fixed by asserting on the one side
+  effect the catch block actually produces unconditionally on that component:
+  `console.error`.
+- Also fixed: a test-constant reference bug (two payload builders in
+  `test_adaptive_zk_v2.py` hardcoded `fp_key_version: 1` instead of the class's
+  `FP_KEY_VERSION`, so changing the constant would break every test in the
+  class with a 409 — exactly the trap the class's own docstring warns about);
+  a coverage gap (`/adaptive/rollback/` missing from the flag-gating test
+  matrix, despite being decorated with `@require_adaptive_enabled`); and a
+  weak assertion in `test_era_is_stamped_from_the_server_not_the_payload`,
+  hardened with response-status checks and a `refresh_from_db()` comparison —
+  though it's documented in that test that the serializer's 409-on-mismatch
+  means payload and config are necessarily equal at request time, so the test
+  still cannot fully distinguish "stamped from payload" from "stamped from
+  config" without mocking, which was judged disproportionate for what
+  CodeRabbit itself labeled a trivial finding.
+- **Declined, with reasons recorded in the commit:** batching the migration's
+  salt-backfill loop with `bulk_update` (CodeRabbit's own "Low value" label;
+  `AdaptivePasswordConfig` is bounded by feature opt-in, not the full user
+  base, and it's a one-time deploy-time backfill). The failing "Dependency
+  Vulnerability Scan" CI check (expired pip-audit suppressions,
+  `PYSEC-2025-183`/`PYSEC-2024-277`) — confirmed via `git diff --stat` that
+  this PR touches zero dependency/ignore files; the failure predates it and is
+  out of scope.
+
+**A pre-existing lesson, reconfirmed, not a new bug:** during the *initial*
+implementation (`7119bad`), a shared mutable class-level `dict` used as
+serializer `context` in `test_adaptive_zk_v2.py` leaked state between tests —
+one test's mutation of the dict silently broke two unrelated tests. Fixed
+before that commit landed (each serializer now gets a fresh `dict` via a
+`_context()` helper) — recorded here because it's the same class of failure
+as the CodeRabbit-suggested-fix bug above: **a test (or a fix) that merely
+looks right has to be run, not just read**, whether the code was written by
+this agent or suggested by a review tool.
+
 ---
 
 ## 4. Phase 2 — Make the adaptation safe (C1)
