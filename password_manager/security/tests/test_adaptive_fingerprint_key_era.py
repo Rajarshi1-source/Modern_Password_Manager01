@@ -19,7 +19,9 @@ import re
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
@@ -134,6 +136,61 @@ class FingerprintSaltProvisioningTests(APITestCase):
             '/api/security/adaptive/enable/', {'consent': True}, format='json'
         ).data['fingerprint_salt']
         self.assertEqual(first, second)
+
+    def test_enable_rejects_out_of_range_frequency_days(self):
+        for bad in (0, -5, 366, 1000):
+            with self.subTest(suggestion_frequency_days=bad):
+                response = self.client.post(
+                    '/api/security/adaptive/enable/',
+                    {'consent': True, 'suggestion_frequency_days': bad},
+                    format='json',
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertFalse(
+                    AdaptivePasswordConfig.objects.filter(user=self.user).exists()
+                )
+
+    def test_enable_rejects_out_of_range_epsilon(self):
+        for bad in (0.0, 0.05, 1.1, 99):
+            with self.subTest(differential_privacy_epsilon=bad):
+                response = self.client.post(
+                    '/api/security/adaptive/enable/',
+                    {'consent': True, 'differential_privacy_epsilon': bad},
+                    format='json',
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertFalse(
+                    AdaptivePasswordConfig.objects.filter(user=self.user).exists()
+                )
+
+    def test_enable_rejects_non_numeric_frequency_days(self):
+        response = self.client.post(
+            '/api/security/adaptive/enable/',
+            {'consent': True, 'suggestion_frequency_days': 'not-a-number'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_enable_accepts_boundary_values(self):
+        # 1 and 365 are the documented inclusive bounds for frequency_days;
+        # 0.1 and 1.0 for epsilon. Off-by-one here would silently narrow the
+        # accepted range below what AdaptivePasswordConfig's own help_text
+        # promises.
+        for frequency_days, epsilon in ((1, 0.1), (365, 1.0)):
+            with self.subTest(frequency_days=frequency_days, epsilon=epsilon):
+                response = self.client.post(
+                    '/api/security/adaptive/enable/',
+                    {
+                        'consent': True,
+                        'suggestion_frequency_days': frequency_days,
+                        'differential_privacy_epsilon': epsilon,
+                    },
+                    format='json',
+                )
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                config = AdaptivePasswordConfig.objects.get(user=self.user)
+                self.assertEqual(config.suggestion_frequency_days, frequency_days)
+                self.assertEqual(config.differential_privacy_epsilon, epsilon)
 
     def test_config_returns_salt_and_era(self):
         self.client.post(
@@ -550,3 +607,60 @@ class AdaptiveFeatureFlagTests(APITestCase):
     def test_missing_settings_block_fails_closed(self):
         response = self.client.get('/api/security/adaptive/config/')
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
+
+
+# =============================================================================
+# History endpoint: N+1 query regression
+# =============================================================================
+
+class AdaptationHistoryQueryTests(APITestCase):
+    """get_adaptation_history's can_rollback() reads previous_adaptation (a FK)
+    on every 'active' row with a non-null parent — a first-generation row has
+    previous_adaptation_id IS NULL, which Django resolves without a query, so
+    only *chained* (generation >= 2) active rows actually exercise the N+1.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user('historyuser', password='testpass123')
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        AdaptivePasswordConfig.objects.create(
+            user=self.user,
+            is_enabled=True,
+            consent_given_at=timezone.now(),
+            fingerprint_salt=AdaptivePasswordConfig.new_fingerprint_salt(),
+        )
+
+    def _build_two_generation_chain(self, original, adapted, third):
+        """Apply twice so the resulting active row has a non-null parent."""
+        self.client.post(
+            '/api/security/adaptive/apply/',
+            _apply_payload(original=original, adapted=adapted),
+            format='json',
+        )
+        self.client.post(
+            '/api/security/adaptive/apply/',
+            _apply_payload(original=adapted, adapted=third),
+            format='json',
+        )
+
+    def test_history_query_count_does_not_scale_with_chained_rows(self):
+        self._build_two_generation_chain(FP_ORIGINAL, FP_ADAPTED, FP_THIRD)
+        with CaptureQueriesContext(connection) as one_chain:
+            response = self.client.get('/api/security/adaptive/history/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['adaptations']), 2)
+
+        self._build_two_generation_chain(
+            'Qq11Ww22Ee33Rr44-_Tt55Yy66', 'Uu77Ii88Oo99Pp00-_Aa11Ss22',
+            'Dd33Ff44Gg55Hh66-_Jj77Kk88',
+        )
+        with CaptureQueriesContext(connection) as two_chains:
+            response = self.client.get('/api/security/adaptive/history/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['adaptations']), 4)
+
+        # A second independent chain (another chained-active row) must not add
+        # a query — if it does, select_related('previous_adaptation') regressed
+        # back to a lazy per-row lookup.
+        self.assertEqual(len(one_chain.captured_queries), len(two_chains.captured_queries))

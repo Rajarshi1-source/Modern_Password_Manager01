@@ -249,13 +249,14 @@ into the existing master-password-change flow.
 Add `@require_adaptive_enabled` (503 + `{"code": "feature_disabled"}`) to
 `adaptive_password_views.py`, reading `ADAPTIVE_PASSWORD['ENABLED']`.
 
-**Exempt three of the 15 views**, not all of them: `disable_adaptive_passwords`,
+**Exempt three of the 16 views**, not all of them: `disable_adaptive_passwords`,
 `delete_adaptive_data` (erasure), and `export_adaptive_data` (portability).
 Opting out and exercising GDPR rights must survive an operator flipping the
 kill switch off — a disabled deployment is not a reason to make a user's data
-unreachable. The other 12, including `suggest_adaptation`, stay gated: for
-`/adaptive/suggest/` specifically, the flag check runs first, so a disabled
-deployment returns 503 there too, not the 410 it returns when enabled.
+unreachable. The other 13, including `suggest_adaptation` and
+`get_feedback_for_adaptation`, stay gated: for `/adaptive/suggest/`
+specifically, the flag check runs first, so a disabled deployment returns 503
+there too, not the 410 it returns when enabled.
 
 ### 1.4 Delete the mobile v1 plaintext client (D-2)
 
@@ -273,7 +274,7 @@ deployment returns 503 there too, not the 410 it returns when enabled.
 - Salt is minted once and stable across repeated `/enable/` calls.
 - Rotation bumps the version and excludes prior-era rows from
   `export_preference_model`.
-- Flag off → the 12 gated endpoints 503; `disable`/`data`/`export` still
+- Flag off → the 13 gated endpoints 503; `disable`/`data`/`export` still
   200 (GDPR endpoints are deliberately not gated — see §1.3).
 - **Leak test extension:** assert `/adaptive/config/` never returns anything
   password-derived, only the salt and version.
@@ -495,6 +496,83 @@ current code rather than the general heuristic behind it.
   with the value it reads.
 
 Verified after this round: 110 passed / 10 subtests (adaptive test files),
+Django `check` clean, `makemigrations --check` clean.
+
+**Fifth review-fix round, on a full CodeRabbit re-review (base `0b7ee24` against
+`d9ddc67`, i.e. the whole PR to date).** Six findings — two applied, one
+partially applied (documentation only), three declined, each verified against
+current code first.
+
+- **Applied: `enable_adaptive_passwords` never validated `suggestion_frequency_days`
+  / `differential_privacy_epsilon`.** Confirmed real: the view copies both
+  straight from the request body into `update_or_create()`, which writes to
+  the DB with no `full_clean()` — nothing stopped a caller posting `epsilon=99`
+  or `frequency_days=-5`. Fixed with inline range validation (1-365 /
+  0.1-1.0, matching the model's own `help_text`) returning 400 on an
+  out-of-range or non-numeric value. **Note on severity, corrected from the
+  original claim**: the finding's justification said this "governs the noise
+  applied to this user's own data" and "makes `should_suggest_adaptation`
+  return true on every check" — traced both claims against the actual code
+  before accepting them, and neither currently holds. `AdaptivePasswordService.__init__`
+  constructs `PrivacyGuard()` with **no arguments**, so DP noise always uses
+  the hardcoded 0.5 default — the stored `differential_privacy_epsilon` is
+  presently dead data, never read by the noise path. `should_suggest_adaptation()`
+  has no callers anywhere outside tests (already documented in §0.2 as gap
+  B5). Fixed anyway, as data-hygiene/defense-in-depth: both fields will
+  matter the moment Phase 3/5 wires them up, and a garbage value already
+  sitting in the DB from an unvalidated `/enable/` call would become a live
+  landmine at that point with no additional review.
+- **Applied: N+1 query in `get_adaptation_history`.** `can_rollback()` reads
+  `self.previous_adaptation` (a FK) on every row where `status == 'active'`
+  (Python's `and` short-circuits the check before it for other statuses), and
+  the queryset didn't `select_related` it — up to 20 extra per-row SELECTs.
+  Fixed with `.select_related('previous_adaptation')`. Verified the fix
+  matters, not just applied it: built two independent two-generation chains
+  (a first-generation row has `previous_adaptation_id IS NULL`, which Django
+  resolves without a query, so the regression only shows up on *chained*
+  active rows) and asserted via `CaptureQueriesContext` that query count
+  doesn't grow between one chain and two. Mutation-checked: temporarily
+  stripped `select_related`, confirmed the query count actually diverged
+  (5 → 6), restored the real code.
+- **Declined: `check-adaptive-zk-client.sh`'s doc reference.** Claimed the
+  script points to a nonexistent `docs/adaptive-password-zk-remediation-plan.md`.
+  Checked — the file exists (14.5KB, predates this PR) and is the correct
+  reference for that specific message: it's the ZK-architecture rationale doc
+  (why raw passwords must never cross the wire), which is more relevant to a
+  plaintext-violation error than the Phase 1 implementation plan or the
+  user-facing API doc would be. The reviewer's own proposed verification
+  script (`fd -a '...' . || true`) was itself phrased as a check for whether
+  the file exists — running it would have shown the answer before the finding
+  was posted.
+- **Declined: `test_ensure_is_idempotent` should `refresh_from_db()` to prove
+  persistence.** `ensure_fingerprint_salt()`'s own docstring states "Does NOT
+  save — the caller decides the transaction boundary" — a deliberate contract
+  that `/enable/` and `/config/`'s self-heal path rely on (they call
+  `ensure_fingerprint_salt()` then `.save(update_fields=[...])` themselves,
+  under a lock). Verified empirically rather than just reading the docstring:
+  called the method once, then `refresh_from_db()` with no intervening
+  `.save()` — the salt reverted to `''`, so the suggested assertion
+  (`config.fingerprint_salt == first`) would fail against the current,
+  *correct* implementation. Applying it verbatim would have broken a passing
+  test testing the right thing; persistence-through-the-API is already
+  covered by `test_config_returns_salt_and_era`, which is the correct layer
+  for that property.
+- **Documentation only, not a code bug: off-by-one in the view count.** The
+  plan's §1.3/§1.5 said "15 views... 12 gated." Recounted directly from
+  `urls.py` (16 `path('adaptive...)` entries) and the view decorators (13
+  `@require_adaptive_enabled`, 3 exempt) — `get_feedback_for_adaptation` had
+  been missed in the original count. Both counts corrected in §1.3 and §1.5;
+  the round-3 log entry a few paragraphs above (which correctly reported what
+  round 3 believed *at the time*) is left as an honest historical record
+  rather than retroactively edited.
+- **Documentation only: two stale-status fixes.** The acceptance-criteria list
+  (§9 item 1) still said "fails today — A1" for the exact blocker Phase 1
+  shipped; marked met. `ADAPTIVE_PASSWORD.md` called `update_rl_model_from_feedback`
+  "the weekly" task — confirmed via `celery.py`'s `beat_schedule` that no
+  entry exists for it yet (a Phase 5 item, §7); reworded to say so explicitly
+  rather than implying it already runs on a schedule.
+
+Verified after this round: 1018 passed / 6 skipped (+5), 27 subtests (+10),
 Django `check` clean, `makemigrations --check` clean.
 
 ---
@@ -784,7 +862,7 @@ that measurably weaken their passwords.**
 
 ## 9. Acceptance criteria
 
-1. A user can enable the feature end-to-end and a fingerprint is computed (fails today — A1).
+1. A user can enable the feature end-to-end and a fingerprint is computed (was the A1 blocker — **met**, Phase 1 §1.6; covered by `FingerprintSaltProvisioningTests`).
 2. No adaptation ever lowers `guesses_log10`, proven by property test over a corpus (C1).
 3. The exported preference model demonstrably diverges from the static baseline after feedback, and the convergence test fails when the policy update is neutralized (B1, B2).
 4. `average_memorability_improvement` is non-zero after an accepted adaptation (B4).

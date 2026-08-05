@@ -194,10 +194,13 @@ are rights rather than features.
 - Differential privacy on all aggregated metrics
 - Suggestion confidence scores come from the exported preference model
 
-> **Not yet implemented:** the reinforcement-learning policy. The weekly
+> **Not yet implemented:** the reinforcement-learning policy. The
 > `update_rl_model_from_feedback` task computes rewards but does not yet persist
 > a model, so `substitution_weights` is still close to the static leetspeak
-> baseline. See `docs/epigenetic-adaptation-implementation-plan.md` §5 (Phase 3).
+> baseline. It is also **not yet scheduled** — no Celery beat entry exists for
+> it (`celery.py`'s `beat_schedule`); "weekly" is the Phase 5 target cadence,
+> not current behavior. See `docs/epigenetic-adaptation-implementation-plan.md`
+> §5 (Phase 3) and §7 (Phase 5, Celery beats).
 >
 > **Not yet implemented:** the strength guard. Leetspeak substitutions are
 > modelled by common cracking rule-sets, so an adaptation can currently reduce

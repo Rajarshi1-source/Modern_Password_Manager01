@@ -136,14 +136,38 @@ def enable_adaptive_passwords(request):
             status=status.HTTP_400_BAD_REQUEST
         )
 
+    # Bound the two numeric fields to the ranges documented on the model
+    # (AdaptivePasswordConfig.suggestion_frequency_days / .differential_privacy_epsilon
+    # help_text: 1-365 / 0.1-1.0). update_or_create() below writes straight to the
+    # DB with no full_clean(), so nothing else stops a caller-supplied 0, a
+    # negative number, or a 99 from being persisted.
+    try:
+        frequency_days = int(data.get('suggestion_frequency_days', 30))
+        epsilon = float(data.get('differential_privacy_epsilon', 0.5))
+    except (TypeError, ValueError):
+        return Response(
+            {'error': 'suggestion_frequency_days and differential_privacy_epsilon must be numeric'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if not 1 <= frequency_days <= 365 or not 0.1 <= epsilon <= 1.0:
+        return Response(
+            {
+                'error': (
+                    'suggestion_frequency_days must be 1-365 and '
+                    'differential_privacy_epsilon must be 0.1-1.0'
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     consent_fields = {
         'is_enabled': True,
         'consent_given_at': timezone.now(),
         'consent_version': data.get('consent_version', '1.0'),
-        'suggestion_frequency_days': data.get('suggestion_frequency_days', 30),
+        'suggestion_frequency_days': frequency_days,
         'allow_centralized_training': data.get('allow_centralized_training', True),
         'allow_federated_learning': data.get('allow_federated_learning', False),
-        'differential_privacy_epsilon': data.get('differential_privacy_epsilon', 0.5),
+        'differential_privacy_epsilon': epsilon,
     }
 
     with transaction.atomic():
