@@ -300,8 +300,8 @@ chain-parent lookup, and `rollback_adaptation`. Documented in the service's
   collapses the underlying command's exit code to a plain 0/1, so
   `grep_status` inside the `then` branch was never grep's real status —
   applying it as given made the guard report "grep failed" on every normal,
-  clean run. Caught only by testing the exact proposed pattern against a real
-  clean tree before adopting it, not by reading it. Fixed by reading `$?`
+  clean run. Caught only by testing the exact proposed pattern against an
+  actual clean tree before adopting it, not by reading it. Fixed by reading `$?`
   directly after the assignment (`hits="$(...)"; grep_status=$?`), which bash
   preserves correctly. See [[darkprotocol-tor-phase3]] — "a reviewer's
   suggested remedy for a real gap can itself be wrong; verify the fix's own
@@ -346,6 +346,24 @@ before that commit landed (each serializer now gets a fresh `dict` via a
 as the CodeRabbit-suggested-fix bug above: **a test (or a fix) that merely
 looks right has to be run, not just read**, whether the code was written by
 this agent or suggested by a review tool.
+
+**Second review-fix round, on the automatic CodeRabbit pass against `d6e0e89`
+(the diff between `7119bad` and `20278fb`):** one actionable finding —
+`check-adaptive-zk-client.sh`'s empty-`CLIENT_DIRS` branch (`exit 0` when none
+of `frontend/src`/`mobile`/`desktop/src`/`browser-extension/src` exist) was
+the *same bug class* as the grep-error fail-open from the first round, just at
+the directory-discovery step instead of the scan step: if every candidate
+directory were renamed or removed (adversarially or by accident), the guard
+would report a clean pass having scanned nothing. Fixed by hard-requiring
+`frontend/src` — the actual client for this feature, always present in a real
+checkout of this repo (no sparse-checkout in CI) — and treating its absence as
+a hard error; the other three directories stay best-effort. This closes the
+guard's blind-spot pattern for a second time: **the "no work to do, exit 0"
+branch is exactly where a fail-closed security gate needs the most scrutiny,
+not the least** — it's the one path with no positive evidence backing the
+success it reports. Verified against all four states (clean tree, planted
+violation, clean again, and a simulated checkout with `frontend/src` itself
+removed) before committing.
 
 ---
 
