@@ -16,6 +16,7 @@ See docs/epigenetic-adaptation-implementation-plan.md §3.
 """
 
 import re
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
@@ -28,6 +29,7 @@ from security.models import (
     PasswordAdaptation,
     TypingSession,
 )
+from security.services.adaptive_password_service import AdaptivePasswordService
 
 FP_ORIGINAL = 'AbCdEf0123456789-_XyZwQr'
 FP_ADAPTED = 'ZyXwVu9876543210-_MnOpQr'
@@ -221,6 +223,91 @@ class FingerprintKeyEraTests(APITestCase):
             '/api/security/adaptive/record-session/', payload, format='json'
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # -- TOCTOU: rotation commits between the view's era read (used to build
+    # -- the serializer context) and the service's own write. The serializer
+    # -- validation already passed at this point — these tests exercise the
+    # -- *second* guard, at the service layer, that catches a config change in
+    # -- that gap. A real HTTP-level race can't be reproduced deterministically
+    # -- in a synchronous test; the service's expected_fp_key_version parameter
+    # -- is the actual mechanism under test, so it's exercised directly.
+
+    def test_record_service_rejects_era_that_changed_after_validation(self):
+        self.config.fp_key_version = 2  # rotated after the (simulated) validation
+        self.config.save(update_fields=['fp_key_version'])
+
+        service = AdaptivePasswordService(self.user)
+        result = service.record_typing_session_v2(
+            password_fingerprint=FP_ORIGINAL,
+            length_bucket=3,
+            keystroke_timings=[100, 120],
+            expected_fp_key_version=1,  # what the view/serializer validated
+        )
+        self.assertEqual(result.get('code'), 'fp_key_era_changed')
+        self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 0)
+
+    def test_apply_service_rejects_era_that_changed_after_validation(self):
+        self.config.fp_key_version = 2  # rotated after the (simulated) validation
+        self.config.save(update_fields=['fp_key_version'])
+
+        service = AdaptivePasswordService(self.user)
+        result = service.apply_adaptation_v2(
+            original_fingerprint=FP_ORIGINAL,
+            adapted_fingerprint=FP_ADAPTED,
+            substitution_classes=[{'from': 'o', 'to': '0'}],
+            expected_fp_key_version=1,
+        )
+        self.assertEqual(result.get('code'), 'fp_key_era_changed')
+        self.assertEqual(PasswordAdaptation.objects.filter(user=self.user).count(), 0)
+
+    def test_expected_fp_key_version_none_skips_the_check(self):
+        # Backward-compat: existing callers that don't pass the parameter (e.g.
+        # direct service use outside the HTTP layer) must not be newly broken.
+        service = AdaptivePasswordService(self.user)
+        result = service.record_typing_session_v2(
+            password_fingerprint=FP_ORIGINAL,
+            length_bucket=3,
+            keystroke_timings=[100, 120],
+        )
+        self.assertNotIn('error', result)
+        self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 1)
+
+    def test_record_view_maps_era_changed_to_409_not_400(self):
+        # Simulate the race end-to-end: the view reads era=1 for the serializer
+        # context (so client-side validation passes), but by the time the
+        # service does its own fresh read, the config has moved to era=2.
+        with patch(
+            'security.api.adaptive_password_views._current_fp_key_version',
+            return_value=1,
+        ):
+            self.config.fp_key_version = 2
+            self.config.save(update_fields=['fp_key_version'])
+
+            response = self.client.post(
+                '/api/security/adaptive/record-session/',
+                _record_payload(fp_key_version=1),
+                format='json',
+            )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data.get('code'), 'fp_key_era_changed')
+        self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 0)
+
+    def test_apply_view_maps_era_changed_to_409_not_400(self):
+        with patch(
+            'security.api.adaptive_password_views._current_fp_key_version',
+            return_value=1,
+        ):
+            self.config.fp_key_version = 2
+            self.config.save(update_fields=['fp_key_version'])
+
+            response = self.client.post(
+                '/api/security/adaptive/apply/',
+                _apply_payload(fp_key_version=1),
+                format='json',
+            )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data.get('code'), 'fp_key_era_changed')
+        self.assertEqual(PasswordAdaptation.objects.filter(user=self.user).count(), 0)
 
     def test_era_is_stamped_from_the_server_not_the_payload(self):
         # The client value is only ever *compared*; the stored value comes from

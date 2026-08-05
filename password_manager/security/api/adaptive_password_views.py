@@ -88,6 +88,20 @@ def _current_fp_key_version(user):
     ).first()
 
 
+def _service_error_response(result):
+    """Map a service-layer ``{'error': ...}`` dict to a status code.
+
+    ``fp_key_era_changed`` (the TOCTOU close in ``record_typing_session_v2`` /
+    ``apply_adaptation_v2``, for a rotation that commits between the
+    serializer's era validation and the service's write) gets the same 409 as
+    :class:`FingerprintKeyEraMismatch`, so the client's existing "409 → re-fetch
+    config, re-derive, retry" handling covers this path too. Everything else
+    (opt-in gate failures, not-found, etc.) stays 400, matching prior behavior.
+    """
+    code = status.HTTP_409_CONFLICT if result.get('code') == 'fp_key_era_changed' else status.HTTP_400_BAD_REQUEST
+    return Response(result, status=code)
+
+
 # =============================================================================
 # Configuration Endpoints
 # =============================================================================
@@ -310,9 +324,10 @@ def record_typing_session(request):
         input_method=data.get('input_method', 'keyboard'),
         substitution_classes_used=data.get('substitution_classes_used') or [],
         success=data.get('success'),
+        expected_fp_key_version=data['fp_key_version'],
     )
     if 'error' in result:
-        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return _service_error_response(result)
     return Response(result)
 
 
@@ -378,9 +393,10 @@ def apply_adaptation(request):
         substitution_classes=data['substitutions'],
         previews=data.get('previews'),
         memorability_improvement=data.get('memorability_improvement'),
+        expected_fp_key_version=data['fp_key_version'],
     )
     if 'error' in result:
-        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return _service_error_response(result)
     return Response(result)
 
 

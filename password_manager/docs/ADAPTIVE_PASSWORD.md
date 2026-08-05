@@ -183,7 +183,7 @@ are rights rather than features.
 |--------|------|
 | `400` | Malformed payload, wrong/missing `schema_version`, feature not enabled for the user |
 | `409` | `fp_key_version` does not match the server's current era — re-fetch `/adaptive/config/` and re-derive |
-| `410` | `/adaptive/suggest/` (server-side suggestion removed under ZK v2) |
+| `410` | `/adaptive/suggest/` (server-side suggestion removed under ZK v2) — only when the feature is enabled; a disabled deployment returns `503` for this endpoint too, since the flag check runs first |
 | `422` | A raw-password field was present (zero-knowledge violation) |
 | `503` | `ADAPTIVE_PASSWORD['ENABLED']` is off for this deployment |
 
