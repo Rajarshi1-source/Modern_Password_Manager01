@@ -1,7 +1,11 @@
 # 🧬 Epigenetic Password Adaptation — Implementation Plan
 
-Status: **PLAN ONLY — no code changed.** Every path, line number, field and
-symbol below was read from the tree at `main` = `0b7ee24`.
+Status: **Phase 1 SHIPPED** — see §1.6 for what actually landed (PR #465) and
+where it deviates from this plan. §0 and the body of §1 below are the
+**pre-Phase-1 baseline**: every path, line number, field and symbol in them
+was read from the tree at `main` = `0b7ee24`, *before* implementation, and
+describes the gaps that motivated the plan — not the current state. Phases
+2-5 are still plan-only.
 
 Companion to `docs/adaptive-password-zk-remediation-plan.md` (the ZK cutover,
 already executed). This plan covers what that one deliberately left open.
@@ -215,13 +219,16 @@ different key eras are never correlated as if they were the same password.
 `fp_key_version += 1`. Old rows are retained but excluded from learning. Hook it
 into the existing master-password-change flow.
 
-> **Verify before implementing:** confirm the salt-in-`/config/` exposure against
-> the actual key derivation — `_deriveFingerprintKeyBits` (`cryptoService.js:269`)
-> composes `` `${perUserSalt}:adaptive-fp` `` as the Argon2id *salt* with
+> **Verified during implementation (pre-Phase-1 note, now resolved):** the
+> salt-in-`/config/` exposure was checked against the actual key derivation —
+> `_deriveFingerprintKeyBits` (`cryptoService.js:269`) composes
+> `` `${perUserSalt}:adaptive-fp` `` as the Argon2id *salt* with
 > `this.masterPassword` as the *password*. Inverting a fingerprint therefore
 > requires the master password, which the server never has. The salt alone is
-> inert. This matches remediation plan §3, but re-derive it at implementation
-> time rather than trusting this paragraph.
+> inert. This matched remediation plan §3, confirmed by re-deriving it at
+> implementation time rather than trusting this paragraph — the confirmation
+> is now recorded as a code comment on `AdaptivePasswordConfig.fingerprint_salt`
+> in `security/models/core.py`.
 
 ### 1.2 Wire the salt through the client
 
@@ -239,8 +246,16 @@ into the existing master-password-change flow.
 
 ### 1.3 Enforce the feature flag
 
-Add `@require_adaptive_enabled` (503 + `{"code": "feature_disabled"}`) to all 15
-views in `adaptive_password_views.py`, reading `ADAPTIVE_PASSWORD['ENABLED']`.
+Add `@require_adaptive_enabled` (503 + `{"code": "feature_disabled"}`) to
+`adaptive_password_views.py`, reading `ADAPTIVE_PASSWORD['ENABLED']`.
+
+**Exempt three of the 15 views**, not all of them: `disable_adaptive_passwords`,
+`delete_adaptive_data` (erasure), and `export_adaptive_data` (portability).
+Opting out and exercising GDPR rights must survive an operator flipping the
+kill switch off — a disabled deployment is not a reason to make a user's data
+unreachable. The other 12, including `suggest_adaptation`, stay gated: for
+`/adaptive/suggest/` specifically, the flag check runs first, so a disabled
+deployment returns 503 there too, not the 410 it returns when enabled.
 
 ### 1.4 Delete the mobile v1 plaintext client (D-2)
 
@@ -258,7 +273,8 @@ views in `adaptive_password_views.py`, reading `ADAPTIVE_PASSWORD['ENABLED']`.
 - Salt is minted once and stable across repeated `/enable/` calls.
 - Rotation bumps the version and excludes prior-era rows from
   `export_preference_model`.
-- Flag off → every endpoint 503.
+- Flag off → the 12 gated endpoints 503; `disable`/`data`/`export` still
+  200 (GDPR endpoints are deliberately not gated — see §1.3).
 - **Leak test extension:** assert `/adaptive/config/` never returns anything
   password-derived, only the salt and version.
 
@@ -364,6 +380,75 @@ not the least** — it's the one path with no positive evidence backing the
 success it reports. Verified against all four states (clean tree, planted
 violation, clean again, and a simulated checkout with `frontend/src` itself
 removed) before committing.
+
+**Third review-fix round, on a full CodeRabbit pass against the diff between
+`0b7ee24` (base) and `457633e`.** Four findings, all verified against current
+code before any change:
+
+- **Migration correctness (real, not hypothetical for this project).**
+  `backfill_fingerprint_salts` queried/wrote through the default manager
+  instead of `schema_editor.connection.alias`. This project actually has
+  `DATABASE_ROUTERS = ['shared.db_router.PrimaryReplicaRouter']` configured
+  (confirmed by reading `settings/base.py` and `shared/db_router.py`), which
+  routes reads to a `replica` database whenever one is configured — so without
+  `.using(alias)`, the migration's read could look at a different connection
+  than the one actually being migrated. Fixed with `.using(db)` +
+  `bulk_update(..., batch_size=500)`. The paired `drop_fingerprint_salts`
+  reverse function was also confirmed dead: Django reverses a migration's
+  `operations` bottom-to-top, so `RunPython`'s `reverse_code` (last in forward
+  order) runs *before* `AddField`'s own reverse — `RemoveField`, which drops
+  the column outright — meaning whatever the blanking function did is
+  immediately discarded regardless. **Verified empirically, not just by
+  reasoning**: migrated forward on a throwaway sqlite DB, set a salt, migrated
+  back to `0023`, confirmed the column itself is gone either way. Replaced with
+  `migrations.RunPython.noop`. Re-verified the fixed migration end-to-end
+  afterward (forward backfill on a pre-existing raw-SQL-inserted row, reverse,
+  re-forward) — all three steps correct.
+- **Doc-vs-code drift (real).** The plan's header still said "PLAN ONLY — no
+  code changed" after three shipped commits; §1.3 said `@require_adaptive_enabled`
+  covers "all 15 views" when it actually exempts 3 (disable/erasure/export, by
+  design — GDPR rights survive the kill switch); and a "Verify before
+  implementing... time rather than trusting this paragraph" callout was still
+  phrased as a pending action after the verification had already happened and
+  been folded into a code comment. All three fixed with minimal, targeted edits
+  rather than rewriting the historical sections (§0 and most of §1 are
+  correctly framed as the pre-Phase-1 baseline once the header says so).
+- **A genuine TOCTOU race, the highest-severity finding of the three rounds so
+  far.** The view reads the current `fp_key_version` and the serializer
+  compares the client's claimed value against it (409 on mismatch) — but the
+  *service* then did its own **independent, unlocked** re-read of the config
+  and stamped from *that*, discarding the already-validated value entirely.
+  If `rotate_fingerprint_key` commits in the gap between the two reads, a row
+  gets stamped with the new era while its fingerprint was actually derived
+  under the old salt. Fixed by threading the validated `fp_key_version` through
+  to both `record_typing_session_v2` and `apply_adaptation_v2` as
+  `expected_fp_key_version`, re-checked against the service's own fresh
+  config read (still needed for the opt-in gate) — a divergence returns a new
+  `fp_key_era_changed` error, mapped to 409 by both views via a shared
+  `_service_error_response` helper, telling the client to re-fetch and retry
+  rather than silently writing an unreproducible row. **Considered and
+  rejected** a simpler alternative (stamp with the validated value directly,
+  no re-check) — semantically defensible since the fingerprint genuinely was
+  derived under that era regardless of what the config says by write time —
+  but rejected for consistency with this feature's established "fail closed on
+  an unverified state" posture (same reasoning as `FingerprintKeyVersionMixin`'s
+  missing-context handling). Per this project's own repeated lesson about race
+  tests needing the actual interleaving, not a race-and-hope: the four new
+  tests reproduce the race *deterministically*, not by attempting real
+  concurrency — two call the service directly with a mismatched
+  `expected_fp_key_version` against the DB's actual value, two mock
+  `_current_fp_key_version` at the view layer to make the serializer validate
+  against a stale reading while the DB has already moved on. **Verified the
+  tests can fail**: neutralized both guards (`if False:` in place of the
+  comparison) and confirmed all four tests failed before restoring the real
+  code — caught and fixed one bug in my own first draft of these tests in the
+  process (a config left at its default era-1 value, so the "mismatch" I
+  intended to create didn't exist; the test passed for the wrong reason until
+  the mutation check exposed it).
+
+Verified after this round: 1013 passed / 6 skipped (security backend suite,
++5 from the 5 new tests — 4 for the race, 1 for the None-default backward-compat
+case), Django `check` clean, `makemigrations --check` clean.
 
 ---
 

@@ -26,21 +26,23 @@ def backfill_fingerprint_salts(apps, schema_editor):
     ``is_enabled`` directly through security/admin_adaptive.py, which never
     passes through the /enable/ endpoint that mints the salt. Leaving those rows
     blank would produce a config that is enabled but unusable.
+
+    Bound to ``schema_editor.connection.alias`` rather than the default
+    manager: this project's ``DATABASE_ROUTERS`` (``PrimaryReplicaRouter``)
+    routes reads to a ``replica`` database when one is configured, which would
+    otherwise make the read below look at a different connection than the one
+    actually being migrated. ``bulk_update`` batches the writes instead of one
+    UPDATE per row.
     """
     Config = apps.get_model('security', 'AdaptivePasswordConfig')
-    for config in Config.objects.filter(fingerprint_salt='').iterator():
+    db = schema_editor.connection.alias
+    configs = list(Config.objects.using(db).filter(fingerprint_salt=''))
+    for config in configs:
         config.fingerprint_salt = secrets.token_hex(16)
-        config.save(update_fields=['fingerprint_salt'])
-
-
-def drop_fingerprint_salts(apps, schema_editor):
-    """Reverse: blank the salts so a re-apply mints fresh ones.
-
-    Deliberately destructive-on-reverse. Retaining a salt whose column is about
-    to be dropped would let a later re-apply resurrect a stale key era.
-    """
-    Config = apps.get_model('security', 'AdaptivePasswordConfig')
-    Config.objects.update(fingerprint_salt='')
+    if configs:
+        Config.objects.using(db).bulk_update(
+            configs, ['fingerprint_salt'], batch_size=500
+        )
 
 
 class Migration(migrations.Migration):
@@ -97,6 +99,12 @@ class Migration(migrations.Migration):
         ),
         migrations.RunPython(
             backfill_fingerprint_salts,
-            drop_fingerprint_salts,
+            # No-op reverse: RunPython's reverse_code runs before AddField's own
+            # reverse (RemoveField) in this same migration — operations reverse
+            # bottom-to-top — so the column is dropped immediately after
+            # regardless of what a blanking function did to its values first.
+            # Empirically verified: migrate forward, set a salt, migrate back to
+            # 0023, and the fingerprint_salt column is gone either way.
+            migrations.RunPython.noop,
         ),
     ]

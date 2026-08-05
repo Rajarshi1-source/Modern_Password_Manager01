@@ -355,6 +355,7 @@ class AdaptivePasswordService:
         input_method: str = 'keyboard',
         substitution_classes_used: Optional[List[Dict]] = None,
         success: Optional[bool] = None,
+        expected_fp_key_version: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Record a typing session under the zero-knowledge v2 contract.
 
@@ -377,6 +378,11 @@ class AdaptivePasswordService:
                 password was ultimately entered correctly). When omitted, falls
                 back to the heuristic "no backspaces" — note a corrected typo is
                 not a failed attempt, so callers should pass this explicitly.
+            expected_fp_key_version: The era the caller's serializer already
+                validated the client's ``fp_key_version`` against (see
+                ``FingerprintKeyVersionMixin``). Re-checked against a fresh
+                config read below to close the gap between that validation and
+                this write — see the comment at the check itself.
 
         Returns:
             Session summary (carries ``schema_version: 2``).
@@ -392,6 +398,23 @@ class AdaptivePasswordService:
                 return {'error': 'Adaptive passwords not enabled'}
         except AdaptivePasswordConfig.DoesNotExist:
             return {'error': 'Adaptive passwords not configured'}
+
+        # Close the TOCTOU window between the view's era validation and this
+        # write. The serializer already compared the client's fp_key_version
+        # against a config read taken *before* this one; without this check,
+        # a rotation that commits in between would make this fresh read see
+        # the NEW era, and the row below would be stamped with it — even
+        # though the fingerprint was actually derived under the OLD salt.
+        # Reject and let the client re-fetch /adaptive/config/ and retry,
+        # rather than silently writing a row no era can ever reproduce.
+        if (
+            expected_fp_key_version is not None
+            and config.fp_key_version != expected_fp_key_version
+        ):
+            return {
+                'error': 'Fingerprint key era changed mid-request; re-fetch and retry.',
+                'code': 'fp_key_era_changed',
+            }
 
         # Prefer the caller's explicit outcome; backspaces are only error
         # *metadata*, not a reliable success signal (a corrected typo still
@@ -617,6 +640,7 @@ class AdaptivePasswordService:
         substitution_classes: List[Dict],
         previews: Optional[Dict[str, str]] = None,
         memorability_improvement: Optional[float] = None,
+        expected_fp_key_version: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Apply/record an adaptation under the zero-knowledge v2 contract.
 
@@ -629,6 +653,10 @@ class AdaptivePasswordService:
             substitution_classes: ``[{"from": "o", "to": "0", "confidence"?: …}]``.
             previews: Optional ``{original_masked, adapted_masked}`` (client-masked).
             memorability_improvement: Optional client-computed Δ (informational).
+            expected_fp_key_version: The era the caller's serializer already
+                validated the client's ``fp_key_version`` against. See
+                ``record_typing_session_v2`` for why this is re-checked here
+                rather than trusted from the earlier validation alone.
 
         Returns:
             Adaptation record summary (carries ``schema_version: 2``).
@@ -643,6 +671,18 @@ class AdaptivePasswordService:
                 return {'error': 'Adaptive passwords not enabled'}
         except AdaptivePasswordConfig.DoesNotExist:
             return {'error': 'Adaptive passwords not configured'}
+
+        # Same TOCTOU close as record_typing_session_v2: reject rather than
+        # silently stamp this adaptation under an era that committed after the
+        # view's validation, which the fingerprints were never derived under.
+        if (
+            expected_fp_key_version is not None
+            and config.fp_key_version != expected_fp_key_version
+        ):
+            return {
+                'error': 'Fingerprint key era changed mid-request; re-fetch and retry.',
+                'code': 'fp_key_era_changed',
+            }
 
         previews = previews or {}
         substitution_classes = list(substitution_classes or [])
