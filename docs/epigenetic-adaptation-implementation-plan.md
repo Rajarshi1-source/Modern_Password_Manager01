@@ -631,6 +631,30 @@ the finding described), one declined after direct verification.
 Verified after this round: script re-verified (six states, see above); no
 Python/JS files touched, so no test-suite re-run was needed.
 
+**Seventh review-fix round, on a full CodeRabbit re-review (base `0b7ee24`
+against `5959c40`).** One finding, applied.
+
+- **Applied: the "after rotation" doc example never rebuilt the fingerprinter.**
+  §2b showed `rotateFingerprintKey()` returning the new salt/era, then stopped
+  at a comment ("Rebuild the fingerprinter... from here on") instead of
+  actually calling `makeFingerprinter(...)` — unlike §1's example, which does
+  show the call. Verified the finding's stated risk mechanism before accepting
+  it, since it's the whole justification: the backend's era check only
+  compares the `fp_key_version` **number** the client claims against what's
+  stored; it has no cryptographic way to verify a fingerprint **string** was
+  actually derived under that era's salt (confirmed exhaustively in rounds 3-4
+  — this is this feature's known, documented trust model, not a new gap). So a
+  developer following the example literally, still holding the pre-rotation
+  `fingerprint` closure from §1, could send it alongside the new
+  `fp_key_version` and have the server accept and store an era-2 row that no
+  era-2-aware client — including that same developer's own future code — could
+  ever reproduce. Fixed by matching §1's established pattern exactly: show the
+  actual `makeFingerprinter(cryptoService, fingerprint_salt)` call, and state
+  explicitly not to keep using the old closure.
+
+Verified after this round: docs-only change; no Python/JS files touched, so no
+test-suite re-run was needed.
+
 ---
 
 ## 4. Phase 2 — Make the adaptation safe (C1)
