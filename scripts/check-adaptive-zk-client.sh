@@ -40,9 +40,43 @@ if [ ! -d "frontend/src" ]; then
   exit 1
 fi
 
-CLIENT_DIRS=(frontend/src)
-for d in mobile desktop/src browser-extension/src; do
-  [ -d "$d" ] && CLIENT_DIRS+=("$d")
+# Scan every top-level directory except known non-client trees, rather than an
+# inclusion list of "known client directories". Tried an inclusion list twice
+# before (frontend/src + mobile/desktop/browser-extension) and it missed a
+# real one: shared/ is not in that list, yet
+# frontend/src/services/webSecureStorage.js imports shared/crypto/secure_storage
+# directly, so shared/ genuinely ships in the client bundle. An exclusion list
+# means a new or forgotten client directory is scanned by default instead of
+# silently skipped — and if the exclusion list itself goes stale (a new
+# non-client top-level directory appears and isn't added here), the failure
+# mode is the safe direction: that directory just gets scanned too, costing
+# time or at worst a spurious match to investigate, never a silently-skipped
+# violation.
+#
+# Pruned at the TOP LEVEL (maxdepth 1) rather than recursing from the repo
+# root with --exclude-dir: measured directly, the latter takes minutes on this
+# checkout (Windows/MSYS directory-walk overhead across the node_modules trees
+# under contracts/, mobile/, frontend/ — tens of thousands of entries each —
+# even though their *contents* are excluded, opendir() still has to visit
+# every one of them during the recursive descent). Excluding whole trees
+# before grep ever opens them keeps this to well under a second.
+EXCLUDE_TOP_DIRS=(
+  node_modules canny .git
+  docker docs documentation k8s scripts contracts
+  password_manager tests testsprite_tests
+  trivy-policy-data audit-evidence compliance_bundle geoip
+)
+SCAN_DIRS=()
+for d in */; do
+  d="${d%/}"
+  excluded=false
+  for ex in "${EXCLUDE_TOP_DIRS[@]}"; do
+    if [ "$d" = "$ex" ]; then
+      excluded=true
+      break
+    fi
+  done
+  [ "$excluded" = false ] && SCAN_DIRS+=("$d")
 done
 
 # Fail closed on a real scan error. grep exits 0 for matches, 1 for "no
@@ -51,7 +85,7 @@ done
 # let a scan that silently didn't run at all report "OK" instead of failing the
 # CI job. `$?` is read immediately after the assignment (not through `!`,
 # which would collapse it to a plain 0/1 and destroy the real code).
-hits="$(grep -rEn --binary-files=without-match "$PATTERN" "${CLIENT_DIRS[@]}" \
+hits="$(grep -rEn --binary-files=without-match "$PATTERN" "${SCAN_DIRS[@]}" \
   --include='*.js' --include='*.jsx' --include='*.ts' --include='*.tsx' \
   --exclude-dir=node_modules \
   --exclude-dir=__tests__ \

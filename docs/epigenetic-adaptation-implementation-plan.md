@@ -575,6 +575,62 @@ current code first.
 Verified after this round: 1018 passed / 6 skipped (+5), 27 subtests (+10),
 Django `check` clean, `makemigrations --check` clean.
 
+**Sixth review-fix round, on a full CodeRabbit re-review (base `0b7ee24`
+against `5c04ab8`).** Four findings — two applied to the plan doc, one
+applied to the CI guard (a genuine, present-day gap, not just the hypothetical
+the finding described), one declined after direct verification.
+
+- **Applied: the CI guard's inclusion list missed a real client directory.**
+  `check-adaptive-zk-client.sh` scanned `frontend/src` + `mobile`/`desktop/src`/
+  `browser-extension/src` (if present). Checked whether the finding's
+  "renamed directory" scenario had *already* happened rather than treating it
+  as hypothetical: it had — `shared/` is a real top-level directory with real
+  JS files, and `frontend/src/services/webSecureStorage.js` imports
+  `shared/crypto/secure_storage` directly, so `shared/` genuinely ships in the
+  client bundle and was never scanned. Fixed by switching to an exclusion
+  list (scan every top-level directory except known non-client ones), which
+  fails in the safe direction if it goes stale (an unlisted new directory
+  gets scanned, not silently skipped) — the opposite of the inclusion list's
+  failure mode. **First attempt regressed on performance**: recursing from
+  the repo root with `--exclude-dir` measured in the minutes on this checkout
+  (timed out at 2 minutes) — Windows/MSYS pays real `opendir()` cost walking
+  into the `node_modules` trees under `contracts/`, `mobile/`, `frontend/`
+  even though their *contents* are excluded, and `canny/` (the Python venv)
+  alone carries ~98k files including ~178 unrelated JS/TS files from
+  third-party package internals. Fixed by pruning at the top level
+  (excluding whole trees before grep ever opens them) instead — measured at
+  ~0.4-0.8s. Verified against six states before committing: clean tree,
+  planted violation under `shared/` (the actual gap), clean again, planted
+  violation under `frontend/src` (original coverage preserved), clean again,
+  and `frontend/src` missing (the round-2 hard-fail still works).
+- **Applied: two doc-only corrections, both confirmed real before fixing.**
+  §9 acceptance criterion 1 said "a user can enable the feature end-to-end...
+  met... covered by `FingerprintSaltProvisioningTests`" — that test is
+  backend-only and can't prove the client actually builds a matching
+  fingerprint, and D1 (no adaptive UI mounted until Phase 5) is still open;
+  narrowed the claim to what's actually proven (the A1 salt-blocker, backed
+  by both the backend test and `cryptoService.fingerprint.test.js`) and noted
+  what "end-to-end" would still require. The Phase 3 (not yet implemented)
+  behavioural-reward design compared `TypingSession` rows by fingerprint value
+  alone, with no `fp_key_version` filter — inconsistent with every other
+  fingerprint-keyed query already shipped in Phase 1, all of which era-scope.
+  Added the filter to the design; noted honestly that a genuine cross-era
+  collision isn't practically reachable (144-bit HMAC under an
+  independently-rotated key), so this is consistency/defense-in-depth for a
+  future implementer, not a live gap in current (unimplemented) code.
+- **Declined: the `ADAPTIVE_PASSWORD.md` `/enable/` example "doesn't match
+  the API."** Claim: `enable()` returns the raw POST response, not
+  `fingerprint_salt`/`fp_key_version` — those "come from `getConfig()`."
+  Read `enable_adaptive_passwords`'s actual response body fresh (not from
+  memory): it returns `{success, enabled, created, consent_given_at,
+  fingerprint_salt, fp_key_version}` directly — both fields Phase 1 added in
+  round 1. The doc's example destructures exactly those two fields from
+  `adaptivePasswordService.enable()`'s return value, which is `response.data`
+  verbatim. The example is correct as written; no change made.
+
+Verified after this round: script re-verified (six states, see above); no
+Python/JS files touched, so no test-suite re-run was needed.
+
 ---
 
 ## 4. Phase 2 — Make the adaptation safe (C1)
@@ -669,12 +725,24 @@ Reuse its existing reward shaping (L167-184) as the explicit-feedback term:
 | Explicit rating | `AdaptationFeedback.rating` → 1.0 / 0.5 / 0.0, plus +0.2/+0.2/+0.1 for the three improvement booleans, capped at 1.0 | 0.4 |
 | Acceptance | `PasswordAdaptation.status == 'active'` | 0.2 |
 | Rollback | `status == 'rolled_back'` → hard 0 | 0.2 |
-| **Behavioural** | mean `error_count` and `total_time_ms` of `TypingSession` rows on `adapted_fingerprint` vs. those on `original_fingerprint` | 0.2 |
+| **Behavioural** | mean `error_count` and `total_time_ms` of `TypingSession` rows on `adapted_fingerprint` vs. those on `original_fingerprint`, **both filtered to the adaptation's own `fp_key_version`** | 0.2 |
 
 The behavioural term is the one that makes this real rather than a satisfaction
 survey, and it is **fully zero-knowledge** — it joins two fingerprints, never a
 password. Require ≥3 sessions on each side before it contributes; otherwise
 renormalize the other weights.
+
+Scope both `TypingSession` predicates by `fp_key_version` (matching the
+`PasswordAdaptation` row's own era), not by fingerprint value alone. Every
+other fingerprint-keyed query already shipped in Phase 1 — the
+`apply_adaptation_v2` chain-parent lookup, `rollback_adaptation`,
+`get_adaptation_history`, `get_evolution_stats` — does this; the reward query
+should follow the same pattern rather than being the one exception. A genuine
+cross-era fingerprint collision is not practically reachable (144-bit HMAC
+output under an independently-rotated key per era), so this is consistency and
+defense-in-depth rather than a live exploit path — but Phase 1's own
+`fp_key_version` columns on `TypingSession`/`PasswordAdaptation` exist
+specifically so a query never has to rely on that improbability.
 
 Update: `alpha += r`, `beta += (1 - r)`.
 
@@ -862,7 +930,15 @@ that measurably weaken their passwords.**
 
 ## 9. Acceptance criteria
 
-1. A user can enable the feature end-to-end and a fingerprint is computed (was the A1 blocker — **met**, Phase 1 §1.6; covered by `FingerprintSaltProvisioningTests`).
+1. The A1 blocker (no salt existed anywhere, so `deriveFingerprintKey` threw
+   unconditionally) is resolved server-side and client-side — **met**, Phase 1
+   §1.6; covered by `FingerprintSaltProvisioningTests` (backend salt
+   provisioning) and `cryptoService.fingerprint.test.js` (client HMAC
+   derivation). This is *not* the same claim as "a user can enable the feature
+   end-to-end": that still needs D1 (no adaptive UI is mounted until Phase 5)
+   and a cross-stack test connecting a real backend response to a real client
+   derivation — a backend-only test can't prove that. Re-word this item to
+   "end-to-end" only once D1/D2 ship.
 2. No adaptation ever lowers `guesses_log10`, proven by property test over a corpus (C1).
 3. The exported preference model demonstrably diverges from the static baseline after feedback, and the convergence test fails when the policy update is neutralized (B1, B2).
 4. `average_memorability_improvement` is non-zero after an accepted adaptation (B4).
