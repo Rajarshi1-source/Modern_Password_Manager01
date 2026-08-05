@@ -27,6 +27,7 @@ import {
     applySubstitutions,
     maskPreview,
     filterByStrength,
+    detectSubstitutionClasses,
 } from '../../services/adaptive/adaptiveFeatures';
 
 // =============================================================================
@@ -156,7 +157,19 @@ export const useTypingPattern = ({
     // Zero-knowledge v2: emit a keyed fingerprint + coarse length bucket — the
     // raw password is used only to compute these locally and is NEVER included
     // in the pattern object (and so never reaches the server).
-    const capturePattern = useCallback(async (password) => {
+    //
+    // Phase 3 (plan §3.3, gap B2) additionally emits the substitution
+    // *classes* already present in the password and an explicit `success`
+    // outcome. Without the classes the server's `_record_substitution_classes`
+    // was unreachable from the real client path; without `success` the service
+    // fell back to a "no backspaces" heuristic its own docstring warns against
+    // (a corrected typo is not a failed attempt).
+    //
+    // @param {string} password - The password just entered (stays on device).
+    // @param {{ success?: boolean }} [outcome] - Whether the password was
+    //   ultimately accepted. Omit only when the caller genuinely cannot know;
+    //   the server then falls back to the heuristic.
+    const capturePattern = useCallback(async (password, { success } = {}) => {
         if (!enabled || keystrokeTimings.current.length === 0) {
             return null;
         }
@@ -186,6 +199,13 @@ export const useTypingPattern = ({
                 backspace_positions: backspacePositions.current,
                 device_type: detectDeviceType(),
                 input_method: detectInputMethod(),
+                substitution_classes_used: detectSubstitutionClasses(password),
+                // Only sent when the caller actually knows. Omitting the key
+                // is meaningfully different from sending `false`: the
+                // serializer treats absence as "fall back to the heuristic",
+                // and a wrong explicit `false` would train the bandit that a
+                // successful entry failed.
+                ...(typeof success === 'boolean' ? { success } : {}),
             };
 
             // Reset for next session
@@ -417,13 +437,24 @@ export const adaptivePasswordService = {
      * suggestion is returned at all, because an ungated suggestion is exactly
      * the defect (gap C1) this gate exists to prevent.
      *
+     * Ranking Thompson-samples from the model's `exploration` posteriors
+     * (Phase 3): the bandit only learns about a class if it is occasionally
+     * suggested despite not currently ranking first, and the sampling happens
+     * here rather than server-side so `/preference-model/` stays deterministic
+     * and cacheable.
+     *
      * @param {string} password - The current password (stays on the device).
-     * @param {{ estimator?: Function }} [options={}] - `estimator` overrides
-     *   the lazily-loaded zxcvbn default (tests, or a pre-warmed instance).
+     * @param {{ estimator?: Function, explore?: boolean, rng?: Function }} [options={}]
+     *   `estimator` overrides the lazily-loaded zxcvbn default (tests, or a
+     *   pre-warmed instance); `explore` (default true) toggles Thompson
+     *   sampling; `rng` injects a uniform source for reproducible tests.
      */
-    async suggestAdaptation(password, { estimator } = {}) {
+    async suggestAdaptation(password, { estimator, explore = true, rng } = {}) {
         const { data: model } = await axios.get('/api/security/adaptive/preference-model/');
-        const ranked = rankSuggestions(generateCandidates(password), model);
+        const ranked = rankSuggestions(generateCandidates(password), model, {
+            explore,
+            ...(rng ? { rng } : {}),
+        });
 
         if (ranked.length === 0) {
             return {

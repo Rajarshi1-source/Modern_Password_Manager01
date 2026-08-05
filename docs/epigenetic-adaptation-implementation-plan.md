@@ -1,11 +1,13 @@
 # 🧬 Epigenetic Password Adaptation — Implementation Plan
 
-Status: **Phase 1 SHIPPED** — see §1.6 for what actually landed (PR #465) and
-where it deviates from this plan. §0 and the body of §1 below are the
-**pre-Phase-1 baseline**: every path, line number, field and symbol in them
-was read from the tree at `main` = `0b7ee24`, *before* implementation, and
-describes the gaps that motivated the plan — not the current state. Phases
-2-5 are still plan-only.
+Status: **Phases 1-3 SHIPPED** — see §1.6 (Phase 1, PR #465), §4.5 (Phase 2)
+and §5.6 (Phase 3) for what actually landed and where it deviates from this
+plan. §0 and the body of §1 below are the **pre-Phase-1 baseline**: every path,
+line number, field and symbol in them was read from the tree at `main` =
+`0b7ee24`, *before* implementation, and describes the gaps that motivated the
+plan — not the current state. Likewise the bodies of §4 and §5 are the
+pre-implementation designs; §4.5 and §5.6 record where the shipped code
+diverges from them, and win on any conflict. Phases 4-5 are still plan-only.
 
 Companion to `docs/adaptive-password-zk-remediation-plan.md` (the ZK cutover,
 already executed). This plan covers what that one deliberately left open.
@@ -706,6 +708,83 @@ Rules, in order:
   same dictionary hit).
 - The gate is exercised without network access (pure function, injected estimator).
 
+### 2.5 As shipped — status and deviations
+
+**Status: SHIPPED**, branch `feat/adaptive-phase2-3-strength-gate-bandit`.
+
+**Dependency: `@zxcvbn-ts/core` 4 + `@zxcvbn-ts/language-common` 4**, not the
+3.x this section assumed. v4's `ZxcvbnFactory` is an *instance* rather than
+3.x's `zxcvbn()` + `zxcvbnOptions` module singletons, so configuring it cannot
+be disturbed by another feature mutating shared global options, and its
+compressed dictionaries are smaller (measured: 1.3 MB vs 1.9 MB on disk). Both
+majors were installed and driven before choosing. Vite stays on 7 per project
+policy; the install is additive and did not move any existing dependency.
+
+**The two rules are applied to a fixed point, not in the numbered sequence
+above.** Every rejection changes the adapted password and therefore the other
+rule's input, so running each rule once can leave a regression standing. Each
+pass drops at least one substitution, so the loop is bounded by the input size;
+exceeding that bound raises rather than returning a stale reading.
+
+**The de-leet rule is the one that closes C1 — the non-regression rule cannot.**
+Measured against the real estimator, `password` scores `guesses_log10 = 0.477`
+and `p@ssw0rd` scores `0.954`: zxcvbn **credits** the leet variant, because the
+l33t matcher's extra guess multiplier outweighs anything it takes away. A gate
+built only on rule 1 would therefore wave through the canonical attack this
+feature was accused of enabling. That measurement is now a test
+(`credits p@ssw0rd over password — proving rule 1 alone cannot close C1`).
+The original §2.2 wording implied rule 1 did the security work and rule 3 was a
+narrow extra check; it is the other way round.
+
+**Attribution.** A rejection is attributed to a substitution when its
+`position` falls inside a leet-flagged dictionary match's `[i, j]` span in the
+*adapted* password. This also rejects a substitution that extends a leet match
+the original already had, which is the conservative reading and the intended
+one.
+
+**Survival rate, measured before building UI around it** (the §8 risk row):
+over a deterministic 200-password corpus, **~25% of passwords keep at least one
+substitution** and **~25% of individual substitutions survive** (143 of 576),
+with **zero** strength violations. Not low enough to force the "safer transform
+family" pivot, but low enough that `has_suggestion: false` is a *common*
+outcome — the UI presents it as "no change needed", never as an error, and
+`suggestAdaptation` returns a reason string for it.
+
+**Bundle cost, measured** (the other §8 risk row): a probe build of an entry
+that actually calls the gate emits three chunks — 5.9 kB for the adaptive
+engine, and **31.6 kB + 427.7 kB (≈222 kB gzipped) of zxcvbn behind the dynamic
+`import()`**. Nothing zxcvbn-related lands in the entry chunk. Worth recording
+honestly: the *production* build cannot show this yet, because gap D1 means no
+route imports the adaptive client, so Rollup drops the whole module — verified
+by grepping `dist/` for the module's own strings and finding none. The
+production number becomes real when Phase 5 mounts the UI.
+
+**Fail-closed.** If the estimator cannot be loaded or throws, `filterByStrength`
+propagates and `suggestAdaptation` returns `has_suggestion: false` with
+`strength_gate_error: true`. An ungated suggestion is the defect, so "could not
+measure" must never be mistaken for "measured and safe". A failed dynamic
+import is deliberately *not* cached, or one offline moment would disable the
+feature until reload.
+
+**Only counts leave the gate.** `suggestAdaptation` surfaces `rejected_count`
+and the distinct reason codes, not the rejected substitutions themselves —
+those carry password positions and nothing downstream needs them.
+
+**Two tests were wrong on first run**, and only running them showed it: a
+fixture used `position: 8` for a character at position 7, which sent the
+scripted estimator down its fallback branch so the test passed for the wrong
+reason; and a caching assertion compared two promises returned by an `async`
+function, which can never be identical. Both rules were then mutation-checked —
+neutralizing de-leet fails 3 tests including the `password` regression;
+neutralizing non-regression fails 3 including the 200-password property — so
+neither holds vacuously.
+
+**Pre-existing leak/contract tests now inject a neutral estimator.** Their
+fixtures (`Sup3rSecret-Passw0rd!`, `MySecret123!`) keep *nothing* against the
+real estimator, which would have turned them red; they are about what crosses
+the wire, not about the gate, so the gate still runs but has no reason to
+reject.
+
 ---
 
 ## 5. Phase 3 — Close the learning loop with a real bandit (B1, B2)
@@ -805,6 +884,110 @@ keeping exploration on-device and the endpoint deterministic and cacheable.
 - The behavioural term is computed from fingerprints only — assert the query set
   touches no password-bearing column.
 - Decay: an arm untouched for N windows relaxes toward the prior.
+
+### 3.6 As shipped — status and deviations
+
+**Status: SHIPPED**, branch `feat/adaptive-phase2-3-strength-gate-bandit`.
+New files: `security/models/adaptive_policy.py`,
+`security/services/adaptive_policy_service.py`,
+`security/tests/test_adaptive_policy_bandit.py`; migrations `0025` (the two
+models, pure schema — no `RunPython`, so none of Phase 1's DB-routing concern
+applies) and `0026` (see idempotency below).
+
+**Decay is applied toward the prior, not multiplicatively.** §3.1 said "decay
+both parameters by γ=0.98", which read literally is `alpha *= 0.98` — that
+walks both parameters toward 0, which is not a valid Beta and makes the
+posterior mean numerically meaningless as an arm goes cold. Shipped as
+`alpha ← 1 + (alpha − 1)·γ`. Same intent (an untouched arm relaxes to "no
+opinion"), and it keeps `alpha, beta ≥ 1` by construction. It also bounds
+growth without an arbitrary cap: with reward ≤ 1 per update the excess
+converges on `1/(1−γ) = 50`, so an arm stays responsive instead of ossifying.
+Both properties are tested.
+
+**`acceptance` and `rollback` are separate components, not one status term.**
+They answer different questions — "did the user take it up" and "did the user
+actively undo it" — and a rolled-back adaptation is worse evidence than one
+merely never accepted.
+
+**Missing components are dropped and the remaining weights renormalized**, so a
+partially-observed adaptation is not implicitly scored 0 on what was never
+measured. With no feedback and too few sessions, an active adaptation scores
+1.0, not 0.4.
+
+**Idempotency was added, and is not optional.** §3.2 kept the original task's
+"feedback from the last week" window. Celery retries tasks, and a re-run over
+the same window would credit the same feedback twice — silently skewing a
+posterior with evidence observed once. Migration `0026` adds
+`AdaptationFeedback.policy_reward_applied_at`; the task selects on
+`IS NULL` instead of a rolling window, claims each row under
+`select_for_update()`, and commits the credit and the stamp together. Selecting
+on "not yet applied" rather than on a date range also means a skipped or failed
+beat catches up next run instead of dropping that week's data permanently. The
+task is batched (`batch_size=500`) and one failing row is logged and left
+unstamped rather than aborting the run.
+
+**`credit_arms` takes a row lock, unlike the config reads Phase 1's round 4
+declined to lock.** That declined lock was for a value fetched once and reused,
+where nothing re-read; this is a genuine read-modify-write (read `alpha`, decay
+it, add the reward, write it back), so two unlocked concurrent credits would
+lose one outright. Different situation, opposite conclusion — recorded here
+because the earlier decision could otherwise look inconsistent.
+
+**Resolution order gained a level.** §3.4 said arm → global prior → baseline.
+Shipped as **arm → `UserTypingProfile` usage confidence → global prior →
+baseline**: the profile signal is user-specific and the global prior is not, so
+letting the population overrule something already observed about this user
+would be backwards. The export reports which level answered each class under
+`weight_sources`.
+
+**Global prior privacy.** Aggregation is restricted at the query to users with
+`allow_centralized_training=True`, and each user contributes their arm's
+**posterior mean** — already bounded to [0, 1] — which is what makes the
+Laplace sensitivity exactly 1.0 rather than the ~50 an unclipped `alpha` would
+imply. On top of the DP noise there is a k-anonymity floor
+(`MIN_CONTRIBUTING_USERS = 5`); below it no row is published at all. Arms with
+`pulls = 0` are excluded: a flat Beta(1,1) has mean 0.5 by construction and
+would look like a real contribution while dragging every class toward "no
+opinion".
+
+**Client-side Thompson sampling shipped as specified.** `exploration` carries
+the raw `{alpha, beta}`; `rankSuggestions` gained `{ explore, rng }` and draws
+a Beta sample (Marsaglia-Tsang gamma with a bounded rejection loop) to *rank*,
+while still reporting the posterior **mean** as `confidence` — showing the user
+a random draw would make the same suggestion look differently confident on each
+refresh. A class the server published no posterior for is scored at its mean
+rather than an implicit Beta(1,1), which would let unknown classes outrank ones
+the user has actually rewarded. `minConfidence` filters on the reported
+confidence, not the draw, so a user-facing floor cannot be satisfied by a lucky
+sample.
+
+**The mutation check runs as a test, not by hand.** Neutralizing `apply_reward`
+makes the convergence assertion fail. One detail is load-bearing and is
+commented in the test: the neutralized stub still increments `pulls`, because
+`pulls` is what makes the export read the arm at all — leave it at 0 and the
+export falls back to the static baseline, where `o→0` (0.6) already beats
+`a→4` (0.4), so `good > bad` would pass against a policy that learned nothing.
+
+**A test expectation was wrong on first run**, in the same class as Phase 2's:
+`test_enough_consenting_users_publish_a_prior` asserted a global mean > 0.8
+from contributors who had rewarded the class *once* — one credit only moves an
+arm from Beta(1,1) to Beta(2,1), a mean of 0.667, aggregating to ~0.639. The
+implementation was right; the fixture was not confident enough to be the
+population the assertion described.
+
+**Known limitation, documented rather than hidden.**
+`detectSubstitutionClasses` runs `REVERSE_LEET_MAP` over the password exactly
+as §3.3 specified, so a symbol used as ordinary punctuation is indistinguishable
+from the same symbol used as leetspeak — a password ending in `!` is reported
+as using `i → !`. Resolving it needs the un-leeted word, i.e. a dictionary
+lookup, and pulling zxcvbn's dictionaries into the per-session capture path is
+not worth it. The cost is a little signal quality for the bandit, not a leak:
+the class is reported either way.
+
+**`success` is omitted, not defaulted.** `capturePattern(password, { success })`
+only sends the key when the caller actually knows. Absence means "fall back to
+the service's heuristic"; an invented `false` would train the bandit that a
+successful entry failed.
 
 ---
 
@@ -946,10 +1129,10 @@ that measurably weaken their passwords.**
 
 | Risk | Mitigation |
 |---|---|
-| Strength gate rejects nearly everything, leaving the feature inert | Measure the survival rate over a password corpus **before** building UI around it. If it is very low, that is evidence for the "safer transform family" option (appending learned syllables, case-shifts at low-error positions) rather than a reason to relax the gate. |
-| Bandit starves on sparse data | Global DP prior for cold start; Thompson sampling explores by construction; ≥3-session floor on the behavioural term. |
+| Strength gate rejects nearly everything, leaving the feature inert | **Measured, Phase 2:** ~25% of passwords keep at least one substitution over a 200-password corpus (§4.5). Workable, so the "safer transform family" option (appending learned syllables, case-shifts at low-error positions) was not needed — but `has_suggestion: false` is common enough that the UI must treat it as a normal outcome. |
+| Bandit starves on sparse data | Global DP prior for cold start; Thompson sampling explores by construction; ≥3-session floor on the behavioural term. **Shipped as specified**, plus a k-anonymity floor of 5 contributors on the global prior (§5.6). |
 | Salt exposure misjudged | Re-derive the argument from `cryptoService.js:269` at implementation time; do not rely on §1.1's summary. |
-| zxcvbn bundle cost | Dynamic `import()`, measured against the current bundle before merge. |
+| zxcvbn bundle cost | **Measured, Phase 2:** ≈460 kB raw / 222 kB gzipped, entirely behind the dynamic `import()`; nothing zxcvbn-related in the entry chunk (§4.5). Not yet visible in the production build because gap D1 keeps the whole adaptive module unreachable and Rollup drops it. |
 | Key rotation orphans learning | Intended — a correlation reset. Make it explicit in the UI, not a silent data loss. |
 
 ## 9. Acceptance criteria
@@ -963,8 +1146,21 @@ that measurably weaken their passwords.**
    and a cross-stack test connecting a real backend response to a real client
    derivation — a backend-only test can't prove that. Re-word this item to
    "end-to-end" only once D1/D2 ship.
-2. No adaptation ever lowers `guesses_log10`, proven by property test over a corpus (C1).
-3. The exported preference model demonstrably diverges from the static baseline after feedback, and the convergence test fails when the policy update is neutralized (B1, B2).
+2. No adaptation ever lowers `guesses_log10`, proven by property test over a
+   corpus (C1) — **met**, Phase 2 §4.5; 200 deterministic passwords, each
+   survivor re-measured independently of the number the gate reported about
+   itself, and both gate rules mutation-checked. Scope of the claim: this is a
+   *client-side* guarantee. The server never sees a password and so cannot
+   verify it; that asymmetry is deliberate and documented in §1.3.
+3. The exported preference model demonstrably diverges from the static baseline
+   after feedback, and the convergence test fails when the policy update is
+   neutralized (B1, B2) — **met**, Phase 3 §5.6. `ConvergenceTests` drives 200
+   rounds where `o→0` always rewards and `a→4` never does, asserts the exported
+   weights (0.98 / 0.02) differ from the baseline (0.6 / 0.4), and a companion
+   test neutralizes `apply_reward` and asserts the ordering assertion then
+   fails. B2 is closed at both ends: `apply_adaptation_v2` credits an
+   acceptance reward, `rollback_adaptation` a hard zero, and the client now
+   sends `substitution_classes_used` and an explicit `success`.
 4. `average_memorability_improvement` is non-zero after an accepted adaptation (B4).
 5. Error-prone positions measurably change suggestion ranking (B3).
 6. `/security/adaptive` is reachable and the e2e spec passes rather than being dormant (D1, D2).

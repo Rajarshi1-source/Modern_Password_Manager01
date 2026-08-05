@@ -161,6 +161,26 @@ export function generateCandidates(password) {
 }
 
 /**
+ * Read a `{from: {to: value}}` table entry, guarding prototype pollution.
+ *
+ * @param {object|null|undefined} table - Two-level table from the server model.
+ * @param {string} fromChar - Lowercased original character.
+ * @param {string} toChar - Candidate substituted character.
+ * @returns {unknown} The entry, or `undefined` if absent.
+ * @private
+ */
+function lookupNested(table, fromChar, toChar) {
+  if (!table || !Object.hasOwn(table, fromChar)) return undefined;
+  // Keys are our own substitution classes (own enumerable props, guarded by
+  // Object.hasOwn above); the model is server-exported data, never code.
+  // eslint-disable-next-line security/detect-object-injection
+  const row = table[fromChar];
+  if (!row || !Object.hasOwn(row, toChar)) return undefined;
+  // eslint-disable-next-line security/detect-object-injection
+  return row[toChar];
+}
+
+/**
  * Look up a substitution weight in a preference model.
  *
  * @param {object|null|undefined} model - Preference model (see {@link rankSuggestions}).
@@ -170,16 +190,157 @@ export function generateCandidates(password) {
  * @private
  */
 function lookupWeight(model, fromChar, toChar) {
-  const weights = model && model.substitution_weights;
-  if (!weights || !Object.hasOwn(weights, fromChar)) return undefined;
-  // Keys are our own substitution classes (own enumerable props, guarded by
-  // Object.hasOwn above); the model is server-exported data, never code.
-  // eslint-disable-next-line security/detect-object-injection
-  const row = weights[fromChar];
-  if (!row || !Object.hasOwn(row, toChar)) return undefined;
-  // eslint-disable-next-line security/detect-object-injection
-  const w = row[toChar];
+  const w = lookupNested(model && model.substitution_weights, fromChar, toChar);
   return typeof w === 'number' ? w : undefined;
+}
+
+// =============================================================================
+// Thompson sampling (Phase 3 — plan §3.4)
+// =============================================================================
+//
+// The server exports the raw Beta posteriors under `exploration` and the
+// client draws the sample. That split is deliberate: exploration has to be
+// random to work, and a server that returned a fresh random draw per request
+// could never be cached or reasoned about. Here the randomness is local, the
+// endpoint stays deterministic, and the injectable `rng` makes the whole thing
+// testable.
+
+/**
+ * Uniform in the OPEN interval (0, 1).
+ *
+ * Uses `crypto.getRandomValues` when available. Endpoints matter: a 0 would
+ * make `Math.log(u)` in the gamma sampler `-Infinity`, and a 1 would make
+ * `u ** (1 / shape)` degenerate.
+ *
+ * @returns {number} A uniform sample in (0, 1).
+ * @private
+ */
+function defaultRng() {
+  const webcrypto = globalThis.crypto;
+  if (webcrypto && typeof webcrypto.getRandomValues === 'function') {
+    const buffer = new Uint32Array(1);
+    webcrypto.getRandomValues(buffer);
+    // (x + 0.5) / 2^32 lands strictly inside (0, 1) for every uint32.
+    return (buffer[0] + 0.5) / 4294967296;
+  }
+  // Math.random() can return exactly 0; nudge it off the endpoint.
+  return Math.min(1 - Number.EPSILON, Math.max(Number.EPSILON, Math.random()));
+}
+
+/**
+ * Standard normal variate (Box-Muller).
+ *
+ * @param {() => number} rng - Uniform (0, 1) source.
+ * @returns {number} A standard normal sample.
+ * @private
+ */
+function normalSample(rng) {
+  return Math.sqrt(-2 * Math.log(rng())) * Math.cos(2 * Math.PI * rng());
+}
+
+/** Iteration ceiling for the gamma sampler's rejection loop. @private */
+const GAMMA_MAX_ITERATIONS = 1000;
+
+/**
+ * Gamma(shape, 1) variate via Marsaglia-Tsang.
+ *
+ * @param {number} shape - Shape parameter (> 0).
+ * @param {() => number} rng - Uniform (0, 1) source.
+ * @returns {number} A gamma sample.
+ * @private
+ */
+function gammaSample(shape, rng) {
+  if (shape < 1) {
+    // Boost into the shape >= 1 regime: G(a) == G(a + 1) * U^(1/a).
+    return gammaSample(shape + 1, rng) * rng() ** (1 / shape);
+  }
+
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+
+  for (let i = 0; i < GAMMA_MAX_ITERATIONS; i += 1) {
+    let x;
+    let v;
+    do {
+      x = normalSample(rng);
+      v = 1 + c * x;
+    } while (v <= 0);
+    v *= v * v;
+    const u = rng();
+    if (u < 1 - 0.0331 * x * x * x * x) return d * v;
+    if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+  }
+
+  // Marsaglia-Tsang accepts in ~1 iteration on average, so this is unreachable
+  // in practice — but an unbounded loop inside a password-entry code path is
+  // not something to leave to "in practice". Fall back to the distribution's
+  // mean, which degrades exploration to exploitation rather than hanging.
+  return d;
+}
+
+/**
+ * Draw from Beta(alpha, beta).
+ *
+ * Exported for tests; `rankSuggestions` is the intended caller.
+ *
+ * @param {number} alpha - Beta alpha (> 0).
+ * @param {number} beta - Beta beta (> 0).
+ * @param {() => number} [rng=defaultRng] - Uniform (0, 1) source.
+ * @returns {number} A sample in [0, 1].
+ */
+export function sampleBeta(alpha, beta, rng = defaultRng) {
+  const a = typeof alpha === 'number' && alpha > 0 ? alpha : 1;
+  const b = typeof beta === 'number' && beta > 0 ? beta : 1;
+  const x = gammaSample(a, rng);
+  const y = gammaSample(b, rng);
+  const total = x + y;
+  // Both gammas underflowing to 0 is possible for tiny shapes; 0.5 is the
+  // "no opinion" answer, matching a Beta(1, 1) mean.
+  return total > 0 ? x / total : 0.5;
+}
+
+/**
+ * Detect the leetspeak substitution *classes* already present in a password.
+ *
+ * Used to populate `substitution_classes_used` on a recorded typing session,
+ * which is what teaches the server which classes this user actually reaches
+ * for. Before Phase 3 the client never sent this, so the service's
+ * `_record_substitution_classes` was unreachable from the real client path
+ * (plan §0.2 gap B2).
+ *
+ * Zero-knowledge scope: the result is a set of character *classes* — never a
+ * position, never surrounding context, never the password. It does reveal that
+ * the password contains, say, a `0`; that is the coarse signal the v2 wire
+ * contract explicitly allows for this field, and the whole feature is opt-in.
+ *
+ * Known limitation: a symbol used as ordinary punctuation is indistinguishable
+ * from the same symbol used as leetspeak. A password ending in `!` is reported
+ * as using the `i → !` class whether or not the user meant it that way.
+ * Resolving it would need the un-leeted word, i.e. a dictionary lookup, and
+ * pulling zxcvbn's dictionaries into the per-session capture path is not worth
+ * it — the cost is a little signal quality for the bandit, not a leak (the
+ * class is reported either way).
+ *
+ * @param {string} password - The plaintext password (stays on the client).
+ * @returns {Array<{ from: string, to: string }>} Distinct classes, ordered by
+ *   first appearance.
+ */
+export function detectSubstitutionClasses(password) {
+  assertString(password, 'detectSubstitutionClasses');
+  const seen = new Set();
+  const classes = [];
+  for (const ch of password) {
+    const from = Object.hasOwn(REVERSE_LEET_MAP, ch)
+      // eslint-disable-next-line security/detect-object-injection
+      ? REVERSE_LEET_MAP[ch]
+      : undefined;
+    if (!from) continue;
+    const key = `${from}->${ch}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    classes.push({ from, to: ch });
+  }
+  return classes;
 }
 
 /**
@@ -195,11 +356,21 @@ function lookupWeight(model, fromChar, toChar) {
  *
  * @param {Array<{ position: number, original_char: string, suggested_char: string, reason?: string }>} candidates
  *   Candidates, typically from {@link generateCandidates}.
- * @param {{ substitution_weights?: Record<string, Record<string, number>>, model_version?: number }|null} [preferenceModel=null]
+ * When `explore` is set and the model carries Phase 3's `exploration` table,
+ * a candidate is *ranked* by a Thompson sample from its Beta posterior instead
+ * of by the posterior mean. The reported `confidence` stays the mean — that is
+ * the number the UI shows the user, and showing them a random draw would make
+ * the same suggestion look differently confident on every refresh.
+ *
+ * @param {Array<{ position: number, original_char: string, suggested_char: string, reason?: string }>} candidates
+ *   Candidates, typically from {@link generateCandidates}.
+ * @param {{ substitution_weights?: Record<string, Record<string, number>>, exploration?: Record<string, Record<string, {alpha: number, beta: number}>>, model_version?: number }|null} [preferenceModel=null]
  *   Server-exported preference model (no password data); `null` uses defaults.
- * @param {{ maxSuggestions?: number, minConfidence?: number }} [options={}]
+ * @param {{ maxSuggestions?: number, minConfidence?: number, explore?: boolean, rng?: () => number }} [options={}]
  *   `maxSuggestions` caps the result size (default 3); `minConfidence` drops
- *   weak candidates (default 0).
+ *   weak candidates (default 0); `explore` enables Thompson sampling (default
+ *   false, so ranking stays deterministic unless a caller opts in); `rng`
+ *   injects a uniform (0, 1) source for reproducible tests.
  * @returns {Array<{ position: number, original_char: string, suggested_char: string, confidence: number, reason: string }>}
  *   The selected, ranked substitutions.
  */
@@ -207,29 +378,53 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
   if (!Array.isArray(candidates)) {
     throw new TypeError('rankSuggestions requires an array of candidates');
   }
-  const { maxSuggestions = 3, minConfidence = 0 } = options;
+  const {
+    maxSuggestions = 3, minConfidence = 0, explore = false, rng = defaultRng,
+  } = options;
+  const exploration = explore ? (preferenceModel && preferenceModel.exploration) : null;
 
   const bestByPosition = new Map();
   for (const candidate of candidates) {
     const fromKey = String(candidate.original_char).toLowerCase();
     const weight = lookupWeight(preferenceModel, fromKey, candidate.suggested_char);
     const confidence = clamp01(weight === undefined ? DEFAULT_CONFIDENCE : weight);
+
+    // Ranking score: a Thompson draw when exploring and a posterior is
+    // published for this exact class, otherwise the mean. A class the server
+    // has no posterior for is not silently explored at Beta(1, 1) — that would
+    // give unknown classes a 0.5-centred random score and let them outrank
+    // classes the user has actually rewarded.
+    const posterior = exploration
+      ? lookupNested(exploration, fromKey, candidate.suggested_char)
+      : undefined;
+    const score = posterior
+      ? sampleBeta(posterior.alpha, posterior.beta, rng)
+      : confidence;
+
     const scored = {
       position: candidate.position,
       original_char: candidate.original_char,
       suggested_char: candidate.suggested_char,
       confidence,
+      score,
       reason: candidate.reason || `Substitution ${fromKey} → ${candidate.suggested_char}`,
     };
     const existing = bestByPosition.get(candidate.position);
-    if (!existing || scored.confidence > existing.confidence) {
+    if (!existing || scored.score > existing.score) {
       bestByPosition.set(candidate.position, scored);
     }
   }
 
   return Array.from(bestByPosition.values())
+    // minConfidence is a floor on the *reported* confidence, not on the
+    // exploration draw: a user-facing "don't show me anything below 0.5"
+    // setting must not be satisfiable by a lucky sample.
     .filter((s) => s.confidence >= minConfidence)
-    .sort((a, b) => b.confidence - a.confidence || a.position - b.position)
+    .sort((a, b) => b.score - a.score || a.position - b.position)
+    // `score` is internal ranking state — it is a random draw when exploring,
+    // so exposing it would put a number in the suggestion object that changes
+    // between identical calls.
+    .map(({ score: _score, ...suggestion }) => suggestion)
     .slice(0, Math.max(0, maxSuggestions));
 }
 
@@ -544,4 +739,6 @@ export default {
   filterByStrength,
   loadDefaultEstimator,
   resetDefaultEstimator,
+  sampleBeta,
+  detectSubstitutionClasses,
 };

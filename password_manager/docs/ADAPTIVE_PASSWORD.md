@@ -139,7 +139,7 @@ After 10+ typing sessions, the system will suggest adaptations:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/adaptive/preference-model/` | GET | Download the learned preference model (client generates suggestions locally) |
+| `/adaptive/preference-model/` | GET | Download the learned preference model — bandit posterior means, plus `exploration` (raw `{alpha, beta}`) and `weight_sources`; the client generates, Thompson-samples and strength-gates suggestions locally |
 | `/adaptive/suggest/` | POST | **Deprecated (HTTP 410)** — server-side suggestion removed; use the preference-model pull instead |
 | `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + `fp_key_version` + substitution classes + masked previews; raw passwords rejected) |
 | `/adaptive/rollback/` | POST | Rollback to previous |
@@ -204,15 +204,42 @@ are rights rather than features.
 - Differential privacy on all aggregated metrics
 - Suggestion confidence scores come from the exported preference model
 
-> **Not yet implemented:** the reinforcement-learning policy. The
-> `update_rl_model_from_feedback` task computes rewards but does not yet persist
-> a model, so `substitution_weights` is still close to the static leetspeak
-> baseline. It is also **not yet scheduled** — no Celery beat entry exists for
-> it (`celery.py`'s `beat_schedule`); "weekly" is the Phase 5 target cadence,
-> not current behavior. See `docs/epigenetic-adaptation-implementation-plan.md`
-> §5 (Phase 3) and §7 (Phase 5, Celery beats).
->
-> **Not yet implemented:** the strength guard. Leetspeak substitutions are
-> modelled by common cracking rule-sets, so an adaptation can currently reduce
-> guess-resistance. Phase 2 of the same plan adds a client-side zxcvbn gate that
-> rejects any non-improving candidate.
+- **Every suggestion passes a client-side strength gate** (Phase 2). No
+  adaptation is offered unless it keeps `guesses_log10` at least as high as the
+  original *and* introduces no leet-flagged dictionary match. The gate runs on
+  the client, because the server never sees a password and so cannot verify it —
+  an accepted asymmetry, since the server only records and never applies.
+  `has_suggestion: false` is a common, expected result; roughly three quarters
+  of candidate substitutions are rejected.
+
+### The reinforcement-learning policy (Phase 3)
+
+`substitution_weights` is now the posterior mean of a per-user Beta-Bernoulli
+bandit arm per substitution class, not the static leetspeak table. Resolution
+order per class: the user's own arm → their `UserTypingProfile` usage
+confidence → a DP-noised cross-user prior → the leetspeak baseline.
+`/adaptive/preference-model/` also returns:
+
+| Field | Meaning |
+|-------|---------|
+| `exploration` | Raw `{alpha, beta}` per class. **The client draws the Thompson sample**, so exploration stays on-device and this endpoint stays deterministic and cacheable. |
+| `weight_sources` | Which of the four levels answered each class (`user_policy` / `user_profile` / `global_prior` / `baseline`). |
+
+Rewards come from four signals, all zero-knowledge: the explicit rating,
+whether the adaptation is active, whether it was rolled back, and — the one
+that makes this more than a satisfaction survey — the change in typing error
+count and entry time measured by joining the two **opaque fingerprints**,
+era-scoped and requiring at least 3 sessions on each side. Applying an
+adaptation credits an immediate partial acceptance reward; rolling one back
+credits a hard zero.
+
+> **Still not scheduled.** `update_rl_model_from_feedback` now persists the
+> policy, but no Celery beat entry exists for it yet (`celery.py`'s
+> `beat_schedule`) — "weekly" remains the Phase 5 target cadence, not current
+> behavior. The task is idempotent (it selects feedback by
+> `policy_reward_applied_at IS NULL`), so running it manually or on a
+> hand-rolled schedule is safe and cannot double-count. See
+> `docs/epigenetic-adaptation-implementation-plan.md` §7 (Phase 5, Celery beats).
+
+> **Still not mounted.** No route imports the adaptive client yet (gap D1), so
+> none of the above is reachable from the running app until Phase 5.

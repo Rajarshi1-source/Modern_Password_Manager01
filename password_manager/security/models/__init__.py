@@ -9,6 +9,15 @@ It consolidates models from multiple submodules into a single namespace.
 # Import all models from core (previously models.py)
 from .core import *
 
+# Import adaptive-password policy models (Phase 3 bandit)
+from .adaptive_policy import (
+    SubstitutionPolicyArm,
+    GlobalSubstitutionPrior,
+    PRIOR_ALPHA,
+    PRIOR_BETA,
+    DEFAULT_DECAY,
+)
+
 # Import ocean entropy models
 from .ocean_entropy_models import (
     OceanEntropyBatch,

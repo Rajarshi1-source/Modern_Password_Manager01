@@ -94,6 +94,75 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
     assertNoSecret(vi.mocked(axios.post).mock.calls);
   });
 
+  it('record-session reports substitution classes and an explicit outcome', async () => {
+    // Phase 3, gap B2: without these the server's _record_substitution_classes
+    // was unreachable from the real client path, and `success` fell back to a
+    // "no backspaces" heuristic the service's own docstring warns against.
+    const input = document.createElement('input');
+    input.type = 'password';
+    const inputRef = { current: input };
+
+    render(
+      <TypingPatternCapture
+        inputRef={inputRef}
+        enabled
+        fingerprint={fingerprint}
+        fpKeyVersion={FP_KEY_VERSION}
+      />
+    );
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
+    await act(async () => {
+      await inputRef.current.captureTypingPattern(SECRET, { success: true });
+    });
+
+    const body = vi.mocked(axios.post).mock.calls[0][1];
+    // SECRET is 'Sup3rSecret-Passw0rd!': a '3', a '0' — and a trailing '!',
+    // which REVERSE_LEET_MAP resolves to 'i'. That last one is a known,
+    // documented false positive: '!' as ordinary punctuation is
+    // indistinguishable from '!' as leetspeak for 'i' without knowing the
+    // un-leeted word. It costs the bandit a little signal quality; it leaks
+    // nothing extra, since the class is reported either way.
+    expect(body.substitution_classes_used).toEqual([
+      { from: 'e', to: '3' },
+      { from: 'o', to: '0' },
+      { from: 'i', to: '!' },
+    ]);
+    expect(body.success).toBe(true);
+    // Classes only: no positions, no context, nothing password-shaped.
+    for (const entry of body.substitution_classes_used) {
+      expect(Object.keys(entry).sort()).toEqual(['from', 'to']);
+    }
+    assertNoSecret(vi.mocked(axios.post).mock.calls);
+  });
+
+  it('omits success entirely when the caller does not know the outcome', async () => {
+    // Absence means "fall back to the heuristic"; an invented `false` would
+    // train the bandit that a successful entry failed.
+    const input = document.createElement('input');
+    input.type = 'password';
+    const inputRef = { current: input };
+
+    render(
+      <TypingPatternCapture
+        inputRef={inputRef}
+        enabled
+        fingerprint={fingerprint}
+        fpKeyVersion={FP_KEY_VERSION}
+      />
+    );
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'b' }));
+    await act(async () => {
+      await inputRef.current.captureTypingPattern(SECRET);
+    });
+
+    const body = vi.mocked(axios.post).mock.calls[0][1];
+    expect(body).not.toHaveProperty('success');
+  });
+
   it('suggestAdaptation pulls the model and never POSTs the password', async () => {
     const result = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator });
 
