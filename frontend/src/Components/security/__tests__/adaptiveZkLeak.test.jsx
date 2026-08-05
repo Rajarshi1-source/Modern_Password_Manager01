@@ -35,6 +35,16 @@ const PREFERENCE_MODEL = {
   memorability_params: {},
 };
 
+// Phase 2 added a strength gate in front of every suggestion, and the real
+// zxcvbn estimator rejects *every* leet substitution on these fixtures (both
+// SECRET and 'MySecret123!' de-leet straight onto dictionary hits — verified
+// against the real estimator, not assumed). These tests are about what crosses
+// the wire, not about the gate, so they inject a **neutral** estimator: the
+// gate still runs end-to-end, it just has no reason to reject. Gate behaviour
+// itself is covered in services/adaptive/__tests__/adaptiveFeatures.test.js.
+const NEUTRAL_ESTIMATE = { guessesLog10: 12, sequence: [] };
+const neutralEstimator = () => NEUTRAL_ESTIMATE;
+
 function assertNoSecret(calls) {
   for (const call of calls) {
     expect(JSON.stringify(call)).not.toContain(SECRET);
@@ -85,7 +95,7 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
   });
 
   it('suggestAdaptation pulls the model and never POSTs the password', async () => {
-    const result = await adaptivePasswordService.suggestAdaptation(SECRET);
+    const result = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator });
 
     expect(axios.get).toHaveBeenCalledWith(expect.stringContaining('/adaptive/preference-model/'));
     expect(axios.post).not.toHaveBeenCalled();
@@ -96,7 +106,7 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
   });
 
   it('applyAdaptation posts only fingerprints, masked previews, and classes', async () => {
-    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET);
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator });
     const result = await adaptivePasswordService.applyAdaptation(
       SECRET, suggestion.substitutions, { fingerprint, fpKeyVersion: FP_KEY_VERSION }
     );
@@ -184,7 +194,7 @@ describe('adaptive ZK v2 — fingerprint key era', () => {
   });
 
   it('applyAdaptation refuses to post without an era', async () => {
-    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET);
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator });
     vi.mocked(axios.post).mockClear();
 
     await expect(

@@ -522,7 +522,16 @@ describe('Adaptive Password API Service', () => {
             },
         });
 
-        const result = await adaptivePasswordService.suggestAdaptation('MySecret123!');
+        // Phase 2 put a strength gate in front of every suggestion. Against the
+        // real zxcvbn estimator this fixture keeps nothing (every leet variant
+        // of 'MySecret123!' de-leets onto a dictionary hit — verified, not
+        // assumed), so a neutral estimator is injected: the gate still runs, it
+        // simply has no reason to reject. Gate behaviour has its own tests in
+        // services/adaptive/__tests__/adaptiveFeatures.test.js.
+        const neutralEstimator = () => ({ guessesLog10: 12, sequence: [] });
+        const result = await adaptivePasswordService.suggestAdaptation('MySecret123!', {
+            estimator: neutralEstimator,
+        });
 
         // Fetched the preference model; never POSTed the password anywhere.
         expect(axios.get).toHaveBeenCalledWith(
@@ -534,6 +543,10 @@ describe('Adaptive Password API Service', () => {
         expect(result.has_suggestion).toBe(true);
         expect(result.substitutions?.length).toBeGreaterThan(0);
         expect(result.original_preview).toMatch(/\*/);
+        // The strength gate's reading is surfaced so the UI can show it.
+        expect(result.guesses_log10_before).toBe(12);
+        expect(result.guesses_log10_after).toBe(12);
+        expect(result.guesses_log10_delta).toBe(0);
         // The raw password never appears anywhere in the suggestion object.
         expect(JSON.stringify(result)).not.toContain('MySecret123!');
     });

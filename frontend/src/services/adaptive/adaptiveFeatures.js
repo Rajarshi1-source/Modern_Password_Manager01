@@ -280,13 +280,268 @@ export function maskPreview(password) {
   return `${password.slice(0, 2)}***${password.slice(-2)}`;
 }
 
+// =============================================================================
+// Strength gate (Phase 2 — plan §4 / gap C1)
+// =============================================================================
+//
+// Leetspeak is exactly what hashcat's `best64`/`leetspeak` rules and zxcvbn's
+// own l33t matcher already model, so an unguarded adaptation can hand an
+// attacker a known rule. Everything below runs **client-side only** — the
+// server never sees a password and therefore cannot verify this gate. That
+// asymmetry is accepted and documented (plan §1.3): the server only records,
+// so a client that records a weakening adaptation harms only itself.
+
+/** Reason code: the substitution created a leet dictionary match. */
+export const REJECT_DE_LEET = 'de_leet';
+
+/** Reason code: the substitution set lowered `guesses_log10`. */
+export const REJECT_STRENGTH_REGRESSION = 'strength_regression';
+
+/**
+ * Cached promise for the lazily-imported default estimator.
+ *
+ * zxcvbn's dictionaries are large, so they are pulled in via `import()` and
+ * never enter the main chunk. Reset on failure so a transient chunk-load error
+ * does not permanently disable the gate.
+ *
+ * @type {Promise<(password: string) => { guessesLog10: number, sequence: Array<object> }>|null}
+ * @private
+ */
+let defaultEstimatorPromise = null;
+
+/**
+ * Read a binding from a dynamically-imported module, tolerating CJS interop.
+ *
+ * `@zxcvbn-ts/*` v4 ships `main` (CJS) + `module` (ESM) with no `exports` map.
+ * Bundlers pick the ESM build and expose named bindings directly; a plain Node
+ * ESM resolver picks the CJS build and puts everything on `default` instead.
+ * Both shapes are handled so the same code works under Vite and under a raw
+ * Node import (verified empirically against both — the difference is real, not
+ * hypothetical).
+ *
+ * @param {object} mod - The imported module namespace.
+ * @param {string} name - The binding to read.
+ * @returns {unknown} The binding, from either shape.
+ * @private
+ */
+function interopNamed(mod, name) {
+  if (mod && Object.hasOwn(mod, name)) {
+    // eslint-disable-next-line security/detect-object-injection
+    return mod[name];
+  }
+  const fallback = mod && mod.default;
+  if (fallback && Object.hasOwn(fallback, name)) {
+    // eslint-disable-next-line security/detect-object-injection
+    return fallback[name];
+  }
+  return undefined;
+}
+
+/**
+ * Lazily build the default zxcvbn-backed strength estimator.
+ *
+ * Exported so a caller can warm the chunk ahead of time (e.g. when the adaptive
+ * panel mounts) instead of paying the import cost inside the gate.
+ *
+ * @returns {Promise<(password: string) => { guessesLog10: number, sequence: Array<object> }>}
+ *   An estimator over the common-language dictionaries.
+ */
+export async function loadDefaultEstimator() {
+  if (defaultEstimatorPromise === null) {
+    defaultEstimatorPromise = (async () => {
+      const [core, common] = await Promise.all([
+        import('@zxcvbn-ts/core'),
+        import('@zxcvbn-ts/language-common'),
+      ]);
+      const ZxcvbnFactory = interopNamed(core, 'ZxcvbnFactory');
+      const dictionary = interopNamed(common, 'dictionary');
+      const graphs = interopNamed(common, 'adjacencyGraphs');
+      if (typeof ZxcvbnFactory !== 'function' || !dictionary || !graphs) {
+        throw new Error('zxcvbn-ts loaded but did not expose the expected API.');
+      }
+      const zxcvbn = new ZxcvbnFactory({ dictionary: { ...dictionary }, graphs });
+      return (password) => {
+        const result = zxcvbn.check(password);
+        return { guessesLog10: result.guessesLog10, sequence: result.sequence };
+      };
+    })().catch((error) => {
+      // Do not cache a failure: a chunk that failed to load once (offline, CDN
+      // hiccup) must be retryable, or the gate stays permanently unavailable
+      // and — because callers fail closed — the feature stays permanently off.
+      defaultEstimatorPromise = null;
+      throw error;
+    });
+  }
+  return defaultEstimatorPromise;
+}
+
+/**
+ * Reset the cached default estimator. Test seam only.
+ *
+ * @returns {void}
+ */
+export function resetDefaultEstimator() {
+  defaultEstimatorPromise = null;
+}
+
+/**
+ * Collect the leet-flagged dictionary matches from a zxcvbn match sequence.
+ *
+ * @param {Array<object>|undefined} sequence - zxcvbn `result.sequence`.
+ * @returns {Array<{ i: number, j: number }>} Index spans of l33t matches.
+ * @private
+ */
+function leetMatchSpans(sequence) {
+  if (!Array.isArray(sequence)) return [];
+  return sequence
+    .filter((match) => match && match.pattern === 'dictionary' && match.l33t === true)
+    .map((match) => ({
+      i: Number.isInteger(match.i) ? match.i : 0,
+      j: Number.isInteger(match.j) ? match.j : 0,
+    }));
+}
+
+/**
+ * Normalize an estimator result, rejecting anything unusable.
+ *
+ * A gate that silently treats a malformed estimator reading as "fine" would be
+ * the same fail-open class of bug this gate exists to prevent, so an unusable
+ * reading throws rather than defaulting.
+ *
+ * @param {unknown} raw - Whatever the estimator returned.
+ * @param {string} label - Which password was measured, for the error message.
+ * @returns {{ guessesLog10: number, sequence: Array<object> }} Normalized reading.
+ * @private
+ */
+function normalizeEstimate(raw, label) {
+  const guessesLog10 = raw && raw.guessesLog10;
+  if (typeof guessesLog10 !== 'number' || !Number.isFinite(guessesLog10)) {
+    throw new TypeError(
+      `filterByStrength: estimator returned no finite guessesLog10 for the ${label} password.`,
+    );
+  }
+  return { guessesLog10, sequence: (raw && raw.sequence) || [] };
+}
+
+/**
+ * Drop every adaptation that would not strictly preserve guess-resistance.
+ *
+ * Two independent rules are enforced, because zxcvbn does **not** punish
+ * leetspeak on its own — measured against the real estimator, `password`
+ * scores `guesses_log10 ≈ 0.48` while `p@ssw0rd` scores `≈ 0.95`, i.e. the
+ * naive non-regression test *passes* the canonical attack. Rule 2 is what
+ * actually closes gap C1; rule 1 catches everything else.
+ *
+ *   1. **Strict non-regression** — the adapted password's `guesses_log10` must
+ *      be `>=` the original's. On a regression the lowest-confidence
+ *      substitution is dropped and the set re-tested.
+ *   2. **De-leet** — a substitution that lands inside a leet-flagged dictionary
+ *      match in the adapted password is rejected outright. That match is a rule
+ *      an offline cracker already models, so the substitution has handed the
+ *      attacker a shortcut regardless of what the guess count says.
+ *
+ * The two rules are applied to a **fixed point** rather than strictly in
+ * sequence (a deviation from the plan's numbered ordering, which is written as
+ * if each rule ran once): every rejection changes the adapted password, and so
+ * changes the other rule's input. Each pass removes at least one substitution,
+ * so the loop is bounded by `subs.length`.
+ *
+ * Fails closed: an estimator that throws or returns an unusable reading
+ * propagates, so a caller can never mistake "could not measure" for "measured
+ * and safe".
+ *
+ * @param {string} password - The original password (stays on the client).
+ * @param {Array<{ position: number, original_char?: string, suggested_char: string, confidence?: number }>} subs
+ *   Ranked substitutions, typically from {@link rankSuggestions}.
+ * @param {{ estimator?: (password: string) => object|Promise<object> }} [options={}]
+ *   `estimator` overrides the lazily-loaded zxcvbn default (used by tests and
+ *   by callers that already hold an estimator).
+ * @returns {Promise<{ subs: Array<object>, originalGuessesLog10: number, adaptedGuessesLog10: number, rejected: Array<object> }>}
+ *   The surviving substitutions (possibly empty — a valid outcome, not an
+ *   error), both guess counts, and every rejection with its reason code.
+ */
+export async function filterByStrength(password, subs, { estimator } = {}) {
+  assertString(password, 'filterByStrength');
+  if (!Array.isArray(subs)) {
+    throw new TypeError('filterByStrength requires an array of substitutions');
+  }
+
+  const estimate = estimator || (await loadDefaultEstimator());
+  const original = normalizeEstimate(await estimate(password), 'original');
+
+  let surviving = subs.slice();
+  const rejected = [];
+  let adapted = original;
+
+  // Every iteration either settles or removes at least one substitution, so
+  // `subs.length + 1` passes is a hard upper bound. Asserting it rather than
+  // silently falling out of a `for` bound keeps a future edit that breaks the
+  // invariant loud instead of returning a stale reading.
+  let passes = 0;
+  for (;;) {
+    if (surviving.length === 0) {
+      adapted = original;
+      break;
+    }
+    passes += 1;
+    if (passes > subs.length + 1) {
+      throw new Error('filterByStrength did not converge (substitution set never shrank).');
+    }
+
+    adapted = normalizeEstimate(
+      await estimate(applySubstitutions(password, surviving)),
+      'adapted',
+    );
+
+    // Rule 2 first: a substitution that created a leet dictionary match is
+    // rejected on its own merits, not merely because the guess count moved.
+    const spans = leetMatchSpans(adapted.sequence);
+    const deLeetCulprits = surviving.filter((sub) =>
+      spans.some((span) => sub.position >= span.i && sub.position <= span.j),
+    );
+    if (deLeetCulprits.length > 0) {
+      for (const sub of deLeetCulprits) {
+        rejected.push({ ...sub, rejected_because: REJECT_DE_LEET });
+      }
+      surviving = surviving.filter((sub) => !deLeetCulprits.includes(sub));
+      continue;
+    }
+
+    // Rule 1: strict non-regression. Equal is acceptable; lower is not.
+    if (adapted.guessesLog10 < original.guessesLog10) {
+      const weakest = surviving.reduce((lowest, sub) =>
+        (sub.confidence ?? 0) < (lowest.confidence ?? 0) ? sub : lowest,
+      );
+      rejected.push({ ...weakest, rejected_because: REJECT_STRENGTH_REGRESSION });
+      surviving = surviving.filter((sub) => sub !== weakest);
+      continue;
+    }
+
+    break;
+  }
+
+  return {
+    subs: surviving,
+    originalGuessesLog10: original.guessesLog10,
+    adaptedGuessesLog10: surviving.length === 0
+      ? original.guessesLog10
+      : adapted.guessesLog10,
+    rejected,
+  };
+}
+
 export default {
   LEET_MAP,
   REVERSE_LEET_MAP,
   DEFAULT_CONFIDENCE,
+  REJECT_DE_LEET,
+  REJECT_STRENGTH_REGRESSION,
   extractFeatures,
   generateCandidates,
   rankSuggestions,
   applySubstitutions,
   maskPreview,
+  filterByStrength,
+  loadDefaultEstimator,
+  resetDefaultEstimator,
 };

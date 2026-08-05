@@ -7,16 +7,21 @@
  * features are coarse/non-reversible and previews never reveal more than the
  * first two / last two characters.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   LEET_MAP,
   REVERSE_LEET_MAP,
   DEFAULT_CONFIDENCE,
+  REJECT_DE_LEET,
+  REJECT_STRENGTH_REGRESSION,
   extractFeatures,
   generateCandidates,
   rankSuggestions,
   applySubstitutions,
   maskPreview,
+  filterByStrength,
+  loadDefaultEstimator,
+  resetDefaultEstimator,
 } from '../adaptiveFeatures';
 
 // A small preference model in the v2 wire shape (see plan §4): the server
@@ -271,4 +276,326 @@ describe('end-to-end pipeline (candidate → rank → apply → mask)', () => {
     expect(preview).not.toContain(password);
     expect(preview.length).toBeLessThan(password.length);
   });
+});
+
+// =============================================================================
+// Phase 2 — strength gate (plan §4, gap C1)
+// =============================================================================
+
+/**
+ * Build a scripted estimator: an explicit password → reading table, so a unit
+ * test states exactly the strength landscape it is testing rather than
+ * depending on zxcvbn's real numbers. Unlisted passwords fall back to
+ * `fallback`, which keeps each table down to the cases that matter.
+ */
+function scriptedEstimator(table, fallback = { guessesLog10: 10, sequence: [] }) {
+  return vi.fn((password) =>
+    // Keys are this test's own literals, guarded by Object.hasOwn.
+    // eslint-disable-next-line security/detect-object-injection
+    (Object.hasOwn(table, password) ? table[password] : fallback),
+  );
+}
+
+/** A zxcvbn-shaped leet dictionary match spanning [i, j] inclusive. */
+const leetMatch = (i, j) => ({ pattern: 'dictionary', l33t: true, i, j });
+
+describe('filterByStrength — rule 1, strict non-regression', () => {
+  it('keeps a substitution set that raises guesses_log10', async () => {
+    const subs = [{ position: 1, original_char: 'b', suggested_char: '8', confidence: 0.9 }];
+    const estimator = scriptedEstimator({
+      abc: { guessesLog10: 5, sequence: [] },
+      a8c: { guessesLog10: 6, sequence: [] },
+    });
+
+    const result = await filterByStrength('abc', subs, { estimator });
+
+    expect(result.subs).toEqual(subs);
+    expect(result.rejected).toEqual([]);
+    expect(result.originalGuessesLog10).toBe(5);
+    expect(result.adaptedGuessesLog10).toBe(6);
+  });
+
+  it('keeps a set that leaves guesses_log10 unchanged (>= is the bar)', async () => {
+    const subs = [{ position: 1, original_char: 'b', suggested_char: '8', confidence: 0.9 }];
+    const estimator = scriptedEstimator({
+      abc: { guessesLog10: 5, sequence: [] },
+      a8c: { guessesLog10: 5, sequence: [] },
+    });
+
+    const result = await filterByStrength('abc', subs, { estimator });
+
+    expect(result.subs).toEqual(subs);
+    expect(result.rejected).toEqual([]);
+  });
+
+  it('drops the lowest-confidence substitution and re-tests until non-regressing', async () => {
+    const strong = { position: 0, original_char: 'a', suggested_char: '@', confidence: 0.9 };
+    const weak = { position: 2, original_char: 'c', suggested_char: 'C', confidence: 0.1 };
+    const estimator = scriptedEstimator({
+      abc: { guessesLog10: 5, sequence: [] },
+      // Both applied: weaker than the original, so the weak one must go first.
+      '@bC': { guessesLog10: 4, sequence: [] },
+      // Only the strong one applied: recovers.
+      '@bc': { guessesLog10: 5.5, sequence: [] },
+    });
+
+    const result = await filterByStrength('abc', [strong, weak], { estimator });
+
+    expect(result.subs).toEqual([strong]);
+    expect(result.rejected).toEqual([
+      { ...weak, rejected_because: REJECT_STRENGTH_REGRESSION },
+    ]);
+    expect(result.adaptedGuessesLog10).toBe(5.5);
+  });
+
+  it('returns an empty set — and the ORIGINAL reading — when nothing survives', async () => {
+    const subs = [{ position: 0, original_char: 'a', suggested_char: '@', confidence: 0.5 }];
+    const estimator = scriptedEstimator({
+      abc: { guessesLog10: 5, sequence: [] },
+      '@bc': { guessesLog10: 1, sequence: [] },
+    });
+
+    const result = await filterByStrength('abc', subs, { estimator });
+
+    expect(result.subs).toEqual([]);
+    // Reporting the rejected candidate's weak reading here would tell the UI a
+    // password got weaker when in fact nothing changed.
+    expect(result.adaptedGuessesLog10).toBe(5);
+    expect(result.originalGuessesLog10).toBe(5);
+    expect(result.rejected).toHaveLength(1);
+  });
+});
+
+describe('filterByStrength — rule 2, de-leet', () => {
+  it('rejects a substitution that lands inside a new leet dictionary match', async () => {
+    const sub = { position: 1, original_char: 'o', suggested_char: '0', confidence: 0.9 };
+    const estimator = scriptedEstimator({
+      // The adapted form scores HIGHER, so rule 1 alone would let it through.
+      // This is the exact shape of the real password -> p@ssw0rd case, where
+      // zxcvbn credits the leet variations instead of punishing them.
+      horse: { guessesLog10: 4, sequence: [] },
+      h0rse: { guessesLog10: 4.5, sequence: [leetMatch(0, 4)] },
+    });
+
+    const result = await filterByStrength('horse', [sub], { estimator });
+
+    expect(result.subs).toEqual([]);
+    expect(result.rejected).toEqual([{ ...sub, rejected_because: REJECT_DE_LEET }]);
+  });
+
+  it('leaves a substitution outside the leet match span alone', async () => {
+    // Indices of 'horse-abc': h0 o1 r2 s3 e4 -5 a6 b7 c8. The 'b' is at 7 —
+    // an off-by-one here silently sends the scripted estimator down its
+    // fallback branch and the test passes for the wrong reason.
+    const inside = { position: 1, original_char: 'o', suggested_char: '0', confidence: 0.9 };
+    const outside = { position: 7, original_char: 'b', suggested_char: '8', confidence: 0.8 };
+    const estimator = scriptedEstimator({
+      'horse-abc': { guessesLog10: 6, sequence: [] },
+      // Both applied: the leet match covers only the first word.
+      'h0rse-a8c': { guessesLog10: 6.5, sequence: [leetMatch(0, 4)] },
+      // After dropping the culprit, no leet match remains.
+      'horse-a8c': { guessesLog10: 6.4, sequence: [] },
+    });
+
+    const result = await filterByStrength('horse-abc', [inside, outside], { estimator });
+
+    expect(result.subs).toEqual([outside]);
+    expect(result.rejected).toEqual([{ ...inside, rejected_because: REJECT_DE_LEET }]);
+    expect(result.adaptedGuessesLog10).toBe(6.4);
+  });
+
+  it('ignores non-leet dictionary matches (they are not something we created)', async () => {
+    const sub = { position: 6, original_char: 'b', suggested_char: '8', confidence: 0.9 };
+    const estimator = scriptedEstimator({
+      horseXbc: { guessesLog10: 6, sequence: [] },
+      horseX8c: {
+        guessesLog10: 6.2,
+        // A plain dictionary match spanning our position, but NOT l33t-flagged:
+        // the word was already there and we did not obfuscate it.
+        sequence: [{ pattern: 'dictionary', l33t: false, i: 0, j: 7 }],
+      },
+    });
+
+    const result = await filterByStrength('horseXbc', [sub], { estimator });
+
+    expect(result.subs).toEqual([sub]);
+    expect(result.rejected).toEqual([]);
+  });
+});
+
+describe('filterByStrength — fail-closed contract', () => {
+  it('propagates an estimator failure instead of passing substitutions through', async () => {
+    const subs = [{ position: 0, original_char: 'a', suggested_char: '@', confidence: 0.5 }];
+    const estimator = vi.fn(() => {
+      throw new Error('chunk load failed');
+    });
+
+    await expect(filterByStrength('abc', subs, { estimator })).rejects.toThrow('chunk load failed');
+  });
+
+  it('rejects an estimator reading with no finite guessesLog10', async () => {
+    const subs = [{ position: 0, original_char: 'a', suggested_char: '@', confidence: 0.5 }];
+    const estimator = vi.fn(() => ({ sequence: [] }));
+
+    await expect(filterByStrength('abc', subs, { estimator })).rejects.toThrow(/guessesLog10/);
+  });
+
+  it('accepts an async estimator', async () => {
+    const subs = [{ position: 0, original_char: 'a', suggested_char: '@', confidence: 0.5 }];
+    const estimator = vi.fn(async () => ({ guessesLog10: 7, sequence: [] }));
+
+    const result = await filterByStrength('abc', subs, { estimator });
+
+    expect(result.subs).toEqual(subs);
+  });
+
+  it('validates its arguments', async () => {
+    await expect(filterByStrength(undefined, [])).rejects.toThrow(TypeError);
+    await expect(filterByStrength('abc', 'not-an-array')).rejects.toThrow(TypeError);
+  });
+
+  it('handles an empty substitution set with a single estimator call', async () => {
+    const estimator = scriptedEstimator({ abc: { guessesLog10: 5, sequence: [] } });
+
+    const result = await filterByStrength('abc', [], { estimator });
+
+    expect(result).toEqual({
+      subs: [],
+      originalGuessesLog10: 5,
+      adaptedGuessesLog10: 5,
+      rejected: [],
+    });
+    expect(estimator).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('filterByStrength — against the real zxcvbn estimator', () => {
+  // The default estimator is a lazily-imported LOCAL dependency: these tests
+  // touch no network, and nothing here reaches for one. This block holds the
+  // acceptance tests for gap C1.
+
+  it('loads the bundled estimator once and reuses it', async () => {
+    resetDefaultEstimator();
+    // `loadDefaultEstimator` is `async`, so it necessarily returns a NEW
+    // promise each call — comparing the promises would only test that. The
+    // property that matters is that the expensive build ran once, which shows
+    // up as the same estimator *function* being handed back.
+    const [first, second] = await Promise.all([
+      loadDefaultEstimator(),
+      loadDefaultEstimator(),
+    ]);
+    expect(typeof first).toBe('function');
+    expect(second).toBe(first);
+    expect(await loadDefaultEstimator()).toBe(first);
+
+    const reading = first('password');
+    expect(reading.guessesLog10).toBeGreaterThan(0);
+    expect(Array.isArray(reading.sequence)).toBe(true);
+  }, 30000);
+
+  it('does not cache a failed load, so the gate stays retryable', async () => {
+    // Drive the real failure path: make the dynamic import throw, confirm both
+    // the first and a *subsequent* call reject (a cached rejected promise would
+    // leave the gate permanently unavailable, and callers fail closed — so the
+    // whole feature would stay silently off until a page reload).
+    // A factory that *throws* is caught and re-wrapped by vitest's own mock
+    // machinery, which would make this assert on vitest's error rather than on
+    // the loader's behaviour. Returning a namespace with the expected binding
+    // missing drives the loader's own guard instead — same catch, same reset,
+    // a message this test actually owns.
+    vi.resetModules();
+    vi.doMock('@zxcvbn-ts/core', () => ({ default: {} }));
+    try {
+      const mod = await import('../adaptiveFeatures');
+      await expect(mod.loadDefaultEstimator()).rejects.toThrow(/did not expose the expected API/);
+      await expect(mod.loadDefaultEstimator()).rejects.toThrow(/did not expose the expected API/);
+    } finally {
+      vi.doUnmock('@zxcvbn-ts/core');
+      vi.resetModules();
+    }
+
+    // And the module under test is still usable afterwards.
+    resetDefaultEstimator();
+    expect(typeof (await loadDefaultEstimator())).toBe('function');
+  }, 30000);
+
+  it("yields no suggestion for 'password' — every leet variant de-leets to the same hit", async () => {
+    const estimator = await loadDefaultEstimator();
+    const subs = rankSuggestions(generateCandidates('password'), null);
+    expect(subs.length).toBeGreaterThan(0);
+
+    const result = await filterByStrength('password', subs, { estimator });
+
+    expect(result.subs).toEqual([]);
+    expect(result.rejected.every((r) => r.rejected_because === REJECT_DE_LEET)).toBe(true);
+  }, 30000);
+
+  it('credits p@ssw0rd over password — proving rule 1 alone cannot close C1', async () => {
+    // The justification for the de-leet rule existing at all. zxcvbn scores the
+    // leetspeak variant HIGHER, so a gate built only on non-regression would
+    // wave through the canonical attack this feature was accused of enabling.
+    const estimator = await loadDefaultEstimator();
+
+    expect(estimator('p@ssw0rd').guessesLog10).toBeGreaterThan(
+      estimator('password').guessesLog10,
+    );
+  }, 30000);
+
+  it('never returns an adaptation that lowers guesses_log10 (property, 200 passwords)', async () => {
+    const estimator = await loadDefaultEstimator();
+
+    // Deterministic LCG: a property test that cannot be reproduced when it
+    // fails is not much of a property test.
+    let seed = 20260805;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
+
+    const words = ['sunshine', 'dragon', 'monkey', 'tiger', 'coffee', 'garden', 'silver',
+      'rocket', 'purple', 'winter', 'orange', 'marble', 'pepper', 'shadow', 'forest',
+      'castle', 'planet', 'falcon', 'copper', 'velvet'];
+    const symbols = ['!', '#', '%', '&', '*', '-', '_', '?'];
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+    const corpus = [];
+    for (let i = 0; i < 200; i += 1) {
+      if (i % 4 === 0) corpus.push(pick(words) + Math.floor(rnd() * 10000));
+      else if (i % 4 === 1) corpus.push(pick(words) + pick(symbols) + pick(words));
+      else if (i % 4 === 2) {
+        let s = '';
+        const n = 8 + Math.floor(rnd() * 8);
+        for (let k = 0; k < n; k += 1) s += alphabet[Math.floor(rnd() * alphabet.length)];
+        corpus.push(s);
+      } else {
+        corpus.push(
+          pick(words).replace(/^./, (c) => c.toUpperCase())
+          + pick(words) + pick(symbols) + Math.floor(rnd() * 100),
+        );
+      }
+    }
+
+    let examined = 0;
+    let survived = 0;
+    for (const password of corpus) {
+      const ranked = rankSuggestions(generateCandidates(password), null);
+      if (ranked.length === 0) continue;
+      examined += 1;
+
+      const result = await filterByStrength(password, ranked, { estimator });
+      if (result.subs.length === 0) continue;
+      survived += 1;
+
+      // Re-measure independently rather than trusting the number the gate
+      // reported about itself.
+      const adapted = applySubstitutions(password, result.subs);
+      expect(estimator(adapted).guessesLog10).toBeGreaterThanOrEqual(
+        result.originalGuessesLog10,
+      );
+    }
+
+    // Sanity floor. If the gate rejected everything the property above would
+    // hold vacuously and prove nothing; the measured survival rate on this
+    // corpus is ~25% of passwords (plan §4.5).
+    expect(examined).toBeGreaterThan(150);
+    expect(survived).toBeGreaterThan(0);
+  }, 60000);
 });

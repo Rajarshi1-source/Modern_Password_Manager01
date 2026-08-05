@@ -26,6 +26,7 @@ import {
     rankSuggestions,
     applySubstitutions,
     maskPreview,
+    filterByStrength,
 } from '../../services/adaptive/adaptiveFeatures';
 
 // =============================================================================
@@ -402,18 +403,72 @@ export const adaptivePasswordService = {
      * Generate an adaptation suggestion entirely client-side (zero-knowledge v2).
      *
      * Fetches the learned preference model, then generates + ranks substitution
-     * candidates locally and builds masked previews. The password NEVER leaves
-     * the device (no POST of the password). Returns the same shape the
-     * AdaptivePasswordSuggestion modal consumes.
+     * candidates locally, runs them through the Phase-2 strength gate, and
+     * builds masked previews. The password NEVER leaves the device (no POST of
+     * the password). Returns the same shape the AdaptivePasswordSuggestion
+     * modal consumes, plus the gate's before/after `guesses_log10`.
+     *
+     * `has_suggestion: false` is a normal, expected outcome here — the gate
+     * rejects roughly three quarters of candidate substitutions (measured over
+     * a 200-password corpus, see plan §4.5). Callers must present it as "no
+     * change needed", never as an error.
+     *
+     * Fails closed: if the strength estimator cannot be loaded or throws, no
+     * suggestion is returned at all, because an ungated suggestion is exactly
+     * the defect (gap C1) this gate exists to prevent.
+     *
+     * @param {string} password - The current password (stays on the device).
+     * @param {{ estimator?: Function }} [options={}] - `estimator` overrides
+     *   the lazily-loaded zxcvbn default (tests, or a pre-warmed instance).
      */
-    async suggestAdaptation(password) {
+    async suggestAdaptation(password, { estimator } = {}) {
         const { data: model } = await axios.get('/api/security/adaptive/preference-model/');
-        const substitutions = rankSuggestions(generateCandidates(password), model);
+        const ranked = rankSuggestions(generateCandidates(password), model);
 
-        if (substitutions.length === 0) {
+        if (ranked.length === 0) {
             return {
                 has_suggestion: false,
                 reason: 'No memorability-improving substitutions found.',
+            };
+        }
+
+        let gate;
+        try {
+            gate = await filterByStrength(password, ranked, { estimator });
+        } catch (error) {
+            console.error('Adaptive strength gate unavailable:', error);
+            return {
+                has_suggestion: false,
+                strength_gate_error: true,
+                reason:
+                    'Could not verify that an adaptation would keep this password '
+                    + 'as hard to guess, so none was suggested.',
+            };
+        }
+
+        // Only counts and reason codes are carried out of the gate — never the
+        // rejected substitutions themselves. They are password-positional data
+        // and nothing downstream needs them.
+        const rejected_count = gate.rejected.length;
+        const rejected_reasons = Array.from(
+            new Set(gate.rejected.map((r) => r.rejected_because)),
+        );
+        const guesses_log10_before = gate.originalGuessesLog10;
+        const guesses_log10_after = gate.adaptedGuessesLog10;
+        const guesses_log10_delta = guesses_log10_after - guesses_log10_before;
+
+        const substitutions = gate.subs;
+        if (substitutions.length === 0) {
+            return {
+                has_suggestion: false,
+                reason:
+                    'Every candidate adaptation would have made this password easier '
+                    + 'to guess, so none was suggested.',
+                guesses_log10_before,
+                guesses_log10_after,
+                guesses_log10_delta,
+                rejected_count,
+                rejected_reasons,
             };
         }
 
@@ -433,6 +488,11 @@ export const adaptivePasswordService = {
             adapted_preview: maskPreview(adapted),
             confidence_score,
             memorability_improvement,
+            guesses_log10_before,
+            guesses_log10_after,
+            guesses_log10_delta,
+            rejected_count,
+            rejected_reasons,
             adaptation_type: 'substitution',
             reason: `Based on your learned preference model (v${model.model_version}).`,
             model_version: model.model_version,
