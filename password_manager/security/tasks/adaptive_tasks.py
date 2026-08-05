@@ -222,7 +222,16 @@ def update_rl_model_from_feedback(batch_size: int = 500):
             )
             skipped += 1
 
-    prior_stats = rebuild_global_priors(PrivacyGuard())
+    try:
+        prior_stats = rebuild_global_priors(PrivacyGuard())
+    except Exception as exc:  # noqa: BLE001 - the credited batch must still report
+        # Every feedback row credited above already committed (each in its own
+        # transaction), so a rebuild failure here must not raise past this
+        # point and discard that result -- it would lose the log line below
+        # and the whole return value for a run that mostly succeeded.
+        logger.error('Global prior rebuild failed: %s', exc, exc_info=True)
+        prior_stats = {'classes_written': 0, 'classes_skipped': 0,
+                       'prior_rebuild_failed': True}
 
     logger.info(
         'RL policy updated: %s feedback rows, %s arms, %s with a behavioural term',

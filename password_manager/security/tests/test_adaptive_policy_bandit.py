@@ -723,6 +723,33 @@ class WeeklyTaskTests(TestCase):
         self.assertIsNone(bad.policy_reward_applied_at)
         self.assertIsNotNone(good.policy_reward_applied_at)
 
+    def test_a_failing_prior_rebuild_does_not_discard_the_credited_batch(self):
+        # Every feedback row's credit + stamp already committed in its own
+        # transaction by the time rebuild_global_priors runs. A raise there
+        # must not propagate past this point and lose the run's own stats —
+        # the row-level work is not lost either way, but an uncaught
+        # exception here would raise before the function returns anything at
+        # all, including the arms_updated/processed counts an operator needs
+        # to see whether the run actually worked.
+        feedback = self._feedback(rating=5)
+
+        # Same reason as the credit_adaptation patch above: the task imports
+        # rebuild_global_priors inside the function body, so patching the
+        # source module's attribute is what the task actually sees at call time.
+        with patch(
+            'security.services.adaptive_policy_service.rebuild_global_priors',
+            side_effect=RuntimeError('simulated DP aggregation failure'),
+        ):
+            result = update_rl_model_from_feedback()
+
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['arms_updated'], 1)
+        self.assertEqual(result['classes_written'], 0)
+        self.assertEqual(result['classes_skipped'], 0)
+        self.assertTrue(result['prior_rebuild_failed'])
+        feedback.refresh_from_db()
+        self.assertIsNotNone(feedback.policy_reward_applied_at)
+
     def test_batch_size_bounds_the_run_and_leftovers_are_picked_up_next_time(self):
         for i in range(3):
             adaptation = _make_adaptation(
@@ -796,6 +823,24 @@ class GlobalPriorTests(TestCase):
         rebuild_global_priors(guard)
 
         self.assertGreater(guard.operations_count, before)
+
+    def test_one_user_across_several_eras_cannot_clear_the_k_floor_alone(self):
+        # Arms are era-scoped (SubstitutionPolicyArm is unique per
+        # (user, from, to, fp_key_version)), so a user who rotates their
+        # fingerprint key holds one arm per era for the same class. Counting
+        # each arm as an independent contributor would let a single user
+        # publish a population-level prior by rotating enough times, and would
+        # break the sensitivity-1.0 bound the Laplace noise is calibrated for
+        # (which assumes one bounded contribution per user).
+        solo = _make_user('solo-rotator')
+        for era in range(1, MIN_CONTRIBUTING_USERS + 2):
+            for _ in range(10):
+                credit_arms(solo, [('o', '0')], 1.0, fp_key_version=era)
+
+        stats = rebuild_global_priors(PrivacyGuard(epsilon=100.0))
+
+        self.assertEqual(stats['classes_written'], 0)
+        self.assertEqual(GlobalSubstitutionPrior.objects.count(), 0)
 
     def test_untouched_arms_do_not_dilute_the_aggregate(self):
         # A Beta(1,1) arm has mean 0.5 by construction. Counting it would look

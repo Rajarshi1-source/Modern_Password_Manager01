@@ -477,11 +477,21 @@ class SubstitutionPolicyArmAdmin(admin.ModelAdmin):
         'fp_key_version', 'created_at', 'last_updated_at',
     )
     ordering = ('-last_updated_at',)
+    # 'user' is in list_display and every row needs it rendered; without this
+    # the changelist issues one extra query per row to fetch the username.
+    list_select_related = ('user',)
 
     def has_add_permission(self, request):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        # Deleting an arm is not recoverable the way a global prior is (that
+        # one is rebuilt from arms on the next weekly run) -- the source
+        # feedback rows that produced it are already stamped as applied, so
+        # nothing would ever re-derive it.
         return False
 
     def substitution(self, obj):
@@ -521,6 +531,13 @@ class GlobalSubstitutionPriorAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        # Recoverable in principle (rebuild_global_priors recreates it from
+        # arms on the next weekly run), but disabled for the same read-only
+        # posture as the rest of this admin -- deletion isn't a supported
+        # operational action here.
         return False
 
     def substitution(self, obj):

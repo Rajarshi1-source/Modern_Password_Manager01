@@ -546,10 +546,14 @@ describe('filterByStrength — against the real zxcvbn estimator', () => {
   it('never returns an adaptation that lowers guesses_log10 (property, 200 passwords)', async () => {
     const estimator = await loadDefaultEstimator();
 
-    // Deterministic LCG: a property test that cannot be reproduced when it
-    // fails is not much of a property test.
-    let seed = 20260805;
-    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    // Deterministic RNG: a property test that cannot be reproduced when it
+    // fails is not much of a property test. Reuses the xorshift32 helper
+    // defined below (hoisted, so usable here) rather than a hand-rolled LCG —
+    // `seed * 1103515245` overflows Number.MAX_SAFE_INTEGER on the very first
+    // multiplication (confirmed: the exact product is ...3472225, the double
+    // computes ...3472224), which silently corrupted the corpus every prior
+    // run of this test.
+    const rnd = seededRng(20260805);
     const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
 
     const words = ['sunshine', 'dragon', 'monkey', 'tiger', 'coffee', 'garden', 'silver',
@@ -773,6 +777,33 @@ describe('rankSuggestions — Thompson sampling', () => {
       });
       // 'e' has no posterior, so it is scored at its mean of 0.1 and can only
       // beat 'o' when 'o' draws below 0.1 — which Beta(40, 2) never does.
+      expect(ranked[0].suggested_char).toBe('0');
+    }
+  });
+
+  it('treats a malformed exploration entry as absent, not as an implicit flat prior', () => {
+    // A posterior entry that IS present but has a non-numeric alpha/beta must
+    // not fall through to sampleBeta's own internal Beta(1,1) fallback — that
+    // is exactly the "unknown class gets a 0.5-centred random score" outcome
+    // the previous test rules out for a MISSING posterior, and it must be
+    // ruled out the same way for a malformed one.
+    const malformed = {
+      substitution_weights: { o: { 0: 0.95 }, a: { '@': 0.05 } },
+      exploration: {
+        o: { 0: { alpha: 40, beta: 2 } },
+        // Missing beta entirely, and a non-numeric alpha — both shapes a
+        // malformed or stale cached model could produce.
+        a: { '@': { alpha: 'not-a-number' } },
+      },
+    };
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const ranked = rankSuggestions(generateCandidates('oa'), malformed, {
+        explore: true, rng: seededRng(seed), maxSuggestions: 2,
+      });
+      // 'a' has a malformed posterior and a low mean (0.05). Without the fix
+      // it could win via an implicit Beta(1,1) draw roughly half the time;
+      // with the fix it is scored at its mean and Beta(40, 2) never draws
+      // below 0.05, so 'o' wins on every seed.
       expect(ranked[0].suggested_char).toBe('0');
     }
   });
