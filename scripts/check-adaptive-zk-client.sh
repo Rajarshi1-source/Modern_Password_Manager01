@@ -28,15 +28,22 @@ cd "$REPO_ROOT" || exit 1
 # endpoint (HTTP 410) whose only caller shape required POSTing the password.
 PATTERN='original_password|adapted_password|adaptive/suggest'
 
-CLIENT_DIRS=()
-for d in frontend/src mobile desktop/src browser-extension/src; do
+# frontend/src is the primary client for this feature (TypingPatternCapture.jsx,
+# adaptiveFeatures.js, cryptoService.js) and is always present in a real
+# checkout of this repo (no sparse-checkout is used in CI). If it's missing,
+# fail loudly rather than silently reporting "OK" having scanned nothing — the
+# previous "no client directories found, exit 0" behavior meant an adversarial
+# rename/removal of every candidate directory would produce a green check
+# without the scan ever running, defeating the guard's entire purpose.
+if [ ! -d "frontend/src" ]; then
+  echo "::error::frontend/src is missing — cannot verify the adaptive-password ZK contract. Refusing to report success having scanned nothing." >&2
+  exit 1
+fi
+
+CLIENT_DIRS=(frontend/src)
+for d in mobile desktop/src browser-extension/src; do
   [ -d "$d" ] && CLIENT_DIRS+=("$d")
 done
-
-if [ ${#CLIENT_DIRS[@]} -eq 0 ]; then
-  echo "No client directories found — nothing to check."
-  exit 0
-fi
 
 # Fail closed on a real scan error. grep exits 0 for matches, 1 for "no
 # matches" (the clean, expected case), and 2+ for an actual problem (bad
