@@ -93,7 +93,17 @@ import { TypingPatternCapture } from './Components/security/TypingPatternCapture
 ```javascript
 const { fingerprint_salt, fp_key_version } =
   await adaptivePasswordService.rotateFingerprintKey();
-// Rebuild the fingerprinter from the new salt and use the new era from here on.
+
+// Rebuild the fingerprinter from the new salt — do NOT keep using the old
+// `fingerprint` closure from step 1. The server only checks that the
+// fp_key_version NUMBER matches; it has no way to verify a fingerprint
+// STRING was actually derived under that era's salt. A stale fingerprinter
+// paired with the new fp_key_version would be silently accepted and stored
+// as an era-2 row that no era-2-aware client can ever reproduce.
+const fingerprint = adaptivePasswordService.makeFingerprinter(
+  cryptoService, fingerprint_salt,
+);
+// Pass this fingerprint + fp_key_version to every capture/apply call from here on.
 ```
 
 ### 3. Review Suggestions
