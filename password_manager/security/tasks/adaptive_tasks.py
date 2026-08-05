@@ -136,76 +136,105 @@ def cleanup_expired_adaptations():
 # =============================================================================
 
 @shared_task
-def update_rl_model_from_feedback():
+def update_rl_model_from_feedback(batch_size: int = 500):
     """
-    Update RL bandit model using user feedback.
-    Runs weekly.
-    
+    Update the RL bandit model from user feedback, and persist it.
+
+    Before Phase 3 this task computed per-substitution rewards and then *logged*
+    them — its own comment said "in a full implementation, this would update a
+    persistent RL model" (plan §0.2 gap B1). It now folds each reward into the
+    user's Beta-Bernoulli ``SubstitutionPolicyArm`` posteriors and rebuilds the
+    DP-noised cross-user cold-start priors.
+
+    Selection is by ``policy_reward_applied_at IS NULL``, not by a rolling
+    "last week" window. That makes the task idempotent under Celery's retries
+    (a re-run cannot credit the same feedback twice) and self-healing after a
+    skipped beat (last week's feedback is picked up on the next run rather than
+    dropped). Each credit and its stamp commit together under a row lock, so
+    two workers racing the same batch cannot double-count.
+
+    Args:
+        batch_size: Maximum feedback rows to process in one run. Bounds both
+            runtime and the transaction count; leftovers are picked up next run
+            because they are still unstamped.
+
     Returns:
-        Dict with update stats
+        Dict with update stats, including the per-component reward breakdown
+        counts so an operator can see *why* the policy moved.
     """
-    from security.models import AdaptationFeedback, PasswordAdaptation
-    
-    # Get feedback from the last week
-    week_ago = timezone.now() - timedelta(days=7)
-    
-    recent_feedback = AdaptationFeedback.objects.filter(
-        created_at__gte=week_ago
-    ).select_related('adaptation')
-    
-    if not recent_feedback.exists():
-        logger.info("No recent feedback to process")
-        return {'processed': 0}
-    
-    # Aggregate feedback by substitution type
-    substitution_rewards = {}
-    
-    for feedback in recent_feedback:
-        if not feedback.adaptation or not feedback.adaptation.substitutions_applied:
-            continue
-        
-        # Calculate reward from feedback
-        reward = 0
-        if feedback.rating >= 4:
-            reward = 1.0
-        elif feedback.rating == 3:
-            reward = 0.5
-        else:
-            reward = 0.0
-        
-        # Add bonus for improvement indicators
-        if feedback.typing_accuracy_improved:
-            reward += 0.2
-        if feedback.memorability_improved:
-            reward += 0.2
-        if feedback.typing_speed_improved:
-            reward += 0.1
-        
-        reward = min(reward, 1.0)  # Cap at 1.0
-        
-        # Map to substitutions
-        for sub_key, sub_data in feedback.adaptation.substitutions_applied.items():
-            if isinstance(sub_data, dict):
-                from_char = sub_data.get('from', '')
-                to_char = sub_data.get('to', '')
-                key = f"{from_char}->{to_char}"
-                
-                if key not in substitution_rewards:
-                    substitution_rewards[key] = []
-                substitution_rewards[key].append(reward)
-    
-    # Update global substitution priors
-    # In a full implementation, this would update a persistent RL model
-    updates = 0
-    for sub_key, rewards in substitution_rewards.items():
-        avg_reward = sum(rewards) / len(rewards)
-        logger.debug(f"Substitution {sub_key}: avg reward = {avg_reward:.2f} ({len(rewards)} samples)")
-        updates += 1
-    
-    logger.info(f"Updated RL model with {updates} substitution patterns from {recent_feedback.count()} feedback entries")
+    from django.db import transaction
+
+    from security.models import AdaptationFeedback
+    from security.services.adaptive_password_service import PrivacyGuard
+    from security.services.adaptive_policy_service import (
+        composite_reward, credit_adaptation, rebuild_global_priors,
+    )
+
+    pending_ids = list(
+        AdaptationFeedback.objects
+        .filter(policy_reward_applied_at__isnull=True)
+        .order_by('created_at')
+        .values_list('id', flat=True)[:batch_size]
+    )
+
+    processed = 0
+    arms_updated = 0
+    skipped = 0
+    behavioural_used = 0
+    reward_total = 0.0
+
+    for feedback_id in pending_ids:
+        try:
+            with transaction.atomic():
+                # Re-assert the unstamped predicate under the lock: another
+                # worker (or a retry of this task) may have claimed this row
+                # between the id scan above and here.
+                feedback = (
+                    AdaptationFeedback.objects
+                    .select_for_update()
+                    .select_related('adaptation', 'adaptation__user')
+                    .filter(pk=feedback_id, policy_reward_applied_at__isnull=True)
+                    .first()
+                )
+                if feedback is None:
+                    skipped += 1
+                    continue
+
+                adaptation = feedback.adaptation
+                reward, components = composite_reward(adaptation, feedback)
+                arms_updated += credit_adaptation(adaptation, reward)
+
+                feedback.policy_reward_applied_at = timezone.now()
+                feedback.save(update_fields=['policy_reward_applied_at'])
+
+            processed += 1
+            reward_total += reward
+            if components.get('behavioural') is not None:
+                behavioural_used += 1
+
+        except Exception as exc:  # noqa: BLE001 - one bad row must not stop the run
+            # The row stays unstamped, so the next run retries it. Logged at
+            # error level because a persistent failure here silently freezes
+            # the policy.
+            logger.error(
+                'Policy update failed for feedback %s: %s', feedback_id, exc,
+                exc_info=True,
+            )
+            skipped += 1
+
+    prior_stats = rebuild_global_priors(PrivacyGuard())
+
+    logger.info(
+        'RL policy updated: %s feedback rows, %s arms, %s with a behavioural term',
+        processed, arms_updated, behavioural_used,
+    )
     return {
-        'processed': recent_feedback.count(),
-        'substitution_updates': updates
+        'processed': processed,
+        'skipped': skipped,
+        'arms_updated': arms_updated,
+        'behavioural_term_used': behavioural_used,
+        'mean_reward': round(reward_total / processed, 4) if processed else None,
+        **prior_stats,
     }
 
 

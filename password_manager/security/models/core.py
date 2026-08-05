@@ -1486,13 +1486,32 @@ class AdaptationFeedback(models.Model):
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
+    # Bandit bookkeeping (Phase 3). Stamped once the weekly policy update has
+    # folded this row's reward into the user's SubstitutionPolicyArm posteriors.
+    #
+    # This is what makes the update idempotent, and it is not optional: Celery
+    # retries a task on failure, and a re-run that credited the same feedback
+    # twice would silently skew the posterior with evidence that was only
+    # observed once. Selecting on this column rather than on a rolling
+    # "last week" window also means a skipped or failed beat catches up on the
+    # next run instead of dropping that week's feedback permanently.
+    policy_reward_applied_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When this feedback was folded into the RL policy (null = pending)"
+    )
+
     class Meta:
         db_table = 'adaptation_feedback'
         verbose_name = 'Adaptation Feedback'
         verbose_name_plural = 'Adaptation Feedback'
         ordering = ['-created_at']
         unique_together = ['adaptation', 'user']  # One feedback per adaptation
+        indexes = [
+            # The weekly policy update scans exactly this predicate.
+            models.Index(fields=['policy_reward_applied_at'],
+                         name='adapt_fb_policy_pending_idx'),
+        ]
     
     def __str__(self):
         return f"Feedback: {self.user.username} rated adaptation {self.rating}/5"

@@ -22,6 +22,8 @@ import {
   filterByStrength,
   loadDefaultEstimator,
   resetDefaultEstimator,
+  sampleBeta,
+  detectSubstitutionClasses,
 } from '../adaptiveFeatures';
 
 // A small preference model in the v2 wire shape (see plan §4): the server
@@ -598,4 +600,199 @@ describe('filterByStrength — against the real zxcvbn estimator', () => {
     expect(examined).toBeGreaterThan(150);
     expect(survived).toBeGreaterThan(0);
   }, 60000);
+});
+
+// =============================================================================
+// Phase 3 — client-side bandit support (plan §5)
+// =============================================================================
+
+/**
+ * Deterministic uniform (0, 1) source. A Thompson sampler tested with real
+ * randomness gives a flaky test; tested with a fixed sequence it gives an
+ * assertion about the sampler.
+ */
+function seededRng(seed = 1) {
+  let state = seed >>> 0;
+  return () => {
+    // xorshift32, mapped into the open interval (0, 1).
+    state ^= state << 13; state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5; state >>>= 0;
+    return (state + 0.5) / 4294967296;
+  };
+}
+
+describe('detectSubstitutionClasses', () => {
+  it('reports the leet classes present, as classes only', () => {
+    expect(detectSubstitutionClasses('p@ssw0rd')).toEqual([
+      { from: 'a', to: '@' },
+      { from: 'o', to: '0' },
+    ]);
+  });
+
+  it('deduplicates repeats and preserves first-appearance order', () => {
+    expect(detectSubstitutionClasses('0a0b@c@')).toEqual([
+      { from: 'o', to: '0' },
+      { from: 'a', to: '@' },
+    ]);
+  });
+
+  it('returns nothing for a password with no substituted characters', () => {
+    expect(detectSubstitutionClasses('Plainword')).toEqual([]);
+  });
+
+  it('never emits a position or any surrounding context', () => {
+    const secret = 'Sup3rSecret-Passw0rd!';
+    const classes = detectSubstitutionClasses(secret);
+    expect(JSON.stringify(classes)).not.toContain('Secret');
+    for (const entry of classes) {
+      expect(Object.keys(entry).sort()).toEqual(['from', 'to']);
+      expect(entry.from).toHaveLength(1);
+      expect(entry.to).toHaveLength(1);
+    }
+  });
+
+  it('throws on a non-string input', () => {
+    expect(() => detectSubstitutionClasses(null)).toThrow(/string password/);
+  });
+});
+
+describe('sampleBeta', () => {
+  it('always lands in [0, 1]', () => {
+    const rng = seededRng(7);
+    for (let i = 0; i < 500; i += 1) {
+      const x = sampleBeta(2, 5, rng);
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('concentrates near the posterior mean as evidence accumulates', () => {
+    const rng = seededRng(11);
+    const draws = [];
+    for (let i = 0; i < 400; i += 1) draws.push(sampleBeta(50, 2, rng));
+    const mean = draws.reduce((a, b) => a + b, 0) / draws.length;
+    // Beta(50, 2) has mean 50/52 ~= 0.96.
+    expect(mean).toBeGreaterThan(0.9);
+    expect(mean).toBeLessThanOrEqual(1);
+  });
+
+  it('separates a strong arm from a weak one on average', () => {
+    const rng = seededRng(3);
+    let strongWins = 0;
+    for (let i = 0; i < 300; i += 1) {
+      if (sampleBeta(40, 3, rng) > sampleBeta(3, 40, rng)) strongWins += 1;
+    }
+    expect(strongWins).toBeGreaterThan(280);
+  });
+
+  it('still explores: a flat prior does not always lose to a strong arm', () => {
+    // This is the whole point of Thompson sampling — an arm with no evidence
+    // has to win sometimes or the bandit never learns anything new.
+    const rng = seededRng(5);
+    let flatWins = 0;
+    for (let i = 0; i < 400; i += 1) {
+      if (sampleBeta(1, 1, rng) > sampleBeta(6, 3, rng)) flatWins += 1;
+    }
+    expect(flatWins).toBeGreaterThan(20);
+    expect(flatWins).toBeLessThan(380);
+  });
+
+  it('handles degenerate parameters by falling back to the flat prior', () => {
+    const rng = seededRng(13);
+    for (const [a, b] of [[0, 1], [-1, 5], [NaN, 2], [2, undefined]]) {
+      const x = sampleBeta(a, b, rng);
+      expect(Number.isFinite(x)).toBe(true);
+      expect(x).toBeGreaterThanOrEqual(0);
+      expect(x).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe('rankSuggestions — Thompson sampling', () => {
+  const EXPLORING_MODEL = {
+    model_version: 9,
+    substitution_weights: { o: { 0: 0.95 }, a: { '@': 0.05, 4: 0.05 } },
+    exploration: {
+      o: { 0: { alpha: 40, beta: 2 } },
+      a: { '@': { alpha: 2, beta: 40 }, 4: { alpha: 2, beta: 40 } },
+    },
+  };
+
+  it('is deterministic by default (explore is opt-in)', () => {
+    const candidates = generateCandidates('oa');
+    const first = rankSuggestions(candidates, EXPLORING_MODEL);
+    const second = rankSuggestions(candidates, EXPLORING_MODEL);
+    expect(first).toEqual(second);
+  });
+
+  it('never exposes the internal ranking score', () => {
+    const ranked = rankSuggestions(generateCandidates('oa'), EXPLORING_MODEL, {
+      explore: true, rng: seededRng(2),
+    });
+    for (const sub of ranked) {
+      expect(sub).not.toHaveProperty('score');
+    }
+  });
+
+  it('reports the posterior MEAN as confidence, not the random draw', () => {
+    // The user sees `confidence`; showing them a sample would make the same
+    // suggestion look differently confident on every refresh.
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const ranked = rankSuggestions(generateCandidates('o'), EXPLORING_MODEL, {
+        explore: true, rng: seededRng(seed),
+      });
+      expect(ranked[0].confidence).toBe(0.95);
+    }
+  });
+
+  it('usually ranks the strong arm first, but not always (that is exploration)', () => {
+    let strongFirst = 0;
+    const runs = 200;
+    for (let seed = 1; seed <= runs; seed += 1) {
+      const ranked = rankSuggestions(generateCandidates('oa'), EXPLORING_MODEL, {
+        explore: true, rng: seededRng(seed), maxSuggestions: 2,
+      });
+      if (ranked[0].suggested_char === '0') strongFirst += 1;
+    }
+    expect(strongFirst).toBeGreaterThan(runs * 0.7);
+    expect(strongFirst).toBeLessThanOrEqual(runs);
+  });
+
+  it('does not explore a class the server published no posterior for', () => {
+    // A class with no posterior must not be scored from an implicit
+    // Beta(1, 1): that would give unknown classes a 0.5-centred random score
+    // and let them outrank classes the user has actually rewarded.
+    const partial = {
+      substitution_weights: { o: { 0: 0.95 }, e: { 3: 0.1 } },
+      exploration: { o: { 0: { alpha: 40, beta: 2 } } },
+    };
+    for (let seed = 1; seed <= 50; seed += 1) {
+      const ranked = rankSuggestions(generateCandidates('oe'), partial, {
+        explore: true, rng: seededRng(seed), maxSuggestions: 2,
+      });
+      // 'e' has no posterior, so it is scored at its mean of 0.1 and can only
+      // beat 'o' when 'o' draws below 0.1 — which Beta(40, 2) never does.
+      expect(ranked[0].suggested_char).toBe('0');
+    }
+  });
+
+  it('applies minConfidence to the reported confidence, not to the draw', () => {
+    // A user-facing "hide anything below 0.5" must not be satisfiable by a
+    // lucky sample.
+    for (let seed = 1; seed <= 50; seed += 1) {
+      const ranked = rankSuggestions(generateCandidates('a'), EXPLORING_MODEL, {
+        explore: true, rng: seededRng(seed), minConfidence: 0.5,
+      });
+      expect(ranked).toEqual([]);
+    }
+  });
+
+  it('falls back to mean ranking when the model carries no exploration table', () => {
+    const ranked = rankSuggestions(generateCandidates('oa'), PREFERENCE_MODEL, {
+      explore: true, rng: seededRng(1),
+    });
+    expect(ranked[0].suggested_char).toBe('0');
+    expect(ranked[0].confidence).toBe(0.9);
+  });
 });

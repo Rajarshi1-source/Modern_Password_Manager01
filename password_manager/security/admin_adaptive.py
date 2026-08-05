@@ -17,6 +17,8 @@ from .models import (
     PasswordAdaptation,
     UserTypingProfile,
     AdaptationFeedback,
+    SubstitutionPolicyArm,
+    GlobalSubstitutionPrior,
 )
 
 
@@ -445,3 +447,86 @@ class AdaptationFeedbackAdmin(admin.ModelAdmin):
             color, filled, empty
         )
     rating_stars.short_description = 'Rating'
+
+
+# =============================================================================
+# Bandit Policy Admin (Phase 3)
+# =============================================================================
+
+@admin.register(SubstitutionPolicyArm)
+class SubstitutionPolicyArmAdmin(admin.ModelAdmin):
+    """Read-only view of a user's Beta posteriors over substitution classes.
+
+    Every field is read-only on purpose: these are learned parameters, and a
+    hand-edited alpha/beta is indistinguishable downstream from evidence the
+    user actually produced.
+    """
+
+    list_display = (
+        'user',
+        'substitution',
+        'posterior_display',
+        'pulls',
+        'fp_key_version',
+        'last_updated_at',
+    )
+    list_filter = ('fp_key_version', 'from_char', 'last_updated_at')
+    search_fields = ('user__username', 'user__email', 'from_char', 'to_char')
+    readonly_fields = (
+        'user', 'from_char', 'to_char', 'alpha', 'beta', 'pulls',
+        'fp_key_version', 'created_at', 'last_updated_at',
+    )
+    ordering = ('-last_updated_at',)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def substitution(self, obj):
+        return f'{obj.from_char} → {obj.to_char}'
+    substitution.short_description = 'Class'
+
+    def posterior_display(self, obj):
+        mean = obj.posterior_mean
+        color = 'green' if mean >= 0.6 else 'orange' if mean >= 0.4 else 'red'
+        return format_html(
+            '<span style="color: {};">{} </span><small>(α={}, β={})</small>',
+            color, f'{mean:.2f}', f'{obj.alpha:.2f}', f'{obj.beta:.2f}',
+        )
+    posterior_display.short_description = 'Posterior mean'
+
+
+@admin.register(GlobalSubstitutionPrior)
+class GlobalSubstitutionPriorAdmin(admin.ModelAdmin):
+    """Read-only view of the DP-noised cross-user cold-start priors."""
+
+    list_display = (
+        'substitution',
+        'posterior_display',
+        'contributing_users',
+        'dp_epsilon',
+        'last_updated_at',
+    )
+    list_filter = ('from_char', 'last_updated_at')
+    search_fields = ('from_char', 'to_char')
+    readonly_fields = (
+        'from_char', 'to_char', 'alpha', 'beta', 'contributing_users',
+        'dp_epsilon', 'created_at', 'last_updated_at',
+    )
+    ordering = ('from_char', 'to_char')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def substitution(self, obj):
+        return f'{obj.from_char} → {obj.to_char}'
+    substitution.short_description = 'Class'
+
+    def posterior_display(self, obj):
+        return format_html('<strong>{}</strong>', f'{obj.posterior_mean:.3f}')
+    posterior_display.short_description = 'Population mean'

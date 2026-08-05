@@ -26,6 +26,13 @@ from django.contrib.auth.models import User
 from django.db import transaction, IntegrityError
 from django.utils import timezone
 
+from .adaptive_policy_service import (
+    ACCEPTANCE_REWARD,
+    ROLLBACK_REWARD,
+    credit_adaptation_best_effort,
+    policy_weights,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -561,24 +568,43 @@ class AdaptivePasswordService:
 
         Returns:
             ``{model_version, fp_key_version, substitution_weights,
-            memorability_params}``.
+            exploration, weight_sources, memorability_params}``.
+
+        Phase 3: ``substitution_weights`` is no longer the static leetspeak
+        table. Each class resolves to the posterior mean of the user's own
+        ``SubstitutionPolicyArm``, falling back to the profile's usage-based
+        confidence, then the DP-noised cross-user prior, then the baseline
+        (see ``adaptive_policy_service.policy_weights`` for why the population
+        signal ranks below both user-specific ones).
+
+        ``exploration`` carries the raw ``{alpha, beta}`` per class so the
+        client draws the Thompson sample itself. Exploration therefore stays
+        on-device and this endpoint stays deterministic and cacheable — the
+        server would otherwise have to return a different, unrepeatable answer
+        on every call.
 
         Note: the profile itself is deliberately NOT era-scoped. It holds
         behavioural aggregates (WPM, error-prone positions, substitution-class
         preferences) that describe the *user*, not any particular password, so
         they stay valid across a fingerprint key rotation. Only the
-        fingerprint-keyed tables (TypingSession, PasswordAdaptation) are scoped.
+        fingerprint-keyed tables (TypingSession, PasswordAdaptation) — and, as
+        of Phase 3, the policy arms, whose behavioural reward is computed by
+        joining two fingerprints inside one era — are scoped.
         """
         from ..models import AdaptivePasswordConfig, UserTypingProfile
 
         # Baseline weights from the shared leetspeak map (primary > secondary).
-        substitution_weights: Dict[str, Dict[str, float]] = {}
+        baseline: Dict[str, Dict[str, float]] = {}
         for char, subs in COMMON_SUBSTITUTIONS.items():
-            substitution_weights[char] = {
+            baseline[char] = {
                 sub: (0.6 if idx == 0 else 0.4) for idx, sub in enumerate(subs)
             }
 
         model_version = 0
+        # Usage-based, user-specific overrides from the aggregate profile: which
+        # classes this user already reaches for. Distinct from a policy arm,
+        # which records which classes actually *worked* when adapted.
+        profile_overrides: Dict[str, Dict[str, float]] = {}
         try:
             profile = UserTypingProfile.objects.get(user=self.user)
         except UserTypingProfile.DoesNotExist:
@@ -588,7 +614,6 @@ class AdaptivePasswordService:
             # Monotonic-ish version so the client can cache/invalidate.
             model_version = profile.total_sessions
 
-            # Learned per-class confidence overrides the baseline.
             for key, confidence in (profile.substitution_confidence or {}).items():
                 if '->' not in key:
                     continue
@@ -599,7 +624,7 @@ class AdaptivePasswordService:
                     conf = float(confidence)
                 except (TypeError, ValueError):
                     continue
-                substitution_weights.setdefault(from_char, {})[to_char] = max(
+                profile_overrides.setdefault(from_char, {})[to_char] = max(
                     0.0, min(1.0, conf)
                 )
 
@@ -608,7 +633,7 @@ class AdaptivePasswordService:
             for from_char, to_char in (profile.preferred_substitutions or {}).items():
                 if not isinstance(from_char, str) or not isinstance(to_char, str):
                     continue
-                row = substitution_weights.setdefault(from_char, {})
+                row = profile_overrides.setdefault(from_char, {})
                 row[to_char] = max(row.get(to_char, 0.0), 0.9)
 
         memorability_params = {
@@ -626,10 +651,19 @@ class AdaptivePasswordService:
             user=self.user
         ).values_list('fp_key_version', flat=True).first() or 1
 
+        substitution_weights, exploration, weight_sources = policy_weights(
+            self.user,
+            fp_key_version=fp_key_version,
+            baseline=baseline,
+            user_overrides=profile_overrides,
+        )
+
         return {
             'model_version': model_version,
             'fp_key_version': fp_key_version,
             'substitution_weights': substitution_weights,
+            'exploration': exploration,
+            'weight_sources': weight_sources,
             'memorability_params': memorability_params,
         }
 
@@ -757,6 +791,15 @@ class AdaptivePasswordService:
                     decided_at=timezone.now(),
                     reason=reason,
                 )
+
+                # Close the near end of the learning loop (plan §3.3, gap B2):
+                # before Phase 3, accepting a suggestion taught the model
+                # nothing at all. Credit each applied substitution class with a
+                # partial acceptance reward — weak positive evidence, since
+                # take-up is not yet proof the change helped. Inside the same
+                # atomic block so a failed insert cannot leave a credited arm
+                # behind for an adaptation that never existed.
+                credit_adaptation_best_effort(adaptation, ACCEPTANCE_REWARD)
         except IntegrityError:
             # Another concurrent apply already created the active row for this
             # adapted_fingerprint. Surface a deterministic, retryable error
@@ -837,6 +880,16 @@ class AdaptivePasswordService:
                 # Reactivate previous
                 previous.status = 'active'
                 previous.save(update_fields=['status'])
+
+                # Close the far end of the loop (plan §3.3): an undo is the
+                # strongest negative signal this feature can observe, so the
+                # arm takes a hard-zero reward. Kept alongside — not instead
+                # of — the substitution_confidence decay below: the two writers
+                # feed different consumers (the bandit posterior and the
+                # UserTypingProfile aggregate), and leaving one of them
+                # un-updated on rollback is exactly the inconsistency that made
+                # the old confidence decay the only thing a rollback taught.
+                credit_adaptation_best_effort(adaptation, ROLLBACK_REWARD)
         except IntegrityError:
             logger.warning(
                 'Rollback rejected for user %s (active fingerprint clash)',
@@ -855,7 +908,7 @@ class AdaptivePasswordService:
             profile.save()
         except UserTypingProfile.DoesNotExist:
             pass
-        
+
         return {
             'success': True,
             'rolled_back_to': str(previous.id),

@@ -614,4 +614,18 @@ class PreferenceModelSerializer(serializers.Serializer):
     substitution_weights = serializers.DictField(
         child=serializers.DictField(child=serializers.FloatField())
     )
+    # Phase 3: raw Beta posteriors, so the CLIENT draws the Thompson sample.
+    # Keeping exploration on-device is what lets this endpoint stay
+    # deterministic and cacheable — a server-side sample would make every
+    # response differ. Optional so a pre-Phase-3 payload still serializes.
+    exploration = serializers.DictField(
+        child=serializers.DictField(child=serializers.DictField(child=serializers.FloatField())),
+        required=False,
+    )
+    # Which resolution level answered each class (user_policy / user_profile /
+    # global_prior / baseline). Aggregate metadata about the model itself —
+    # no password-derived data — and useful for explaining a suggestion.
+    weight_sources = serializers.DictField(
+        child=serializers.CharField(), required=False,
+    )
     memorability_params = serializers.DictField()
