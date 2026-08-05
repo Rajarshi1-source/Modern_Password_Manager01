@@ -200,6 +200,57 @@ class V2FieldValidationTests(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn('substitutions', serializer.errors)
 
+    def test_apply_accepts_a_class_outside_the_leetspeak_baseline(self):
+        # Deliberately NOT an allowlist of COMMON_SUBSTITUTIONS pairs: a
+        # user's own evidence for a class the baseline never suggested is a
+        # legitimate input to the bandit (see
+        # adaptive_policy_service.policy_weights and
+        # test_policy_weights_keeps_a_class_the_baseline_never_had). The
+        # single-char/allowed-key shape is still enforced; the specific
+        # character pair is not restricted.
+        serializer = self._apply_serializer(substitutions=[{'from': 'z', 'to': '2'}])
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_apply_rejects_a_substitution_list_beyond_the_cap(self):
+        # No max_length previously meant one request could create an
+        # unbounded number of SubstitutionPolicyArm rows. The cap is generous
+        # headroom above the 14 distinct (from, to) pairs in the shared
+        # LEET_MAP baseline, not a tight allowlist around it (see the
+        # previous test) — this exercises the boundary itself, not the
+        # specific character pairs.
+        from security.serializers.adaptive_serializers import MAX_SUBSTITUTION_CLASSES
+
+        too_many = [
+            {'from': chr(ord('a') + i % 26), 'to': str(i % 10)}
+            for i in range(MAX_SUBSTITUTION_CLASSES + 1)
+        ]
+        serializer = self._apply_serializer(substitutions=too_many)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('substitutions', serializer.errors)
+
+    def test_apply_accepts_a_substitution_list_at_the_cap(self):
+        from security.serializers.adaptive_serializers import MAX_SUBSTITUTION_CLASSES
+
+        exactly_at_cap = [
+            {'from': chr(ord('a') + i % 26), 'to': str(i % 10)}
+            for i in range(MAX_SUBSTITUTION_CLASSES)
+        ]
+        serializer = self._apply_serializer(substitutions=exactly_at_cap)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_record_rejects_a_substitution_classes_used_list_beyond_the_cap(self):
+        # The same shared validator backs record-session's
+        # substitution_classes_used, so the cap applies there too.
+        from security.serializers.adaptive_serializers import MAX_SUBSTITUTION_CLASSES
+
+        too_many = [
+            {'from': chr(ord('a') + i % 26), 'to': str(i % 10)}
+            for i in range(MAX_SUBSTITUTION_CLASSES + 1)
+        ]
+        serializer = self._record_serializer(substitution_classes_used=too_many)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('substitution_classes_used', serializer.errors)
+
     def test_apply_rejects_plaintext_preview(self):
         # A "preview" with no mask character is plaintext — reject it.
         """Apply rejects plaintext preview."""

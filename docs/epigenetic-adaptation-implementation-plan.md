@@ -744,11 +744,15 @@ one.
 
 **Survival rate, measured before building UI around it** (the §8 risk row):
 over a deterministic 200-password corpus, **~25% of passwords keep at least one
-substitution** and **~25% of individual substitutions survive** (143 of 576),
+substitution** and **~24% of individual substitutions survive** (136 of 575),
 with **zero** strength violations. Not low enough to force the "safer transform
 family" pivot, but low enough that `has_suggestion: false` is a *common*
 outcome — the UI presents it as "no change needed", never as an error, and
-`suggestAdaptation` returns a reason string for it.
+`suggestAdaptation` returns a reason string for it. (First measured with a
+hand-rolled LCG corpus generator that overflowed `Number.MAX_SAFE_INTEGER` on
+its very first multiplication — caught in review, see §4.6 — and re-measured
+with a correct generator; the survival rate barely moved, which is itself
+evidence the earlier corpus, while technically corrupted, wasn't degenerate.)
 
 **Bundle cost, measured** (the other §8 risk row): a probe build of an entry
 that actually calls the gate emits three chunks — 5.9 kB for the adaptive
@@ -784,6 +788,33 @@ fixtures (`Sup3rSecret-Passw0rd!`, `MySecret123!`) keep *nothing* against the
 real estimator, which would have turned them red; they are about what crosses
 the wire, not about the gate, so the gate still runs but has no reason to
 reject.
+
+### 2.6 First review-fix round (PR #466), on CodeRabbit/Greptile/Codex findings
+
+Two findings against the Phase 2 test file, both verified before fixing.
+
+- **Grammar bug in the strength panel, and an overclaimed reason.**
+  `AdaptivePasswordSuggestion.jsx`'s `rejected_count` message read "1 weaker
+  substitution were dropped" for the singular case (subject-verb
+  disagreement), and unconditionally called every rejection "weaker" — true
+  for a non-regression rejection, not accurate for a de-leet one (which can
+  reject a substitution whose raw `guesses_log10` went *up*, per §2.5). Fixed
+  the grammar and reworded to "removed to keep this password strong", which
+  is accurate for both rejection reasons without claiming a specific
+  mechanism.
+- **LCG precision loss silently corrupted the 200-password property-test
+  corpus.** The hand-rolled generator did `seed * 1103515245`, and for the
+  fixed seed `20260805` that product is `22358107193472225` — already past
+  `Number.MAX_SAFE_INTEGER` (confirmed by computing the exact product via
+  `BigInt` and diffing against the `Number` result: the double came out
+  `...3472224`, off by one on the very first multiplication, before any
+  accumulation). Fixed by reusing the already-defined, hoisted `seededRng`
+  xorshift32 helper instead. Re-measured the corpus stats afterward rather
+  than assuming they were unaffected: survival moved from 143/576 (24.8%) to
+  136/575 (23.7%) individual substitutions, ~25% of passwords either way,
+  still zero strength violations — close enough that the earlier corpus,
+  while genuinely corrupted, wasn't measuring something degenerate, but the
+  precise numbers in §2.5 above are now the corrected ones.
 
 ---
 
@@ -988,6 +1019,142 @@ the class is reported either way.
 only sends the key when the caller actually knows. Absence means "fall back to
 the service's heuristic"; an invented `false` would train the bandit that a
 successful entry failed.
+
+### 3.7 First review-fix round (PR #466), on CodeRabbit/Greptile/Codex findings
+
+Six findings applied, four declined with reasons recorded below, each verified
+against current code (and in three cases, against the project's own defaults)
+before deciding.
+
+- **A genuine k-anonymity bypass, the most significant finding of this
+  round.** `rebuild_global_priors` counted `SubstitutionPolicyArm` **rows**
+  toward the `MIN_CONTRIBUTING_USERS` floor, not distinct users. Arms are
+  era-scoped (`unique_together (user, from_char, to_char, fp_key_version)`),
+  so a single user who rotates their fingerprint key holds one arm per era for
+  the same class — rotate six times and that one person clears a floor of
+  five alone. Verified by writing the reviewer's proposed test first and
+  confirming it failed against the actual current code (one user, six eras,
+  `classes_written` came back `1` where it should be `0`) before touching the
+  aggregation — not just trusting the report. Fixed by keeping only the most
+  recently updated arm per `(user, class)` before aggregating. This also
+  matters for the Laplace calibration: `add_laplace_noise(sensitivity=1.0)`
+  assumes exactly one bounded contribution per user, which multiple arms per
+  user would have violated regardless of the anonymity floor.
+- **A prior-rebuild failure discarded a batch's own stats.**
+  `update_rl_model_from_feedback` called `rebuild_global_priors` outside any
+  `try`/`except`. Every feedback row's credit had already committed by that
+  point (each in its own transaction), so nothing was lost at the database
+  level — but an uncaught exception there raised past the `logger.info`
+  summary and the function's return value, so an operator watching the task
+  result would see a bare failure instead of "142 rows credited, then the
+  prior rebuild broke." Wrapped to match the per-row loop's own established
+  rule that one failure must not discard an otherwise-successful run. Added a
+  test that patches `rebuild_global_priors` to raise and asserts
+  `processed`/`arms_updated` still come back correct; mutation-checked by
+  reverting the wrap and confirming the test fails.
+- **Dead code, not a bug: an explicit `last_updated_at` in `update_or_create`
+  defaults.** `GlobalSubstitutionPrior.last_updated_at` is `auto_now=True`,
+  so Django overwrites whatever is passed at `.save()` time unconditionally —
+  the explicit `timezone.now()` never reached the database. Removed; the
+  `timezone` import became unused as a result and was removed too.
+- **Both new admin classes were missing `has_delete_permission`.** Read-only
+  was the stated intent (`has_add_permission`/`has_change_permission` both
+  already returned `False`), but neither disabled delete. Deleting an arm is
+  not recoverable the way a prior is (a prior rebuilds from arms next run; an
+  arm's source feedback rows are already stamped as applied, so nothing would
+  ever re-derive it). Added `has_delete_permission` returning `False` to both.
+  Also added `list_select_related = ('user',)` to
+  `SubstitutionPolicyArmAdmin` — `user` is in `list_display`, so every
+  changelist row was issuing its own query for the username.
+- **Thompson sampling treated a malformed posterior as a usable one.**
+  `rankSuggestions` checked `posterior` for truthiness only. A published
+  `exploration` entry with a missing or non-numeric `alpha`/`beta` is a
+  truthy object, so it reached `sampleBeta`, which has its own internal
+  fallback to Beta(1,1) for exactly that case (by design, for a *genuinely
+  absent* posterior). The result: a malformed entry got the same "0.5-centred
+  random score that can outrank a class the user actually rewarded" outcome
+  the surrounding code's own comment says is ruled out for a missing
+  posterior — just reached through a different path. Fixed by gating on
+  `typeof alpha === 'number' && alpha > 0` (same for `beta`) before treating a
+  posterior as usable; anything else now falls back to the deterministic
+  `confidence`, same as "no posterior published." Added a deterministic test
+  (30 fixed seeds, malformed entry never wins) and mutation-checked it —
+  reverting the gate makes the test fail on the very first assertion.
+- **Unbounded substitution-class list length.** Neither
+  `ApplyAdaptationV2Serializer.substitutions` nor
+  `TypingSessionInputV2Serializer.substitution_classes_used` had a
+  `max_length`, so one request could create an open-ended number of
+  `SubstitutionPolicyArm` rows. The finding's own suggested remedy — restrict
+  values to a `COMMON_SUBSTITUTIONS` allowlist — was **not** applied: it
+  directly contradicts an intentional, already-tested design decision from
+  this same PR (`policy_weights` deliberately lets a user's own evidence for a
+  class outside the baseline enter their model;
+  `test_policy_weights_keeps_a_class_the_baseline_never_had` asserts exactly
+  that). Applied the proportionate fix instead: a shared
+  `MAX_SUBSTITUTION_CLASSES = 32` bound in `_validate_substitution_classes`
+  (generous headroom above the baseline's 14 distinct pairs, not a tight fit
+  around it), which closes the open-ended-row-creation concern without
+  reversing the tested design. Added tests for both serializers at and past
+  the cap, and one confirming an out-of-baseline class still validates.
+
+Four findings declined, each for a concrete reason discovered by tracing the
+suggestion against actual code or the project's own runtime defaults, not by
+disagreement on principle:
+
+- **Declined (empirically, not just judged low-value): wiring
+  `PrivacyGuard.verify_privacy_budget` into `rebuild_global_priors` before
+  publishing.** The suggested guard, `verify_privacy_budget(2 *
+  classes_above_floor)`, was checked against this project's own default
+  `PrivacyGuard()` before adopting it: `epsilon=0.5, delta=1e-5` computes
+  `total_epsilon ≈ 2.4` for a **single** operation, already past the method's
+  own `> 1.0` "exceeded" threshold. Every call with these defaults returns
+  `False`. Wiring the suggested check in as a hard gate would not have capped
+  publication — it would have silently disabled the entire global-prior
+  feature on every run, which is a far worse outcome than the gap it was
+  meant to close and would not have been caught by any existing test (none of
+  them assert the function *keeps working* under repeated calls with default
+  parameters). This is the same "run the reviewer's suggested fix, don't just
+  read it" discipline this project has needed before — here applied to a
+  suggestion whose failure mode would have been silent.
+- **Declined: restrict `apply`/`record-session` substitution classes to a
+  `COMMON_SUBSTITUTIONS` allowlist.** See the applied length-cap fix above —
+  this specific remedy was reversed in favor of the proportionate one because
+  it conflicts with a design decision this same PR deliberately made and
+  tested.
+- **Declined: stamp pre-existing `AdaptationFeedback` rows with
+  `policy_reward_applied_at` in migration 0026, so only future feedback moves
+  the policy.** Backwards from the intended behavior: nothing credited
+  historical feedback before Phase 3 existed (there was no persistent policy
+  to credit it into), so the first real run crediting the full backlog once
+  is the correct, intended outcome, not a bug — matching
+  `test_the_task_picks_up_feedback_a_missed_beat_left_behind`'s design intent
+  that unprocessed feedback should always eventually be credited, however old.
+  Stamping it away would silently discard real, never-before-used signal.
+- **Declined, both "Trivial / Low value" per the report itself:** a
+  PostgreSQL-partial-index optimization for migration 0026's pending-feedback
+  index (no measurable load exists yet — gap D1 keeps the whole feature
+  unmounted) and adding `help_text` to `GlobalSubstitutionPrior.from_char`/
+  `to_char` (would need its own migration for a field Django tracks purely
+  for admin/introspection display, zero runtime effect). Neither is a defect;
+  both deferred to avoid an unforced migration and an unforced query-plan
+  change for no current benefit.
+
+**Also investigated, confirmed out of scope: the failing "Dependency
+Vulnerability Scan" CI check.** Same two advisories as Phase 1 round 1
+(`PYSEC-2025-183`, `PYSEC-2024-277`), now further past their `2026-08-01`
+suppression-expiry date. Confirmed via the actual job log rather than assumed:
+the failure is pip-audit (Python), and this PR's only dependency-file changes
+are to `frontend/package.json`/`package-lock.json` (the `@zxcvbn-ts/*`
+additions from Phase 2) — zero Python dependency or suppression-list files are
+touched. Renewing an expired suppression needs a fresh threat assessment per
+the check's own error message, which is a security decision outside this
+review-fix round's scope, not a merge-blocking regression this PR introduced.
+
+Verified after this round: 164 passed across the four adaptive backend test
+files (bandit, zk_v2, fingerprint-key-era, adaptive_password), 587 passed
+frontend (58 files), Django `check` clean, `makemigrations --check` clean (no
+model fields changed, so no new migration), `npm run build` green on Vite 7,
+ESLint clean on every touched file, ZK client CI guard green.
 
 ---
 

@@ -628,7 +628,9 @@ const AdaptivePasswordSuggestion = ({
                                     ? 'This change makes the password harder to guess.'
                                     : 'This change keeps the password exactly as hard to guess.'}
                                 {rejected_count > 0
-                                    && ` ${rejected_count} weaker substitution${rejected_count === 1 ? '' : 's'} were dropped.`}
+                                    && (rejected_count === 1
+                                        ? ' 1 substitution was removed to keep this password strong.'
+                                        : ` ${rejected_count} substitutions were removed to keep this password strong.`)}
                             </StrengthNote>
                         </StrengthPanel>
                     )}

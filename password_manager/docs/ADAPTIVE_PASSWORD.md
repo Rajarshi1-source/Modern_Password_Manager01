@@ -240,6 +240,6 @@ credits a hard zero.
 > `policy_reward_applied_at IS NULL`), so running it manually or on a
 > hand-rolled schedule is safe and cannot double-count. See
 > `docs/epigenetic-adaptation-implementation-plan.md` §7 (Phase 5, Celery beats).
-
+<!-- -->
 > **Still not mounted.** No route imports the adaptive client yet (gap D1), so
 > none of the above is reachable from the running app until Phase 5.

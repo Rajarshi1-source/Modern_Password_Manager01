@@ -28,7 +28,6 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from django.db import IntegrityError, transaction
 from django.db.models import Avg, Count
-from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -473,16 +472,31 @@ def rebuild_global_priors(privacy_guard) -> Dict[str, int]:
         allow_centralized_training=True,
     ).values_list('user_id', flat=True)
 
-    per_class: Dict[Tuple[str, str], List[float]] = {}
     # Only arms with evidence: an untouched Beta(1,1) arm has mean 0.5 by
     # construction and would drag every class toward "no opinion" while looking
     # like a real contribution.
     arms = SubstitutionPolicyArm.objects.filter(
         user_id__in=consenting_user_ids, pulls__gt=0,
-    ).only('from_char', 'to_char', 'alpha', 'beta', 'user_id')
+    ).only('from_char', 'to_char', 'alpha', 'beta', 'user_id', 'last_updated_at')
 
+    # Arms are era-scoped (unique per user, class AND fp_key_version), so a
+    # user who has rotated their fingerprint key holds one arm per era for the
+    # same class. Keying only by class here would count each of those eras as
+    # an independent contributor, letting a single user clear the
+    # MIN_CONTRIBUTING_USERS floor alone by rotating enough times — and would
+    # break the sensitivity-1.0 bound the Laplace noise below is calibrated
+    # for, which assumes exactly one bounded contribution per user. Keep only
+    # the most recently updated arm per (user, class) before aggregating.
+    latest_by_user_and_class = {}
     for arm in arms.iterator(chunk_size=1000):
-        per_class.setdefault((arm.from_char, arm.to_char), []).append(arm.posterior_mean)
+        key = (arm.from_char, arm.to_char, arm.user_id)
+        existing = latest_by_user_and_class.get(key)
+        if existing is None or arm.last_updated_at > existing.last_updated_at:
+            latest_by_user_and_class[key] = arm
+
+    per_class: Dict[Tuple[str, str], List[float]] = {}
+    for (from_char, to_char, _user_id), arm in latest_by_user_and_class.items():
+        per_class.setdefault((from_char, to_char), []).append(arm.posterior_mean)
 
     written = 0
     skipped = 0
@@ -514,7 +528,10 @@ def rebuild_global_priors(privacy_guard) -> Dict[str, int]:
                 # exported to any client.
                 'contributing_users': n,
                 'dp_epsilon': privacy_guard.epsilon,
-                'last_updated_at': timezone.now(),
+                # last_updated_at is NOT set here: the field is auto_now=True,
+                # so Django overwrites whatever is passed at save() time
+                # regardless — an explicit value here was dead, misleading
+                # code, not a real timestamp override.
             },
         )
         written += 1

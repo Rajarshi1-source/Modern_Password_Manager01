@@ -356,6 +356,17 @@ FORBIDDEN_PLAINTEXT_FIELDS = ('password', 'original_password', 'adapted_password
 # which emits 24 chars / 144 bits); allow a small range for forward-compat.
 FINGERPRINT_REGEX = r'^[A-Za-z0-9_-]{16,64}$'
 
+# Upper bound on how many substitution classes one request may report.
+# Deliberately NOT restricted to only the shared LEET_MAP baseline's 14
+# distinct (from, to) pairs: a user's own evidence for a class outside that
+# baseline is a legitimate, already-tested input to the bandit (see
+# adaptive_policy_service.policy_weights' resolution order and
+# test_policy_weights_keeps_a_class_the_baseline_never_had). This bound exists
+# only to stop a single request from creating an open-ended number of
+# SubstitutionPolicyArm rows; it is generous headroom above that natural 14,
+# not a tight fit around it.
+MAX_SUBSTITUTION_CLASSES = 32
+
 
 class PlaintextRejected(APIException):
     """Raised when a forbidden raw-password field is present (fail-closed).
@@ -407,6 +418,11 @@ def _validate_substitution_classes(value):
     """
     if not isinstance(value, list):
         raise serializers.ValidationError('Expected a list of substitution classes.')
+    if len(value) > MAX_SUBSTITUTION_CLASSES:
+        raise serializers.ValidationError(
+            f'At most {MAX_SUBSTITUTION_CLASSES} substitution classes are '
+            f'accepted per request.'
+        )
     allowed_keys = {'from', 'to', 'confidence'}
     cleaned = []
     for item in value:

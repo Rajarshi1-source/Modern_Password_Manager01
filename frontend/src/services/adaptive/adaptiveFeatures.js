@@ -393,11 +393,18 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
     // published for this exact class, otherwise the mean. A class the server
     // has no posterior for is not silently explored at Beta(1, 1) — that would
     // give unknown classes a 0.5-centred random score and let them outrank
-    // classes the user has actually rewarded.
+    // classes the user has actually rewarded. The same reasoning applies to a
+    // posterior entry that IS present but malformed (missing/non-numeric
+    // alpha or beta): sampleBeta's own internal fallback would silently
+    // produce that same undesirable Beta(1,1) draw, so a malformed entry has
+    // to be treated as absent here, not left to fall through to that fallback.
     const posterior = exploration
       ? lookupNested(exploration, fromKey, candidate.suggested_char)
       : undefined;
-    const score = posterior
+    const hasUsablePosterior = posterior
+      && typeof posterior.alpha === 'number' && posterior.alpha > 0
+      && typeof posterior.beta === 'number' && posterior.beta > 0;
+    const score = hasUsablePosterior
       ? sampleBeta(posterior.alpha, posterior.beta, rng)
       : confidence;
 
