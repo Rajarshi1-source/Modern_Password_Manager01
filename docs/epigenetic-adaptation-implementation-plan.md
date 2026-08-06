@@ -710,7 +710,12 @@ Rules, in order:
 
 ### 2.5 As shipped — status and deviations
 
-**Status: SHIPPED**, branch `feat/adaptive-phase2-3-strength-gate-bandit`.
+**Status: SHIPPED — code-complete and tested, not yet reachable by a user.**
+Branch `feat/adaptive-phase2-3-strength-gate-bandit`. The gate itself runs
+today via the API endpoints Phase 1 shipped (`suggestAdaptation` calls it
+directly), but no route mounts the adaptive client anywhere in the app yet
+(gap D1, Phase 5) — "SHIPPED" here means the code and its tests landed on
+`main`, not that it currently protects a real user's password.
 
 **Dependency: `@zxcvbn-ts/core` 4 + `@zxcvbn-ts/language-common` 4**, not the
 3.x this section assumed. v4's `ZxcvbnFactory` is an *instance* rather than
@@ -791,7 +796,7 @@ reject.
 
 ### 2.6 First review-fix round (PR #466), on CodeRabbit/Greptile/Codex findings
 
-Two findings against the Phase 2 test file, both verified before fixing.
+Two Phase 2 review findings, both verified before fixing.
 
 - **Grammar bug in the strength panel, and an overclaimed reason.**
   `AdaptivePasswordSuggestion.jsx`'s `rejected_count` message read "1 weaker
@@ -918,8 +923,9 @@ keeping exploration on-device and the endpoint deterministic and cacheable.
 
 ### 3.6 As shipped — status and deviations
 
-**Status: SHIPPED**, branch `feat/adaptive-phase2-3-strength-gate-bandit`.
-New files: `security/models/adaptive_policy.py`,
+**Status: SHIPPED — code-complete and tested, not yet reachable by a user**
+(same caveat as §2.5: gap D1 means no route mounts the adaptive client yet).
+Branch `feat/adaptive-phase2-3-strength-gate-bandit`. New files: `security/models/adaptive_policy.py`,
 `security/services/adaptive_policy_service.py`,
 `security/tests/test_adaptive_policy_bandit.py`; migrations `0025` (the two
 models, pure schema — no `RunPython`, so none of Phase 1's DB-routing concern
@@ -1156,6 +1162,47 @@ frontend (58 files), Django `check` clean, `makemigrations --check` clean (no
 model fields changed, so no new migration), `npm run build` green on Vite 7,
 ESLint clean on every touched file, ZK client CI guard green.
 
+**Second review-fix round (PR #466), on a re-review of the first round's own
+fix.** One finding, applied and mutation-checked; two documentation-only
+wording fixes alongside it.
+
+- **Applied: `Infinity` passed the `typeof`-based posterior gate the first
+  round added.** `typeof Infinity === 'number'` and `Infinity > 0` are both
+  `true`, so `hasUsablePosterior`'s original `typeof x === 'number' && x > 0`
+  check treated an `Infinity` `alpha`/`beta` as usable. Verified the actual
+  consequence empirically rather than reasoning about it in the abstract:
+  `sampleBeta(Infinity, 2, rng)` was run across ten different seeds and
+  returned `NaN` every time — `gammaSample`'s `d = shape - 1/3` becomes
+  `Infinity`, and the eventual `x / (x + y)` becomes `Infinity / Infinity`.
+  A `NaN` score is worse than merely wrong: `NaN > existing.score` and
+  `existing.score > NaN` are both always `false`, so a `NaN`-scored candidate
+  processed *first* for a position can never be dethroned by a legitimately
+  scored competitor — it wins by iteration-order accident, not confidence.
+  Fixed by swapping `typeof x === 'number'` for `Number.isFinite(x)`, which
+  excludes `Infinity`/`-Infinity`/`NaN` in one check. Added a deterministic
+  regression test exploiting `LEET_MAP.a = ['@', '4']` (two candidates
+  compete for the *same* position, so the outcome doesn't depend on the final
+  sort's `NaN`-comparator behavior) and mutation-checked it: reverting to the
+  pre-fix `typeof` gate makes the test fail with `'@'` (the malformed,
+  first-generated candidate) selected instead of `'4'` (the legitimately
+  strong one), on every one of 30 fixed seeds.
+- **Documentation only: the §2.6 heading overclaimed its own scope**
+  ("Two findings against the Phase 2 test file") when one of the two findings
+  was about `AdaptivePasswordSuggestion.jsx`, not a test file. Reworded to
+  "Two Phase 2 review findings."
+- **Documentation only: "Status: SHIPPED" in both §2.5 and §3.6 could read as
+  claiming the code protects a running user**, when gap D1 (no route mounts
+  the adaptive client) means neither the strength gate nor the bandit is
+  reachable outside tests and direct API calls yet. The finding was posted
+  against §2.5 only; applied the same clarifying caveat to §3.6 too, since
+  both sections use identical wording for the identical gap and fixing one
+  while leaving the other would just relocate the ambiguity. Also added the
+  same caveat to acceptance-criteria items 2 and 3 (§9), matching the pattern
+  item 1 already used for the A1 blocker.
+
+Verified after this round: adaptiveFeatures.test.js green (68 tests, +1),
+ESLint clean. Docs-only changes elsewhere needed no test re-run.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
@@ -1318,7 +1365,10 @@ that measurably weaken their passwords.**
    survivor re-measured independently of the number the gate reported about
    itself, and both gate rules mutation-checked. Scope of the claim: this is a
    *client-side* guarantee. The server never sees a password and so cannot
-   verify it; that asymmetry is deliberate and documented in §1.3.
+   verify it; that asymmetry is deliberate and documented in §1.3. Same D1
+   caveat as item 1: "met" means the code and its tests exist, not that any
+   real user's password is passing through this gate yet — nothing calls
+   `suggestAdaptation` until Phase 5 mounts the UI.
 3. The exported preference model demonstrably diverges from the static baseline
    after feedback, and the convergence test fails when the policy update is
    neutralized (B1, B2) — **met**, Phase 3 §5.6. `ConvergenceTests` drives 200
@@ -1327,7 +1377,9 @@ that measurably weaken their passwords.**
    test neutralizes `apply_reward` and asserts the ordering assertion then
    fails. B2 is closed at both ends: `apply_adaptation_v2` credits an
    acceptance reward, `rollback_adaptation` a hard zero, and the client now
-   sends `substitution_classes_used` and an explicit `success`.
+   sends `substitution_classes_used` and an explicit `success`. Same D1 caveat:
+   the policy learns correctly once fed, but nothing feeds it from a real
+   session until Phase 5.
 4. `average_memorability_improvement` is non-zero after an accepted adaptation (B4).
 5. Error-prone positions measurably change suggestion ranking (B3).
 6. `/security/adaptive` is reachable and the e2e spec passes rather than being dormant (D1, D2).

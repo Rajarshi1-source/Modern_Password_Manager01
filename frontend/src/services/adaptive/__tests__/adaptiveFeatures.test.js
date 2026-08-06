@@ -808,6 +808,34 @@ describe('rankSuggestions — Thompson sampling', () => {
     }
   });
 
+  it('rejects a non-finite posterior parameter (Infinity), not just non-numeric ones', () => {
+    // typeof Infinity === 'number', so a bare `typeof x === 'number'` gate (an
+    // earlier version of this guard) treats Infinity as usable.
+    // sampleBeta(Infinity, ...) reliably returns NaN (verified empirically,
+    // not assumed), and NaN compares false in both directions against every
+    // real number — so a NaN-scored candidate processed FIRST for a position
+    // can never be dethroned by a legitimately scored competitor; it wins by
+    // iteration-order accident, not confidence. LEET_MAP.a = ['@', '4'], so
+    // both compete for the SAME position via generateCandidates('a'), and
+    // '@' is generated first, which is what makes this deterministic rather
+    // than seed-dependent.
+    const model = {
+      substitution_weights: { a: { '@': 0.05, 4: 0.05 } },
+      exploration: {
+        a: {
+          '@': { alpha: Infinity, beta: 2 }, // malformed
+          4: { alpha: 40, beta: 2 }, // strong, real posterior (mean ~0.95)
+        },
+      },
+    };
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const ranked = rankSuggestions(generateCandidates('a'), model, {
+        explore: true, rng: seededRng(seed),
+      });
+      expect(ranked[0].suggested_char).toBe('4');
+    }
+  });
+
   it('applies minConfidence to the reported confidence, not to the draw', () => {
     // A user-facing "hide anything below 0.5" must not be satisfiable by a
     // lucky sample.
