@@ -26,7 +26,7 @@ password.
 import logging
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from django.db import IntegrityError, transaction
+from django.db import DatabaseError, transaction
 from django.db.models import Avg, Count
 
 logger = logging.getLogger(__name__)
@@ -136,8 +136,12 @@ def rollback_reward(adaptation) -> float:
 def _relative_improvement(before: float, after: float) -> float:
     """Map a lower-is-better metric pair onto ``[0, 1]``.
 
-    ``0.5`` means "no change", ``1.0`` means the metric went to zero, ``0.0``
-    means it at least doubled. Scaling by the larger of the two magnitudes
+    ``0.5`` means "no change" and ``1.0`` means the metric went to zero. The
+    score falls below ``0.5`` as the metric worsens, but not linearly with the
+    ratio: an exact doubling scores ``0.25`` (verified:
+    ``rel(1, 2) == 0.25``), and ``0.0`` is approached only as ``after`` grows
+    arbitrarily larger than ``before`` — no finite ratio reaches it exactly
+    (``rel(1, 100) ≈ 0.005``). Scaling by the larger of the two magnitudes
     keeps the result bounded and symmetric, so one pathological session cannot
     dominate the term.
     """
@@ -309,10 +313,14 @@ def credit_adaptation_best_effort(adaptation, reward: float) -> int:
     opportunistic learning signal, not part of what the user asked for. Two
     concurrent writers can make ``get_or_create`` surface an ``IntegrityError``
     it cannot recover from (its internal retry re-reads inside the same
-    snapshot, which may not see the row the other transaction just committed) —
-    and blocking a password change on bandit bookkeeping would be the wrong
-    trade. The signal is not lost either way: the weekly task recomputes a full
-    composite reward from the adaptation's own status.
+    snapshot, which may not see the row the other transaction just committed);
+    ``credit_arms``' own ``select_for_update()`` can also raise
+    ``OperationalError`` on a lock-wait timeout or a detected deadlock under
+    real contention. Both are ``django.db.DatabaseError`` (confirmed via
+    ``issubclass`` — they are siblings, neither a subclass of the other, so a
+    catch scoped to only one misses the other). Blocking a password change on
+    either is the wrong trade. The signal is not lost either way: the weekly
+    task recomputes a full composite reward from the adaptation's own status.
 
     The credit still runs in a **savepoint of the caller's transaction**, so it
     cannot leave a credited arm behind for an adaptation that never committed —
@@ -326,10 +334,10 @@ def credit_adaptation_best_effort(adaptation, reward: float) -> int:
     try:
         with transaction.atomic():
             return credit_adaptation(adaptation, reward)
-    except IntegrityError:
+    except DatabaseError:
         logger.warning(
-            'Policy arm credit skipped for adaptation %s (concurrent write); '
-            'the weekly policy update will still score it.',
+            'Policy arm credit skipped for adaptation %s (concurrent write or '
+            'lock contention); the weekly policy update will still score it.',
             adaptation.pk,
         )
         return 0

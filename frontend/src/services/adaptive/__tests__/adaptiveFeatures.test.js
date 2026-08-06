@@ -751,16 +751,35 @@ describe('rankSuggestions — Thompson sampling', () => {
   });
 
   it('usually ranks the strong arm first, but not always (that is exploration)', () => {
+    // A DELIBERATELY LOCAL model, not EXPLORING_MODEL: that one uses
+    // Beta(40, 2) vs Beta(2, 40), and sampling both 20,000 times empirically
+    // never produced a single crossover (verified before writing this test,
+    // not assumed) — those two distributions barely overlap, so the
+    // "explore" side of the property this test is named for could never be
+    // observed with them, no matter how many seeds were tried. Beta(8, 4) vs
+    // Beta(4, 8) is close enough to overlap in practice (measured: 182/200
+    // strong-arm wins over this exact seed range) while still being lopsided
+    // enough that "usually" is the correct description.
+    const model = {
+      substitution_weights: { o: { 0: 0.8 }, a: { '@': 0.2, 4: 0.2 } },
+      exploration: {
+        o: { 0: { alpha: 8, beta: 4 } },
+        a: { '@': { alpha: 4, beta: 8 }, 4: { alpha: 4, beta: 8 } },
+      },
+    };
     let strongFirst = 0;
     const runs = 200;
     for (let seed = 1; seed <= runs; seed += 1) {
-      const ranked = rankSuggestions(generateCandidates('oa'), EXPLORING_MODEL, {
+      const ranked = rankSuggestions(generateCandidates('oa'), model, {
         explore: true, rng: seededRng(seed), maxSuggestions: 2,
       });
       if (ranked[0].suggested_char === '0') strongFirst += 1;
     }
     expect(strongFirst).toBeGreaterThan(runs * 0.7);
-    expect(strongFirst).toBeLessThanOrEqual(runs);
+    // Strictly less than every run: the weak arm has to win at least once
+    // for this test to actually exercise exploration rather than just
+    // asserting a tautology about the sample count.
+    expect(strongFirst).toBeLessThan(runs);
   });
 
   it('does not explore a class the server published no posterior for', () => {

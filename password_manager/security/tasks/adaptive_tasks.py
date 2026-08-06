@@ -189,9 +189,22 @@ def update_rl_model_from_feedback(batch_size: int = 500):
                 # Re-assert the unstamped predicate under the lock: another
                 # worker (or a retry of this task) may have claimed this row
                 # between the id scan above and here.
+                #
+                # of=('self',) scopes FOR UPDATE to adaptation_feedback alone.
+                # Without it, Postgres applies FOR UPDATE to every joined
+                # table select_related() pulls in -- including auth_user via
+                # adaptation__user -- so this background batch job would lock
+                # user rows for the duration of each iteration's transaction,
+                # unrelated to anything this task actually writes. 'self' is
+                # Django's documented literal for the base table (verified in
+                # SQLCompiler.get_select_for_update_of_arguments's
+                # _get_field_choices, which yields "self" for the root
+                # klass_info); both adaptation and adaptation__user are
+                # non-nullable FKs, so select_related still uses plain INNER
+                # JOINs to fetch them, just without a lock.
                 feedback = (
                     AdaptationFeedback.objects
-                    .select_for_update()
+                    .select_for_update(of=('self',))
                     .select_related('adaptation', 'adaptation__user')
                     .filter(pk=feedback_id, policy_reward_applied_at__isnull=True)
                     .first()
