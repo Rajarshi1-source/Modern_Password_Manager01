@@ -781,6 +781,7 @@ class WeeklyTaskTests(TestCase):
         self.assertEqual(result['arms_updated'], 1)
         self.assertEqual(result['classes_written'], 0)
         self.assertEqual(result['classes_skipped'], 0)
+        self.assertEqual(result['classes_retracted'], 0)
         self.assertTrue(result['prior_rebuild_failed'])
         feedback.refresh_from_db()
         self.assertIsNotNone(feedback.policy_reward_applied_at)
