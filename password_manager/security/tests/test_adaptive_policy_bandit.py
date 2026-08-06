@@ -984,12 +984,12 @@ class GlobalPriorTests(TestCase):
         # default did not consent to weaker noise on the one path where their
         # data leaves their account and shapes someone else's suggestions.
         #
-        # This test cannot raise its contributors' epsilon to dodge noise the
-        # way the retraction tests do -- a specific LOW epsilon (0.1, a large
-        # Laplace scale of 1/0.1=10) is exactly what's under test. Padding the
-        # population well above the k=5 floor instead, so the noise added to
-        # the COUNT has to be an unrealistically large outlier to push
-        # noisy_count back under the floor and flake the test.
+        # This test is about epsilon SELECTION, not noise magnitude, so the
+        # Laplace draw itself is patched to a no-op. Padding the population
+        # does not make this safe on its own: at epsilon=0.1 (scale=10) a real
+        # draw still has P(noise < -10) = 0.5*exp(-1) ~= 18% of pushing
+        # noisy_count back under the k=5 floor regardless of population size,
+        # since the tail of an unbounded Laplace distribution never vanishes.
         strict_user = _make_user('strict-epsilon', differential_privacy_epsilon=0.1)
         for _ in range(10):
             credit_arms(strict_user, [('o', '0')], 1.0, fp_key_version=1)
@@ -1000,7 +1000,11 @@ class GlobalPriorTests(TestCase):
 
         # PrivacyGuard() defaults to epsilon=0.5; the strict user's 0.1 must
         # win despite that.
-        rebuild_global_priors(PrivacyGuard())
+        with patch.object(
+            PrivacyGuard, 'add_laplace_noise',
+            lambda self, value, sensitivity=1.0: value,
+        ):
+            rebuild_global_priors(PrivacyGuard())
 
         prior = GlobalSubstitutionPrior.objects.get(from_char='o', to_char='0')
         self.assertEqual(prior.dp_epsilon, 0.1)
@@ -1009,13 +1013,17 @@ class GlobalPriorTests(TestCase):
         # A consenting user who has never touched the feature (zero pulls)
         # must not make an UNRELATED class's epsilon stricter than it needs
         # to be -- the scope is "contributed to THIS run", not "consented at
-        # some point". Padded above the bare k=5 floor for the same
-        # noise-margin reason as the test above (epsilon=0.5 here, scale=2 --
-        # milder than 0.1's scale=10, but still real noise on a small count).
+        # some point". Same patched-noise reasoning as the test above: at
+        # epsilon=0.5 (scale=2) a real draw still has P(noise < -5) =
+        # 0.5*exp(-2.5) ~= 4% of flaking this on noise, not epsilon selection.
         _make_user('idle-strict-epsilon', differential_privacy_epsilon=0.05)
         self._contributors(MIN_CONTRIBUTING_USERS + 5, 1.0)
 
-        rebuild_global_priors(PrivacyGuard())
+        with patch.object(
+            PrivacyGuard, 'add_laplace_noise',
+            lambda self, value, sensitivity=1.0: value,
+        ):
+            rebuild_global_priors(PrivacyGuard())
 
         prior = GlobalSubstitutionPrior.objects.get(from_char='o', to_char='0')
         # _contributors doesn't set differential_privacy_epsilon, so every

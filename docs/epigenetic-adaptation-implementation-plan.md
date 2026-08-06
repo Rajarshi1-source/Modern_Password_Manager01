@@ -354,7 +354,10 @@ chain-parent lookup, and `rollback_adaptation`. Documented in the service's
   Vulnerability Scan" CI check (expired pip-audit suppressions,
   `PYSEC-2025-183`/`PYSEC-2024-277`) — confirmed via `git diff --stat` that
   this PR touches zero dependency/ignore files; the failure predates it and is
-  out of scope.
+  out of scope. (Superseded once the entries actually crossed their
+  `2026-08-01` expiry and started hard-failing the PR's own merge gate — see
+  the fifth PR #466 review-fix round below, where renewing them became this
+  PR's own scope rather than a pre-existing, unrelated failure.)
 
 **A pre-existing lesson, reconfirmed, not a new bug:** during the *initial*
 implementation (`7119bad`), a shared mutable class-level `dict` used as
@@ -1487,6 +1490,78 @@ existing test rather than adding new ones), Django `check` clean,
 every touched file. Both new production-code fixes mutation-checked
 independently, each restored from a clean backup and re-verified before
 moving to the next.
+
+**Fifth review-fix round (PR #466), on CodeRabbit's follow-up review of round
+4's own new code, plus two CI checks investigated directly from the PR's
+failing-checks list rather than from a bot comment.**
+
+- **Applied: the two epsilon-scoping tests round 4 added were themselves
+  flaky, and CodeRabbit's mechanism was correct.** Both call
+  `rebuild_global_priors` with a real, unseeded `PrivacyGuard`, whose
+  `add_laplace_noise` draws `np.random.laplace(0, sensitivity/epsilon)`.
+  Verified the exact failure probabilities from the Laplace CDF rather than
+  trusting the review's numbers outright: `P(noise < -margin) =
+  0.5*exp(-margin/scale)` gives `0.5*exp(-10/10) ≈ 18.4%` for
+  `test_the_strictest_contributing_users_epsilon_is_honoured` (epsilon=0.1,
+  scale=10, 10-user margin above the k=5 floor) and `0.5*exp(-5/2) ≈ 4.1%`
+  for `test_a_non_contributing_consenting_users_epsilon_does_not_leak_in`
+  (epsilon=0.5, scale=2, 5-user margin) — both real, CI-relevant flake rates.
+  Padding the contributor population further, which round 4 had already
+  tried, cannot fix this: the Laplace tail probability is set by `scale =
+  sensitivity / epsilon`, not by `n`, so no amount of padding shrinks it.
+  Fixed by patching `PrivacyGuard.add_laplace_noise` to the identity function
+  for the duration of these two tests (`patch.object`) — they test epsilon
+  SELECTION, not noise magnitude, so removing the noise removes the flake
+  without weakening what the test asserts. Mutation-checked by reverting the
+  round-4 epsilon-override line itself (`privacy_guard.epsilon =
+  strictest_epsilon` → `pass`) with the noise still patched out:
+  `test_the_strictest_contributing_users_epsilon_is_honoured` failed exactly
+  as expected (`0.5 != 0.1`), proving the patched test still catches the
+  actual bug it exists to catch, not just the noise.
+- **Investigated, confirmed not caused by this PR: the failing "CI/CD
+  Pipeline / Backend Tests" check.** Fetched the actual job log rather than
+  assuming. Of 1676 passed / 203 errors, **zero** were in
+  `test_adaptive_policy_bandit.py` or `test_adaptive_zk_v2.py` — both files
+  passed in full (51 and 38 tests respectively) in that exact run. Every
+  error was the same `AttributeError: type object 'PytestDjangoTestCase' has
+  no attribute '_pre_setup_ran_eagerly'` first diagnosed in round 2 (trap
+  18), this time cascading through ten unrelated apps (`bug_bounty`,
+  `circadian_totp`, `decentralized_identity`, `fhe_sharing`, `mesh_deaddrop`,
+  `ml_dark_web`, `password_reputation`, `personality_auth`, `stegano_vault`,
+  `zk_proofs`), first appearing in `ambient_auth`'s async fixture setup after
+  a ~50-second stall. Confirmed not this PR's diff: `git diff main...HEAD
+  --stat` touches zero conftest, settings, or dependency files, and none of
+  the ten affected apps share any code path with the adaptive feature. Left
+  un-fixed, same discipline as trap 18: bisectability to this PR's own diff,
+  not "is something red," decides whether it's this PR's bug to fix.
+- **Applied: renewed the two expired pip-audit suppressions, reversing the
+  "confirmed out of scope" stance recorded in the third and fourth rounds
+  above.** That stance was correct when written — the entries hadn't crossed
+  their `2026-08-01` expiry yet, and the manifest's own policy requires "a
+  fresh threat assessment" to renew, which a round that didn't own that
+  assessment correctly declined to do. Both have now actually expired and
+  the "Dependency Vulnerability Scan" check hard-fails, blocking this PR's
+  own merge — making the fresh assessment this round's problem, not
+  background noise. Did the assessment rather than reflexively bumping
+  dates: web-verified `PYSEC-2025-183` (PyJWT) is still disputed upstream
+  with no fixing release (`jpadilla/pyjwt#1168`), and `PYSEC-2024-277`
+  (joblib) is still disputed on the same "deserializes only trusted,
+  self-authored cache content" grounds already recorded in the manifest —
+  `joblib==1.5.2`, the current pin, is also the latest release and remains
+  flagged because the finding is inherent to the pickle-based design, not a
+  version gap. Checked git history (`git log --follow -p`) before renewing:
+  both entries were added once, in `c8e1a6e`, and never renewed since — this
+  is the FIRST renewal for each, not the second, so the manifest's own
+  "after two renewals without a fix, file a tracking issue" threshold does
+  not apply yet. Bumped to `2026-09-28` (PyJWT) and `2026-10-03` (joblib),
+  both within the policy's 60-day cap and staggered against the file's other
+  entries.
+
+Verified after this round: 89 passed / 7 subtests across
+`test_adaptive_policy_bandit.py` + `test_adaptive_zk_v2.py` (count unchanged
+— this round fixed test *reliability*, not test *count*), re-confirmed clean
+after reverting the mutation-check backup, Django `check` clean. Frontend
+untouched this round, so no frontend re-run was needed.
 
 ---
 
