@@ -30,6 +30,7 @@ from rest_framework.test import APIClient, APITestCase
 from security.models import (
     AdaptationFeedback,
     AdaptivePasswordConfig,
+    DEFAULT_DECAY,
     GlobalSubstitutionPrior,
     PasswordAdaptation,
     SubstitutionPolicyArm,
@@ -309,8 +310,12 @@ class ArmUpdateTests(TestCase):
         arm = SubstitutionPolicyArm(user=self.user, from_char='o', to_char='0')
         for _ in range(1000):
             arm.apply_reward(1.0)
-        # Fixed point of decay-toward-prior with reward 1 is 1 + 1/(1 - 0.98).
-        self.assertLess(arm.alpha, 1 + 1 / (1 - 0.98) + 1e-6)
+        # Fixed point of decay-toward-prior with reward 1 is
+        # PRIOR_ALPHA + 1 / (1 - DEFAULT_DECAY). Importing the constant
+        # instead of hardcoding 0.98 means a future change to the decay rate
+        # fails this assertion with a value mismatch pointing at the real
+        # cause, not a silently-stale magic number.
+        self.assertLess(arm.alpha, PRIOR_ALPHA + 1 / (1 - DEFAULT_DECAY) + 1e-6)
 
     def test_reward_is_clamped_into_the_unit_interval(self):
         arm = SubstitutionPolicyArm(user=self.user, from_char='o', to_char='0')
@@ -408,6 +413,36 @@ class LoopClosureTests(TestCase):
         # ...and was NOT misreported as an adapted-fingerprint chain clash,
         # which is what the surrounding IntegrityError handler is about.
         self.assertNotIn('already exists', str(result))
+
+    def test_a_lock_timeout_on_the_arm_credit_never_blocks_the_password_change(self):
+        # credit_arms takes select_for_update() on SubstitutionPolicyArm, so
+        # real contention can raise OperationalError (lock-wait timeout,
+        # detected deadlock) rather than IntegrityError. The two are siblings
+        # under django.db.DatabaseError -- neither is a subclass of the other
+        # (confirmed via issubclass before this test was written) -- so a
+        # handler scoped to only IntegrityError would let this one propagate
+        # into the caller's transaction, exactly the failure mode
+        # credit_adaptation_best_effort's own docstring says it exists to
+        # prevent.
+        from django.db import OperationalError
+
+        with patch(
+            'security.services.adaptive_policy_service.credit_adaptation',
+            side_effect=OperationalError('lock wait timeout'),
+        ):
+            result = self.service.apply_adaptation_v2(
+                original_fingerprint=FP_ORIGINAL,
+                adapted_fingerprint=FP_ADAPTED,
+                substitution_classes=[{'from': 'o', 'to': '0'}],
+                expected_fp_key_version=1,
+            )
+
+        self.assertNotIn('error', result)
+        self.assertTrue(
+            PasswordAdaptation.objects.filter(
+                user=self.user, adapted_fingerprint=FP_ADAPTED, status='active',
+            ).exists()
+        )
 
     def test_rollback_still_decays_the_profile_confidence_too(self):
         # The two writers feed different consumers; Phase 3 adds the arm credit

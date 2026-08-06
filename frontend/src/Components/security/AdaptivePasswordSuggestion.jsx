@@ -624,9 +624,20 @@ const AdaptivePasswordSuggestion = ({
                                 </StrengthDelta>
                             </StrengthRow>
                             <StrengthNote>
-                                {strengthDelta > 0
-                                    ? 'This change makes the password harder to guess.'
-                                    : 'This change keeps the password exactly as hard to guess.'}
+                                {/* The real filterByStrength path enforces
+                                    non-regression, so strengthDelta < 0 never
+                                    happens via suggestAdaptation. It stays a
+                                    real branch here (not an assumed
+                                    impossibility) because this component also
+                                    accepts a caller-supplied suggestion
+                                    object, and the row above always renders
+                                    the actual signed number regardless — the
+                                    note text has to agree with it in every
+                                    case, not just the one the real gate
+                                    produces. */}
+                                {strengthDelta > 0 && 'This change makes the password harder to guess.'}
+                                {strengthDelta === 0 && 'This change keeps the password exactly as hard to guess.'}
+                                {strengthDelta < 0 && 'This change makes the password easier to guess.'}
                                 {rejected_count > 0
                                     && (rejected_count === 1
                                         ? ' 1 substitution was removed to keep this password strong.'

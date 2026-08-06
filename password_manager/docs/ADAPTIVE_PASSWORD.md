@@ -214,11 +214,15 @@ are rights rather than features.
 
 ### The reinforcement-learning policy (Phase 3)
 
-`substitution_weights` is now the posterior mean of a per-user Beta-Bernoulli
-bandit arm per substitution class, not the static leetspeak table. Resolution
-order per class: the user's own arm → their `UserTypingProfile` usage
-confidence → a DP-noised cross-user prior → the leetspeak baseline.
-`/adaptive/preference-model/` also returns:
+`substitution_weights` is no longer always the static leetspeak table — each
+class now resolves through a four-level fallback, most specific first: the
+user's own Beta-Bernoulli bandit arm (posterior mean) → their
+`UserTypingProfile` usage confidence → a DP-noised cross-user prior → the
+leetspeak baseline. The Beta-Bernoulli posterior mean specifically applies
+**only** when `weight_sources` reports `user_policy` for that class; for
+`user_profile` / `global_prior` / `baseline` the value comes from that
+fallback source instead — check `weight_sources` to know which one produced a
+given weight. `/adaptive/preference-model/` also returns:
 
 | Field | Meaning |
 |-------|---------|
@@ -242,4 +246,8 @@ credits a hard zero.
 > `docs/epigenetic-adaptation-implementation-plan.md` §7 (Phase 5, Celery beats).
 <!-- -->
 > **Still not mounted.** No route imports the adaptive client yet (gap D1), so
-> none of the above is reachable from the running app until Phase 5.
+> the client-side adaptive flow is not reachable from the running app until
+> Phase 5. This is narrower than "nothing works": the documented API
+> endpoints and the manually-invoked `update_rl_model_from_feedback` task are
+> real and reachable today via direct calls — what's missing is the UI that
+> would drive them for a real user.

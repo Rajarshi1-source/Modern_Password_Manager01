@@ -1203,6 +1203,142 @@ wording fixes alongside it.
 Verified after this round: adaptiveFeatures.test.js green (68 tests, +1),
 ESLint clean. Docs-only changes elsewhere needed no test re-run.
 
+**Third review-fix round (PR #466), full CodeRabbit re-review.** Two
+production-code findings applied and mutation-checked, four documentation
+wording clarifications, one nitpick applied, four declined. Also: a
+"Backend Tests" CI check turned red on this round's first push — investigated
+and confirmed unrelated to this PR before touching anything.
+
+- **Applied: `credit_adaptation_best_effort` only caught `IntegrityError`,
+  not `credit_arms`' own lock-contention failures.** `credit_arms` takes
+  `select_for_update()` on `SubstitutionPolicyArm`; under real contention that
+  can raise `OperationalError` (lock-wait timeout, detected deadlock), not
+  just `IntegrityError`. Verified the two are genuinely unrelated in Django's
+  hierarchy before fixing — `issubclass(OperationalError, IntegrityError)` is
+  `False`, both are direct siblings under `DatabaseError` — so the original
+  handler's scope was a real gap, not a stylistic nit: a lock timeout would
+  have propagated straight into the caller's password-apply/rollback
+  transaction, exactly the outcome this function's own docstring says it
+  exists to prevent. Fixed by catching `DatabaseError`. Added a test that
+  injects `OperationalError` and asserts the password change still commits;
+  mutation-checked by reverting to the narrow catch and confirming the new
+  test fails with the `OperationalError` propagating uncaught, exactly as
+  predicted.
+- **Applied: the weekly task's row lock could lock joined tables it never
+  writes.** `AdaptationFeedback.objects.select_for_update().select_related(
+  'adaptation', 'adaptation__user')` — without `of=(...)`, Postgres applies
+  `FOR UPDATE` to every table in the join, including `auth_user` via
+  `adaptation__user`, for a background batch job that writes only the
+  feedback row. Verified `of=('self',)` is safe before applying: read
+  Django's actual `SQLCompiler.get_select_for_update_of_arguments` source to
+  confirm `'self'` is the documented literal for the query's base table; the
+  `adaptation`/`adaptation__user` FKs are both non-nullable, so
+  `select_related` already uses plain `INNER JOIN`s for them regardless;
+  confirmed `has_select_for_update` is `False` on SQLite (this project's local
+  test backend), so the whole clause is silently a no-op there and the change
+  needed verifying by reading Postgres-path source, not just running the
+  local suite. Full `WeeklyTaskTests` class re-run twice (once via a stale
+  background job, once fresh) after the change: 7/7 both times.
+- **Applied: a docstring's own stated numbers were wrong.** `_relative_improvement`
+  claimed "0.0 means it at least doubled." Computed the actual formula at
+  `before=1, after=2` (an exact doubling): `0.5 + 0.5*((1-2)/2) = 0.25`, not
+  `0.0`. `0.0` is only approached asymptotically as the ratio grows without
+  bound (`≈0.005` at 100x). Corrected the docstring to state the real
+  behaviour rather than the aspirational one.
+- **Applied, but not as literally suggested: the "usually ranks the strong
+  arm first, but not always" test's upper bound was vacuous.** `expect(
+  strongFirst).toBeLessThanOrEqual(runs)` can never fail — `strongFirst` is a
+  count that cannot exceed the loop bound `runs` by construction, so the
+  assertion carries no information regardless of whether exploration is
+  broken. The literal suggested fix (`toBeLessThan(runs)`) was checked against
+  the test's *actual* seed range before applying, per this project's standing
+  rule about testing a suggested fix rather than reading it: with the test's
+  existing `EXPLORING_MODEL` (`Beta(40, 2)` vs `Beta(2, 40)`), the strong arm
+  won **200 of 200** seeds — tightening the bound as suggested would have
+  broken the test immediately. Widened the check to 20,000 direct samples of
+  the two distributions: **zero** crossovers. These two Beta parameterizations
+  are too concentrated and too far apart to ever overlap in a realistic
+  sample; the test's own name ("but not always") was not actually true for
+  its chosen parameters. Fixed properly rather than papering over it: added a
+  new, deliberately *local* model (`Beta(8, 4)` vs `Beta(4, 8)`, not touching
+  the shared `EXPLORING_MODEL` used by five other tests) chosen by measuring
+  several candidate parameterizations until one produced a realistic mix
+  (182/200 strong-arm wins over this exact seed range — comfortably above the
+  existing `>70%` floor, genuinely below 100%). Mutation-checked: forcing
+  `hasUsablePosterior` to always be `false` (exploration disabled) makes the
+  tightened assertion fail exactly as expected (`200 to be less than 200`).
+- **Applied, low-risk: `test_evidence_is_bounded_so_an_arm_stays_responsive`
+  hardcoded `0.98` instead of importing `DEFAULT_DECAY`.** A future change to
+  the decay constant would previously fail this test on a bare arithmetic
+  mismatch instead of pointing at the actual constant. Imported and rewrote
+  the assertion in terms of `PRIOR_ALPHA + 1 / (1 - DEFAULT_DECAY)`.
+- **Declined, both re-raising round-1 nitpicks the report itself already
+  labeled "Trivial / Low value":** a Postgres partial index for the
+  `AdaptationFeedback.Meta.indexes` pending-scan entry (same reasoning as
+  round 1 — no measurable load exists while gap D1 keeps the feature
+  unmounted, and it would need its own migration for a query-plan change with
+  no current traffic to justify it), and replacing `short_description`
+  attribute assignments with `@admin.display(...)` decorators on the two
+  bandit admin classes (functionally identical, pure style, already declined
+  once for the same reason).
+- **Declined: streaming `rebuild_global_priors`' arm aggregation to avoid
+  holding one model instance per `(user, class)` pair in memory.** The
+  concern (100k users × 10 classes ⇒ 1M retained instances) is real in the
+  abstract, but the feature currently has zero real users (gap D1), and the
+  suggested refactor would have to faithfully reproduce the exact
+  one-contribution-per-user dedup logic this same round's own k-anonymity fix
+  (round 1) just added and tested — reimplementing that as a streaming
+  group-by *now*, with no live scale problem to justify the added complexity
+  and re-verification burden, is exactly the premature-abstraction trade this
+  project's own working practice avoids. Revisit if/when Phase 5 ships real
+  traffic through this path.
+- **Declined: caching `GlobalSubstitutionPrior.objects.all()`'s read inside
+  `policy_weights` (used by `/preference-model/`).** Same "no measurable load
+  yet" reasoning, plus an added risk the finding's own proposed sketch doesn't
+  fully resolve: a cache with a fixed TTL can serve a stale prior for up to
+  that TTL after `rebuild_global_priors` runs, and getting the invalidation
+  wrong is a worse failure mode (silently stale personalization data) than
+  the uncached read it would replace, for a code path nothing calls yet.
+- **Investigated, confirmed unrelated: "CI/CD Pipeline / Backend Tests" went
+  red on this round's first push.** Fetched the actual job log rather than
+  assuming a connection to this PR's changes. Findings: (1) the job runs
+  against a **real Postgres 15 container** (`postgresql`, not this project's
+  local SQLite test default), a backend this PR's local `canny`-venv runs
+  never exercise; (2) of 203 total errors, **zero** were in any
+  `test_adaptive_*` file — every adaptive test outcome was `PASSED`; (3) all
+  203 errors were `ERROR at setup of ...` across a dozen unrelated modules
+  (`bug_bounty`, `personality_auth`, `zk_proofs`, `auth_module`, and others),
+  every one tracing to the identical
+  `AttributeError: type object 'PytestDjangoTestCase' has no attribute
+  '_pre_setup_ran_eagerly'` inside `pytest_asyncio`'s bridge into
+  `pytest_django` internals — a dependency-version-compatibility break
+  affecting only `async` test fixtures, none of which this feature's tests
+  use; (4) most conclusively, the two commits immediately preceding this
+  round on **this same branch** (`2faa9b2`, `157bfbc`) both had this exact
+  check green, and the diff between the last green run and the first red one
+  touched only `adaptiveFeatures.js` (an `Infinity`-gate fix) and two docs
+  files — nothing that touches dependency pins, async fixtures, or any of the
+  203 failing modules. Confirmed out of scope: environment/dependency drift
+  between CI runs, not a regression introduced by this PR's code.
+- **Noted, not fixed: `isort --check-only` fails on every adaptive file this
+  PR touches.** Confirmed non-fatal — `ci.yml`'s invocation is
+  `isort --check-only --diff . || true`, so it cannot be what failed the
+  Backend Tests job. Confirmed pre-existing and repo-wide, not specific to
+  this PR's files: the same failure hits files this PR has never touched
+  (`fhe_service/services/adaptive_manager.py`,
+  `auth_module/migrations/0002_...py`). Running `isort` locally on the touched
+  files would reorder import blocks that predate this PR's own diff — a
+  larger, less-surgical change than the actual review findings called for.
+  Left alone.
+
+Verified after this round: 46 passed / 7 subtests in
+`test_adaptive_policy_bandit.py` (+2 vs. round 1: the new `OperationalError`
+best-effort test and the multi-era k-anonymity test), full frontend suite
+green (588 tests, 58 files — the local test count is unchanged from round 2
+since round 3's frontend changes fixed existing tests rather than adding new
+ones), Django `check` clean, `makemigrations --check` clean (no model fields
+changed), ESLint clean on every touched file.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
@@ -1345,7 +1481,7 @@ that measurably weaken their passwords.**
 |---|---|
 | Strength gate rejects nearly everything, leaving the feature inert | **Measured, Phase 2:** ~25% of passwords keep at least one substitution over a 200-password corpus (§4.5). Workable, so the "safer transform family" option (appending learned syllables, case-shifts at low-error positions) was not needed — but `has_suggestion: false` is common enough that the UI must treat it as a normal outcome. |
 | Bandit starves on sparse data | Global DP prior for cold start; Thompson sampling explores by construction; ≥3-session floor on the behavioural term. **Shipped as specified**, plus a k-anonymity floor of 5 contributors on the global prior (§5.6). |
-| Salt exposure misjudged | Re-derive the argument from `cryptoService.js:269` at implementation time; do not rely on §1.1's summary. |
+| Salt exposure misjudged | **Shipped, Phase 1 (§1.1):** the salt is genuinely non-secret — `AdaptivePasswordConfig.fingerprint_salt`'s own `help_text` states it, and it is useless to an attacker without the master password, which is never transmitted. Serving it over `/adaptive/config/` leaks nothing. Fingerprint-era isolation (`fp_key_version`) is enforced end-to-end: stamped from the server's own config (never the client's claim), scoped on every fingerprint-keyed read path, and bumped on rotation so eras never correlate. Residual property, not a blocker (§1): fingerprint strength is bounded by master-password strength, since HMAC is fast to brute-force offline given the master password — out of scope under this feature's threat model (hostile server, master password never transmitted). |
 | zxcvbn bundle cost | **Measured, Phase 2:** ≈460 kB raw / 222 kB gzipped, entirely behind the dynamic `import()`; nothing zxcvbn-related in the entry chunk (§4.5). Not yet visible in the production build because gap D1 keeps the whole adaptive module unreachable and Rollup drops it. |
 | Key rotation orphans learning | Intended — a correlation reset. Make it explicit in the UI, not a silent data loss. |
 
@@ -1377,7 +1513,10 @@ that measurably weaken their passwords.**
    test neutralizes `apply_reward` and asserts the ordering assertion then
    fails. B2 is closed at both ends: `apply_adaptation_v2` credits an
    acceptance reward, `rollback_adaptation` a hard zero, and the client now
-   sends `substitution_classes_used` and an explicit `success`. Same D1 caveat:
+   sends `substitution_classes_used` and, when the outcome is actually known,
+   an explicit `success` — omitted intentionally otherwise, so
+   `capturePattern` falls back to the service's own heuristic rather than
+   guessing. Same D1 caveat:
    the policy learns correctly once fed, but nothing feeds it from a real
    session until Phase 5.
 4. `average_memorability_improvement` is non-zero after an accepted adaptation (B4).
