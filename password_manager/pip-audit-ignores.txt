@@ -28,13 +28,18 @@
 
 # pyjwt advisory — disputed by the supplier ("key length is chosen by
 # the application"). Our usage in auth_module/services/jwt_service.py
-# uses 256-bit secrets from settings.SECRET_KEY.
-PYSEC-2025-183 exp:2026-08-01
+# uses 256-bit secrets from settings.SECRET_KEY. Renewed 2026-08-06:
+# still disputed upstream, no PyJWT release resolves it (confirmed via
+# jpadilla/pyjwt#1168 and osv.dev/vulnerability/PYSEC-2025-183).
+PYSEC-2025-183 exp:2026-09-28
 
 # joblib NumpyArrayWrapper deserialization — applies to caching of
 # trusted content. We do not deserialise joblib pickles from untrusted
-# sources.
-PYSEC-2024-277 exp:2026-08-01
+# sources. Renewed 2026-08-06: still disputed upstream on the same
+# trusted-content-only grounds; joblib==1.5.2 (current pin, also
+# latest) remains flagged since no fix version exists for the
+# pickle-based design.
+PYSEC-2024-277 exp:2026-10-03
 
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the
