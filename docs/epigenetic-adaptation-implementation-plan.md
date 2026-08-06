@@ -712,10 +712,12 @@ Rules, in order:
 
 **Status: SHIPPED — code-complete and tested, not yet reachable by a user.**
 Branch `feat/adaptive-phase2-3-strength-gate-bandit`. The gate itself runs
-today via the API endpoints Phase 1 shipped (`suggestAdaptation` calls it
-directly), but no route mounts the adaptive client anywhere in the app yet
-(gap D1, Phase 5) — "SHIPPED" here means the code and its tests landed on
-`main`, not that it currently protects a real user's password.
+today via direct client/service calls and the test suite — `suggestAdaptation`
+is a **client-side function** (in `adaptivePasswordService`), not an API
+endpoint; the actual `/adaptive/suggest/` route is the old, deprecated one and
+returns HTTP 410 Gone (§0.1). No route mounts the adaptive client anywhere in
+the app yet (gap D1, Phase 5) — "SHIPPED" here means the code and its tests
+landed on `main`, not that it currently protects a real user's password.
 
 **Dependency: `@zxcvbn-ts/core` 4 + `@zxcvbn-ts/language-common` 4**, not the
 3.x this section assumed. v4's `ZxcvbnFactory` is an *instance* rather than
@@ -1338,6 +1340,153 @@ green (588 tests, 58 files — the local test count is unchanged from round 2
 since round 3's frontend changes fixed existing tests rather than adding new
 ones), Django `check` clean, `makemigrations --check` clean (no model fields
 changed), ESLint clean on every touched file.
+
+**Fourth review-fix round (PR #466), full CodeRabbit re-review.** Two Major
+findings applied and mutation-checked — both genuine gaps in the bandit's
+privacy guarantees, not stylistic issues. One finding declined after direct
+empirical verification found it factually wrong about the shipped code's
+behaviour. Two `Number.isFinite` gaps applied (same class of bug as round 2,
+found in two more call sites). Three doc wording fixes. One query-scoping
+nitpick applied; five declined.
+
+- **Applied, the most significant finding of this round:
+  `rebuild_global_priors` never retracted a published class.** The function
+  only ever wrote or updated `GlobalSubstitutionPrior` rows — nothing deleted
+  one. Verified the consequence is real and reachable via the ordinary path
+  (not just full GDPR deletion): toggling `allow_centralized_training=False`
+  on `/config/` removes a user from `consenting_user_ids` on the very next
+  run, and if that user was one of exactly `MIN_CONTRIBUTING_USERS`
+  contributors, the class silently stops clearing the floor while its stale
+  row keeps being served by `policy_weights` as `global_prior` — the one path
+  where a user's data shapes someone else's suggestions, and their withdrawal
+  never reached it. Fixed by tracking `published_classes` each run and
+  deleting every `GlobalSubstitutionPrior` row outside that set (including
+  every row, in the degenerate case where nothing clears the floor at all —
+  privacy-first means failing closed on publication, not leaving stale data
+  indefinitely just because the current run couldn't confirm it). Four new
+  tests, including the exact scenario CodeRabbit proposed (publish, withdraw
+  consent, confirm retraction) plus a negative control (a still-qualifying
+  class survives an unrelated run) and the degenerate "nothing qualifies"
+  case. Mutation-checked: disabling retraction makes both retraction-asserting
+  tests fail on their `classes_retracted` assertion specifically (confirmed
+  after initially misreading a truncated terminal capture as a different,
+  unrelated assertion — corrected by re-running with output redirected to a
+  file instead of piped through `tail`, which is now the standing practice for
+  any mutation-check output long enough to risk truncation).
+- **Applied: the per-user DP epsilon never reached `rebuild_global_priors`.**
+  `adaptive_tasks.py` called `rebuild_global_priors(PrivacyGuard())` with no
+  epsilon, so the aggregation always ran at the class default (0.5) regardless
+  of what any individual contributing user configured via
+  `differential_privacy_epsilon`. This is the one path where a user's data
+  crosses into shaping another user's output, so a user who chose a stricter
+  (lower) epsilon did not consent to their contribution being folded in under
+  a weaker one. Implemented more precisely than the literal suggestion (which
+  would have queried `AdaptivePasswordConfig` broadly for every
+  enabled+consenting user): scoped the `Min(differential_privacy_epsilon)`
+  aggregate to the exact set of users who actually contribute an arm *this
+  run* (already materialized in `latest_by_user_and_class`), computed inside
+  `rebuild_global_priors` itself rather than in the caller — so a consenting
+  user who has never touched the feature cannot make an unrelated class's
+  epsilon stricter than it needs to be, and `adaptive_tasks.py` needed no
+  changes at all. `PrivacyGuard.epsilon` is a plain instance attribute read at
+  call time by `add_laplace_noise` (confirmed by reading every reference to it
+  in the class), so overriding it before the noise-adding loop is sufficient.
+  Two new tests (strictest epsilon wins over the caller's default; a
+  non-contributing consenting user's stricter epsilon does not leak into an
+  unrelated class's noise). Mutation-checked: disabling the override makes the
+  strictest-epsilon test fail on `dp_epsilon` (0.5 instead of 0.1).
+  **This fix broke nine pre-existing assertions** in tests built around
+  `PrivacyGuard(epsilon=100.0)` for negligible-noise testing of the
+  aggregation math — the override silently downgraded their contributors to
+  the unconfigured default (0.5), reintroducing real noise into tests that
+  were specifically designed to have none. Fixed by extending `_contributors`
+  with a `dp_epsilon` parameter and threading a matching epsilon through every
+  affected test's contributors, not just the guard. Two of the new retraction
+  tests had a second, independent problem surfaced during this process: they
+  used exactly `MIN_CONTRIBUTING_USERS` contributors, which makes "does this
+  class still publish" a coin flip on the *sign* of the Laplace noise alone —
+  landing exactly at an integer floor means any negative draw, however tiny,
+  crosses the boundary, independent of how small the noise scale is (confirmed
+  by direct computation, not just observed as flaky: `P(noise < 0) = 0.5` for
+  any symmetric distribution regardless of scale). Fixed by padding the
+  "should publish" side of these tests well above the floor and, where a test
+  needed to demonstrate a *drop below* the floor, doing so with a multi-user
+  margin (8 down to 4) rather than the single-user, exactly-at-the-boundary
+  version that shipped first.
+- **Declined, after direct empirical verification found the finding
+  factually wrong about the shipped code:** "the gate rejects only *new*
+  leet-flagged matches, preserving pre-existing ones." This contradicts what
+  round 1 already documented about the same code (§2.5's "Attribution" note)
+  after its own investigation, and — because a claim about production
+  behaviour is worth re-verifying rather than trusting either doc against the
+  other — was checked directly against the running gate rather than taken on
+  faith from either source. Constructed `c0rrect` (already zxcvbn-l33t-matched
+  at `[0, 6]` in its unmodified form, confirmed via `loadDefaultEstimator`
+  before touching `filterByStrength` at all) and ran it through the real
+  pipeline: the `e→3` substitution at position 4 — squarely inside that
+  *pre-existing* span — is rejected as `de_leet`, identical to how a
+  genuinely new match would be rejected. The implementation does not compare
+  against the original's match sequence at all; it rejects any surviving
+  substitution whose position falls inside *any* leet-flagged span of the
+  *adapted* result, new or inherited. Left `ADAPTIVE_PASSWORD.md`'s wording
+  unchanged (it already says "no leet-flagged dictionary match" without
+  qualifying "new," which is the accurate description).
+- **Applied: two more `Number.isFinite` gaps, same defect class as round 2's
+  `hasUsablePosterior` fix, found in call sites that fix didn't cover.**
+  `sampleBeta` itself still used `typeof x === 'number'` internally — round
+  2's fix protects `rankSuggestions`' own call site, but `sampleBeta` is
+  exported and callable directly, and its own contract ("valid probability
+  for garbage input") wasn't actually met for `Infinity`. Verified before
+  fixing: `sampleBeta(Infinity, 2)` returns `NaN` directly, and
+  `sampleBeta(2, Infinity)` returns `0` (a false-confident answer, not an
+  error). `AdaptivePasswordSuggestion.jsx`'s `hasStrengthReading` gate had the
+  identical pattern for `guesses_log10_before`/`after`, where `typeof NaN ===
+  'number'` would let a NaN reading through and render literally "NaN" in the
+  UI. Both fixed with `Number.isFinite`. Extended the existing degenerate-
+  parameter test for `sampleBeta` with `Infinity`/`-Infinity` cases (not a new
+  test — the existing one already existed for exactly this purpose and simply
+  hadn't been extended to the value that mattered) and mutation-checked it.
+- **Applied, doc wording:** the reachability description near
+  `suggestAdaptation` called it "the API endpoints Phase 1 shipped," but
+  `suggestAdaptation` is a **client-side function** in `adaptivePasswordService`,
+  not an API endpoint — the actual `/adaptive/suggest/` route is the old,
+  deprecated one and returns 410 Gone. Reworded to state plainly that the gate
+  runs today via direct client/service calls and the test suite.
+- **Applied, low-risk query scoping:** `policy_weights` read
+  `GlobalSubstitutionPrior.objects.all()` unconditionally on every
+  `/preference-model/` call, though only classes in `known_classes` (the
+  baseline, the user's own overrides, and their arms) can ever be looked up
+  from the result. Reordered `known_classes`' construction ahead of the query
+  and filtered with a superset `from_char__in`/`to_char__in` pair — safe
+  specifically because the per-class loop only ever reads
+  `globals_by_class.get((from_char, to_char))` for a class already being
+  iterated from `known_classes`, so an over-fetched row is simply never looked
+  up.
+- **Declined, all explicitly labeled "Trivial" by the report itself, or
+  matching an already-declined round-1/round-3 item:** `@admin.display`
+  decorators (pure style, declined twice already); streaming
+  `latest_by_user_and_class`'s aggregation to bound memory (same round-3
+  reasoning — zero real users behind gap D1, and the suggested refactor would
+  have to faithfully reproduce the one-contribution-per-user dedup this same
+  round's own retraction fix already tests, for no live scale problem);
+  `AddIndexConcurrently` for migration 0026 (the table is empty behind gap D1 —
+  nothing to lock); splitting the task's `skipped` counter into
+  `already_claimed`/`failed` (genuinely useful once an operator is watching
+  this task, but nothing schedules it yet — gap D3 — so there is no current
+  consumer to serve); backfilling `policy_reward_applied_at` on historical
+  rows (same round-3 reasoning — crediting the full backlog once is the
+  intended behaviour for a policy that never existed before Phase 3, not a bug
+  to suppress).
+
+Verified after this round: 170 passed / 27 subtests across the four adaptive
+backend test files (+6 vs. round 3: four new retraction tests, two new
+epsilon-scoping tests), full frontend suite green (588 tests, 58 files —
+local count unchanged, since this round's frontend changes extended an
+existing test rather than adding new ones), Django `check` clean,
+`makemigrations --check` clean (no model fields changed), ESLint clean on
+every touched file. Both new production-code fixes mutation-checked
+independently, each restored from a clean backup and re-verified before
+moving to the next.
 
 ---
 

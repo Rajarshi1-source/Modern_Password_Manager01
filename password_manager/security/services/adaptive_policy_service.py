@@ -23,11 +23,13 @@ time actually improve after this adaptation"* without ever knowing either
 password.
 """
 
+import functools
 import logging
+import operator
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from django.db import DatabaseError, transaction
-from django.db.models import Avg, Count
+from django.db.models import Avg, Count, Min, Q
 
 logger = logging.getLogger(__name__)
 
@@ -391,10 +393,6 @@ def policy_weights(
     exploration: Dict[str, Dict[str, Dict[str, float]]] = {}
     sources: Dict[str, str] = {}
 
-    globals_by_class = {
-        (p.from_char, p.to_char): p
-        for p in GlobalSubstitutionPrior.objects.all()
-    }
     arms_by_class = {
         (a.from_char, a.to_char): a
         for a in SubstitutionPolicyArm.objects.filter(
@@ -411,6 +409,27 @@ def policy_weights(
         for from_char, row in table.items()
         for to_char in row
     } | set(arms_by_class)
+
+    # Bounded to classes this response can possibly use. GlobalSubstitutionPrior
+    # grows with the whole population's distinct published classes (any pair
+    # that clears the k-anonymity floor in rebuild_global_priors), not with
+    # anything one /preference-model/ request needs — reading the whole table
+    # on every call scales with the wrong thing. The __in/__in pair is a
+    # superset filter (it can also match a from/to combination NOT in
+    # known_classes), which is fine: the per-class loop below only ever reads
+    # `globals_by_class.get((from_char, to_char))` for a class it is already
+    # iterating from `known_classes`, so an extra fetched row is simply never
+    # looked up.
+    if known_classes:
+        globals_by_class = {
+            (p.from_char, p.to_char): p
+            for p in GlobalSubstitutionPrior.objects.filter(
+                from_char__in={c[0] for c in known_classes},
+                to_char__in={c[1] for c in known_classes},
+            )
+        }
+    else:
+        globals_by_class = {}
 
     for from_char, to_char in sorted(known_classes):
         arm = arms_by_class.get((from_char, to_char))
@@ -463,12 +482,33 @@ def rebuild_global_priors(privacy_guard) -> Dict[str, int]:
     sensitivity of the sum exactly 1.0 rather than the ~50 an un-clipped
     ``alpha`` would imply, so the same epsilon buys far less distortion.
 
+    ``privacy_guard.epsilon`` is **overridden** before any noise is drawn, to
+    the strictest (lowest) ``differential_privacy_epsilon`` among the users
+    who actually contribute an arm this run. This is the one path where a
+    user's own data leaves their account and shapes another user's
+    suggestions, so a caller who requested epsilon=0.1 (strong) must not have
+    their contribution folded in under whatever the caller-supplied guard's
+    default happens to be — nobody's chosen protection level is weakened by
+    someone else's default. Scoped to actual contributors of *this* run
+    (not every enabled+consenting user) so an unrelated consenting user who
+    has never touched the feature cannot make an unrelated class's epsilon
+    stricter than it needs to be.
+
+    Every class that fails to clear ``MIN_CONTRIBUTING_USERS`` in a given run
+    is also **retracted** if a stale row from an earlier run still publishes
+    it — a class can stop clearing the floor because contributors withdrew
+    consent (``allow_centralized_training=False``) or deleted their data, and
+    ``policy_weights`` has no other signal telling it that class is no longer
+    backed by enough people. Leaving the old row in place would mean consent
+    withdrawal never reaches the published artifact.
+
     Args:
-        privacy_guard: A ``PrivacyGuard``; its ``add_laplace_noise`` supplies
-            the noise and its ``operations_count`` tracks the budget.
+        privacy_guard: A ``PrivacyGuard``; its ``delta`` and
+            ``add_laplace_noise`` are used as given, but its ``epsilon`` is
+            overridden as described above before any noise is drawn.
 
     Returns:
-        ``{'classes_written': n, 'classes_skipped': m}``.
+        ``{'classes_written': n, 'classes_skipped': m, 'classes_retracted': r}``.
     """
     from ..models import (
         AdaptivePasswordConfig, GlobalSubstitutionPrior, SubstitutionPolicyArm,
@@ -506,8 +546,25 @@ def rebuild_global_priors(privacy_guard) -> Dict[str, int]:
     for (from_char, to_char, _user_id), arm in latest_by_user_and_class.items():
         per_class.setdefault((from_char, to_char), []).append(arm.posterior_mean)
 
+    # Honour the strictest privacy setting among the users actually
+    # contributing this run, not the caller-supplied guard's own default
+    # (0.5 unless overridden) and not every enabled+consenting user (which
+    # would let someone who has never touched the feature make an unrelated
+    # class's epsilon stricter than it needs to be). PrivacyGuard.epsilon is
+    # a plain instance attribute read at call time by add_laplace_noise, so
+    # mutating it here — before any noise is drawn — is sufficient; nothing
+    # caches the earlier value.
+    contributing_user_ids = {user_id for (_, _, user_id) in latest_by_user_and_class}
+    if contributing_user_ids:
+        strictest_epsilon = AdaptivePasswordConfig.objects.filter(
+            user_id__in=contributing_user_ids,
+        ).aggregate(Min('differential_privacy_epsilon'))['differential_privacy_epsilon__min']
+        if strictest_epsilon is not None:
+            privacy_guard.epsilon = strictest_epsilon
+
     written = 0
     skipped = 0
+    published_classes = set()
     for (from_char, to_char), means in per_class.items():
         n = len(means)
         if n < MIN_CONTRIBUTING_USERS:
@@ -543,9 +600,31 @@ def rebuild_global_priors(privacy_guard) -> Dict[str, int]:
             },
         )
         written += 1
+        published_classes.add((from_char, to_char))
+
+    # Retract every previously-published row this run did not re-clear the
+    # floor for. Without this, a class that stops having enough consenting
+    # contributors (opt-out, GDPR deletion) stays served by policy_weights as
+    # 'global_prior' forever — the one code path where a user's data can
+    # influence someone else's suggestions would never actually forget them.
+    if published_classes:
+        keep = functools.reduce(
+            operator.or_,
+            (Q(from_char=f, to_char=t) for f, t in published_classes),
+        )
+        retracted, _ = GlobalSubstitutionPrior.objects.exclude(keep).delete()
+    else:
+        # Nothing cleared the floor this run at all: every existing row is
+        # stale by the same rule that retracts any single class.
+        retracted, _ = GlobalSubstitutionPrior.objects.all().delete()
 
     logger.info(
-        'Global substitution priors rebuilt: %s written, %s skipped (below k=%s)',
-        written, skipped, MIN_CONTRIBUTING_USERS,
+        'Global substitution priors rebuilt: %s written, %s skipped, %s '
+        'retracted (below k=%s)',
+        written, skipped, retracted, MIN_CONTRIBUTING_USERS,
     )
-    return {'classes_written': written, 'classes_skipped': skipped}
+    return {
+        'classes_written': written,
+        'classes_skipped': skipped,
+        'classes_retracted': retracted,
+    }

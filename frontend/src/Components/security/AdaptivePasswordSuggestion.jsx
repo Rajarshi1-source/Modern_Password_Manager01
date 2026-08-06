@@ -532,10 +532,15 @@ const AdaptivePasswordSuggestion = ({
     // show the numbers rather than asserting it. Absent when a caller supplied
     // a suggestion built before Phase 2 (or by a test fixture) — the panel is
     // simply omitted then, never faked with a placeholder.
+    // Number.isFinite, not typeof: `typeof NaN === 'number'` is true, so a
+    // bare typeof check would let a NaN reading through and render "NaN" in
+    // the panel. The real gate (filterByStrength) cannot produce NaN, but
+    // this component also accepts a caller-supplied suggestion object, which
+    // is the same reason the negative-delta branch below exists.
     const hasStrengthReading =
-        typeof guesses_log10_before === 'number' && typeof guesses_log10_after === 'number';
+        Number.isFinite(guesses_log10_before) && Number.isFinite(guesses_log10_after);
     const strengthDelta =
-        typeof guesses_log10_delta === 'number'
+        Number.isFinite(guesses_log10_delta)
             ? guesses_log10_delta
             : (guesses_log10_after - guesses_log10_before);
 

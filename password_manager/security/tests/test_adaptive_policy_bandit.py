@@ -806,7 +806,7 @@ class WeeklyTaskTests(TestCase):
 class GlobalPriorTests(TestCase):
     """Cross-user aggregation: consent, k-anonymity, DP."""
 
-    def _contributors(self, n, reward, consenting=True, repeats=10):
+    def _contributors(self, n, reward, consenting=True, repeats=10, dp_epsilon=None):
         """Create `n` users who each rewarded o->0 `repeats` times.
 
         `repeats` matters: one credit of 1.0 only moves an arm from Beta(1, 1)
@@ -814,10 +814,21 @@ class GlobalPriorTests(TestCase):
         aggregating those gives a global prior around 0.64. Ten credits is a
         genuinely confident user (mean ~0.98), which is the population these
         assertions are about.
+
+        `dp_epsilon`, when given, sets every contributor's own
+        `differential_privacy_epsilon`. Since `rebuild_global_priors`
+        overrides the guard's epsilon with the strictest contributing user's
+        setting, a test built around `PrivacyGuard(epsilon=100.0)` for
+        "negligible noise" must give its contributors a matching epsilon too,
+        or the override silently substitutes the model default (0.5) and
+        reintroduces real noise into a test that was designed around not
+        having any.
         """
         for i in range(n):
-            user = _make_user(f'contrib-{consenting}-{reward}-{i}',
-                              allow_centralized_training=consenting)
+            kwargs = {'allow_centralized_training': consenting}
+            if dp_epsilon is not None:
+                kwargs['differential_privacy_epsilon'] = dp_epsilon
+            user = _make_user(f'contrib-{consenting}-{reward}-{i}', **kwargs)
             for _ in range(repeats):
                 credit_arms(user, [('o', '0')], reward, fp_key_version=1)
 
@@ -838,7 +849,12 @@ class GlobalPriorTests(TestCase):
         self.assertEqual(GlobalSubstitutionPrior.objects.count(), 0)
 
     def test_enough_consenting_users_publish_a_prior_in_the_right_direction(self):
-        self._contributors(MIN_CONTRIBUTING_USERS + 5, 1.0)
+        # dp_epsilon=100.0 matches the guard below: rebuild_global_priors
+        # overrides the guard's epsilon with the strictest CONTRIBUTOR's
+        # setting, so the contributors need it too or the override falls back
+        # to the model default (0.5) and this stops being a negligible-noise
+        # test of the aggregation math.
+        self._contributors(MIN_CONTRIBUTING_USERS + 5, 1.0, dp_epsilon=100.0)
 
         # Epsilon 100 => negligible Laplace noise, so this asserts the
         # aggregation is correct rather than asserting anything about the noise.
@@ -882,7 +898,7 @@ class GlobalPriorTests(TestCase):
         # like a real contribution while dragging every class toward "no
         # opinion", and would also let a user who never used the feature
         # influence everyone else's cold start.
-        self._contributors(MIN_CONTRIBUTING_USERS + 5, 1.0)
+        self._contributors(MIN_CONTRIBUTING_USERS + 5, 1.0, dp_epsilon=100.0)
         for i in range(20):
             idle = _make_user(f'idle-{i}')
             SubstitutionPolicyArm.objects.create(
@@ -894,3 +910,134 @@ class GlobalPriorTests(TestCase):
         prior = GlobalSubstitutionPrior.objects.get(from_char='o', to_char='0')
         self.assertEqual(prior.contributing_users, MIN_CONTRIBUTING_USERS + 5)
         self.assertGreater(prior.posterior_mean, 0.8)
+
+    def test_withdrawn_consent_retracts_a_previously_published_class(self):
+        # A class that clears the k-anonymity floor in one run and then loses
+        # enough contributors to opt-out must not keep serving the stale row
+        # forever -- this is the one path where a user's data influences
+        # someone ELSE's suggestions, so their withdrawal has to actually
+        # reach the published artifact, not just stop feeding it.
+        # differential_privacy_epsilon=100.0 matches the guard below, for the
+        # same reason as _contributors' dp_epsilon parameter: the override
+        # would otherwise fall back to the model default (0.5) and turn this
+        # into a real-noise test of retraction logic that isn't the point here.
+        #
+        # Start well ABOVE the floor (8, not the bare 5) rather than exactly
+        # at it. `noisy_count < MIN_CONTRIBUTING_USERS` compares a continuous
+        # noised value against an integer floor: sitting exactly AT the floor
+        # makes "still published" a coin flip on the sign of the noise alone,
+        # independent of how small the noise SCALE is (any negative draw,
+        # however tiny, crosses the integer boundary). This was found the
+        # hard way -- an earlier version of this test used exactly
+        # MIN_CONTRIBUTING_USERS and failed intermittently in CI for exactly
+        # this reason, not because of any bug in the code under test.
+        users = [
+            _make_user(f'withdraw-{i}', allow_centralized_training=True,
+                       differential_privacy_epsilon=100.0)
+            for i in range(MIN_CONTRIBUTING_USERS + 3)
+        ]
+        for user in users:
+            for _ in range(10):
+                credit_arms(user, [('o', '0')], 1.0, fp_key_version=1)
+
+        first = rebuild_global_priors(PrivacyGuard(epsilon=100.0))
+        self.assertEqual(first['classes_written'], 1)
+        self.assertTrue(
+            GlobalSubstitutionPrior.objects.filter(from_char='o', to_char='0').exists()
+        )
+
+        # Four of the eight withdraw consent -- down to 4, clearly (not just
+        # barely) below MIN_CONTRIBUTING_USERS=5. The asymmetry is deliberate:
+        # landing 1 below the floor is robust (a large POSITIVE noise draw
+        # would be needed to cross back over, unlike sitting AT the floor).
+        AdaptivePasswordConfig.objects.filter(
+            user__in=[u.pk for u in users[:4]]
+        ).update(allow_centralized_training=False)
+
+        second = rebuild_global_priors(PrivacyGuard(epsilon=100.0))
+
+        self.assertEqual(second['classes_written'], 0)
+        self.assertEqual(second['classes_retracted'], 1)
+        self.assertFalse(
+            GlobalSubstitutionPrior.objects.filter(from_char='o', to_char='0').exists()
+        )
+
+    def test_a_still_qualifying_class_is_not_retracted_by_an_unrelated_run(self):
+        # Guards the fix above against being overly broad: retraction must be
+        # scoped to classes that actually stopped qualifying, not everything
+        # that isn't freshly rewritten by coincidence of dict ordering.
+        self._contributors(MIN_CONTRIBUTING_USERS + 2, 1.0, dp_epsilon=100.0)
+
+        first = rebuild_global_priors(PrivacyGuard(epsilon=100.0))
+        self.assertEqual(first['classes_written'], 1)
+
+        second = rebuild_global_priors(PrivacyGuard(epsilon=100.0))
+
+        self.assertEqual(second['classes_written'], 1)
+        self.assertEqual(second['classes_retracted'], 0)
+        self.assertTrue(
+            GlobalSubstitutionPrior.objects.filter(from_char='o', to_char='0').exists()
+        )
+
+    def test_the_strictest_contributing_users_epsilon_is_honoured(self):
+        # A user who chose a stricter epsilon than the caller-supplied guard's
+        # default did not consent to weaker noise on the one path where their
+        # data leaves their account and shapes someone else's suggestions.
+        #
+        # This test cannot raise its contributors' epsilon to dodge noise the
+        # way the retraction tests do -- a specific LOW epsilon (0.1, a large
+        # Laplace scale of 1/0.1=10) is exactly what's under test. Padding the
+        # population well above the k=5 floor instead, so the noise added to
+        # the COUNT has to be an unrealistically large outlier to push
+        # noisy_count back under the floor and flake the test.
+        strict_user = _make_user('strict-epsilon', differential_privacy_epsilon=0.1)
+        for _ in range(10):
+            credit_arms(strict_user, [('o', '0')], 1.0, fp_key_version=1)
+        for i in range(MIN_CONTRIBUTING_USERS + 9):
+            user = _make_user(f'default-epsilon-{i}')
+            for _ in range(10):
+                credit_arms(user, [('o', '0')], 1.0, fp_key_version=1)
+
+        # PrivacyGuard() defaults to epsilon=0.5; the strict user's 0.1 must
+        # win despite that.
+        rebuild_global_priors(PrivacyGuard())
+
+        prior = GlobalSubstitutionPrior.objects.get(from_char='o', to_char='0')
+        self.assertEqual(prior.dp_epsilon, 0.1)
+
+    def test_a_non_contributing_consenting_users_epsilon_does_not_leak_in(self):
+        # A consenting user who has never touched the feature (zero pulls)
+        # must not make an UNRELATED class's epsilon stricter than it needs
+        # to be -- the scope is "contributed to THIS run", not "consented at
+        # some point". Padded above the bare k=5 floor for the same
+        # noise-margin reason as the test above (epsilon=0.5 here, scale=2 --
+        # milder than 0.1's scale=10, but still real noise on a small count).
+        _make_user('idle-strict-epsilon', differential_privacy_epsilon=0.05)
+        self._contributors(MIN_CONTRIBUTING_USERS + 5, 1.0)
+
+        rebuild_global_priors(PrivacyGuard())
+
+        prior = GlobalSubstitutionPrior.objects.get(from_char='o', to_char='0')
+        # _contributors doesn't set differential_privacy_epsilon, so every
+        # actual contributor is on the model default (0.5).
+        self.assertEqual(prior.dp_epsilon, 0.5)
+
+    def test_nothing_qualifying_retracts_every_existing_row(self):
+        # The degenerate case: a run where NO class clears the floor (e.g. a
+        # transient issue with the consenting-user query) must still retract
+        # everything published by a prior run, by the same rule that retracts
+        # any single class -- privacy-first means failing closed on
+        # publication, not leaving the last-known-good data indefinitely
+        # stale. Recoverable: the next correct run republishes anything that
+        # still genuinely qualifies.
+        self._contributors(MIN_CONTRIBUTING_USERS + 2, 1.0, dp_epsilon=100.0)
+        first = rebuild_global_priors(PrivacyGuard(epsilon=100.0))
+        self.assertEqual(first['classes_written'], 1)
+
+        SubstitutionPolicyArm.objects.all().delete()
+
+        second = rebuild_global_priors(PrivacyGuard(epsilon=100.0))
+
+        self.assertEqual(second['classes_written'], 0)
+        self.assertEqual(second['classes_retracted'], 1)
+        self.assertEqual(GlobalSubstitutionPrior.objects.count(), 0)
