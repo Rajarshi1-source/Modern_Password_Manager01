@@ -1555,13 +1555,121 @@ failing-checks list rather than from a bot comment.**
   "after two renewals without a fix, file a tracking issue" threshold does
   not apply yet. Bumped to `2026-09-28` (PyJWT) and `2026-10-03` (joblib),
   both within the policy's 60-day cap and staggered against the file's other
-  entries.
+  entries. (This round's own "disputed, no fixing release" framing for both
+  IDs turned out to be imprecise once the ACTUAL pip-audit output was read
+  rather than only the advisories' text — see the sixth round below, which
+  removed both entries entirely rather than renewing them again.)
 
 Verified after this round: 89 passed / 7 subtests across
 `test_adaptive_policy_bandit.py` + `test_adaptive_zk_v2.py` (count unchanged
 — this round fixed test *reliability*, not test *count*), re-confirmed clean
 after reverting the mutation-check backup, Django `check` clean. Frontend
 untouched this round, so no frontend re-run was needed.
+
+**Sixth review-fix round (PR #466), a full CodeRabbit re-review on round 5's
+own commit, plus a CI failure that only became visible once round 5 fixed
+the check that was gating it.**
+
+- **Applied, and the actual root cause of the still-failing "Dependency
+  Vulnerability Scan" check: three brand-new `cryptography` CVEs, not the
+  two IDs round 5 renewed.** Round 5's fix worked exactly as intended — the
+  scan's own `pip-audit-report.json` from this round confirms zero vulns for
+  `pyjwt==2.13.0` and `joblib==1.5.3` — but that expiry pre-check had been
+  short-circuiting the job before pip-audit itself ever ran (`sys.exit(3)` on
+  the validation step), so nothing downstream was visible until round 5
+  unblocked it. With the gate passing, pip-audit ran for the first time in
+  this investigation and surfaced three real, unsuppressed findings against
+  `cryptography==48.0.1`: `PYSEC-2026-3552` (Bleichenbacher oracle in
+  `pkcs7_decrypt_der/_pem/_smime`), `PYSEC-2026-3553` (exponential-blowup DoS
+  in x509 chain validation via duplicate self-signed certs), and
+  `PYSEC-2026-3554` (wildcard SAN escapes a name-constrained sub-CA, same
+  `x509.verification` module). Assessed reachability before suppressing
+  rather than reflexively adding entries: grepped the whole codebase for
+  `pkcs7_decrypt` and for any `cryptography.x509`/`x509.verification` import
+  — zero matches for either. Everything this app actually uses the library
+  for (AESGCM/ChaCha20Poly1305 AEAD, Fernet, HKDF, Scrypt, Ed25519/X25519/EC)
+  is untouched by any of the three. Added threat-assessed suppressions for
+  all three rather than upgrading `cryptography` — a core dependency used by
+  most of the app's crypto services and by `pyjwt`/`fido2`/`pyopenssl`
+  transitively, so a version bump is a repo-wide regression risk far outside
+  this PR's "adaptive password feature" scope, and with zero reachable
+  vulnerable code paths there is nothing an upgrade would actually protect
+  here.
+- **Applied, correcting round 5's own imprecise framing rather than renewing
+  it again:** removed the `PYSEC-2025-183` (PyJWT) and `PYSEC-2024-277`
+  (joblib) suppressions entirely instead of keeping them. CodeRabbit's
+  re-review caught what round 5 got right in outcome but wrong in mechanism.
+  For PyJWT, round 5's report read "PyJWT==2.13.0 (our pin) reports zero
+  vulns" from `pip-audit-report.json` and reasoned "no fixing release" —
+  but the actual reason pip-audit reports zero vulns is that OSV's affected
+  range for this advisory tops out at 2.10.1, and our pin (2.13.0) is
+  outside it entirely, not that PyJWT shipped a release that "fixes" a
+  disputed design choice. For joblib, round 5's framing ("still disputed
+  upstream... no fix version exists") was superseded by a fact round 5
+  hadn't checked: OSV shows `PYSEC-2024-277` was formally **withdrawn** on
+  2026-06-09 as a confirmed false positive (`joblib/joblib#1588`), not
+  merely disputed-but-standing. A withdrawn/out-of-range advisory that
+  pip-audit doesn't even report needs no suppression entry at all — keeping
+  one is not wrong, but it's dead weight that reads as "this is still an
+  active, live risk we're accepting," which neither ID is.
+- **Applied: `rebuild_global_priors`'s failure fallback in
+  `adaptive_tasks.py` returned a differently-shaped dict than its success
+  path.** The success path returns `classes_written`/`classes_skipped`/
+  `classes_retracted`; the `except Exception` fallback supplied only the
+  first two plus `prior_rebuild_failed`. Any consumer reading
+  `result['classes_retracted']` unconditionally — exactly the shape every
+  other caller in this codebase already assumes, per the round-4 retraction
+  work — would `KeyError` specifically on the failure path, the one where an
+  operator most needs the dict to be readable. Added the missing key with
+  value `0` and extended the existing failure-path test
+  (`test_a_failing_prior_rebuild_does_not_discard_the_credited_batch`) to
+  assert it.
+- **Applied: `update_rl_model_from_feedback`'s per-row `except Exception`
+  could swallow a Celery soft-time-limit interruption.** Verified this is
+  reachable, not hypothetical, before fixing: `password_manager/celery.py`
+  sets `task_soft_time_limit=300` / `task_time_limit=600` as app-wide
+  defaults, and this task carries no per-task override, so it genuinely runs
+  under a 5-minute soft limit. `SoftTimeLimitExceeded` is a plain `Exception`
+  subclass (confirmed via `celery.exceptions`), so the existing broad handler
+  would catch it, log it as "one bad row," and let the loop continue — past
+  the soft deadline's intended graceful-wind-down point, all the way to the
+  **uncatchable** 10-minute hard limit, which then `SIGKILL`s the worker
+  mid-batch instead. Fixed by re-raising `SoftTimeLimitExceeded` and `Retry`
+  (Celery's own control-flow exceptions) before the generic handler, so
+  worker-level interruptions propagate instead of being misfiled as
+  row-level failures.
+- **Applied: the per-(user, class) aggregation dictionary in
+  `rebuild_global_priors` retained a full `SubstitutionPolicyArm` ORM
+  instance per key, when only two scalar values are ever read back from
+  it.** `arms.iterator(chunk_size=1000)` bounds the DB cursor, but the
+  dictionary — not the iterator — sets this task's peak memory, growing with
+  the whole consenting population regardless of chunk size. Changed the
+  dict's values from model instances to `(last_updated_at, posterior_mean)`
+  tuples; `contributing_user_ids` below reads only the dict's keys, so it is
+  unaffected. Declined the review's alternative "dedupe in SQL with
+  `.distinct(*fields)`" option: PostgreSQL-only, and this project's existing
+  streaming/memory nitpicks in this exact function have been declined twice
+  before (rounds 3 and 4) on "zero real users behind gap D1" grounds — the
+  tuple change gets the actual memory win from the review at effectively
+  zero added complexity, without reopening a query-shape change that was
+  already twice judged disproportionate to current scale.
+- **Declined, all explicitly labeled "Trivial"/"Low value" by the report
+  itself:** `help_text` on `SubstitutionPolicyArm`'s sibling model's
+  `from_char`/`to_char` columns (cosmetic, would generate a no-op
+  `AlterField` migration for zero runtime effect); a partial index on
+  `AdaptationFeedback.policy_reward_applied_at` (same round-3/4 reasoning —
+  the table is empty behind gap D1, nothing to optimize for yet);
+  `@admin.display` decorators over `short_description` assignment (pure
+  style, declined three times now — the surrounding admin module, largely
+  pre-dating this PR, uses `short_description` assignment consistently
+  throughout, and converting only the two new methods would make this PR's
+  code the odd one out against its own file).
+
+Verified after this round: 89 passed / 7 subtests across
+`test_adaptive_policy_bandit.py` + `test_adaptive_zk_v2.py` (unchanged —
+this round's test change only extended an existing assertion), Django
+`check` clean, `makemigrations --check` clean (no model fields changed).
+Frontend untouched this round.
 
 ---
 

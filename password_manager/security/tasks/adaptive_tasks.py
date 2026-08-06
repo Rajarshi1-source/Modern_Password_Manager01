@@ -10,6 +10,7 @@ Async tasks for:
 """
 
 from celery import shared_task
+from celery.exceptions import Retry, SoftTimeLimitExceeded
 from django.contrib.auth.models import User
 from django.utils import timezone
 from django.conf import settings
@@ -225,6 +226,13 @@ def update_rl_model_from_feedback(batch_size: int = 500):
             if components.get('behavioural') is not None:
                 behavioural_used += 1
 
+        except (SoftTimeLimitExceeded, Retry):
+            # Celery worker control flow, not a bad row -- the task runs
+            # under a global task_soft_time_limit (celery.py). Swallowing
+            # this here would let the loop keep going past the soft
+            # deadline until the uncatchable 10-minute hard limit SIGKILLs
+            # the worker mid-batch instead of winding down gracefully.
+            raise
         except Exception as exc:  # noqa: BLE001 - one bad row must not stop the run
             # The row stays unstamped, so the next run retries it. Logged at
             # error level because a persistent failure here silently freezes
@@ -244,7 +252,7 @@ def update_rl_model_from_feedback(batch_size: int = 500):
         # and the whole return value for a run that mostly succeeded.
         logger.error('Global prior rebuild failed: %s', exc, exc_info=True)
         prior_stats = {'classes_written': 0, 'classes_skipped': 0,
-                       'prior_rebuild_failed': True}
+                       'classes_retracted': 0, 'prior_rebuild_failed': True}
 
     logger.info(
         'RL policy updated: %s feedback rows, %s arms, %s with a behavioural term',

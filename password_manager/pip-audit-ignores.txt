@@ -26,20 +26,40 @@
 # requirements.txt has pinned `Twisted>=26.4.0` for this exact advisory since
 # 2026-05-27, so the finding is fixed rather than accepted. Nothing to renew.)
 
-# pyjwt advisory — disputed by the supplier ("key length is chosen by
-# the application"). Our usage in auth_module/services/jwt_service.py
-# uses 256-bit secrets from settings.SECRET_KEY. Renewed 2026-08-06:
-# still disputed upstream, no PyJWT release resolves it (confirmed via
-# jpadilla/pyjwt#1168 and osv.dev/vulnerability/PYSEC-2025-183).
-PYSEC-2025-183 exp:2026-09-28
+# pyjwt PYSEC-2025-183 — REMOVED 2026-08-06, not renewed. Re-checked against
+# this scan's own pip-audit-report.json rather than assumed: PyJWT==2.13.0
+# (our pin) reports zero vulns. OSV lists the affected range as up through
+# 2.10.1; our pin is outside it. Nothing to suppress.
 
-# joblib NumpyArrayWrapper deserialization — applies to caching of
-# trusted content. We do not deserialise joblib pickles from untrusted
-# sources. Renewed 2026-08-06: still disputed upstream on the same
-# trusted-content-only grounds; joblib==1.5.2 (current pin, also
-# latest) remains flagged since no fix version exists for the
-# pickle-based design.
-PYSEC-2024-277 exp:2026-10-03
+# joblib PYSEC-2024-277 — REMOVED 2026-08-06, not renewed. The advisory
+# itself was withdrawn upstream as a confirmed false positive
+# (joblib/joblib#1588: NumpyArrayWrapper is only ever used for caching
+# trusted, self-authored content, never untrusted deserialization) and this
+# scan's own pip-audit-report.json reports zero vulns for our joblib pin.
+# Nothing to suppress.
+
+# cryptography advisories disclosed 2026-08 against our 48.0.1 pin, all
+# three in code paths this app never calls. Verified by grepping the whole
+# codebase rather than assumed: zero references to
+# pkcs7_decrypt_der/_pem/_smime, and zero references to cryptography.x509 or
+# the x509.verification module (PolicyBuilder / build_server_verifier /
+# build_client_verifier) anywhere. Everything this app actually uses the
+# library for — AESGCM/ChaCha20Poly1305 AEAD, Fernet, HKDF, Scrypt,
+# Ed25519/X25519/EC — is untouched by any of the three.
+#
+# PYSEC-2026-3552 (GHSA-g6cj-pr64-35w5, CVE-2026-69247): Bleichenbacher
+# oracle in pkcs7_decrypt_der/_pem/_smime. Not called anywhere.
+PYSEC-2026-3552 exp:2026-10-05
+
+# PYSEC-2026-3553 (GHSA-jwv3-5hgf-82ww, CVE-2026-69249): exponential-blowup
+# DoS in x509 chain validation via duplicate self-signed certs. The whole
+# x509.verification module is unused.
+PYSEC-2026-3553 exp:2026-10-10
+
+# PYSEC-2026-3554 (GHSA-m2h6-j472-rp4c, CVE-2026-69248): wildcard SAN escapes
+# a name-constrained sub-CA, same x509.verification module as PYSEC-2026-3553
+# above. Same non-reachability.
+PYSEC-2026-3554 exp:2026-10-10
 
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the

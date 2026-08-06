@@ -535,16 +535,19 @@ def rebuild_global_priors(privacy_guard) -> Dict[str, int]:
     # break the sensitivity-1.0 bound the Laplace noise below is calibrated
     # for, which assumes exactly one bounded contribution per user. Keep only
     # the most recently updated arm per (user, class) before aggregating.
-    latest_by_user_and_class = {}
+    # Only (timestamp, posterior_mean) is kept per key, not the model
+    # instance itself -- across the whole consenting population this
+    # dictionary, not the iterator's chunk_size, sets the task's peak memory.
+    latest_by_user_and_class: Dict[Tuple[str, str, int], Tuple[object, float]] = {}
     for arm in arms.iterator(chunk_size=1000):
         key = (arm.from_char, arm.to_char, arm.user_id)
         existing = latest_by_user_and_class.get(key)
-        if existing is None or arm.last_updated_at > existing.last_updated_at:
-            latest_by_user_and_class[key] = arm
+        if existing is None or arm.last_updated_at > existing[0]:
+            latest_by_user_and_class[key] = (arm.last_updated_at, arm.posterior_mean)
 
     per_class: Dict[Tuple[str, str], List[float]] = {}
-    for (from_char, to_char, _user_id), arm in latest_by_user_and_class.items():
-        per_class.setdefault((from_char, to_char), []).append(arm.posterior_mean)
+    for (from_char, to_char, _user_id), (_ts, mean) in latest_by_user_and_class.items():
+        per_class.setdefault((from_char, to_char), []).append(mean)
 
     # Honour the strictest privacy setting among the users actually
     # contributing this run, not the caller-supplied guard's own default
