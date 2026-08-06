@@ -402,8 +402,8 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
       ? lookupNested(exploration, fromKey, candidate.suggested_char)
       : undefined;
     const hasUsablePosterior = posterior
-      && typeof posterior.alpha === 'number' && posterior.alpha > 0
-      && typeof posterior.beta === 'number' && posterior.beta > 0;
+      && Number.isFinite(posterior.alpha) && posterior.alpha > 0
+      && Number.isFinite(posterior.beta) && posterior.beta > 0;
     const score = hasUsablePosterior
       ? sampleBeta(posterior.alpha, posterior.beta, rng)
       : confidence;
