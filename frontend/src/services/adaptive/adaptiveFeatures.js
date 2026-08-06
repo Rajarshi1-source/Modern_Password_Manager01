@@ -289,8 +289,15 @@ function gammaSample(shape, rng) {
  * @returns {number} A sample in [0, 1].
  */
 export function sampleBeta(alpha, beta, rng = defaultRng) {
-  const a = typeof alpha === 'number' && alpha > 0 ? alpha : 1;
-  const b = typeof beta === 'number' && beta > 0 ? beta : 1;
+  // Number.isFinite, not typeof: `typeof Infinity === 'number'` is true, so a
+  // bare typeof check lets Infinity/-Infinity through. gammaSample(Infinity)
+  // returns Infinity, and Infinity / (Infinity + finite) or
+  // finite / (finite + Infinity) is NaN or 0 depending on which side is
+  // infinite — neither is a valid probability, and both would silently
+  // corrupt a caller that isn't rankSuggestions' own already-gated call site
+  // (this function is exported and part of the public contract on its own).
+  const a = Number.isFinite(alpha) && alpha > 0 ? alpha : 1;
+  const b = Number.isFinite(beta) && beta > 0 ? beta : 1;
   const x = gammaSample(a, rng);
   const y = gammaSample(b, rng);
   const total = x + y;

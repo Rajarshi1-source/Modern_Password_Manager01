@@ -704,7 +704,14 @@ describe('sampleBeta', () => {
 
   it('handles degenerate parameters by falling back to the flat prior', () => {
     const rng = seededRng(13);
-    for (const [a, b] of [[0, 1], [-1, 5], [NaN, 2], [2, undefined]]) {
+    // Infinity/-Infinity are deliberately included, not just NaN: this is
+    // the exact gap a bare `typeof x === 'number'` check misses (it is true
+    // for Infinity), and sampleBeta is exported and callable directly, not
+    // just reached through rankSuggestions' own already-gated call site.
+    for (const [a, b] of [
+      [0, 1], [-1, 5], [NaN, 2], [2, undefined], [Infinity, 2], [2, Infinity],
+      [-Infinity, 2], [Infinity, Infinity],
+    ]) {
       const x = sampleBeta(a, b, rng);
       expect(Number.isFinite(x)).toBe(true);
       expect(x).toBeGreaterThanOrEqual(0);
