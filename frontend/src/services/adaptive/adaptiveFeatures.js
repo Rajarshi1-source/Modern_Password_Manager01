@@ -712,6 +712,13 @@ export async function filterByStrength(password, subs, { estimator } = {}) {
 
     // Rule 2 first: a substitution that created a leet dictionary match is
     // rejected on its own merits, not merely because the guess count moved.
+    // Reusing `sub.position` (an index into the ORIGINAL password) against
+    // spans measured in the ADAPTED one is only valid because every
+    // substitution replaces exactly one character with exactly one other
+    // (LEET_MAP's values are all single characters; applySubstitutions does
+    // a 1:1 swap) -- positions never shift between original and adapted. A
+    // multi-character substitution would break this and need the adapted
+    // position computed explicitly instead.
     const spans = leetMatchSpans(adapted.sequence);
     const deLeetCulprits = surviving.filter((sub) =>
       spans.some((span) => sub.position >= span.i && sub.position <= span.j),
