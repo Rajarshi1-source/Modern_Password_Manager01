@@ -28,6 +28,7 @@ import {
     maskPreview,
     filterByStrength,
     detectSubstitutionClasses,
+    REJECT_DE_LEET,
 } from '../../services/adaptive/adaptiveFeatures';
 
 // =============================================================================
@@ -500,11 +501,20 @@ export const adaptivePasswordService = {
 
         const substitutions = gate.subs;
         if (substitutions.length === 0) {
+            // REJECT_DE_LEET fires even when guesses_log10 went UP (that's the
+            // whole point of the de-leet rule -- zxcvbn credits leetspeak, so
+            // non-regression alone would wave the attack through). Claiming a
+            // strength regression when every rejection was de-leet-only would
+            // contradict guesses_log10_delta, which can be zero or positive here.
+            const onlyDeLeet = rejected_reasons.length > 0
+                && rejected_reasons.every((r) => r === REJECT_DE_LEET);
             return {
                 has_suggestion: false,
-                reason:
-                    'Every candidate adaptation would have made this password easier '
-                    + 'to guess, so none was suggested.',
+                reason: onlyDeLeet
+                    ? 'Every candidate adaptation matched a known leetspeak pattern '
+                      + 'attackers already try, so none was suggested.'
+                    : 'Every candidate adaptation would have made this password easier '
+                      + 'to guess, so none was suggested.',
                 guesses_log10_before,
                 guesses_log10_after,
                 guesses_log10_delta,

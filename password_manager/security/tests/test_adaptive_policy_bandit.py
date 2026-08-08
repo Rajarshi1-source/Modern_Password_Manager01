@@ -50,6 +50,7 @@ from security.services.adaptive_policy_service import (
     MIN_CONTRIBUTING_USERS,
     REWARD_WEIGHTS,
     ROLLBACK_REWARD,
+    acceptance_reward,
     behavioural_reward,
     composite_reward,
     credit_adaptation,
@@ -57,6 +58,7 @@ from security.services.adaptive_policy_service import (
     explicit_feedback_reward,
     policy_weights,
     rebuild_global_priors,
+    rollback_reward,
     substitution_classes,
 )
 from security.tasks.adaptive_tasks import update_rl_model_from_feedback
@@ -218,44 +220,57 @@ class RewardShapingTests(TestCase):
             self.assertNotIn(forbidden, sql)
 
     def test_composite_renormalizes_when_components_are_missing(self):
-        # With no feedback and no behavioural data, only acceptance (0.2) and
-        # rollback (0.2) contribute. An active adaptation therefore scores 1.0
-        # -- NOT 0.4 -- because the missing components are dropped rather than
-        # implicitly scored zero.
+        # No feedback and no behavioural data: nothing to score this
+        # adaptation on. acceptance/rollback deliberately do NOT fill this gap
+        # (see composite_reward's own docstring) -- they are credited once,
+        # immediately, at apply/rollback time, not re-derived here. Degrades
+        # to the documented "no opinion" fallback rather than a status guess.
         adaptation = _make_adaptation(self.user, [('o', '0')], status='active')
         reward, components = composite_reward(adaptation, feedback=None)
 
         self.assertIsNone(components['rating'])
         self.assertIsNone(components['behavioural'])
-        self.assertAlmostEqual(reward, 1.0)
+        self.assertAlmostEqual(reward, 0.5)
 
-    def test_composite_uses_all_four_components_when_available(self):
+    def test_composite_uses_both_components_when_available(self):
         adaptation = _make_adaptation(self.user, [('o', '0')], status='active')
+        # Neutral behavioural (0.5) and a non-neutral rating (5 -> 1.0): equal
+        # inputs would make any weighted average land on the same number
+        # regardless of whether the normalization is actually correct, so
+        # this fixture deliberately uses two DIFFERENT values to prove the
+        # weights and the division by total_weight both matter.
         _sessions(self.user, FP_ORIGINAL, 5, error_count=2, total_time_ms=5000)
         _sessions(self.user, FP_ADAPTED, 5, error_count=2, total_time_ms=5000)
         feedback = AdaptationFeedback.objects.create(
-            adaptation=adaptation, user=self.user, rating=3,
+            adaptation=adaptation, user=self.user, rating=5,
         )
 
         reward, components = composite_reward(adaptation, feedback)
 
-        self.assertEqual(components['rating'], 0.5)
-        self.assertEqual(components['acceptance'], 1.0)
-        self.assertEqual(components['rollback'], 1.0)
+        self.assertEqual(components['rating'], 1.0)
         self.assertAlmostEqual(components['behavioural'], 0.5)
+        self.assertNotIn('acceptance', components)
+        self.assertNotIn('rollback', components)
+        total_weight = REWARD_WEIGHTS['rating'] + REWARD_WEIGHTS['behavioural']
         expected = (
-            REWARD_WEIGHTS['rating'] * 0.5
-            + REWARD_WEIGHTS['acceptance'] * 1.0
-            + REWARD_WEIGHTS['rollback'] * 1.0
+            REWARD_WEIGHTS['rating'] * 1.0
             + REWARD_WEIGHTS['behavioural'] * 0.5
-        )
+        ) / total_weight
         self.assertAlmostEqual(reward, expected)
 
-    def test_rollback_is_a_hard_zero_on_its_own_component(self):
-        adaptation = _make_adaptation(self.user, [('o', '0')], status='rolled_back')
-        _, components = composite_reward(adaptation, feedback=None)
-        self.assertEqual(components['rollback'], 0.0)
-        self.assertEqual(components['acceptance'], 0.0)
+    def test_acceptance_and_rollback_reward_functions_read_current_status(self):
+        # Standalone reward-shaping primitives, no longer wired into
+        # composite_reward (see its docstring for why: they are already
+        # credited once, immediately, by credit_adaptation_best_effort at
+        # apply/rollback time -- folding them in again here would score the
+        # same status fact twice on the same arm).
+        active = _make_adaptation(self.user, [('o', '0')], status='active')
+        self.assertEqual(acceptance_reward(active), 1.0)
+        self.assertEqual(rollback_reward(active), 1.0)
+
+        rolled_back = _make_adaptation(self.user, [('o', '0')], status='rolled_back')
+        self.assertEqual(acceptance_reward(rolled_back), 0.0)
+        self.assertEqual(rollback_reward(rolled_back), 0.0)
 
 
 class ArmUpdateTests(TestCase):
@@ -418,6 +433,7 @@ class LoopClosureTests(TestCase):
             substitution_classes=[{'from': 'o', 'to': '0'}],
             expected_fp_key_version=1,
         )
+        self.assertNotIn('error', first)
         second = self.service.apply_adaptation_v2(
             original_fingerprint=FP_ADAPTED,
             adapted_fingerprint='ThirdFingerprint12345678',
@@ -436,13 +452,14 @@ class LoopClosureTests(TestCase):
         self.assertLess(arm.posterior_mean, after_accepts)
         self.assertEqual(arm.pulls, 3)  # two applies + one rollback
         self.assertEqual(ROLLBACK_REWARD, 0.0)
-        self.assertIsNotNone(first)
 
     def test_a_conflicting_arm_credit_never_blocks_the_password_change(self):
         # The credit is an opportunistic learning signal. Failing the user's
         # adaptation because of bandit bookkeeping would be the wrong trade —
-        # and the signal is not lost, because the weekly task recomputes a full
-        # composite reward from the adaptation's own status.
+        # even though the signal genuinely IS lost on this rare path (see
+        # credit_adaptation_best_effort's own docstring: composite_reward
+        # deliberately does not re-derive acceptance/rollback from status, so
+        # there is no weekly-task fallback that recovers a dropped credit).
         from django.db import IntegrityError
 
         with patch(

@@ -416,8 +416,12 @@ const FooterInfo = styled.div`
 const StrengthPanel = styled.div`
   padding: 16px;
   border-radius: 12px;
-  background: rgba(16, 185, 129, 0.08);
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: ${props => (props.$regressed
+    ? 'rgba(239, 68, 68, 0.08)'
+    : 'rgba(16, 185, 129, 0.08)')};
+  border: 1px solid ${props => (props.$regressed
+    ? 'rgba(239, 68, 68, 0.25)'
+    : 'rgba(16, 185, 129, 0.25)')};
   margin-bottom: 24px;
 `;
 
@@ -607,7 +611,10 @@ const AdaptivePasswordSuggestion = ({
 
                     {/* Guess-resistance (Phase 2 strength gate) */}
                     {hasStrengthReading && (
-                        <StrengthPanel data-testid="adaptive-strength-panel">
+                        <StrengthPanel
+                            data-testid="adaptive-strength-panel"
+                            $regressed={strengthDelta < 0}
+                        >
                             <StrengthHeading>
                                 <Shield size={16} />
                                 Guess-resistance (zxcvbn log&#8321;&#8320;)

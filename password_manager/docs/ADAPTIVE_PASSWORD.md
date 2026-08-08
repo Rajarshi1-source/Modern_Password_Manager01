@@ -139,7 +139,7 @@ After 10+ typing sessions, the system will suggest adaptations:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/adaptive/preference-model/` | GET | Download the learned preference model — bandit posterior means, plus `exploration` (raw `{alpha, beta}`) and `weight_sources`; the client generates, Thompson-samples and strength-gates suggestions locally |
+| `/adaptive/preference-model/` | GET | Download the learned preference model — resolved substitution weights, plus `exploration` (raw `{alpha, beta}`) and `weight_sources`; the client generates, Thompson-samples and strength-gates suggestions locally |
 | `/adaptive/suggest/` | POST | **Deprecated (HTTP 410)** — server-side suggestion removed; use the preference-model pull instead |
 | `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + `fp_key_version` + substitution classes + masked previews; raw passwords rejected) |
 | `/adaptive/rollback/` | POST | Rollback to previous |

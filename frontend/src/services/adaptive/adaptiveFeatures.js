@@ -611,11 +611,15 @@ export function resetDefaultEstimator() {
 function leetMatchSpans(sequence) {
   if (!Array.isArray(sequence)) return [];
   return sequence
-    .filter((match) => match && match.pattern === 'dictionary' && match.l33t === true)
-    .map((match) => ({
-      i: Number.isInteger(match.i) ? match.i : 0,
-      j: Number.isInteger(match.j) ? match.j : 0,
-    }));
+    // A match missing a valid i/j is dropped, not coerced to {i: 0, j: 0}:
+    // that fake span would wrongly reject any substitution sitting at
+    // position 0 for a match the estimator never actually reported there --
+    // the same "don't default malformed data into a plausible-looking value"
+    // principle normalizeEstimate below applies to the estimator reading
+    // itself.
+    .filter((match) => match && match.pattern === 'dictionary' && match.l33t === true
+      && Number.isInteger(match.i) && Number.isInteger(match.j))
+    .map((match) => ({ i: match.i, j: match.j }));
 }
 
 /**
