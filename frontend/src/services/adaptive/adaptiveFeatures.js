@@ -415,6 +415,18 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
       ? sampleBeta(posterior.alpha, posterior.beta, rng)
       : confidence;
 
+    // minConfidence is a floor on the *reported* confidence, not on the
+    // exploration draw: a user-facing "don't show me anything below 0.5"
+    // setting must not be satisfiable by a lucky sample. Applied here, before
+    // the per-position winner is picked, not after: filtering post-reduction
+    // would let a low-confidence candidate win its position on a lucky
+    // Thompson draw and then drop that position entirely, even when a
+    // sibling candidate at the same position had confidence >= minConfidence
+    // all along.
+    if (confidence < minConfidence) {
+      continue;
+    }
+
     const scored = {
       position: candidate.position,
       original_char: candidate.original_char,
@@ -430,10 +442,6 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
   }
 
   return Array.from(bestByPosition.values())
-    // minConfidence is a floor on the *reported* confidence, not on the
-    // exploration draw: a user-facing "don't show me anything below 0.5"
-    // setting must not be satisfiable by a lucky sample.
-    .filter((s) => s.confidence >= minConfidence)
     .sort((a, b) => b.score - a.score || a.position - b.position)
     // `score` is internal ranking state — it is a random draw when exploring,
     // so exposing it would put a number in the suggestion object that changes

@@ -61,6 +61,41 @@ PYSEC-2026-3553 exp:2026-10-10
 # above. Same non-reachability.
 PYSEC-2026-3554 exp:2026-10-10
 
+# Django advisories disclosed 2026-08 against our 5.1.15 pin. All six fixes
+# require Django 5.2.15+/6.0.6+ or 5.2.16+/6.0.7+ -- a MINOR version upgrade,
+# not a patch bump, and far too large a change to make inside this PR's own
+# scope (adaptive password feature, not a framework upgrade). Verified all
+# six are unreachable rather than assumed, by grepping the whole codebase:
+#
+# CVE-2026-48587 (GHSA-923m-gv2p-w5qp), CVE-2026-8404 (GHSA-8cjm-8mp7-r2xf),
+# CVE-2026-48588 (GHSA-3h9f-r86x-qvjx): all three are cache-poisoning/leak
+# bugs in Vary-header and Cache-Control handling inside
+# UpdateCacheMiddleware/cache_page/vary_on_headers. Zero usage anywhere:
+# no django.middleware.cache in MIDDLEWARE, no CACHE_MIDDLEWARE_* settings,
+# no @cache_page/@vary_on_headers decorator, no direct patch_vary_headers/
+# has_vary_header call.
+CVE-2026-48587 exp:2026-10-08
+CVE-2026-8404 exp:2026-10-08
+CVE-2026-48588 exp:2026-10-08
+
+# CVE-2026-6873 (GHSA-h7pc-vwp9-298g): non-injective salt derivation in
+# HttpRequest.get_signed_cookie. Zero calls to get_signed_cookie anywhere in
+# the codebase.
+CVE-2026-6873 exp:2026-10-12
+
+# CVE-2026-53877 (GHSA-crhf-3pfg-w68w): buffer over-read in
+# django.contrib.gis.gdal.GDALRaster. `django.contrib.gis` is commented OUT
+# of INSTALLED_APPS (settings/base.py) and never enabled; the only
+# django.contrib.gis import anywhere in the codebase is
+# django.contrib.gis.geoip2.GeoIP2 (IP geolocation, a different submodule
+# entirely) -- zero references to GDALRaster or gdal at all.
+CVE-2026-53877 exp:2026-10-12
+
+# CVE-2026-53878 (GHSA-8qcx-xf44-272x): DomainNameValidator doesn't strip
+# newlines, enabling header injection if a validated value reaches an HTTP
+# response header. Zero usage of DomainNameValidator anywhere.
+CVE-2026-53878 exp:2026-10-15
+
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the
 # model as already-validated tensors via ml_dark_web/ml_services.py,
