@@ -437,6 +437,25 @@ describe('filterByStrength — rule 2, de-leet', () => {
     expect(result.subs).toEqual([sub]);
     expect(result.rejected).toEqual([]);
   });
+
+  it('ignores a leet match missing i/j instead of treating it as a span at position 0', async () => {
+    // A match object without a valid i/j used to default to {i: 0, j: 0},
+    // which would wrongly reject ANY substitution at position 0 for a span
+    // the estimator never actually reported.
+    const sub = { position: 0, original_char: 'o', suggested_char: '0', confidence: 0.9 };
+    const estimator = scriptedEstimator({
+      horse: { guessesLog10: 4, sequence: [] },
+      '0orse': {
+        guessesLog10: 4.5,
+        sequence: [{ pattern: 'dictionary', l33t: true }], // no i/j at all
+      },
+    }, 'strict');
+
+    const result = await filterByStrength('horse', [sub], { estimator });
+
+    expect(result.subs).toEqual([sub]);
+    expect(result.rejected).toEqual([]);
+  });
 });
 
 describe('filterByStrength — fail-closed contract', () => {

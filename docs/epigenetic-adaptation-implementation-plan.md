@@ -2108,6 +2108,97 @@ Verified after this round: 35 passed across `adaptive_password.test.tsx` +
 re-confirmed on round 10's own job log (not carried forward). No backend
 code changed this round.
 
+**Twelfth review-fix round (PR #466), full CodeRabbit re-review of round
+11's own commit.**
+
+- **Applied, the most significant finding across all twelve rounds so far:
+  acceptance and rollback rewards were being credited to the same arm
+  TWICE.** `apply_adaptation_v2`/`rollback_adaptation` already credit
+  `ACCEPTANCE_REWARD`/`ROLLBACK_REWARD` immediately via
+  `credit_adaptation_best_effort` (Phase 3's "close the near/far end of the
+  loop" work). `composite_reward` — the weekly task's aggregate, run
+  whenever a user submits explicit feedback for that SAME adaptation — also
+  independently derived `acceptance_reward(adaptation)`/
+  `rollback_reward(adaptation)` from `adaptation.status` and folded them
+  into the weighted blend, credited to the SAME arm again. Traced this to
+  its root: `credit_adaptation_best_effort`'s own docstring said "the signal
+  is not lost either way: the weekly task recomputes a full composite
+  reward from the adaptation's own status" — written believing this was a
+  FAILURE-RECOVERY fallback (only matters if the immediate credit fails).
+  It is not: the weekly composite runs this unconditionally, on every
+  feedback row, regardless of whether the immediate credit already
+  succeeded — so the common case (immediate credit succeeds, user later
+  rates it) double-counts the identical "still active" / "not rolled back"
+  fact on every single processed feedback row, not just as an edge-case
+  fallback. Fixed by removing `acceptance`/`rollback` from
+  `composite_reward`'s components and `REWARD_WEIGHTS` entirely — the
+  weekly composite is now `rating` + `behavioural` only, the two signals
+  that only become available over time and are NOT already captured by the
+  immediate credit. Kept `acceptance_reward`/`rollback_reward` as
+  standalone, still-tested reward-shaping primitives (no longer wired into
+  the composite) rather than deleting them, since the concept ("current
+  lifecycle status as a reward") may still be useful to some future,
+  different caller. Corrected the stale docstring/comments this
+  misunderstanding had propagated into (the function's own docstring, and
+  a test comment repeating the same claim) — the immediate credit's failure
+  path is now honestly documented as a genuinely lost signal on a rare
+  path, an accepted trade against guaranteed double-counting on every
+  common-path success. Three tests rewritten to test the corrected
+  contract (one of my own new tests had a wrong expected-value formula on
+  first run — forgot `composite_reward`'s own normalization division,
+  caught by running it, not by reading it — matching this PR's own
+  documented 1-in-8 ratio). Mutation-checked: reintroducing the double
+  count broke immediately and loudly (`KeyError: 'acceptance'`, since
+  `REWARD_WEIGHTS` no longer has that key) rather than silently — the fix
+  cannot be casually un-done by a future edit without an immediate test
+  failure pointing at exactly why.
+- **Applied: the "no suggestion" reason text always blamed a strength
+  regression, even when every rejection was `REJECT_DE_LEET` with
+  `guesses_log10_delta >= 0`.** This is the exact asymmetry the project's
+  own headline Phase 2 finding is about (`p@ssw0rd` scores HIGHER than
+  `password`, rejected anyway) — the UI text just never accounted for it.
+  Derived the message from `rejected_reasons` instead of a single
+  hardcoded string.
+- **Applied: `leetMatchSpans` coerced a match missing `i`/`j` into
+  `{i: 0, j: 0}`, which could wrongly reject a substitution at position 0
+  for a span the estimator never reported.** Directly violates a principle
+  already stated in the very next function's own comment in this file
+  ("a gate that silently treats a malformed estimator reading as 'fine'
+  would be the same fail-open class of bug this gate exists to prevent").
+  Fixed to filter out the malformed match instead of defaulting it; added
+  a regression test since the function isn't directly exported/testable
+  otherwise.
+- **Applied: `StrengthPanel` always rendered success (green) styling** even
+  when `strengthDelta < 0` — a state the real gate never produces via
+  `suggestAdaptation` but the component explicitly documents accepting from
+  a caller-supplied suggestion object too. Passed the regression flag
+  through so the panel's framing agrees with its own text and delta pill.
+  Zero existing tests touch this styling; verified before applying.
+- **Applied, doc-only:** reworded `ADAPTIVE_PASSWORD.md`'s
+  `/preference-model/` row from "bandit posterior means" to "resolved
+  substitution weights" — accurate as of round 10, since
+  `substitution_weights` can also resolve via `user_profile`/`baseline`,
+  neither a real posterior mean.
+- **Fixed the exact vacuous assertion CodeRabbit flagged**
+  (`assertIsNotNone(first)` on a call that always returns a dict, so it can
+  never fail) — replaced with `assertNotIn('error', first)`, matching the
+  pattern already used for every other call in the same test.
+
+Declined: `AddIndexConcurrently` for migration 0026, still the same
+empty table (repeat, re-checked not assumed).
+
+Verified after this round: 91 passed / 7 subtests (backend, unchanged
+count — this round's backend edits corrected existing coverage rather than
+adding net-new), 105 passed across `adaptiveFeatures.test.js` +
+`adaptive_password.test.tsx` + `adaptiveZkLeak.test.jsx` (frontend, +1 new
+test), Backend Tests re-confirmed on round 11's own fresh job log — the
+identical unrelated flake for the SEVENTH consecutive round. ESLint clean
+on every touched frontend file (pre-existing, unrelated warnings on two of
+them, confirmed via `git diff` not introduced this round). Both the
+composite-reward fix and the acceptance/rollback-function decoupling
+mutation-checked; one of the two new backend tests caught a real error in
+its own first-draft expected-value formula, corrected by running it.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)

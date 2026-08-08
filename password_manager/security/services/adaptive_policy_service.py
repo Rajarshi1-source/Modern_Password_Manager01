@@ -38,15 +38,20 @@ logger = logging.getLogger(__name__)
 # Reward shaping
 # =============================================================================
 
-#: Component weights for the composite reward (plan §3.2). ``acceptance`` and
-#: ``rollback`` are separate components rather than one status term because
-#: they answer different questions: "did the user take it up" and "did the user
-#: actively undo it". A rolled-back adaptation is worse evidence than one that
-#: was merely never accepted.
+#: Component weights for the composite reward (plan §3.2). No ``acceptance``/
+#: ``rollback`` entries: those lifecycle facts are already credited the moment
+#: they happen, via ``credit_adaptation_best_effort`` in ``apply_adaptation_v2``
+#: / ``rollback_adaptation`` (``ACCEPTANCE_REWARD`` / ``ROLLBACK_REWARD``
+#: below). Folding ``acceptance_reward(adaptation)`` /
+#: ``rollback_reward(adaptation)`` into this composite too would credit the
+#: SAME status fact to the SAME arm a second time whenever a feedback row is
+#: later processed for that adaptation -- not independent evidence, just the
+#: original signal re-read and re-applied. The two functions stay as
+#: standalone reward-shaping primitives (still directly tested) in case a
+#: future caller needs "current lifecycle status as a reward" for something
+#: that is not this composite.
 REWARD_WEIGHTS = {
     'rating': 0.4,
-    'acceptance': 0.2,
-    'rollback': 0.2,
     'behavioural': 0.2,
 }
 
@@ -234,6 +239,15 @@ def behavioural_reward(adaptation) -> Optional[float]:
 def composite_reward(adaptation, feedback=None) -> Tuple[float, Dict[str, Optional[float]]]:
     """Weighted reward for an adaptation, plus the per-component breakdown.
 
+    Deliberately only ``rating`` and ``behavioural``: acceptance and rollback
+    are NOT included here even though ``acceptance_reward``/``rollback_reward``
+    exist, because those lifecycle facts are already credited once, the moment
+    they happen, by ``credit_adaptation_best_effort`` at apply/rollback time.
+    Re-deriving them from ``adaptation.status`` here and folding them into this
+    composite would credit the identical status fact to the same arm a second
+    time on every feedback row processed for that adaptation -- not new
+    evidence, the same one read twice. See ``REWARD_WEIGHTS``.
+
     Any component with no signal (no feedback row, or too few sessions for the
     behavioural term) is dropped and the surviving weights are renormalized, so
     a partially-observed adaptation is not implicitly scored 0 on what was
@@ -247,17 +261,16 @@ def composite_reward(adaptation, feedback=None) -> Tuple[float, Dict[str, Option
     """
     raw: Dict[str, Optional[float]] = {
         'rating': explicit_feedback_reward(feedback) if feedback is not None else None,
-        'acceptance': acceptance_reward(adaptation),
-        'rollback': rollback_reward(adaptation),
         'behavioural': behavioural_reward(adaptation),
     }
 
     contributing = {k: v for k, v in raw.items() if v is not None}
     total_weight = sum(REWARD_WEIGHTS[k] for k in contributing)
     if total_weight <= 0:
-        # Cannot happen with the current component set (acceptance and rollback
-        # are always available), but a future component change should degrade to
-        # "no opinion" rather than divide by zero.
+        # Both components absent (no feedback row, and too few sessions for
+        # behavioural): genuinely no signal to score this adaptation on, not a
+        # bug -- the caller (currently always with a real feedback row) simply
+        # has no rating text and no behavioural data yet.
         return 0.5, raw
 
     reward = sum(REWARD_WEIGHTS[k] * v for k, v in contributing.items()) / total_weight
@@ -349,8 +362,14 @@ def credit_adaptation_best_effort(adaptation, reward: float) -> int:
     real contention. Both are ``django.db.DatabaseError`` (confirmed via
     ``issubclass`` — they are siblings, neither a subclass of the other, so a
     catch scoped to only one misses the other). Blocking a password change on
-    either is the wrong trade. The signal is not lost either way: the weekly
-    task recomputes a full composite reward from the adaptation's own status.
+    either is the wrong trade, even though the signal genuinely IS lost on
+    this rare path: ``composite_reward`` deliberately does not re-derive
+    acceptance/rollback from ``adaptation.status`` (that would double-credit
+    the common case, where this call succeeds, on every later feedback row —
+    see ``composite_reward``'s own docstring), so there is no fallback that
+    recovers a credit dropped here. Accepted trade: guaranteed double-counting
+    on every successful call is worse than an occasional lost credit on a rare
+    lock-contention failure.
 
     The credit still runs in a **savepoint of the caller's transaction**, so it
     cannot leave a credited arm behind for an adaptation that never committed —
