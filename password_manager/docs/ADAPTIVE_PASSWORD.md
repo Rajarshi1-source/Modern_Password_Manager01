@@ -232,13 +232,20 @@ given weight. `/adaptive/preference-model/` also returns:
 | `exploration` | Raw `{alpha, beta}` for classes resolved from `user_policy` or `global_prior` — the two sources backed by a real Beta posterior. `user_profile`- and `baseline`-resolved classes carry no entry and rank by `substitution_weights` confidence instead. **The client draws the Thompson sample**, so exploration stays on-device and this endpoint stays deterministic and cacheable. |
 | `weight_sources` | Which of the four levels answered each class (`user_policy` / `user_profile` / `global_prior` / `baseline`). |
 
-Rewards come from four signals, all zero-knowledge: the explicit rating,
-whether the adaptation is active, whether it was rolled back, and — the one
-that makes this more than a satisfaction survey — the change in typing error
-count and entry time measured by joining the two **opaque fingerprints**,
-era-scoped and requiring at least 3 sessions on each side. Applying an
-adaptation credits an immediate partial acceptance reward; rolling one back
-credits a hard zero.
+Rewards arrive on two paths, both zero-knowledge.
+
+The **composite reward**, computed when feedback is processed, combines two
+signals: the explicit rating, and — the one that makes this more than a
+satisfaction survey — the change in typing error count and entry time
+measured by joining the two **opaque fingerprints**, era-scoped and requiring
+at least 3 sessions on each side. A signal with no data is dropped and the
+remaining weight is renormalized.
+
+The **lifecycle credit** is applied immediately instead: applying an
+adaptation credits a partial acceptance reward, and rolling one back credits a
+hard zero. Status is deliberately not re-read into the composite reward,
+because that would credit the same fact to the same arm twice — see
+`composite_reward`'s docstring in `adaptive_policy_service.py`.
 
 > **Still not scheduled.** `update_rl_model_from_feedback` now persists the
 > policy, but no Celery beat entry exists for it yet (`celery.py`'s

@@ -303,11 +303,24 @@ def credit_arms(
     Distinct (user, fp_key_version) arms are capped at ``MAX_ARMS_PER_USER_ERA``
     — see that constant's docstring. Existing arms keep being credited past
     the ceiling; only creating a brand-new one stops.
+
+    The ceiling check itself needs a lock: reading ``existing_pairs`` and
+    deciding there is headroom is a check-then-act, and two concurrent calls
+    for the same user that both read before either commits can each see
+    headroom for a *different* new class and together exceed the ceiling.
+    Locking a stable one-row-per-user ``AdaptivePasswordConfig`` row first —
+    the same "mint/allocate under a lock" pattern used elsewhere in this
+    feature (see ``get_adaptive_config``'s salt self-heal) — serializes those
+    calls around the check. A missing config row is not an error here: the
+    lock is a no-op and the check runs exactly as it did before this was
+    added, since nothing below actually reads the row's contents.
     """
-    from ..models import SubstitutionPolicyArm
+    from ..models import AdaptivePasswordConfig, SubstitutionPolicyArm
 
     touched = 0
     with transaction.atomic():
+        AdaptivePasswordConfig.objects.select_for_update().filter(user=user).first()
+
         existing_pairs = set(
             SubstitutionPolicyArm.objects.filter(
                 user=user, fp_key_version=fp_key_version,

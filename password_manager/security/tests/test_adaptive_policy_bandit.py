@@ -20,9 +20,10 @@ See docs/epigenetic-adaptation-implementation-plan.md §5.
 from datetime import timedelta
 from unittest.mock import patch
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.contrib.auth.models import User
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase
@@ -399,6 +400,95 @@ class ArmUpdateTests(TestCase):
                 user=self.user, fp_key_version=1,
             ).count(),
             MAX_ARMS_PER_USER_ERA,
+        )
+
+
+class ArmCeilingConcurrencyTests(TransactionTestCase):
+    """The per-era arm ceiling must hold under real concurrent credits.
+
+    ``credit_arms`` reads ``existing_pairs`` and only then decides whether
+    there is headroom under ``MAX_ARMS_PER_USER_ERA`` (CodeRabbit, PR #466
+    round 13). That check-then-act is only wrong when two transactions
+    actually interleave their reads before either commits -- a sequential
+    test cannot observe it, so this drives the interleaving for real against
+    Postgres rather than asserting on the single-threaded happy path.
+    """
+
+    def setUp(self):
+        self.user = _make_user('ceiling-race-user')
+        # One slot of headroom: MAX_ARMS_PER_USER_ERA - 1 distinct arms
+        # already exist, so at most one more distinct class can legitimately
+        # be created this era.
+        SubstitutionPolicyArm.objects.bulk_create([
+            SubstitutionPolicyArm(
+                user=self.user, from_char=chr(0x2600 + i), to_char='X',
+                fp_key_version=1,
+            )
+            for i in range(MAX_ARMS_PER_USER_ERA - 1)
+        ])
+
+    def test_concurrent_credits_never_exceed_the_per_era_ceiling(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+
+        from django.db import connection, connections
+
+        if connection.vendor == 'sqlite':
+            # Same reasoning as EntangledDevicePairConcurrentInsertTests
+            # (test_quantum_entanglement.py): SQLite serializes writers at the
+            # file level rather than row-locking, so concurrent threads hit
+            # "database is locked" regardless of whether the ceiling check
+            # itself is correct. Real interleaving needs real row locks; this
+            # runs against Postgres in CI.
+            self.skipTest(
+                "select_for_update() row-locking needs real MVCC. SQLite "
+                "serializes writers at the file level instead, so concurrent "
+                "threads fail with 'database is locked' independent of the "
+                "fix under test. Runs against Postgres in CI."
+            )
+
+        n_threads = 8
+        start_gate = threading.Event()
+        errors = []
+        errors_lock = threading.Lock()
+
+        def worker(i):
+            # Two classes brand-new to this era, unique across threads (own
+            # code point range from the seeded 0x2600.. block above): a race
+            # lets several threads each believe they hold the one open slot
+            # and create distinct rows past the ceiling.
+            classes = [
+                (chr(0x2700 + 2 * i), 'Y'),
+                (chr(0x2700 + 2 * i + 1), 'Y'),
+            ]
+            try:
+                # PR #277 review (CodeRabbit) pattern: check wait()'s return
+                # value, or a thread that misses the gate goes sequential and
+                # silently stops racing instead of failing loudly.
+                if not start_gate.wait(timeout=5):
+                    raise RuntimeError('start gate never opened')
+                credit_arms(self.user, classes, 1.0, fp_key_version=1)
+            except Exception as exc:  # noqa: BLE001 - surfaced on the main thread below
+                with errors_lock:
+                    errors.append(exc)
+            finally:
+                # Per-thread connections leak unless closed explicitly.
+                connections.close_all()
+
+        with ThreadPoolExecutor(max_workers=n_threads) as executor:
+            futures = [executor.submit(worker, i) for i in range(n_threads)]
+            start_gate.set()
+            for f in futures:
+                f.result(timeout=10)
+
+        self.assertEqual(errors, [], f"worker threads failed: {errors}")
+        self.assertEqual(
+            SubstitutionPolicyArm.objects.filter(
+                user=self.user, fp_key_version=1,
+            ).count(),
+            MAX_ARMS_PER_USER_ERA,
+            "concurrent credits created more distinct arms than the "
+            "per-era ceiling allows",
         )
 
 
@@ -806,6 +896,25 @@ class WeeklyTaskTests(TestCase):
 
         result = update_rl_model_from_feedback()
         self.assertEqual(result['processed'], 1)
+
+    def test_soft_time_limit_during_prior_rebuild_propagates_not_swallowed(self):
+        # CodeRabbit, PR #466 round 13 (duplicate of an earlier per-row-loop
+        # finding): rebuild_global_priors scans the whole consenting
+        # population in one transaction, so it is the single call most likely
+        # to cross the soft deadline. Catching SoftTimeLimitExceeded here
+        # under the broad `except Exception` would report
+        # prior_rebuild_failed and return as if the run completed, letting
+        # the worker keep going past the soft limit until the hard limit
+        # SIGKILLs it mid-batch instead of winding down gracefully -- the
+        # same reasoning already applied to the per-row loop above.
+        self._feedback(rating=5)
+
+        with patch(
+            'security.services.adaptive_policy_service.rebuild_global_priors',
+            side_effect=SoftTimeLimitExceeded(),
+        ):
+            with self.assertRaises(SoftTimeLimitExceeded):
+                update_rl_model_from_feedback()
 
     def test_a_failing_row_does_not_stop_the_run_or_get_stamped(self):
         bad = self._feedback(rating=5)

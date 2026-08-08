@@ -637,6 +637,18 @@ describe('filterByStrength — against the real zxcvbn estimator', () => {
     expect(examined).toBeGreaterThan(150);
     expect(survived).toBeGreaterThan(0);
   }, 60000);
+
+  it('recognizes an English dictionary word absent from language-common', async () => {
+    // language-common ships breached passwords + diceware + keyboard graphs,
+    // not an English word list -- an ordinary word with no leetspeak would
+    // otherwise read as near-random and score far stronger than it should.
+    // Measured directly against the real estimator: 'xylophone' scores
+    // guessesLog10 ~7.955 with language-common alone vs ~4.392 once
+    // @zxcvbn-ts/language-en is merged in (see loadDefaultEstimator).
+    const estimator = await loadDefaultEstimator();
+
+    expect(estimator('xylophone').guessesLog10).toBeLessThan(5);
+  }, 30000);
 });
 
 // =============================================================================
