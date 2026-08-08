@@ -45,6 +45,7 @@ from security.services.adaptive_password_service import (
 from security.services.adaptive_policy_service import (
     ACCEPTANCE_REWARD,
     GLOBAL_PRIOR_STRENGTH,
+    MAX_ARMS_PER_USER_ERA,
     MIN_BEHAVIOURAL_SESSIONS,
     MIN_CONTRIBUTING_USERS,
     REWARD_WEIGHTS,
@@ -332,6 +333,58 @@ class ArmUpdateTests(TestCase):
         self.assertEqual({a.fp_key_version for a in arms}, {1, 2})
         # The duplicated class in one call is one pull, not two.
         self.assertEqual(arms.get(fp_key_version=1).pulls, 1)
+
+    def test_new_arms_stop_being_created_once_the_per_era_ceiling_is_reached(self):
+        # from/to are single Unicode characters, not restricted to a small
+        # leet alphabet -- an authenticated user could otherwise accumulate
+        # an unbounded number of arms one MAX_SUBSTITUTION_CLASSES-sized
+        # request at a time. Fill the era to the ceiling with distinct
+        # single-char classes (chr(0x2600 + i) stays well clear of every
+        # other test's ASCII fixtures), then try to add one more.
+        SubstitutionPolicyArm.objects.bulk_create([
+            SubstitutionPolicyArm(
+                user=self.user, from_char=chr(0x2600 + i), to_char='X',
+                fp_key_version=1,
+            )
+            for i in range(MAX_ARMS_PER_USER_ERA)
+        ])
+
+        touched = credit_arms(self.user, [('z', 'Z')], 1.0, fp_key_version=1)
+
+        self.assertEqual(touched, 0)
+        self.assertEqual(
+            SubstitutionPolicyArm.objects.filter(
+                user=self.user, fp_key_version=1,
+            ).count(),
+            MAX_ARMS_PER_USER_ERA,
+        )
+
+    def test_existing_arms_keep_being_credited_past_the_ceiling(self):
+        # The ceiling stops NEW arms, not credit to ones that already exist --
+        # an era already at the ceiling must not become permanently frozen.
+        SubstitutionPolicyArm.objects.bulk_create([
+            SubstitutionPolicyArm(
+                user=self.user, from_char=chr(0x2600 + i), to_char='X',
+                fp_key_version=1,
+            )
+            for i in range(MAX_ARMS_PER_USER_ERA)
+        ])
+        existing_pair = (chr(0x2600), 'X')
+
+        touched = credit_arms(self.user, [existing_pair], 1.0, fp_key_version=1)
+
+        self.assertEqual(touched, 1)
+        arm = SubstitutionPolicyArm.objects.get(
+            user=self.user, from_char=existing_pair[0], to_char=existing_pair[1],
+            fp_key_version=1,
+        )
+        self.assertEqual(arm.pulls, 1)
+        self.assertEqual(
+            SubstitutionPolicyArm.objects.filter(
+                user=self.user, fp_key_version=1,
+            ).count(),
+            MAX_ARMS_PER_USER_ERA,
+        )
 
 
 class LoopClosureTests(TestCase):

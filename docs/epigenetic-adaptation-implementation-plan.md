@@ -1857,6 +1857,73 @@ Verified after this round: 69 passed in `adaptiveFeatures.test.js`
 unchanged count — this round's backend change was a transaction boundary,
 not new coverage), Django `check` clean.
 
+**Ninth review-fix round (PR #466), full CodeRabbit re-review of round 8's
+own commit.**
+
+- **Applied, a genuine unbounded-growth gap: nothing capped how many
+  `SubstitutionPolicyArm` rows one user could accumulate across many
+  requests over time.** `adaptive_serializers.MAX_SUBSTITUTION_CLASSES`
+  (from round 1) bounds how many NEW classes one `/apply/` request may
+  introduce (32), but `from`/`to` are single Unicode characters — not
+  restricted to a small leet alphabet — so the reachable space per request
+  is not naturally small, and nothing stopped an authenticated user from
+  repeating requests with new distinct pairs indefinitely. Confirmed this
+  is live-reachable, not gap-D1-gated: `/apply/` requires only
+  `IsAuthenticated` + `@require_adaptive_enabled` (self-service opt-in, no
+  UI needed to call the API directly) and carries no throttle class.
+  Confirmed the read-side cost too: `policy_weights` loads
+  `SubstitutionPolicyArm.objects.filter(user=user, fp_key_version=...)` in
+  full, unfiltered, on every `/preference-model/` call. Added
+  `MAX_ARMS_PER_USER_ERA = 200` and a check in `credit_arms`: a NEW class is
+  skipped once an era is at the ceiling, but an already-existing arm keeps
+  being credited normally — the era doesn't freeze once full. Two new
+  tests, one for each half of that behavior, the ceiling-stops-creation one
+  mutation-checked (disabling the check made it fail exactly as expected:
+  `1 != 0`).
+- **Investigated, declined: a claim that `SchemaVersionMixin` could reject
+  an older deployed client's payload.** Checked `git log`/`git diff
+  main...HEAD` before touching anything: `SchemaVersionMixin` and
+  `ZK_SCHEMA_VERSION` predate this PR entirely (from PR #318's ZK v2 schema
+  work), and this PR's diff touches zero lines of that mechanism — it only
+  added two NEW fields to the v2 serializer (`success`,
+  `substitution_classes_used`), both already `required=False`. The finding
+  conflated "this PR added optional fields, correctly" with "a pre-existing,
+  deliberately strict version gate is a compatibility risk" — two unrelated
+  claims. The review's own investigation script runs (visible in its
+  comment) never landed on a concrete mechanism, only a hedged "verify X";
+  nothing to verify turned up a bug this PR introduced or could fix without
+  redesigning a schema-versioning contract several PRs old.
+- **Confirmed, not re-fixed: Backend Tests is the identical unrelated flake
+  for the FIFTH consecutive round** (1676 passed, 203 errors, all 89
+  adaptive tests passing — re-verified from the actual job log, not
+  assumed from the last four rounds' results).
+
+Declined:
+
+- A composite `(policy_reward_applied_at, created_at)` index — a SIXTH
+  appearance (rounds 3, 4, 6, 7, 8, 9) of the same still-empty-table
+  nitpick.
+- Splitting `skipped` into a separate `failed` counter — a THIRD appearance;
+  `update_rl_model_from_feedback` still has no `beat_schedule` entry
+  (checked again, not assumed), so there is still no operator consuming
+  this counter to split it for.
+- `@admin.display` over `short_description` — a FIFTH decline, same
+  reasoning as rounds 4, 6, 7, and 8.
+- An axios timeout on `suggestAdaptation`'s `/preference-model/` GET.
+  Checked every axios call site in `TypingPatternCapture.jsx` (13 total,
+  12 pre-existing and unrelated to this PR): none of them set a timeout —
+  it is a file-wide, pre-existing pattern, not something introduced here.
+  Adding a timeout to only the one call this PR happens to touch would
+  single out this PR's own code as the odd one out against its own
+  surrounding file, the same reasoning that has declined `@admin.display`
+  four times running.
+
+Verified after this round: 91 passed / 7 subtests across
+`test_adaptive_policy_bandit.py` + `test_adaptive_zk_v2.py` (+2 new tests),
+Django `check` clean, `makemigrations --check` clean (no model fields
+changed — the new ceiling is enforced in Python, not the schema). Frontend
+untouched this round.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
