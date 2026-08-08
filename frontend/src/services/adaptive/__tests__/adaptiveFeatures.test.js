@@ -289,13 +289,27 @@ describe('end-to-end pipeline (candidate → rank → apply → mask)', () => {
  * test states exactly the strength landscape it is testing rather than
  * depending on zxcvbn's real numbers. Unlisted passwords fall back to
  * `fallback`, which keeps each table down to the cases that matter.
+ *
+ * `fallback: 'strict'` opts into throwing on an unlisted password instead of
+ * returning a strong-and-clean fallback reading. Use it for a table meant to
+ * enumerate every adapted form the implementation should query: a table that
+ * intends to be exhaustive but silently isn't (an off-by-one position, a
+ * missed adapted-string variant) would otherwise fall through to the
+ * fallback and pass for the wrong reason — the exact hazard the comment on
+ * the de-leet span test below already warns about by hand.
  */
 function scriptedEstimator(table, fallback = { guessesLog10: 10, sequence: [] }) {
-  return vi.fn((password) =>
+  return vi.fn((password) => {
     // Keys are this test's own literals, guarded by Object.hasOwn.
-    // eslint-disable-next-line security/detect-object-injection
-    (Object.hasOwn(table, password) ? table[password] : fallback),
-  );
+    if (Object.hasOwn(table, password)) {
+      // eslint-disable-next-line security/detect-object-injection
+      return table[password];
+    }
+    if (fallback === 'strict') {
+      throw new Error(`scriptedEstimator: unlisted password ${JSON.stringify(password)}`);
+    }
+    return fallback;
+  });
 }
 
 /** A zxcvbn-shaped leet dictionary match spanning [i, j] inclusive. */
@@ -397,7 +411,7 @@ describe('filterByStrength — rule 2, de-leet', () => {
       'h0rse-a8c': { guessesLog10: 6.5, sequence: [leetMatch(0, 4)] },
       // After dropping the culprit, no leet match remains.
       'horse-a8c': { guessesLog10: 6.4, sequence: [] },
-    });
+    }, 'strict');
 
     const result = await filterByStrength('horse-abc', [inside, outside], { estimator });
 
@@ -870,6 +884,31 @@ describe('rankSuggestions — Thompson sampling', () => {
         explore: true, rng: seededRng(seed), minConfidence: 0.5,
       });
       expect(ranked).toEqual([]);
+    }
+  });
+
+  it('does not let a losing-confidence sibling drop a qualifying one from the same position', () => {
+    // 'a' -> '@' and 'a' -> '4' compete for the SAME position. '@' has
+    // confidence 0.9 (qualifies for minConfidence: 0.5); '4' has confidence
+    // 0.1 (does not) but a strong posterior (mean ~0.95) that wins the
+    // Thompson draw almost every time against '@'s weak one (mean ~0.05).
+    // Filtering minConfidence AFTER picking the per-position winner would
+    // let '4' win the position on its lucky draw, then get dropped by the
+    // confidence floor -- taking '@' down with it even though '@' alone
+    // already satisfied the floor. '@' must survive regardless of which way
+    // any individual draw goes.
+    const model = {
+      substitution_weights: { a: { '@': 0.9, 4: 0.1 } },
+      exploration: {
+        a: { '@': { alpha: 2, beta: 40 }, 4: { alpha: 40, beta: 2 } },
+      },
+    };
+    for (let seed = 1; seed <= 30; seed += 1) {
+      const ranked = rankSuggestions(generateCandidates('a'), model, {
+        explore: true, rng: seededRng(seed), minConfidence: 0.5,
+      });
+      expect(ranked).toHaveLength(1);
+      expect(ranked[0].suggested_char).toBe('@');
     }
   });
 

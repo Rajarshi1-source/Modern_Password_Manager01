@@ -568,58 +568,69 @@ def rebuild_global_priors(privacy_guard) -> Dict[str, int]:
     written = 0
     skipped = 0
     published_classes = set()
-    for (from_char, to_char), means in per_class.items():
-        n = len(means)
-        if n < MIN_CONTRIBUTING_USERS:
-            skipped += 1
-            continue
+    # The whole publish-and-retract cycle commits as one unit. Without this,
+    # a process death partway through (OOM, SIGKILL, worker eviction) leaves
+    # some classes freshly written and others untouched, AND skips the
+    # retraction below entirely (it only runs after the loop completes) --
+    # exactly the half-updated, never-retracted state this function's own
+    # docstring says the retraction step exists to prevent. A rollback here
+    # is cheap to retry: the next scheduled run recomputes from the same
+    # underlying arms, so failing closed to the pre-run state is strictly
+    # safer than publishing a partial one.
+    with transaction.atomic():
+        for (from_char, to_char), means in per_class.items():
+            n = len(means)
+            if n < MIN_CONTRIBUTING_USERS:
+                skipped += 1
+                continue
 
-        # Sensitivity 1.0: one user can move the sum by at most 1.0 (their mean
-        # is in [0, 1]) and the count by exactly 1.
-        noisy_sum = privacy_guard.add_laplace_noise(sum(means), sensitivity=1.0)
-        noisy_count = privacy_guard.add_laplace_noise(float(n), sensitivity=1.0)
-        if noisy_count < MIN_CONTRIBUTING_USERS:
-            skipped += 1
-            continue
+            # Sensitivity 1.0: one user can move the sum by at most 1.0 (their
+            # mean is in [0, 1]) and the count by exactly 1.
+            noisy_sum = privacy_guard.add_laplace_noise(sum(means), sensitivity=1.0)
+            noisy_count = privacy_guard.add_laplace_noise(float(n), sensitivity=1.0)
+            if noisy_count < MIN_CONTRIBUTING_USERS:
+                skipped += 1
+                continue
 
-        mean = _clamp01(noisy_sum / noisy_count)
-        GlobalSubstitutionPrior.objects.update_or_create(
-            from_char=from_char,
-            to_char=to_char,
-            defaults={
-                'alpha': PRIOR_ALPHA + GLOBAL_PRIOR_STRENGTH * mean,
-                'beta': PRIOR_BETA + GLOBAL_PRIOR_STRENGTH * (1.0 - mean),
-                # The true count, not the noised one: this column is admin
-                # metadata about how much data backs the row, and publishing a
-                # noised count alongside a noised mean derived from it would
-                # spend privacy budget twice for no benefit. It is never
-                # exported to any client.
-                'contributing_users': n,
-                'dp_epsilon': privacy_guard.epsilon,
-                # last_updated_at is NOT set here: the field is auto_now=True,
-                # so Django overwrites whatever is passed at save() time
-                # regardless — an explicit value here was dead, misleading
-                # code, not a real timestamp override.
-            },
-        )
-        written += 1
-        published_classes.add((from_char, to_char))
+            mean = _clamp01(noisy_sum / noisy_count)
+            GlobalSubstitutionPrior.objects.update_or_create(
+                from_char=from_char,
+                to_char=to_char,
+                defaults={
+                    'alpha': PRIOR_ALPHA + GLOBAL_PRIOR_STRENGTH * mean,
+                    'beta': PRIOR_BETA + GLOBAL_PRIOR_STRENGTH * (1.0 - mean),
+                    # The true count, not the noised one: this column is admin
+                    # metadata about how much data backs the row, and
+                    # publishing a noised count alongside a noised mean
+                    # derived from it would spend privacy budget twice for no
+                    # benefit. It is never exported to any client.
+                    'contributing_users': n,
+                    'dp_epsilon': privacy_guard.epsilon,
+                    # last_updated_at is NOT set here: the field is
+                    # auto_now=True, so Django overwrites whatever is passed
+                    # at save() time regardless — an explicit value here was
+                    # dead, misleading code, not a real timestamp override.
+                },
+            )
+            written += 1
+            published_classes.add((from_char, to_char))
 
-    # Retract every previously-published row this run did not re-clear the
-    # floor for. Without this, a class that stops having enough consenting
-    # contributors (opt-out, GDPR deletion) stays served by policy_weights as
-    # 'global_prior' forever — the one code path where a user's data can
-    # influence someone else's suggestions would never actually forget them.
-    if published_classes:
-        keep = functools.reduce(
-            operator.or_,
-            (Q(from_char=f, to_char=t) for f, t in published_classes),
-        )
-        retracted, _ = GlobalSubstitutionPrior.objects.exclude(keep).delete()
-    else:
-        # Nothing cleared the floor this run at all: every existing row is
-        # stale by the same rule that retracts any single class.
-        retracted, _ = GlobalSubstitutionPrior.objects.all().delete()
+        # Retract every previously-published row this run did not re-clear
+        # the floor for. Without this, a class that stops having enough
+        # consenting contributors (opt-out, GDPR deletion) stays served by
+        # policy_weights as 'global_prior' forever — the one code path where
+        # a user's data can influence someone else's suggestions would never
+        # actually forget them.
+        if published_classes:
+            keep = functools.reduce(
+                operator.or_,
+                (Q(from_char=f, to_char=t) for f, t in published_classes),
+            )
+            retracted, _ = GlobalSubstitutionPrior.objects.exclude(keep).delete()
+        else:
+            # Nothing cleared the floor this run at all: every existing row
+            # is stale by the same rule that retracts any single class.
+            retracted, _ = GlobalSubstitutionPrior.objects.all().delete()
 
     logger.info(
         'Global substitution priors rebuilt: %s written, %s skipped, %s '

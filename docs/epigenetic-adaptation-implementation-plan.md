@@ -1758,6 +1758,105 @@ Verified after this round: 25 passed in `adaptive_password.test.tsx`
 unrelated via job log (no local backend re-run needed — no backend code
 changed this round).
 
+**Eighth review-fix round (PR #466), full CodeRabbit re-review of round 7's
+own commit.**
+
+- **Applied, a new Django-CVE wave against the pinned framework itself, same
+  shape as round 6's cryptography wave.** Six new CVEs against
+  `django==5.1.15` (our pin): `CVE-2026-48587`, `CVE-2026-8404`,
+  `CVE-2026-48588` (Vary-header/Cache-Control cache-poisoning bugs in
+  `UpdateCacheMiddleware`/`cache_page`/`vary_on_headers`), `CVE-2026-6873`
+  (`get_signed_cookie` non-injective salt derivation), `CVE-2026-53877`
+  (`django.contrib.gis.gdal.GDALRaster` buffer over-read), `CVE-2026-53878`
+  (`DomainNameValidator` newline injection). All six fixes require Django
+  5.2.15+/6.0.6+ or 5.2.16+/6.0.7+ — a MINOR version upgrade of the
+  framework the entire app runs on, far outside this PR's own scope.
+  Verified all six unreachable rather than assumed: zero
+  `django.middleware.cache`/`cache_page`/`vary_on_headers`/
+  `patch_vary_headers` usage anywhere; zero `get_signed_cookie` calls; zero
+  `DomainNameValidator` usage; and for the GIS CVE specifically,
+  `django.contrib.gis` is commented OUT of `INSTALLED_APPS` entirely, with
+  the only `django.contrib.gis` import anywhere in the codebase being the
+  unrelated `geoip2.GeoIP2` submodule, never `gdal.GDALRaster`. Added six
+  threat-assessed suppressions rather than treating "Django itself has CVEs"
+  as license to attempt a framework upgrade inside an unrelated feature PR.
+- **Applied: `rankSuggestions` applied its `minConfidence` floor to the
+  per-position WINNER after Thompson sampling had already picked it, not to
+  each candidate before the pick.** A low-confidence sibling could win its
+  position on a lucky exploration draw and then get filtered out by the
+  confidence floor, dropping the whole position even though a
+  higher-confidence sibling at the same position had satisfied the floor
+  all along. In deterministic mode (`explore: false`, the default) this is
+  provably a no-op — `score === confidence` there, so the position's winner
+  IS its highest-confidence candidate, and pre- vs post-filtering are
+  equivalent — the bug only exists on the `explore: true` path. Fixed by
+  moving the filter before the per-position reduction. Added the exact
+  regression case CodeRabbit specified (`a: { '@': 0.9, 4: 0.1 }`, `'4'`'s
+  posterior tuned to win the draw almost every time) across 30 seeds, and
+  mutation-checked by reverting to the old post-reduction filter: the new
+  test failed immediately (`expected [] to have a length of 1`), confirming
+  it catches the real bug.
+- **Applied: `rebuild_global_priors`'s publish loop and its retraction step
+  were not one transaction.** Each `update_or_create` auto-committed
+  individually, and the retraction `delete()` ran as its own statement
+  after the loop. A process death mid-loop (OOM, SIGKILL, worker eviction)
+  would leave some classes freshly published and others untouched, AND skip
+  the retraction entirely (it only runs after the loop completes) — the
+  exact half-updated, never-retracted state the function's own retraction
+  comment already exists to prevent. Wrapped the publish loop and retraction
+  in one `transaction.atomic()` block: the whole run now commits or rolls
+  back together, and a rollback is cheap to retry (the next scheduled run
+  recomputes from the same underlying arms). Verified the caller
+  (`update_rl_model_from_feedback`) does not already wrap this call in its
+  own atomic block before nesting — it doesn't; each feedback row's credit
+  already commits independently, per that function's own docstring, so
+  nesting here does not change any existing commit boundary.
+- **Applied: `scriptedEstimator`'s silent fallback for an unlisted password
+  could make a table-exhaustive test pass for the wrong reason** — the exact
+  hazard a NEIGHBORING test's own comment already warns about by hand (an
+  off-by-one position "silently sends the scripted estimator down its
+  fallback branch and the test passes for the wrong reason"). Added an
+  opt-in `'strict'` fallback mode that throws on an unlisted password
+  instead of returning a strong-and-clean reading, and applied it to that
+  exact test (`leaves a substitution outside the leet match span alone`)
+  after tracing `filterByStrength`'s actual query sequence to confirm all
+  three table entries are the only forms it ever queries for this specific
+  test — `'strict'` is provably safe there, not just probably.
+- **Confirmed, not re-fixed: Backend Tests is the identical unrelated flake
+  for the FOURTH consecutive round** (1676 passed, 203 errors, all 89
+  adaptive tests passing, same `_pre_setup_ran_eagerly` cascade). An
+  in-repo `grep` for the "ast-grep rule model-help-text" CodeRabbit cited as
+  the reason to add `help_text` found no such rule or config file anywhere
+  in this repository — the claim doesn't survive verification, so it
+  carries no more weight than the same nitpick's prior, already-declined
+  appearances.
+
+Declined:
+
+- `help_text` on `GlobalSubstitutionPrior.from_char`/`to_char` — a second
+  appearance of the round-6 nitpick, same reasoning (cosmetic, a no-op
+  `AlterField` migration for zero runtime effect), plus this round's
+  specific "ast-grep rule" citation did not check out (see above).
+- The `AdaptationFeedback.policy_reward_applied_at` index, a FIFTH time
+  (rounds 3, 4, 6, 7, 8) in yet another variant (composite this time), and
+  the historical-backfill question a THIRD time (rounds 3 and 4 already
+  reasoned through this: crediting the full backlog once is the intended
+  behaviour for a policy that never existed before Phase 3). Both still
+  against the same table, still empty behind gap D1.
+- Splitting the task's `skipped` counter into `already_claimed`/failed — a
+  SECOND appearance of a nitpick declined all the way back before round 4
+  (same reasoning: `update_rl_model_from_feedback` still has no
+  `beat_schedule` entry — confirmed still true, not assumed — so there is
+  still no operator consuming this counter to split it for).
+- `@admin.display` over `short_description` — a fourth decline, same
+  reasoning as rounds 4, 6, and 7.
+
+Verified after this round: 69 passed in `adaptiveFeatures.test.js`
+(frontend, +1 new test, mutation-checked), 89 passed / 7 subtests across
+`test_adaptive_policy_bandit.py` + `test_adaptive_zk_v2.py` (backend,
+unchanged count — this round's backend change was a transaction boundary,
+not new coverage), Django `check` clean.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
