@@ -229,7 +229,7 @@ given weight. `/adaptive/preference-model/` also returns:
 
 | Field | Meaning |
 |-------|---------|
-| `exploration` | Raw `{alpha, beta}` per class. **The client draws the Thompson sample**, so exploration stays on-device and this endpoint stays deterministic and cacheable. |
+| `exploration` | Raw `{alpha, beta}` for classes resolved from `user_policy` or `global_prior` — the two sources backed by a real Beta posterior. `user_profile`- and `baseline`-resolved classes carry no entry and rank by `substitution_weights` confidence instead. **The client draws the Thompson sample**, so exploration stays on-device and this endpoint stays deterministic and cacheable. |
 | `weight_sources` | Which of the four levels answered each class (`user_policy` / `user_profile` / `global_prior` / `baseline`). |
 
 Rewards come from four signals, all zero-knowledge: the explicit rating,

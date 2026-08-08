@@ -2029,6 +2029,85 @@ round's "confirmed unrelated" claim rests on — the next round should
 re-verify from an actual job log for round 10's own commit, not cite this
 sentence.
 
+**Eleventh review-fix round (PR #466), full CodeRabbit re-review of round
+10's own commit.**
+
+- **Closed round 10's own open loop first:** fetched the actual job log for
+  round 10's specific commit (a fresh run ID, not round 9's cached one).
+  Identical pattern for the SIXTH consecutive round: 1678 passed (+2,
+  matching round 9's two new tests), 203 errors (unchanged count), all 91
+  adaptive tests passing (53 + 38). Backend Tests remains confirmed
+  unrelated, now on direct evidence for this round too, not carried
+  forward.
+- **Applied: `suggestAdaptation`'s preference-model fetch was the one
+  `await` in the function with no failure handling, inconsistent with the
+  function's own established pattern two lines below it.** The
+  `filterByStrength` call immediately after it already wraps in
+  `try`/`catch` and returns a structured `{has_suggestion: false, ...}`
+  result on failure — `axios.get('/preference-model/')` did not, so a
+  network error or 5xx there propagated as an unhandled rejection instead
+  of the structured result every other failure path in this function
+  returns. Distinguished this from round 9's axios-timeout decline before
+  fixing: that one was about WHICH client/timeout the file's 13 call sites
+  should use (file-wide, deferred to its own PR); this one is about
+  missing error HANDLING in a single function, matching an established
+  LOCAL pattern rather than reopening the file-wide question. Applied only
+  the try/catch half of the review's suggested diff, not the `{ timeout:
+  10000 }` it bundled in — adding a timeout to just this one call would be
+  exactly the round-9-declined pattern (one call singled out against 12
+  siblings sharing the file's client). New test added and mutation-checked
+  (removing the try/catch made the test fail with the raw `Error: Network
+  error` propagating, confirming it catches the real regression).
+- **Applied: pinned `explore: false` in the three `suggestAdaptation` calls
+  in `adaptiveZkLeak.test.jsx`, the same fix round 7 already made to the
+  sibling test file for the identical reason.** Verified before applying:
+  the shared `PREFERENCE_MODEL` fixture in this file carries no
+  `exploration` table today (confirmed by reading it directly), so this is
+  zero behavioral change now and closes the same future
+  seed-dependency trap round 7 closed elsewhere.
+- **Applied, doc-only:** reworded `ADAPTIVE_PASSWORD.md`'s `exploration`
+  field description to state it is sparse (only `user_policy`/
+  `global_prior` classes get an entry), matching round 10's actual fix —
+  the doc previously said "per class," which round 10's own change made
+  inaccurate.
+- **Declined, after re-verifying rather than citing round 6's prior
+  conclusion:** "add matching workflow threat assessments" for the new
+  pip-audit suppressions, citing a `SUPPRESS_WARNINGS_GUIDE.md` file as the
+  requirement's source. Read that file directly rather than trusting the
+  citation: it is an unrelated guide to noisy DEV-ENVIRONMENT log warnings
+  (deprecation notices, missing optional native libraries) with nothing to
+  do with security-vulnerability suppressions. Re-checked the actual
+  authoritative policy fresh (`.github/workflows/security-multi-scanner.yml`
+  lines 143-146): "Each entry has a threat assessment in the manifest's
+  comment block" — the manifest (`pip-audit-ignores.txt`) already IS the
+  threat-assessment layer, which is exactly what every suppression added
+  in rounds 6, 8, and 9 already carries. Nothing to add.
+- **Investigated, declined for now: `model_version` does not reflect
+  Phase-3 policy-arm or global-prior changes**, only `UserTypingProfile.
+  total_sessions`. Confirmed real (arms update via `apply`/`rollback`/the
+  weekly task without any new session) but currently UNREACHABLE as a bug:
+  grepped both sides — the client only ever displays `model_version` in a
+  reason string, never uses it to skip a refetch; the server sets no
+  `ETag`, `Cache-Control`, or conditional-GET handling on
+  `/preference-model/` at all. Declined implementing the review's own
+  suggested fix (fold arm `last_updated_at`/`pulls` into the version) as
+  written, because it is itself incomplete: it only covers the
+  `user_policy` component of staleness, not `global_prior` (a WEEKLY,
+  cross-user event via `rebuild_global_priors`) — applying it now would
+  read as "fixed" while leaving a real gap, for a concern with zero live
+  consumers today. Getting this right needs a real design decision (what
+  should "version" mean across three independent change sources) that
+  belongs with whichever future work actually builds a caching consumer,
+  not a partial fix now.
+
+Declined, repeats re-checked against current state: `AddIndexConcurrently`
+for migration 0026 (same still-empty table).
+
+Verified after this round: 35 passed across `adaptive_password.test.tsx` +
+`adaptiveZkLeak.test.jsx` (+1 new test, mutation-checked), Backend Tests
+re-confirmed on round 10's own job log (not carried forward). No backend
+code changed this round.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)

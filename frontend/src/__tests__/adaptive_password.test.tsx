@@ -559,6 +559,25 @@ describe('Adaptive Password API Service', () => {
         expect(JSON.stringify(result)).not.toContain('MySecret123!');
     });
 
+    test('suggestAdaptation fails closed when the preference model is unreachable', async () => {
+        const { adaptivePasswordService } = await import('../Components/security/TypingPatternCapture');
+
+        // Unlike getProfile (see 'propagates API errors' below), suggestAdaptation
+        // must resolve with a structured has_suggestion: false result rather than
+        // reject -- the strength gate a few lines later already establishes this
+        // contract for its own failures, and a caller that only inspects
+        // has_suggestion should not need a second try/catch for this call.
+        vi.mocked(axios.get).mockRejectedValueOnce(new Error('Network error'));
+
+        const result = await adaptivePasswordService.suggestAdaptation('MySecret123!');
+
+        expect(result).toEqual({
+            has_suggestion: false,
+            preference_model_error: true,
+            reason: expect.stringContaining('Could not load your preference model'),
+        });
+    });
+
     test('getProfile returns profile data', async () => {
         const { adaptivePasswordService } = await import('../Components/security/TypingPatternCapture');
 

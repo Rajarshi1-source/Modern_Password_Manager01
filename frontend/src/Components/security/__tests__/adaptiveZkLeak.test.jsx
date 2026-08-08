@@ -164,7 +164,7 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
   });
 
   it('suggestAdaptation pulls the model and never POSTs the password', async () => {
-    const result = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator });
+    const result = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator, explore: false });
 
     expect(axios.get).toHaveBeenCalledWith(expect.stringContaining('/adaptive/preference-model/'));
     expect(axios.post).not.toHaveBeenCalled();
@@ -175,7 +175,7 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
   });
 
   it('applyAdaptation posts only fingerprints, masked previews, and classes', async () => {
-    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator });
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator, explore: false });
     const result = await adaptivePasswordService.applyAdaptation(
       SECRET, suggestion.substitutions, { fingerprint, fpKeyVersion: FP_KEY_VERSION }
     );
@@ -263,7 +263,7 @@ describe('adaptive ZK v2 — fingerprint key era', () => {
   });
 
   it('applyAdaptation refuses to post without an era', async () => {
-    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator });
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator, explore: false });
     vi.mocked(axios.post).mockClear();
 
     await expect(
