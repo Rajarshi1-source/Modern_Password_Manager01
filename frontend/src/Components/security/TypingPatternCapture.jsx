@@ -450,7 +450,17 @@ export const adaptivePasswordService = {
      *   sampling; `rng` injects a uniform source for reproducible tests.
      */
     async suggestAdaptation(password, { estimator, explore = true, rng } = {}) {
-        const { data: model } = await axios.get('/api/security/adaptive/preference-model/');
+        let model;
+        try {
+            ({ data: model } = await axios.get('/api/security/adaptive/preference-model/'));
+        } catch (error) {
+            console.error('Adaptive preference model unavailable:', error);
+            return {
+                has_suggestion: false,
+                preference_model_error: true,
+                reason: 'Could not load your preference model, so no adaptation was suggested.',
+            };
+        }
         const ranked = rankSuggestions(generateCandidates(password), model, {
             explore,
             ...(rng ? { rng } : {}),
