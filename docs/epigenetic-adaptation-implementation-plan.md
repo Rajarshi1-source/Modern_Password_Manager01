@@ -1433,7 +1433,11 @@ nitpick applied; five declined.
   substitution whose position falls inside *any* leet-flagged span of the
   *adapted* result, new or inherited. Left `ADAPTIVE_PASSWORD.md`'s wording
   unchanged (it already says "no leet-flagged dictionary match" without
-  qualifying "new," which is the accurate description).
+  qualifying "new," which is the accurate description). (The word
+  "introduces" in that same sentence kept reading as implying novelty to
+  reviewers even though the doc never said "new" — reworded in round 10
+  below to state the span rule explicitly, ending the recurring flag rather
+  than re-arguing an already-correct-but-ambiguous sentence a third time.)
 - **Applied: two more `Number.isFinite` gaps, same defect class as round 2's
   `hasUsablePosterior` fix, found in call sites that fix didn't cover.**
   `sampleBeta` itself still used `typeof x === 'number'` internally — round
@@ -1946,6 +1950,84 @@ Verified after this round: 91 passed / 7 subtests across
 Django `check` clean, `makemigrations --check` clean (no model fields
 changed — the new ceiling is enforced in Python, not the schema). Frontend
 untouched this round.
+
+**Tenth review-fix round (PR #466), full CodeRabbit re-review of round 9's
+own commit.**
+
+- **Applied, a real functional bug this round's own investigation
+  confirmed rather than took on the review's word alone:**
+  `policy_weights` tagged EVERY resolved class with an `{alpha, beta}`
+  exploration entry, including the two sources (`user_profile`, a
+  `UserTypingProfile` usage signal; `baseline`, the static shared leetspeak
+  table) that are point estimates with no accumulated evidence behind
+  them at all — both were stamped with the flat `PRIOR_ALPHA`/`PRIOR_BETA`
+  prior (1.0, 1.0) regardless of the actual resolved weight. Traced the
+  client-side consequence directly rather than assuming: `rankSuggestions`'
+  `hasUsablePosterior` gate only checks `Number.isFinite(...) && > 0` on
+  both parameters, and `alpha=beta=1` passes it cleanly — it reads as a
+  genuine (if uninformative) posterior, not a "no data" sentinel the client
+  could special-case. `sampleBeta(1, 1, rng)` is exactly uniform on
+  `[0, 1]`, so with `explore: true` (the client's own default), ranking
+  for these two sources — cold-start's two MOST COMMON sources, since
+  `user_policy` requires `arm.pulls > 0` and `global_prior` requires
+  enough other users' data to have published — degraded to random noise,
+  completely discarding the 0.6 (baseline) or 0.35 (profile-derived)
+  confidence still correctly shown to the user as `substitution_weights`.
+  Fixed by only populating `exploration` for the two sources that ARE
+  real Beta posteriors (`user_policy`, `global_prior`); the client already
+  has the correct fallback for a class with no exploration entry (rank by
+  `confidence`) — this bug was in what the SERVER chose to send, not
+  anything missing client-side. An existing test
+  (`test_a_cold_user_still_gets_the_leetspeak_baseline`) had asserted the
+  buggy value as correct (`{'alpha': 1.0, 'beta': 1.0}`) — fixed alongside
+  the bug, and a second test extended to cover the `user_profile` half.
+  Both mutation-checked (reverting the fix made both fail exactly as
+  expected, `AssertionError: '0' unexpectedly found in {...}`).
+- **Applied, a follow-on to round 9's own `MAX_ARMS_PER_USER_ERA` finding:**
+  `SubstitutionPolicyArmAdmin.list_filter` included `from_char`, an
+  unbounded-cardinality single-Unicode-character field per round 9's own
+  docstring — Django builds one sidebar link per distinct value via a
+  `DISTINCT` scan of the whole table, which does not stay small the way a
+  leet-alphabet-only field would. Removed it from `list_filter`;
+  `search_fields` already covers locating a specific class. Left
+  `GlobalSubstitutionPriorAdmin`'s equivalent filter alone — its table is
+  bounded by published classes (the k-anonymity floor), not by this
+  concern, matching the review's own narrower framing of that half.
+- **Applied, doc-only:** documented the one-character-substitution
+  invariant `filterByStrength`'s de-leet span comparison silently relies
+  on (`sub.position`, an index into the ORIGINAL password, is only valid
+  against spans measured in the ADAPTED one because every substitution is
+  a 1:1 character swap) — a genuinely held invariant today, verified
+  against `LEET_MAP`'s values and `applySubstitutions`' contract, not
+  merely asserted.
+- **Applied, doc-only, ending a recurring flag:** reworded
+  `ADAPTIVE_PASSWORD.md`'s de-leet gate description, marked a "♻️ Duplicate"
+  by CodeRabbit's own tracking (still present, not stale) even though round
+  4 already disproved the specific claim being re-litigated ("rejects only
+  NEW matches") with a live counter-example. The underlying implementation
+  was never wrong; the word "introduces" in the doc kept reading as
+  implying novelty to reviewers even though the sentence never said "new".
+  Reworded to state the span rule explicitly (matches this doc's own
+  §2.5 "Attribution" note verbatim), closing the recurring re-raise rather
+  than re-arguing an already-correct sentence a third time.
+
+Declined, all repeats with the same reasoning as prior rounds (checked
+each still holds, not assumed): `help_text` on `GlobalSubstitutionPrior`'s
+character columns; `AddIndexConcurrently` for migration 0026 and a
+composite/partial index on `core.py` (still the same empty table behind
+gap D1); splitting `skipped` into a separate `failed` counter (re-checked
+`celery.py`'s `beat_schedule` directly — `update_rl_model_from_feedback`
+still has no entry, so there is still no operator to serve).
+
+Verified after this round: 91 passed / 7 subtests (unchanged — this
+round's backend test edits corrected two existing assertions rather than
+adding new ones), Django `check` clean, ESLint clean on
+`adaptiveFeatures.js`. Backend Tests' CI status for this specific commit
+was not re-fetched (no fresh run existed yet at write time); local test
+runs and round 9's identical-for-five-rounds job-log history are what this
+round's "confirmed unrelated" claim rests on — the next round should
+re-verify from an actual job log for round 10's own commit, not cite this
+sentence.
 
 ---
 

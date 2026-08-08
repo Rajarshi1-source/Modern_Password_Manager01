@@ -412,7 +412,7 @@ def policy_weights(
         deterministic and cacheable (plan §3.4). ``sources`` records which of
         the four levels answered each class, for the model's own metadata.
     """
-    from ..models import GlobalSubstitutionPrior, SubstitutionPolicyArm, PRIOR_ALPHA, PRIOR_BETA
+    from ..models import GlobalSubstitutionPrior, SubstitutionPolicyArm
 
     weights = {
         from_char: dict(row) for from_char, row in baseline.items()
@@ -464,13 +464,27 @@ def policy_weights(
         prior = globals_by_class.get((from_char, to_char))
         override = overrides.get(from_char, {}).get(to_char)
 
+        # Only user_policy and global_prior are actual Beta posteriors --
+        # accumulated evidence with a real (alpha, beta) shape worth Thompson
+        # sampling around. user_profile (a UserTypingProfile usage signal)
+        # and baseline (the static shared leetspeak table) are point
+        # estimates with no evidence count behind them at all; tagging them
+        # with the flat PRIOR_ALPHA/PRIOR_BETA prior would not express "some
+        # uncertainty around this weight", it would silently replace the
+        # weight with uniform noise once sampled -- alpha=beta=1 is a valid
+        # posterior shape, not a "no data" sentinel, so the client's own
+        # finite-and-positive usability check cannot distinguish the two.
+        # Omitting the exploration entry for these sources is what actually
+        # makes the client fall back to ranking by the reported weight, per
+        # rankSuggestions' own documented fallback for a class with no
+        # exploration entry.
+        alpha = beta = None
         if arm is not None and arm.pulls > 0:
             weight = arm.posterior_mean
             alpha, beta = arm.alpha, arm.beta
             source = 'user_policy'
         elif override is not None:
             weight = override
-            alpha, beta = PRIOR_ALPHA, PRIOR_BETA
             source = 'user_profile'
         elif prior is not None:
             weight = prior.posterior_mean
@@ -480,14 +494,14 @@ def policy_weights(
             weight = weights.get(from_char, {}).get(to_char)
             if weight is None:
                 continue
-            alpha, beta = PRIOR_ALPHA, PRIOR_BETA
             source = 'baseline'
 
         weights.setdefault(from_char, {})[to_char] = _clamp01(weight)
-        exploration.setdefault(from_char, {})[to_char] = {
-            'alpha': round(float(alpha), 6),
-            'beta': round(float(beta), 6),
-        }
+        if alpha is not None and beta is not None:
+            exploration.setdefault(from_char, {})[to_char] = {
+                'alpha': round(float(alpha), 6),
+                'beta': round(float(beta), 6),
+            }
         sources[f'{from_char}->{to_char}'] = source
 
     return weights, exploration, sources

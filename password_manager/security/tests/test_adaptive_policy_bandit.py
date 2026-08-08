@@ -535,7 +535,12 @@ class PreferenceModelExportTests(TestCase):
         model = self.service.export_preference_model()
         self.assertEqual(model['substitution_weights']['o']['0'], 0.6)
         self.assertEqual(model['weight_sources']['o->0'], 'baseline')
-        self.assertEqual(model['exploration']['o']['0'], {'alpha': 1.0, 'beta': 1.0})
+        # No exploration entry: baseline is a static point estimate, not a
+        # Beta posterior. Tagging it with the flat PRIOR_ALPHA/PRIOR_BETA
+        # prior would be indistinguishable, client-side, from real evidence
+        # of total uncertainty -- Thompson sampling would then rank this
+        # class by uniform noise instead of its 0.6 baseline confidence.
+        self.assertNotIn('0', model['exploration'].get('o', {}))
 
     def test_a_learned_arm_overrides_the_baseline(self):
         credit_arms(self.user, [('o', '0')], 1.0, fp_key_version=1)
@@ -597,6 +602,10 @@ class PreferenceModelExportTests(TestCase):
         model = self.service.export_preference_model()
         self.assertEqual(model['weight_sources']['o->0'], 'user_profile')
         self.assertAlmostEqual(model['substitution_weights']['o']['0'], 0.35)
+        # Same reasoning as the baseline case: a UserTypingProfile usage
+        # signal is a point estimate, not accumulated Beta evidence, so it
+        # must not carry an exploration entry either.
+        self.assertNotIn('0', model['exploration'].get('o', {}))
 
     def test_policy_weights_keeps_a_class_the_baseline_never_had(self):
         # Evidence can arrive for a class outside COMMON_SUBSTITUTIONS via

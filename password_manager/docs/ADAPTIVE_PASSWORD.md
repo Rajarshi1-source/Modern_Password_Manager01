@@ -206,11 +206,14 @@ are rights rather than features.
 
 - **Every suggestion passes a client-side strength gate** (Phase 2). No
   adaptation is offered unless it keeps `guesses_log10` at least as high as the
-  original *and* introduces no leet-flagged dictionary match. The gate runs on
-  the client, because the server never sees a password and so cannot verify it —
-  an accepted asymmetry, since the server only records and never applies.
-  `has_suggestion: false` is a common, expected result; roughly three quarters
-  of candidate substitutions are rejected.
+  original *and* every surviving substitution's position falls outside any
+  leet-flagged dictionary match in the adapted result — whether that match is
+  newly created by the substitution or was already present at the original
+  password's own leet-matched positions. The gate runs on the client, because
+  the server never sees a password and so cannot verify it — an accepted
+  asymmetry, since the server only records and never applies. `has_suggestion:
+  false` is a common, expected result; roughly three quarters of candidate
+  substitutions are rejected.
 
 ### The reinforcement-learning policy (Phase 3)
 

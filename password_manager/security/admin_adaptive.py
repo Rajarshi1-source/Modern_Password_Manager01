@@ -470,7 +470,11 @@ class SubstitutionPolicyArmAdmin(admin.ModelAdmin):
         'fp_key_version',
         'last_updated_at',
     )
-    list_filter = ('fp_key_version', 'from_char', 'last_updated_at')
+    # from_char excluded: it's any single Unicode character (see
+    # MAX_ARMS_PER_USER_ERA's docstring), so a filter link per distinct value
+    # doesn't stay small the way a leet-alphabet-only field would -- use the
+    # search box below instead.
+    list_filter = ('fp_key_version', 'last_updated_at')
     search_fields = ('user__username', 'user__email', 'from_char', 'to_char')
     readonly_fields = (
         'user', 'from_char', 'to_char', 'alpha', 'beta', 'pulls',
