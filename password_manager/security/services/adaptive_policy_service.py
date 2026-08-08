@@ -76,6 +76,18 @@ MIN_CONTRIBUTING_USERS = 5
 #: user's own accumulated evidence.
 GLOBAL_PRIOR_STRENGTH = 10.0
 
+#: Ceiling on distinct SubstitutionPolicyArm rows one (user, fp_key_version)
+#: era may hold. adaptive_serializers.MAX_SUBSTITUTION_CLASSES bounds how many
+#: NEW classes one request can introduce (32), but nothing previously bounded
+#: how many an authenticated user could accumulate across many requests over
+#: time -- from/to are single Unicode characters, not restricted to a small
+#: leet alphabet, so the reachable space is not naturally small. Generous
+#: headroom above any realistic vocabulary (same reasoning as
+#: MAX_SUBSTITUTION_CLASSES itself: a backstop, not a tight fit), while still
+#: bounding the per-user row count that policy_weights loads in full on every
+#: /preference-model/ call.
+MAX_ARMS_PER_USER_ERA = 200
+
 
 def _clamp01(value: float) -> float:
     """Clamp into ``[0, 1]``."""
@@ -274,18 +286,34 @@ def credit_arms(
     Runs in its own ``transaction.atomic()``; nesting inside a caller's atomic
     block (as ``apply_adaptation_v2`` does) makes it a savepoint, which is the
     intended behaviour — the credit commits or rolls back with the adaptation.
+
+    Distinct (user, fp_key_version) arms are capped at ``MAX_ARMS_PER_USER_ERA``
+    — see that constant's docstring. Existing arms keep being credited past
+    the ceiling; only creating a brand-new one stops.
     """
     from ..models import SubstitutionPolicyArm
 
     touched = 0
     with transaction.atomic():
+        existing_pairs = set(
+            SubstitutionPolicyArm.objects.filter(
+                user=user, fp_key_version=fp_key_version,
+            ).values_list('from_char', 'to_char')
+        )
         for from_char, to_char in sorted(set(classes)):
-            arm, _ = SubstitutionPolicyArm.objects.get_or_create(
+            is_new = (from_char, to_char) not in existing_pairs
+            if is_new and len(existing_pairs) >= MAX_ARMS_PER_USER_ERA:
+                # Ceiling reached: don't create another distinct arm this era.
+                # Arms that already exist keep being credited normally below.
+                continue
+            arm, created = SubstitutionPolicyArm.objects.get_or_create(
                 user=user,
                 from_char=from_char,
                 to_char=to_char,
                 fp_key_version=fp_key_version,
             )
+            if created:
+                existing_pairs.add((from_char, to_char))
             # Re-read under the lock: get_or_create's returned instance may
             # predate a concurrent credit that has since committed.
             arm = SubstitutionPolicyArm.objects.select_for_update().get(pk=arm.pk)
