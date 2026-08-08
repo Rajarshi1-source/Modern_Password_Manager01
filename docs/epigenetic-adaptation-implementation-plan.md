@@ -1547,9 +1547,15 @@ failing-checks list rather than from a bot comment.**
   with no fixing release (`jpadilla/pyjwt#1168`), and `PYSEC-2024-277`
   (joblib) is still disputed on the same "deserializes only trusted,
   self-authored cache content" grounds already recorded in the manifest —
-  `joblib==1.5.2`, the current pin, is also the latest release and remains
-  flagged because the finding is inherent to the pickle-based design, not a
-  version gap. Checked git history (`git log --follow -p`) before renewing:
+  `joblib==1.5.2`, the exact version `requirements-lock.txt` pins as of this
+  review round, remains flagged because the finding is inherent to the
+  pickle-based design, not a version gap (the round-6 section below records
+  `joblib==1.5.3` from that round's own `pip-audit-report.json` — CI resolves
+  the looser `joblib>=1.3.0` in `requirements.txt`/`requirements-ml.txt`
+  rather than the lock file's exact pin, so the two version numbers
+  describing "current" a round apart are not a typo, just two different
+  requirements files with different constraints). Checked git history
+  (`git log --follow -p`) before renewing:
   both entries were added once, in `c8e1a6e`, and never renewed since — this
   is the FIRST renewal for each, not the second, so the manifest's own
   "after two renewals without a fix, file a tracking issue" threshold does
@@ -1670,6 +1676,87 @@ Verified after this round: 89 passed / 7 subtests across
 this round's test change only extended an existing assertion), Django
 `check` clean, `makemigrations --check` clean (no model fields changed).
 Frontend untouched this round.
+
+**Seventh review-fix round (PR #466), a full CodeRabbit re-review of round
+6's own commit, triggered manually (`@coderabbitai full review`) rather than
+landing automatically.**
+
+- **Confirmed, not re-fixed: "Dependency Vulnerability Scan" is green.**
+  `gh pr checks 466` after round 6 shows the check passing — round 6's fix
+  held. The only CI failure remaining is "Backend Tests," re-verified via
+  the actual job log to be the byte-for-byte same result as round 5's own
+  investigation: 1676 passed, 203 errors, all still the identical
+  `_pre_setup_ran_eagerly` cascade through the same ten unrelated apps
+  (`password_reputation`, `personality_auth`, `stegano_vault`, etc.), and
+  all 89 adaptive-feature tests (51 + 38) passing in full. Re-confirming an
+  already-diagnosed unrelated flake on every round rather than assuming the
+  earlier diagnosis still holds — same discipline as trap 18, now exercised
+  a third time (rounds 5, 6, 7) with an identical result each time.
+- **Applied: `suggestAdaptation generates the suggestion client-side` in
+  `adaptive_password.test.tsx` relied on an unstated assumption.**
+  `suggestAdaptation` defaults to `explore: true` (confirmed in
+  `TypingPatternCapture.jsx`), which enables Thompson sampling over the
+  preference model's `exploration` table when one is present. The test's
+  mocked model has no `exploration` key at all today, so the sampling path
+  is a no-op purely by fixture accident, not by the test's own design —
+  verified by reading `rankSuggestions`' guard (`explore ? preferenceModel
+  && preferenceModel.exploration : null`) rather than assuming. Pinned
+  `explore: false` explicitly, at zero behavioral cost today (re-ran the
+  file: all 25 tests still pass, same assertions, same outcome) and
+  removing a latent trap for whoever adds an `exploration` table to this
+  fixture later without realizing this specific test would then become
+  seed-dependent.
+- **Applied: clarified an internal inconsistency in round 5's own text**,
+  not a code change. Round 5 called `joblib==1.5.2` "the current pin";
+  round 6's own section two paragraphs below it recorded
+  `joblib==1.5.3` from that round's `pip-audit-report.json`. Both numbers
+  are correct, just for different things: `requirements-lock.txt` pins
+  `joblib==1.5.2` exactly, but CI actually resolves the looser
+  `joblib>=1.3.0` in `requirements.txt`/`requirements-ml.txt`, which is
+  where 1.5.3 came from. Reworded round 5's text to name the lock file
+  specifically and point at this explanation, rather than leaving two
+  unreconciled "current" version numbers a few paragraphs apart.
+- **Declined, with a stronger reason than "trivial": a `CheckConstraint`
+  requiring `alpha > 0`/`beta > 0` on both bandit models would work AGAINST
+  an already-documented design choice in the same file, not just add
+  unforced ceremony.** `SubstitutionPolicyArm.posterior_mean` already
+  guards a zero-or-negative denominator with an explicit comment: "a row
+  edited by hand in the admin, or restored from an older schema, should
+  degrade to 'no opinion' rather than raise." A DB-level `CheckConstraint`
+  would make exactly that scenario — a hand-edited or legacy row with a
+  non-positive `alpha`/`beta` — impossible to save at all, contradicting
+  the graceful-degradation behavior the model's own docstring commits to.
+  Separately, both write paths are mathematically guaranteed positive by
+  construction anyway: `_decay_toward_prior` keeps `SubstitutionPolicyArm`'s
+  parameters `>= 1` (verified by reading the decay formula, not assumed),
+  and `GlobalSubstitutionPrior`'s `alpha`/`beta` are `PRIOR_ALPHA/BETA +
+  GLOBAL_PRIOR_STRENGTH * mean` with `mean` clamped to `[0, 1]` by
+  `_clamp01` before use. Matches this project's own stated code
+  philosophy — validate at system boundaries, trust internal invariants —
+  applied here to a constraint that would additionally undo a documented
+  fallback.
+- **Declined, the fourth review pass to flag the same
+  `AdaptationFeedback.policy_reward_applied_at` index in some form (rounds
+  3, 4, 6, and now 7 — partial index, then partial+`AddIndexConcurrently`,
+  now also a composite `(policy_reward_applied_at, created_at)` variant in
+  `core.py`):** all three of this round's specific proposals share the same
+  underlying non-problem as the previous three rounds' proposals — the
+  table is empty behind gap D1 (nothing schedules the weekly task that
+  would populate or query it yet), so there is no query plan, lock
+  contention, or backlog-size problem for any of partial/concurrent/
+  composite to solve today. Noting the repeat count explicitly here so a
+  future round doesn't re-litigate this from zero a fifth time without
+  first checking whether gap D1 has actually closed.
+- **Declined again, third time: `@admin.display` over `short_description`**
+  — same reasoning as rounds 4 and 6 (the surrounding, largely pre-existing
+  admin module uses `short_description` assignment consistently; converting
+  only the two newest methods would make this PR's own code the
+  inconsistent one).
+
+Verified after this round: 25 passed in `adaptive_password.test.tsx`
+(frontend, the only test file touched), Backend Tests re-confirmed
+unrelated via job log (no local backend re-run needed — no backend code
+changed this round).
 
 ---
 

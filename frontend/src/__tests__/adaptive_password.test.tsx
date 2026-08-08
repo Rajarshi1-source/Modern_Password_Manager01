@@ -529,8 +529,16 @@ describe('Adaptive Password API Service', () => {
         // simply has no reason to reject. Gate behaviour has its own tests in
         // services/adaptive/__tests__/adaptiveFeatures.test.js.
         const neutralEstimator = () => ({ guessesLog10: 12, sequence: [] });
+        // explore: false pins this test to ranking off substitution_weights
+        // alone. suggestAdaptation defaults to explore: true, and the mocked
+        // model above happens to carry no `exploration` table today, so
+        // Thompson sampling is a no-op either way -- but that's an accident
+        // of this fixture, not something this test is about. Pinning it
+        // explicitly means a later fixture that adds an exploration table
+        // can't turn this into a seed-dependent test by surprise.
         const result = await adaptivePasswordService.suggestAdaptation('MySecret123!', {
             estimator: neutralEstimator,
+            explore: false,
         });
 
         // Fetched the preference model; never POSTed the password anywhere.
