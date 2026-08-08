@@ -566,17 +566,29 @@ function interopNamed(mod, name) {
 export async function loadDefaultEstimator() {
   if (defaultEstimatorPromise === null) {
     defaultEstimatorPromise = (async () => {
-      const [core, common] = await Promise.all([
+      const [core, common, en] = await Promise.all([
         import('@zxcvbn-ts/core'),
         import('@zxcvbn-ts/language-common'),
+        import('@zxcvbn-ts/language-en'),
       ]);
       const ZxcvbnFactory = interopNamed(core, 'ZxcvbnFactory');
       const dictionary = interopNamed(common, 'dictionary');
       const graphs = interopNamed(common, 'adjacencyGraphs');
-      if (typeof ZxcvbnFactory !== 'function' || !dictionary || !graphs) {
+      const enDictionary = interopNamed(en, 'dictionary');
+      if (typeof ZxcvbnFactory !== 'function' || !dictionary || !graphs || !enDictionary) {
         throw new Error('zxcvbn-ts loaded but did not expose the expected API.');
       }
-      const zxcvbn = new ZxcvbnFactory({ dictionary: { ...dictionary }, graphs });
+      // language-common alone has no English word list (just breached
+      // passwords + diceware + keyboard graphs), so an ordinary English word
+      // with no leetspeak reads as near-random and scores far stronger than
+      // it should -- measured: 'xylophone' alone goes from guesses_log10
+      // 4.392 (recognized) to 7.955 (unmatched) without this merged in. That
+      // is the same underestimation-of-guessability failure mode C1 exists
+      // to close, just via a missing dictionary instead of a leetspeak match.
+      const zxcvbn = new ZxcvbnFactory({
+        dictionary: { ...dictionary, ...enDictionary },
+        graphs,
+      });
       return (password) => {
         const result = zxcvbn.check(password);
         return { guessesLog10: result.guessesLog10, sequence: result.sequence };

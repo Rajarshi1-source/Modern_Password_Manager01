@@ -722,13 +722,25 @@ returns HTTP 410 Gone (§0.1). No route mounts the adaptive client anywhere in
 the app yet (gap D1, Phase 5) — "SHIPPED" here means the code and its tests
 landed on `main`, not that it currently protects a real user's password.
 
-**Dependency: `@zxcvbn-ts/core` 4 + `@zxcvbn-ts/language-common` 4**, not the
-3.x this section assumed. v4's `ZxcvbnFactory` is an *instance* rather than
-3.x's `zxcvbn()` + `zxcvbnOptions` module singletons, so configuring it cannot
-be disturbed by another feature mutating shared global options, and its
-compressed dictionaries are smaller (measured: 1.3 MB vs 1.9 MB on disk). Both
-majors were installed and driven before choosing. Vite stays on 7 per project
-policy; the install is additive and did not move any existing dependency.
+**Dependency: `@zxcvbn-ts/core` 4 + `@zxcvbn-ts/language-common` 4 +
+`@zxcvbn-ts/language-en` 4**, not the 3.x this section assumed. v4's
+`ZxcvbnFactory` is an *instance* rather than 3.x's `zxcvbn()` + `zxcvbnOptions`
+module singletons, so configuring it cannot be disturbed by another feature
+mutating shared global options, and its compressed dictionaries are smaller
+(measured: 1.3 MB vs 1.9 MB on disk). Both majors were installed and driven
+before choosing. Vite stays on 7 per project policy; the install is additive
+and did not move any existing dependency.
+
+**`language-en` was missing entirely until PR #466 review round 13
+(CodeRabbit).** `language-common` ships breached passwords + diceware +
+keyboard graphs, not an English word list, so an ordinary English word with no
+leetspeak read as near-random. Measured directly against the real estimator:
+`xylophone` scored `guesses_log10` 7.955 with only `language-common` loaded,
+vs 4.392 once `language-en`'s dictionary is merged in — the same
+underestimation-of-guessability failure mode C1 exists to close, just via a
+missing dictionary instead of a leetspeak match. Now merged into the
+`ZxcvbnFactory` options alongside `language-common`'s dictionary in
+`loadDefaultEstimator`, with a regression test pinning the gap shut.
 
 **The two rules are applied to a fixed point, not in the numbered sequence
 above.** Every rejection changes the adapted password and therefore the other
@@ -765,13 +777,21 @@ with a correct generator; the survival rate barely moved, which is itself
 evidence the earlier corpus, while technically corrupted, wasn't degenerate.)
 
 **Bundle cost, measured** (the other §8 risk row): a probe build of an entry
-that actually calls the gate emits three chunks — 5.9 kB for the adaptive
-engine, and **31.6 kB + 427.7 kB (≈222 kB gzipped) of zxcvbn behind the dynamic
-`import()`**. Nothing zxcvbn-related lands in the entry chunk. Worth recording
-honestly: the *production* build cannot show this yet, because gap D1 means no
-route imports the adaptive client, so Rollup drops the whole module — verified
-by grepping `dist/` for the module's own strings and finding none. The
-production number becomes real when Phase 5 mounts the UI.
+that actually calls the gate emits the adaptive-engine glue plus three zxcvbn
+chunks behind the dynamic `import()` — `@zxcvbn-ts/core` (31.6 kB / 11.1 kB
+gzipped), `@zxcvbn-ts/language-common` (427.6 kB / 221.7 kB gzipped), and, as
+of review round 13, `@zxcvbn-ts/language-en` (1200.6 kB / **605.4 kB
+gzipped** — the English word/name/surname dictionaries are the single biggest
+piece by far). **Total ≈1660 kB raw / ≈838 kB gzipped**, up from the
+pre-round-13 ≈460 kB / ≈222 kB — nearly 4x, entirely the cost of closing the
+missing-dictionary gap above. Nothing zxcvbn-related lands in the entry chunk
+either way. Worth recording honestly: the *production* build cannot show this
+yet, because gap D1 means no route imports the adaptive client, so Rollup
+drops the whole module — verified by grepping `dist/` for the module's own
+strings and finding none. The production number becomes real when Phase 5
+mounts the UI, at which point ≈838 kB gzipped on first use of the strength
+gate is worth a deliberate look (a loading state while the chunk fetches, at
+minimum) rather than being carried forward as a stale ≈222 kB assumption.
 
 **Fail-closed.** If the estimator cannot be loaded or throws, `filterByStrength`
 propagates and `suggestAdaptation` returns `has_suggestion: false` with
@@ -2199,6 +2219,106 @@ composite-reward fix and the acceptance/rollback-function decoupling
 mutation-checked; one of the two new backend tests caught a real error in
 its own first-draft expected-value formula, corrected by running it.
 
+**Thirteenth review-fix round (PR #466), full CodeRabbit re-review of round
+12's own commit.**
+
+- **Applied, the ♻️ duplicate finding:** `rebuild_global_priors`'s call site
+  caught `Exception` broadly, without the `(SoftTimeLimitExceeded, Retry)`
+  re-raise the per-row loop above it already has. `rebuild_global_priors`
+  scans the whole consenting population in one transaction, so it is the
+  single call most likely to cross the Celery soft deadline — left unfixed,
+  hitting it there would report `prior_rebuild_failed` and return as if the
+  run completed, letting the worker keep going past the soft limit until the
+  hard limit SIGKILLs it mid-batch. Added the same exclusion, plus a test
+  that patches `rebuild_global_priors` to raise `SoftTimeLimitExceeded` and
+  asserts it propagates rather than being swallowed — a gap this feature had
+  carried since the pattern was first established (§3.7 first round) without
+  ever getting direct coverage for either call site.
+- **Applied: `credit_arms`' per-era ceiling was a real check-then-act race.**
+  `existing_pairs` was read unlocked before deciding whether
+  `MAX_ARMS_PER_USER_ERA` had headroom; two concurrent credits for the same
+  user could each read before either committed, each see headroom for a
+  DIFFERENT new class, and together exceed the ceiling — the same class of
+  bug as trap 14/20 (a limit enforced by reading-then-deciding, without a
+  lock serializing the decision). Fixed by locking the user's
+  `AdaptivePasswordConfig` row (a stable one-per-user row already used for
+  this "mint/allocate under a lock" pattern elsewhere in this feature — see
+  `get_adaptive_config`'s salt self-heal) before the read, so concurrent
+  calls for the same user serialize around the check. Traced the lock
+  ordering against every other `select_for_update()` site in this feature
+  before applying it, to rule out a new deadlock: nothing else acquires
+  `AdaptivePasswordConfig` and `PasswordAdaptation`/`SubstitutionPolicyArm`
+  locks in the opposite order within one transaction. Added a real
+  multi-threaded `TransactionTestCase` that seeds the ceiling to exactly one
+  slot of headroom and races 8 threads for it — genuinely reproduces the
+  interleaving rather than asserting on the single-threaded happy path
+  (same discipline the plan's standing concurrency-testing note requires).
+  Skips on SQLite (file-level write locking makes concurrent threads fail
+  with "database is locked" independent of whether the fix is correct,
+  confirmed by first running the test unguarded and getting exactly that);
+  runs for real against CI's Postgres, matching the precedent already
+  established for `EntangledDevicePairConcurrentInsertTests`.
+- **Applied: `@zxcvbn-ts/language-en` was missing entirely.**
+  `loadDefaultEstimator` only merged `@zxcvbn-ts/language-common`'s
+  dictionary — breached passwords, diceware, keyboard graphs, no English word
+  list. Verified empirically before fixing, not assumed from the package
+  names: `xylophone` scored `guesses_log10` 7.955 (read as near-random)
+  against `language-common` alone, vs 4.392 once `language-en` is merged in.
+  Same underestimation-of-guessability failure mode trap 11 documented for
+  leetspeak, this time for the "ordinary English word, no substitutions"
+  case — a strength gate whose whole job is not overestimating guess
+  resistance was silently doing exactly that for a large class of real
+  passwords. Installed the package, merged its dictionary alongside
+  `language-common`'s in the same `ZxcvbnFactory` options object, added a
+  regression test pinning the measured gap shut. Re-measured the bundle cost
+  this adds rather than estimating it: a probe build (same methodology as
+  §4.5's original measurement) puts `language-en` alone at 1200.6 kB raw /
+  **605.4 kB gzipped** — nearly 3x core + language-common combined, pushing
+  the total lazy-loaded zxcvbn cost from ≈222 kB to ≈838 kB gzipped. Still
+  entirely behind the dynamic `import()` and absent from the current
+  production build (gap D1), but recorded honestly in §4.5/§8 rather than
+  left as a stale 4x-smaller number, since it becomes a real Phase-5
+  trade-off once the UI mounts.
+- **Applied, doc-only:** reworded `ADAPTIVE_PASSWORD.md`'s reward-signal
+  paragraph, which listed acceptance/rollback status alongside rating and
+  behavioural change as if all four fed the same "four signals" composite —
+  exactly the double-counting shape round 12 fixed in code, still present in
+  prose. Split into two explicit paths: the composite reward (rating +
+  behavioural only) and the separately-applied lifecycle credit
+  (accept/rollback), matching current `composite_reward`.
+- **Investigated and fixed, not left as "unrelated to this PR" for an eighth
+  round:** the failing "Backend Tests" CI check traced to the SAME
+  `pytest-django`/`pytest-asyncio` incompatibility rounds 5-12 all correctly
+  identified as pre-existing and out of scope (`_pre_setup_ran_eagerly`) —
+  but this round the root cause was newly fixable in scope. `requirements.txt`
+  had floating `pytest-django>=4.11.0`/`pytest-asyncio>=0.23.0`, which
+  resolved to freshly-published `pytest-django==4.13.0`/`pytest-asyncio==1.4.0`
+  on 2026-08-08 (confirmed via the job log's own `pip install` output) — an
+  untested combination that broke `pytest-django`'s internal
+  `_django_db_helper` fixture. `requirements-lock.txt` already pinned the
+  tested combo (`4.11.1`/`1.3.0`), and the local `canny` dev venv was
+  independently already running exactly those versions — the fix was already
+  proven correct elsewhere in the repo, just not applied to the file CI
+  actually installs from. Pinned `requirements.txt`, `requirements-core.txt`,
+  and `requirements-dev.txt` to match, after confirming (via `git diff
+  main...HEAD`) this PR's own diff never touched these files, so the break
+  was environmental drift between the last green `main` run (2026-08-05) and
+  this PR's CI run (2026-08-08), not anything in the adaptive-password
+  feature. See trap 35.
+
+Declined: nothing new this round (no other findings survived verification).
+
+Verified after this round: 55 tests in `test_adaptive_policy_bandit.py`
+(+1 new, +1 skipped on SQLite/runs on Postgres in CI), 38 passed in
+`test_adaptive_zk_v2.py` (unchanged, re-run to confirm the `credit_arms`
+lock didn't regress the concurrent-credit paths it exercises), 71 passed in
+`adaptiveFeatures.test.js` (+1 new), `npm run build` green on Vite 7.3.5,
+ESLint clean on every touched frontend file. Both the Celery re-raise and
+the arm-ceiling lock mutation-checked in the sense that matters here: the
+re-raise test fails without the fix (exception swallowed, no
+`assertRaises` match) and the ceiling test is a genuine concurrency
+reproduction, not a sequential assertion dressed up as one.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
@@ -2342,7 +2462,7 @@ that measurably weaken their passwords.**
 | Strength gate rejects nearly everything, leaving the feature inert | **Measured, Phase 2:** ~25% of passwords keep at least one substitution over a 200-password corpus (§4.5). Workable, so the "safer transform family" option (appending learned syllables, case-shifts at low-error positions) was not needed — but `has_suggestion: false` is common enough that the UI must treat it as a normal outcome. |
 | Bandit starves on sparse data | Global DP prior for cold start; Thompson sampling explores by construction; ≥3-session floor on the behavioural term. **Shipped as specified**, plus a k-anonymity floor of 5 contributors on the global prior (§5.6). |
 | Salt exposure misjudged | **Shipped, Phase 1 (§1.1):** the salt is genuinely non-secret — `AdaptivePasswordConfig.fingerprint_salt`'s own `help_text` states it, and it is useless to an attacker without the master password, which is never transmitted. Serving it over `/adaptive/config/` leaks nothing. Fingerprint-era isolation (`fp_key_version`) is enforced end-to-end: stamped from the server's own config (never the client's claim), scoped on every fingerprint-keyed read path, and bumped on rotation so eras never correlate. Residual property, not a blocker (§1): fingerprint strength is bounded by master-password strength, since HMAC is fast to brute-force offline given the master password — out of scope under this feature's threat model (hostile server, master password never transmitted). |
-| zxcvbn bundle cost | **Measured, Phase 2:** ≈460 kB raw / 222 kB gzipped, entirely behind the dynamic `import()`; nothing zxcvbn-related in the entry chunk (§4.5). Not yet visible in the production build because gap D1 keeps the whole adaptive module unreachable and Rollup drops it. |
+| zxcvbn bundle cost | **Measured, Phase 2:** ≈1660 kB raw / ≈838 kB gzipped as of round 13 (`language-en` added — was ≈460 kB / 222 kB before), entirely behind the dynamic `import()`; nothing zxcvbn-related in the entry chunk (§4.5). Not yet visible in the production build because gap D1 keeps the whole adaptive module unreachable and Rollup drops it. Worth a deliberate loading-state look at Phase 5 mount time, not just a bigger lazy chunk to shrug off. |
 | Key rotation orphans learning | Intended — a correlation reset. Make it explicit in the UI, not a silent data loss. |
 
 ## 9. Acceptance criteria

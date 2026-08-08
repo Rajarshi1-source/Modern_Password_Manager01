@@ -245,6 +245,16 @@ def update_rl_model_from_feedback(batch_size: int = 500):
 
     try:
         prior_stats = rebuild_global_priors(PrivacyGuard())
+    except (SoftTimeLimitExceeded, Retry):
+        # Same reasoning as the per-row handler above: this is Celery worker
+        # control flow, not a rebuild failure. rebuild_global_priors scans the
+        # whole consenting population in one transaction, so it is the call
+        # most likely to cross the soft deadline -- swallowing it here would
+        # let the loop keep going past the soft limit until the uncatchable
+        # hard limit SIGKILLs the worker instead of winding down gracefully.
+        # The feedback rows credited above already committed independently,
+        # so nothing from this run is lost by re-raising.
+        raise
     except Exception as exc:  # noqa: BLE001 - the credited batch must still report
         # Every feedback row credited above already committed (each in its own
         # transaction), so a rebuild failure here must not raise past this
