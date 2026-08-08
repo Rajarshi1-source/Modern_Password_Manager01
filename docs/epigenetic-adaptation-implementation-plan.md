@@ -1910,13 +1910,36 @@ Declined:
 - `@admin.display` over `short_description` — a FIFTH decline, same
   reasoning as rounds 4, 6, 7, and 8.
 - An axios timeout on `suggestAdaptation`'s `/preference-model/` GET.
-  Checked every axios call site in `TypingPatternCapture.jsx` (13 total,
-  12 pre-existing and unrelated to this PR): none of them set a timeout —
-  it is a file-wide, pre-existing pattern, not something introduced here.
-  Adding a timeout to only the one call this PR happens to touch would
-  single out this PR's own code as the odd one out against its own
-  surrounding file, the same reasoning that has declined `@admin.display`
-  four times running.
+  Deferred to its own follow-up PR, on three verified grounds (the first
+  pass recorded only the weakest of them, "consistent with a file-wide
+  pattern"; re-derived properly on challenge):
+  1. **It cannot fail open, structurally.** The `await axios.get(...)` is
+     the *first* statement in `suggestAdaptation`, before
+     `filterByStrength`. A hang never returns and a rejection propagates
+     out — either way **no suggestion object is produced at all**, so
+     there is no path where a failed model fetch yields an *ungated*
+     suggestion. The Phase 2 C1 guarantee sits downstream of this fetch
+     and does not depend on the timeout.
+  2. **It is not a ZK surface.** The GET carries no body and no params;
+     no password material is in the request, so a timeout has no bearing
+     on the zero-knowledge property either. This is a stability/UX issue,
+     not a security one, and is described that way in the follow-up.
+  3. **It is pre-existing and unreachable today.** Verified on `main`
+     directly (`git show main:…` — the identical untimed line is at
+     line 410 there), and it appears as a *context* line, not a `+`, in
+     this PR's diff. Gap D1 still holds: the only reference to
+     `suggestAdaptation` outside its defining file and tests is a code
+     comment, so no user can reach it yet.
+
+  The follow-up is scoped wider than the review suggested, and that is
+  what makes it a separate PR rather than a one-line patch here:
+  `frontend/src/services/api.js` already builds a configured client with
+  `timeout: 30000` *and* an HTTPS-enforcement interceptor, and
+  `TypingPatternCapture.jsx` bypasses it by importing bare `axios` for
+  **all 13** of its calls. The correct fix is migrating the file to that
+  client (and retargeting the several tests that mock `axios` directly),
+  not adding `{ timeout }` to the single call this PR happened to touch.
+  Should land before Phase 5 mounts the UI.
 
 Verified after this round: 91 passed / 7 subtests across
 `test_adaptive_policy_bandit.py` + `test_adaptive_zk_v2.py` (+2 new tests),
