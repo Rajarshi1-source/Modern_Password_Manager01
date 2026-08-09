@@ -968,36 +968,43 @@ class AdaptivePasswordService:
 
         counts = {}
 
-        counts['typing_sessions'] = TypingSession.objects.filter(
-            user=self.user
-        ).delete()[0]
+        # Erasure must be all-or-nothing: without this, a failure partway
+        # through (e.g. a dropped connection between deletes) leaves earlier
+        # deletes committed and later ones -- including the policy-arm delete
+        # below, which runs last and would be the most likely step skipped --
+        # never applied, silently leaving the user partially erased with no
+        # way to tell from the exception alone what actually survived.
+        with transaction.atomic():
+            counts['typing_sessions'] = TypingSession.objects.filter(
+                user=self.user
+            ).delete()[0]
 
-        counts['adaptations'] = PasswordAdaptation.objects.filter(
-            user=self.user
-        ).delete()[0]
+            counts['adaptations'] = PasswordAdaptation.objects.filter(
+                user=self.user
+            ).delete()[0]
 
-        counts['profiles'] = UserTypingProfile.objects.filter(
-            user=self.user
-        ).delete()[0]
+            counts['profiles'] = UserTypingProfile.objects.filter(
+                user=self.user
+            ).delete()[0]
 
-        # The bandit's per-user learned posteriors (which substitutions THIS
-        # user tends to accept) are personal data too, independently keyed by
-        # `user` -- deleting PasswordAdaptation above does not cascade to
-        # these, so without this they would survive GDPR erasure indefinitely
-        # even though the account itself is kept.
-        counts['policy_arms'] = SubstitutionPolicyArm.objects.filter(
-            user=self.user
-        ).delete()[0]
+            # The bandit's per-user learned posteriors (which substitutions
+            # THIS user tends to accept) are personal data too, independently
+            # keyed by `user` -- deleting PasswordAdaptation above does not
+            # cascade to these, so without this they would survive GDPR
+            # erasure indefinitely even though the account itself is kept.
+            counts['policy_arms'] = SubstitutionPolicyArm.objects.filter(
+                user=self.user
+            ).delete()[0]
 
-        # Disable but don't delete config
-        try:
-            config = AdaptivePasswordConfig.objects.get(user=self.user)
-            config.is_enabled = False
-            config.save()
-            counts['config_disabled'] = 1
-        except AdaptivePasswordConfig.DoesNotExist:
-            counts['config_disabled'] = 0
-        
+            # Disable but don't delete config
+            try:
+                config = AdaptivePasswordConfig.objects.get(user=self.user)
+                config.is_enabled = False
+                config.save()
+                counts['config_disabled'] = 1
+            except AdaptivePasswordConfig.DoesNotExist:
+                counts['config_disabled'] = 0
+
         logger.info(f"Deleted adaptive password data for user {self.user.id}: {counts}")
         
         return counts

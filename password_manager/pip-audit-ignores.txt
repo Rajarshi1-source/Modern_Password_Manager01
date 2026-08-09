@@ -76,6 +76,17 @@ PYSEC-2026-3554 exp:2026-10-10
 # scope (adaptive password feature, not a framework upgrade). Verified all
 # six are unreachable rather than assumed, by grepping the whole codebase:
 #
+# Unlike the no-fix entries below (torch, nltk), a fix already exists for
+# all six -- this is a deferred-upgrade suppression, not a no-fix one. The
+# header's generic "file a tracking issue after two renewals" policy is
+# written for advisories with no available fix; it under-serves this case,
+# where the actual blocker is scheduling the Django 5.2/6.0 upgrade itself.
+# No such tracking issue exists in this repo as of 2026-08 (checked via
+# `gh issue list`) -- filing one is an explicit action for a human to take,
+# not fabricated here. Until it exists, treat every renewal of this block
+# as a prompt to re-ask whether the upgrade can be scheduled, not a reflex
+# date bump.
+#
 # CVE-2026-48587 (GHSA-923m-gv2p-w5qp), CVE-2026-8404 (GHSA-8cjm-8mp7-r2xf),
 # CVE-2026-48588 (GHSA-3h9f-r86x-qvjx): all three are cache-poisoning/leak
 # bugs in Vary-header and Cache-Control handling inside
