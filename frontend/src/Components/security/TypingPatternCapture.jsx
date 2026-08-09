@@ -453,6 +453,19 @@ export const adaptivePasswordService = {
     async suggestAdaptation(password, { estimator, explore = true, rng } = {}) {
         let model;
         try {
+            // No explicit timeout here (PR #466 review, raised twice: round 9
+            // and again round 14) -- deliberate, not an oversight. This GET is
+            // the FIRST statement in this function, before filterByStrength,
+            // so a hang or rejection yields has_suggestion: false with no
+            // adaptation object at all: structurally fail-closed, and the C1
+            // guarantee never depends on it. The GET carries no body/params,
+            // so it is not a zero-knowledge surface either. The identical
+            // untimed call is pre-existing on main (not introduced by this
+            // PR), and 5 sibling axios.get calls in this same file share the
+            // pattern -- a one-line timeout here alone would be the wrong
+            // shape of fix; the correct one is migrating this file's calls to
+            // services/api.js's already-timeout-configured client, which is
+            // separate, larger, out-of-scope work, not a quick inline add.
             ({ data: model } = await axios.get('/api/security/adaptive/preference-model/'));
         } catch (error) {
             console.error('Adaptive preference model unavailable:', error);
