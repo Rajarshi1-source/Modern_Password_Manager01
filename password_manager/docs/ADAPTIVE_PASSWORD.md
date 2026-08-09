@@ -254,6 +254,21 @@ because that would credit the same fact to the same arm twice — see
 > `policy_reward_applied_at IS NULL`), so running it manually or on a
 > hand-rolled schedule is safe and cannot double-count. See
 > `docs/epigenetic-adaptation-implementation-plan.md` §7 (Phase 5, Celery beats).
+>
+> **Pre-existing feedback is replayed, by design, on first run.**
+> `AdaptationFeedback` predates this bandit (the table has existed since
+> January 2026, long before Phase 3); migration 0026 only adds
+> `policy_reward_applied_at` to it and leaves every existing row `NULL`. The
+> first run of `update_rl_model_from_feedback` after this ships therefore
+> treats the *entire pre-Phase-3 history* as pending and folds it into fresh
+> posteriors, 500 rows per run (`batch_size`) until the backlog clears —
+> not just feedback submitted after the bandit went live. This is an
+> intentional consequence of the idempotent "not yet applied" selection
+> (chosen over a rolling window specifically so a missed run never loses
+> data, see above), not an oversight, and `apply_reward`'s decay bounds how
+> much any one batch of old evidence can move a posterior. An operator
+> should read an initial burst of policy movement after first deploy as
+> this backlog draining, not as live signal from the newly-shipped bandit.
 <!-- -->
 > **Still not mounted.** No route imports the adaptive client yet (gap D1), so
 > the client-side adaptive flow is not reachable from the running app until

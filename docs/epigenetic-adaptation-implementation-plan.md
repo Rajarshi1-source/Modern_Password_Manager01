@@ -2513,6 +2513,81 @@ the GDPR deletion test and the `prior_rebuild_failed` success-path
 assertion), Django `check` clean, `makemigrations --check --dry-run`
 reports no changes after the new migration.
 
+**Seventeenth review-fix round (PR #466), full CodeRabbit re-review of
+round 16's own commit (`4e45386`).** One Actionable finding (Minor) and
+five Nitpicks.
+
+- **Applied: `delete_all_data` (GDPR erasure) ran as five separate
+  implicit transactions, not one.** A real gap in round 16's own fix: if
+  any step failed partway (a dropped connection, a lock timeout), earlier
+  deletes stayed committed while later ones — including the
+  `SubstitutionPolicyArm` delete round 16 added, which runs last and is
+  therefore the step most likely to be skipped — never ran, leaving the
+  user partially erased with no way to tell what survived from the
+  exception alone. Wrapped the whole method body in one
+  `transaction.atomic()`; `transaction` was already imported in this file,
+  so no new import.
+- **Applied: pinned `@zxcvbn-ts/core`/`language-common`/`language-en` to
+  exact versions in `package.json`.** Verified the actual risk rather than
+  the label: `package-lock.json` already resolves all three to
+  `4.1.2`/`4.1.3`/`4.1.1`, but `package.json` still used caret ranges,
+  meaning a future lockfile refresh (not just `npm install` today) could
+  silently pick up a newer patch/minor release with different dictionary
+  contents — exactly the failure mode that broke CI in round 13
+  (`pytest-django`/`pytest-asyncio` floating pins resolving to an untested
+  combo). The Phase 2 tests assert exact numeric thresholds and orderings
+  against the real estimator (`xylophone < 5`, `p@ssw0rd > password`),
+  which are dictionary-version-dependent by construction. Exact-pinned all
+  three; `npm install` confirmed the resolved versions did not move.
+- **Applied, documentation only: pre-existing `AdaptationFeedback` replay
+  on first deploy.** Checked whether this was hypothetical before writing
+  anything: `git blame` traced `AdaptationFeedback`'s model class to
+  2026-01-19 (commit `49359fc0`), six-plus months before this PR — the
+  table is NOT new to Phase 3, only the `policy_reward_applied_at` column
+  (migration 0026) is. Any pre-existing rows get `NULL` on that column and
+  are genuinely treated as pending on first task run, not just future
+  feedback. Declined the suggested data migration (stamping every existing
+  row) as disproportionate: a blanket UPDATE across an unknown, unverified
+  set of historical rows is a bigger, harder-to-undo change than
+  documenting the already-intentional idempotent-selection design (chosen,
+  per round 3's own reasoning, so a missed run never loses data) — and I
+  have no way to confirm from here what shape that historical data
+  actually takes. Documented the behavior in `ADAPTIVE_PASSWORD.md`
+  instead, so an operator reads an initial burst of policy movement after
+  deploy as backlog draining, not live signal.
+- **Partially applied, no fabricated citation: the Django CVE suppression
+  block's "add a tracking issue" ask.** Checked whether one already
+  exists, since the finding's own phrasing ("the existing... tracking
+  issue") implied it should: `gh issue list` against this repo, multiple
+  search terms, zero results. Declined to invent a reference — a fake
+  issue number would actively mislead whoever renews this block next.
+  Instead added a short clarifying note distinguishing this block from the
+  genuine no-fix suppressions immediately below it (torch, nltk): a fix
+  exists here, filing the actual tracking issue is a human's call this
+  session isn't authorized to make unprompted (opening a GitHub issue is a
+  "posting public content" action), and until one exists each renewal
+  should re-ask whether the Django 5.2/6.0 upgrade can be scheduled rather
+  than reflexively bumping the date. Re-ran CodeRabbit's own six-part
+  verification script fresh (cache middleware, `get_signed_cookie`,
+  `django.contrib.gis`, `DomainNameValidator`, Django pin) before touching
+  anything — all six unreachability claims still hold unchanged.
+- **Declined again: partial/composite index on `AdaptationFeedback`.**
+  Two nitpicks (in `core.py` and independently in migration
+  `0026_adaptation_feedback_policy_stamp.py`) asking for the same change
+  from two angles. Re-checked both files byte-for-byte against round 16's
+  declined version — unchanged. Same reasoning stands, now a 3rd/6th
+  decline of variants of this one index concern: still-empty table behind
+  gap D1, a schema change for a query-plan optimization with zero current
+  rows to plan around.
+
+Verified after this round: 102 passed / 1 skipped / 7 subtests across
+`test_adaptive_policy_bandit.py` + `test_adaptive_password.py` (unchanged
+counts — no new backend test needed; the transaction wrap doesn't change
+observable behavior on the happy path), 71 passed in
+`adaptiveFeatures.test.js` (re-run after the exact-pin change), Django
+`check` clean, manifest parser logic re-run directly (32 entries, 0
+malformed, 0 expired).
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
