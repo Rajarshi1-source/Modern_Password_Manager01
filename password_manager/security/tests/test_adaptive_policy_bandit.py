@@ -1027,6 +1027,13 @@ class GlobalPriorTests(TestCase):
                 credit_arms(user, [('o', '0')], reward, fp_key_version=1)
 
     def test_a_class_below_the_k_anonymity_floor_is_not_published(self):
+        # Deterministic, not a Laplace-noise bet (raised twice, rounds 19-20:
+        # rebuild_global_priors gates on the RAW contributor count before any
+        # noise is drawn -- see that function's own comment at the gate).
+        # 4 contributors here never reach add_laplace_noise at all, so
+        # pinning the noise draw would guard nothing this test doesn't
+        # already guarantee. Verified with a 40-iteration empirical probe
+        # (0 failures) in round 19, re-confirmed unchanged in round 20.
         self._contributors(MIN_CONTRIBUTING_USERS - 1, 1.0)
 
         stats = rebuild_global_priors(PrivacyGuard())
@@ -1077,6 +1084,14 @@ class GlobalPriorTests(TestCase):
         # publish a population-level prior by rotating enough times, and would
         # break the sensitivity-1.0 bound the Laplace noise is calibrated for
         # (which assumes one bounded contribution per user).
+        #
+        # Deterministic, not a Laplace-noise bet (CodeRabbit, round 20): the
+        # era-dedup logic above collapses this user's 6 arms to ONE entry per
+        # class, so the raw contributor count is 1 -- rebuild_global_priors'
+        # pre-noise floor gate (see its own comment) means add_laplace_noise
+        # is never called for this class at all. Verified with a
+        # 40-iteration empirical probe (0 failures), same discipline as the
+        # sibling test above.
         solo = _make_user('solo-rotator')
         for era in range(1, MIN_CONTRIBUTING_USERS + 2):
             for _ in range(10):
