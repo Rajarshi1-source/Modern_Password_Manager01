@@ -2720,6 +2720,58 @@ Verified after this round: `test_adaptive_password.py` re-run in full
 (new atomicity test included), Django `check` clean. No other files
 changed, so no broader re-run was needed.
 
+**Twentieth review-fix round (PR #466), full CodeRabbit re-review of
+round 19's own commit (`16ada51`).** Two Actionable findings, both Major.
+
+- **Disproved again, plus a genuinely new claim disproved for the first
+  time: the k-anonymity noise-flakiness claim.** CodeRabbit re-raised the
+  IDENTICAL claim round 19 already disproved for
+  `test_a_class_below_the_k_anonymity_floor_is_not_published` (same
+  lines, same reasoning) — expected, since round 19 made no code change
+  for CodeRabbit's own re-review to recognize as resolved (a decline
+  with no diff looks identical to an unexamined finding on the next
+  pass). Re-confirmed the underlying source is byte-for-byte unchanged
+  since round 19 (`git diff` between that commit and now: empty for
+  `adaptive_policy_service.py`), so the round-19 disproof carries forward
+  without re-deriving it from zero. The new part: CodeRabbit also named a
+  SECOND test,
+  `test_one_user_across_several_eras_cannot_clear_the_k_floor_alone`
+  ("solo-rotator"), not covered by round 19's probe. Traced it rather
+  than assuming the same conclusion transfers: this test's era-dedup
+  logic collapses one user's 6 rotated arms down to a single
+  `(user, class)` entry, so its raw contributor count is 1 — the exact
+  same pre-noise gate applies. Verified empirically with a fresh
+  40-iteration probe (properly isolated this time, learning from round
+  19's own fixture mistake): 0/40 failures. Both tests are deterministic;
+  neither needed a code change. Given this is the SECOND time round 19's
+  argument had to be restated for the first test, and CodeRabbit has no
+  way to see round 19's disproof from the diff alone, added an in-file
+  pointer at the actual gate in `rebuild_global_priors` (not just the
+  plan doc/memory) plus a one-line reference at each test, so a third
+  raise — by CodeRabbit or a future human reviewer — finds the reasoning
+  in the file being questioned, not just cross-referenced from
+  elsewhere. See trap 41.
+- **Declined again, now Major severity: composite index on
+  `AdaptationFeedback`.** A ninth-plus angle on the same suggestion
+  (rounds 3, 4, 6, 7, 14, 16, 17, 18, 19) — unchanged reasoning
+  (still-empty table behind gap D1); the severity label changed, the
+  underlying facts didn't. Separately checked the attached Ruff `RUF012`
+  ("mutable default value for class attribute") warning rather than
+  assuming it was noise: this project has no `pyproject.toml`/`ruff.toml`
+  anywhere and no `ruff` step in any CI workflow, so it's CodeRabbit's own
+  bundled linter, not an enforced project standard. The rule itself is a
+  false positive for this exact shape — Django `Meta.indexes`/
+  `constraints` list literals aren't the mutable-default-ARGUMENT pattern
+  RUF012 targets (each model class gets its own fresh `Meta`, there's no
+  shared-state footgun), and the identical `indexes = [...]` idiom
+  appears 20+ times elsewhere in `core.py` alone, unflagged — confirming
+  this is a one-off linter quirk, not a real issue specific to these
+  lines.
+
+Verified after this round: `test_adaptive_policy_bandit.py` re-run in
+full (comment-only changes; both k-anonymity tests still pass). No
+functional code changed this round — only explanatory comments.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
