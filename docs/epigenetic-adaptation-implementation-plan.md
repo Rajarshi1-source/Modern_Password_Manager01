@@ -2660,6 +2660,66 @@ Verified after this round: Django `check` clean; the only functional-file
 change this round is a comment (`admin_adaptive.py`), so the existing
 backend/frontend suites were not re-run — nothing in their scope changed.
 
+**Nineteenth review-fix round (PR #466), full CodeRabbit re-review of
+round 18's own commit (`818fe34`).** One Actionable finding (Major) and
+four Nitpicks.
+
+- **Disproved, with a self-caught false start along the way:
+  `test_a_class_below_the_k_anonymity_floor_is_not_published` "fails
+  about 30% of the time" from unpinned Laplace noise.** The math in the
+  finding was internally correct (Laplace scale 2 at epsilon 0.5, `P(noise
+  >= 1) ≈ 0.30`), which made it worth taking seriously rather than
+  dismissing on vibes. Reading `rebuild_global_priors` settled it: `n =
+  len(means)` is checked against `MIN_CONTRIBUTING_USERS` and the class
+  `continue`s (skipped, never published) BEFORE `add_laplace_noise` is
+  ever called — the noise-drawing lines are unreachable for a raw count of
+  4. The finding's math was real math for a scenario that doesn't occur
+  on this code path. Verified empirically, and this is where a real
+  mistake happened and got caught before shipping: the first probe (40
+  iterations of the test's exact setup) showed 39/40 "failures" — a
+  dramatic, wrong-looking result that would have suggested the OPPOSITE
+  conclusion (an even worse bug than CodeRabbit claimed). Tracing it found
+  the probe itself only cleaned up `GlobalSubstitutionPrior` between
+  iterations, never the `User`/`SubstitutionPolicyArm` rows — so
+  contributors accumulated across all 40 iterations (8 real contributors
+  by iteration 1, 160 by iteration 39), pushing every run past the floor
+  for a reason having nothing to do with noise. Fixed the probe to delete
+  every created object each iteration; re-ran: 0/40 failures, matching the
+  source read. **The corrected empirical result and the source-code
+  reading agree; the finding's own math, while correct in the abstract,
+  doesn't apply to this function's actual control flow.** No test change
+  — the existing test is exactly right as written. See trap 40.
+- **Applied: added the suggested `delete_all_data` atomicity test.**
+  Round 17 wrapped the method in `transaction.atomic()` but nothing
+  proved the all-or-nothing property directly — the existing test only
+  covers the happy path. Added
+  `test_delete_all_data_is_all_or_nothing`, patching
+  `AdaptivePasswordConfig.save` (the last statement inside the atomic
+  block) to raise, asserting every earlier delete in the same call rolled
+  back rather than partially committing. Matches CodeRabbit's own
+  suggested implementation closely; verified the patch target is correct
+  against the current code (config save genuinely is the last statement).
+- **Declined: index for `SubstitutionPolicyArmAdmin`'s
+  `ordering = ('-last_updated_at',)`.** Same reasoning as the seven-plus
+  prior declines of similar suggestions on this feature's other tables:
+  `SubstitutionPolicyArm` rows only exist behind real usage of `/apply/`,
+  and gap D1 keeps the UI (though not the API itself, per round 9) out of
+  reach for any real deployment right now.
+- **Declined: `skip_locked=True` on the weekly task's per-row lock.**
+  CodeRabbit's own framing is explicit: "changes throughput only;
+  correctness is already guaranteed." The task this would optimize has no
+  Celery beat entry yet (still not scheduled, per every prior round that
+  has touched this area) — there is no real concurrent-worker scenario to
+  speed up today. Declined as premature optimization for a code path
+  that isn't live.
+- **Declined again: composite index on `AdaptationFeedback`.** An
+  eighth-plus angle on the same index concern (rounds 3, 4, 6, 7, 14, 16,
+  17, 18). Unchanged reasoning.
+
+Verified after this round: `test_adaptive_password.py` re-run in full
+(new atomicity test included), Django `check` clean. No other files
+changed, so no broader re-run was needed.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)

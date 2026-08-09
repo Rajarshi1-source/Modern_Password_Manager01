@@ -736,6 +736,48 @@ class AdaptivePasswordE2ETests(TestCase):
             SubstitutionPolicyArm.objects.filter(user=other_user).count(), 1
         )
 
+    def test_delete_all_data_is_all_or_nothing(self):
+        """The round-17 ``transaction.atomic()`` wrap around ``delete_all_data``
+        has no direct test of its own -- the test above only exercises the
+        happy path. Force a failure on the LAST statement inside the atomic
+        block (the config disable) and confirm every earlier delete in the
+        same call rolled back instead of partially committing (CodeRabbit,
+        PR #466 round 19)."""
+        from unittest.mock import patch
+
+        from security.models import (
+            AdaptivePasswordConfig, SubstitutionPolicyArm, TypingSession,
+        )
+        from security.services.adaptive_password_service import AdaptivePasswordService
+
+        AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, consent_given_at=timezone.now(),
+        )
+        TypingSession.objects.create(
+            user=self.user, password_fingerprint=FP_STUB, length_bucket=3,
+            success=True,
+        )
+        SubstitutionPolicyArm.objects.create(
+            user=self.user, from_char='o', to_char='0', fp_key_version=1,
+        )
+        service = AdaptivePasswordService(self.user)
+
+        with patch.object(
+            AdaptivePasswordConfig, 'save', side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                service.delete_all_data()
+
+        # Nothing committed -- the earlier deletes in the same call rolled
+        # back along with the failing config save.
+        self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 1)
+        self.assertEqual(
+            SubstitutionPolicyArm.objects.filter(user=self.user).count(), 1
+        )
+        self.assertTrue(
+            AdaptivePasswordConfig.objects.get(user=self.user).is_enabled
+        )
+
     def test_privacy_preserved_throughout_flow(self):
         """Verify no raw password is stored — only the keyed fingerprint."""
         from security.models import AdaptivePasswordConfig, TypingSession
