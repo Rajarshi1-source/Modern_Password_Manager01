@@ -2319,6 +2319,85 @@ re-raise test fails without the fix (exception swallowed, no
 `assertRaises` match) and the ceiling test is a genuine concurrency
 reproduction, not a sequential assertion dressed up as one.
 
+**Fourteenth review-fix round (PR #466), full CodeRabbit re-review of round
+13's own commit (`5be855c`).** All four findings from the stale pre-round-13
+review (Celery re-raise, `credit_arms` lock, `language-en`, the
+`ADAPTIVE_PASSWORD.md` wording) confirmed already resolved — absent from
+this fresh review entirely, and "All checks have passed" on the PR. One
+Actionable finding (Minor) and four Nitpicks (three self-labeled "Low
+value" by CodeRabbit itself) against the new diff.
+
+- **Applied: `credit_adaptation_best_effort`'s `DatabaseError` log message
+  contradicted its own docstring.** The log said "the weekly policy update
+  will still score it"; the docstring two paragraphs above it says the
+  opposite in as many words — `composite_reward` deliberately does not
+  re-derive acceptance/rollback from `adaptation.status`, so a credit
+  dropped on this path is genuinely lost, not recovered later. An operator
+  reading only the log line would conclude no signal was lost when one was.
+  Reworded to match the documented (and actual) behavior.
+- **Declined: partial index on `AdaptationFeedback`
+  (`created_at`, `condition=Q(policy_reward_applied_at__isnull=True)`).**
+  Verified the underlying claim first rather than the label: the weekly
+  task's query genuinely does `.filter(policy_reward_applied_at__isnull=True)
+  .order_by('created_at')`, so the technical observation is correct. But
+  CodeRabbit's own tag is "Trivial | Low value," and the table it targets is
+  still empty in any real deployment — gap D1 keeps the whole feature
+  unreachable, the same reason §4.5's bundle-cost number can't be measured
+  from a production build yet. A schema migration for a query-plan
+  optimization with zero current rows to plan around is exactly the kind of
+  premature change "keep it minimal" argues against; this is the same
+  still-empty-table reasoning that declined a related (but distinct —
+  concurrent index creation, not a partial predicate) suggestion on this
+  same migration in rounds 3, 4, 6, and 7.
+- **Declined: `help_text` on `GlobalSubstitutionPrior.from_char`/`to_char`.**
+  The citation ("the project's ast-grep rule `model-help-text`") is the
+  IDENTICAL fictitious citation trap 29 already found doesn't exist anywhere
+  in this repository — re-grepped fresh this round, still zero matches. The
+  underlying observation (the sibling `SubstitutionPolicyArm` model has
+  `help_text` on its own `from_char`/`to_char`, this one doesn't) is true and
+  cheap to fix, but CodeRabbit itself tags it "Trivial | Low value," and
+  Django's migration framework tracks `help_text` in model state, so even
+  this cosmetic change would need a real `AlterField` migration. Declined
+  alongside the index suggestion for the same "minimal changes" reasoning;
+  the inconsistency is real but not a bug.
+- **Declined: `@admin.display` decorator instead of `.short_description`
+  attributes.** Zero behavior difference — CodeRabbit's own text calls it
+  "optional," since the attribute form still works. Pure style preference,
+  out of scope for a bug-fix round.
+- **Declined again, second raise: explicit `axios` timeout on the
+  preference-model fetch in `suggestAdaptation`.** Re-verified round 9's
+  reasoning against the current file rather than citing it — still holds
+  unchanged: the call is still the first statement in the function, before
+  `filterByStrength`, so a hang or rejection still yields `has_suggestion:
+  false` with no adaptation object, structurally fail-closed independent of
+  any timeout; the GET still carries no body/params, so it's still not a
+  zero-knowledge surface; the identical untimed pattern is still on `main`
+  pre-existing this PR; and 5 sibling `axios.get` calls in the same file
+  still share the pattern, so a one-line timeout on only this one would
+  still be the wrong-shaped fix (the correct one — migrating this file to
+  `services/api.js`'s already-timeout-configured client — is separate,
+  larger, out-of-scope work). Declined again on the same, re-checked
+  grounds. Since this is the second raise of the identical finding, added an
+  in-file pointer comment directly at the call site this time (per the
+  standing practice: a cross-referenced decline in a plan doc/memory alone
+  doesn't reliably stop a re-raise; a pointer in the actually-flagged file
+  does more work) rather than relying solely on this doc and memory to
+  carry the reasoning forward a third time.
+
+Declined: 4 of 5 findings this round, each independently re-verified rather
+than triaged on CodeRabbit's own severity/value label alone — the labels
+matched the outcome here, but the label was one input to the check, not a
+substitute for it. See the four bullets above for the specific reason each
+one held.
+
+Verified after this round: 54 passed / 1 skipped / 7 subtests in
+`test_adaptive_policy_bandit.py` (unchanged counts — this round's only
+backend edit was a log-message string, no new test needed since no test
+asserted on the old text), 26 passed in `adaptive_password.test.tsx`
+(re-run to confirm the new pointer comment didn't alter `suggestAdaptation`
+behavior — it's comment-only), ESLint clean on
+`TypingPatternCapture.jsx`.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)

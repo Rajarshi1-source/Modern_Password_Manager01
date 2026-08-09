@@ -399,7 +399,9 @@ def credit_adaptation_best_effort(adaptation, reward: float) -> int:
     except DatabaseError:
         logger.warning(
             'Policy arm credit skipped for adaptation %s (concurrent write or '
-            'lock contention); the weekly policy update will still score it.',
+            'lock contention); this acceptance/rollback signal is lost, since '
+            'composite_reward deliberately does not re-derive it from '
+            'adaptation.status on a later pass.',
             adaptation.pk,
         )
         return 0
