@@ -10,7 +10,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, act } from '@testing-library/react';
 import axios from 'axios';
-import TypingPatternCapture, { adaptivePasswordService } from '../TypingPatternCapture';
+import TypingPatternCapture, {
+  adaptivePasswordService,
+  ADAPTIVE_API_TIMEOUT_MS,
+} from '../TypingPatternCapture';
 
 vi.mock('axios');
 
@@ -168,7 +171,7 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
 
     expect(axios.get).toHaveBeenCalledWith(
       expect.stringContaining('/adaptive/preference-model/'),
-      expect.any(Object)
+      expect.objectContaining({ timeout: ADAPTIVE_API_TIMEOUT_MS })
     );
     expect(axios.post).not.toHaveBeenCalled();
     expect(result.has_suggestion).toBe(true);
@@ -298,7 +301,7 @@ describe('adaptive ZK v2 — fingerprint key era', () => {
     expect(axios.post).toHaveBeenCalledWith(
       expect.stringContaining('/adaptive/rotate-fingerprint-key/'),
       { confirm: true },
-      expect.any(Object)
+      expect.objectContaining({ timeout: ADAPTIVE_API_TIMEOUT_MS })
     );
     expect(result.fp_key_version).toBe(2);
   });

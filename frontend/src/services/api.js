@@ -4,20 +4,30 @@ import { attachGeolocationInterceptor } from './geolocation';
 import { authHeader } from '../utils/authHeader';
 import { clearStoredTokens } from '../utils/authStorage';
 
+// `x || '30000'` alone has a real gap: the STRING '0' is truthy, so
+// VITE_API_TIMEOUT=0 would survive that fallback and parse to the number 0 --
+// which axios treats as "no timeout", silently defeating the point of
+// configuring one. Validate the parsed value instead of the raw string.
+const _parsedApiTimeout = Number(import.meta.env.VITE_API_TIMEOUT);
+const API_TIMEOUT_MS =
+  Number.isSafeInteger(_parsedApiTimeout) && _parsedApiTimeout > 0
+    ? _parsedApiTimeout
+    : 30000;
+
 // Create API instance with enforced HTTPS
 const createSecureApiInstance = (baseURL) => {
   // Force HTTPS in production
   if (import.meta.env.PROD && baseURL.startsWith('http://')) {
     baseURL = baseURL.replace('http://', 'https://');
   }
-  
+
   const instance = axios.create({
     baseURL,
     headers: {
       'Content-Type': 'application/json',
     },
     withCredentials: false, // Set to true if using cookie-based sessions
-    timeout: parseInt(import.meta.env.VITE_API_TIMEOUT || '30000'),
+    timeout: API_TIMEOUT_MS,
   });
   
   // Add interceptor to enforce HTTPS
