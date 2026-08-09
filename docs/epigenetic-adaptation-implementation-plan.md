@@ -2834,6 +2834,40 @@ Verified: ESLint clean (2 pre-existing, unrelated warnings only), 106/106
 tests passing across `adaptive_password.test.tsx` + `adaptiveZkLeak.test.jsx`
 + `adaptiveFeatures.test.js`, `npm run build` green on Vite 7.3.5.
 
+**Second review-fix round (PR #474).** One Nitpick.
+
+- **Applied: no test exercised the timeout-validation logic itself.** The
+  round-1 fix (`Number.isSafeInteger(x) && x > 0`, else 30000) was verified
+  ad hoc with a throwaway Node script before committing, but that
+  verification was never captured as a real, repeatable test — existing
+  tests only proved CALLERS use whatever `ADAPTIVE_API_TIMEOUT_MS` happens
+  to resolve to, not that the resolution itself is correct across inputs.
+  Added `frontend/src/__tests__/apiTimeoutValidation.test.js`: table-driven,
+  9 cases (unset, empty, zero, negative, fractional, non-numeric, exceeds
+  `MAX_SAFE_INTEGER`, a normal integer, scientific notation) × 2 targets
+  (`TypingPatternCapture.jsx`'s exported constant and `services/api.js`'s
+  `api.defaults.timeout`), using `vi.stubEnv` + `vi.resetModules()` +
+  dynamic re-import per case, since both values are computed once at
+  module-load time. Verified the exact mechanics of `vi.stubEnv` with a
+  throwaway probe first (does `undefined` really read back as `undefined`,
+  does `'0'` read back as the literal string `'0'`) rather than assuming —
+  this project's standing discipline of not trusting an API's behavior
+  without running it. **Mutation-checked, and the result was stronger than
+  expected**: reverting `TypingPatternCapture.jsx` to the original buggy
+  `parseInt(x || '30000', 10)` failed 6 of the 9 cases, not just the
+  `'0'` case the finding was about — negative, fractional, non-numeric,
+  and out-of-range values were ALSO silently accepted by the old code
+  (`parseInt` truncates fractions to their integer part and doesn't
+  validate sign or magnitude at all). The new test suite catches a
+  materially wider range of misconfiguration than the single reported bug.
+  Restored the real fix afterward; confirmed byte-identical to the
+  committed version via `git diff`.
+
+Verified: 18/18 new tests passing, mutation-checked (6/9 fail on the
+reverted code, pass on the real fix), 124/124 total across all four
+relevant test files, ESLint clean on the new file, `npm run build` green
+on Vite 7.3.5.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
