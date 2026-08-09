@@ -48,7 +48,19 @@ const TIMING_BUCKET_THRESHOLDS = [50, 100, 150, 200, 300, 500, 750, 1000, 2000];
 // on the existing calls gets the same protection without that regression.
 // Matches services/api.js's own configured value so behavior is consistent
 // with the rest of the app.
-const ADAPTIVE_API_TIMEOUT_MS = parseInt(import.meta.env.VITE_API_TIMEOUT || '30000', 10);
+//
+// `parseInt(x || '30000', 10)` alone has a real gap: the STRING '0' is
+// truthy, so VITE_API_TIMEOUT=0 would survive the `|| '30000'` fallback and
+// parse to the number 0 -- which axios treats as "no timeout", silently
+// undoing this fix for exactly the misconfiguration it exists to guard
+// against. Validate the parsed value instead of the raw string. Exported so
+// tests can assert against the real computed value instead of a duplicated
+// literal that could drift.
+const _parsedApiTimeout = Number(import.meta.env.VITE_API_TIMEOUT);
+export const ADAPTIVE_API_TIMEOUT_MS =
+    Number.isSafeInteger(_parsedApiTimeout) && _parsedApiTimeout > 0
+        ? _parsedApiTimeout
+        : 30000;
 
 // =============================================================================
 // Utility Functions

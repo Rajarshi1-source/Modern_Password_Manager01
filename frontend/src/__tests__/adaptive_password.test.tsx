@@ -498,7 +498,8 @@ describe('Adaptive Password API Service', () => {
     });
 
     test('enable sends correct request', async () => {
-        const { adaptivePasswordService } = await import('../Components/security/TypingPatternCapture');
+        const { adaptivePasswordService, ADAPTIVE_API_TIMEOUT_MS } =
+            await import('../Components/security/TypingPatternCapture');
 
         vi.mocked(axios.post).mockResolvedValueOnce({ data: { enabled: true } });
 
@@ -507,12 +508,13 @@ describe('Adaptive Password API Service', () => {
         expect(axios.post).toHaveBeenCalledWith(
             expect.stringContaining('/adaptive/enable/'),
             expect.objectContaining({ consent: true }),
-            expect.any(Object)
+            expect.objectContaining({ timeout: ADAPTIVE_API_TIMEOUT_MS })
         );
     });
 
     test('suggestAdaptation generates the suggestion client-side (no password POST)', async () => {
-        const { adaptivePasswordService } = await import('../Components/security/TypingPatternCapture');
+        const { adaptivePasswordService, ADAPTIVE_API_TIMEOUT_MS } =
+            await import('../Components/security/TypingPatternCapture');
 
         // v2: the client pulls the learned preference model and ranks locally.
         vi.mocked(axios.get).mockResolvedValueOnce({
@@ -545,7 +547,7 @@ describe('Adaptive Password API Service', () => {
         // Fetched the preference model; never POSTed the password anywhere.
         expect(axios.get).toHaveBeenCalledWith(
             expect.stringContaining('/adaptive/preference-model/'),
-            expect.any(Object)
+            expect.objectContaining({ timeout: ADAPTIVE_API_TIMEOUT_MS })
         );
         expect(axios.post).not.toHaveBeenCalled();
 
@@ -581,7 +583,8 @@ describe('Adaptive Password API Service', () => {
     });
 
     test('getProfile returns profile data', async () => {
-        const { adaptivePasswordService } = await import('../Components/security/TypingPatternCapture');
+        const { adaptivePasswordService, ADAPTIVE_API_TIMEOUT_MS } =
+            await import('../Components/security/TypingPatternCapture');
 
         const mockProfile = { has_profile: true, total_sessions: 10 };
         vi.mocked(axios.get).mockResolvedValueOnce({ data: mockProfile });
@@ -590,7 +593,7 @@ describe('Adaptive Password API Service', () => {
 
         expect(axios.get).toHaveBeenCalledWith(
             expect.stringContaining('/adaptive/profile/'),
-            expect.any(Object)
+            expect.objectContaining({ timeout: ADAPTIVE_API_TIMEOUT_MS })
         );
         expect(result).toEqual(mockProfile);
     });

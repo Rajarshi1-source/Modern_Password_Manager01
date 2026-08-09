@@ -2774,6 +2774,68 @@ functional code changed this round — only explanatory comments.
 
 ---
 
+### 5.7 Follow-up: PR #474 — the deferred `axios` timeout, in its own PR
+
+The untimed `axios` calls in `TypingPatternCapture.jsx` (declined inline on
+PR #466 rounds 9 and 14 as correctly out of scope — see §5.6 above) got
+their own PR once #466 merged, per the plan both declines pointed at.
+
+**PR creation.** Synced local `main` to `origin/main` (PR #466 had merged),
+branched `fix/typing-pattern-capture-axios-timeout` off it. The suggested
+fix — migrate to `services/api.js`'s configured client — turned out to be
+wrong on inspection, not just a bigger diff than needed: `useAuth.jsx`
+registers a request interceptor (Authorization header) **and** a response
+interceptor (refresh-on-401 with in-flight request queuing) directly on
+the bare, global `axios` object. A separate instance — `services/api.js`'s
+`api`, or even a fresh local `axios.create()` — does not inherit
+interceptors registered on a different instance, so migrating would have
+silently dropped automatic token refresh on all 14 calls, while also
+picking up `services/api.js`'s vault-specific geolocation interceptor on
+requests that have nothing to do with vault self-destruct policies. Fixed
+by keeping the bare `axios` import and adding a per-request
+`timeout: ADAPTIVE_API_TIMEOUT_MS` (matching `services/api.js`'s own
+`VITE_API_TIMEOUT`/30000ms default) to all 14 call sites — one more than
+the originally-filed task's estimate of 13, confirmed by direct grep.
+Updated 5 `toHaveBeenCalledWith` test assertions to account for the new
+config argument (2 related ones already used `expect.any(Object)` and
+needed no change). Verified: ESLint clean, 106/106 tests passing, `npm run
+build` green on Vite 7.3.5. Opened as PR #474.
+
+**First CodeRabbit review-fix round (PR #474).** One Major, one Minor.
+
+- **Applied: `VITE_API_TIMEOUT=0` silently disabled the whole fix.**
+  `parseInt(x || '30000', 10)` has a real gap the PR-creation pass missed:
+  the STRING `'0'` is truthy in JS, so `'0' || '30000'` evaluates to
+  `'0'`, and `parseInt('0', 10) = 0` — which axios treats as "no timeout,"
+  exactly undoing the fix for the one misconfiguration it should guard
+  against hardest. Verified empirically (`'0' || '30000'` → `'0'` in a
+  real Node REPL, not just reasoned about) before fixing. Also found the
+  identical pattern already existed in `services/api.js` (line 20) — the
+  file this PR's own reasoning said NOT to migrate to, but which shares
+  the same bug independently. Fixed both with the same validation:
+  `Number.isSafeInteger(parsed) && parsed > 0`, falling back to 30000
+  otherwise — verified against CodeRabbit's own edge cases (`''`, `'0'`,
+  `'abc'`, `'0.5'`, `'-1'`, `'1e2'`, `'1e300'`) with a real Node script,
+  matching their computed expectations exactly. Exported
+  `ADAPTIVE_API_TIMEOUT_MS` from `TypingPatternCapture.jsx` (was
+  module-private) so tests can assert against the real computed value
+  instead of a duplicated literal that could drift.
+- **Applied: the 5 test fixes from PR creation used `expect.any(Object)`
+  for the config argument, which passes for ANY object — a missing or
+  wrong `timeout` would not fail these tests.** Replaced with
+  `expect.objectContaining({ timeout: ADAPTIVE_API_TIMEOUT_MS })` at
+  exactly the 5 sites CodeRabbit flagged. Two pre-existing, unflagged
+  `expect.any(Object)` sites (the `record-session` test in each file,
+  predating this PR per `git diff` against the merge-base) were
+  deliberately left alone — out of scope, not touched by this PR's own
+  diff.
+
+Verified: ESLint clean (2 pre-existing, unrelated warnings only), 106/106
+tests passing across `adaptive_password.test.tsx` + `adaptiveZkLeak.test.jsx`
++ `adaptiveFeatures.test.js`, `npm run build` green on Vite 7.3.5.
+
+---
+
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
 
 ### 4.1 Client-side memorability scorer
