@@ -37,6 +37,19 @@ import {
 
 const TIMING_BUCKET_THRESHOLDS = [50, 100, 150, 200, 300, 500, 750, 1000, 2000];
 
+// Bare axios has no default timeout (waits forever) and this file's calls go
+// through the global, bare `axios` object deliberately -- NOT services/api.js's
+// separate instance, and NOT a local axios.create() either, because both are
+// distinct instances that would not inherit useAuth.jsx's interceptors
+// registered on the shared bare axios object (the Authorization-header
+// injection and, more importantly, its refresh-on-401-and-retry logic).
+// Switching instances would trade an unlimited timeout for silently losing
+// automatic token refresh on every one of these calls. A per-request timeout
+// on the existing calls gets the same protection without that regression.
+// Matches services/api.js's own configured value so behavior is consistent
+// with the rest of the app.
+const ADAPTIVE_API_TIMEOUT_MS = parseInt(import.meta.env.VITE_API_TIMEOUT || '30000', 10);
+
 // =============================================================================
 // Utility Functions
 // =============================================================================
@@ -298,6 +311,7 @@ const TypingPatternCapture = ({
                         headers: {
                             'Content-Type': 'application/json',
                         },
+                        timeout: ADAPTIVE_API_TIMEOUT_MS,
                     });
 
                     if (onSessionRecorded) {
@@ -343,7 +357,9 @@ export const adaptivePasswordService = {
      * needs before it can compute any fingerprint at all.
      */
     async getConfig() {
-        const response = await axios.get('/api/security/adaptive/config/');
+        const response = await axios.get('/api/security/adaptive/config/', {
+            timeout: ADAPTIVE_API_TIMEOUT_MS,
+        });
         return response.data;
     },
 
@@ -383,6 +399,7 @@ export const adaptivePasswordService = {
         const response = await axios.post(
             '/api/security/adaptive/rotate-fingerprint-key/',
             { confirm: true },
+            { timeout: ADAPTIVE_API_TIMEOUT_MS },
         );
         return response.data;
     },
@@ -397,7 +414,7 @@ export const adaptivePasswordService = {
             suggestion_frequency_days: options.frequencyDays || 30,
             allow_centralized_training: options.allowCentralized ?? true,
             allow_federated_learning: options.allowFederated ?? false,
-        });
+        }, { timeout: ADAPTIVE_API_TIMEOUT_MS });
         return response.data;
     },
 
@@ -407,7 +424,7 @@ export const adaptivePasswordService = {
     async disable(deleteData = false) {
         const response = await axios.post('/api/security/adaptive/disable/', {
             delete_data: deleteData,
-        });
+        }, { timeout: ADAPTIVE_API_TIMEOUT_MS });
         return response.data;
     },
 
@@ -416,7 +433,11 @@ export const adaptivePasswordService = {
      * The pattern carries a keyed fingerprint + coarse features only.
      */
     async record(pattern) {
-        const response = await axios.post('/api/security/adaptive/record-session/', pattern);
+        const response = await axios.post(
+            '/api/security/adaptive/record-session/',
+            pattern,
+            { timeout: ADAPTIVE_API_TIMEOUT_MS },
+        );
         return response.data;
     },
 
@@ -453,20 +474,23 @@ export const adaptivePasswordService = {
     async suggestAdaptation(password, { estimator, explore = true, rng } = {}) {
         let model;
         try {
-            // No explicit timeout here (PR #466 review, raised twice: round 9
-            // and again round 14) -- deliberate, not an oversight. This GET is
-            // the FIRST statement in this function, before filterByStrength,
-            // so a hang or rejection yields has_suggestion: false with no
-            // adaptation object at all: structurally fail-closed, and the C1
-            // guarantee never depends on it. The GET carries no body/params,
-            // so it is not a zero-knowledge surface either. The identical
-            // untimed call is pre-existing on main (not introduced by this
-            // PR), and 5 sibling axios.get calls in this same file share the
-            // pattern -- a one-line timeout here alone would be the wrong
-            // shape of fix; the correct one is migrating this file's calls to
-            // services/api.js's already-timeout-configured client, which is
-            // separate, larger, out-of-scope work, not a quick inline add.
-            ({ data: model } = await axios.get('/api/security/adaptive/preference-model/'));
+            // Timed now (follow-up PR after #466, "migrate TypingPatternCapture
+            // to a configured axios client"): all 14 calls in this file get a
+            // per-request timeout, not a client swap -- see
+            // ADAPTIVE_API_TIMEOUT_MS's own comment for why a different axios
+            // instance (services/api.js's, or a local axios.create()) would
+            // have silently dropped useAuth.jsx's refresh-on-401 retry, which
+            // only the bare, global axios object carries. This GET is still
+            // the first statement in this function, before filterByStrength,
+            // so a hang or rejection still yields has_suggestion: false with
+            // no adaptation object at all -- structurally fail-closed
+            // independent of the timeout, and the C1 guarantee never
+            // depended on it either way. The GET still carries no body/
+            // params, so it was never a zero-knowledge surface.
+            ({ data: model } = await axios.get(
+                '/api/security/adaptive/preference-model/',
+                { timeout: ADAPTIVE_API_TIMEOUT_MS },
+            ));
         } catch (error) {
             console.error('Adaptive preference model unavailable:', error);
             return {
@@ -622,7 +646,7 @@ export const adaptivePasswordService = {
             ...(typeof memorabilityImprovement === 'number'
                 ? { memorability_improvement: memorabilityImprovement }
                 : {}),
-        });
+        }, { timeout: ADAPTIVE_API_TIMEOUT_MS });
         // Return the locally-computed adapted password alongside the server
         // record so the caller can update the stored credential. It is held in
         // memory only — never sent to the server (only fingerprints are).
@@ -635,7 +659,7 @@ export const adaptivePasswordService = {
     async rollback(adaptationId) {
         const response = await axios.post('/api/security/adaptive/rollback/', {
             adaptation_id: adaptationId,
-        });
+        }, { timeout: ADAPTIVE_API_TIMEOUT_MS });
         return response.data;
     },
 
@@ -643,7 +667,9 @@ export const adaptivePasswordService = {
      * Get typing profile statistics.
      */
     async getProfile() {
-        const response = await axios.get('/api/security/adaptive/profile/');
+        const response = await axios.get('/api/security/adaptive/profile/', {
+            timeout: ADAPTIVE_API_TIMEOUT_MS,
+        });
         return response.data;
     },
 
@@ -651,7 +677,9 @@ export const adaptivePasswordService = {
      * Get adaptation history.
      */
     async getHistory() {
-        const response = await axios.get('/api/security/adaptive/history/');
+        const response = await axios.get('/api/security/adaptive/history/', {
+            timeout: ADAPTIVE_API_TIMEOUT_MS,
+        });
         return response.data;
     },
 
@@ -659,7 +687,9 @@ export const adaptivePasswordService = {
      * Get evolution statistics.
      */
     async getStats() {
-        const response = await axios.get('/api/security/adaptive/stats/');
+        const response = await axios.get('/api/security/adaptive/stats/', {
+            timeout: ADAPTIVE_API_TIMEOUT_MS,
+        });
         return response.data;
     },
 
@@ -667,7 +697,9 @@ export const adaptivePasswordService = {
      * Delete all adaptive data (GDPR).
      */
     async deleteAllData() {
-        const response = await axios.delete('/api/security/adaptive/data/');
+        const response = await axios.delete('/api/security/adaptive/data/', {
+            timeout: ADAPTIVE_API_TIMEOUT_MS,
+        });
         return response.data;
     },
 
@@ -675,7 +707,9 @@ export const adaptivePasswordService = {
      * Export all adaptive data (GDPR).
      */
     async exportData() {
-        const response = await axios.get('/api/security/adaptive/export/');
+        const response = await axios.get('/api/security/adaptive/export/', {
+            timeout: ADAPTIVE_API_TIMEOUT_MS,
+        });
         return response.data;
     },
 };
