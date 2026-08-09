@@ -9,15 +9,24 @@
 # an entry expires the CI pre-check fails the build with a clear
 # "expired suppression" message naming the IDs that need renewal or
 # removal. To renew, re-confirm the threat assessment (the comment
-# block in the workflow YAML lists what to check for each ID) and bump
-# the date by no more than 60 days. After two renewals without an
+# block directly above the entry in THIS file, not the workflow YAML —
+# see the note below) and bump the date by no more than 60 days. After
+# two renewals without an
 # upstream fix, file a tracking issue and consider an alternative
 # mitigation (drop the dependency, switch implementation, etc.).
 #
 # When pip-audit reports a finding for a NEW ID, do NOT add it here
-# without writing the threat assessment in the workflow YAML first —
-# this manifest is the enforcement layer; the workflow is the
-# justification layer.
+# without first writing the threat assessment as a comment block directly
+# above the new entry, in THIS file — this manifest is both the
+# enforcement layer (the `<id> exp:<date>` line the workflow's validator
+# parses) and the justification layer (the assessment comment above it).
+# The workflow YAML's own comment (see "Validate pip-audit ignore
+# expiries" in .github/workflows/security-multi-scanner.yml) only
+# describes the general suppression mechanism and renewal policy; it
+# does not, and should not, hold any single advisory's reasoning —
+# duplicating per-CVE assessments there would drift out of sync with
+# this file on every renewal instead of living next to the ID they're
+# about.
 
 # -----------------------------------------------------------------------------
 # (GHSA-grgv-6hw6-v9g4, Twisted DNS DoS — REMOVED, not renewed, on expiry
