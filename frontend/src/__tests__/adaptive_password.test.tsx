@@ -506,7 +506,8 @@ describe('Adaptive Password API Service', () => {
 
         expect(axios.post).toHaveBeenCalledWith(
             expect.stringContaining('/adaptive/enable/'),
-            expect.objectContaining({ consent: true })
+            expect.objectContaining({ consent: true }),
+            expect.any(Object)
         );
     });
 
@@ -543,7 +544,8 @@ describe('Adaptive Password API Service', () => {
 
         // Fetched the preference model; never POSTed the password anywhere.
         expect(axios.get).toHaveBeenCalledWith(
-            expect.stringContaining('/adaptive/preference-model/')
+            expect.stringContaining('/adaptive/preference-model/'),
+            expect.any(Object)
         );
         expect(axios.post).not.toHaveBeenCalled();
 
@@ -586,7 +588,10 @@ describe('Adaptive Password API Service', () => {
 
         const result = await adaptivePasswordService.getProfile();
 
-        expect(axios.get).toHaveBeenCalledWith(expect.stringContaining('/adaptive/profile/'));
+        expect(axios.get).toHaveBeenCalledWith(
+            expect.stringContaining('/adaptive/profile/'),
+            expect.any(Object)
+        );
         expect(result).toEqual(mockProfile);
     });
 

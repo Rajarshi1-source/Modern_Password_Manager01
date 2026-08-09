@@ -166,7 +166,10 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
   it('suggestAdaptation pulls the model and never POSTs the password', async () => {
     const result = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator, explore: false });
 
-    expect(axios.get).toHaveBeenCalledWith(expect.stringContaining('/adaptive/preference-model/'));
+    expect(axios.get).toHaveBeenCalledWith(
+      expect.stringContaining('/adaptive/preference-model/'),
+      expect.any(Object)
+    );
     expect(axios.post).not.toHaveBeenCalled();
     expect(result.has_suggestion).toBe(true);
     // Neither the suggestion object nor any GET arg leaks the password.
@@ -294,7 +297,8 @@ describe('adaptive ZK v2 — fingerprint key era', () => {
 
     expect(axios.post).toHaveBeenCalledWith(
       expect.stringContaining('/adaptive/rotate-fingerprint-key/'),
-      { confirm: true }
+      { confirm: true },
+      expect.any(Object)
     );
     expect(result.fp_key_version).toBe(2);
   });
