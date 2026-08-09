@@ -523,6 +523,12 @@ class GlobalSubstitutionPriorAdmin(admin.ModelAdmin):
         'dp_epsilon',
         'last_updated_at',
     )
+    # Unlike SubstitutionPolicyArmAdmin (which excludes from_char from its
+    # own list_filter for the same field type), a filter link per distinct
+    # value stays small here: every row must clear MIN_CONTRIBUTING_USERS'
+    # k-anonymity floor before rebuild_global_priors publishes it at all, so
+    # the set of published classes -- unlike the unbounded, per-user, any-
+    # Unicode-character SubstitutionPolicyArm rows -- is naturally small.
     list_filter = ('from_char', 'last_updated_at')
     search_fields = ('from_char', 'to_char')
     readonly_fields = (
