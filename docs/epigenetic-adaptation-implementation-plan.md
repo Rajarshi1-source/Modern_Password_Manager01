@@ -2398,6 +2398,46 @@ asserted on the old text), 26 passed in `adaptive_password.test.tsx`
 behavior — it's comment-only), ESLint clean on
 `TypingPatternCapture.jsx`.
 
+**Fifteenth review-fix round (PR #466), verifying two carried-over findings
+against current HEAD (`1159aaa`) rather than trusting their posted
+timestamps.**
+
+- **Confirmed already fixed, no action:** a re-posted `credit_arms`
+  concurrency-race comment. Checked current code directly rather than the
+  comment's age: `AdaptivePasswordConfig.objects.select_for_update()
+  .filter(user=user).first()` still runs before `existing_pairs` is read,
+  exactly the round-13 fix, unmodified since. The comment predates that
+  fix's push and was stale by the time it was surfaced.
+- **Investigated and fixed a different bug than the one CodeRabbit
+  reported.** CodeRabbit's finding — "add matching workflow threat
+  assessments" for the `pip-audit-ignores.txt` suppressions — cited "the
+  suppressions guidance" without naming a file. Traced it to the manifest's
+  own header text (`pip-audit-ignores.txt` lines 11-12 and 17-20), not the
+  `SUPPRESS_WARNINGS_GUIDE.md` citation trap 33 already disproved — a
+  genuinely new angle, checked fresh rather than assumed to be the same
+  claim again. Found the header **self-contradicts** the workflow YAML's
+  own comment: the header says "write the threat assessment in the
+  workflow YAML"; the workflow YAML says "each entry has a threat
+  assessment in the manifest's comment block." `git blame` showed both
+  lines came from the SAME original commit (`c8e1a6e1`, 2026-05-21,
+  pre-dating this PR entirely) — an authoring inconsistency baked in from
+  day one, not drift between rounds. Actual practice across every round
+  that has touched this file (5, 6, 8) has consistently put assessments in
+  the manifest, matching the workflow's description, never the header's.
+  Declined CodeRabbit's literal suggestion (duplicating prose into the
+  workflow YAML would contradict the system's real, working design and
+  drift out of sync on every renewal), and instead corrected the manifest
+  header's self-contradictory wording — the most likely actual cause of
+  this exact complaint recurring. Comment-only; validated by running the
+  workflow's own parser logic (the "Validate pip-audit ignore expiries"
+  Python block) against the edited file directly, not just re-read: 32
+  entries parsed, none malformed, none expired.
+
+Verified after this round: manifest parser logic re-run directly (32
+entries, 0 malformed, 0 expired) since the change is comment-only and
+outside any existing test's scope; no code changed, so no test suite
+re-run was needed.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
