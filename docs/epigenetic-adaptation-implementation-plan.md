@@ -2438,6 +2438,81 @@ entries, 0 malformed, 0 expired) since the change is comment-only and
 outside any existing test's scope; no code changed, so no test suite
 re-run was needed.
 
+**Sixteenth review-fix round (PR #466), full CodeRabbit re-review of round
+15's own commit (`44afa68`).** One Actionable finding (Major) and four
+Nitpicks (three "Trivial | Low value" self-labeled, repeats of prior
+rounds' declines).
+
+- **Applied, the first Major-severity finding in several rounds:
+  `delete_all_data` (GDPR erasure) never deleted `SubstitutionPolicyArm`
+  rows.** Read the method directly rather than trusting the finding's own
+  (slightly wrong — it named a function, `destroy_era_for_user`, that
+  doesn't exist anywhere in the codebase) framing: `delete_all_data`
+  deletes `TypingSession`, `PasswordAdaptation`, `UserTypingProfile`, and
+  disables (does not delete) `AdaptivePasswordConfig` — `SubstitutionPolicyArm`
+  is untouched. These rows are independently keyed by `user`, not cascaded
+  from `PasswordAdaptation`'s FK, so a user who exercises "delete my
+  adaptive password data" while keeping their account keeps every learned
+  bandit posterior about themselves in the database forever. Deliberately
+  scoped to `SubstitutionPolicyArm` only, not `GlobalSubstitutionPrior` —
+  that table is explicitly not per-user (its own docstring: "Deliberately
+  not era-scoped... this row describes the population"), already
+  DP-noised and k-anonymized before publication, and already has its own
+  retraction path (round 4/trap 20) for a consent withdrawal on the NEXT
+  scheduled rebuild — re-litigated here to confirm the scope decision
+  still holds, not re-derived from nothing. **Also found while verifying:
+  zero test coverage existed for `delete_all_data` at all** —
+  `test_gdpr_data_lifecycle` (the only test with "GDPR" in its name) never
+  calls the real method; it deletes each model directly via the ORM,
+  testing that Django's `.delete()` works, not that the service method
+  does. This is very likely why the gap went unnoticed. Added a new test
+  that calls the real `delete_all_data`, populates a
+  `SubstitutionPolicyArm` through the actual creation path
+  (`apply_adaptation_v2` → `credit_adaptation_best_effort`, not a direct
+  insert) matching how CodeRabbit's own finding described the row's
+  origin, and checks a second user's arm survives untouched (scoping
+  check).
+- **Applied: `prior_stats`' success path omitted the `prior_rebuild_failed`
+  key the failure path always includes.** Verified the actual shapes
+  first: `rebuild_global_priors`'s own `return` has three keys, no such
+  flag; the exception handler's fallback dict has four, including
+  `prior_rebuild_failed: True`. A consumer doing `result['prior_rebuild_failed']`
+  (not `.get()`) would `KeyError` on the ordinary success path. Nothing
+  currently does that (grepped: the only reader is a test asserting the
+  failure-path value), so this was latent, not an active bug — fixed
+  anyway since it's a one-line spread and closes the shape inconsistency
+  before any future consumer trips over it. Added the missing assertion
+  to the existing success-path test.
+- **Applied, ending a three-round cycle: `help_text` on
+  `GlobalSubstitutionPrior.from_char`/`to_char`.** The citation ("the
+  repository's ast-grep rule `model-help-text`") is STILL fictitious —
+  re-grepped fresh, zero matches anywhere in the repo, third time this
+  exact citation has been checked and found false (trap 29, round 14, now
+  round 16). Unlike the prior two rounds, applied the fix this time rather
+  than declining again: the underlying inconsistency (the sibling
+  `SubstitutionPolicyArm` model has `help_text` on the same two fields,
+  this one didn't) is real and the fix is two strings plus a metadata-only
+  `AlterField` migration (`0027_globalsubstitutionprior_help_text.py`,
+  confirmed via `makemigrations --check` that nothing else was pending
+  after). The calculus changed because the finding keeps recurring
+  regardless of the citation being false each time — ending the cycle was
+  cheaper than a fourth decline.
+- **Declined again: `AddIndexConcurrently` for migration 0026.** Same
+  still-empty-table reasoning as rounds 3, 4, 6, 7 (fifth decline of a
+  variant of this same index concern) — gap D1 keeps the whole feature,
+  and this table, unreachable in any real deployment.
+- **Declined again: partial index on `AdaptationFeedback`.** Re-checked
+  the current `Meta.indexes` block byte-for-byte against round 14's
+  declined version — unchanged. Same reasoning stands: still-empty table
+  behind gap D1, a schema migration for a query-plan optimization with
+  zero current rows to plan around.
+
+Verified after this round: 102 passed / 1 skipped / 7 subtests across
+`test_adaptive_policy_bandit.py` + `test_adaptive_password.py` (+2 new:
+the GDPR deletion test and the `prior_rebuild_failed` success-path
+assertion), Django `check` clean, `makemigrations --check --dry-run`
+reports no changes after the new migration.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)

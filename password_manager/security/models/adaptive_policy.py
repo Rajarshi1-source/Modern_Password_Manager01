@@ -180,8 +180,14 @@ class GlobalSubstitutionPrior(models.Model):
     era-scoped: eras are per-user, and this row describes the population.
     """
 
-    from_char = models.CharField(max_length=1)
-    to_char = models.CharField(max_length=1)
+    from_char = models.CharField(
+        max_length=1,
+        help_text="Original character of the substitution class (e.g. 'o')",
+    )
+    to_char = models.CharField(
+        max_length=1,
+        help_text="Substituted character of the class (e.g. '0')",
+    )
 
     alpha = models.FloatField(default=PRIOR_ALPHA)
     beta = models.FloatField(default=PRIOR_BETA)

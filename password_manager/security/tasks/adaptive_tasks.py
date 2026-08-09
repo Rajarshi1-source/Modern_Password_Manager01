@@ -244,7 +244,7 @@ def update_rl_model_from_feedback(batch_size: int = 500):
             skipped += 1
 
     try:
-        prior_stats = rebuild_global_priors(PrivacyGuard())
+        prior_stats = {**rebuild_global_priors(PrivacyGuard()), 'prior_rebuild_failed': False}
     except (SoftTimeLimitExceeded, Retry):
         # Same reasoning as the per-row handler above: this is Celery worker
         # control flow, not a rebuild failure. rebuild_global_priors scans the
