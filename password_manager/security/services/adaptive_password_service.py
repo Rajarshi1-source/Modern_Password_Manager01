@@ -963,23 +963,32 @@ class AdaptivePasswordService:
         """
         from ..models import (
             TypingSession, PasswordAdaptation,
-            UserTypingProfile, AdaptivePasswordConfig
+            UserTypingProfile, AdaptivePasswordConfig, SubstitutionPolicyArm
         )
-        
+
         counts = {}
-        
+
         counts['typing_sessions'] = TypingSession.objects.filter(
             user=self.user
         ).delete()[0]
-        
+
         counts['adaptations'] = PasswordAdaptation.objects.filter(
             user=self.user
         ).delete()[0]
-        
+
         counts['profiles'] = UserTypingProfile.objects.filter(
             user=self.user
         ).delete()[0]
-        
+
+        # The bandit's per-user learned posteriors (which substitutions THIS
+        # user tends to accept) are personal data too, independently keyed by
+        # `user` -- deleting PasswordAdaptation above does not cascade to
+        # these, so without this they would survive GDPR erasure indefinitely
+        # even though the account itself is kept.
+        counts['policy_arms'] = SubstitutionPolicyArm.objects.filter(
+            user=self.user
+        ).delete()[0]
+
         # Disable but don't delete config
         try:
             config = AdaptivePasswordConfig.objects.get(user=self.user)

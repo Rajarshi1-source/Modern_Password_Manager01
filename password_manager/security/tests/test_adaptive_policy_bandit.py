@@ -861,6 +861,11 @@ class WeeklyTaskTests(TestCase):
         arm = SubstitutionPolicyArm.objects.get(user=self.user, from_char='o')
         self.assertEqual(arm.pulls, 1)
         self.assertGreater(arm.posterior_mean, 0.5)
+        # Same key present on the success path as on the failure path
+        # (CodeRabbit, PR #466 round 16) -- a consumer indexing
+        # result['prior_rebuild_failed'] must not KeyError just because the
+        # rebuild happened to succeed.
+        self.assertFalse(result['prior_rebuild_failed'])
 
     def test_the_task_is_idempotent(self):
         self._feedback(rating=5)

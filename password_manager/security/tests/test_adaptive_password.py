@@ -675,6 +675,67 @@ class AdaptivePasswordE2ETests(TestCase):
         self.assertEqual(UserTypingProfile.objects.filter(user=self.user).count(), 0)
         self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 0)
 
+    def test_delete_all_data_erases_policy_arms_too(self):
+        """The real ``delete_all_data`` path, not a hand-rolled equivalent
+        (unlike ``test_gdpr_data_lifecycle`` above, which deletes each model
+        directly and never calls the service method at all).
+
+        ``SubstitutionPolicyArm`` rows -- the bandit's per-user learned
+        posteriors -- are independently keyed by ``user``, not cascaded from
+        ``PasswordAdaptation``, so they survived GDPR erasure indefinitely
+        until this was fixed (CodeRabbit, PR #466 round 16). Also checks
+        another user's arm is untouched, so the fix is scoped correctly.
+        """
+        from security.models import (
+            AdaptivePasswordConfig, TypingSession, UserTypingProfile,
+            SubstitutionPolicyArm,
+        )
+        from security.services.adaptive_password_service import AdaptivePasswordService
+
+        AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, consent_given_at=timezone.now(),
+        )
+        UserTypingProfile.objects.create(user=self.user, total_sessions=10)
+        TypingSession.objects.create(
+            user=self.user, password_fingerprint=FP_STUB, length_bucket=3,
+            success=True,
+        )
+        service = AdaptivePasswordService(self.user)
+        # Real creation path: applying an adaptation credits an arm as a
+        # side effect (credit_adaptation_best_effort), the same as CodeRabbit's
+        # finding described, rather than inserting the row directly.
+        service.apply_adaptation_v2(
+            original_fingerprint='Orig0123456789-_aAbBcCdD',
+            adapted_fingerprint='Adpt0123456789-_aAbBcCdD',
+            substitution_classes=[{'from': 'o', 'to': '0', 'confidence': 0.9}],
+        )
+        self.assertEqual(
+            SubstitutionPolicyArm.objects.filter(user=self.user).count(), 1
+        )
+
+        other_user = User.objects.create_user(
+            username='other-gdpr-user', password='irrelevant-to-this-test',
+        )
+        SubstitutionPolicyArm.objects.create(
+            user=other_user, from_char='a', to_char='4', fp_key_version=1,
+        )
+
+        counts = service.delete_all_data()
+
+        self.assertEqual(counts['policy_arms'], 1)
+        self.assertEqual(
+            SubstitutionPolicyArm.objects.filter(user=self.user).count(), 0
+        )
+        self.assertEqual(TypingSession.objects.filter(user=self.user).count(), 0)
+        self.assertEqual(UserTypingProfile.objects.filter(user=self.user).count(), 0)
+        self.assertFalse(
+            AdaptivePasswordConfig.objects.get(user=self.user).is_enabled
+        )
+        # Scoped to this user only -- the other user's arm survives.
+        self.assertEqual(
+            SubstitutionPolicyArm.objects.filter(user=other_user).count(), 1
+        )
+
     def test_privacy_preserved_throughout_flow(self):
         """Verify no raw password is stored — only the keyed fingerprint."""
         from security.models import AdaptivePasswordConfig, TypingSession
