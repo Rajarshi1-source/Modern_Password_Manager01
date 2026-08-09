@@ -2588,6 +2588,78 @@ observable behavior on the happy path), 71 passed in
 `check` clean, manifest parser logic re-run directly (32 entries, 0
 malformed, 0 expired).
 
+**Eighteenth review-fix round (PR #466), full CodeRabbit re-review of
+round 17's own commit (`0068226`).** One Actionable finding (Minor) and
+three Nitpicks.
+
+- **Disproved, not just declined: `select_for_update(of=('self',))`
+  "raises `NotSupportedError` on SQLite, caught by the per-row handler,
+  silently skips the row."** This directly contradicted an existing
+  memory note from round 3 ("SQLite no-ops the whole clause"), so it
+  needed re-deriving fresh rather than trusting either the old note or
+  the new claim. Read Django 5.1.15's actual
+  `SQLCompiler.as_sql` source: the entire `select_for_update` handling
+  block — including the `elif of and not
+  features.has_select_for_update_of: raise NotSupportedError(...)` line
+  the finding is about — is nested inside `if self.query.select_for_update
+  and features.has_select_for_update:`. `connection.features.has_select_for_update`
+  is `False` for this project's SQLite backend (checked directly), so
+  that whole branch, `of=` check included, is unreachable — no exception
+  of any kind is raised. Verified empirically, not just by reading
+  source (this project's own standing practice): wrote a throwaway test
+  running the exact query from `adaptive_tasks.py` against a real SQLite
+  test DB inside a real transaction — passed, row returned, zero
+  exceptions, confirming the source read. Declined; no code change,
+  since there is nothing to fix. See trap 39.
+- **Declined again: composite/single-column index tradeoff on
+  `AdaptationFeedback`.** A 4th/7th angle on the same index concern
+  raised in rounds 3, 4, 6, 7, 14, 16, 17 — unchanged reasoning:
+  still-empty table behind gap D1.
+- **Applied, comment-only: `GlobalSubstitutionPriorAdmin.list_filter`
+  includes `from_char`, while the sibling `SubstitutionPolicyArmAdmin`
+  explicitly excludes the same field for cardinality reasons.** Real
+  inconsistency — CodeRabbit's own framing ("the two admins now state
+  opposite conclusions about the same field") is accurate. But the two
+  fields don't actually share the same practical cardinality: arms are
+  per-user and any-Unicode-character (unbounded in practice, per
+  `MAX_ARMS_PER_USER_ERA`'s own docstring), while published global
+  priors must first clear `MIN_CONTRIBUTING_USERS`' k-anonymity floor,
+  keeping the published-class set small by construction. Kept the
+  filter (removing it would lose a genuinely useful, safe admin
+  affordance) and added the comment CodeRabbit's own suggested fix
+  offered as the alternative to removing it, explaining why the
+  difference is intentional rather than an oversight.
+- **Declined, with a flaw found in the suggested test's own approach,
+  not just its absence: a savepoint-boundary test for `credit_arms`.**
+  The claim — the two existing mocked tests patch `credit_adaptation`
+  directly, so `credit_arms`'s own `transaction.atomic()` never actually
+  runs, and both tests would still pass if that block were deleted — is
+  correct on inspection. But tracing the suggested fix (add a test via
+  `apply_adaptation_v2` that forces a real `IntegrityError` inside
+  `credit_arms`) found it wouldn't actually discriminate the mutation
+  either: `credit_adaptation_best_effort`, `credit_arms`'s only caller on
+  this path, wraps `credit_adaptation(...)` in its OWN
+  `transaction.atomic()` and its own `except DatabaseError:` — a
+  savepoint boundary that exists independent of whether `credit_arms`
+  has one of its own. Any exception `credit_arms` raises, with or
+  without its own nested atomic(), still gets caught at
+  `credit_adaptation_best_effort`'s level, so `apply_adaptation_v2`'s
+  observable behavior (does the adaptation still commit, is the error
+  swallowed) would be identical either way. A test that actually
+  discriminates the mutation would need to go through
+  `credit_arms`'s OTHER caller — the weekly task's direct, non-best-effort
+  `credit_adaptation` call in `adaptive_tasks.py`, which has no
+  equivalent per-call wrapper — a meaningfully larger, more complex
+  test than "Trivial | Quick win" suggests, and disproportionate to add
+  for a coverage gap on a code path (`credit_arms`'s specific nested
+  atomic(), independent of `apply_adaptation_v2`'s own layered
+  protection) that has no evidence of being under-protected in
+  practice. Declined.
+
+Verified after this round: Django `check` clean; the only functional-file
+change this round is a comment (`admin_adaptive.py`), so the existing
+backend/frontend suites were not re-run — nothing in their scope changed.
+
 ---
 
 ## 6. Phase 4 — Memorability and error signals (B3, B4)
