@@ -522,6 +522,8 @@ const AdaptivePasswordSuggestion = ({
         adapted_preview,
         confidence_score,
         memorability_improvement,
+        memorability_score_before,
+        memorability_score_after,
         guesses_log10_before,
         guesses_log10_after,
         guesses_log10_delta,
@@ -529,8 +531,21 @@ const AdaptivePasswordSuggestion = ({
         reason,
     } = suggestion;
 
-    const memorabilityBefore = 0.65; // Example - would come from API
-    const memorabilityAfter = memorabilityBefore + (memorability_improvement || 0);
+    // Phase 4: real measurements from scoreMemorability, replacing a
+    // hard-coded 0.65 "Example - would come from API" placeholder plus a
+    // fabricated improvement that was positive by construction.
+    //
+    // Number.isFinite, not a `||` fallback: 0 is a legitimate memorability
+    // score and `score || 0.65` would silently substitute the old placeholder
+    // for it. The panel is omitted entirely when either reading is absent
+    // (a pre-Phase-4 caller, or a test fixture) rather than shown with an
+    // invented number.
+    const hasMemorabilityReading =
+        Number.isFinite(memorability_score_before)
+        && Number.isFinite(memorability_score_after);
+    const memorabilityDelta = Number.isFinite(memorability_improvement)
+        ? memorability_improvement
+        : (memorability_score_after - memorability_score_before);
 
     // The strength gate is what makes the "harder for attackers" claim true, so
     // show the numbers rather than asserting it. Absent when a caller supplied
@@ -550,7 +565,13 @@ const AdaptivePasswordSuggestion = ({
 
     return (
         <Overlay onClick={onClose}>
-            <Modal onClick={(e) => e.stopPropagation()}>
+            <Modal
+                onClick={(e) => e.stopPropagation()}
+                data-testid="adaptation-suggestion-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Password adaptation suggested"
+            >
                 <Header>
                     <IconWrapper>
                         <Brain size={24} color="#fff" />
@@ -658,23 +679,43 @@ const AdaptivePasswordSuggestion = ({
                         </StrengthPanel>
                     )}
 
-                    {/* Memorability Improvement */}
-                    <ImprovementBadge>
-                        <TrendingUp size={16} />
-                        +{Math.round((memorability_improvement || 0) * 100)}% easier to remember
-                    </ImprovementBadge>
+                    {/* Memorability (Phase 4 — measured, not asserted).
+                        The sign is rendered rather than assumed: replacing a
+                        letter with a symbol or digit genuinely lowers two of
+                        the four scored features, so a real reading is often
+                        negative. Claiming "+X% easier" over a measured drop is
+                        exactly the defect the fabricated formula had. */}
+                    {hasMemorabilityReading && (
+                        <>
+                            <ImprovementBadge data-testid="memorability-badge">
+                                <TrendingUp size={16} />
+                                {memorabilityDelta > 0
+                                    && `+${Math.round(memorabilityDelta * 100)}% easier to remember`}
+                                {memorabilityDelta === 0
+                                    && 'Just as easy to remember'}
+                                {memorabilityDelta < 0
+                                    && `${Math.round(memorabilityDelta * 100)}% harder to read, but it matches how you type`}
+                            </ImprovementBadge>
 
-                    {/* Score Comparison */}
-                    <ScoreComparison>
-                        <ScoreCard>
-                            <ScoreValue>{Math.round(memorabilityBefore * 100)}</ScoreValue>
-                            <ScoreLabel>Current Memorability</ScoreLabel>
-                        </ScoreCard>
-                        <ScoreCard $improved>
-                            <ScoreValue $color="#10B981">{Math.round(memorabilityAfter * 100)}</ScoreValue>
-                            <ScoreLabel>New Memorability</ScoreLabel>
-                        </ScoreCard>
-                    </ScoreComparison>
+                            <ScoreComparison>
+                                <ScoreCard>
+                                    <ScoreValue data-testid="memorability-before">
+                                        {Math.round(memorability_score_before * 100)}
+                                    </ScoreValue>
+                                    <ScoreLabel>Current Memorability</ScoreLabel>
+                                </ScoreCard>
+                                <ScoreCard $improved={memorabilityDelta > 0}>
+                                    <ScoreValue
+                                        $color={memorabilityDelta >= 0 ? '#10B981' : '#F59E0B'}
+                                        data-testid="memorability-after"
+                                    >
+                                        {Math.round(memorability_score_after * 100)}
+                                    </ScoreValue>
+                                    <ScoreLabel>New Memorability</ScoreLabel>
+                                </ScoreCard>
+                            </ScoreComparison>
+                        </>
+                    )}
 
                     {/* Practice Mode */}
                     <PracticeSection>
@@ -701,11 +742,21 @@ const AdaptivePasswordSuggestion = ({
 
                     {/* Action Buttons */}
                     <ButtonRow>
-                        <Button $secondary onClick={handleReject} disabled={isLoading}>
+                        <Button
+                            $secondary
+                            onClick={handleReject}
+                            disabled={isLoading}
+                            data-testid="reject-suggestion-button"
+                        >
                             <X size={18} />
                             Reject
                         </Button>
-                        <Button $primary onClick={handleAccept} disabled={isLoading}>
+                        <Button
+                            $primary
+                            onClick={handleAccept}
+                            disabled={isLoading}
+                            data-testid="accept-suggestion-button"
+                        >
                             <Check size={18} />
                             Accept & Update
                         </Button>

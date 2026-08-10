@@ -12,6 +12,9 @@ Covers the v2 backend surface from docs/adaptive-password-zk-remediation-plan.md
 - v2 is the only contract: server-side /suggest/ is gone (410).
 """
 
+from datetime import timedelta
+
+from django.conf import settings
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
@@ -19,11 +22,27 @@ from django.utils import timezone
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
 
+from security.models import (
+    AdaptationFeedback,
+    AdaptivePasswordConfig,
+    PasswordAdaptation,
+    TypingSession,
+    UserTypingProfile,
+)
 from security.serializers.adaptive_serializers import (
     TypingSessionInputV2Serializer,
     ApplyAdaptationV2Serializer,
     PlaintextRejected,
     FingerprintKeyEraMismatch,
+)
+from security.services.adaptive_password_service import (
+    AdaptivePasswordService,
+    DEFAULT_MEMORABILITY_WEIGHTS,
+    DEFAULT_OPTIMAL_LENGTH,
+    MIN_SESSIONS_FOR_LENGTH_BAND,
+    RHYTHM_BINS,
+    normalize_memorability_weights,
+    nudge_memorability_weights,
 )
 
 # A valid client fingerprint: unpadded base64url, 24 chars (see PR-1).
@@ -571,3 +590,413 @@ class ZKV2APITests(APITestCase):
             'password': 'testpassword123',
         }, format='json')
         self.assertEqual(response.status_code, status.HTTP_410_GONE)
+
+
+# =============================================================================
+# Phase 4 — memorability model + error signals (plan §6, gaps B4/B3/B6)
+# =============================================================================
+
+class MemorabilityModelTests(TestCase):
+    """The learned half of the memorability model (plan §4.2).
+
+    Scoring itself is client-side (it needs the raw password); what the server
+    owns is the *parameters* that feed the client's scorer, and publishing them.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='memuser', password='testpass123'
+        )
+        AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, fingerprint_salt='memsalt'
+        )
+        self.service = AdaptivePasswordService(self.user)
+
+    def _sessions(self, bucket, successes, failures=0):
+        for index in range(successes + failures):
+            TypingSession.objects.create(
+                user=self.user,
+                password_fingerprint=f'fp-{bucket}-{index}',
+                length_bucket=bucket,
+                success=index < successes,
+                error_positions=[],
+                error_count=0,
+                timing_profile={},
+                total_time_ms=1000,
+            )
+
+    def test_optimal_length_band_defaults_without_enough_evidence(self):
+        self._sessions(bucket=4, successes=MIN_SESSIONS_FOR_LENGTH_BAND - 1)
+        params = self.service.export_preference_model()['memorability_params']
+        self.assertEqual(
+            (params['optimal_length_min'], params['optimal_length_max']),
+            DEFAULT_OPTIMAL_LENGTH,
+        )
+
+    def test_optimal_length_band_follows_the_most_successful_bucket(self):
+        # Bucket 4 covers lengths 16-19 and wins on SUCCESSES, not on raw
+        # session count -- bucket 2 has more sessions but mostly failures, so
+        # weighting the distribution by success rate is what decides this.
+        self._sessions(bucket=2, successes=2, failures=40)
+        self._sessions(bucket=4, successes=MIN_SESSIONS_FOR_LENGTH_BAND + 2)
+
+        params = self.service.export_preference_model()['memorability_params']
+        self.assertEqual(params['optimal_length_min'], 16)
+        self.assertEqual(params['optimal_length_max'], 19)
+
+    def test_optimal_length_band_ignores_the_sub_four_character_bucket(self):
+        # Bucket 0 is 0-3 characters. Publishing "your optimal length is 0-3"
+        # would steer the client's length-fit scorer toward unusable
+        # passwords, and such sessions are far more likely truncated entries
+        # than a real preference.
+        self._sessions(bucket=0, successes=MIN_SESSIONS_FOR_LENGTH_BAND * 5)
+        params = self.service.export_preference_model()['memorability_params']
+        self.assertEqual(
+            (params['optimal_length_min'], params['optimal_length_max']),
+            DEFAULT_OPTIMAL_LENGTH,
+        )
+
+    def test_weights_default_until_feedback_moves_them(self):
+        params = self.service.export_preference_model()['memorability_params']
+        self.assertEqual(params['weights'], DEFAULT_MEMORABILITY_WEIGHTS)
+
+    def test_partial_stored_weights_fall_back_rather_than_blending(self):
+        # A half-learned blob merged with defaults is a third thing neither
+        # side intended, so an incomplete dict is rejected wholesale.
+        UserTypingProfile.objects.create(
+            user=self.user, memorability_weights={'length': 0.9},
+        )
+        params = self.service.export_preference_model()['memorability_params']
+        self.assertEqual(params['weights'], DEFAULT_MEMORABILITY_WEIGHTS)
+
+    def test_non_finite_stored_weights_fall_back(self):
+        # float('inf') >= 0 is True, so a bare non-negativity check would let
+        # it through and normalize every other weight to 0.
+        for bad in (float('inf'), float('nan'), -1.0, 'x'):
+            weights = dict(DEFAULT_MEMORABILITY_WEIGHTS)
+            weights['variety'] = bad
+            self.assertEqual(
+                normalize_memorability_weights(weights),
+                DEFAULT_MEMORABILITY_WEIGHTS,
+                f'{bad!r} should have been rejected',
+            )
+
+    def test_positive_feedback_raises_the_driving_feature_weight(self):
+        adaptation = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='active',
+            substitutions_applied={'0': {'from': 'o', 'to': '0'}},
+            memorability_driver='variety',
+        )
+        feedback = AdaptationFeedback.objects.create(
+            adaptation=adaptation, user=self.user, rating=5,
+            memorability_improved=True,
+        )
+
+        before = DEFAULT_MEMORABILITY_WEIGHTS['variety']
+        weights = nudge_memorability_weights(adaptation, feedback)
+
+        self.assertIsNotNone(weights)
+        self.assertGreater(weights['variety'], before)
+        self.assertAlmostEqual(sum(weights.values()), 1.0, places=9)
+
+    def test_negative_feedback_lowers_the_driving_feature_weight(self):
+        adaptation = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='active',
+            memorability_driver='pronounceable',
+        )
+        feedback = AdaptationFeedback.objects.create(
+            adaptation=adaptation, user=self.user, rating=2,
+            memorability_improved=False,
+        )
+
+        before = DEFAULT_MEMORABILITY_WEIGHTS['pronounceable']
+        weights = nudge_memorability_weights(adaptation, feedback)
+
+        self.assertIsNotNone(weights)
+        self.assertLess(weights['pronounceable'], before)
+
+    def test_unanswered_or_undriven_feedback_teaches_nothing(self):
+        # `memorability_improved = None` is "we do not know", which is not the
+        # same as "no". Nudging on a non-answer would learn from the absence
+        # of data. Same for an adaptation with no driver (a pre-Phase-4
+        # client, which cannot tell us which feature moved).
+        undriven = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='active', memorability_driver='',
+        )
+        driven = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='active', memorability_driver='variety',
+        )
+        unanswered = AdaptationFeedback.objects.create(
+            adaptation=driven, user=self.user, rating=4,
+            memorability_improved=None,
+        )
+        answered = AdaptationFeedback.objects.create(
+            adaptation=undriven, user=self.user, rating=4,
+            memorability_improved=True,
+        )
+
+        self.assertIsNone(nudge_memorability_weights(driven, unanswered))
+        self.assertIsNone(nudge_memorability_weights(undriven, answered))
+        self.assertFalse(
+            UserTypingProfile.objects.filter(user=self.user)
+            .exclude(memorability_weights={}).exists()
+        )
+
+    def test_repeated_negative_feedback_never_drives_a_weight_to_zero(self):
+        # Zero is an absorbing state once the weights are renormalized: a
+        # feature at exactly 0 can never be nudged back up, so a long run of
+        # one-sided feedback would permanently delete a feature from the model.
+        adaptation = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='active', memorability_driver='variety',
+        )
+        # One feedback row, applied repeatedly: AdaptationFeedback is unique
+        # per (adaptation, user), and it is the weekly task's
+        # `policy_reward_applied_at` stamp -- not this function -- that makes a
+        # real run apply each row exactly once. Driving the EMA directly is
+        # what isolates the absorbing-state question from that stamp.
+        feedback = AdaptationFeedback.objects.create(
+            adaptation=adaptation, user=self.user, rating=1,
+            memorability_improved=False,
+        )
+        for _ in range(200):
+            weights = nudge_memorability_weights(adaptation, feedback)
+
+        self.assertGreater(weights['variety'], 0.0)
+        self.assertAlmostEqual(sum(weights.values()), 1.0, places=9)
+
+
+class ErrorPositionExportTests(TestCase):
+    """`error_prone_positions` finally reaches a consumer (plan §4.3, gap B3)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='erruser', password='testpass123'
+        )
+        AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, fingerprint_salt='errsalt'
+        )
+        self.service = AdaptivePasswordService(self.user)
+
+    def test_positions_are_published_in_the_preference_model(self):
+        UserTypingProfile.objects.create(
+            user=self.user, error_prone_positions={'3': 0.4, '7': 0.15},
+        )
+        model = self.service.export_preference_model()
+        self.assertEqual(model['error_prone_positions'], {'3': 0.4, '7': 0.15})
+
+    def test_malformed_positions_are_dropped_not_coerced(self):
+        # A junk key coerced to 0 would boost whatever sits at the start of
+        # every password on the client side.
+        # `'inf'` as a STRING, not float('inf'): the column carries a JSON_VALID
+        # check constraint and a bare float infinity cannot be stored at all
+        # (SQLite rejects the INSERT). The string round-trips as valid JSON and
+        # `float('inf')` parses it right back to a non-finite value, so this
+        # reaches the `math.isfinite` guard through a path that can actually
+        # occur in stored data.
+        UserTypingProfile.objects.create(
+            user=self.user,
+            error_prone_positions={
+                'x': 0.5, '-1': 0.5, '2': 'nope', '4': 'inf', '5': 0.3,
+            },
+        )
+        model = self.service.export_preference_model()
+        self.assertEqual(model['error_prone_positions'], {'5': 0.3})
+
+    def test_rates_are_clamped_into_zero_one(self):
+        UserTypingProfile.objects.create(
+            user=self.user, error_prone_positions={'1': 5.0, '2': -3.0},
+        )
+        model = self.service.export_preference_model()
+        self.assertEqual(model['error_prone_positions'], {'1': 1.0, '2': 0.0})
+
+    def test_empty_when_the_user_has_no_profile(self):
+        model = self.service.export_preference_model()
+        self.assertEqual(model['error_prone_positions'], {})
+
+
+class DeadProfileFieldTests(TestCase):
+    """`wpm_variance`, `rhythm_signature`, `common_error_types` (gap B6)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='b6user', password='testpass123'
+        )
+        AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, fingerprint_salt='b6salt'
+        )
+        self.service = AdaptivePasswordService(self.user)
+
+    def _record(self, timings, backspaces=()):
+        return self.service.record_typing_session_v2(
+            password_fingerprint='fp-b6-' + str(len(timings)),
+            length_bucket=3,
+            keystroke_timings=list(timings),
+            backspace_positions=list(backspaces),
+            success=True,
+        )
+
+    def test_wpm_variance_is_written_and_grows_with_spread(self):
+        self._record([100] * 12)
+        profile = UserTypingProfile.objects.get(user=self.user)
+        # First observation has no deviation to measure yet -- 0.0, not None,
+        # so the field stops reading as "never written".
+        self.assertEqual(profile.wpm_variance, 0.0)
+
+        self._record([900] * 12)
+        profile.refresh_from_db()
+        self.assertGreater(profile.wpm_variance, 0.0)
+
+    def test_rhythm_vector_is_scale_free(self):
+        # Asserted on the pure helper, NOT end-to-end. `record_typing_session_v2`
+        # runs every session through `PrivacyGuard.sanitize_pattern`, which adds
+        # Laplace noise to the timing buckets before the profile ever sees them
+        # -- so uniform input does not stay uniform downstream, and an
+        # end-to-end "every bin is exactly 1.0" assertion measures the DP noise
+        # rather than the scale-freeness it claims to test.
+        fast = AdaptivePasswordService._rhythm_vector({i: 100 for i in range(16)})
+        slow = AdaptivePasswordService._rhythm_vector({i: 700 for i in range(16)})
+
+        self.assertEqual(len(fast), RHYTHM_BINS)
+        self.assertEqual(fast, slow)
+        for value in fast:
+            self.assertAlmostEqual(value, 1.0, places=6)
+
+        # A genuine shape difference DOES move the vector: slow start, fast end.
+        ramp = AdaptivePasswordService._rhythm_vector(
+            {i: (400 if i < 8 else 100) for i in range(16)}
+        )
+        self.assertGreater(ramp[0], ramp[-1])
+
+    def test_rhythm_vector_handles_unusable_sessions(self):
+        self.assertIsNone(AdaptivePasswordService._rhythm_vector({}))
+        self.assertIsNone(AdaptivePasswordService._rhythm_vector({0: 0, 1: 0}))
+
+    def test_rhythm_signature_is_persisted_with_a_fixed_length(self):
+        self._record([100] * 16)
+        profile = UserTypingProfile.objects.get(user=self.user)
+
+        self.assertEqual(len(profile.rhythm_signature), RHYTHM_BINS)
+        for value in profile.rhythm_signature:
+            self.assertIsInstance(value, float)
+            self.assertGreater(value, 0.0)
+
+        # A second session of a different length must not change the vector's
+        # length -- fixed bins are what make element-wise blending possible.
+        self._record([120] * 5)
+        profile.refresh_from_db()
+        self.assertEqual(len(profile.rhythm_signature), RHYTHM_BINS)
+
+    def test_common_error_types_classifies_adjacency(self):
+        # Two corrections at adjacent positions read as a transposition; an
+        # isolated one reads as a single-character (adjacent-key) slip.
+        self._record([120] * 10, backspaces=[4, 5])
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertGreater(profile.common_error_types.get('transposition', 0), 0)
+        self.assertAlmostEqual(sum(profile.common_error_types.values()), 1.0, places=6)
+
+    def test_a_clean_session_does_not_rewrite_the_error_distribution(self):
+        # Zero errors is not evidence about which error TYPE dominates.
+        self._record([120] * 10, backspaces=[4, 5])
+        profile = UserTypingProfile.objects.get(user=self.user)
+        before = dict(profile.common_error_types)
+
+        self._record([120] * 10, backspaces=[])
+        profile.refresh_from_db()
+        self.assertEqual(profile.common_error_types, before)
+
+
+class MemorabilityScorePersistenceTests(APITestCase):
+    """The client's readings reach `PasswordAdaptation` (plan §4.1, gap B4)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='scoreuser', password='testpass123'
+        )
+        self.client.force_authenticate(user=self.user)
+        self.config = AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, fingerprint_salt='scoresalt'
+        )
+
+    def _apply(self, **overrides):
+        payload = {
+            'schema_version': 2,
+            'fp_key_version': self.config.fp_key_version,
+            'original_fingerprint': 'AAAAAAAAAAAAAAAAAAAAAAAA',
+            'adapted_fingerprint': 'BBBBBBBBBBBBBBBBBBBBBBBB',
+            'substitutions': [{'from': 'o', 'to': '0', 'confidence': 0.9}],
+            'previews': {'original_masked': 'pa***rd', 'adapted_masked': 'pa***rd'},
+        }
+        payload.update(overrides)
+        return self.client.post(
+            '/api/security/adaptive/apply/', payload, format='json'
+        )
+
+    def test_scores_are_persisted_and_reach_the_evolution_stats(self):
+        response = self._apply(
+            memorability_improvement=-0.30,
+            memorability_score_before=0.55,
+            memorability_score_after=0.25,
+            memorability_driver='variety',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        adaptation = PasswordAdaptation.objects.get(user=self.user)
+        self.assertAlmostEqual(adaptation.memorability_score_before, 0.55)
+        self.assertAlmostEqual(adaptation.memorability_score_after, 0.25)
+        self.assertEqual(adaptation.memorability_driver, 'variety')
+
+        # The direct regression test for the always-0 bug: before Phase 4 both
+        # columns were hard-None, so this average could never be anything else.
+        stats = self.client.get('/api/security/adaptive/stats/')
+        self.assertEqual(stats.status_code, status.HTTP_200_OK)
+        self.assertAlmostEqual(
+            stats.data['average_memorability_improvement'], -0.30, places=6
+        )
+
+    def test_a_positive_improvement_is_reported_as_non_zero(self):
+        self._apply(
+            memorability_score_before=0.40,
+            memorability_score_after=0.55,
+        )
+        stats = self.client.get('/api/security/adaptive/stats/')
+        self.assertAlmostEqual(
+            stats.data['average_memorability_improvement'], 0.15, places=6
+        )
+
+    def test_scores_are_omitted_together_or_not_at_all(self):
+        # get_evolution_stats keys off `before is not None` and would average a
+        # delta against an implicit 0, so half a pair is worse than none.
+        response = self._apply(memorability_score_after=0.25)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        adaptation = PasswordAdaptation.objects.get(user=self.user)
+        self.assertIsNone(adaptation.memorability_score_before)
+        self.assertIsNone(adaptation.memorability_score_after)
+
+        stats = self.client.get('/api/security/adaptive/stats/')
+        self.assertEqual(stats.data['average_memorability_improvement'], 0)
+
+    def test_out_of_range_scores_are_rejected(self):
+        for field in ('memorability_score_before', 'memorability_score_after'):
+            response = self._apply(**{field: 1.5})
+            self.assertEqual(
+                response.status_code, status.HTTP_400_BAD_REQUEST, field
+            )
+
+    def test_an_unknown_driver_is_rejected(self):
+        # A free-text driver would accumulate weight against a key
+        # export_preference_model never reads.
+        response = self._apply(memorability_driver='vibes')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_a_pre_phase_four_client_still_records_an_adaptation(self):
+        response = self._apply()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        adaptation = PasswordAdaptation.objects.get(user=self.user)
+        self.assertIsNone(adaptation.memorability_score_before)
+        self.assertEqual(adaptation.memorability_driver, '')

@@ -1242,7 +1242,27 @@ class PasswordAdaptation(models.Model):
         help_text="ML model confidence (0.0-1.0)")
     memorability_score_before = models.FloatField(null=True, blank=True)
     memorability_score_after = models.FloatField(null=True, blank=True)
-    
+    # Phase 4 (plan §4.2): which of the four memorability features the client
+    # measured as moving MOST between the two passwords. The server cannot
+    # derive this — it never sees either password — but it needs it to attribute
+    # a later `AdaptationFeedback.memorability_improved` answer to a specific
+    # feature weight. A single categorical value out of four, deliberately in
+    # place of the per-feature delta vector that would carry more about the
+    # password's shape for no extra learning value.
+    memorability_driver = models.CharField(
+        max_length=16, blank=True, default='',
+        choices=[
+            ('length', 'Length fit'),
+            ('patterns', 'Repeated patterns'),
+            ('variety', 'Character-class variety'),
+            ('pronounceable', 'Pronounceability'),
+        ],
+        help_text=(
+            "Client-reported memorability feature that moved most for this "
+            "adaptation (empty when nothing moved or a pre-Phase-4 client)."
+        ),
+    )
+
     # Status tracking
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, 
                                default='suggested')
@@ -1358,7 +1378,23 @@ class UserTypingProfile(models.Model):
         default=list,
         help_text="Normalized timing pattern signature"
     )
-    
+
+    # Phase 4 (plan §4.2): the learned memorability feature weights this user's
+    # own feedback has nudged away from the defaults. Empty until enough
+    # feedback arrives; `export_preference_model` falls back to the defaults
+    # rather than publishing a half-learned blend.
+    #
+    # Behavioural, not fingerprint-derived, so — like every other field on this
+    # model — it deliberately survives a fingerprint key rotation.
+    memorability_weights = models.JSONField(
+        default=dict,
+        help_text=(
+            "Learned memorability feature weights: "
+            "{'length': 0.2, 'patterns': 0.3, 'variety': 0.2, "
+            "'pronounceable': 0.3}. Empty means 'use the defaults'."
+        )
+    )
+
     # Statistics
     total_sessions = models.IntegerField(default=0)
     successful_sessions = models.IntegerField(default=0)

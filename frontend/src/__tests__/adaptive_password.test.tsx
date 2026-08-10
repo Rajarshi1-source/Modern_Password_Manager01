@@ -329,7 +329,13 @@ describe('AdaptivePasswordSuggestion Component', () => {
             { position: 1, original_char: 'e', suggested_char: '3', reason: 'leet', confidence: 0.9 },
         ],
         confidence_score: 0.85,
+        // Phase 4 shape: the panel now needs the two ABSOLUTE readings, not
+        // just the delta. Before Phase 4 it rendered a hard-coded 0.65
+        // "Current Memorability" placeholder and derived the "after" value
+        // from it, so it displayed a number no one had measured.
         memorability_improvement: 0.15,
+        memorability_score_before: 0.50,
+        memorability_score_after: 0.65,
     };
 
     test('displays suggestion details', async () => {
@@ -346,6 +352,59 @@ describe('AdaptivePasswordSuggestion Component', () => {
         expect(screen.getByText(/Adaptation/i)).toBeInTheDocument();  // Title: "Password Adaptation Suggested"
         expect(screen.getByText(/15%/)).toBeInTheDocument();  // Memorability improvement
         expect(screen.getByText(/85%/)).toBeInTheDocument();  // Confidence
+        // The absolute scores are the measured ones, not the old placeholder.
+        expect(screen.getByTestId('memorability-before')).toHaveTextContent('50');
+        expect(screen.getByTestId('memorability-after')).toHaveTextContent('65');
+    });
+
+    test('renders a measured drop as a drop, never as "+X% easier"', async () => {
+        const { default: AdaptivePasswordSuggestion } = await import('../Components/security/AdaptivePasswordSuggestion');
+
+        // The ordinary case for canonical leetspeak: replacing a letter with a
+        // symbol lowers two of the four scored features, so the honest reading
+        // is negative. The pre-Phase-4 formula could not produce this at all
+        // (it was positive by construction), which is why it never measured
+        // anything.
+        render(
+            <AdaptivePasswordSuggestion
+                suggestion={{
+                    ...mockSuggestion,
+                    memorability_improvement: -0.30,
+                    memorability_score_before: 0.55,
+                    memorability_score_after: 0.25,
+                }}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
+            />
+        );
+
+        const badge = screen.getByTestId('memorability-badge');
+        expect(badge).toHaveTextContent(/-30%/);
+        expect(badge).not.toHaveTextContent(/easier to remember/i);
+    });
+
+    test('omits the memorability panel when no reading was supplied', async () => {
+        const { default: AdaptivePasswordSuggestion } = await import('../Components/security/AdaptivePasswordSuggestion');
+
+        // A pre-Phase-4 caller sends only the delta. Showing the panel would
+        // mean inventing the two absolute numbers, which is exactly the
+        // placeholder bug Phase 4 removed — so the panel is dropped instead.
+        const { memorability_score_before: _b, memorability_score_after: _a, ...legacy } =
+            mockSuggestion;
+
+        render(
+            <AdaptivePasswordSuggestion
+                suggestion={legacy}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
+            />
+        );
+
+        expect(screen.queryByTestId('memorability-badge')).toBeNull();
+        expect(screen.queryByTestId('memorability-before')).toBeNull();
+        // The rest of the modal still renders — the panel is optional, not a
+        // precondition for showing a suggestion at all.
+        expect(screen.getByText(/Adaptation/i)).toBeInTheDocument();
     });
 
     test('lists substitutions', async () => {

@@ -367,6 +367,11 @@ FINGERPRINT_REGEX = r'^[A-Za-z0-9_-]{16,64}$'
 # not a tight fit around it.
 MAX_SUBSTITUTION_CLASSES = 32
 
+# The four memorability features the client scores (plan §4.1). Kept here rather
+# than imported from the model so the wire contract is validated in one place;
+# PasswordAdaptation.memorability_driver's own `choices` mirror it.
+MEMORABILITY_FEATURE_NAMES = ('length', 'patterns', 'variety', 'pronounceable')
+
 
 class PlaintextRejected(APIException):
     """Raised when a forbidden raw-password field is present (fail-closed).
@@ -585,6 +590,26 @@ class ApplyAdaptationV2Serializer(
     memorability_improvement = serializers.FloatField(
         required=False, min_value=-1.0, max_value=1.0
     )
+    # Phase 4 (plan §4.1): the client's actual memorability readings for the two
+    # passwords, so `get_evolution_stats` can stop reporting a permanent 0.
+    # Coarse scalars over four aggregate features (length fit, repeated
+    # patterns, class variety, pronounceability) — bounded to [0, 1] and stored
+    # as-is. They say nothing about *which* characters produced them, so they
+    # sit at the same coarseness as `length_bucket`, which the record-session
+    # contract has always allowed.
+    memorability_score_before = serializers.FloatField(
+        required=False, min_value=0.0, max_value=1.0
+    )
+    memorability_score_after = serializers.FloatField(
+        required=False, min_value=0.0, max_value=1.0
+    )
+    # Which feature moved most (plan §4.2's attribution). ChoiceField, not a
+    # free CharField: only the four modelled feature names are meaningful, and
+    # an unrecognized value would silently accumulate weight against a key
+    # `export_preference_model` never reads.
+    memorability_driver = serializers.ChoiceField(
+        choices=MEMORABILITY_FEATURE_NAMES, required=False, allow_blank=True,
+    )
 
     def validate_substitutions(self, value):
         return _validate_substitution_classes(value)
@@ -645,3 +670,11 @@ class PreferenceModelSerializer(serializers.Serializer):
         child=serializers.CharField(), required=False,
     )
     memorability_params = serializers.DictField()
+    # Phase 4 (plan §4.3): {position: error_rate}. Aggregate, DP-covered
+    # positional error rates that already reach the client through
+    # /adaptive/profile/; publishing them here is what lets `rankSuggestions`
+    # do the position → character join locally, which the server cannot.
+    # Optional so a pre-Phase-4 payload still serializes.
+    error_prone_positions = serializers.DictField(
+        child=serializers.FloatField(), required=False,
+    )

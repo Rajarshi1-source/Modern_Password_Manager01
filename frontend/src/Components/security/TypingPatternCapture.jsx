@@ -28,6 +28,8 @@ import {
     maskPreview,
     filterByStrength,
     detectSubstitutionClasses,
+    scoreMemorability,
+    memorabilityDriver,
     REJECT_DE_LEET,
 } from '../../services/adaptive/adaptiveFeatures';
 
@@ -575,11 +577,23 @@ export const adaptivePasswordService = {
         const adapted = applySubstitutions(password, substitutions);
         const confidence_score =
             substitutions.reduce((sum, s) => sum + s.confidence, 0) / substitutions.length;
-        // Local, transparent estimate — the server no longer scores the password.
-        const memorability_improvement = Math.min(
-            0.3,
-            Number((confidence_score * 0.15 + substitutions.length * 0.03).toFixed(2))
-        );
+
+        // Phase 4 (plan §4.1, gap B4): a real measurement, replacing
+        // `min(0.3, confidence*0.15 + count*0.03)` -- a formula that could only
+        // ever return a positive number, so it asserted an improvement rather
+        // than measuring one. scoreMemorability reads both passwords locally and
+        // only the two scalars below ever leave the device.
+        //
+        // The delta is SIGNED and is frequently negative for leetspeak: two of
+        // the four scored features (character-class variety, pronounceability)
+        // genuinely fall when a letter becomes a symbol or a digit. Callers must
+        // render the sign rather than assume an improvement -- see
+        // scoreMemorability's own docstring for the measured numbers.
+        const memorabilityParams = model.memorability_params;
+        const memorability_score_before = scoreMemorability(password, memorabilityParams);
+        const memorability_score_after = scoreMemorability(adapted, memorabilityParams);
+        const memorability_improvement =
+            memorability_score_after - memorability_score_before;
 
         return {
             has_suggestion: true,
@@ -587,7 +601,14 @@ export const adaptivePasswordService = {
             original_preview: maskPreview(password),
             adapted_preview: maskPreview(adapted),
             confidence_score,
+            memorability_score_before,
+            memorability_score_after,
             memorability_improvement,
+            // Which of the four features moved most. Needed by the server to
+            // attribute a later "was this easier to remember?" answer to a
+            // feature weight (plan §4.2); a single categorical value out of
+            // four, not a per-feature delta vector.
+            memorability_driver: memorabilityDriver(password, adapted, memorabilityParams),
             guesses_log10_before,
             guesses_log10_after,
             guesses_log10_delta,
@@ -611,12 +632,26 @@ export const adaptivePasswordService = {
      * @param {Object} opts
      * @param {(pw: string) => Promise<string>} opts.fingerprint - Keyed fingerprint fn.
      * @param {number} opts.fpKeyVersion - Era the fingerprint fn was derived under.
-     * @param {number} [opts.memorabilityImprovement] - Optional client estimate.
+     * @param {number} [opts.memorabilityImprovement] - Optional client-measured Δ.
+     * @param {number} [opts.memorabilityScoreBefore] - Optional client-measured
+     *   memorability of the original password (plan §4.1). Sent so
+     *   `get_evolution_stats`' `average_memorability_improvement` stops being
+     *   permanently 0 — before Phase 4 the server wrote both scores as `None`.
+     * @param {number} [opts.memorabilityScoreAfter] - Same, for the adapted one.
+     * @param {string|null} [opts.memorabilityDriver] - Which memorability
+     *   feature moved most, for §4.2's weight attribution.
      */
     async applyAdaptation(
         originalPassword,
         substitutions,
-        { fingerprint, fpKeyVersion, memorabilityImprovement } = {},
+        {
+            fingerprint,
+            fpKeyVersion,
+            memorabilityImprovement,
+            memorabilityScoreBefore,
+            memorabilityScoreAfter,
+            memorabilityDriver: driver,
+        } = {},
     ) {
         if (typeof fingerprint !== 'function') {
             throw new Error('applyAdaptation requires a fingerprint() function (zero-knowledge v2).');
@@ -655,8 +690,21 @@ export const adaptivePasswordService = {
                 original_masked: maskPreview(originalPassword),
                 adapted_masked: maskPreview(adaptedPassword),
             },
-            ...(typeof memorabilityImprovement === 'number'
+            // Number.isFinite, not typeof: `typeof NaN === 'number'` is true,
+            // and a NaN here would be rejected by the serializer as a 400 on
+            // the whole apply — losing the adaptation record over an
+            // informational field. Omitting is the right failure mode.
+            ...(Number.isFinite(memorabilityImprovement)
                 ? { memorability_improvement: memorabilityImprovement }
+                : {}),
+            ...(Number.isFinite(memorabilityScoreBefore)
+                ? { memorability_score_before: memorabilityScoreBefore }
+                : {}),
+            ...(Number.isFinite(memorabilityScoreAfter)
+                ? { memorability_score_after: memorabilityScoreAfter }
+                : {}),
+            ...(typeof driver === 'string' && driver
+                ? { memorability_driver: driver }
                 : {}),
         }, { timeout: ADAPTIVE_API_TIMEOUT_MS });
         // Return the locally-computed adapted password alongside the server
