@@ -3128,9 +3128,21 @@ against fixtures and assert its return payload.
 - **§5.1 needs the master password re-entered.** There is no app-wide unlocked
   `CryptoService` to borrow — `sessionVaultCrypto` holds a session *key*, not
   the password, and `deriveFingerprintKey` genuinely requires the password
-  (Argon2id). The dashboard asks for it, derives once (so a wrong password fails
-  as a failed unlock rather than later as a failed rotation with the vault
-  already rewritten), and clears it from state immediately.
+  (Argon2id). The dashboard asks for it and derives once. **Correction (review
+  round 1): a wrong password does NOT fail this unlock.** Argon2id has no
+  "wrong password" outcome — it deterministically derives *different*, equally
+  well-formed key material from any input — so a typo silently succeeds and
+  fingerprints under the wrong key for the rest of the session. The vault
+  credential itself is never at risk (`updateItem` uses the vault's own,
+  separately-authenticated session key), so the blast radius is this feature's
+  own fingerprint-keyed bookkeeping (rollback chain, history) getting
+  orphaned, not the password. A real fix needs vault-auth verification
+  plumbing this component doesn't have; tracked as a follow-up. Also
+  corrected in round 1: React state is cleared, but the `CryptoService`
+  instance the fingerprinter closure captures kept the raw password on
+  `this.masterPassword` for the instance's whole lifetime regardless — scrubbed
+  directly (not via the existing `clearKeys()`, which would also drop the
+  cached HMAC key and break every later fingerprint call).
 - **§5.3's ordering is implemented as specified and is load-bearing**: vault
   write first, adaptation record second, with the record failure downgraded to a
   warning the user sees. The vault gate is `canEdit`, not `isUnlocked` — both
@@ -3143,6 +3155,42 @@ against fixtures and assert its return payload.
   but Playwright still is not wired into CI and running the spec needs a live
   backend plus a seeded login. Acceptance criterion 6 is therefore met for
   "reachable", not yet demonstrated for "the spec passes".
+
+**1st review-fix round** (PR #475, CodeRabbit + Codex on commit `54a1fa0`,
+fixed in `b38010d`): every finding verified against current code before
+acting, not applied on trust. Fixed — three CodeRabbit Major: `masterPassword`
+left in React state if a user disabled before submitting the unlock form
+(cleared at the start of that flow now); the GDPR export/delete panel nested
+under `{enabled && ...}`, making it unreachable once a user opted out (moved
+to `tab === 'data' || !enabled`, and a delete-all-data action was added — the
+dashboard had shipped with export only); neither dialog trapped keyboard
+focus (new self-contained `useModalFocusTrap` hook — no context dependency,
+so it doesn't need every existing test that renders these dialogs in
+isolation to be rewrapped). Plus two CodeRabbit data-integrity findings
+(§4.6 already documents the `select_for_update()` fix;
+`aggregate_typing_profiles`'s unscoped `save()` could clobber a concurrent
+memorability nudge, fixed with `update_fields` and mutation-checked — reverting
+it fails the new regression test) and two trivial ones (a pre-existing,
+not-mine `f`-string bug in `cleanup_expired_adaptations.reason`; `zip(...,
+strict=True)`). Declined one CodeRabbit nitpick (caching
+`_learn_optimal_length_band`, its own label: "advice, not a defect").
+
+Three Codex P2 findings, all fixed: the GDPR export omitted all four
+Phase-4-populated profile fields plus `memorability_driver` (§4.6's own
+memorability model was, ironically, invisible to a data-portability
+request); the history tab had no feedback-submission control at all, so the
+Phase 4 memorability-nudge loop had a correct backend and zero real input
+from product usage (added a form matching the pre-existing, not-mine e2e
+spec's testids exactly); and the `CryptoService`-closure master-password
+retention documented in the §5.1 correction above. One Codex Major
+(mistyped master password, same §5.1 correction) was deferred rather than
+fixed — real gap, but the fix needs vault-auth plumbing this dashboard
+doesn't have, so it was flagged as a follow-up rather than turning a
+review-fix round into a vault-auth redesign.
+
+Verified: 211 adaptive backend tests (+2), 625 frontend (unchanged), build
+green (`vendor` chunk unchanged, `zxcvbn` still isolated), ZK client guard
+green, 0 new lint warnings.
 
 ---
 
