@@ -368,7 +368,16 @@ const EmptySubtext = styled.p`
 // Component
 // =============================================================================
 
-const TypingProfileCard = ({ onSettingsClick = () => {} }) => {
+/**
+ * @param {Object} props
+ * @param {Function} [props.onSettingsClick] - Settings button handler.
+ * @param {boolean} [props.showToggle] - Render this card's own enable/disable
+ *   toggle. `false` when the card is embedded in AdaptivePasswordDashboard,
+ *   which owns opt-in through an explicit consent dialog — this card's toggle
+ *   calls `enable()` directly, with no consent step, so showing both would give
+ *   the same page two different opt-in paths with different guarantees.
+ */
+const TypingProfileCard = ({ onSettingsClick = () => {}, showToggle = true }) => {
     const [config, setConfig] = useState(null);
     const [profile, setProfile] = useState(null);
     const [history, setHistory] = useState([]);
@@ -480,9 +489,17 @@ const TypingProfileCard = ({ onSettingsClick = () => {} }) => {
                         </Subtitle>
                     </TitleSection>
                 </HeaderLeft>
-                <ToggleButton onClick={handleToggle} $enabled={isEnabled}>
-                    {isEnabled ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
-                </ToggleButton>
+                {showToggle && (
+                    <ToggleButton
+                        onClick={handleToggle}
+                        $enabled={isEnabled}
+                        aria-label={isEnabled
+                            ? 'Disable adaptive passwords'
+                            : 'Enable adaptive passwords'}
+                    >
+                        {isEnabled ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
+                    </ToggleButton>
+                )}
             </Header>
 
             <Content>

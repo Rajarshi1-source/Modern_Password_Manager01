@@ -168,6 +168,52 @@ app.conf.update(
         },
         
         # =================================================================
+        # Adaptive (Epigenetic) Password Tasks — plan §5.4 / gap D3
+        # =================================================================
+        #
+        # These three tasks have existed and been importable since the
+        # feature's first version with NO beat entry, so the learning loop
+        # never actually closed in production: profiles were never
+        # re-aggregated, expired suggestions were never swept, and the bandit
+        # posteriors (Phase 3) were persisted but never fed.
+        #
+        # Task NAMES verified against the live registry rather than taken from
+        # the plan text, which named them `security.tasks.<func>`. `@shared_task`
+        # with no explicit `name=` derives the name from the DEFINING module, so
+        # the real names carry the `adaptive_tasks` segment. An entry using the
+        # plan's names would raise NotRegistered on every beat tick.
+        #
+        # Left on the default queue deliberately. There is no `security.tasks.*`
+        # entry in `task_routes` above, so every security task runs on default
+        # today; adding one for these three would also relocate the breach,
+        # genetic and predictive-expiration tasks to a queue no deployed worker
+        # currently consumes.
+        #
+        # Times are offset from the 2:00 / 3:30 / 4:15 / 4:30 / 5:00 jobs
+        # already in this schedule rather than reusing the plan's 4:15 and
+        # 4:45, both of which are taken above.
+
+        # Re-aggregate typing profiles for users with recent sessions (hourly)
+        'adaptive-aggregate-typing-profiles': {
+            'task': 'security.tasks.adaptive_tasks.aggregate_typing_profiles',
+            'schedule': crontab(minute=15),  # Every hour at :15
+        },
+
+        # Expire stale adaptation suggestions (daily)
+        'adaptive-cleanup-expired-adaptations': {
+            'task': 'security.tasks.adaptive_tasks.cleanup_expired_adaptations',
+            'schedule': crontab(hour=4, minute=45),  # 4:45 AM daily
+        },
+
+        # Fold user feedback into the Beta-Bernoulli bandit posteriors and
+        # rebuild the DP-noised cross-user cold-start priors (weekly).
+        # Matches ADAPTIVE_PASSWORD['RL_MODEL_UPDATE_INTERVAL_DAYS'] = 7.
+        'adaptive-update-rl-model-from-feedback': {
+            'task': 'security.tasks.adaptive_tasks.update_rl_model_from_feedback',
+            'schedule': crontab(day_of_week=1, hour=5, minute=15),  # Mon 5:15 AM
+        },
+
+        # =================================================================
         # 🌑 Dark Protocol Network Tasks
         # =================================================================
         

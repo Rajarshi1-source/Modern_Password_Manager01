@@ -256,6 +256,7 @@ const SettingsPage = () => {
           <Tab
             active={activeTab === 'security'}
             onClick={() => handleTabChange('security')}
+            data-testid="security-settings"
           >
             <FaShieldAlt /> Security
           </Tab>

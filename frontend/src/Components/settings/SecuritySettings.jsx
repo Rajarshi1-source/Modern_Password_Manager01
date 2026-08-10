@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import styled from 'styled-components';
 import preferencesService from '../../services/preferencesService';
 import { FaShieldAlt, FaLock, FaClock, FaFingerprint, FaKey, FaClipboard, FaRandom, FaEye, FaExclamationTriangle, FaCheckCircle, FaInfoCircle, FaGlobe } from 'react-icons/fa';
@@ -134,7 +135,50 @@ const SecuritySettings = () => {
           <FaCheckCircle /> Security settings saved successfully!
         </Alert>
       )}
-      
+
+      {/* Adaptive (Epigenetic) Password Evolution — plan §5.1, gap D2.
+          The feature's own surface lives at /security/adaptive; this is the
+          entry point the e2e spec has always driven
+          (`[data-testid="adaptive-password-tab"]`), which nothing rendered
+          before Phase 5. */}
+      <Section>
+        <SectionHeader>
+          <SectionIcon $color="#8B5CF6">
+            <FaFingerprint />
+          </SectionIcon>
+          <SectionHeaderContent>
+            <h2>Adaptive Password</h2>
+            <p>Learn your typing patterns and gradually morph a credential</p>
+          </SectionHeaderContent>
+        </SectionHeader>
+
+        <SettingItem>
+          <SettingInfo>
+            <h3>Adaptive password evolution</h3>
+            <p>
+              Opt in, review your typing profile, and adapt a stored credential.
+              Every suggestion is generated on your device and must pass a
+              strength check before it is offered.
+            </p>
+          </SettingInfo>
+          <Link
+            to="/security/adaptive"
+            data-testid="adaptive-password-tab"
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: '1px solid rgba(139,92,246,0.4)',
+              background: 'rgba(139,92,246,0.18)',
+              color: 'inherit',
+              textDecoration: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Open
+          </Link>
+        </SettingItem>
+      </Section>
+
       <Section>
         <SectionHeader>
           <SectionIcon $color="#7B68EE">

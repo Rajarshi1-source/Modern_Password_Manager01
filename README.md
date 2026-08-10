@@ -1204,6 +1204,7 @@ SecureVault implements a **true zero-knowledge architecture** where sensitive da
 | **Session Auto-Lock** | Automatic key clearing after configurable timeout |
 | **Secure Memory Clearing** | Keys wiped from memory on lock/logout |
 | **Adaptive Password is Zero-Knowledge** | The adaptive/typing-pattern feature sends only a client-keyed HMAC fingerprint + coarse features (length bucket, timings) and masked previews; the raw password never leaves the device, and the server rejects any plaintext field. Suggestions are generated client-side from a downloaded preference model. |
+| **Adaptive Password never weakens a password** | Every adaptation passes a client-side strength gate before it is offered: the adapted password's zxcvbn `guesses_log10` must be at least the original's, *and* no surviving substitution may land inside a leet-flagged dictionary match. The second rule is what actually closes the gap — zxcvbn *credits* leetspeak, so non-regression alone would wave `password → p@ssw0rd` straight through. The gate is client-side by necessity (the server has no password to check), so it binds what the app offers, not what a modified client could record. "No suggestion" is a common, expected outcome. |
 
 ### Authentication Flow (Zero-Knowledge)
 

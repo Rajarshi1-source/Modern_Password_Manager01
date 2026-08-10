@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from uuid import uuid4
 import json
 
+from django.conf import settings
 from django.test import TestCase
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -1025,23 +1026,155 @@ class CeleryTaskTests(TestCase):
             password='testpass123'
         )
     
-    def test_cleanup_expired_adaptations_structure(self):
-        """Test cleanup task structure."""
+    # These three tests were `assertTrue(callable(task))` until Phase 5. That
+    # asserts the import worked, nothing else -- it would pass against a task
+    # whose body raised on every row. They now run each task against real
+    # fixtures and assert its return payload (plan §5.4).
+
+    def test_cleanup_expired_adaptations_expires_only_stale_suggestions(self):
+        """The cleanup task marks aged 'suggested' rows expired, and only those."""
+        from security.models import PasswordAdaptation
         from security.tasks.adaptive_tasks import cleanup_expired_adaptations
-        
-        self.assertTrue(callable(cleanup_expired_adaptations))
-    
-    def test_aggregate_typing_profiles_structure(self):
-        """Test aggregation task structure."""
+
+        expiry_days = getattr(settings, 'ADAPTIVE_PASSWORD', {}).get(
+            'ADAPTATION_EXPIRY_DAYS', 7
+        )
+        stale = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='suggested',
+        )
+        # suggested_at is auto_now_add, so it cannot be set on create.
+        PasswordAdaptation.objects.filter(pk=stale.pk).update(
+            suggested_at=timezone.now() - timedelta(days=expiry_days + 1)
+        )
+        fresh = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='suggested',
+        )
+        # An ACTIVE row is the user's live password. Ageing must never touch it.
+        active = PasswordAdaptation.objects.create(
+            user=self.user, adaptation_type='substitution',
+            confidence_score=0.8, status='active',
+        )
+        PasswordAdaptation.objects.filter(pk=active.pk).update(
+            suggested_at=timezone.now() - timedelta(days=expiry_days + 30)
+        )
+
+        result = cleanup_expired_adaptations()
+
+        self.assertEqual(result, {'expired': 1})
+        stale.refresh_from_db()
+        fresh.refresh_from_db()
+        active.refresh_from_db()
+        self.assertEqual(stale.status, 'expired')
+        self.assertEqual(fresh.status, 'suggested')
+        self.assertEqual(active.status, 'active')
+
+    def test_aggregate_typing_profiles_recomputes_from_sessions(self):
+        """The aggregation task rebuilds the profile from recent sessions."""
+        from security.models import TypingSession, UserTypingProfile
         from security.tasks.adaptive_tasks import aggregate_typing_profiles
-        
-        self.assertTrue(callable(aggregate_typing_profiles))
-    
-    def test_update_rl_model_structure(self):
-        """Test RL model update task structure."""
+
+        for index in range(4):
+            TypingSession.objects.create(
+                user=self.user,
+                password_fingerprint=f'fp-agg-{index}',
+                length_bucket=3,
+                success=index != 0,  # 3 of 4 succeed
+                error_positions=[],
+                error_count=0,
+                timing_profile={},
+                total_time_ms=1000,
+            )
+
+        result = aggregate_typing_profiles()
+
+        self.assertEqual(result['errors'], 0)
+        self.assertEqual(result['processed'], 1)
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertEqual(profile.total_sessions, 4)
+        self.assertEqual(profile.successful_sessions, 3)
+        self.assertAlmostEqual(profile.success_rate, 0.75)
+
+    def test_aggregate_typing_profiles_ignores_users_with_no_recent_sessions(self):
+        """A user with nothing new is not processed at all."""
+        from security.tasks.adaptive_tasks import aggregate_typing_profiles
+
+        result = aggregate_typing_profiles()
+
+        self.assertEqual(result, {'processed': 0, 'errors': 0})
+
+    def test_update_rl_model_credits_feedback_and_reports_it(self):
+        """The RL task credits an arm, stamps the row, and is idempotent."""
+        from security.models import (
+            AdaptationFeedback, AdaptivePasswordConfig, PasswordAdaptation,
+            SubstitutionPolicyArm,
+        )
         from security.tasks.adaptive_tasks import update_rl_model_from_feedback
-        
-        self.assertTrue(callable(update_rl_model_from_feedback))
+
+        AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, fingerprint_salt='saltysalt',
+        )
+        adaptation = PasswordAdaptation.objects.create(
+            user=self.user,
+            adaptation_type='substitution',
+            confidence_score=0.8,
+            status='active',
+            substitutions_applied={'0': {'from': 'o', 'to': '0'}},
+            memorability_driver='variety',
+        )
+        feedback = AdaptationFeedback.objects.create(
+            adaptation=adaptation, user=self.user, rating=5,
+            memorability_improved=True,
+        )
+
+        result = update_rl_model_from_feedback()
+
+        self.assertEqual(result['processed'], 1)
+        self.assertEqual(result['skipped'], 0)
+        self.assertEqual(result['arms_updated'], 1)
+        self.assertFalse(result['prior_rebuild_failed'])
+        self.assertIn('classes_written', result)
+        self.assertIsNotNone(result['mean_reward'])
+
+        arm = SubstitutionPolicyArm.objects.get(
+            user=self.user, from_char='o', to_char='0',
+        )
+        self.assertEqual(arm.pulls, 1)
+
+        feedback.refresh_from_db()
+        self.assertIsNotNone(feedback.policy_reward_applied_at)
+
+        # Idempotency: the stamp is what makes a Celery retry safe, so a second
+        # run must credit nothing rather than double-count the same evidence.
+        second = update_rl_model_from_feedback()
+        self.assertEqual(second['processed'], 0)
+        arm.refresh_from_db()
+        self.assertEqual(arm.pulls, 1)
+
+    def test_beat_schedule_entries_name_registered_tasks(self):
+        """Every adaptive beat entry must resolve to a real registered task.
+
+        The plan named these `security.tasks.<func>`, but a bare
+        ``@shared_task`` derives its name from the DEFINING module, so the real
+        names carry an ``adaptive_tasks`` segment. A wrong name here does not
+        fail loudly at import -- beat simply raises NotRegistered on every tick
+        and the task silently never runs, which is exactly how these three came
+        to have no schedule at all for so long.
+        """
+        from password_manager.celery import app
+
+        # Import for the side effect of registering the tasks, mirroring what
+        # autodiscovery does in a real worker.
+        import security.tasks.adaptive_tasks  # noqa: F401
+
+        adaptive_entries = {
+            name: entry for name, entry in app.conf.beat_schedule.items()
+            if name.startswith('adaptive-')
+        }
+        self.assertEqual(len(adaptive_entries), 3, adaptive_entries)
+        for name, entry in adaptive_entries.items():
+            self.assertIn(entry['task'], app.tasks, f'{name} -> {entry["task"]}')
 
 
 # =============================================================================

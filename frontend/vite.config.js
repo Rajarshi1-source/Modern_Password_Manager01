@@ -151,6 +151,26 @@ export default defineConfig({
             return 'crypto-primitives';
           }
 
+          // zxcvbn dictionaries ─ ~1.6 MB raw / ~840 KB gzip, and used by
+          // exactly one caller: the adaptive-password strength gate's
+          // `import()` inside loadDefaultEstimator.
+          //
+          // This entry is load-bearing, not tidiness. `manualChunks` below
+          // ends with a catch-all that sends every unnamed node_modules
+          // package to `vendor`, and `vendor` is EAGER (index.html loads it
+          // directly). A named chunk is only fetched when something in the
+          // loaded graph imports it, so naming zxcvbn here is what keeps the
+          // dictionaries behind the dynamic import instead of on the critical
+          // path for every user, including those who never open the feature.
+          //
+          // This was invisible until Phase 5: with no route mounting the
+          // adaptive module (gap D1) Rollup dropped zxcvbn entirely, so the
+          // catch-all never had anything to misplace. Verified by measuring
+          // the `vendor` chunk with and without this entry.
+          if (id.includes('/@zxcvbn-ts/')) {
+            return 'zxcvbn';
+          }
+
           // Chart libraries
           if (id.includes('/chart.js/') || id.includes('/react-chartjs-2/')) {
             return 'charts-vendor';

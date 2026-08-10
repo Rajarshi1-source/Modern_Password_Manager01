@@ -232,6 +232,13 @@ const LivenessVerification = lazy(() => import('./Components/security/liveness/L
 // Predictive Password Expiration - AI-powered threat intelligence
 const PredictiveExpirationDashboard = lazy(() => import('./Components/security/PredictiveExpirationDashboard'));
 
+// Adaptive (Epigenetic) Password Evolution — learns your typing patterns and
+// morphs a credential toward substitutions you already type fluently, behind a
+// client-side strength gate. Lazy like every other /security/* surface: it
+// pulls in zxcvbn's dictionaries (~838 kB gzipped) on demand, which must never
+// land in the entry chunk.
+const AdaptivePasswordDashboard = lazy(() => import('./Components/security/AdaptivePasswordDashboard'));
+
 // Cosmic Ray Entropy - True randomness from muon detection
 const CosmicRayEntropyDashboard = lazy(() => import('./Components/security/CosmicRayEntropyDashboard'));
 
@@ -1718,7 +1725,8 @@ function App() {
               <Link to="/security/bug-bounty" className="nav-link">🏆 Bug Bounty</Link>
               <Link to="/security/password-archaeology" className="nav-link">🕰️ Archaeology</Link>
               <Link to="/security/ai-assistant" className="nav-link">🧠 AI Assistant</Link>
-              <Link to="/settings" className="nav-link">Settings</Link>
+              <Link to="/security/adaptive" className="nav-link">🧬 Adaptive Password</Link>
+              <Link to="/settings" className="nav-link" data-testid="settings-menu">Settings</Link>
               <button onClick={handleLogout} className="logout-btn" disabled={isLoggingOut}>
                 {isLoggingOut ? 'Logging out...' : 'Logout'}
               </button>
@@ -2091,6 +2099,10 @@ function App() {
                 {/* Dark Protocol Network for Anonymous Vault Access */}
                 <Route path="/security/dark-protocol" element={
                   !isAuthenticated ? <Navigate to="/" /> : <DarkProtocolDashboard />
+                } />
+                {/* Adaptive (Epigenetic) Password Evolution — plan §5.1, gap D1 */}
+                <Route path="/security/adaptive" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <AdaptivePasswordDashboard />
                 } />
                 {/* Predictive Intent Analysis - AI Password Prediction */}
                 <Route path="/settings/security/predictive-intent/dashboard" element={

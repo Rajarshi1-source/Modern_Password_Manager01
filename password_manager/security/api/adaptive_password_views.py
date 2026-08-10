@@ -88,6 +88,30 @@ def _current_fp_key_version(user):
     ).first()
 
 
+def _auto_apply_threshold():
+    """Confidence a suggestion must clear before the client may auto-apply it.
+
+    Read from ``settings.ADAPTIVE_PASSWORD['AUTO_APPLY_THRESHOLD']`` (0.9) —
+    stored and admin-displayed since the feature's first version but, like
+    ``auto_apply_high_confidence`` itself, never acted on (plan §0.2 gap B5).
+    Published on ``/adaptive/config/`` so the client applies the deployment's
+    threshold rather than a duplicated literal that could drift from it.
+
+    Fail-safe rather than fail-closed: a missing or non-numeric setting reads as
+    1.0, i.e. "nothing is confident enough to auto-apply". Defaulting to a low
+    number here would silently auto-rotate credentials on a misconfigured
+    deployment, which is the exact opposite of what an unset value should mean.
+    """
+    raw = getattr(settings, 'ADAPTIVE_PASSWORD', {}).get('AUTO_APPLY_THRESHOLD', 1.0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    if not 0.0 <= value <= 1.0:
+        return 1.0
+    return value
+
+
 def _service_error_response(result):
     """Map a service-layer ``{'error': ...}`` dict to a status code.
 
@@ -294,6 +318,19 @@ def get_adaptive_config(request):
             'allow_federated_learning': config.allow_federated_learning,
             'differential_privacy_epsilon': config.differential_privacy_epsilon,
             'auto_suggest_enabled': config.auto_suggest_enabled,
+            'auto_apply_high_confidence': config.auto_apply_high_confidence,
+            'auto_apply_threshold': _auto_apply_threshold(),
+            # Phase 5 (plan §5.2, gap B5): the cadence gate. `should_suggest_
+            # adaptation()` has existed on the model since the feature's first
+            # version and was referenced ONLY by tests, so "gradually morph"
+            # was never enforced -- nothing stopped the client offering a
+            # suggestion on every unlock. AND-ed with auto_suggest_enabled
+            # here rather than left to the client to combine, so a client that
+            # reads one field and not the other cannot nag a user who turned
+            # suggestions off.
+            'should_suggest': (
+                config.auto_suggest_enabled and config.should_suggest_adaptation()
+            ),
         })
     except AdaptivePasswordConfig.DoesNotExist:
         return Response({
