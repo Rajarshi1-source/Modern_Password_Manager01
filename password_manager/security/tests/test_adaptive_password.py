@@ -1097,9 +1097,39 @@ class CeleryTaskTests(TestCase):
         self.assertEqual(result['errors'], 0)
         self.assertEqual(result['processed'], 1)
         profile = UserTypingProfile.objects.get(user=self.user)
-        self.assertEqual(profile.total_sessions, 4)
+        # NOT total_sessions -- see the dedicated test below for why this
+        # task must never write it.
         self.assertEqual(profile.successful_sessions, 3)
         self.assertAlmostEqual(profile.success_rate, 0.75)
+
+    def test_aggregate_typing_profiles_never_regresses_the_lifetime_session_count(self):
+        """`total_sessions` is exported as `model_version` and documented as
+        monotonic. This task recomputes stats from a 50-session WINDOW, so
+        writing that windowed count back into `total_sessions` would walk a
+        version counter backwards for any user past 50 lifetime sessions --
+        found only after fixing the crash that had kept this task from ever
+        completing before, so the bug (already in this exact line) had never
+        been reachable until that fix made it so.
+        """
+        from security.models import TypingSession, UserTypingProfile
+        from security.tasks.adaptive_tasks import aggregate_typing_profiles
+
+        # A lifetime count a real, older user would have -- deliberately
+        # ABOVE the task's 50-session window, so overwriting it with the
+        # window size would be a visible regression, not a coincidental match.
+        UserTypingProfile.objects.create(user=self.user, total_sessions=120)
+        for index in range(4):
+            TypingSession.objects.create(
+                user=self.user,
+                password_fingerprint=f'fp-lifetime-{index}',
+                length_bucket=3, success=True, error_positions=[],
+                error_count=0, timing_profile={}, total_time_ms=1000,
+            )
+
+        aggregate_typing_profiles()
+
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertEqual(profile.total_sessions, 120)
 
     def test_aggregate_typing_profiles_does_not_clobber_concurrent_writes(self):
         """This task must only touch the columns it recomputes.
@@ -1154,7 +1184,9 @@ class CeleryTaskTests(TestCase):
             aggregate_typing_profiles()
 
         profile = UserTypingProfile.objects.get(user=self.user)
-        self.assertEqual(profile.total_sessions, 1)
+        # total_sessions is intentionally NOT among update_fields (see
+        # test_aggregate_typing_profiles_never_regresses_the_lifetime_session_count),
+        # so this test's own assertion is about the field it exists to guard.
         self.assertEqual(profile.memorability_weights, concurrent_weights)
 
     def test_aggregate_typing_profiles_ignores_users_with_no_recent_sessions(self):

@@ -1197,6 +1197,12 @@ class PasswordAdaptation(models.Model):
         ('rejected', 'Rejected'),
         ('active', 'Active'),
         ('rolled_back', 'Rolled Back'),
+        # Written by security.tasks.adaptive_tasks.cleanup_expired_adaptations
+        # since this feature's very first commit, but never registered here —
+        # QuerySet.update() bypasses model validation, so the write always
+        # succeeded, it just left get_status_display() and the admin with no
+        # label for a real, reachable status value.
+        ('expired', 'Expired'),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

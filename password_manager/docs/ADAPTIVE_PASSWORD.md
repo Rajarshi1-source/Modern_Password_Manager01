@@ -141,7 +141,7 @@ After 10+ typing sessions, the system will suggest adaptations:
 |----------|--------|-------------|
 | `/adaptive/preference-model/` | GET | Download the learned preference model — resolved substitution weights, plus `exploration` (raw `{alpha, beta}`), `weight_sources`, learned `memorability_params` and `error_prone_positions`; the client generates, Thompson-samples, error-tilts and strength-gates suggestions locally |
 | `/adaptive/suggest/` | POST | **Deprecated (HTTP 410)** — server-side suggestion removed; use the preference-model pull instead |
-| `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + `fp_key_version` + substitution classes + masked previews; optionally `memorability_score_before`/`_after` and `memorability_driver`; raw passwords rejected) |
+| `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + `fp_key_version` + substitution classes + masked previews; optionally `memorability_improvement`, `memorability_score_before`/`_after` and `memorability_driver`; raw passwords rejected) |
 | `/adaptive/rollback/` | POST | Rollback to previous |
 
 ### Profile & History
@@ -283,7 +283,12 @@ correct reading for these four intrinsic features. The reason a user finds
 *their own* habitual substitution easy is habit, and habit is modelled by the
 bandit posterior (`confidence`), not here. The UI renders the signed number.
 
-The server learns the *parameters*, never the score:
+The server learns the *parameters*, and never **computes** a score itself —
+but it does **receive and persist** the client's already-computed readings.
+`/adaptive/apply/` accepts `memorability_score_before`/`_after` (and the
+derived `memorability_improvement`), stored so `get_evolution_stats`' average
+isn't permanently 0. "Never the score" describes where the scoring *logic*
+runs, not whether the number ever reaches the server.
 
 - `optimal_length_min` / `optimal_length_max` come from the user's own
   `length_bucket` distribution weighted by per-bucket success rate — in effect,

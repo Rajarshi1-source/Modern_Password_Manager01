@@ -705,7 +705,12 @@ const AdaptivePasswordSuggestion = ({
                                 {memorabilityDelta === 0
                                     && 'Just as easy to remember'}
                                 {memorabilityDelta < 0
-                                    && `${Math.round(memorabilityDelta * 100)}% harder to read, but it matches how you type`}
+                                    // memorabilityDelta is negative here, so
+                                    // Math.round(...) alone renders a leading
+                                    // "-" ("-30% harder to read") -- a double
+                                    // negative next to the word "harder".
+                                    // Math.abs() reports the magnitude only.
+                                    && `${Math.abs(Math.round(memorabilityDelta * 100))}% harder to read, but it matches how you type`}
                             </ImprovementBadge>
 
                             <ScoreComparison>

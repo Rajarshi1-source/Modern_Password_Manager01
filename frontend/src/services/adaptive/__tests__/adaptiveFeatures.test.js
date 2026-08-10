@@ -1039,6 +1039,22 @@ describe('scoreMemorability', () => {
       .toBeCloseTo(scoreMemorability('correcthorse'), 10);
   });
 
+  it('falls back to full defaults on a PARTIAL weights blob, matching the server', () => {
+    // The server's own normalize_memorability_weights (adaptive_password_
+    // service.py) rejects a weights blob wholesale unless all four features
+    // are present -- it never back-fills a missing one with 0 and
+    // renormalizes over the rest. An earlier version of this client function
+    // did exactly that back-filling, a silent contract mismatch: the same
+    // partial input would score differently depending on which side computed
+    // it. Three valid weights, one genuinely absent (not zero, not present at
+    // all) -- must land on the pure defaults, not a 3-feature blend.
+    const partial = {
+      weights: { length: 0.1, patterns: 0.2, variety: 0.7 }, // no `pronounceable`
+    };
+    expect(scoreMemorability('correcthorse', partial))
+      .toBeCloseTo(scoreMemorability('correcthorse'), 10);
+  });
+
   it('rejects a non-string password rather than scoring undefined', () => {
     expect(() => scoreMemorability(undefined)).toThrow(TypeError);
     expect(() => memorabilityFeatures(42)).toThrow(TypeError);

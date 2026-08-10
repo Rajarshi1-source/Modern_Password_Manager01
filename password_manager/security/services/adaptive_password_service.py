@@ -743,8 +743,24 @@ class AdaptivePasswordService:
         # Update profile confidence
         profile.profile_confidence = min(1.0, profile.total_sessions / 50)
         profile.last_session_at = timezone.now()
-        
-        profile.save()
+
+        # update_fields, not a bare save(): this is the request-path writer
+        # (record_typing_session_v2 -> here) for the columns above only, and
+        # runs on every typing session -- the highest-frequency of the three
+        # call sites that read/write this row. memorability_weights is owned
+        # by nudge_memorability_weights (the weekly feedback task); an
+        # unscoped save() here would read-then-write-back whatever stale
+        # value this instance happened to load, silently reverting a nudge
+        # that committed in the gap between this method's read and its save.
+        # Same class of bug already fixed for aggregate_typing_profiles and
+        # nudge_memorability_weights itself -- this was the third, and the
+        # one on the hottest path.
+        profile.save(update_fields=[
+            'total_sessions', 'successful_sessions', 'success_rate',
+            'error_prone_positions', 'common_error_types', 'rhythm_signature',
+            'average_wpm', 'wpm_variance', 'profile_confidence',
+            'last_session_at', 'updated_at',
+        ])
     
     @staticmethod
     def _blend_error_types(current: Optional[Dict], error_positions: List[int]) -> Dict:
