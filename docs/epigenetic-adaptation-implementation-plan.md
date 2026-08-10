@@ -3192,6 +3192,70 @@ Verified: 211 adaptive backend tests (+2), 625 frontend (unchanged), build
 green (`vendor` chunk unchanged, `zxcvbn` still isolated), ZK client guard
 green, 0 new lint warnings.
 
+**2nd review-fix round** (CodeRabbit + Codex re-review of round 1's own
+commit, PR #475, fixed in `f77d0fc`): every finding re-verified against
+current code rather than trusted, one declined as a disproven false
+positive. Fixed — GDPR export/delete was STILL unreachable in a second,
+narrower case round 1 hadn't covered: the deployment kill switch
+(`featureDisabled`, HTTP 503) triggered a full-page early return, on top of
+round 1's fix for the ordinary "user opted out" case. Both endpoints are
+deliberately not gated by the deployment flag server-side, so the UI now
+reaches them in both states. `useModalFocusTrap` (round 1's own new hook)
+had two of its own bugs: it treated a `:disabled` control as reachable via
+Tab (browsers skip disabled elements natively, so the wrap-around condition
+was unsatisfiable — Tab from the true last control left the dialog
+entirely), and it depended on `onClose` in its effect array, so an inline
+arrow at either call site re-ran the effect — and reset focus — on every
+re-render of an already-open dialog. `readItemPassword` read `data.password
+?? data.secret` but always wrote back to `data.password`, so a
+`secret`-keyed item would accumulate two different credentials on adapt.
+`AdaptivePasswordSuggestion`'s negative-delta message rendered a double
+negative ("-30% harder to read"); the round-1 test for this exact branch
+had itself asserted the buggy text as correct, caught and fixed together.
+Client `normalizeMemorabilityParams` back-filled a missing weight with 0
+and renormalized, while the server's version (same PR) returns full
+defaults on any missing feature — a same-shaped partial blob would score
+differently depending which side computed it; the server never actually
+emits a partial blob today, so this was latent, not live, but aligned
+regardless since two normalizers silently defining "partial" differently is
+a drift trap on its own. Plus two nitpicks (deferred `URL.revokeObjectURL`;
+`ErrorBoundary` around the route, matching sibling `/security/*` routes).
+
+Two Codex findings were real gaps that round 1's own fix had, for the first
+time, made *reachable*, not new bugs it introduced: `_update_typing_profile`
+(the request-path writer, called on every real session) had the identical
+bare-`save()` clobber bug already fixed twice elsewhere on this PR — the
+highest-frequency of the three sites. And `aggregate_typing_profiles` wrote
+a 50-session WINDOWED count into `profile.total_sessions`, which
+`export_preference_model` exports as `model_version`, documented at that
+call site as "monotonic-ish" — for any user past 50 lifetime sessions, the
+version would go backwards on the next hourly run. That exact line predates
+this PR entirely (the original pre-Phase-4/5 code), but the task crashed on
+every single invocation before round 1's crash fix, so this downstream bug
+had literally never executed in production until that fix unblocked it.
+Also fixed: `'expired'` was never a registered `PasswordAdaptation.
+STATUS_CHOICES` value despite `cleanup_expired_adaptations` writing it since
+the feature's first commit (migration 0029); two doc corrections
+(`memorability_improvement` missing from the `/adaptive/apply/` table;
+"the server learns the parameters, never the score" read as "never sees a
+score" when it does receive and persist one).
+
+Declined as a disproven false positive: "SecuritySettings needs Router
+context in production." Every one of the reviewer's own verification
+scripts for this claim returned empty or failed output, yet it reached a
+confident conclusion regardless. Checked the actual entry point instead of
+trusting the claim: `frontend/src/main.jsx:61-65` wraps `<App />` in
+`<BrowserRouter>` at the true React root, one level above `App.jsx` — the
+standard v6 pattern, and why the rest of the app's many pre-existing
+`<Link>`/`<Routes>` usages already work in production. No change needed.
+
+Verified: 213 adaptive backend tests (+2), 626 frontend (+1), build green
+(`vendor` chunk unchanged), Django check clean, no pending migrations, ZK
+client guard green, 0 new lint warnings. Both new backend regression tests
+mutation-checked — reverting either fix reproduces the exact predicted
+failure (a clobbered `memorability_weights`; `120 → 4` on the session-count
+regression).
+
 ---
 
 ## 8. Sequencing and risk
