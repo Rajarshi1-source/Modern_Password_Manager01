@@ -79,7 +79,19 @@ def aggregate_typing_profiles():
             total = len(recent_ids)
             successful = recent.filter(success=True).count()
 
-            profile.total_sessions = total
+            # `total` here is a WINDOW (the last <=50 sessions), not the
+            # lifetime count -- deliberately NOT written to
+            # profile.total_sessions. That field is exported as
+            # export_preference_model's model_version, documented at that
+            # call site as "monotonic-ish so the client can cache/invalidate";
+            # _update_typing_profile (the per-session, request-path writer)
+            # already owns it correctly via `+= 1` on every real session. This
+            # task overwriting it with a smaller windowed count once a user
+            # passes 50 lifetime sessions would make model_version go
+            # BACKWARDS, exactly what a version counter must never do. Found
+            # only after fixing the crash that had kept this task from ever
+            # completing successfully before now -- the bug was already in
+            # this exact line, just unreachable.
             profile.successful_sessions = successful
             profile.success_rate = successful / total if total > 0 else 0
             
@@ -108,7 +120,7 @@ def aggregate_typing_profiles():
             # commits, then saving after it commits, would silently revert
             # the nudge with no error and no log line.
             profile.save(update_fields=[
-                'total_sessions', 'successful_sessions', 'success_rate',
+                'successful_sessions', 'success_rate',
                 'profile_confidence', 'last_session_at',
             ])
             

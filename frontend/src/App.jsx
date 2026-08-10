@@ -2100,9 +2100,16 @@ function App() {
                 <Route path="/security/dark-protocol" element={
                   !isAuthenticated ? <Navigate to="/" /> : <DarkProtocolDashboard />
                 } />
-                {/* Adaptive (Epigenetic) Password Evolution — plan §5.1, gap D1 */}
+                {/* Adaptive (Epigenetic) Password Evolution — plan §5.1, gap D1.
+                    Wrapped in ErrorBoundary like the adjacent lazy /security/*
+                    routes, for a route-specific fallback message rather than
+                    the generic one the app-root boundary would otherwise show. */}
                 <Route path="/security/adaptive" element={
-                  !isAuthenticated ? <Navigate to="/" /> : <AdaptivePasswordDashboard />
+                  !isAuthenticated ? <Navigate to="/" /> : (
+                    <ErrorBoundary fallbackMessage="Failed to load Adaptive Password Dashboard">
+                      <AdaptivePasswordDashboard />
+                    </ErrorBoundary>
+                  )
                 } />
                 {/* Predictive Intent Analysis - AI Password Prediction */}
                 <Route path="/settings/security/predictive-intent/dashboard" element={

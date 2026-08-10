@@ -675,21 +675,37 @@ function normalizeMemorabilityParams(params) {
     max = DEFAULT_MEMORABILITY_PARAMS.optimal_length_max;
   }
 
+  // All-or-nothing, matching the server's own `normalize_memorability_weights`
+  // exactly (adaptive_password_service.py): a weights blob is accepted only
+  // if every one of the four features is present with a finite, non-negative
+  // number. The server never actually emits a partial blob over
+  // `/preference-model/` (its own normalizer already rejects partial input
+  // before publishing), so this mismatch was unreachable via that path — but
+  // this function is also called directly by anything constructing a
+  // `memorabilityParams` object by hand (tests, a future caller), and having
+  // two normalizers silently define "partial" differently is a drift trap
+  // regardless of today's reachability. Back-filling a missing weight with 0
+  // and renormalizing over the rest, as a first version of this did, is a
+  // DIFFERENT blend than "use the defaults" -- a half-learned model treated
+  // as a complete one is a third thing neither side intended.
   const rawWeights = raw.weights || {};
   const weights = {};
   let total = 0;
   for (const name of MEMORABILITY_FEATURES) {
-    const value = Object.hasOwn(rawWeights, name)
-      // eslint-disable-next-line security/detect-object-injection
-      ? Number(rawWeights[name])
-      : Number.NaN;
+    if (!Object.hasOwn(rawWeights, name)) {
+      return { min, max, weights: { ...DEFAULT_MEMORABILITY_PARAMS.weights } };
+    }
+    // eslint-disable-next-line security/detect-object-injection
+    const value = Number(rawWeights[name]);
     // Number.isFinite, not typeof/truthiness: a weight of Infinity would make
     // the normalized combination NaN for every password, and a NaN weight
     // would poison the sum silently.
-    const usable = Number.isFinite(value) && value >= 0 ? value : 0;
+    if (!Number.isFinite(value) || value < 0) {
+      return { min, max, weights: { ...DEFAULT_MEMORABILITY_PARAMS.weights } };
+    }
     // eslint-disable-next-line security/detect-object-injection
-    weights[name] = usable;
-    total += usable;
+    weights[name] = value;
+    total += value;
   }
   if (total <= 0) {
     return { min, max, weights: { ...DEFAULT_MEMORABILITY_PARAMS.weights } };

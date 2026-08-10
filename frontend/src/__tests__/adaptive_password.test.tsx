@@ -379,7 +379,12 @@ describe('AdaptivePasswordSuggestion Component', () => {
         );
 
         const badge = screen.getByTestId('memorability-badge');
-        expect(badge).toHaveTextContent(/-30%/);
+        // Magnitude only, no leading "-": "-30% harder to read" reads as a
+        // double negative next to the word "harder". This was itself a real
+        // bug caught by a fresh review pass -- this assertion originally
+        // asserted the buggy "-30%" text as if it were correct.
+        expect(badge).toHaveTextContent(/30%/);
+        expect(badge).not.toHaveTextContent(/-30%/);
         expect(badge).not.toHaveTextContent(/easier to remember/i);
     });
 

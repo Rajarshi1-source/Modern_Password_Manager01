@@ -260,16 +260,28 @@ const ConsentCheck = styled.label`
  *
  * Vault payload shapes have drifted over the project's life, so read the
  * documented key first and fall back rather than assuming one shape and
- * silently scoring `undefined`.
+ * silently scoring `undefined`. Returns which key the value came from
+ * alongside the value itself — the caller must write the adapted password
+ * back to that SAME key. Always writing to `password` regardless of where
+ * the value was read from would, for an item keyed under `secret`, add a
+ * new `password` field while leaving the stale pre-adaptation value sitting
+ * in `secret` — two different credentials on the same item, and any reader
+ * that prefers `secret` would keep using the old one.
  *
  * @param {object|null} item - A decrypted vault item.
- * @returns {string|null} The password, or `null` when the item has none.
+ * @returns {{ key: 'password'|'secret', value: string }|null} The field the
+ *   password was read from and its value, or `null` when the item has none.
  */
 function readItemPassword(item) {
     const data = item && item.data;
     if (!data || typeof data !== 'object') return null;
-    const candidate = data.password ?? data.secret ?? null;
-    return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+    if (typeof data.password === 'string' && data.password.length > 0) {
+        return { key: 'password', value: data.password };
+    }
+    if (typeof data.secret === 'string' && data.secret.length > 0) {
+        return { key: 'secret', value: data.secret };
+    }
+    return null;
 }
 
 /** Human label for a vault item in the picker. @private */
@@ -500,11 +512,12 @@ const AdaptivePasswordDashboard = () => {
                 say('That item could not be decrypted, so it was not analysed.', true);
                 return;
             }
-            const password = readItemPassword(decrypted);
-            if (!password) {
+            const read = readItemPassword(decrypted);
+            if (!read) {
                 say('That item has no password field to adapt.', true);
                 return;
             }
+            const { key: passwordKey, value: password } = read;
 
             const result = await adaptivePasswordService.suggestAdaptation(password);
             if (!result.has_suggestion) {
@@ -515,7 +528,9 @@ const AdaptivePasswordDashboard = () => {
                 return;
             }
 
-            pendingRef.current = { itemId: selectedItemId, password, decrypted };
+            pendingRef.current = {
+                itemId: selectedItemId, password, passwordKey, decrypted,
+            };
             setSuggestion(result);
         } catch (error) {
             say(error.message || 'Could not analyse that credential.', true);
@@ -548,7 +563,10 @@ const AdaptivePasswordDashboard = () => {
                 // ever existed in this tab's memory.
                 await updateItem({
                     ...pending.decrypted,
-                    data: { ...pending.decrypted.data, password: adaptedPassword },
+                    data: {
+                        ...pending.decrypted.data,
+                        [pending.passwordKey]: adaptedPassword,
+                    },
                 });
 
                 try {
@@ -657,7 +675,10 @@ const AdaptivePasswordDashboard = () => {
             link.href = url;
             link.download = 'adaptive-password-data.json';
             link.click();
-            URL.revokeObjectURL(url);
+            // Deferred, not synchronous: some browsers cancel a download
+            // that's still starting if its blob URL is revoked in the same
+            // tick as the click that triggered it.
+            setTimeout(() => URL.revokeObjectURL(url), 0);
             say('Export complete.');
         } catch (error) {
             say(error.message || 'Export failed.', true);
@@ -702,19 +723,16 @@ const AdaptivePasswordDashboard = () => {
         );
     }
 
-    if (featureDisabled) {
-        return (
-            <Page data-testid="adaptive-password-section">
-                <Heading>
-                    <ShieldAlert size={22} />
-                    <h1>Adaptive Password</h1>
-                </Heading>
-                <Note $error>
-                    Adaptive passwords are switched off for this deployment.
-                </Note>
-            </Page>
-        );
-    }
+    // featureDisabled is NOT an early return (it was — see round-1 fix history):
+    // GDPR export (`/adaptive/export/`) and erasure (`/adaptive/data/`) are
+    // deliberately not gated by the deployment kill switch server-side (same
+    // reasoning as the opted-out case just above), so a full-page replacement
+    // here made both permanently unreachable the moment ADAPTIVE_PASSWORD.ENABLED
+    // was off — the config fetch that produces this state is itself gated,
+    // but the erasure/export endpoints it blocks the REST of the page for are
+    // not. `config` stays `null` in this state, so `enabled` is already
+    // `false` and the existing `!enabled` data-panel fallback below applies
+    // without further changes.
 
     return (
         <Page data-testid="adaptive-password-section">
@@ -732,20 +750,30 @@ const AdaptivePasswordDashboard = () => {
             <Panel>
                 <Row>
                     <PanelTitle style={{ margin: 0, flex: '1 1 auto' }}>
-                        <Shield size={16} />
-                        {enabled ? 'Enabled' : 'Disabled'}
+                        {featureDisabled ? <ShieldAlert size={16} /> : <Shield size={16} />}
+                        {featureDisabled ? 'Unavailable' : (enabled ? 'Enabled' : 'Disabled')}
                     </PanelTitle>
-                    <Action
-                        type="button"
-                        onClick={handleToggleClick}
-                        disabled={busy}
-                        data-testid="adaptive-enable-toggle"
-                        $danger={enabled}
-                    >
-                        {enabled ? 'Turn off' : 'Turn on'}
-                    </Action>
+                    {/* No config exists to toggle while the deployment kill
+                        switch is on -- calling enable() would just 503 too. */}
+                    {!featureDisabled && (
+                        <Action
+                            type="button"
+                            onClick={handleToggleClick}
+                            disabled={busy}
+                            data-testid="adaptive-enable-toggle"
+                            $danger={enabled}
+                        >
+                            {enabled ? 'Turn off' : 'Turn on'}
+                        </Action>
+                    )}
                 </Row>
-                {!enabled && (
+                {featureDisabled && (
+                    <Note $error>
+                        Adaptive passwords are switched off for this deployment.
+                        You can still export or erase any data already collected.
+                    </Note>
+                )}
+                {!enabled && !featureDisabled && (
                     <Note data-testid="adaptive-status-disabled">
                         Adaptive passwords are off. Nothing about your typing is
                         collected until you opt in.

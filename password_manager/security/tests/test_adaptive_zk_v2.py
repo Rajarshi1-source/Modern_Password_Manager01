@@ -909,6 +909,39 @@ class DeadProfileFieldTests(TestCase):
         profile.refresh_from_db()
         self.assertEqual(profile.common_error_types, before)
 
+    def test_record_typing_session_does_not_clobber_concurrent_weight_nudge(self):
+        """`_update_typing_profile` is the request-path writer, the third of
+        three sites this same clobber bug was found and fixed on this PR.
+
+        Same interleaving-forcing technique as `aggregate_typing_profiles`'
+        regression test: patch `get_or_create` so a concurrent write lands
+        between this method's read and its own later save, which its
+        in-memory instance cannot see.
+        """
+        from unittest.mock import patch
+
+        concurrent_weights = {
+            'length': 0.05, 'patterns': 0.15, 'variety': 0.5, 'pronounceable': 0.3,
+        }
+        real_get_or_create = UserTypingProfile.objects.get_or_create
+
+        def racing_get_or_create(*args, **kwargs):
+            result = real_get_or_create(*args, **kwargs)
+            UserTypingProfile.objects.filter(user=self.user).update(
+                memorability_weights=concurrent_weights,
+            )
+            return result
+
+        with patch.object(
+            UserTypingProfile.objects, 'get_or_create',
+            side_effect=racing_get_or_create,
+        ):
+            self._record([120] * 10, backspaces=[])
+
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertEqual(profile.total_sessions, 1)
+        self.assertEqual(profile.memorability_weights, concurrent_weights)
+
 
 class MemorabilityScorePersistenceTests(APITestCase):
     """The client's readings reach `PasswordAdaptation` (plan §4.1, gap B4)."""
