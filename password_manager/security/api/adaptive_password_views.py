@@ -399,8 +399,15 @@ def apply_adaptation(request):
         "adapted_fingerprint": "…",
         "substitutions": [{"from": "o", "to": "0", "confidence": 0.9}],
         "previews": {"original_masked": "ab***yz", "adapted_masked": "a0***yz"},
-        "memorability_improvement": 0.15
+        "memorability_improvement": -0.30,
+        "memorability_score_before": 0.55,
+        "memorability_score_after": 0.24,
+        "memorability_driver": "variety"
     }
+
+    The three memorability fields are Phase 4 additions and remain optional: a
+    client that omits them records an adaptation exactly as before, with both
+    scores left NULL and excluded from `average_memorability_improvement`.
     """
     user = request.user
 
@@ -417,6 +424,9 @@ def apply_adaptation(request):
         substitution_classes=data['substitutions'],
         previews=data.get('previews'),
         memorability_improvement=data.get('memorability_improvement'),
+        memorability_score_before=data.get('memorability_score_before'),
+        memorability_score_after=data.get('memorability_score_after'),
+        memorability_driver=data.get('memorability_driver'),
         expected_fp_key_version=data['fp_key_version'],
     )
     if 'error' in result:

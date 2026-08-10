@@ -350,6 +350,84 @@ export function detectSubstitutionClasses(password) {
   return classes;
 }
 
+// =============================================================================
+// Error-position ranking (Phase 4 — plan §4.3 / gap B3)
+// =============================================================================
+//
+// `UserTypingProfile.error_prone_positions` has been written and decayed since
+// the feature's first version and read by nothing (gap B3): the product claim
+// "learns from your typing errors" was false. The join that makes it useful --
+// position -> which CHARACTER sits there -- can only happen on the client,
+// because the server never sees the password. The positions themselves already
+// cross the wire (they are in /adaptive/profile/ today), so exporting them in
+// the preference model adds no new server-side knowledge.
+
+/**
+ * How much a fully error-prone (or fully error-free) position moves a
+ * candidate's ranking score, in the same [0, 1] units as a confidence or a
+ * Thompson draw. Deliberately smaller than the gap between a learned weight
+ * (0.9) and the default (0.5), so error data tilts ties rather than
+ * overpowering an actually-learned preference.
+ *
+ * @type {number}
+ */
+export const ERROR_POSITION_WEIGHT = 0.15;
+
+/**
+ * Weight applied to a neighbouring position's error rate.
+ *
+ * A stumble recorded at position p is evidence about the *transition* into p,
+ * so p-1 and p+1 are partially implicated -- but only partially, or a single
+ * hot position would smear across the whole password.
+ *
+ * @type {number}
+ * @private
+ */
+const ADJACENT_ERROR_WEIGHT = 0.5;
+
+/**
+ * Error affinity of a position: how much this user stumbles at or next to it.
+ *
+ * @param {Map<number, number>} rates - position → error rate in [0, 1].
+ * @param {number} position - Candidate position (index into the password).
+ * @returns {number} Affinity in [0, 1].
+ * @private
+ */
+function errorAffinity(rates, position) {
+  const at = rates.get(position) ?? 0;
+  const before = rates.get(position - 1) ?? 0;
+  const after = rates.get(position + 1) ?? 0;
+  return Math.min(1, Math.max(at, ADJACENT_ERROR_WEIGHT * Math.max(before, after)));
+}
+
+/**
+ * Normalize the server's `error_prone_positions` map into a numeric Map.
+ *
+ * The wire shape is `{ "3": 0.4, "7": 0.15 }` — JSON object keys are always
+ * strings. Entries that are not a finite number, or not a non-negative integer
+ * position, are dropped rather than coerced: a malformed entry silently read as
+ * position 0 would boost whatever sits at the start of every password (the same
+ * "don't default malformed data into a plausible-looking value" principle
+ * `leetMatchSpans` applies to estimator output).
+ *
+ * @param {Record<string, number>|null|undefined} errorPositions - Wire map.
+ * @returns {Map<number, number>} Cleaned position → rate map (possibly empty).
+ * @private
+ */
+function normalizeErrorPositions(errorPositions) {
+  const rates = new Map();
+  if (!errorPositions || typeof errorPositions !== 'object') return rates;
+  for (const [key, value] of Object.entries(errorPositions)) {
+    const position = Number(key);
+    if (!Number.isInteger(position) || position < 0) continue;
+    // Number.isFinite, not typeof: `typeof Infinity === 'number'` is true and
+    // an Infinity rate would clamp to 1 and pin every ranking to that position.
+    if (!Number.isFinite(value)) continue;
+    rates.set(position, clamp01(value));
+  }
+  return rates;
+}
+
 /**
  * Rank candidate substitutions against a learned preference model and select
  * the best one per position.
@@ -371,13 +449,26 @@ export function detectSubstitutionClasses(password) {
  *
  * @param {Array<{ position: number, original_char: string, suggested_char: string, reason?: string }>} candidates
  *   Candidates, typically from {@link generateCandidates}.
- * @param {{ substitution_weights?: Record<string, Record<string, number>>, exploration?: Record<string, Record<string, {alpha: number, beta: number}>>, model_version?: number }|null} [preferenceModel=null]
+ * When `errorPositions` is supplied (Phase 4, plan §4.3), the ranking score is
+ * additionally tilted by where this user actually stumbles: **boosted** at or
+ * next to a high-error position (adapting the character they keep fumbling is
+ * the change most likely to help) and **penalized** at a position they never
+ * miss (swapping in an unfamiliar character there trades a fluent keystroke for
+ * a new one). Like Thompson sampling, this moves the ranking only — the
+ * reported `confidence` is untouched, because that is the number shown to the
+ * user and it must mean "how much the model likes this class", not "how this
+ * class happened to rank in this password".
+ *
+ * @param {Array<{ position: number, original_char: string, suggested_char: string, reason?: string }>} candidates
+ *   Candidates, typically from {@link generateCandidates}.
+ * @param {{ substitution_weights?: Record<string, Record<string, number>>, exploration?: Record<string, Record<string, {alpha: number, beta: number}>>, error_prone_positions?: Record<string, number>, model_version?: number }|null} [preferenceModel=null]
  *   Server-exported preference model (no password data); `null` uses defaults.
- * @param {{ maxSuggestions?: number, minConfidence?: number, explore?: boolean, rng?: () => number }} [options={}]
+ * @param {{ maxSuggestions?: number, minConfidence?: number, explore?: boolean, rng?: () => number, errorPositions?: Record<string, number> }} [options={}]
  *   `maxSuggestions` caps the result size (default 3); `minConfidence` drops
  *   weak candidates (default 0); `explore` enables Thompson sampling (default
  *   false, so ranking stays deterministic unless a caller opts in); `rng`
- *   injects a uniform (0, 1) source for reproducible tests.
+ *   injects a uniform (0, 1) source for reproducible tests; `errorPositions`
+ *   overrides the model's own `error_prone_positions` table.
  * @returns {Array<{ position: number, original_char: string, suggested_char: string, confidence: number, reason: string }>}
  *   The selected, ranked substitutions.
  */
@@ -387,8 +478,20 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
   }
   const {
     maxSuggestions = 3, minConfidence = 0, explore = false, rng = defaultRng,
+    errorPositions,
   } = options;
   const exploration = explore ? (preferenceModel && preferenceModel.exploration) : null;
+  const errorRates = normalizeErrorPositions(
+    errorPositions !== undefined
+      ? errorPositions
+      : (preferenceModel && preferenceModel.error_prone_positions),
+  );
+  // An empty table is a genuine no-op, not "every position is error-free".
+  // Applying the -ERROR_POSITION_WEIGHT floor uniformly would not reorder
+  // anything (it shifts every score equally), but it would make the "no error
+  // data" and "measured zero everywhere" cases indistinguishable to a reader
+  // and to any future code that inspects the score.
+  const useErrorTilt = errorRates.size > 0;
 
   const bestByPosition = new Map();
   for (const candidate of candidates) {
@@ -411,9 +514,18 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
     const hasUsablePosterior = posterior
       && Number.isFinite(posterior.alpha) && posterior.alpha > 0
       && Number.isFinite(posterior.beta) && posterior.beta > 0;
-    const score = hasUsablePosterior
+    const baseScore = hasUsablePosterior
       ? sampleBeta(posterior.alpha, posterior.beta, rng)
       : confidence;
+
+    // Signed tilt: +ERROR_POSITION_WEIGHT at a position this user always
+    // stumbles on, -ERROR_POSITION_WEIGHT at one they never miss. Deliberately
+    // NOT clamped back into [0, 1]: the score is only ever compared against
+    // other scores, and clamping would flatten exactly the extremes this term
+    // exists to separate.
+    const score = useErrorTilt
+      ? baseScore + ERROR_POSITION_WEIGHT * (2 * errorAffinity(errorRates, candidate.position) - 1)
+      : baseScore;
 
     // minConfidence is a floor on the *reported* confidence, not on the
     // exploration draw: a user-facing "don't show me anything below 0.5"
@@ -495,6 +607,314 @@ export function maskPreview(password) {
   if (password.length === 0) return '';
   if (password.length <= 4) return '*'.repeat(password.length);
   return `${password.slice(0, 2)}***${password.slice(-2)}`;
+}
+
+// =============================================================================
+// Memorability scorer (Phase 4 — plan §4.1 / gap B4)
+// =============================================================================
+//
+// `export_preference_model` has shipped `memorability_params` since the
+// feature's first version with NO consumer anywhere (gap B4), and
+// `suggestAdaptation` fabricated its "% easier to remember" from the
+// confidence and the substitution count -- a formula that is positive by
+// construction and therefore measures nothing.
+//
+// Everything below is pure and client-side: scoring needs the raw password,
+// which the server never has. Direction matters and is stated per feature,
+// because two of the four move OPPOSITE to guess-resistance. That is not a
+// conflict to resolve here: the Phase 2 strength gate is a hard filter applied
+// independently, and memorability is never allowed to buy a weaker password
+// (see `filterByStrength` -- it runs on the ranked set regardless of score).
+
+/** Default memorability params, used when the server sends none. @private */
+const DEFAULT_MEMORABILITY_PARAMS = Object.freeze({
+  optimal_length_min: 12,
+  optimal_length_max: 16,
+  weights: Object.freeze({
+    length: 0.2, patterns: 0.3, variety: 0.2, pronounceable: 0.3,
+  }),
+});
+
+/** The four feature names, in a fixed order. @type {ReadonlyArray<string>} */
+export const MEMORABILITY_FEATURES = Object.freeze([
+  'length', 'patterns', 'variety', 'pronounceable',
+]);
+
+/** Characters treated as vowels for the pronounceability ratio. @private */
+const VOWELS = new Set(['a', 'e', 'i', 'o', 'u', 'y']);
+
+/**
+ * Characters over which a length is considered "far" outside the optimal band.
+ * A password 8 characters past the band scores 0 on length fit.
+ * @private
+ */
+const LENGTH_DECAY_CHARS = 8;
+
+/** Total number of character classes {@link extractFeatures} distinguishes. @private */
+const CHAR_CLASS_COUNT = 4;
+
+/**
+ * Read the optimal length band + weights out of a server-supplied params blob.
+ *
+ * Anything missing, non-finite, or inconsistent (min > max, weights that do not
+ * sum to a positive number) falls back to the defaults for that piece alone.
+ * Failing closed here would be wrong: memorability is advisory, and a malformed
+ * params blob must not make the whole suggestion path unavailable the way a
+ * malformed strength reading rightly does.
+ *
+ * @param {object|null|undefined} params - `memorability_params` from the model.
+ * @returns {{ min: number, max: number, weights: Record<string, number> }}
+ * @private
+ */
+function normalizeMemorabilityParams(params) {
+  const raw = params || {};
+  let min = Number(raw.optimal_length_min);
+  let max = Number(raw.optimal_length_max);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max < min) {
+    min = DEFAULT_MEMORABILITY_PARAMS.optimal_length_min;
+    max = DEFAULT_MEMORABILITY_PARAMS.optimal_length_max;
+  }
+
+  const rawWeights = raw.weights || {};
+  const weights = {};
+  let total = 0;
+  for (const name of MEMORABILITY_FEATURES) {
+    const value = Object.hasOwn(rawWeights, name)
+      // eslint-disable-next-line security/detect-object-injection
+      ? Number(rawWeights[name])
+      : Number.NaN;
+    // Number.isFinite, not typeof/truthiness: a weight of Infinity would make
+    // the normalized combination NaN for every password, and a NaN weight
+    // would poison the sum silently.
+    const usable = Number.isFinite(value) && value >= 0 ? value : 0;
+    // eslint-disable-next-line security/detect-object-injection
+    weights[name] = usable;
+    total += usable;
+  }
+  if (total <= 0) {
+    return { min, max, weights: { ...DEFAULT_MEMORABILITY_PARAMS.weights } };
+  }
+  for (const name of MEMORABILITY_FEATURES) {
+    // eslint-disable-next-line security/detect-object-injection
+    weights[name] /= total;
+  }
+  return { min, max, weights };
+}
+
+/**
+ * Length fit against the user's learned optimal band.
+ *
+ * **Direction:** higher = more memorable. 1.0 anywhere inside the band, decaying
+ * linearly to 0 over {@link LENGTH_DECAY_CHARS} characters on either side.
+ *
+ * Note this feature is *constant* under the substitution family this whole
+ * feature implements: every substitution replaces one character with exactly
+ * one other, so length never moves. It therefore contributes to the displayed
+ * absolute score but never to the before/after Δ.
+ *
+ * @param {number} length - Password length.
+ * @param {number} min - Optimal band lower bound.
+ * @param {number} max - Optimal band upper bound.
+ * @returns {number} Score in [0, 1].
+ * @private
+ */
+function lengthFitScore(length, min, max) {
+  if (length >= min && length <= max) return 1;
+  const distance = length < min ? min - length : length - max;
+  return clamp01(1 - distance / LENGTH_DECAY_CHARS);
+}
+
+/**
+ * Repeated-pattern presence — the recall handles a password gives you.
+ *
+ * **Direction:** higher = more memorable. Measured as the fraction of positions
+ * covered by either a run of identical characters or a bigram that occurs more
+ * than once; both are structure a person can chunk and rehearse.
+ *
+ * @param {string} password - The plaintext password (stays on the client).
+ * @returns {number} Score in [0, 1].
+ * @private
+ */
+function patternScore(password) {
+  if (password.length < 2) return 0;
+  const chars = password.split('');
+  const covered = new Set();
+
+  // Single pass over adjacent pairs, carrying the previous character rather
+  // than indexing back into `chars`. Equivalent to chars[i - 1], and keeps the
+  // whole function clear of the object-injection lint sink.
+  const bigramPositions = new Map();
+  let previous = chars[0];
+  for (const [index, current] of chars.entries()) {
+    if (index === 0) continue;
+
+    // Runs of identical characters ("aa", "111").
+    if (current === previous) {
+      covered.add(index - 1);
+      covered.add(index);
+    }
+
+    // Bigrams, recorded by the position of their FIRST character.
+    const bigram = `${previous}${current}`;
+    const seen = bigramPositions.get(bigram);
+    if (seen) seen.push(index - 1);
+    else bigramPositions.set(bigram, [index - 1]);
+
+    previous = current;
+  }
+  for (const positions of bigramPositions.values()) {
+    if (positions.length < 2) continue;
+    for (const i of positions) {
+      covered.add(i);
+      covered.add(i + 1);
+    }
+  }
+
+  return covered.size / chars.length;
+}
+
+/**
+ * Character-class variety.
+ *
+ * **Direction:** higher score = FEWER classes = more memorable. A password drawn
+ * from one class is a word; one drawn from four is a string of exceptions, each
+ * of which has to be recalled separately.
+ *
+ * This is the clearest place where memorability and guess-resistance genuinely
+ * disagree, and the disagreement is resolved by keeping them separate rather
+ * than by blending them: `filterByStrength` can veto any substitution, and no
+ * memorability score can overrule it.
+ *
+ * @param {string} password - The plaintext password (stays on the client).
+ * @returns {number} Score in [0, 1].
+ * @private
+ */
+function varietyScore(password) {
+  if (password.length === 0) return 1;
+  const { char_classes: classes } = extractFeatures(password);
+  const used = Object.values(classes).filter((n) => n > 0).length;
+  return clamp01(1 - (used - 1) / (CHAR_CLASS_COUNT - 1));
+}
+
+/**
+ * Pronounceability — vowel/consonant alternation over the alphabetic run.
+ *
+ * **Direction:** higher = more memorable. Computed over the *alphabetic*
+ * characters only, in order: a password whose letters alternate vowel/consonant
+ * can be said aloud, which is the strongest single predictor of recall.
+ *
+ * A password with fewer than two letters gets 0.5 — "no opinion" — rather than
+ * 0: an all-digit PIN is not maximally unpronounceable, it is simply outside
+ * what this feature measures.
+ *
+ * @param {string} password - The plaintext password (stays on the client).
+ * @returns {number} Score in [0, 1].
+ * @private
+ */
+function pronounceableScore(password) {
+  const letters = password.toLowerCase().split('').filter((ch) => ch >= 'a' && ch <= 'z');
+  if (letters.length < 2) return 0.5;
+  let alternations = 0;
+  let previousIsVowel = VOWELS.has(letters[0]);
+  for (const [index, letter] of letters.entries()) {
+    if (index === 0) continue;
+    const isVowel = VOWELS.has(letter);
+    if (isVowel !== previousIsVowel) alternations += 1;
+    previousIsVowel = isVowel;
+  }
+  return alternations / (letters.length - 1);
+}
+
+/**
+ * Compute the four memorability sub-scores for a password.
+ *
+ * Exported alongside {@link scoreMemorability} because the *attribution* half of
+ * plan §4.2 needs to know which feature an adaptation moved most, and because
+ * asserting the combiner is monotone in each feature requires seeing them
+ * individually.
+ *
+ * @param {string} password - The plaintext password (stays on the client).
+ * @param {object|null} [memorabilityParams=null] - `memorability_params` from
+ *   the server-exported preference model.
+ * @returns {{ length: number, patterns: number, variety: number, pronounceable: number }}
+ *   Each sub-score in [0, 1]; higher always means "easier to remember".
+ */
+export function memorabilityFeatures(password, memorabilityParams = null) {
+  assertString(password, 'memorabilityFeatures');
+  const { min, max } = normalizeMemorabilityParams(memorabilityParams);
+  return {
+    length: lengthFitScore(password.length, min, max),
+    patterns: patternScore(password),
+    variety: varietyScore(password),
+    pronounceable: pronounceableScore(password),
+  };
+}
+
+/**
+ * Score how memorable a password is, in [0, 1].
+ *
+ * The missing consumer of `memorability_params` (plan §4.1, gap B4). Pure: the
+ * password is read here and nothing about it leaves the function — callers send
+ * the server at most the resulting scalar.
+ *
+ * Honest scope, measured rather than asserted: because two of the four features
+ * (variety, pronounceability) fall when a letter is replaced by a symbol or a
+ * digit, a canonical leetspeak substitution usually scores *lower* here than the
+ * original — e.g. `password` → `p@ssw0rd` moves variety 1.00 → 0.33 and
+ * pronounceability 0.57 → 0.00. That negative reading is the correct one for
+ * these four intrinsic features; the reason a user finds their own habitual
+ * substitution easy is habit, which this feature models in the bandit posterior
+ * (`confidence`), not here. The pre-Phase-4 formula hid this by being positive
+ * by construction.
+ *
+ * @param {string} password - The plaintext password (stays on the client).
+ * @param {object|null} [memorabilityParams=null] - `memorability_params` from
+ *   the server-exported preference model; defaults are used when absent.
+ * @returns {number} Weighted memorability score in [0, 1].
+ */
+export function scoreMemorability(password, memorabilityParams = null) {
+  assertString(password, 'scoreMemorability');
+  const { weights } = normalizeMemorabilityParams(memorabilityParams);
+  const features = memorabilityFeatures(password, memorabilityParams);
+  let score = 0;
+  for (const name of MEMORABILITY_FEATURES) {
+    // eslint-disable-next-line security/detect-object-injection
+    score += weights[name] * features[name];
+  }
+  return clamp01(score);
+}
+
+/**
+ * Identify which memorability feature an adaptation moved most.
+ *
+ * The server cannot compute this — it never sees either password — but plan
+ * §4.2 needs it to attribute a user's "was this easier to remember?" feedback to
+ * a feature before nudging that feature's weight. Sending the *name* of the
+ * dominant feature (one of four fixed strings) rather than the delta vector
+ * keeps the wire surface to a single categorical value.
+ *
+ * @param {string} original - The original password (stays on the client).
+ * @param {string} adapted - The adapted password (stays on the client).
+ * @param {object|null} [memorabilityParams=null] - Server memorability params.
+ * @returns {string|null} The dominant feature name, or `null` when no feature
+ *   moved at all (nothing to attribute).
+ */
+export function memorabilityDriver(original, adapted, memorabilityParams = null) {
+  const before = memorabilityFeatures(original, memorabilityParams);
+  const after = memorabilityFeatures(adapted, memorabilityParams);
+  let driver = null;
+  let largest = 0;
+  for (const name of MEMORABILITY_FEATURES) {
+    // eslint-disable-next-line security/detect-object-injection
+    const delta = Math.abs(after[name] - before[name]);
+    // Strict >: MEMORABILITY_FEATURES is a fixed order, so ties resolve to the
+    // first-listed feature deterministically rather than by object key order.
+    if (delta > largest) {
+      largest = delta;
+      driver = name;
+    }
+  }
+  return driver;
 }
 
 // =============================================================================
@@ -774,8 +1194,13 @@ export default {
   LEET_MAP,
   REVERSE_LEET_MAP,
   DEFAULT_CONFIDENCE,
+  ERROR_POSITION_WEIGHT,
+  MEMORABILITY_FEATURES,
   REJECT_DE_LEET,
   REJECT_STRENGTH_REGRESSION,
+  memorabilityFeatures,
+  scoreMemorability,
+  memorabilityDriver,
   extractFeatures,
   generateCandidates,
   rankSuggestions,

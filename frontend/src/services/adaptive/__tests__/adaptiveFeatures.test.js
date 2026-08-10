@@ -24,6 +24,9 @@ import {
   resetDefaultEstimator,
   sampleBeta,
   detectSubstitutionClasses,
+  scoreMemorability,
+  memorabilityFeatures,
+  memorabilityDriver,
 } from '../adaptiveFeatures';
 
 // A small preference model in the v2 wire shape (see plan §4): the server
@@ -949,5 +952,187 @@ describe('rankSuggestions — Thompson sampling', () => {
     });
     expect(ranked[0].suggested_char).toBe('0');
     expect(ranked[0].confidence).toBe(0.9);
+  });
+});
+
+// =============================================================================
+// Phase 4 — memorability scorer (plan §4.1 / gap B4)
+// =============================================================================
+
+describe('scoreMemorability', () => {
+  it('is monotone in each feature, holding the others fixed', () => {
+    // Monotonicity of the COMBINER, asserted directly: move one weight to 1
+    // and the rest to 0, then compare two passwords ordered on that feature
+    // alone. Constructing four password pairs that differ in exactly one
+    // feature is not possible -- length, variety and pronounceability are all
+    // functions of the same characters -- so the sub-scores are read from
+    // memorabilityFeatures and the combiner is driven one feature at a time.
+    const only = (name) => ({
+      optimal_length_min: 12,
+      optimal_length_max: 16,
+      weights: {
+        length: name === 'length' ? 1 : 0,
+        patterns: name === 'patterns' ? 1 : 0,
+        variety: name === 'variety' ? 1 : 0,
+        pronounceable: name === 'pronounceable' ? 1 : 0,
+      },
+    });
+
+    // Each pair: [lower on this feature, higher on this feature].
+    const pairs = {
+      length: ['ab', 'correcthorse'],          // 2 chars vs inside the band
+      patterns: ['abcdefgh', 'abababab'],      // no repeats vs all repeats
+      variety: ['aB1!aB1!', 'abcdefgh'],       // four classes vs one
+      pronounceable: ['bcdfghjk', 'banana'],   // all consonants vs alternating
+    };
+
+    for (const [feature, [low, high]] of Object.entries(pairs)) {
+      const params = only(feature);
+      const lowFeature = memorabilityFeatures(low, params)[feature];
+      const highFeature = memorabilityFeatures(high, params)[feature];
+      // The fixture itself has to order the feature the way its name claims,
+      // or the combiner assertion below would hold vacuously.
+      expect(highFeature).toBeGreaterThan(lowFeature);
+      expect(scoreMemorability(high, params)).toBeGreaterThan(
+        scoreMemorability(low, params),
+      );
+    }
+  });
+
+  it('measures a real drop for canonical leetspeak instead of asserting a gain', () => {
+    // The headline behaviour change. The pre-Phase-4 formula
+    // (min(0.3, confidence*0.15 + count*0.03)) could only ever return a
+    // POSITIVE number, so it claimed an improvement for every adaptation
+    // without measuring one. Two of the four scored features genuinely fall
+    // here, and the scorer now says so.
+    const before = memorabilityFeatures('password');
+    const after = memorabilityFeatures('p@ssw0rd');
+
+    expect(after.variety).toBeLessThan(before.variety);
+    expect(after.pronounceable).toBeLessThan(before.pronounceable);
+    // Length is constant under a 1:1 substitution, by construction.
+    expect(after.length).toBe(before.length);
+
+    expect(scoreMemorability('p@ssw0rd')).toBeLessThan(scoreMemorability('password'));
+  });
+
+  it('stays in [0, 1] and falls back to defaults for malformed params', () => {
+    const zeroWeights = {
+      weights: { length: 0, patterns: 0, variety: 0, pronounceable: 0 },
+    };
+    const malformed = [
+      null,
+      {},
+      { optimal_length_min: 20, optimal_length_max: 4 },        // inverted band
+      { weights: { length: Number.NaN, patterns: Infinity } },  // non-finite
+      zeroWeights,
+    ];
+    for (const params of malformed) {
+      const score = scoreMemorability('correcthorse', params);
+      expect(Number.isFinite(score)).toBe(true);
+      expect(score).toBeGreaterThanOrEqual(0);
+      expect(score).toBeLessThanOrEqual(1);
+    }
+    // A weights blob that is entirely unusable must land on the documented
+    // defaults, not on some other silently-chosen blend.
+    expect(scoreMemorability('correcthorse', zeroWeights))
+      .toBeCloseTo(scoreMemorability('correcthorse'), 10);
+  });
+
+  it('rejects a non-string password rather than scoring undefined', () => {
+    expect(() => scoreMemorability(undefined)).toThrow(TypeError);
+    expect(() => memorabilityFeatures(42)).toThrow(TypeError);
+  });
+});
+
+describe('memorabilityDriver', () => {
+  it('names the feature that moved most', () => {
+    expect(memorabilityDriver('password', 'p@ssw0rd')).toBe('variety');
+  });
+
+  it('returns null when nothing moved', () => {
+    expect(memorabilityDriver('password', 'password')).toBeNull();
+  });
+
+  it('is deterministic across repeated calls', () => {
+    // The driver is persisted server-side and used to attribute a weight
+    // nudge, so it must not vary between runs or engines.
+    for (let i = 0; i < 5; i += 1) {
+      expect(memorabilityDriver('password', 'p@ssw0rd')).toBe('variety');
+    }
+  });
+});
+
+// =============================================================================
+// Phase 4 — error-position ranking (plan §4.3 / gap B3)
+// =============================================================================
+
+describe('rankSuggestions error-position tilt', () => {
+  // 'password' -> indices 0:p 1:a 2:s 3:s 4:w 5:o 6:r 7:d
+  const CANDIDATES = () => generateCandidates('password');
+
+  it('boosts a substitution at a position the user stumbles on', () => {
+    const baseline = rankSuggestions(CANDIDATES(), null, { maxSuggestions: 3 });
+    const tilted = rankSuggestions(CANDIDATES(), null, {
+      maxSuggestions: 3,
+      errorPositions: { 5: 1.0 },
+    });
+
+    // Position 5 ('o') is nowhere in the untilted top 3 -- every candidate
+    // scores the identical DEFAULT_CONFIDENCE, so the tie breaks on position
+    // ascending -- and the tilt pulls it in.
+    expect(baseline.map((s) => s.position)).not.toContain(5);
+    expect(tilted.map((s) => s.position)).toContain(5);
+  });
+
+  it('reaches an adjacent position, at reduced weight', () => {
+    // An error recorded at 4 ('w', which has no substitution) is evidence
+    // about the transition into it, so 3 and 5 are partially implicated.
+    const tilted = rankSuggestions(CANDIDATES(), null, {
+      maxSuggestions: 2,
+      errorPositions: { 4: 1.0 },
+    });
+    expect(tilted.map((s) => s.position)).toContain(5);
+  });
+
+  it('does not change the ranking when there is no error data', () => {
+    const baseline = rankSuggestions(CANDIDATES(), null, { maxSuggestions: 3 });
+    for (const empty of [undefined, {}, null]) {
+      expect(rankSuggestions(CANDIDATES(), null, {
+        maxSuggestions: 3, errorPositions: empty,
+      })).toEqual(baseline);
+    }
+  });
+
+  it('ignores malformed entries instead of defaulting them to position 0', () => {
+    // A malformed key coerced to 0 would boost whatever sits at the start of
+    // every password -- the same failure mode leetMatchSpans guards against.
+    const baseline = rankSuggestions(CANDIDATES(), null, { maxSuggestions: 3 });
+    const junk = rankSuggestions(CANDIDATES(), null, {
+      maxSuggestions: 3,
+      errorPositions: {
+        notanumber: 1.0, '-1': 1.0, 2.5: 1.0, 9: Infinity,
+      },
+    });
+    expect(junk).toEqual(baseline);
+  });
+
+  it('leaves the reported confidence untouched', () => {
+    // The tilt is ranking state. Confidence is what the UI shows the user and
+    // must keep meaning "how much the model likes this class" -- the same
+    // separation Thompson sampling already relies on.
+    const tilted = rankSuggestions(CANDIDATES(), null, {
+      maxSuggestions: 8,
+      errorPositions: { 5: 1.0, 1: 0.0 },
+    });
+    for (const suggestion of tilted) {
+      expect(suggestion.confidence).toBe(DEFAULT_CONFIDENCE);
+    }
+  });
+
+  it('reads error_prone_positions off the model when no override is given', () => {
+    const model = { substitution_weights: {}, error_prone_positions: { 5: 1.0 } };
+    const ranked = rankSuggestions(CANDIDATES(), model, { maxSuggestions: 3 });
+    expect(ranked.map((s) => s.position)).toContain(5);
   });
 });

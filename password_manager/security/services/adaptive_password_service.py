@@ -18,8 +18,9 @@ Privacy:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import logging
+import math
 import numpy as np
 
 from django.contrib.auth.models import User
@@ -68,6 +69,150 @@ REVERSE_SUBSTITUTIONS = {
 
 # Timing buckets for anonymization
 TIMING_BUCKETS = [50, 100, 150, 200, 300, 500, 750, 1000, 2000]
+
+# =============================================================================
+# Memorability model (Phase 4 — plan §4.1/§4.2, gap B4)
+# =============================================================================
+
+#: The four memorability features the CLIENT scores (it is the only side that
+#: can — scoring needs the raw password). The server's job is only to learn the
+#: parameters that feed that scorer and to publish them in the preference model.
+MEMORABILITY_FEATURES = ('length', 'patterns', 'variety', 'pronounceable')
+
+#: Starting weights, used until a user's own feedback has moved them. Same
+#: numbers this feature has published since its first version, kept so a
+#: pre-Phase-4 client sees no behaviour change.
+DEFAULT_MEMORABILITY_WEIGHTS = {
+    'length': 0.2,
+    'patterns': 0.3,
+    'variety': 0.2,
+    'pronounceable': 0.3,
+}
+
+#: Fallback optimal-length band, published until the user has enough sessions
+#: for their own band to mean anything.
+DEFAULT_OPTIMAL_LENGTH = (12, 16)
+
+#: Successful typing sessions required in a single length bucket before that
+#: bucket may set the published band. Below this, one lucky short password
+#: would redefine "optimal" for everything the client scores afterwards.
+MIN_SESSIONS_FOR_LENGTH_BAND = 10
+
+#: Length buckets are ``floor(len / 4)``, so bucket 0 covers 0-3 characters.
+#: Excluded from the band search outright: a 0-3 character password is not a
+#: credible preference signal, it is far more likely a truncated or abandoned
+#: entry, and publishing "your optimal length is 0-3" would actively mislead
+#: the client's length-fit scorer. This is a domain exclusion, not a clamp on
+#: the learned value — every other bucket is used exactly as measured.
+MIN_LENGTH_BUCKET = 1
+
+#: EMA rate for the per-feature weight nudge. Small on purpose: a single
+#: "yes, easier to remember" is one data point about one adaptation, and the
+#: plan (§4.2) specifies an EMA precisely because the sample size does not
+#: support anything heavier.
+MEMORABILITY_WEIGHT_EMA_ALPHA = 0.1
+
+#: Floor on any single learned weight. Without it a long run of one-sided
+#: feedback can drive a feature's weight to (numerically) zero, after which it
+#: can never be nudged back up — the nudge is multiplicative in effect once
+#: renormalized, so zero is an absorbing state.
+MIN_MEMORABILITY_WEIGHT = 0.02
+
+#: Number of relative slots a session's keystroke timings are binned into for
+#: ``UserTypingProfile.rhythm_signature``. Fixed so signatures from sessions of
+#: different lengths can be blended element-wise at all.
+RHYTHM_BINS = 8
+
+
+def normalize_memorability_weights(raw) -> Dict[str, float]:
+    """Coerce a stored weight blob into a complete, normalized weight dict.
+
+    Returns the defaults unless *every* feature is present with a finite,
+    non-negative number that sums to something positive. Partial blobs are
+    rejected rather than back-filled: a half-learned model blended with
+    defaults is a third thing neither side intended.
+    """
+    if not isinstance(raw, dict):
+        return dict(DEFAULT_MEMORABILITY_WEIGHTS)
+
+    values: Dict[str, float] = {}
+    total = 0.0
+    for name in MEMORABILITY_FEATURES:
+        if name not in raw:
+            return dict(DEFAULT_MEMORABILITY_WEIGHTS)
+        try:
+            value = float(raw[name])
+        except (TypeError, ValueError):
+            return dict(DEFAULT_MEMORABILITY_WEIGHTS)
+        # math.isfinite, not a bare `>= 0` test: float('inf') >= 0 is True and
+        # float('nan') >= 0 is False, so neither is caught by the comparison
+        # alone in the way a reader expects.
+        if not math.isfinite(value) or value < 0:
+            return dict(DEFAULT_MEMORABILITY_WEIGHTS)
+        values[name] = value
+        total += value
+
+    if total <= 0:
+        return dict(DEFAULT_MEMORABILITY_WEIGHTS)
+    return {name: value / total for name, value in values.items()}
+
+
+def nudge_memorability_weights(adaptation, feedback) -> Optional[Dict[str, float]]:
+    """Nudge one user's memorability weights from one feedback row (plan §4.2).
+
+    The user answered "was this easier to remember?"; the client already told us
+    which feature that adaptation moved most (``memorability_driver``). A "yes"
+    raises that feature's weight, a "no" lowers it, by an EMA step — then all
+    four are renormalized so they still sum to 1.
+
+    Deliberately a no-op (returning ``None``) when the feedback left
+    ``memorability_improved`` unanswered, or when the adaptation carries no
+    driver: both are the "we do not know" case, and nudging a weight on a
+    non-answer would teach the model from the absence of data.
+
+    Runs from the weekly policy task rather than from ``export_preference_model``
+    as the plan's §4.2 text implies. Learning is a write and export is a read;
+    doing this on the GET would make ``/preference-model/`` mutate state on every
+    poll, and would credit the same feedback row once per page refresh instead of
+    exactly once (the task's ``policy_reward_applied_at`` stamp is what makes it
+    once, and it already holds the row lock).
+
+    Args:
+        adaptation: The ``PasswordAdaptation`` the feedback is about.
+        feedback: The ``AdaptationFeedback`` row.
+
+    Returns:
+        The new normalized weights, or ``None`` if nothing was learned.
+    """
+    from ..models import UserTypingProfile
+
+    improved = feedback.memorability_improved
+    if improved is None:
+        return None
+    driver = (adaptation.memorability_driver or '').strip()
+    if driver not in MEMORABILITY_FEATURES:
+        return None
+
+    profile, _ = UserTypingProfile.objects.get_or_create(
+        user=adaptation.user,
+        defaults={
+            'preferred_substitutions': {},
+            'substitution_confidence': {},
+            'error_prone_positions': {},
+        },
+    )
+    weights = normalize_memorability_weights(profile.memorability_weights)
+    target = 1.0 if improved else 0.0
+    weights[driver] = max(
+        MIN_MEMORABILITY_WEIGHT,
+        weights[driver] * (1 - MEMORABILITY_WEIGHT_EMA_ALPHA)
+        + target * MEMORABILITY_WEIGHT_EMA_ALPHA,
+    )
+    weights = normalize_memorability_weights(weights)
+
+    profile.memorability_weights = weights
+    profile.save(update_fields=['memorability_weights', 'updated_at'])
+    return weights
 
 
 # =============================================================================
@@ -540,23 +685,184 @@ class AdaptivePasswordService:
             if int(pos_str) not in pattern.error_positions:
                 profile.error_prone_positions[pos_str] *= 0.95
         
+        # Classify what KIND of errors this user makes (plan §4.4, gap B6).
+        profile.common_error_types = self._blend_error_types(
+            profile.common_error_types, pattern.error_positions
+        )
+
+        # Rhythm signature (plan §4.4, gap B6): a fixed-length, scale-free
+        # summary of this session's timing shape, EMA'd into the profile.
+        session_rhythm = self._rhythm_vector(pattern.timing_buckets)
+        if session_rhythm is not None:
+            profile.rhythm_signature = self._blend_rhythm(
+                profile.rhythm_signature, session_rhythm
+            )
+
         # Update WPM
         if pattern.total_time_ms > 0:
             # Approximate WPM from password length and time
             chars_per_min = (pattern.password_length / pattern.total_time_ms) * 60000
             wpm = chars_per_min / 5  # Standard: 5 chars = 1 word
-            
+
             if profile.average_wpm is None:
                 profile.average_wpm = wpm
+                # First observation: no deviation to measure yet. 0.0, not
+                # None, so the field stops reading as "never written".
+                profile.wpm_variance = 0.0
             else:
-                profile.average_wpm = profile.average_wpm * 0.9 + wpm * 0.1
-        
+                # Exponentially-weighted variance (plan §4.4, gap B6).
+                #
+                # The plan says "Welford, online", but Welford maintains the
+                # ARITHMETIC mean and its M2 companion, and this profile stores
+                # an EWMA (`average_wpm * 0.9 + wpm * 0.1`) with no M2 column.
+                # Pairing Welford's M2 with an EWMA mean would produce a number
+                # that is not the variance of anything. The EWMA's own variance
+                # companion (West/Finch) is the consistent choice and needs no
+                # new field:
+                #     diff = x - mean_prev
+                #     mean = mean_prev + alpha * diff
+                #     var  = (1 - alpha) * (var_prev + alpha * diff^2)
+                # with the same alpha = 0.1 the mean already uses.
+                alpha = 0.1
+                diff = wpm - profile.average_wpm
+                previous_variance = profile.wpm_variance or 0.0
+                profile.average_wpm = profile.average_wpm + alpha * diff
+                profile.wpm_variance = (1 - alpha) * (
+                    previous_variance + alpha * diff * diff
+                )
+
         # Update profile confidence
         profile.profile_confidence = min(1.0, profile.total_sessions / 50)
         profile.last_session_at = timezone.now()
         
         profile.save()
     
+    @staticmethod
+    def _blend_error_types(current: Optional[Dict], error_positions: List[int]) -> Dict:
+        """Fold this session's error shape into the aggregate distribution.
+
+        Classified from ``backspace_positions`` adjacency alone, because that is
+        genuinely all the server has: the client sends WHERE a correction
+        happened, never WHICH key was pressed. The labels are therefore
+        positional proxies and are documented as such rather than presented as
+        keystroke forensics:
+
+        - ``transposition`` — two corrections at adjacent positions, the
+          signature of backing over a swapped pair.
+        - ``repeated`` — the same position corrected more than once in one
+          session, i.e. a character the user genuinely struggles with.
+        - ``adjacent_key`` — an isolated single correction; the residual class,
+          and the most common cause of one is hitting a neighbouring key.
+
+        A true adjacent-key slip and any other one-character mistake are
+        indistinguishable from positions alone, so ``adjacent_key`` should be
+        read as "isolated single-character error", not as a proven cause.
+
+        Returns the EMA-blended distribution, always summing to 1 when any error
+        was observed. A clean session leaves the distribution untouched: zero
+        errors is not evidence about which error *type* dominates.
+        """
+        counts = {'adjacent_key': 0, 'transposition': 0, 'repeated': 0}
+        if error_positions:
+            seen = set()
+            duplicates = set()
+            for position in error_positions:
+                if position in seen:
+                    duplicates.add(position)
+                seen.add(position)
+            for position in sorted(seen):
+                if position in duplicates:
+                    counts['repeated'] += 1
+                elif (position - 1) in seen or (position + 1) in seen:
+                    counts['transposition'] += 1
+                else:
+                    counts['adjacent_key'] += 1
+
+        total = sum(counts.values())
+        blended = dict(current or {})
+        if total == 0:
+            return blended
+
+        alpha = 0.2
+        for label, count in counts.items():
+            try:
+                previous = float(blended.get(label, 0.0))
+            except (TypeError, ValueError):
+                previous = 0.0
+            if not math.isfinite(previous) or previous < 0:
+                previous = 0.0
+            blended[label] = previous * (1 - alpha) + (count / total) * alpha
+
+        # Renormalize so the stored value is always a distribution. Without
+        # this, a profile carrying stale keys from an older schema would leave
+        # the sum drifting away from 1 forever.
+        scale = sum(v for v in blended.values() if isinstance(v, (int, float)))
+        if scale > 0:
+            blended = {
+                k: (v / scale) for k, v in blended.items()
+                if isinstance(v, (int, float))
+            }
+        return blended
+
+    @staticmethod
+    def _rhythm_vector(timing_buckets: Dict[int, int]) -> Optional[List[float]]:
+        """Summarize a session's timings as a fixed-length, scale-free vector.
+
+        Keystroke counts differ per session, so the raw timing list cannot be
+        blended element-wise across sessions. Positions are binned into
+        ``RHYTHM_BINS`` relative slots (first eighth of the password, second
+        eighth, …) and each bin's mean timing divided by the session mean, which
+        removes overall typing speed and leaves only the *shape* — where this
+        user speeds up and slows down within a password.
+
+        Adds no information the server does not already hold: it is a lossy
+        summary of ``TypingSession.timing_profile``, which is stored per session
+        in full (already bucketized and DP-noised upstream).
+
+        Returns ``None`` for a session with no usable timings.
+        """
+        if not timing_buckets:
+            return None
+        ordered = [timing_buckets[k] for k in sorted(timing_buckets)]
+        values = [float(v) for v in ordered if isinstance(v, (int, float)) and v > 0]
+        if not values:
+            return None
+        mean = sum(values) / len(values)
+        if mean <= 0:
+            return None
+
+        bins = [[] for _ in range(RHYTHM_BINS)]
+        for index, value in enumerate(values):
+            slot = min(RHYTHM_BINS - 1, (index * RHYTHM_BINS) // len(values))
+            bins[slot].append(value)
+        # An empty bin (fewer keystrokes than bins) reads as 1.0 — "average
+        # speed", the neutral value — rather than 0.0, which would be
+        # indistinguishable from "typed instantly here".
+        return [
+            round((sum(b) / len(b)) / mean, 4) if b else 1.0
+            for b in bins
+        ]
+
+    @staticmethod
+    def _blend_rhythm(current, session_rhythm: List[float]) -> List[float]:
+        """EMA this session's rhythm vector into the stored signature."""
+        alpha = 0.2
+        if not isinstance(current, list) or len(current) != RHYTHM_BINS:
+            # First write, or a signature from a different RHYTHM_BINS. Adopt
+            # the session outright instead of blending against a vector whose
+            # bins mean something else.
+            return list(session_rhythm)
+        blended = []
+        for previous, value in zip(current, session_rhythm):
+            try:
+                previous_value = float(previous)
+            except (TypeError, ValueError):
+                previous_value = value
+            if not math.isfinite(previous_value):
+                previous_value = value
+            blended.append(round(previous_value * (1 - alpha) + value * alpha, 4))
+        return blended
+
     def export_preference_model(self) -> Dict[str, Any]:
         """Export the per-user preference model for client-side suggestion ranking.
 
@@ -568,7 +874,17 @@ class AdaptivePasswordService:
 
         Returns:
             ``{model_version, fp_key_version, substitution_weights,
-            exploration, weight_sources, memorability_params}``.
+            exploration, weight_sources, memorability_params,
+            error_prone_positions}``.
+
+        Phase 4: ``memorability_params`` is no longer a hard-coded literal with
+        no consumer. ``optimal_length_min/max`` come from this user's own
+        successful-session length distribution and ``weights`` from whatever
+        their ``memorability_improved`` feedback has nudged them to; the client
+        finally reads both in ``scoreMemorability``. ``error_prone_positions``
+        is published so ``rankSuggestions`` can boost substitutions where the
+        user actually stumbles — the position → character join happens on the
+        client, because the server has no password to join against.
 
         Phase 3: ``substitution_weights`` is no longer the static leetspeak
         table. Each class resolves to the posterior mean of the user's own
@@ -636,16 +952,32 @@ class AdaptivePasswordService:
                 row = profile_overrides.setdefault(from_char, {})
                 row[to_char] = max(row.get(to_char, 0.0), 0.9)
 
+        optimal_min, optimal_max = self._learn_optimal_length_band()
         memorability_params = {
-            'optimal_length_min': 12,
-            'optimal_length_max': 16,
-            'weights': {
-                'length': 0.2,
-                'patterns': 0.3,
-                'variety': 0.2,
-                'pronounceable': 0.3,
-            },
+            'optimal_length_min': optimal_min,
+            'optimal_length_max': optimal_max,
+            'weights': normalize_memorability_weights(
+                profile.memorability_weights if profile is not None else None
+            ),
         }
+
+        # Phase 4 (plan §4.3, gap B3): the "learns from your typing errors"
+        # claim. These positions have been written and decayed since the
+        # feature's first version and read by NOTHING; the join that makes them
+        # useful (position -> which character sits there) can only happen on the
+        # client. Keys are stringified positions, so they are normalized to a
+        # {str: float} map here rather than trusted as stored.
+        error_prone_positions: Dict[str, float] = {}
+        if profile is not None:
+            for position, rate in (profile.error_prone_positions or {}).items():
+                try:
+                    index = int(position)
+                    value = float(rate)
+                except (TypeError, ValueError):
+                    continue
+                if index < 0 or not math.isfinite(value):
+                    continue
+                error_prone_positions[str(index)] = max(0.0, min(1.0, value))
 
         fp_key_version = AdaptivePasswordConfig.objects.filter(
             user=self.user
@@ -665,7 +997,57 @@ class AdaptivePasswordService:
             'exploration': exploration,
             'weight_sources': weight_sources,
             'memorability_params': memorability_params,
+            'error_prone_positions': error_prone_positions,
         }
+
+    def _learn_optimal_length_band(self) -> Tuple[int, int]:
+        """Derive this user's optimal password-length band (plan §4.2).
+
+        The user's own ``length_bucket`` distribution weighted by per-bucket
+        success rate: ``count_b * (successes_b / count_b)`` is just
+        ``successes_b``, so the winning bucket is simply the one where this user
+        has typed correctly most often. A bucket is ``floor(len / 4)``, so
+        bucket *b* publishes the band ``[4b, 4b + 3]``.
+
+        Deliberately NOT era-scoped, unlike ``get_evolution_stats`` and
+        ``get_adaptation_history``. Those two read ``TypingSession`` for its
+        *fingerprint*, which is exactly what a key rotation invalidates. This
+        reads only ``length_bucket`` and ``success`` — behavioural columns that
+        carry no fingerprint and so create no cross-era correlation — and it
+        describes the user's typing, not any particular password. That puts it
+        in the same category as ``UserTypingProfile`` itself, which
+        ``export_preference_model``'s own docstring already documents as
+        deliberately un-scoped.
+
+        Returns:
+            ``(optimal_length_min, optimal_length_max)``; the defaults when no
+            bucket has enough successful sessions to speak for itself.
+        """
+        from django.db.models import Count, Q
+
+        from ..models import TypingSession
+
+        rows = (
+            TypingSession.objects
+            .filter(user=self.user, length_bucket__gte=MIN_LENGTH_BUCKET)
+            .values('length_bucket')
+            .annotate(successes=Count('id', filter=Q(success=True)))
+            .order_by('length_bucket')
+        )
+
+        best_bucket = None
+        best_successes = 0
+        for row in rows:
+            successes = row['successes']
+            # Strict >: `rows` is ordered by bucket ascending, so a tie keeps
+            # the SHORTER band rather than resolving on database row order.
+            if successes >= MIN_SESSIONS_FOR_LENGTH_BAND and successes > best_successes:
+                best_bucket = row['length_bucket']
+                best_successes = successes
+
+        if best_bucket is None:
+            return DEFAULT_OPTIMAL_LENGTH
+        return (best_bucket * 4, best_bucket * 4 + 3)
 
     def apply_adaptation_v2(
         self,
@@ -674,6 +1056,9 @@ class AdaptivePasswordService:
         substitution_classes: List[Dict],
         previews: Optional[Dict[str, str]] = None,
         memorability_improvement: Optional[float] = None,
+        memorability_score_before: Optional[float] = None,
+        memorability_score_after: Optional[float] = None,
+        memorability_driver: Optional[str] = None,
         expected_fp_key_version: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Apply/record an adaptation under the zero-knowledge v2 contract.
@@ -687,6 +1072,15 @@ class AdaptivePasswordService:
             substitution_classes: ``[{"from": "o", "to": "0", "confidence"?: …}]``.
             previews: Optional ``{original_masked, adapted_masked}`` (client-masked).
             memorability_improvement: Optional client-computed Δ (informational).
+            memorability_score_before: Optional client-measured memorability of
+                the original password, in ``[0, 1]`` (plan §4.1). Before Phase 4
+                both score columns were hard-``None``, which is why
+                ``get_evolution_stats``' ``average_memorability_improvement``
+                was permanently 0.
+            memorability_score_after: Same, for the adapted password.
+            memorability_driver: Which of the four memorability features moved
+                most, per the client. Only used later, to attribute a user's
+                ``memorability_improved`` feedback to a feature weight.
             expected_fp_key_version: The era the caller's serializer already
                 validated the client's ``fp_key_version`` against. See
                 ``record_typing_session_v2`` for why this is re-checked here
@@ -785,8 +1179,25 @@ class AdaptivePasswordService:
                     adaptation_type='substitution',
                     substitutions_applied=substitutions_applied,
                     confidence_score=confidence_score,
-                    memorability_score_before=None,
-                    memorability_score_after=None,
+                    # Phase 4: the client's real readings, or NULL when it did
+                    # not send them. Storing only ONE of the pair would be
+                    # worse than storing neither -- get_evolution_stats keys
+                    # off `memorability_score_before is not None` and would
+                    # then average a delta against an implicit 0 -- so the
+                    # pair is written together or not at all.
+                    memorability_score_before=(
+                        memorability_score_before
+                        if memorability_score_before is not None
+                        and memorability_score_after is not None
+                        else None
+                    ),
+                    memorability_score_after=(
+                        memorability_score_after
+                        if memorability_score_before is not None
+                        and memorability_score_after is not None
+                        else None
+                    ),
+                    memorability_driver=memorability_driver or '',
                     status='active',
                     decided_at=timezone.now(),
                     reason=reason,
