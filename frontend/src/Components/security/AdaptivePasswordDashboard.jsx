@@ -464,6 +464,22 @@ const AdaptivePasswordDashboard = () => {
                 // doesn't have (a stored auth-hash/salt, or a decrypt-and-compare
                 // against a known item) — flagged as a follow-up rather than
                 // built here under time pressure.
+                // Investigated (round 3 review) whether `sessionVaultCrypto.
+                // unlockWithVaultPassword` could be reused directly: it DOES
+                // genuinely verify a password (AES-GCM unwrap of a stored
+                // wrapped DEK fails loudly on the wrong key), but it's scoped
+                // to the OAuth/social-login path specifically ("the user has
+                // no master password" per its own caller's docstring,
+                // VaultUnlockModal.jsx) — calling it here would conflate two
+                // potentially-different secrets and mutate that module's own
+                // session-key state as a side effect. Standard (non-OAuth)
+                // login never calls it either (grepped VaultContext.jsx and
+                // useAuth.jsx: zero hits), so no drop-in "verify the master
+                // password" primitive exists for the common case today. A
+                // real fix needs tracing the actual login-time key-derivation
+                // flow end to end, not a same-round graft of an
+                // OAuth-specific helper onto a different authentication
+                // concept.
                 await fingerprint('adaptive-probe');
                 // `fingerprint` is a closure over `crypto`, and CryptoService
                 // keeps the raw password on `this.masterPassword` for the
