@@ -73,7 +73,7 @@ def aggregate_typing_profiles():
             recent = TypingSession.objects.filter(id__in=recent_ids)
 
             # Get or create profile
-            profile, created = UserTypingProfile.objects.get_or_create(user=user)
+            profile, _created = UserTypingProfile.objects.get_or_create(user=user)
 
             # Update aggregated metrics
             total = len(recent_ids)
@@ -94,34 +94,37 @@ def aggregate_typing_profiles():
             # this exact line, just unreachable.
             profile.successful_sessions = successful
             profile.success_rate = successful / total if total > 0 else 0
-            
-            # Calculate profile confidence
-            if total >= 50:
-                profile.profile_confidence = 0.9
-            elif total >= 20:
-                profile.profile_confidence = 0.7
-            elif total >= 10:
-                profile.profile_confidence = 0.5
-            else:
-                profile.profile_confidence = total / 20.0  # Linear up to 10
-            
+
+            # profile_confidence is deliberately NOT recomputed here -- same
+            # reasoning as total_sessions above, and a real bug found the same
+            # way (round 3 review): _update_typing_profile already owns this
+            # field via `min(1.0, profile.total_sessions / 50)` on the LIFETIME
+            # count. This task's `total` is a 50-session WINDOW, so a tiered
+            # windowed formula computed here would give a DIFFERENT number for
+            # the same user (e.g. 200 lifetime sessions -> 1.0 from the request
+            # path, 0.9 from this task, whichever wrote last winning) rather
+            # than two views of the same fact -- two competing definitions of
+            # one column, not two writers of one definition.
             profile.last_session_at = (
                 recent.order_by('-created_at')
                 .values_list('created_at', flat=True)
                 .first()
             )
             # update_fields, not a bare save(): this task only ever
-            # recomputes the five session-statistics fields above. An
-            # unscoped save() writes back EVERY field on the in-memory
-            # instance, including memorability_weights -- which
-            # nudge_memorability_weights (the weekly feedback task) can
-            # update concurrently on the same row. Without update_fields, an
-            # hourly aggregation run reading this profile before that nudge
-            # commits, then saving after it commits, would silently revert
-            # the nudge with no error and no log line.
+            # recomputes the three session-statistics fields above (plus the
+            # auto_now updated_at, which -- unlike the other three -- Django
+            # only refreshes if it's explicitly named here, matching the two
+            # sibling writers of this same row: nudge_memorability_weights and
+            # _update_typing_profile both list it too). An unscoped save()
+            # writes back EVERY field on the in-memory instance, including
+            # memorability_weights -- which nudge_memorability_weights (the
+            # weekly feedback task) can update concurrently on the same row.
+            # Without update_fields, an hourly aggregation run reading this
+            # profile before that nudge commits, then saving after it commits,
+            # would silently revert the nudge with no error and no log line.
             profile.save(update_fields=[
-                'successful_sessions', 'success_rate',
-                'profile_confidence', 'last_session_at',
+                'successful_sessions', 'success_rate', 'last_session_at',
+                'updated_at',
             ])
             
             processed += 1

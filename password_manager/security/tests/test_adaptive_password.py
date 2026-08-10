@@ -1131,6 +1131,37 @@ class CeleryTaskTests(TestCase):
         profile = UserTypingProfile.objects.get(user=self.user)
         self.assertEqual(profile.total_sessions, 120)
 
+    def test_aggregate_typing_profiles_does_not_overwrite_profile_confidence(self):
+        """`profile_confidence` has exactly one owner: `_update_typing_profile`'s
+        `min(1.0, total_sessions / 50)` on the LIFETIME count. This task used
+        to recompute it from a tiered windowed formula and write it back too
+        -- for the same user, the two definitions disagree (200 lifetime
+        sessions -> 1.0 from the request path, 0.9 from this task's
+        window-capped-at-50 tiers), so whichever writer ran most recently
+        silently overwrote the other's answer with a different one, not a
+        refresh of the same fact.
+        """
+        from security.models import TypingSession, UserTypingProfile
+        from security.tasks.adaptive_tasks import aggregate_typing_profiles
+
+        # A lifetime confidence a real, long-tenured user would have from
+        # _update_typing_profile's own formula (min(1.0, 200/50) = 1.0).
+        UserTypingProfile.objects.create(
+            user=self.user, total_sessions=200, profile_confidence=1.0,
+        )
+        for index in range(4):
+            TypingSession.objects.create(
+                user=self.user,
+                password_fingerprint=f'fp-confidence-{index}',
+                length_bucket=3, success=True, error_positions=[],
+                error_count=0, timing_profile={}, total_time_ms=1000,
+            )
+
+        aggregate_typing_profiles()
+
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertEqual(profile.profile_confidence, 1.0)
+
     def test_aggregate_typing_profiles_does_not_clobber_concurrent_writes(self):
         """This task must only touch the columns it recomputes.
 

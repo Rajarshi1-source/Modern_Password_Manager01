@@ -30,6 +30,7 @@ import {
     detectSubstitutionClasses,
     scoreMemorability,
     memorabilityDriver,
+    MEMORABILITY_FEATURES,
     REJECT_DE_LEET,
 } from '../../services/adaptive/adaptiveFeatures';
 
@@ -703,7 +704,18 @@ export const adaptivePasswordService = {
             ...(Number.isFinite(memorabilityScoreAfter)
                 ? { memorability_score_after: memorabilityScoreAfter }
                 : {}),
-            ...(typeof driver === 'string' && driver
+            // The server's memorability_driver is a ChoiceField over exactly
+            // MEMORABILITY_FEATURES (adaptive_serializers.py) -- an
+            // unrecognized value fails the WHOLE apply request (400), losing
+            // the adaptation record over an informational field, the same
+            // failure mode the Number.isFinite checks above already guard
+            // against for the score fields. memorabilityDriver() (this
+            // file's own caller) only ever returns one of these four names or
+            // null, so this never fires via the real suggest -> apply path
+            // today -- kept anyway as the same defense-in-depth the server
+            // side already applies, in case a future caller builds this
+            // object by hand.
+            ...(typeof driver === 'string' && MEMORABILITY_FEATURES.includes(driver)
                 ? { memorability_driver: driver }
                 : {}),
         }, { timeout: ADAPTIVE_API_TIMEOUT_MS });

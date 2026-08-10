@@ -1133,6 +1133,58 @@ describe('rankSuggestions error-position tilt', () => {
     expect(junk).toEqual(baseline);
   });
 
+  it('rejects an empty/whitespace key instead of coercing it to position 0', () => {
+    // Number('') === 0 and Number(' ') === 0 -- neither is "invalid" by a
+    // bare Number.isInteger check performed AFTER parsing, so an empty or
+    // whitespace key would otherwise silently become "position 0" and boost
+    // whatever sits there.
+    //
+    // 'password' can't discriminate this: position 0 is 'p' (no candidate
+    // there at all), and the only reachable neighbour effect (adjacency onto
+    // position 1) lands exactly on the tilt formula's neutral point at
+    // rate 1.0, so an accept-vs-reject mutation there produces byte-identical
+    // output either way -- verified empirically, not assumed, after an
+    // earlier version of this test passed against a deliberately-reintroduced
+    // bug for exactly that reason. 'oxygen' (o@0 -> '0') has a real candidate
+    // AT position 0, and a model weight elsewhere ensures accepting the
+    // illegitimate boost would flip the winner, not just add a no-op.
+    const oxygenCandidates = () => generateCandidates('oxygen');
+    const model = { substitution_weights: { g: { 9: 0.6 } } };
+    const baseline = rankSuggestions(oxygenCandidates(), model, { maxSuggestions: 1 });
+    expect(baseline[0].position).toBe(3); // g -> 9, the genuinely higher-confidence pick
+
+    for (const badKey of ['', ' ', '  ']) {
+      const junk = rankSuggestions(oxygenCandidates(), model, {
+        maxSuggestions: 1,
+        errorPositions: { [badKey]: 1.0 },
+      });
+      expect(junk).toEqual(baseline);
+    }
+  });
+
+  it('drops a negative rate rather than clamping it into the map', () => {
+    // Documents the fix's intent; NOT a behavioural regression guard, and
+    // said so honestly rather than asserting something unfalsifiable as if
+    // it were one. clamp01(-3) stores an explicit 0 rather than dropping the
+    // entry, but errorAffinity only ever reads via `rates.get(pos) ?? 0`,
+    // which is identical for "explicit 0" and "absent" -- and the ONLY other
+    // place presence matters (`errorRates.size > 0`) gates a tilt applied
+    // UNIFORMLY to every candidate when no OTHER real entry exists, which
+    // provably cannot change rankSuggestions' relative order (a constant
+    // shift to every score leaves every pairwise b.score - a.score
+    // unchanged). Verified empirically: reverting the `value < 0` guard
+    // produces byte-identical rankSuggestions output on every fixture tried.
+    // The fix is still correct -- an explicit stored 0 is a different fact
+    // from "no data" even if this one consumer can't currently tell -- kept
+    // for that reason, not because this test can catch a regression in it.
+    const baseline = rankSuggestions(CANDIDATES(), null, { maxSuggestions: 8 });
+    const withNegative = rankSuggestions(CANDIDATES(), null, {
+      maxSuggestions: 8,
+      errorPositions: { 3: -1.0 },
+    });
+    expect(withNegative).toEqual(baseline);
+  });
+
   it('leaves the reported confidence untouched', () => {
     // The tilt is ranking state. Confidence is what the UI shows the user and
     // must keep meaning "how much the model likes this class" -- the same

@@ -401,6 +401,17 @@ function errorAffinity(rates, position) {
 }
 
 /**
+ * Matches a canonical non-negative integer string: `'0'`, or a leading
+ * nonzero digit followed by any digits (`'12'`, `'100'`). Rejects `''` and
+ * `' '` (both of which `Number()` coerces to `0`, not "invalid"), leading
+ * zeros (`'01'`), decimals, and signs.
+ *
+ * @type {RegExp}
+ * @private
+ */
+const CANONICAL_INTEGER_KEY = /^(?:0|[1-9]\d*)$/u;
+
+/**
  * Normalize the server's `error_prone_positions` map into a numeric Map.
  *
  * The wire shape is `{ "3": 0.4, "7": 0.15 }` — JSON object keys are always
@@ -408,7 +419,16 @@ function errorAffinity(rates, position) {
  * position, are dropped rather than coerced: a malformed entry silently read as
  * position 0 would boost whatever sits at the start of every password (the same
  * "don't default malformed data into a plausible-looking value" principle
- * `leetMatchSpans` applies to estimator output).
+ * `leetMatchSpans` applies to estimator output). The key check runs BEFORE
+ * `Number(key)`, not after: `Number('')` and `Number(' ')` both equal `0`,
+ * so checking only the parsed number can't distinguish a deliberate `"0"`
+ * key from an empty/whitespace one — both would otherwise silently boost
+ * position 0. A negative rate is dropped outright, not clamped into the map:
+ * `clamp01` would store it as a real `0` entry, which is different from no
+ * entry at all — `rankSuggestions` uses `errorRates.size > 0` to decide
+ * whether ANY real error data exists, and a stored-but-clamped bad entry
+ * would incorrectly flip that on, activating a uniform penalty tilt across
+ * every position that has no real data of its own.
  *
  * @param {Record<string, number>|null|undefined} errorPositions - Wire map.
  * @returns {Map<number, number>} Cleaned position → rate map (possibly empty).
@@ -418,11 +438,11 @@ function normalizeErrorPositions(errorPositions) {
   const rates = new Map();
   if (!errorPositions || typeof errorPositions !== 'object') return rates;
   for (const [key, value] of Object.entries(errorPositions)) {
+    if (!CANONICAL_INTEGER_KEY.test(key)) continue;
     const position = Number(key);
-    if (!Number.isInteger(position) || position < 0) continue;
     // Number.isFinite, not typeof: `typeof Infinity === 'number'` is true and
     // an Infinity rate would clamp to 1 and pin every ranking to that position.
-    if (!Number.isFinite(value)) continue;
+    if (!Number.isFinite(value) || value < 0) continue;
     rates.set(position, clamp01(value));
   }
   return rates;
