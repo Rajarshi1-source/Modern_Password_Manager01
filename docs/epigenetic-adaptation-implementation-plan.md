@@ -3256,6 +3256,63 @@ mutation-checked — reverting either fix reproduces the exact predicted
 failure (a clobbered `memorability_weights`; `120 → 4` on the session-count
 regression).
 
+**3rd review-fix round** (CodeRabbit, PR #475, fixed in `927ceb6`): every
+finding re-verified against current code. `profile_confidence` turned out to
+have the IDENTICAL two-competing-writers bug round 2 already fixed for
+`total_sessions` on the very same task — `aggregate_typing_profiles`
+recomputed it from a tiered 50-session-window formula while
+`_update_typing_profile` independently computes `min(1.0, total_sessions /
+50)` from the lifetime count, so a 200-session user's stored value alternated
+between `1.0` and `0.9` depending on which writer ran last. Removed the
+task's own computation entirely, the same treatment as `total_sessions`;
+mutation-checked (reintroducing the tiered formula reproduces `0.2 != 1.0`
+on the new test). Also fixed a client-side `errorPositions` key-coercion gap
+(`Number('')` and `Number(' ')` both equal `0`, so either would silently
+become "position 0"), a negative-rate handling gap (clamped into an explicit
+map entry rather than dropped), an under-validated `memorability_driver`
+sent to `/adaptive/apply/` (checked for "non-empty string" rather than one
+of the server's actual four `ChoiceField` values — an unrecognized value
+fails the whole apply request, not just drops the field), a stale
+`update_fields` comment plus a missing `updated_at` entry on the same writer
+fixed above, and an unused `get_or_create` return value. One doc
+clarification: the risk table's one-line "key rotation orphans learning"
+now cross-references §4.6's own statement that behavioural, non-fingerprint-
+keyed aggregates (like the length band) are unaffected by rotation.
+
+The most valuable finding this round came from my own mutation-checking
+discipline, not from the reviewer: my first-written versions of BOTH new
+`errorPositions` regression tests were themselves wrong; caught only by
+verifying they actually failed against the reverted (buggy) code before
+trusting them, per this project's standing practice. Neither could
+distinguish fixed from buggy behavior against the fixtures as first written
+— confirmed by direct empirical probe, not just re-reading the math. Both
+were rewritten: one against a fixture proven to discriminate the bug, the
+other left in place but re-labeled honestly as a non-discriminating
+documentation test (the underlying data-hygiene fix is still correct — an
+explicit stored `0` is a different fact from "no entry" even though no
+consumer that exists today can tell the difference through `rankSuggestions`'
+output, since a uniform per-candidate score shift never changes relative
+ranking order).
+
+Declined (CodeRabbit nitpick, its own label: "capacity guidance only," "the
+current form is correct"): task-level observability metrics for
+`aggregate_typing_profiles`. Not a bug.
+
+Investigated but deferred — third re-raise of the mistyped-master-password
+finding (Codex rounds 1-2, CodeRabbit round 3, same gap each time): checked
+whether `sessionVaultCrypto.unlockWithVaultPassword` — which DOES genuinely
+verify a password via AES-GCM unwrap failure — could be reused directly. It
+is scoped specifically to the OAuth/social-login path per its own caller's
+docstring; grepped `VaultContext.jsx` and `useAuth.jsx` and confirmed the
+standard (non-OAuth) login flow never calls it, so no drop-in verifier
+exists for the common case today. Updated the in-file comment and the
+tracked follow-up with this finding rather than grafting an OAuth-specific
+helper onto unfamiliar authentication code in the same round.
+
+Verified: 214 adaptive backend tests (+1), 628 frontend (+2), build green
+(`vendor` chunk unchanged), Django check clean, no pending migrations, ZK
+client guard green, 0 new lint warnings.
+
 ---
 
 ## 8. Sequencing and risk
@@ -3277,7 +3334,7 @@ that measurably weaken their passwords.**
 | Bandit starves on sparse data | Global DP prior for cold start; Thompson sampling explores by construction; ≥3-session floor on the behavioural term. **Shipped as specified**, plus a k-anonymity floor of 5 contributors on the global prior (§5.6). |
 | Salt exposure misjudged | **Shipped, Phase 1 (§1.1):** the salt is genuinely non-secret — `AdaptivePasswordConfig.fingerprint_salt`'s own `help_text` states it, and it is useless to an attacker without the master password, which is never transmitted. Serving it over `/adaptive/config/` leaks nothing. Fingerprint-era isolation (`fp_key_version`) is enforced end-to-end: stamped from the server's own config (never the client's claim), scoped on every fingerprint-keyed read path, and bumped on rotation so eras never correlate. Residual property, not a blocker (§1): fingerprint strength is bounded by master-password strength, since HMAC is fast to brute-force offline given the master password — out of scope under this feature's threat model (hostile server, master password never transmitted). |
 | zxcvbn bundle cost | **Measured, Phase 2; re-measured and a real regression caught at Phase 5 mount time (§5.6).** ≈1660 kB raw / ≈838 kB gzipped. Phase 2 recorded it as "entirely behind the dynamic `import()`" — true of the source, but *not* of the build, and unfalsifiable at the time because gap D1 made the module unreachable and Rollup dropped it entirely. Mounting the route in Phase 5 made it real, and `vite.config.js`'s `manualChunks` catch-all (`return 'vendor'` for every unnamed `node_modules` package) put the whole dictionary set into the **eagerly-loaded** `vendor` chunk — paid by every user on first paint, including those who never open the feature. Fixed by naming a dedicated `zxcvbn` chunk. Measured before/after: eager `vendor` 3516.08 kB raw / 1400.99 kB gzip → 1855.46 kB / 564.10 kB, with `zxcvbn-*.js` (1660.31 kB / 837.44 kB gzip) absent from `index.html`'s eager list. **Lesson: "it's behind a dynamic `import()`" is a claim about the source graph, not about chunking — a bundler's catch-all can still hoist it into an eager chunk, and the claim is only checkable once something actually imports the module.** |
-| Key rotation orphans learning | Intended — a correlation reset. Make it explicit in the UI, not a silent data loss. |
+| Key rotation orphans learning | Intended — a correlation reset. Make it explicit in the UI, not a silent data loss. **Scoped, not total (round 3 review clarification):** only *fingerprint-keyed* learning resets — `TypingSession`/`PasswordAdaptation` rows and the bandit's `SubstitutionPolicyArm` posteriors, since a new era's fingerprints cannot be correlated with the old ones. Behavioural aggregates that carry no fingerprint — `UserTypingProfile` itself, and the memorability length band derived from `TypingSession.length_bucket` (§4.6) — describe the *user*, not a particular password, and are unaffected by rotation. An operator reading this row in isolation should not conclude a rotation resets all learning; §4.6's own bullet on the length band states the survives-rotation half explicitly. |
 
 ## 9. Acceptance criteria
 
