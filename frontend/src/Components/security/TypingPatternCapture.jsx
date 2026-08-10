@@ -772,4 +772,33 @@ export const adaptivePasswordService = {
         });
         return response.data;
     },
+
+    /**
+     * Submit explicit feedback on an adaptation.
+     *
+     * This is the input the Phase 4 learning loop actually depends on:
+     * `update_rl_model_from_feedback` reads `memorability_improved` off this
+     * row to nudge the per-user memorability weights (plan §4.2). No UI called
+     * this endpoint before Phase 5, so the nudge existed and was tested but
+     * had no real-world input to run on.
+     *
+     * @param {string} adaptationId - The adaptation this feedback is about.
+     * @param {{ rating: number, typingAccuracyImproved?: boolean, memorabilityImproved?: boolean, additionalFeedback?: string }} opts
+     */
+    async submitFeedback(adaptationId, {
+        rating, typingAccuracyImproved, memorabilityImproved, additionalFeedback,
+    } = {}) {
+        const response = await axios.post('/api/security/adaptive/feedback/', {
+            adaptation_id: adaptationId,
+            rating,
+            ...(typeof typingAccuracyImproved === 'boolean'
+                ? { typing_accuracy_improved: typingAccuracyImproved }
+                : {}),
+            ...(typeof memorabilityImproved === 'boolean'
+                ? { memorability_improved: memorabilityImproved }
+                : {}),
+            ...(additionalFeedback ? { additional_feedback: additionalFeedback } : {}),
+        }, { timeout: ADAPTIVE_API_TIMEOUT_MS });
+        return response.data;
+    },
 };

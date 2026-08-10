@@ -1001,6 +1001,36 @@ class MemorabilityScorePersistenceTests(APITestCase):
         self.assertIsNone(adaptation.memorability_score_before)
         self.assertEqual(adaptation.memorability_driver, '')
 
+    def test_gdpr_export_includes_the_learned_memorability_fields(self):
+        # A real gap: export_adaptive_data was written before Phase 4 and
+        # never updated, so a GDPR export stopped being complete the moment
+        # a user's first feedback nudged their memorability weights.
+        self._apply(memorability_driver='variety')
+        UserTypingProfile.objects.create(
+            user=self.user,
+            memorability_weights={'length': 0.1, 'patterns': 0.2,
+                                   'variety': 0.4, 'pronounceable': 0.3},
+            wpm_variance=12.5,
+            common_error_types={'transposition': 1.0},
+            rhythm_signature=[1.0] * RHYTHM_BINS,
+        )
+
+        export = self.client.get('/api/security/adaptive/export/').data
+
+        self.assertEqual(
+            export['typing_profile']['memorability_weights']['variety'], 0.4,
+        )
+        self.assertEqual(export['typing_profile']['wpm_variance'], 12.5)
+        self.assertEqual(
+            export['typing_profile']['common_error_types'], {'transposition': 1.0},
+        )
+        self.assertEqual(
+            export['typing_profile']['rhythm_signature'], [1.0] * RHYTHM_BINS,
+        )
+        self.assertEqual(
+            export['adaptations'][0]['memorability_driver'], 'variety',
+        )
+
 
 # =============================================================================
 # Phase 5 — suggestion cadence (plan §5.2, gap B5)
