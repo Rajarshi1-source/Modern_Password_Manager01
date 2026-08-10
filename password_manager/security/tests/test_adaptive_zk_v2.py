@@ -1000,3 +1000,67 @@ class MemorabilityScorePersistenceTests(APITestCase):
         adaptation = PasswordAdaptation.objects.get(user=self.user)
         self.assertIsNone(adaptation.memorability_score_before)
         self.assertEqual(adaptation.memorability_driver, '')
+
+
+# =============================================================================
+# Phase 5 — suggestion cadence (plan §5.2, gap B5)
+# =============================================================================
+
+class SuggestionCadenceTests(APITestCase):
+    """`should_suggest_adaptation()` finally has a non-test caller."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='cadenceuser', password='testpass123'
+        )
+        self.client.force_authenticate(user=self.user)
+        self.config = AdaptivePasswordConfig.objects.create(
+            user=self.user, is_enabled=True, fingerprint_salt='cadencesalt',
+            suggestion_frequency_days=30,
+        )
+
+    def _config(self):
+        response = self.client.get('/api/security/adaptive/config/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data
+
+    def test_due_when_no_suggestion_has_ever_been_made(self):
+        self.assertTrue(self._config()['should_suggest'])
+
+    def test_not_due_inside_the_cadence_window(self):
+        self.config.last_suggestion_at = timezone.now() - timedelta(days=5)
+        self.config.save()
+        self.assertFalse(self._config()['should_suggest'])
+
+    def test_due_again_once_the_window_has_passed(self):
+        self.config.last_suggestion_at = timezone.now() - timedelta(days=31)
+        self.config.save()
+        self.assertTrue(self._config()['should_suggest'])
+
+    def test_auto_suggest_off_overrides_a_due_cadence(self):
+        # AND-ed server-side rather than left to the client to combine: a
+        # client that reads one field and not the other must not be able to
+        # nag a user who turned suggestions off.
+        self.config.auto_suggest_enabled = False
+        self.config.save()
+        self.assertTrue(self.config.should_suggest_adaptation())
+        self.assertFalse(self._config()['should_suggest'])
+
+    def test_auto_apply_threshold_is_published(self):
+        data = self._config()
+        self.assertIn('auto_apply_high_confidence', data)
+        self.assertEqual(
+            data['auto_apply_threshold'],
+            settings.ADAPTIVE_PASSWORD['AUTO_APPLY_THRESHOLD'],
+        )
+
+    def test_auto_apply_threshold_fails_safe_when_misconfigured(self):
+        # 1.0 means "nothing is confident enough to auto-apply". Defaulting
+        # low would silently auto-rotate credentials on a broken deployment.
+        for bad in ('nonsense', None, -1, 5.0, float('nan')):
+            with self.settings(
+                ADAPTIVE_PASSWORD={
+                    **settings.ADAPTIVE_PASSWORD, 'AUTO_APPLY_THRESHOLD': bad
+                }
+            ):
+                self.assertEqual(self._config()['auto_apply_threshold'], 1.0, bad)

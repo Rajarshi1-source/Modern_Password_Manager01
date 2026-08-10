@@ -11,6 +11,10 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+// SecuritySettings renders a <Link> to /security/adaptive (the adaptive-password
+// entry point), and react-router's Link throws without a Router in context.
+// In the app it always has one; the test just has to supply the same.
+import { MemoryRouter } from 'react-router-dom';
 import preferencesService from '../../../services/preferencesService';
 import SecuritySettings from '../SecuritySettings';
 
@@ -22,7 +26,11 @@ describe('SecuritySettings preference persistence', () => {
   it('saves a changed setting via set(`security.<key>`, value), not the 3-arg form', () => {
     const setSpy = vi.spyOn(preferencesService, 'set').mockImplementation(() => {});
 
-    render(<SecuritySettings />);
+    render(
+      <MemoryRouter>
+        <SecuritySettings />
+      </MemoryRouter>
+    );
 
     // Target the Auto-Lock Timeout select by its accessible name (not render
     // order) → updateSecurity('autoLockTimeout', N).

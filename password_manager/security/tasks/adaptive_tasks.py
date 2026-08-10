@@ -34,8 +34,7 @@ def aggregate_typing_profiles():
         Dict with processing stats
     """
     from security.models import UserTypingProfile, TypingSession
-    from security.services.adaptive_password_service import AdaptivePasswordService
-    
+
     # Find users with sessions in the last hour
     recent_cutoff = timezone.now() - timedelta(hours=1)
     
@@ -48,23 +47,38 @@ def aggregate_typing_profiles():
     
     for user in users_with_sessions:
         try:
-            service = AdaptivePasswordService(user)
-            
-            # Get recent sessions
-            sessions = TypingSession.objects.filter(
-                user=user
-            ).order_by('-created_at')[:50]  # Last 50 sessions
-            
-            if not sessions:
+            # Materialize the ids of the last 50 sessions FIRST.
+            #
+            # This task had never once completed successfully: it used to slice
+            # (`[:50]`) and then call `.filter(success=True)` on the result,
+            # which raises `TypeError: Cannot filter a query once a slice has
+            # been taken`. Every user therefore fell into the `except Exception`
+            # below and was counted as an error, so the task returned
+            # `{'processed': 0, 'errors': N}` on every run. It went unnoticed
+            # because its only test asserted `callable(aggregate_typing_profiles)`
+            # -- true of a function that raises on every input.
+            #
+            # Two queries against a fixed id set, rather than one sliced
+            # queryset reused three ways, so the window cannot drift between
+            # the count and the success count either.
+            recent_ids = list(
+                TypingSession.objects
+                .filter(user=user)
+                .order_by('-created_at')
+                .values_list('id', flat=True)[:50]
+            )
+            if not recent_ids:
                 continue
-            
+
+            recent = TypingSession.objects.filter(id__in=recent_ids)
+
             # Get or create profile
             profile, created = UserTypingProfile.objects.get_or_create(user=user)
-            
+
             # Update aggregated metrics
-            total = sessions.count()
-            successful = sessions.filter(success=True).count()
-            
+            total = len(recent_ids)
+            successful = recent.filter(success=True).count()
+
             profile.total_sessions = total
             profile.successful_sessions = successful
             profile.success_rate = successful / total if total > 0 else 0
@@ -79,7 +93,11 @@ def aggregate_typing_profiles():
             else:
                 profile.profile_confidence = total / 20.0  # Linear up to 10
             
-            profile.last_session_at = sessions.first().created_at
+            profile.last_session_at = (
+                recent.order_by('-created_at')
+                .values_list('created_at', flat=True)
+                .first()
+            )
             profile.save()
             
             processed += 1
@@ -159,6 +177,10 @@ def update_rl_model_from_feedback(batch_size: int = 500):
             runtime and the transaction count; leftovers are picked up next run
             because they are still unstamped.
 
+    Phase 4 additionally nudges the user's memorability feature weights from the
+    same feedback row (plan §4.2), inside the same transaction and behind the
+    same stamp, so both learned models move exactly once per feedback.
+
     Returns:
         Dict with update stats, including the per-component reward breakdown
         counts so an operator can see *why* the policy moved.
@@ -166,7 +188,9 @@ def update_rl_model_from_feedback(batch_size: int = 500):
     from django.db import transaction
 
     from security.models import AdaptationFeedback
-    from security.services.adaptive_password_service import PrivacyGuard
+    from security.services.adaptive_password_service import (
+        PrivacyGuard, nudge_memorability_weights,
+    )
     from security.services.adaptive_policy_service import (
         composite_reward, credit_adaptation, rebuild_global_priors,
     )
@@ -182,6 +206,7 @@ def update_rl_model_from_feedback(batch_size: int = 500):
     arms_updated = 0
     skipped = 0
     behavioural_used = 0
+    memorability_nudges = 0
     reward_total = 0.0
 
     for feedback_id in pending_ids:
@@ -217,6 +242,15 @@ def update_rl_model_from_feedback(batch_size: int = 500):
                 adaptation = feedback.adaptation
                 reward, components = composite_reward(adaptation, feedback)
                 arms_updated += credit_adaptation(adaptation, reward)
+
+                # Phase 4 (plan §4.2): the same feedback row also carries an
+                # explicit memorability answer. Nudged inside this transaction,
+                # under the same lock and behind the same
+                # policy_reward_applied_at stamp as the reward above, so a
+                # retry cannot apply the EMA step twice -- the identical
+                # idempotency argument Phase 3 made for the arm credit.
+                if nudge_memorability_weights(adaptation, feedback) is not None:
+                    memorability_nudges += 1
 
                 feedback.policy_reward_applied_at = timezone.now()
                 feedback.save(update_fields=['policy_reward_applied_at'])
@@ -273,6 +307,7 @@ def update_rl_model_from_feedback(batch_size: int = 500):
         'skipped': skipped,
         'arms_updated': arms_updated,
         'behavioural_term_used': behavioural_used,
+        'memorability_nudges': memorability_nudges,
         'mean_reward': round(reward_total / processed, 4) if processed else None,
         **prior_stats,
     }

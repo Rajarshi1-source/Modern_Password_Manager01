@@ -2927,6 +2927,101 @@ admin-surfaced, and DP-covered by the existing `PrivacyGuard`.
 - `average_memorability_improvement` is non-zero after an accepted adaptation
   (direct regression test for the always-0 bug).
 
+### 4.6 As shipped — status and deviations (Phase 4)
+
+**Status: SHIPPED** on branch `feat/adaptive-phase4-5-memorability-ship`, in the
+same PR as Phase 5. Migration `0028_adaptive_memorability_phase4`.
+
+**The headline finding: a real memorability measurement is usually negative for
+leetspeak, and the old formula could not have told us.**
+
+§4.1 specifies four intrinsic features. Driven against the real implementation
+rather than reasoned about:
+
+| | `password` | `p@ssw0rd` |
+|---|---|---|
+| length fit | 0.50 | 0.50 |
+| patterns | 0.25 | 0.25 |
+| variety | **1.00** | **0.33** |
+| pronounceable | **0.571** | **0.00** |
+| weighted score | 0.546 | 0.242 |
+
+Δ = **−0.305**. Two of the four features fall by construction when a letter
+becomes a symbol or a digit, and length is *provably* constant under this
+feature's transform family (every substitution is a 1:1 character swap), so it
+can never contribute to the Δ at all — only to the displayed absolute score.
+That last point also means half of §4.2's work (learning
+`optimal_length_min/max`) affects display only, never the improvement number.
+
+The pre-Phase-4 formula, `min(0.3, confidence * 0.15 + count * 0.03)`, is
+positive by construction. It was not an approximation of this measurement — it
+could not produce this sign at all. So "memorability optimization" was not
+merely unimplemented (gap B4), it was *asserted in a direction the feature's own
+documented model does not support*.
+
+Two alternatives were considered and rejected with the arithmetic, not by
+argument:
+
+1. **De-leet before scoring** (score the underlying word, as this repo's own
+   `clientPatternEngine.normalizeLeet()` does for the attacker side). This makes
+   all four features invariant under a substitution, so Δ becomes identically
+   **0** — which fails acceptance criterion 4 ("non-zero after an accepted
+   adaptation") and measures nothing at all.
+2. **Add a habit/familiarity term.** This is where the real gain lives — a user
+   finds *their own* habitual substitution easy — but `memorability_params`
+   models exactly four features, and habit is already modelled, properly, by the
+   Phase 3 bandit posterior surfaced as `confidence`.
+
+Shipped as specified (option: neither), with the sign rendered honestly in the
+UI. `AdaptivePasswordSuggestion` previously showed a hard-coded
+`memorabilityBefore = 0.65` placeholder ("Example - would come from API") and
+derived "after" from it; it now shows the two measured numbers or, absent a
+reading, omits the panel rather than inventing one.
+
+Note the EMA in §4.2 converges toward Δ ≈ 0 rather than toward positive: if the
+only features that move for leetspeak are variety and pronounceability, and
+users report the change *did* help, their weights rise; if users report it did
+not, they fall toward `MIN_MEMORABILITY_WEIGHT` and the Δ shrinks. Neither
+direction manufactures a positive intrinsic improvement. That is a limitation of
+the four-feature model, recorded rather than hidden.
+
+**Deviations from the plan text:**
+
+- **§4.2's EMA runs in the weekly Celery task, not in `export_preference_model`.**
+  Learning is a write; export is a read. Nudging on the GET would mutate state
+  on every poll and credit the same feedback row once per page refresh instead
+  of exactly once. It now runs inside the task's existing per-row transaction,
+  under the same lock and behind the same `policy_reward_applied_at` stamp that
+  makes the arm credit idempotent.
+- **§4.2's "attributed to whichever feature each accepted adaptation moved
+  most" is not computable server-side.** The server never sees either password,
+  so it cannot derive per-feature deltas. The client sends the *name* of the
+  dominant feature (`memorability_driver`, one of four fixed strings) rather
+  than the delta vector — the minimum the attribution needs, and less about the
+  password's shape than a 4-vector would be.
+- **§4.4's `wpm_variance` is the exponentially-weighted variance (West/Finch),
+  not Welford's.** Welford maintains an *arithmetic* mean plus an M2 companion;
+  `average_wpm` is an EWMA (`* 0.9 + wpm * 0.1`) and there is no M2 column.
+  Pairing Welford's M2 with an EWMA mean produces a number that is not the
+  variance of anything. The EWMA's own variance companion uses the same
+  `alpha = 0.1` and needs no new field.
+- **§4.4's `common_error_types` is positional, not forensic.** The client sends
+  *where* a correction happened, never *which* key was pressed, so a true
+  adjacent-key slip is indistinguishable from any other single-character error.
+  Labels shipped as `transposition` (two corrections at adjacent positions),
+  `repeated` (the same position corrected twice in one session) and
+  `adjacent_key` (the residual isolated-single-error class), documented as
+  proxies in the method's own docstring.
+- **`error_prone_positions` is exported but the length band is not era-scoped.**
+  `_learn_optimal_length_band` reads `TypingSession.length_bucket` and `success`
+  only — behavioural columns carrying no fingerprint — so unlike
+  `get_evolution_stats` there is no cross-era correlation to prevent, and the
+  band survives a key rotation like `UserTypingProfile` itself does. Bucket 0
+  (0-3 characters) is excluded outright: publishing "your optimal length is 0-3"
+  would steer the client's scorer toward unusable passwords, and such sessions
+  are far more likely truncated entries than a real preference.
+
+
 ---
 
 ## 7. Phase 5 — Ship it (D1-D4, B5, C2)
@@ -2991,6 +3086,64 @@ against fixtures and assert its return payload.
 - Note the accepted asymmetry from §1.3 (client-only gate) and the residual
   property from §1 (fingerprint strength is bounded by master-password strength).
 
+### 5.6 As shipped — status and deviations (Phase 5)
+
+**Status: SHIPPED** on the same branch/PR.
+
+- **§5.4's beat task names in the plan are wrong and would never have fired.**
+  The plan names them `security.tasks.<func>`; a bare `@shared_task` derives its
+  name from the *defining* module, so the live registry holds
+  `security.tasks.adaptive_tasks.<func>`. Verified against
+  `app.tasks` rather than assumed, and a regression test now asserts every
+  `adaptive-*` beat entry resolves. A wrong name here does not fail at import —
+  beat raises `NotRegistered` on each tick and the task silently never runs,
+  which is precisely how these three came to have no schedule for so long.
+- **The plan's suggested `security.tasks.*` routing entry was NOT added.** There
+  is no such route today, so every security task runs on the default queue;
+  adding one for these three would also relocate the breach, genetic and
+  predictive-expiration tasks onto a queue no deployed worker consumes.
+- **Times moved off the plan's 4:15 / Mon 4:45**, both of which collide with
+  entries already in `beat_schedule` (`verify-random-merkle-proofs`,
+  `cleanup-genetic-trials`). Shipped: hourly `:15`, daily 4:45, Mondays 5:15.
+- **Found but deliberately not fixed here:** three *pre-existing*
+  `beat_schedule` entries (`check-genetic-evolution-daily`,
+  `cleanup-genetic-trials`, `refresh-dna-tokens-weekly`) name tasks that are
+  likewise absent from the registry, so they have never run. Fixing them would
+  start three unrelated jobs executing against production data (including
+  outbound DNA-provider OAuth refreshes), which is a behaviour change that
+  belongs in its own reviewed PR.
+- **Replacing the three `assertTrue(callable(...))` placeholders immediately
+  found a task that had never once worked.** `aggregate_typing_profiles` sliced
+  its queryset (`[:50]`) and then called `.filter(success=True)` on the result,
+  which raises `TypeError: Cannot filter a query once a slice has been taken`.
+  Every user hit the surrounding `except Exception`, so the task returned
+  `{'processed': 0, 'errors': N}` on every run — and its only test asserted
+  the function was *callable*, which is true of a function that raises on all
+  input. Fixed (materialize the ids first, then two queries against that fixed
+  id set) before scheduling it, since a beat entry for a task that always
+  fails is worse than no beat entry. **Lesson: a placeholder test is not weak
+  coverage, it is anti-coverage — it makes a completely broken function look
+  tested. §5.4's "replace the placeholders" line was the highest-value item in
+  Phase 5 and it read like busywork.**
+- **§5.1 needs the master password re-entered.** There is no app-wide unlocked
+  `CryptoService` to borrow — `sessionVaultCrypto` holds a session *key*, not
+  the password, and `deriveFingerprintKey` genuinely requires the password
+  (Argon2id). The dashboard asks for it, derives once (so a wrong password fails
+  as a failed unlock rather than later as a failed rotation with the vault
+  already rewritten), and clears it from state immediately.
+- **§5.3's ordering is implemented as specified and is load-bearing**: vault
+  write first, adaptation record second, with the record failure downgraded to a
+  warning the user sees. The vault gate is `canEdit`, not `isUnlocked` — both
+  `decryptItem` and `updateItem` go through the session key, and gating on
+  `isUnlocked` would let the whole flow run and then throw at the write, after
+  the user had accepted.
+- **e2e (D2) is mounted but not executed here.** Every `data-testid` the spec
+  drives now exists (`settings-menu`, `security-settings`,
+  `adaptive-password-tab`, the consent dialog, the tabs, the suggestion modal),
+  but Playwright still is not wired into CI and running the spec needs a live
+  backend plus a seeded login. Acceptance criterion 6 is therefore met for
+  "reachable", not yet demonstrated for "the spec passes".
+
 ---
 
 ## 8. Sequencing and risk
@@ -3011,7 +3164,7 @@ that measurably weaken their passwords.**
 | Strength gate rejects nearly everything, leaving the feature inert | **Measured, Phase 2:** ~25% of passwords keep at least one substitution over a 200-password corpus (§4.5). Workable, so the "safer transform family" option (appending learned syllables, case-shifts at low-error positions) was not needed — but `has_suggestion: false` is common enough that the UI must treat it as a normal outcome. |
 | Bandit starves on sparse data | Global DP prior for cold start; Thompson sampling explores by construction; ≥3-session floor on the behavioural term. **Shipped as specified**, plus a k-anonymity floor of 5 contributors on the global prior (§5.6). |
 | Salt exposure misjudged | **Shipped, Phase 1 (§1.1):** the salt is genuinely non-secret — `AdaptivePasswordConfig.fingerprint_salt`'s own `help_text` states it, and it is useless to an attacker without the master password, which is never transmitted. Serving it over `/adaptive/config/` leaks nothing. Fingerprint-era isolation (`fp_key_version`) is enforced end-to-end: stamped from the server's own config (never the client's claim), scoped on every fingerprint-keyed read path, and bumped on rotation so eras never correlate. Residual property, not a blocker (§1): fingerprint strength is bounded by master-password strength, since HMAC is fast to brute-force offline given the master password — out of scope under this feature's threat model (hostile server, master password never transmitted). |
-| zxcvbn bundle cost | **Measured, Phase 2:** ≈1660 kB raw / ≈838 kB gzipped as of round 13 (`language-en` added — was ≈460 kB / 222 kB before), entirely behind the dynamic `import()`; nothing zxcvbn-related in the entry chunk (§4.5). Not yet visible in the production build because gap D1 keeps the whole adaptive module unreachable and Rollup drops it. Worth a deliberate loading-state look at Phase 5 mount time, not just a bigger lazy chunk to shrug off. |
+| zxcvbn bundle cost | **Measured, Phase 2; re-measured and a real regression caught at Phase 5 mount time (§5.6).** ≈1660 kB raw / ≈838 kB gzipped. Phase 2 recorded it as "entirely behind the dynamic `import()`" — true of the source, but *not* of the build, and unfalsifiable at the time because gap D1 made the module unreachable and Rollup dropped it entirely. Mounting the route in Phase 5 made it real, and `vite.config.js`'s `manualChunks` catch-all (`return 'vendor'` for every unnamed `node_modules` package) put the whole dictionary set into the **eagerly-loaded** `vendor` chunk — paid by every user on first paint, including those who never open the feature. Fixed by naming a dedicated `zxcvbn` chunk. Measured before/after: eager `vendor` 3516.08 kB raw / 1400.99 kB gzip → 1855.46 kB / 564.10 kB, with `zxcvbn-*.js` (1660.31 kB / 837.44 kB gzip) absent from `index.html`'s eager list. **Lesson: "it's behind a dynamic `import()`" is a claim about the source graph, not about chunking — a bundler's catch-all can still hoist it into an eager chunk, and the claim is only checkable once something actually imports the module.** |
 | Key rotation orphans learning | Intended — a correlation reset. Make it explicit in the UI, not a silent data loss. |
 
 ## 9. Acceptance criteria
@@ -3048,9 +3201,30 @@ that measurably weaken their passwords.**
    guessing. Same D1 caveat:
    the policy learns correctly once fed, but nothing feeds it from a real
    session until Phase 5.
-4. `average_memorability_improvement` is non-zero after an accepted adaptation (B4).
-5. Error-prone positions measurably change suggestion ranking (B3).
-6. `/security/adaptive` is reachable and the e2e spec passes rather than being dormant (D1, D2).
+4. `average_memorability_improvement` is non-zero after an accepted adaptation
+   (B4) — **met**, Phase 4 §4.6, covered by
+   `MemorabilityScorePersistenceTests`. Read the criterion literally: it asks
+   for non-zero, and the honest measurement is usually *negative* for
+   leetspeak (measured Δ ≈ −0.30 for `password` → `p@ssw0rd`). The always-0
+   bug was that both score columns were hard-`None`; the always-positive bug
+   was the fabricated client formula. Both are gone. What is **not** claimed:
+   that this feature makes passwords intrinsically more memorable — see §4.6
+   for why the four documented features cannot show that, and where the real
+   per-user gain is actually modelled.
+5. Error-prone positions measurably change suggestion ranking (B3) —
+   **met**, Phase 4 §4.6. `rankSuggestions` gains a signed tilt
+   (±`ERROR_POSITION_WEIGHT`) driven by the newly-exported
+   `error_prone_positions`; covered by six tests including a
+   changes-it/does-not-change-it pair, and mutation-checked by neutralizing
+   the tilt (3 tests fail).
+6. `/security/adaptive` is reachable and the e2e spec passes rather than
+   being dormant (D1, D2) — **partially met**, Phase 5 §5.6. D1 is closed:
+   the route, the nav link, the Settings entry point and
+   `AdaptivePasswordDashboard` all exist, and every `data-testid` the spec
+   drives is now rendered. D2 is **not** demonstrated: Playwright is still not
+   wired into CI, and running the spec needs a live backend plus a seeded
+   login, neither of which this change provides. Do not re-word this to "met"
+   until the spec has actually been run green.
 7. Leak tests stay green — frontend, backend, and e2e network assertions.
 8. No file under `mobile/` or `frontend/src/` references `original_password` / `adapted_password`, enforced in CI (A3).
 9. Backend suite green under the `canny` venv with `DEBUG=True`; `npm run build` green on Vite 7.

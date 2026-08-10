@@ -124,7 +124,7 @@ After 10+ typing sessions, the system will suggest adaptations:
 
 | Endpoint | Method | Description |
 |----------|--------------|-------------|
-| `/adaptive/config/` | GET | Get configuration, incl. `fingerprint_salt` + `fp_key_version` |
+| `/adaptive/config/` | GET | Get configuration, incl. `fingerprint_salt`, `fp_key_version`, and the cadence gate `should_suggest` (+ `auto_apply_high_confidence` / `auto_apply_threshold`) |
 | `/adaptive/enable/` | POST | Enable with consent; mints the `fingerprint_salt` |
 | `/adaptive/disable/` | POST | Disable feature |
 | `/adaptive/rotate-fingerprint-key/` | POST | Re-base the fingerprint key (`{"confirm": true}`) |
@@ -139,9 +139,9 @@ After 10+ typing sessions, the system will suggest adaptations:
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/adaptive/preference-model/` | GET | Download the learned preference model — resolved substitution weights, plus `exploration` (raw `{alpha, beta}`) and `weight_sources`; the client generates, Thompson-samples and strength-gates suggestions locally |
+| `/adaptive/preference-model/` | GET | Download the learned preference model — resolved substitution weights, plus `exploration` (raw `{alpha, beta}`), `weight_sources`, learned `memorability_params` and `error_prone_positions`; the client generates, Thompson-samples, error-tilts and strength-gates suggestions locally |
 | `/adaptive/suggest/` | POST | **Deprecated (HTTP 410)** — server-side suggestion removed; use the preference-model pull instead |
-| `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + `fp_key_version` + substitution classes + masked previews; raw passwords rejected) |
+| `/adaptive/apply/` | POST | Apply adaptation (v2: original/adapted fingerprints + `fp_key_version` + substitution classes + masked previews; optionally `memorability_score_before`/`_after` and `memorability_driver`; raw passwords rejected) |
 | `/adaptive/rollback/` | POST | Rollback to previous |
 
 ### Profile & History
@@ -247,14 +247,6 @@ hard zero. Status is deliberately not re-read into the composite reward,
 because that would credit the same fact to the same arm twice — see
 `composite_reward`'s docstring in `adaptive_policy_service.py`.
 
-> **Still not scheduled.** `update_rl_model_from_feedback` now persists the
-> policy, but no Celery beat entry exists for it yet (`celery.py`'s
-> `beat_schedule`) — "weekly" remains the Phase 5 target cadence, not current
-> behavior. The task is idempotent (it selects feedback by
-> `policy_reward_applied_at IS NULL`), so running it manually or on a
-> hand-rolled schedule is safe and cannot double-count. See
-> `docs/epigenetic-adaptation-implementation-plan.md` §7 (Phase 5, Celery beats).
->
 > **Pre-existing feedback is replayed, by design, on first run.**
 > `AdaptationFeedback` predates this bandit (the table has existed since
 > January 2026, long before Phase 3); migration 0026 only adds
@@ -269,10 +261,87 @@ because that would credit the same fact to the same arm twice — see
 > much any one batch of old evidence can move a posterior. An operator
 > should read an initial burst of policy movement after first deploy as
 > this backlog draining, not as live signal from the newly-shipped bandit.
-<!-- -->
-> **Still not mounted.** No route imports the adaptive client yet (gap D1), so
-> the client-side adaptive flow is not reachable from the running app until
-> Phase 5. This is narrower than "nothing works": the documented API
-> endpoints and the manually-invoked `update_rl_model_from_feedback` task are
-> real and reachable today via direct calls — what's missing is the UI that
-> would drive them for a real user.
+
+### Memorability and typing errors (Phase 4)
+
+Two product claims that were previously unimplemented.
+
+**Memorability is now measured, not asserted.** `scoreMemorability` in
+`adaptiveFeatures.js` is the missing consumer of `memorability_params`. It
+combines four features, each in `[0, 1]`, higher always meaning "easier to
+remember": length fit against the learned optimal band, repeated-pattern
+presence, character-class variety (*fewer* classes score higher), and
+pronounceability (vowel/consonant alternation over the letters). The previous
+formula — `min(0.3, confidence * 0.15 + count * 0.03)` — was positive by
+construction, so it could only ever claim an improvement.
+
+Read the sign. Because two of the four features genuinely fall when a letter
+becomes a symbol or a digit, a canonical leetspeak substitution usually scores
+**lower**: measured, `password` → `p@ssw0rd` moves variety `1.00 → 0.33` and
+pronounceability `0.57 → 0.00`, for a net Δ of about `-0.30`. That is the
+correct reading for these four intrinsic features. The reason a user finds
+*their own* habitual substitution easy is habit, and habit is modelled by the
+bandit posterior (`confidence`), not here. The UI renders the signed number.
+
+The server learns the *parameters*, never the score:
+
+- `optimal_length_min` / `optimal_length_max` come from the user's own
+  `length_bucket` distribution weighted by per-bucket success rate — in effect,
+  the bucket they have typed correctly most often, requiring at least 10
+  successful sessions in that bucket. Note this feature is **constant under a
+  substitution** (a 1:1 swap never changes length), so it moves the displayed
+  absolute score but never the before/after Δ.
+- The four `weights` are nudged by an EMA whenever a user answers
+  `memorability_improved`, attributed to the feature the client reported moved
+  most (`memorability_driver`). This runs in the weekly task, not in
+  `export_preference_model` as the plan's §4.2 text implies: learning is a
+  write, export is a read, and doing it on the GET would re-apply the same
+  feedback on every poll.
+
+**Typing errors now change the ranking.** `error_prone_positions` has been
+written and decayed since the feature's first version and read by nothing.
+`/adaptive/preference-model/` now publishes it, and `rankSuggestions` boosts
+candidates at or adjacent to a high-error position and penalizes introducing an
+unfamiliar character at a position the user never misses. The join that makes
+this useful — position → *which character sits there* — happens only on the
+client, because the server has no password to join against. Like Thompson
+sampling, the tilt moves the ranking only; the reported `confidence` is
+untouched.
+
+`UserTypingProfile.wpm_variance`, `rhythm_signature` and `common_error_types`
+are also written now. Two honest caveats: `wpm_variance` is the
+**exponentially-weighted** variance (West/Finch), not Welford's — Welford pairs
+with an arithmetic mean and `average_wpm` is an EWMA, so Welford's M2 would not
+be the variance of anything. And `common_error_types` is classified from
+backspace *positions* alone, because that is all the server receives; read
+`adjacent_key` as "isolated single-character error", not as proven keystroke
+forensics.
+
+### Shipping (Phase 5)
+
+- **Mounted** at `/security/adaptive` (`AdaptivePasswordDashboard`), reachable
+  from the main nav and from Settings → Security. Lazy-loaded like every other
+  `/security/*` surface — zxcvbn's dictionaries (~838 kB gzipped) must never
+  reach the entry chunk.
+- **Cadence enforced.** `/adaptive/config/` returns `should_suggest`, which is
+  `auto_suggest_enabled AND should_suggest_adaptation()`. The two are AND-ed
+  server-side so a client that reads one field and not the other cannot nag a
+  user who turned suggestions off. `auto_apply_high_confidence` and
+  `auto_apply_threshold` are published alongside; a missing or out-of-range
+  threshold setting reads as `1.0` ("nothing is confident enough"), because
+  failing low would silently auto-rotate credentials.
+- **Vault wiring.** Accepting a suggestion updates the vault entry **first**,
+  then POSTs the adaptation record. If the record write fails the user still
+  has a working credential and a missing analytics row; the reverse ordering
+  loses the password, which only ever existed in that tab's memory.
+- **Scheduled.** Three `beat_schedule` entries now exist. Their task names are
+  `security.tasks.adaptive_tasks.*` — a bare `@shared_task` derives its name
+  from the defining module, so the shorter `security.tasks.*` form the plan
+  used would raise `NotRegistered` on every tick. A test asserts each entry
+  resolves against the live registry.
+
+| Task | Schedule |
+|---|---|
+| `security.tasks.adaptive_tasks.aggregate_typing_profiles` | hourly, `:15` |
+| `security.tasks.adaptive_tasks.cleanup_expired_adaptations` | daily, 4:45 |
+| `security.tasks.adaptive_tasks.update_rl_model_from_feedback` | Mondays, 5:15 |
