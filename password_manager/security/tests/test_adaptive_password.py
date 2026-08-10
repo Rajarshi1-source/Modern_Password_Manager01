@@ -1067,6 +1067,11 @@ class CeleryTaskTests(TestCase):
         fresh.refresh_from_db()
         active.refresh_from_db()
         self.assertEqual(stale.status, 'expired')
+        # Regression guard for a real bug found while writing this test: the
+        # f-string was missing its `f` prefix, so every expired row stored
+        # the literal text below, braces and all, instead of the interpolated
+        # day count.
+        self.assertEqual(stale.reason, f'Auto-expired after {expiry_days} days')
         self.assertEqual(fresh.status, 'suggested')
         self.assertEqual(active.status, 'active')
 
@@ -1096,6 +1101,62 @@ class CeleryTaskTests(TestCase):
         self.assertEqual(profile.successful_sessions, 3)
         self.assertAlmostEqual(profile.success_rate, 0.75)
 
+    def test_aggregate_typing_profiles_does_not_clobber_concurrent_writes(self):
+        """This task must only touch the columns it recomputes.
+
+        Regression test for a real bug: an unscoped `profile.save()` writes
+        back EVERY field on the in-memory instance, including
+        `memorability_weights` -- which `nudge_memorability_weights` (the
+        weekly feedback task) can update concurrently on the same row. A
+        stale in-memory snapshot from this hourly task, saved after that
+        nudge commits, would silently revert it with no error and no log
+        line.
+
+        A single-threaded test can't produce real concurrency, so the
+        interleaving is forced directly: `get_or_create` is patched to, as a
+        side effect of the task's own read, apply a raw `.update()` the
+        task's in-memory `profile` object cannot see -- exactly what a
+        second writer committing between this task's read and its save would
+        look like. Without `update_fields`, the task's later save would
+        overwrite this change with the stale value it read; with it, the
+        change survives untouched.
+        """
+        from unittest.mock import patch
+
+        from security.models import TypingSession, UserTypingProfile
+        from security.tasks.adaptive_tasks import aggregate_typing_profiles
+
+        TypingSession.objects.create(
+            user=self.user, password_fingerprint='fp-clobber-0',
+            length_bucket=3, success=True, error_positions=[],
+            error_count=0, timing_profile={}, total_time_ms=1000,
+        )
+        UserTypingProfile.objects.create(user=self.user)
+
+        concurrent_weights = {
+            'length': 0.1, 'patterns': 0.2, 'variety': 0.4, 'pronounceable': 0.3,
+        }
+        real_get_or_create = UserTypingProfile.objects.get_or_create
+
+        def racing_get_or_create(*args, **kwargs):
+            result = real_get_or_create(*args, **kwargs)
+            # Lands AFTER this task's own read, simulating a concurrent
+            # committer this task's in-memory instance never sees.
+            UserTypingProfile.objects.filter(user=self.user).update(
+                memorability_weights=concurrent_weights,
+            )
+            return result
+
+        with patch.object(
+            UserTypingProfile.objects, 'get_or_create',
+            side_effect=racing_get_or_create,
+        ):
+            aggregate_typing_profiles()
+
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertEqual(profile.total_sessions, 1)
+        self.assertEqual(profile.memorability_weights, concurrent_weights)
+
     def test_aggregate_typing_profiles_ignores_users_with_no_recent_sessions(self):
         """A user with nothing new is not processed at all."""
         from security.tasks.adaptive_tasks import aggregate_typing_profiles
@@ -1108,7 +1169,10 @@ class CeleryTaskTests(TestCase):
         """The RL task credits an arm, stamps the row, and is idempotent."""
         from security.models import (
             AdaptationFeedback, AdaptivePasswordConfig, PasswordAdaptation,
-            SubstitutionPolicyArm,
+            SubstitutionPolicyArm, UserTypingProfile,
+        )
+        from security.services.adaptive_password_service import (
+            DEFAULT_MEMORABILITY_WEIGHTS,
         )
         from security.tasks.adaptive_tasks import update_rl_model_from_feedback
 
@@ -1133,6 +1197,10 @@ class CeleryTaskTests(TestCase):
         self.assertEqual(result['processed'], 1)
         self.assertEqual(result['skipped'], 0)
         self.assertEqual(result['arms_updated'], 1)
+        # The fixture's driver='variety' + improved=True feeds
+        # nudge_memorability_weights too; assert the IN-TASK wiring, not just
+        # the standalone helper (covered separately in test_adaptive_zk_v2.py).
+        self.assertEqual(result['memorability_nudges'], 1)
         self.assertFalse(result['prior_rebuild_failed'])
         self.assertIn('classes_written', result)
         self.assertIsNotNone(result['mean_reward'])
@@ -1142,15 +1210,25 @@ class CeleryTaskTests(TestCase):
         )
         self.assertEqual(arm.pulls, 1)
 
+        profile = UserTypingProfile.objects.get(user=self.user)
+        variety_after_first_run = profile.memorability_weights['variety']
+        self.assertGreater(
+            variety_after_first_run, DEFAULT_MEMORABILITY_WEIGHTS['variety'],
+        )
+
         feedback.refresh_from_db()
         self.assertIsNotNone(feedback.policy_reward_applied_at)
 
         # Idempotency: the stamp is what makes a Celery retry safe, so a second
-        # run must credit nothing rather than double-count the same evidence.
+        # run must credit nothing rather than double-count the same evidence,
+        # for BOTH learned models the task updates.
         second = update_rl_model_from_feedback()
         self.assertEqual(second['processed'], 0)
+        self.assertEqual(second['memorability_nudges'], 0)
         arm.refresh_from_db()
         self.assertEqual(arm.pulls, 1)
+        profile.refresh_from_db()
+        self.assertEqual(profile.memorability_weights['variety'], variety_after_first_run)
 
     def test_beat_schedule_entries_name_registered_tasks(self):
         """Every adaptive beat entry must resolve to a real registered task.

@@ -177,6 +177,15 @@ def nudge_memorability_weights(adaptation, feedback) -> Optional[Dict[str, float
     exactly once (the task's ``policy_reward_applied_at`` stamp is what makes it
     once, and it already holds the row lock).
 
+    Locked, same reasoning as ``credit_arms``: this is a genuine
+    read-modify-write (read the stored weights, EMA one of them, renormalize,
+    write back), so two feedback rows for the same user processed by
+    overlapping task runs could both read the row before either commits, and
+    the second save would silently discard the first's EMA step. Must be
+    called inside a transaction (the caller's ``transaction.atomic()``); a
+    bare call outside one raises, by design, the same way an un-transacted
+    ``select_for_update()`` does anywhere else in this feature.
+
     Args:
         adaptation: The ``PasswordAdaptation`` the feedback is about.
         feedback: The ``AdaptationFeedback`` row.
@@ -193,7 +202,7 @@ def nudge_memorability_weights(adaptation, feedback) -> Optional[Dict[str, float
     if driver not in MEMORABILITY_FEATURES:
         return None
 
-    profile, _ = UserTypingProfile.objects.get_or_create(
+    profile, _ = UserTypingProfile.objects.select_for_update().get_or_create(
         user=adaptation.user,
         defaults={
             'preferred_substitutions': {},
@@ -853,7 +862,11 @@ class AdaptivePasswordService:
             # bins mean something else.
             return list(session_rhythm)
         blended = []
-        for previous, value in zip(current, session_rhythm):
+        # strict=True: the guard above already proves both sequences have
+        # exactly RHYTHM_BINS elements; stating that invariant here means a
+        # future edit that breaks it fails loudly instead of silently
+        # truncating.
+        for previous, value in zip(current, session_rhythm, strict=True):
             try:
                 previous_value = float(previous)
             except (TypeError, ValueError):

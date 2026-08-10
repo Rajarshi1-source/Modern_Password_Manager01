@@ -749,6 +749,15 @@ def export_adaptive_data(request):
             'average_wpm': profile.average_wpm,
             'preferred_substitutions': profile.preferred_substitutions,
             'error_prone_positions': profile.error_prone_positions,
+            # Phase 4 fields (plan §4.2/§4.4): learned per-user memorability
+            # weights and the three profile fields _update_typing_profile
+            # populates. Omitting them would make this export stop being a
+            # complete GDPR portability record the moment a user's first
+            # feedback row lands and the weekly task nudges their weights.
+            'memorability_weights': profile.memorability_weights,
+            'wpm_variance': profile.wpm_variance,
+            'common_error_types': profile.common_error_types,
+            'rhythm_signature': profile.rhythm_signature,
         }
     except UserTypingProfile.DoesNotExist:
         profile_data = None
@@ -768,6 +777,7 @@ def export_adaptive_data(request):
             'memorability_improvement': (
                 (a.memorability_score_after or 0) - (a.memorability_score_before or 0)
             ) if a.memorability_score_before else None,
+            'memorability_driver': a.memorability_driver or None,
         }
         for a in adaptations
     ]

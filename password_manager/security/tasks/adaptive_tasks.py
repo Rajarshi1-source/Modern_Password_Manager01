@@ -98,7 +98,19 @@ def aggregate_typing_profiles():
                 .values_list('created_at', flat=True)
                 .first()
             )
-            profile.save()
+            # update_fields, not a bare save(): this task only ever
+            # recomputes the five session-statistics fields above. An
+            # unscoped save() writes back EVERY field on the in-memory
+            # instance, including memorability_weights -- which
+            # nudge_memorability_weights (the weekly feedback task) can
+            # update concurrently on the same row. Without update_fields, an
+            # hourly aggregation run reading this profile before that nudge
+            # commits, then saving after it commits, would silently revert
+            # the nudge with no error and no log line.
+            profile.save(update_fields=[
+                'total_sessions', 'successful_sessions', 'success_rate',
+                'profile_confidence', 'last_session_at',
+            ])
             
             processed += 1
             logger.debug(f"Aggregated profile for user {user.id}")
@@ -141,9 +153,13 @@ def cleanup_expired_adaptations():
     count = expired.count()
     
     # Mark as expired rather than delete (for analytics)
+    # Pre-existing bug, found while adding this task's first real test
+    # (plan §5.4): missing f-prefix meant every expired row stored the
+    # literal text "Auto-expired after {expiry_days} days" verbatim, braces
+    # and all, reaching a real user through /adaptive/history/.
     expired.update(
         status='expired',
-        reason='Auto-expired after {expiry_days} days'
+        reason=f'Auto-expired after {expiry_days} days'
     )
     
     logger.info(f"Expired {count} pending adaptations")

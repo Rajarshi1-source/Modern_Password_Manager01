@@ -22,13 +22,14 @@
  *     preview, a substitution *class*, or a coarse aggregate score.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import styled from 'styled-components';
 import { Fingerprint, Lock, RefreshCw, Shield, ShieldAlert } from 'lucide-react';
 
 import { CryptoService } from '../../services/cryptoService';
 import { applySubstitutions } from '../../services/adaptive/adaptiveFeatures';
 import { useVault } from '../../contexts/VaultContext';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap';
 import AdaptivePasswordSuggestion from './AdaptivePasswordSuggestion';
 import TypingProfileCard from './TypingProfileCard';
 import { adaptivePasswordService } from './TypingPatternCapture';
@@ -169,6 +170,50 @@ const HistoryRow = styled.li`
   font-size: 13px;
 `;
 
+const FeedbackForm = styled.li`
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+`;
+
+const StarRow = styled.div`
+  display: flex;
+  gap: 4px;
+`;
+
+const StarButton = styled.button`
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  font-size: 18px;
+  color: ${(props) => (props.$filled ? '#F59E0B' : 'rgba(255,255,255,0.25)')};
+`;
+
+const CheckboxLabel = styled.label`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
+const TextArea = styled.textarea`
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.25);
+  color: #fff;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+`;
+
 const ConsentBackdrop = styled.div`
   position: fixed;
   inset: 0;
@@ -263,12 +308,24 @@ const AdaptivePasswordDashboard = () => {
 
     const [history, setHistory] = useState([]);
     const [pendingRollbackId, setPendingRollbackId] = useState(null);
+    const [pendingDeleteConfirm, setPendingDeleteConfirm] = useState(false);
+
+    // Feedback form (plan §4.2's input signal): at most one open at a time,
+    // matching the rollback confirm's single-target pattern above.
+    const [feedbackTargetId, setFeedbackTargetId] = useState(null);
+    const [feedbackRating, setFeedbackRating] = useState(0);
+    const [feedbackAccuracyImproved, setFeedbackAccuracyImproved] = useState(false);
+    const [feedbackMemorabilityImproved, setFeedbackMemorabilityImproved] = useState(false);
+    const [feedbackText, setFeedbackText] = useState('');
 
     // The plaintext credential is needed twice — once to score, once to write
     // the adapted value back — but must never enter React state, where it would
     // survive in the fiber tree and in devtools. A ref is dropped on unmount
     // with everything else.
     const pendingRef = useRef(null);
+
+    const consentDialogRef = useRef(null);
+    useModalFocusTrap(consentDialogRef, showConsent, () => setShowConsent(false));
 
     const say = useCallback((text, isError = false) => {
         setMessage(text);
@@ -329,6 +386,12 @@ const AdaptivePasswordDashboard = () => {
     const handleToggleClick = useCallback(() => {
         if (enabled) {
             setBusy(true);
+            // Clear the master password immediately, not just the derived
+            // fingerprinter: a user can type it into the unlock form and then
+            // change their mind and disable before ever submitting, which
+            // would otherwise leave it sitting in component state
+            // indefinitely — outliving the derivation it existed for.
+            setMasterPassword('');
             adaptivePasswordService
                 .disable()
                 .then(() => {
@@ -373,11 +436,36 @@ const AdaptivePasswordDashboard = () => {
                     crypto,
                     config.fingerprint_salt,
                 );
-                // Derive once here rather than lazily at apply time: Argon2id
-                // takes seconds, and a wrong master password must surface now,
-                // as a failed unlock, not later as a failed credential rotation
-                // with the vault already rewritten.
+                // Derive once here rather than lazily at apply time, so
+                // deriving is a one-time cost rather than paid on every
+                // fingerprint call. This does NOT verify the password itself:
+                // Argon2id has no "wrong password" outcome, it deterministically
+                // derives DIFFERENT (but equally well-formed) key material from
+                // any input, so a mistyped password "succeeds" here and silently
+                // fingerprints under the wrong key for the rest of the session.
+                // The vault write later still uses the vault's own, correctly
+                // authenticated session key, so the credential itself is never
+                // at risk — only this feature's own fingerprint-keyed
+                // bookkeeping (rollback chain, history) gets orphaned. Verifying
+                // the typed password against the vault's already-unlocked key
+                // material would close this, but needs plumbing this component
+                // doesn't have (a stored auth-hash/salt, or a decrypt-and-compare
+                // against a known item) — flagged as a follow-up rather than
+                // built here under time pressure.
                 await fingerprint('adaptive-probe');
+                // `fingerprint` is a closure over `crypto`, and CryptoService
+                // keeps the raw password on `this.masterPassword` for the
+                // instance's whole lifetime -- so clearing the React state
+                // below is not enough on its own; the password would still be
+                // reachable through this closure for the rest of the adaptive
+                // session. Scrub it directly rather than calling the
+                // existing `crypto.clearKeys()`: that also drops
+                // `_fpKeyCache`, which is exactly what lets every LATER
+                // `fingerprint(password)` call skip re-deriving from
+                // `masterPassword` in the first place (see
+                // deriveFingerprintKey's cache-hit branch) -- clearing it
+                // here would silently break every fingerprint after this one.
+                crypto.masterPassword = null;
                 setFingerprinter(() => fingerprint);
                 say('Adaptive learning unlocked for this session.');
             } catch (error) {
@@ -528,6 +616,36 @@ const AdaptivePasswordDashboard = () => {
         [loadHistory, say],
     );
 
+    const handleOpenFeedback = useCallback((adaptationId) => {
+        setFeedbackTargetId(adaptationId);
+        setFeedbackRating(0);
+        setFeedbackAccuracyImproved(false);
+        setFeedbackMemorabilityImproved(false);
+        setFeedbackText('');
+    }, []);
+
+    const handleSubmitFeedback = useCallback(async () => {
+        if (!feedbackTargetId || feedbackRating < 1) return;
+        setBusy(true);
+        try {
+            await adaptivePasswordService.submitFeedback(feedbackTargetId, {
+                rating: feedbackRating,
+                typingAccuracyImproved: feedbackAccuracyImproved,
+                memorabilityImproved: feedbackMemorabilityImproved,
+                additionalFeedback: feedbackText,
+            });
+            say('Feedback submitted.');
+            setFeedbackTargetId(null);
+        } catch (error) {
+            say(error.message || 'Could not submit feedback.', true);
+        } finally {
+            setBusy(false);
+        }
+    }, [
+        feedbackTargetId, feedbackRating, feedbackAccuracyImproved,
+        feedbackMemorabilityImproved, feedbackText, say,
+    ]);
+
     const handleExport = useCallback(async () => {
         try {
             const data = await adaptivePasswordService.exportData();
@@ -545,6 +663,28 @@ const AdaptivePasswordDashboard = () => {
             say(error.message || 'Export failed.', true);
         }
     }, [say]);
+
+    // GDPR erasure (plan §7, service `delete_all_data`): deliberately reachable
+    // whether or not the feature is currently enabled — `/adaptive/data/` is
+    // not behind `@require_adaptive_enabled` server-side either, because
+    // opting out and erasing data are rights, not features. Two-step confirm,
+    // matching the rollback flow's own click-then-confirm pattern above.
+    const handleDeleteAllData = useCallback(async () => {
+        setBusy(true);
+        try {
+            await adaptivePasswordService.deleteAllData();
+            say('Data deleted.');
+            setFingerprinter(null);
+            setSuggestion(null);
+            setHistory([]);
+            await loadConfig();
+        } catch (error) {
+            say(error.message || 'Could not delete your data.', true);
+        } finally {
+            setPendingDeleteConfirm(false);
+            setBusy(false);
+        }
+    }, [loadConfig, say]);
 
     // -------------------------------------------------------------------------
     // Render
@@ -627,9 +767,18 @@ const AdaptivePasswordDashboard = () => {
                 {message && <Note $error={messageIsError}>{message}</Note>}
             </Panel>
 
-            {enabled && (
-                <>
-                    <TabBar>
+            {/* The tab bar and "Your data" are NOT gated on `enabled` as a
+                block, unlike the other three tabs: `/adaptive/export/` and
+                `/adaptive/data/` (erasure) are deliberately reachable
+                whether or not the feature is currently on (same GDPR
+                reasoning as the backend's own `disable_adaptive_passwords`
+                view docstring), so the UI path to them must survive opting
+                out too. `tab === 'data' || !enabled` falls back to the data
+                panel automatically when the feature is off, regardless of
+                which tab was last selected before it was turned off. */}
+            <TabBar>
+                {enabled && (
+                    <>
                         <TabButton
                             type="button"
                             $active={tab === 'profile'}
@@ -654,19 +803,21 @@ const AdaptivePasswordDashboard = () => {
                         >
                             History
                         </TabButton>
-                        <TabButton
-                            type="button"
-                            $active={tab === 'data'}
-                            onClick={() => setTab('data')}
-                            data-testid="data-management-tab"
-                        >
-                            Your data
-                        </TabButton>
-                    </TabBar>
+                    </>
+                )}
+                <TabButton
+                    type="button"
+                    $active={tab === 'data' || !enabled}
+                    onClick={() => setTab('data')}
+                    data-testid="data-management-tab"
+                >
+                    Your data
+                </TabButton>
+            </TabBar>
 
-                    {tab === 'profile' && <TypingProfileCard showToggle={false} />}
+            {enabled && tab === 'profile' && <TypingProfileCard showToggle={false} />}
 
-                    {tab === 'adapt' && (
+            {enabled && tab === 'adapt' && (
                         <Panel>
                             <PanelTitle>
                                 <Lock size={16} />
@@ -733,7 +884,7 @@ const AdaptivePasswordDashboard = () => {
                         </Panel>
                     )}
 
-                    {tab === 'history' && (
+                    {enabled && tab === 'history' && (
                         <Panel>
                             <PanelTitle>Adaptation history</PanelTitle>
                             {history.length === 0 ? (
@@ -741,65 +892,159 @@ const AdaptivePasswordDashboard = () => {
                             ) : (
                                 <HistoryList data-testid="adaptation-history-list">
                                     {history.map((entry) => (
-                                        <HistoryRow key={entry.id}>
-                                            <span>
-                                                Generation {entry.generation} · {entry.status}
-                                                {entry.suggested_at
-                                                    && ` · ${new Date(entry.suggested_at).toLocaleDateString()}`}
-                                            </span>
-                                            {entry.can_rollback
-                                                && (pendingRollbackId === entry.id ? (
+                                        <Fragment key={entry.id}>
+                                            <HistoryRow>
+                                                <span>
+                                                    Generation {entry.generation} · {entry.status}
+                                                    {entry.suggested_at
+                                                        && ` · ${new Date(entry.suggested_at).toLocaleDateString()}`}
+                                                </span>
+                                                <Row style={{ gap: 8 }}>
                                                     <Action
                                                         type="button"
                                                         disabled={busy}
-                                                        onClick={() => handleRollback(entry.id)}
-                                                        data-testid="confirm-rollback-button"
+                                                        onClick={() => handleOpenFeedback(entry.id)}
+                                                        data-testid="feedback-button"
                                                     >
-                                                        Confirm rollback
+                                                        Give feedback
                                                     </Action>
-                                                ) : (
-                                                    <Action
-                                                        type="button"
-                                                        disabled={busy}
-                                                        onClick={() => setPendingRollbackId(entry.id)}
-                                                        data-testid="rollback-button"
-                                                    >
-                                                        Roll back
-                                                    </Action>
-                                                ))}
-                                        </HistoryRow>
+                                                    {entry.can_rollback
+                                                        && (pendingRollbackId === entry.id ? (
+                                                            <Action
+                                                                type="button"
+                                                                disabled={busy}
+                                                                onClick={() => handleRollback(entry.id)}
+                                                                data-testid="confirm-rollback-button"
+                                                            >
+                                                                Confirm rollback
+                                                            </Action>
+                                                        ) : (
+                                                            <Action
+                                                                type="button"
+                                                                disabled={busy}
+                                                                onClick={() => setPendingRollbackId(entry.id)}
+                                                                data-testid="rollback-button"
+                                                            >
+                                                                Roll back
+                                                            </Action>
+                                                        ))}
+                                                </Row>
+                                            </HistoryRow>
+
+                                            {feedbackTargetId === entry.id && (
+                                                <FeedbackForm>
+                                                    <StarRow role="radiogroup" aria-label="Rating">
+                                                        {[1, 2, 3, 4, 5].map((star) => (
+                                                            <StarButton
+                                                                key={star}
+                                                                type="button"
+                                                                $filled={star <= feedbackRating}
+                                                                onClick={() => setFeedbackRating(star)}
+                                                                aria-label={`${star} star${star === 1 ? '' : 's'}`}
+                                                                data-testid={`rating-star-${star}`}
+                                                            >
+                                                                ★
+                                                            </StarButton>
+                                                        ))}
+                                                    </StarRow>
+                                                    <CheckboxLabel>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={feedbackAccuracyImproved}
+                                                            onChange={(e) =>
+                                                                setFeedbackAccuracyImproved(e.target.checked)}
+                                                            data-testid="accuracy-improved-checkbox"
+                                                        />
+                                                        Typing accuracy improved
+                                                    </CheckboxLabel>
+                                                    <CheckboxLabel>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={feedbackMemorabilityImproved}
+                                                            onChange={(e) =>
+                                                                setFeedbackMemorabilityImproved(e.target.checked)}
+                                                            data-testid="memorability-improved-checkbox"
+                                                        />
+                                                        Easier to remember
+                                                    </CheckboxLabel>
+                                                    <TextArea
+                                                        placeholder="Anything else? (optional)"
+                                                        value={feedbackText}
+                                                        onChange={(e) => setFeedbackText(e.target.value)}
+                                                        data-testid="feedback-text"
+                                                    />
+                                                    <Row>
+                                                        <Action
+                                                            type="button"
+                                                            disabled={busy || feedbackRating < 1}
+                                                            onClick={handleSubmitFeedback}
+                                                            data-testid="submit-feedback-button"
+                                                        >
+                                                            Submit feedback
+                                                        </Action>
+                                                        <Action
+                                                            type="button"
+                                                            onClick={() => setFeedbackTargetId(null)}
+                                                        >
+                                                            Cancel
+                                                        </Action>
+                                                    </Row>
+                                                </FeedbackForm>
+                                            )}
+                                        </Fragment>
                                     ))}
                                 </HistoryList>
                             )}
                         </Panel>
                     )}
 
-                    {tab === 'data' && (
-                        <Panel>
-                            <PanelTitle>Your data</PanelTitle>
-                            <Note>
-                                Export or erase everything this feature has learned.
-                                Both work even if the feature is switched off for
-                                the deployment — they are GDPR rights, not
-                                features.
-                            </Note>
-                            <Row style={{ marginTop: 12 }}>
-                                <Action
-                                    type="button"
-                                    onClick={handleExport}
-                                    data-testid="export-data-button"
-                                >
-                                    Export my data
-                                </Action>
-                            </Row>
-                        </Panel>
-                    )}
-                </>
+            {(tab === 'data' || !enabled) && (
+                <Panel>
+                    <PanelTitle>Your data</PanelTitle>
+                    <Note>
+                        Export or erase everything this feature has learned.
+                        Both work even if the feature is switched off for
+                        the deployment — they are GDPR rights, not
+                        features.
+                    </Note>
+                    <Row style={{ marginTop: 12 }}>
+                        <Action
+                            type="button"
+                            onClick={handleExport}
+                            data-testid="export-data-button"
+                        >
+                            Export my data
+                        </Action>
+                        {pendingDeleteConfirm ? (
+                            <Action
+                                type="button"
+                                $danger
+                                disabled={busy}
+                                onClick={handleDeleteAllData}
+                                data-testid="confirm-delete-button"
+                            >
+                                Confirm delete
+                            </Action>
+                        ) : (
+                            <Action
+                                type="button"
+                                $danger
+                                disabled={busy}
+                                onClick={() => setPendingDeleteConfirm(true)}
+                                data-testid="delete-data-button"
+                            >
+                                Delete all my data
+                            </Action>
+                        )}
+                    </Row>
+                </Panel>
             )}
 
             {showConsent && (
                 <ConsentBackdrop role="presentation">
                     <ConsentCard
+                        ref={consentDialogRef}
+                        tabIndex={-1}
                         data-testid="consent-dialog"
                         role="dialog"
                         aria-modal="true"

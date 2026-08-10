@@ -13,7 +13,8 @@
  * - Rollback support
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
+import { useModalFocusTrap } from '../../hooks/useModalFocusTrap';
 import styled, { css, keyframes } from 'styled-components';
 import {
     Brain,
@@ -471,6 +472,14 @@ const AdaptivePasswordSuggestion = ({
     const [practiceValue, setPracticeValue] = useState('');
     const [practiceResult, setPracticeResult] = useState(null);
 
+    // Keyboard/screen-reader users must not be able to reach the page behind
+    // this dialog while it's open. Declared before the early `return null`
+    // below (hooks can't be conditional), gated on the same
+    // `has_suggestion` check the render itself uses.
+    const modalRef = useRef(null);
+    const isDialogOpen = Boolean(suggestion?.has_suggestion);
+    useModalFocusTrap(modalRef, isDialogOpen, onClose);
+
     // Calculate actual passwords (for internal use only)
     const adaptedPassword = useMemo(() => {
         if (!suggestion?.substitutions) return '';
@@ -566,6 +575,8 @@ const AdaptivePasswordSuggestion = ({
     return (
         <Overlay onClick={onClose}>
             <Modal
+                ref={modalRef}
+                tabIndex={-1}
                 onClick={(e) => e.stopPropagation()}
                 data-testid="adaptation-suggestion-modal"
                 role="dialog"
