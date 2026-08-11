@@ -3313,6 +3313,82 @@ Verified: 214 adaptive backend tests (+1), 628 frontend (+2), build green
 (`vendor` chunk unchanged), Django check clean, no pending migrations, ZK
 client guard green, 0 new lint warnings.
 
+**4th review-fix round** (CodeRabbit, PR #475, full review on commit
+`6b632e1`): every finding re-verified against current code before acting, not
+applied on trust. Three real gaps applied and mutation-checked; one finding
+already resolved by round 3 (confirmed, not assumed); two declined as repeats
+of already-declined findings with no new information.
+
+- **Applied: `export_adaptive_data`'s `memorability_improvement` used a
+  truthy check where `get_evolution_stats` (same PR) already used `is not
+  None`.** A real `0.0` reading — a legitimate score under Phase 4's own
+  contract, not a missing one — reported `null` in a GDPR export while the
+  stats endpoint correctly computed the delta for the identical row. Fixed to
+  match. Mutation-checked: reverting to the truthy check makes the new
+  regression test fail with `TypeError: unsupported operand type(s) for -:
+  'NoneType' and 'float'`, not just a wrong value.
+- **Applied: `ApplyAdaptationV2Serializer`'s three memorability `FloatField`s
+  had no finiteness guard.** Verified against the actually-installed `canny`
+  venv's `rest_framework/fields.py` and `django/core/validators.py` (not
+  assumed from a changelog): DRF 3.16.1's `min_value`/`max_value` validators
+  compare with `<`/`>`, both `False` against `NaN`, so a `NaN` reading passes
+  bounds validation, persists, and later blows up the strict JSON renderer
+  (`STRICT_JSON` defaults `True` → `allow_nan=False`) the next time
+  `average_memorability_improvement` or an export echoes it back — one bad
+  client-side computation turning into a 500 on an unrelated read. Added a
+  shared `_validate_finite` helper (matching the module's existing
+  `_validate_substitution_classes` pattern) wired to
+  `validate_memorability_improvement`/`_score_before`/`_score_after`.
+  Mutation-checked per field (removing the three `validate_` methods makes
+  the new test fail specifically on the `NaN` case for
+  `memorability_improvement`; `inf`/`-inf` are still caught by the
+  pre-existing bounds either way, confirming the new check closes exactly the
+  gap the bounds alone could not).
+- **Applied: `aggregate_typing_profiles`'s per-user loop caught
+  `SoftTimeLimitExceeded`/`Retry` in its broad `except Exception`, unlike its
+  sibling `update_rl_model_from_feedback` in the same file.** `celery.py` sets
+  a real 300s soft / 600s hard limit applying to every task. Swallowing the
+  soft-limit signal here would let the loop keep iterating past the deadline
+  until the uncatchable hard limit `SIGKILL`s the worker mid-batch, instead of
+  winding down gracefully like the RL task already does. Added the identical
+  `except (SoftTimeLimitExceeded, Retry): raise` guard immediately above the
+  generic handler. Mutation-checked: without the guard, the new test's
+  `assertRaises(SoftTimeLimitExceeded)` fails because the exception is
+  swallowed and counted as a per-user error instead of propagating.
+- **Already fixed — confirmed, not assumed.** The same CodeRabbit pass, run
+  against an older commit (`b5ccf09`) than the one this round triaged, flagged
+  `aggregate_typing_profiles`'s `update_fields` list as missing `updated_at`
+  with a comment miscounting "five" fields. Read current code before acting:
+  round 3 had already added `updated_at` and corrected the comment to "three
+  ... fields ... (plus ... updated_at)" — an exact match to the field list.
+  No change needed.
+- **Declined — repeat of an already-declined round-1 finding, no new
+  information.** `_learn_optimal_length_band`'s per-request aggregation over
+  unbounded `TypingSession` rows. Round 1 declined the identical suggestion
+  under CodeRabbit's own "advice, not a defect" label; this round's report
+  re-labels the same suggestion "Trivial" severity. Same reasoning stands —
+  zero real users behind gap D1's still-open scale question, and persisting a
+  learned band on `UserTypingProfile` would be a larger refactor than "keep
+  changes minimal" calls for on a Trivial nitpick.
+- **Declined — fourth re-raise of the mistyped-master-password finding**
+  (Codex rounds 1-2, CodeRabbit round 3, CodeRabbit round 4, same gap every
+  time, itself labeled 🏗️ Heavy lift by this round's own reviewer).
+  Re-checked `VaultContext.jsx`'s exported surface for any verification
+  primitive added since round 3 — none; `decryptItem` and the rest of
+  `useVault()`'s value still assume an already-unlocked session, and there is
+  still no "verify this password against the vault" call the dashboard could
+  reach without either a new backend-verified endpoint or reusing
+  `sessionVaultCrypto.unlockWithVaultPassword` (re-confirmed still
+  OAuth/social-login-scoped only, same finding as round 3). No new
+  information since round 3's investigation; still tracked as a follow-up
+  rather than a same-round vault-auth redesign.
+
+Verified: 218 adaptive backend tests (+3: one new test per fix above, all
+mutation-checked — each reverted fix reproduces the exact predicted failure),
+Django `check` clean, `makemigrations --check --dry-run` clean (no model
+fields touched), `py_compile` clean on every touched file. No frontend files
+touched this round.
+
 ---
 
 ## 8. Sequencing and risk
