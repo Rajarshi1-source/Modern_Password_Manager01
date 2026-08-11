@@ -116,20 +116,38 @@ CVE-2026-53877 exp:2026-10-12
 # response header. Zero usage of DomainNameValidator anywhere.
 CVE-2026-53878 exp:2026-10-15
 
+# PYSEC-2025-189/190/191 — REMOVED 2026-08-11, not renewed. Re-checked
+# against OSV directly rather than assumed stale: each has `last_affected`
+# capped at torch 2.6.0-cu124/2.6.0+cu124 (PYSEC-2025-189 = CVE-2025-2148,
+# 190 = CVE-2025-2149, 191 = CVE-2025-2953). Our pin (torch==2.12.0+cpu,
+# requirements-lock.txt) is well past that ceiling, so pip-audit's own
+# version-range match no longer flags these against this pin at all —
+# same "our pin is outside it, nothing to suppress" resolution as
+# PYSEC-2025-183/PYSEC-2024-277 above.
+#
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the
 # model as already-validated tensors via ml_dark_web/ml_services.py,
-# never as torch.jit scripts or pt2 binaries. Twelve IDs total.
+# never as torch.jit scripts or pt2 binaries. Nine IDs total (was
+# twelve; three removed above, not renewed).
 #
-# CVE-2025-3000 (GHSA-rrmf-rvhw-rf47) is the torch.jit.script memory-corruption
-# disclosed 2026-06; it has NO upstream fix (fix_versions: []) and matches the
-# assessment above exactly — the codebase imports torch.nn for inference and
-# never calls torch.jit.script/.trace on any input (grep: no jit.script call
-# sites). Re-evaluate when PyTorch ships a fixed release.
-CVE-2025-3000 exp:2026-08-10
-PYSEC-2025-189 exp:2026-08-10
-PYSEC-2025-190 exp:2026-08-10
-PYSEC-2025-191 exp:2026-08-10
+# CVE-2025-3000 (GHSA-rrmf-rvhw-rf47, same advisory as PYSEC-2025-194 below
+# under a different ID alias — dates kept in sync) is the torch.jit.script
+# memory-corruption disclosed 2026-06. Correction on renewal (2026-08-11):
+# the prior "NO upstream fix" note was wrong — re-checked against OSV
+# directly rather than re-asserted, and it lists `fixed: 2.13.0` with a
+# real fix commit. Our pin (2.12.0) is inside the affected range (last
+# affected 2.12.1), so this is a deferred-upgrade suppression like the
+# Django block below, not a no-fix one: the actual blocker is scheduling
+# and testing a torch bump against `ml_dark_web/ml_services.py`, out of
+# scope for this PR (adaptive password feature, not an ML dependency
+# bump). The reachability argument still independently applies as this
+# PR's mitigation — re-checked, not re-asserted: the codebase imports
+# torch.nn for inference and never calls torch.jit.script/.trace on any
+# input (grep: no jit.script/.trace/.load call sites anywhere in
+# password_manager/). Re-evaluate whether the upgrade can be scheduled on
+# each renewal, not as a reflex date bump.
+CVE-2025-3000 exp:2026-08-15
 PYSEC-2025-192 exp:2026-08-15
 PYSEC-2025-193 exp:2026-08-15
 PYSEC-2025-194 exp:2026-08-15
