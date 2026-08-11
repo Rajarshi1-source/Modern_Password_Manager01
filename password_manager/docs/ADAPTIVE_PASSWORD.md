@@ -281,7 +281,10 @@ becomes a symbol or a digit, a canonical leetspeak substitution usually scores
 pronounceability `0.57 → 0.00`, for a net Δ of about `-0.30`. That is the
 correct reading for these four intrinsic features. The reason a user finds
 *their own* habitual substitution easy is habit, and habit is modelled by the
-bandit posterior (`confidence`), not here. The UI renders the signed number.
+bandit posterior (`confidence`), not here. The UI does not render the signed
+number — it renders the magnitude with directional wording ("+X% easier to
+remember" / "X% harder to read, but it matches how you type"), since a bare
+signed percentage next to the word "harder" would read as a double negative.
 
 The server learns the *parameters*, and never **computes** a score itself —
 but it does **receive and persist** the client's already-computed readings.

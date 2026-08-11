@@ -58,9 +58,9 @@ def aggregate_typing_profiles():
             # because its only test asserted `callable(aggregate_typing_profiles)`
             # -- true of a function that raises on every input.
             #
-            # Two queries against a fixed id set, rather than one sliced
-            # queryset reused three ways, so the window cannot drift between
-            # the count and the success count either.
+            # A query against a fixed id set, rather than a sliced queryset
+            # re-sliced later, so the window cannot drift mid-run if new
+            # sessions land while this task is still iterating.
             recent_ids = list(
                 TypingSession.objects
                 .filter(user=user)
@@ -75,45 +75,26 @@ def aggregate_typing_profiles():
             # Get or create profile
             profile, _created = UserTypingProfile.objects.get_or_create(user=user)
 
-            # Update aggregated metrics
-            total = len(recent_ids)
-            successful = recent.filter(success=True).count()
-
-            # `total` here is a WINDOW (the last <=50 sessions), not the
-            # lifetime count -- deliberately NOT written to
-            # profile.total_sessions. That field is exported as
-            # export_preference_model's model_version, documented at that
-            # call site as "monotonic-ish so the client can cache/invalidate";
-            # _update_typing_profile (the per-session, request-path writer)
-            # already owns it correctly via `+= 1` on every real session. This
-            # task overwriting it with a smaller windowed count once a user
-            # passes 50 lifetime sessions would make model_version go
-            # BACKWARDS, exactly what a version counter must never do. Found
-            # only after fixing the crash that had kept this task from ever
-            # completing successfully before now -- the bug was already in
-            # this exact line, just unreachable.
-            profile.successful_sessions = successful
-            profile.success_rate = successful / total if total > 0 else 0
-
-            # profile_confidence is deliberately NOT recomputed here -- same
-            # reasoning as total_sessions above, and a real bug found the same
-            # way (round 3 review): _update_typing_profile already owns this
-            # field via `min(1.0, profile.total_sessions / 50)` on the LIFETIME
-            # count. This task's `total` is a 50-session WINDOW, so a tiered
-            # windowed formula computed here would give a DIFFERENT number for
-            # the same user (e.g. 200 lifetime sessions -> 1.0 from the request
-            # path, 0.9 from this task, whichever wrote last winning) rather
-            # than two views of the same fact -- two competing definitions of
-            # one column, not two writers of one definition.
+            # This task recomputes NO session-statistics field any more.
+            # total_sessions (round 2) and profile_confidence (round 3) were
+            # already found to have the same two-competing-writers shape and
+            # removed from here; successful_sessions/success_rate had the
+            # IDENTICAL windowed-vs-lifetime mismatch and were missed both
+            # times (trap 59 named the exact risk of not re-scanning the
+            # whole function after the first fix, and it recurred anyway).
+            # All four fields are owned exclusively by `_update_typing_profile`,
+            # which recomputes them from the LIFETIME count on every real
+            # session. This task's `successful`/`total` were always a
+            # 50-session WINDOW, so for any user past 50 lifetime sessions the
+            # two writers would disagree, whichever ran last silently winning.
             profile.last_session_at = (
                 recent.order_by('-created_at')
                 .values_list('created_at', flat=True)
                 .first()
             )
-            # update_fields, not a bare save(): this task only ever
-            # recomputes the three session-statistics fields above (plus the
-            # auto_now updated_at, which -- unlike the other three -- Django
-            # only refreshes if it's explicitly named here, matching the two
+            # update_fields, not a bare save(): this task now only recomputes
+            # last_session_at (plus the auto_now updated_at, which Django only
+            # refreshes if it's explicitly named here, matching the two
             # sibling writers of this same row: nudge_memorability_weights and
             # _update_typing_profile both list it too). An unscoped save()
             # writes back EVERY field on the in-memory instance, including
@@ -122,10 +103,7 @@ def aggregate_typing_profiles():
             # Without update_fields, an hourly aggregation run reading this
             # profile before that nudge commits, then saving after it commits,
             # would silently revert the nudge with no error and no log line.
-            profile.save(update_fields=[
-                'successful_sessions', 'success_rate', 'last_session_at',
-                'updated_at',
-            ])
+            profile.save(update_fields=['last_session_at', 'updated_at'])
             
             processed += 1
             logger.debug(f"Aggregated profile for user {user.id}")

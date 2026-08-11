@@ -463,6 +463,53 @@ describe('AdaptivePasswordSuggestion Component', () => {
         expect(mockReject).toHaveBeenCalled();
     });
 
+    test('ignores Escape and outside-click while an accept is in flight', async () => {
+        const { default: AdaptivePasswordSuggestion } = await import('../Components/security/AdaptivePasswordSuggestion');
+
+        // Real bug: `applyToVault` (the dashboard's `onAccept`) reads
+        // `pendingRef.current` ONCE at the start and does not re-check it
+        // before writing to the vault, so dismissing this dialog mid-flight
+        // only hid it -- the vault write still landed afterward, changing
+        // the credential the user believed they had just cancelled. The
+        // explicit Accept/Reject buttons are already `disabled={isLoading}`;
+        // Escape and outside-click were the two paths that weren't gated.
+        const mockClose = vi.fn();
+        render(
+            <AdaptivePasswordSuggestion
+                suggestion={mockSuggestion}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
+                onClose={mockClose}
+                isLoading={true}
+            />
+        );
+
+        await userEvent.keyboard('{Escape}');
+        expect(mockClose).not.toHaveBeenCalled();
+
+        const overlay = screen.getByTestId('adaptation-suggestion-modal').parentElement;
+        await userEvent.click(overlay as Element);
+        expect(mockClose).not.toHaveBeenCalled();
+    });
+
+    test('allows Escape to dismiss once loading has finished', async () => {
+        const { default: AdaptivePasswordSuggestion } = await import('../Components/security/AdaptivePasswordSuggestion');
+
+        const mockClose = vi.fn();
+        render(
+            <AdaptivePasswordSuggestion
+                suggestion={mockSuggestion}
+                onAccept={vi.fn()}
+                onReject={vi.fn()}
+                onClose={mockClose}
+                isLoading={false}
+            />
+        );
+
+        await userEvent.keyboard('{Escape}');
+        expect(mockClose).toHaveBeenCalledTimes(1);
+    });
+
     test('shows the password diff (current vs suggested)', async () => {
         const { default: AdaptivePasswordSuggestion } = await import('../Components/security/AdaptivePasswordSuggestion');
 

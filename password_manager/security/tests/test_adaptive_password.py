@@ -1075,13 +1075,19 @@ class CeleryTaskTests(TestCase):
         self.assertEqual(fresh.status, 'suggested')
         self.assertEqual(active.status, 'active')
 
-    def test_aggregate_typing_profiles_recomputes_from_sessions(self):
-        """The aggregation task rebuilds the profile from recent sessions."""
+    def test_aggregate_typing_profiles_recomputes_last_session_at(self):
+        """The aggregation task recomputes `last_session_at` from recent
+        sessions -- the one field it still owns. It no longer touches
+        `successful_sessions`/`success_rate` (see the dedicated test below
+        for why) or `total_sessions`/`profile_confidence` (see their own
+        dedicated tests).
+        """
         from security.models import TypingSession, UserTypingProfile
         from security.tasks.adaptive_tasks import aggregate_typing_profiles
 
+        latest = None
         for index in range(4):
-            TypingSession.objects.create(
+            session = TypingSession.objects.create(
                 user=self.user,
                 password_fingerprint=f'fp-agg-{index}',
                 length_bucket=3,
@@ -1091,16 +1097,48 @@ class CeleryTaskTests(TestCase):
                 timing_profile={},
                 total_time_ms=1000,
             )
+            latest = session.created_at
 
         result = aggregate_typing_profiles()
 
         self.assertEqual(result['errors'], 0)
         self.assertEqual(result['processed'], 1)
         profile = UserTypingProfile.objects.get(user=self.user)
-        # NOT total_sessions -- see the dedicated test below for why this
-        # task must never write it.
-        self.assertEqual(profile.successful_sessions, 3)
-        self.assertAlmostEqual(profile.success_rate, 0.75)
+        self.assertEqual(profile.last_session_at, latest)
+
+    def test_aggregate_typing_profiles_does_not_overwrite_successful_sessions_or_success_rate(self):
+        """`successful_sessions`/`success_rate` have exactly one owner:
+        `_update_typing_profile`'s `+= 1` / `successful_sessions /
+        total_sessions` on the LIFETIME count. This task used to recompute
+        both from a 50-session WINDOW and write them back too -- the
+        IDENTICAL two-competing-writers shape already found and fixed for
+        `total_sessions` (round 2) and `profile_confidence` (round 3) on this
+        same task, missed both times despite trap 59 naming the exact risk of
+        not re-scanning the whole function after the first fix.
+        """
+        from security.models import TypingSession, UserTypingProfile
+        from security.tasks.adaptive_tasks import aggregate_typing_profiles
+
+        # A lifetime count/rate a real, long-tenured user would have from
+        # _update_typing_profile's own formula -- deliberately DIFFERENT from
+        # what this task's 4-session, 3-success window would compute (0.75),
+        # so overwriting it would be a visible regression, not a coincidence.
+        UserTypingProfile.objects.create(
+            user=self.user, successful_sessions=180, success_rate=0.9,
+        )
+        for index in range(4):
+            TypingSession.objects.create(
+                user=self.user,
+                password_fingerprint=f'fp-successrate-{index}',
+                length_bucket=3, success=index != 0, error_positions=[],
+                error_count=0, timing_profile={}, total_time_ms=1000,
+            )
+
+        aggregate_typing_profiles()
+
+        profile = UserTypingProfile.objects.get(user=self.user)
+        self.assertEqual(profile.successful_sessions, 180)
+        self.assertAlmostEqual(profile.success_rate, 0.9)
 
     def test_aggregate_typing_profiles_never_regresses_the_lifetime_session_count(self):
         """`total_sessions` is exported as `model_version` and documented as

@@ -1101,14 +1101,53 @@ describe('rankSuggestions error-position tilt', () => {
     expect(tilted.map((s) => s.position)).toContain(5);
   });
 
+  it('does not penalize an unobserved position just because another position has data', () => {
+    // Real bug: `useErrorTilt` gates on the WHOLE table being non-empty, but
+    // `errorAffinity` reads an absent position via `?? 0` -- identical to an
+    // EXPLICIT zero-rate entry. Once errorRates had ANY entry, every OTHER
+    // position with no entry of its own (and no adjacent one) was penalized
+    // the same -WEIGHT as a position with a confirmed, measured zero rate,
+    // even though "no entry" means "never observed" (the server only ever
+    // adds an entry for a position that has erred at least once) while
+    // "measured zero" means "observed, never erred".
+    //
+    // Position 1 ('a') carries an EXPLICIT 0.0 rate -- observed, confirmed
+    // low. Position 3 ('s') has no entry, and neither does either neighbour
+    // (2, 4) -- genuinely unobserved. Under the bug both score identically
+    // (baseScore - WEIGHT: `?? 0` can't tell them apart), and the tie breaks
+    // on position ascending, so position 1 wins. Fixed, position 3 has no
+    // nearby signal at all and stays neutral (baseScore), which beats
+    // position 1's confirmed penalty outright -- position 3 wins on score,
+    // not on a tie-break.
+    const winner = rankSuggestions(CANDIDATES(), null, {
+      maxSuggestions: 1,
+      errorPositions: { 1: 0.0 },
+    });
+    expect(winner[0].position).toBe(3);
+  });
+
   it('reaches an adjacent position, at reduced weight', () => {
     // An error recorded at 4 ('w', which has no substitution) is evidence
-    // about the transition into it, so 3 and 5 are partially implicated.
+    // about the transition into it, so 3 and 5 are partially implicated
+    // (affinity 0.5 -- the tilt formula's own neutral point, since
+    // ADJACENT_ERROR_WEIGHT caps pure adjacency at 0.5 * the neighbour's
+    // rate and can never reach a full boost).
+    //
+    // Position 1 carries an EXPLICIT confirmed-zero rate as the comparison
+    // point: genuinely observed and genuinely low, so it is still penalized
+    // (-WEIGHT) even under the "don't penalize the merely-unobserved" fix
+    // (see the dedicated test above). Position 2, adjacent to that confirmed
+    // zero, nets the same 0 affinity and is penalized too. This makes 3 and
+    // 5 (neutral, via adjacency to 4) outrank 1 and 2 (penalized) on SCORE,
+    // not on a position tie-break -- unlike this test's own previous
+    // fixture (`{4: 1.0}` alone), which relied on 1 and 2 being penalized
+    // merely for having NO error data at all, the exact bug the dedicated
+    // test above now guards against.
     const tilted = rankSuggestions(CANDIDATES(), null, {
       maxSuggestions: 2,
-      errorPositions: { 4: 1.0 },
+      errorPositions: { 1: 0.0, 4: 1.0 },
     });
-    expect(tilted.map((s) => s.position)).toContain(5);
+    expect(tilted.map((s) => s.position)).toEqual([3, 5]);
   });
 
   it('does not change the ranking when there is no error data', () => {
