@@ -3692,6 +3692,52 @@ against current code, not against the prior round's conclusion.
 Verified: 221 adaptive backend tests (219 + 2 net-new), both new tests
 mutation-checked individually, Django `check` clean.
 
+**CI-fix (not a CodeRabbit round): renewed the expired pip-audit
+suppressions the last three rounds had correctly declared out of scope.**
+The "Dependency Vulnerability Scan" check finally needed direct action once
+the user asked for it explicitly, rather than continuing to note it as
+pre-existing. Four entries had expired (`CVE-2025-3000`,
+`PYSEC-2025-189/190/191`, all `exp:2026-08-10`), which fails the workflow's
+own pre-check unconditionally, before `pip-audit` itself even runs.
+Re-verified each against OSV directly — not by re-reading the existing
+comment block, which turned out to be stale in one place:
+
+- **`PYSEC-2025-189/190/191` (CVE-2025-2148/2149/2953): removed, not
+  renewed.** Each advisory's OSV entry caps `last_affected` at torch
+  `2.6.0-cu124`/`2.6.0+cu124`; the project's pin (`torch==2.12.0+cpu`) is
+  well past that ceiling. Confirmed empirically, not just by reading the
+  OSV page: running `pip-audit` directly against `torch==2.12.0` in
+  isolation reports zero findings for these three IDs. Same resolution
+  already established in this file for `PYSEC-2025-183`/`PYSEC-2024-277`.
+- **`CVE-2025-3000`/`PYSEC-2025-194` (GHSA-rrmf-rvhw-rf47): renewed, with a
+  corrected assessment.** The existing comment claimed "NO upstream fix
+  (fix_versions: [])" — checking OSV's raw JSON directly (not a
+  secondhand summary) showed this was wrong: a fix shipped in torch
+  2.13.0, with a real fix commit. The isolated `pip-audit` run against the
+  pin independently confirmed the same `fix_versions: ["2.13.0"]`. Since
+  the project's pin (2.12.0) is still inside the affected range, this is
+  now treated as a deferred-upgrade suppression — the same category
+  already established for the Django advisories block below it — rather
+  than a no-fix one: the actual blocker is scheduling and testing a torch
+  version bump against `ml_dark_web/ml_services.py`, out of scope for an
+  adaptive-password feature PR. The reachability argument (no
+  `torch.jit.script`/`.trace`/`.load` call sites anywhere in
+  `password_manager/`, re-grepped rather than assumed unchanged) remains
+  the operative mitigation. Renewed to `2026-08-15`, aligned with
+  `PYSEC-2025-194`'s existing date since both IDs are the same advisory
+  under different aliases.
+
+Verification method: the workflow's own expiry-validating Python snippet
+was run locally against the edited file (zero expired, zero malformed —
+the exact check that had been failing), and `pip-audit` was run directly
+against the isolated pin to get ground truth rather than trusting the OSV
+web summary alone. A full-`requirements.txt` audit was also attempted for
+completeness but failed to complete locally on an unrelated Windows
+build-toolchain gap (no Fortran compiler for building `scipy` from
+source) — irrelevant to the fix and not expected to recur on the actual
+Linux CI runner, which uses prebuilt wheels; abandoned in favor of the
+already-decisive isolated-pin result rather than blocking on it.
+
 ---
 
 ## 8. Sequencing and risk
