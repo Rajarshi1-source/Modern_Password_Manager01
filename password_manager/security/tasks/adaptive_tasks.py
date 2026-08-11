@@ -47,7 +47,7 @@ def aggregate_typing_profiles():
     
     for user in users_with_sessions:
         try:
-            # Materialize the ids of the last 50 sessions FIRST.
+            # Materialize the (id, created_at) pairs of the last 50 sessions.
             #
             # This task had never once completed successfully: it used to slice
             # (`[:50]`) and then call `.filter(success=True)` on the result,
@@ -58,19 +58,21 @@ def aggregate_typing_profiles():
             # because its only test asserted `callable(aggregate_typing_profiles)`
             # -- true of a function that raises on every input.
             #
-            # A query against a fixed id set, rather than a sliced queryset
-            # re-sliced later, so the window cannot drift mid-run if new
-            # sessions land while this task is still iterating.
-            recent_ids = list(
+            # As of round 5 this task recomputes only `last_session_at`, so one
+            # query for (id, created_at) suffices -- fetching `created_at`
+            # alongside `id` here means the newest session's timestamp is just
+            # `recent[0][1]` below, without a second query to re-derive it.
+            # `id` is kept (not just `created_at`) so a future windowed
+            # aggregate over this same 50-session set would not need to add a
+            # second query back.
+            recent = list(
                 TypingSession.objects
                 .filter(user=user)
                 .order_by('-created_at')
-                .values_list('id', flat=True)[:50]
+                .values_list('id', 'created_at')[:50]
             )
-            if not recent_ids:
+            if not recent:
                 continue
-
-            recent = TypingSession.objects.filter(id__in=recent_ids)
 
             # Get or create profile
             profile, _created = UserTypingProfile.objects.get_or_create(user=user)
@@ -87,11 +89,9 @@ def aggregate_typing_profiles():
             # session. This task's `successful`/`total` were always a
             # 50-session WINDOW, so for any user past 50 lifetime sessions the
             # two writers would disagree, whichever ran last silently winning.
-            profile.last_session_at = (
-                recent.order_by('-created_at')
-                .values_list('created_at', flat=True)
-                .first()
-            )
+            # `recent` is ordered by -created_at, so the first row is the
+            # newest session -- no second query needed to find it again.
+            profile.last_session_at = recent[0][1]
             # update_fields, not a bare save(): this task now only recomputes
             # last_session_at (plus the auto_now updated_at, which Django only
             # refreshes if it's explicitly named here, matching the two

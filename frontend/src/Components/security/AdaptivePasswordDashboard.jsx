@@ -336,8 +336,20 @@ const AdaptivePasswordDashboard = () => {
     // with everything else.
     const pendingRef = useRef(null);
 
+    // Escape and Cancel must not be able to dismiss the consent dialog while
+    // `handleConfirmConsent`'s enable() request is in flight: it sets `busy`
+    // before the request and only clears the dialog / shows a success toast
+    // in its own then/finally, with nothing checking whether the user backed
+    // out in the meantime. Dismissing mid-request only hid the dialog -- the
+    // request still landed, enabling adaptive collection after the user
+    // believed they had cancelled it. Same shape as the fix in
+    // AdaptivePasswordSuggestion.jsx (dismiss-while-loading).
+    const handleConsentClose = useCallback(() => {
+        if (!busy) setShowConsent(false);
+    }, [busy]);
+
     const consentDialogRef = useRef(null);
-    useModalFocusTrap(consentDialogRef, showConsent, () => setShowConsent(false));
+    useModalFocusTrap(consentDialogRef, showConsent, handleConsentClose);
 
     const say = useCallback((text, isError = false) => {
         setMessage(text);
@@ -1130,7 +1142,8 @@ const AdaptivePasswordDashboard = () => {
                         <Row>
                             <Action
                                 type="button"
-                                onClick={() => setShowConsent(false)}
+                                onClick={handleConsentClose}
+                                disabled={busy}
                                 data-testid="cancel-consent-button"
                             >
                                 Cancel
