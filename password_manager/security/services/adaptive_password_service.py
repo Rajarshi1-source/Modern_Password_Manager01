@@ -848,7 +848,15 @@ class AdaptivePasswordService:
         """
         if not timing_buckets:
             return None
-        ordered = [timing_buckets[k] for k in sorted(timing_buckets)]
+        # Sort numerically, not lexicographically: the only current caller
+        # builds this dict with int keys (enumerate()), but TypingSession.
+        # timing_profile is a JSONField, and JSON always stringifies object
+        # keys -- '10' would sort before '2' for a caller that ever passes a
+        # stored profile back in, silently scrambling the rhythm shape.
+        ordered = [
+            timing_buckets[k]
+            for k in sorted(timing_buckets, key=lambda position: int(position))
+        ]
         values = [float(v) for v in ordered if isinstance(v, (int, float)) and v > 0]
         if not values:
             return None
@@ -1237,16 +1245,10 @@ class AdaptivePasswordService:
                     # then average a delta against an implicit 0 -- so the
                     # pair is written together or not at all.
                     memorability_score_before=(
-                        memorability_score_before
-                        if memorability_score_before is not None
-                        and memorability_score_after is not None
-                        else None
+                        memorability_score_before if has_score_pair else None
                     ),
                     memorability_score_after=(
-                        memorability_score_after
-                        if memorability_score_before is not None
-                        and memorability_score_after is not None
-                        else None
+                        memorability_score_after if has_score_pair else None
                     ),
                     memorability_driver=memorability_driver or '',
                     status='active',
