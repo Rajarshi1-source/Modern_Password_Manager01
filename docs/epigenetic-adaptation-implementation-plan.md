@@ -2978,12 +2978,30 @@ UI. `AdaptivePasswordSuggestion` previously showed a hard-coded
 derived "after" from it; it now shows the two measured numbers or, absent a
 reading, omits the panel rather than inventing one.
 
-Note the EMA in §4.2 converges toward Δ ≈ 0 rather than toward positive: if the
-only features that move for leetspeak are variety and pronounceability, and
-users report the change *did* help, their weights rise; if users report it did
-not, they fall toward `MIN_MEMORABILITY_WEIGHT` and the Δ shrinks. Neither
-direction manufactures a positive intrinsic improvement. That is a limitation of
-the four-feature model, recorded rather than hidden.
+**Correction (round 5 review): the EMA in §4.2 does not converge Δ toward 0 —
+an earlier version of this paragraph claimed it did, in both feedback
+directions, and that claim does not hold under the actual update rule.**
+`nudge_memorability_weights` raises the *driver* feature's weight toward 1.0
+on "yes, easier," lowers it toward `MIN_MEMORABILITY_WEIGHT` on "no," then
+renormalizes all four weights to sum to 1 — it moves weight toward whichever
+feature the user says mattered, it does not touch that feature's own
+*delta*. For leetspeak, the driver is almost always `variety` or
+`pronounceable`, and both have *negative* deltas (`password` → `p@ssw0rd`:
+variety `1.00 → 0.33`, pronounceable `0.57 → 0.00`). Worked from the default
+weights (`length` 0.2, `patterns` 0.3, `variety` 0.2, `pronounceable` 0.3,
+Δlength ≈ Δpatterns ≈ 0): a "yes" with driver `variety` raises its weight
+0.2 → 0.28 pre-renormalization (≈0.259 after), moving Δ from **−0.305 to
+−0.332** — *more* negative, away from zero, the opposite of what the
+original claim said for this direction. A "no" with driver `pronounceable`
+lowers its weight 0.3 → 0.27 pre-renormalization (≈0.278 after), moving Δ to
+**−0.297** — only marginally toward zero, and only because renormalization
+spreads the freed weight mass onto the two near-zero-delta features
+(`length`, `patterns`), not because the EMA targets zero. Neither direction
+manufactures a positive intrinsic improvement, and neither reliably shrinks
+the magnitude of a negative one either — the mechanism moves weight toward
+what a user says mattered to *them*, which is a different thing from moving
+the aggregate delta toward any particular value. That is a limitation of the
+four-feature model, recorded rather than hidden.
 
 **Deviations from the plan text:**
 
@@ -3383,11 +3401,147 @@ of already-declined findings with no new information.
   information since round 3's investigation; still tracked as a follow-up
   rather than a same-round vault-auth redesign.
 
-Verified: 218 adaptive backend tests (+3: one new test per fix above, all
-mutation-checked — each reverted fix reproduces the exact predicted failure),
-Django `check` clean, `makemigrations --check --dry-run` clean (no model
-fields touched), `py_compile` clean on every touched file. No frontend files
+Verified: 218 adaptive backend tests, measured directly (not derived from the
+prior round's count, which used a scope this round's measurement cannot
+reconstruct exactly — round 5 below found the two numbers don't reconcile by
+simple addition and corrected this line rather than inventing a match). Three
+new tests, one per fix above, all mutation-checked — each reverted fix
+reproduces the exact predicted failure. Django `check` clean, `makemigrations
+--check --dry-run` clean (no model fields touched), `py_compile` clean on
+every touched file. No frontend files
 touched this round.
+
+**5th review-fix round** (CodeRabbit full review, commit `0a082c1`, plus a
+follow-up full re-review posted minutes later against the fix commit itself):
+every finding re-verified against current code before acting. Five real gaps
+applied, each mutation-checked; one applied as a low-risk operational
+improvement; three were this round's own doc-accuracy corrections, caught by
+re-deriving the underlying claim rather than trusting the prose.
+
+- **Applied, the most significant finding of this round:
+  `successful_sessions`/`success_rate` had the IDENTICAL two-competing-writers
+  bug already found and fixed TWICE on this same task** — `total_sessions`
+  (round 2) and `profile_confidence` (round 3). `aggregate_typing_profiles`
+  recomputed both from a 50-session WINDOW while `_update_typing_profile`
+  independently owns both from the LIFETIME count (`+= 1` /
+  `successful_sessions / total_sessions`). For any user past 50 lifetime
+  sessions the two writers disagreed, whichever ran last silently winning —
+  exactly the shape trap 59 named after round 3 ("grep the whole function for
+  the same bug shape," not just the field a reviewer names), and it recurred a
+  third time anyway. Removed both fields from this task's writes entirely
+  (matching how `total_sessions`/`profile_confidence` were handled), leaving
+  the task to recompute only `last_session_at`. The old
+  `test_aggregate_typing_profiles_recomputes_from_sessions` asserted the now-
+  removed windowed values; renamed to
+  `test_aggregate_typing_profiles_recomputes_last_session_at` and rewritten to
+  test the one field the task still owns, plus a new dedicated
+  `test_aggregate_typing_profiles_does_not_overwrite_successful_sessions_or_success_rate`
+  mirroring the existing `total_sessions`/`profile_confidence` guard tests
+  exactly. Mutation-checked: reintroducing the two writes makes the new test
+  fail on `3 != 180`.
+- **Applied: `AdaptivePasswordSuggestion` let Escape and outside-click dismiss
+  the dialog while an accept was in flight.** `applyToVault` (the dashboard's
+  `onAccept`) reads `pendingRef.current` ONCE at the start and does not
+  re-check it before writing to the vault — traced this precisely rather than
+  taking the finding's word for it. The explicit Accept/Reject buttons are
+  already `disabled={isLoading}`; Escape (via `useModalFocusTrap`) and the
+  overlay's outside-click were the two paths that weren't. Dismissing
+  mid-flight only hid the dialog; the vault write still landed afterward,
+  changing the credential the user believed they had just cancelled. Fixed
+  with a single guarded `handleClose` (`if (!isLoading) onClose()`) wired to
+  both paths. Two new tests — dismissal ignored while loading, restored once
+  loading ends — each independently mutation-checked by reverting one
+  consumer at a time (Escape alone, then outside-click alone), confirming
+  neither guard holds vacuously on the other's coattails.
+- **Applied: `rankSuggestions`'s error-position tilt penalized positions with
+  NO recorded error data, once ANY position anywhere had some.**
+  `error_prone_positions` only ever gains an entry for a position that has
+  erred at least once (`_update_typing_profile`, server-side); an absent
+  position could mean "typed correctly every time" or "never typed at all" —
+  the map alone cannot tell. `errorAffinity` read an absent position via
+  `?? 0`, identical to an EXPLICIT zero-rate entry, so once `errorRates` was
+  non-empty for any reason, an unrelated, genuinely-unobserved position got
+  the same full `-ERROR_POSITION_WEIGHT` penalty as a confirmed-good one.
+  Added `hasErrorSignal` (does this position or a neighbour have an entry at
+  all) and gated the tilt on it. New test: an explicit-zero position (1) stays
+  penalized while a genuinely-unobserved, non-adjacent position (3) goes
+  neutral and wins outright on score, not a position tie-break — the exact
+  distinction the bug erased. This also required fixing the PRE-EXISTING
+  `reaches an adjacent position, at reduced weight` test, whose old fixture
+  (`{4: 1.0}` alone) had been unknowingly relying on the SAME bug: positions
+  1/2, having no signal at all, were being wrongly penalized down to the same
+  score as 3/5's genuine (and, at rate 1.0, exactly-neutral) adjacency effect,
+  which is what let 3/5 "win" the old assertion. Re-verified with a script
+  before touching the fixture (see the arithmetic below) rather than trusting
+  a second hand-derivation after the first one had just been proven wrong by
+  the test run itself; the corrected fixture (`{1: 0.0, 4: 1.0}`) now
+  demonstrates the adjacency effect against a genuinely confirmed-zero
+  comparator instead of an accidentally-penalized one.
+- **Applied, low-risk operational improvement (reviewer's own label:
+  Trivial):** added `'options': {'expires': 3600}` to the hourly
+  `adaptive-aggregate-typing-profiles` beat entry, matching the schedule
+  interval — a tick still queued an hour after a broker/worker outage is
+  stale by the time it would run (the next tick already supersedes it), so it
+  is now dropped instead of piling up into a backlog that fires in a burst
+  once a worker recovers.
+- **Doc correction: §4.2's EMA-direction claim had the sign backwards for the
+  "yes, easier" case.** The original text claimed the EMA "converges toward Δ
+  ≈ 0" in both feedback directions. Re-derived from the actual update rule
+  rather than re-asserted: `nudge_memorability_weights` raises the *driver*
+  feature's weight toward 1.0 on "yes," which for leetspeak is almost always
+  `variety` or `pronounceable` — both already NEGATIVE-delta features.
+  Raising a negative-delta feature's weight makes the weighted sum MORE
+  negative, not less. Verified with a script against the default weights and
+  the doc's own `password`→`p@ssw0rd` example: Δ moves from **−0.305 to
+  −0.332** on "yes" (away from zero, the opposite of the original claim), and
+  only to **−0.297** on "no" (barely toward zero, and only because
+  renormalization spreads the freed weight onto the two near-zero-delta
+  features). Corrected the paragraph to state the actual mechanism — weight
+  moves toward whichever feature the user says mattered to *them*, which is a
+  different thing from moving the aggregate delta toward any particular
+  value — with the worked numbers in place of the removed guarantee.
+- **Doc correction: the acceptance-criteria checklist self-contradicted on
+  whether the e2e leak assertion had ever run.** Item 6 already stated
+  Playwright is not wired into CI and the spec needs infrastructure this
+  change doesn't provide; item 7, two lines later, claimed "e2e network
+  assertions" stayed green regardless. Confirmed via `grep` across
+  `.github/workflows/` that no workflow invokes Playwright, and that no
+  round's "Verified:" line in this document has ever reported running
+  `adaptive_password.spec.ts`. Reworded item 7 to state plainly that frontend
+  and backend leak tests are verified and e2e is not, rather than letting the
+  contradiction stand.
+- **Doc correction: `ADAPTIVE_PASSWORD.md` claimed the UI renders a signed
+  number.** Checked the actual render branches in
+  `AdaptivePasswordSuggestion.jsx`: they render magnitude with directional
+  wording ("+X% easier to remember" / "X% harder to read, but it matches how
+  you type"), never a bare signed percentage — deliberately, per that
+  component's own comment, since "-30% harder" would read as a double
+  negative. Corrected the doc line to match.
+- **Doc correction: this document's own round-4 test count didn't add up.**
+  214 (+1, round 3) plus round 4's own "+3" should read 217, not the 218
+  actually measured. `git diff` confirms round 4 added exactly 3 new test
+  methods and removed none, so the arithmetic gap is in the round-3 baseline
+  or its measurement scope, not in round 4's claimed delta — neither of which
+  this round can reconstruct after the fact. Reworded to state the 218 figure
+  as directly measured rather than implying it reconciles by simple addition
+  (see the round-4 "Verified:" line above, which now carries this
+  correction).
+- **Already covered by an existing, still-valid decision — no action.** The
+  failing "Dependency Vulnerability Scan" CI check (`CVE-2025-3000`,
+  `PYSEC-2025-189/190/191`, all `exp:2026-08-10` in
+  `pip-audit-ignores.txt`, expired the day before this round). Confirmed via
+  `git diff --stat` against round 4's own commit that this round touches zero
+  dependency/ignore files — the same out-of-scope reasoning Phase 1's round 1
+  already established for an earlier instance of this exact check.
+
+Verified: 219 adaptive backend tests (measured directly: 218 + 1 net-new —
+the "recomputes" test above was renamed and rewritten, not added; the new
+"does not overwrite successful_sessions/success_rate" test is the one
+net-new test), 118 frontend tests across the two touched files (+3 net-new:
+the dismiss-while-loading pair, the error-tilt coverage test), all
+new/changed tests mutation-checked individually. Django `check` clean, 0
+ESLint errors on touched files (4 pre-existing warnings, confirmed via `git
+diff --stat` to predate this round's changes).
 
 ---
 
@@ -3470,6 +3624,14 @@ that measurably weaken their passwords.**
    wired into CI, and running the spec needs a live backend plus a seeded
    login, neither of which this change provides. Do not re-word this to "met"
    until the spec has actually been run green.
-7. Leak tests stay green — frontend, backend, and e2e network assertions.
+7. Leak tests stay green — **frontend and backend, verified; e2e not
+   verified.** Every round's "Verified:" line in this document reports
+   frontend/backend suite results; none of them report running
+   `adaptive_password.spec.ts`, and item 6 above already states why: no CI
+   workflow invokes Playwright (confirmed by grepping `.github/workflows/`),
+   and the spec needs a live backend plus a seeded login this change does not
+   provide. The spec's own network-leak assertion (§8's e2e half) exists in
+   source but has never actually been run — do not read this bullet as
+   evidence it has.
 8. No file under `mobile/` or `frontend/src/` references `original_password` / `adapted_password`, enforced in CI (A3).
 9. Backend suite green under the `canny` venv with `DEBUG=True`; `npm run build` green on Vite 7.
