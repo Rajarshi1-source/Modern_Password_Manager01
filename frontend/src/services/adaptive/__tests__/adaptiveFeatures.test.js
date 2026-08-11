@@ -1055,6 +1055,25 @@ describe('scoreMemorability', () => {
       .toBeCloseTo(scoreMemorability('correcthorse'), 10);
   });
 
+  it('rejects a non-numeric weight value, matching the server', () => {
+    // Round 9 review: `Number(rawWeights[name])` coerces null/''/' ' to a
+    // "valid" weight of 0, while the server's `float(...)` equivalent
+    // raises on all three and falls back to defaults -- a real mismatch
+    // for the identical wire input. A numeric string ('0.5') and a JSON
+    // boolean (true) both used to be silently accepted too
+    // (`Number('0.5') === 0.5`, `Number(true) === 1`), the mismatch in the
+    // OTHER direction once the server was tightened to require a genuine
+    // number. All five must now fall back to full defaults, matching
+    // normalize_memorability_weights exactly.
+    for (const bad of [null, '', ' ', '0.5', true]) {
+      const params = {
+        weights: { length: 0.1, patterns: 0.2, variety: 0.3, pronounceable: bad },
+      };
+      expect(scoreMemorability('correcthorse', params))
+        .toBeCloseTo(scoreMemorability('correcthorse'), 10);
+    }
+  });
+
   it('rejects a non-string password rather than scoring undefined', () => {
     expect(() => scoreMemorability(undefined)).toThrow(TypeError);
     expect(() => memorabilityFeatures(42)).toThrow(TypeError);

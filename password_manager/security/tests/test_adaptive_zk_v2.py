@@ -685,7 +685,18 @@ class MemorabilityModelTests(TestCase):
     def test_non_finite_stored_weights_fall_back(self):
         # float('inf') >= 0 is True, so a bare non-negativity check would let
         # it through and normalize every other weight to 0.
-        for bad in (float('inf'), float('nan'), -1.0, 'x'):
+        #
+        # None/''/' '/'0.5'/True (round 9 review): the client's own
+        # normalizer used `Number(...)` coercion, which turns None/''/' '
+        # into a "valid" weight of 0 -- accepted -- while this function's
+        # `float(...)` raises on all three and (correctly) falls back to
+        # defaults. A numeric string ('0.5') and a bool (True) both used to
+        # succeed through `float()` too (`float('0.5') == 0.5`,
+        # `float(True) == 1.0`), which the client's own `typeof === 'number'`
+        # check would reject for the identical wire input -- a mismatch in
+        # the OTHER direction. All five must now be rejected the same way a
+        # non-numeric string already was.
+        for bad in (float('inf'), float('nan'), -1.0, 'x', None, '', ' ', '0.5', True):
             weights = dict(DEFAULT_MEMORABILITY_WEIGHTS)
             weights['variety'] = bad
             self.assertEqual(
