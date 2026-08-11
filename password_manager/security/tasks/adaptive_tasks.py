@@ -129,7 +129,14 @@ def aggregate_typing_profiles():
             
             processed += 1
             logger.debug(f"Aggregated profile for user {user.id}")
-            
+
+        except (SoftTimeLimitExceeded, Retry):
+            # Celery worker control flow, not a bad row -- same reasoning as
+            # update_rl_model_from_feedback below. Swallowing this would let
+            # the loop keep going past the soft deadline until the
+            # uncatchable hard limit SIGKILLs the worker mid-batch instead of
+            # winding down gracefully.
+            raise
         except Exception as e:
             logger.error(f"Error aggregating profile for user {user.id}: {str(e)}")
             errors += 1

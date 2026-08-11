@@ -5,6 +5,7 @@ DRF Serializers for Adaptive Password Feature
 Serializers for REST API endpoints.
 """
 
+import math
 from collections.abc import Mapping
 
 from rest_framework import serializers
@@ -415,6 +416,16 @@ def _fingerprint_field(**kwargs):
     )
 
 
+def _validate_finite(value):
+    """Reject NaN/Infinity. DRF 3.16's FloatField min_value/max_value use ``<``/``>``,
+    which are False against NaN, so bounds checks alone let it through -- then the
+    strict JSON renderer raises ValueError on the response that echoes it back.
+    """
+    if not math.isfinite(value):
+        raise serializers.ValidationError('Must be a finite number.')
+    return value
+
+
 def _validate_substitution_classes(value):
     """Validate a list of class-level substitutions: ``{from, to[, confidence]}``.
 
@@ -610,6 +621,15 @@ class ApplyAdaptationV2Serializer(
     memorability_driver = serializers.ChoiceField(
         choices=MEMORABILITY_FEATURE_NAMES, required=False, allow_blank=True,
     )
+
+    def validate_memorability_improvement(self, value):
+        return _validate_finite(value)
+
+    def validate_memorability_score_before(self, value):
+        return _validate_finite(value)
+
+    def validate_memorability_score_after(self, value):
+        return _validate_finite(value)
 
     def validate_substitutions(self, value):
         return _validate_substitution_classes(value)

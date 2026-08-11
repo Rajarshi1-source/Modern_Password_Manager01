@@ -219,6 +219,19 @@ class V2FieldValidationTests(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn('substitutions', serializer.errors)
 
+    def test_apply_rejects_non_finite_memorability_values(self):
+        # DRF 3.16's FloatField min_value/max_value compare with </>, both
+        # False against NaN, so bounds alone would let it through and the
+        # strict JSON renderer would later blow up echoing it back.
+        for field in (
+            'memorability_improvement', 'memorability_score_before',
+            'memorability_score_after',
+        ):
+            for bad in (float('nan'), float('inf'), float('-inf')):
+                serializer = self._apply_serializer(**{field: bad})
+                self.assertFalse(serializer.is_valid(), (field, bad))
+                self.assertIn(field, serializer.errors, (field, bad))
+
     def test_apply_accepts_a_class_outside_the_leetspeak_baseline(self):
         # Deliberately NOT an allowlist of COMMON_SUBSTITUTIONS pairs: a
         # user's own evidence for a class the baseline never suggested is a
@@ -1062,6 +1075,21 @@ class MemorabilityScorePersistenceTests(APITestCase):
         )
         self.assertEqual(
             export['adaptations'][0]['memorability_driver'], 'variety',
+        )
+
+    def test_export_reports_a_zero_before_score_as_a_real_delta(self):
+        # `before` truthy-checked instead of `is not None` would treat a real
+        # 0.0 reading as "missing" and report null instead of the delta —
+        # the same class of bug get_evolution_stats already guards against.
+        self._apply(
+            memorability_score_before=0.0,
+            memorability_score_after=0.4,
+        )
+
+        export = self.client.get('/api/security/adaptive/export/').data
+
+        self.assertAlmostEqual(
+            export['adaptations'][0]['memorability_improvement'], 0.4, places=6
         )
 
 

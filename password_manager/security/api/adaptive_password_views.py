@@ -776,7 +776,7 @@ def export_adaptive_data(request):
             'suggested_at': a.suggested_at.isoformat(),
             'memorability_improvement': (
                 (a.memorability_score_after or 0) - (a.memorability_score_before or 0)
-            ) if a.memorability_score_before else None,
+            ) if a.memorability_score_before is not None else None,
             'memorability_driver': a.memorability_driver or None,
         }
         for a in adaptations
