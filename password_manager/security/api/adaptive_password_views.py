@@ -442,7 +442,7 @@ def apply_adaptation(request):
         "memorability_driver": "variety"
     }
 
-    The three memorability fields are Phase 4 additions and remain optional: a
+    The four memorability fields are Phase 4 additions and remain optional: a
     client that omits them records an adaptation exactly as before, with both
     scores left NULL and excluded from `average_memorability_improvement`.
     """

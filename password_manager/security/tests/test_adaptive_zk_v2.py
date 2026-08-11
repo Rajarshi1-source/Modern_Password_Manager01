@@ -1034,6 +1034,35 @@ class MemorabilityScorePersistenceTests(APITestCase):
                 response.status_code, status.HTTP_400_BAD_REQUEST, field
             )
 
+    def test_reason_text_derives_delta_from_scores_not_the_raw_client_value(self):
+        # Real gap (round 7 review): memorability_improvement and the
+        # before/after pair are computed independently client-side, so
+        # nothing guarantees they agree -- an inconsistent payload could
+        # make the audit-trail reason text disagree with the scores actually
+        # stored for the same row. Deliberately sending a WRONG improvement
+        # (+0.99) alongside a correct, consistent before/after pair (delta
+        # -0.30) proves the reason text uses the derived value, not the
+        # client's raw one, once both scores are available -- closing the
+        # gap without rejecting the request (rejecting would need to also
+        # reject a lone score, which test_scores_are_omitted_together_or_
+        # not_at_all already establishes as intentionally accepted).
+        self._apply(
+            memorability_improvement=0.99,
+            memorability_score_before=0.55,
+            memorability_score_after=0.25,
+        )
+        adaptation = PasswordAdaptation.objects.get(user=self.user)
+        self.assertIn('Δ=-0.30', adaptation.reason)
+        self.assertNotIn('Δ=+0.99', adaptation.reason)
+
+    def test_reason_text_uses_the_raw_improvement_when_no_score_pair_is_sent(self):
+        # A pre-Phase-4 client sends only the delta, no absolute scores --
+        # nothing to derive from, so the raw value is still the best
+        # available signal and must not be dropped.
+        self._apply(memorability_improvement=0.42)
+        adaptation = PasswordAdaptation.objects.get(user=self.user)
+        self.assertIn('Δ=+0.42', adaptation.reason)
+
     def test_an_unknown_driver_is_rejected(self):
         # A free-text driver would accumulate weight against a key
         # export_preference_model never reads.

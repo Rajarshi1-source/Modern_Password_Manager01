@@ -1183,9 +1183,31 @@ class AdaptivePasswordService:
                 generation = (previous.adaptation_generation + 1) if previous else 1
 
                 reason = f"User-approved ZK adaptation (gen {generation})"
-                if memorability_improvement is not None:
+                # Derive the reported delta from before/after when both are
+                # present, rather than trusting the separately-sent
+                # memorability_improvement verbatim -- the two are computed
+                # independently client-side and nothing upstream guarantees
+                # they agree, so this text could otherwise contradict the
+                # memorability_score_before/_after actually stored for the
+                # same row (round 7 review). before/after are the more
+                # granular, individually-bounded signal, so they win when
+                # both are available; memorability_improvement is only used
+                # standalone for a pre-Phase-4 client that sent no absolute
+                # scores at all (see test_scores_are_omitted_together_or_
+                # not_at_all for why a lone score is dropped, not rejected,
+                # a case this must not disturb).
+                has_score_pair = (
+                    memorability_score_before is not None
+                    and memorability_score_after is not None
+                )
+                reported_delta = (
+                    (memorability_score_after - memorability_score_before)
+                    if has_score_pair
+                    else memorability_improvement
+                )
+                if reported_delta is not None:
                     reason += (
-                        f"; client-reported memorability Δ={memorability_improvement:+.2f}"
+                        f"; client-reported memorability Δ={reported_delta:+.2f}"
                     )
 
                 # Free the parent's unique (adapted_fingerprint, active) slot
