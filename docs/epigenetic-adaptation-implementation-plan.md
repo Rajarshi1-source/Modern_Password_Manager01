@@ -3632,6 +3632,66 @@ no tests and added none, only changed the internal query shape of an
 already-covered function), Django `check` clean, `makemigrations --check
 --dry-run` clean, 0 ESLint errors on touched files.
 
+**7th review-fix round** (CodeRabbit full review, commit `1fbf8ba`, the
+memorability cross-field finding re-raised a second and third time in the
+same round — once inline against the diff, once "outside diff range" citing
+"raised on an earlier commit"): every finding re-verified from scratch
+against current code, not against the prior round's conclusion.
+
+- **Re-verified the memorability cross-field finding rather than citing
+  round 6's decline, and found a narrower fix that closes the real half of
+  it without touching the tested half.** Re-checked `apply_adaptation_v2`
+  and `test_scores_are_omitted_together_or_not_at_all` from scratch: both
+  are unchanged since round 6, so the "reject a lone score" half of the
+  suggestion still contradicts an existing, deliberately-tested "silently
+  drop an incomplete pair" contract — declining that half again, not on
+  trust but on re-confirmation. But grepped every consumer of
+  `memorability_improvement` this time (not just the ones round 6 happened
+  to check) and confirmed the reviewer's underlying concern for the OTHER
+  half is real: it is not a model column, and its only use — a free-text
+  `reason` string on the audit record — trusted the client's raw value
+  verbatim even when a contradicting, individually-validated
+  `before`/`after` pair was ALSO present and being stored on the same row.
+  Fixed by deriving the reported delta from `after - before` whenever both
+  scores are present, falling back to the raw `memorability_improvement`
+  only when they are absent (the pre-Phase-4, no-absolute-scores case) —
+  closing the inconsistency the reviewer flagged via "trust the more
+  granular signal" rather than "reject the request," so it needs no new
+  validation error and cannot conflict with the pairing contract at all.
+  Two new tests: a deliberately-wrong `memorability_improvement` (+0.99)
+  alongside a consistent, correct pair (delta −0.30) proves the derived
+  value wins; a lone `memorability_improvement` with no scores proves the
+  raw value is still used when there is nothing to derive from.
+  Mutation-checked: reverting to the raw value makes the first test fail,
+  showing the wrong `Δ=+0.99` in the stored reason text instead of the
+  correct `Δ=-0.30`.
+- **Applied, trivial doc fix:** `apply_adaptation`'s docstring said "The
+  three memorability fields," but the example body immediately above it,
+  and the actual call three lines below, both carry four
+  (`memorability_improvement`, `memorability_score_before`,
+  `memorability_score_after`, `memorability_driver`). Corrected the count.
+- **Declined — Ruff S106 ("possible hardcoded password") on 5 test-fixture
+  literals in `test_adaptive_zk_v2.py`.** Verified this is not an enforced
+  CI gate in this repository (`grep` across `.github/workflows/` finds no
+  Ruff job; the PR's own failing-checks list names only the pre-existing
+  Dependency Vulnerability Scan) — it is CodeRabbit's own bundled static
+  analysis, reported but not blocking. Also verified the identical
+  `password='testpass123'`-shaped literal is not unique to these 5 lines:
+  it appears 60+ times across a dozen other test files in this codebase
+  (`test_adaptive_password.py`, `test_duress_code.py`,
+  `test_quantum_entanglement.py`, and others), none suppressed. Adding
+  `# noqa: S106` to only the 5 lines this review happened to flag would be
+  an arbitrary, inconsistent partial fix for a repo-wide, pre-existing
+  pattern this PR did not introduce — out of scope for a targeted,
+  surgical review-fix round.
+- **No action — unchanged since round 5/6.** The failing "Dependency
+  Vulnerability Scan" check: same `pip-audit-ignores.txt` entries, still
+  expired, still zero dependency/ignore files touched by this branch
+  (re-confirmed via `git diff --stat` against round 6's commit).
+
+Verified: 221 adaptive backend tests (219 + 2 net-new), both new tests
+mutation-checked individually, Django `check` clean.
+
 ---
 
 ## 8. Sequencing and risk
