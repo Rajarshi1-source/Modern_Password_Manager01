@@ -3723,9 +3723,13 @@ comment block, which turned out to be stale in one place:
   adaptive-password feature PR. The reachability argument (no
   `torch.jit.script`/`.trace`/`.load` call sites anywhere in
   `password_manager/`, re-grepped rather than assumed unchanged) remains
-  the operative mitigation. Renewed to `2026-08-15`, aligned with
-  `PYSEC-2025-194`'s existing date since both IDs are the same advisory
-  under different aliases.
+  the operative mitigation. Renewed to `2026-10-10` (the 60-day policy
+  cap from the renewal date), not the initially-chosen `2026-08-15` —
+  that date was inherited from `PYSEC-2025-194`'s existing neighbouring
+  entries purely to keep the two aliases in sync with each other, but
+  CodeRabbit correctly flagged (round 8) that 4 days of runway from an
+  ACTIVE renewal defeats the purpose of renewing at all. Both aliases
+  moved together to `2026-10-10`, still in sync.
 
 Verification method: the workflow's own expiry-validating Python snippet
 was run locally against the edited file (zero expired, zero malformed —
@@ -3737,6 +3741,72 @@ build-toolchain gap (no Fortran compiler for building `scipy` from
 source) — irrelevant to the fix and not expected to recur on the actual
 Linux CI runner, which uses prebuilt wheels; abandoned in favor of the
 already-decisive isolated-pin result rather than blocking on it.
+
+**8th review-fix round** (CodeRabbit full review, commit `4cdf769`): every
+finding re-verified against current code before acting. One real finding
+applied (a self-inflicted one, on the CI fix from the previous round); three
+Trivial/Low-value nitpicks applied since each was genuinely safe and cheap;
+one purely informational note required no action.
+
+- **Applied — CodeRabbit correctly caught a planning oversight in my own
+  prior-round renewal.** The pip-audit CI fix renewed `CVE-2025-3000`/
+  `PYSEC-2025-194` to `2026-08-15`, chosen by aligning to the pre-existing
+  neighbouring `PYSEC-2025-194` entry so the two aliases wouldn't drift
+  apart. That reasoning is sound for keeping aliases *in sync with each
+  other*, but it inherited a date only 4 days out from the renewal itself
+  (2026-08-11) — for an ACTIVE renewal, that defeats the point of renewing
+  at all, since the exact same CI failure would recur almost immediately.
+  Extended both aliases together to `2026-10-10`, the full 60-day policy
+  cap from the renewal date, keeping them in sync as intended. Verified the
+  new dates against the workflow's own expiry check (zero expired) and
+  confirmed they stay within the stated 60-day renewal limit (unlike three
+  unrelated, pre-existing entries elsewhere in the file that are
+  62-65 days out — not introduced by this round, not touched).
+- **Applied — `_rhythm_vector`'s key sort was lexicographic, not
+  numeric.** The only current caller builds this dict with `enumerate()`
+  (always int keys), so this is not live today — but `TypingSession.
+  timing_profile` is a `JSONField`, and JSON always stringifies object
+  keys, so any future caller passing a stored profile back in would get
+  `'10'` sorted before `'2'`, silently scrambling the rhythm shape with no
+  error. Fixed with an explicit `key=lambda position: int(position)`.
+  Genuinely trivial in cost (one line, zero behavior change for the only
+  current caller) protecting against a well-known, not-contrived
+  JSON-serialization gotcha, so applied despite the reviewer's own
+  "Low value" label. New test: the same "ramp" fixture (slow start, fast
+  end) already used by `test_rhythm_vector_is_scale_free`, built with
+  string keys, must produce an IDENTICAL vector to the int-keyed version.
+  Mutation-checked: reverting to plain `sorted(timing_buckets)` produces a
+  visibly scrambled vector (`[1.6, 0.4, 0.4, 0.4, 1.6, 1.6, 1.6, 0.4]`
+  instead of the correct `[1.6, 1.6, 1.6, 1.6, 0.4, 0.4, 0.4, 0.4]`), not
+  just a slightly-off number.
+- **Applied — reused the already-computed `has_score_pair` instead of
+  repeating its two-part predicate twice more.** Pure DRY, zero behavior
+  change (the round-7 commit that introduced `has_score_pair` had left the
+  two persistence expressions using their own inline copies of the same
+  check). No new test needed — the existing `MemorabilityScorePersistenceTests`
+  suite (6 tests, including the two round-7 additions) already covers this
+  exact code path and passed unchanged.
+- **Applied — `cleanup_expired_adaptations` used `expired.count()` then
+  `expired.update()`, two separate queries with no transaction between
+  them.** `QuerySet.update()` returns the exact number of rows it changed,
+  which removes the extra query and closes a real (if narrow) gap: a row
+  altered by another process in between the two calls could make the
+  reported count diverge from what was actually updated. Verified the
+  existing `test_cleanup_expired_adaptations_expires_only_stale_suggestions`
+  test asserts only on the output value (`{'expired': 1}`), not the
+  mechanism, so it still passes unchanged.
+- **No action — purely informational, no code change requested.** A note
+  on `celery.py`'s hourly lookback window interacting with the new
+  `expires: 3600` from round 6: since this task now owns only
+  `last_session_at` (already independently written by `_update_typing_profile`
+  on every real session), a missed beat has small practical impact. The
+  comment itself says "otherwise preserve the current behavior" — actionable
+  only if a future change reintroduces more fields into this task.
+
+Verified: 222 adaptive backend tests (221 + 1 net-new, mutation-checked),
+Django `check` clean, pip-audit-ignores.txt re-validated against the
+workflow's own expiry parser (zero expired, zero malformed, both touched
+dates within the 60-day cap).
 
 ---
 
