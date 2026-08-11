@@ -150,14 +150,19 @@ def cleanup_expired_adaptations():
         suggested_at__lt=expiry_cutoff
     )
     
-    count = expired.count()
-    
     # Mark as expired rather than delete (for analytics)
     # Pre-existing bug, found while adding this task's first real test
     # (plan §5.4): missing f-prefix meant every expired row stored the
     # literal text "Auto-expired after {expiry_days} days" verbatim, braces
     # and all, reaching a real user through /adaptive/history/.
-    expired.update(
+    #
+    # count comes from update()'s own return value, not a separate
+    # .count() query beforehand: the two would run as separate queries
+    # with no transaction between them, so a row changed by another
+    # process in that gap could make the reported count diverge from what
+    # was actually updated. update() returns the exact number of rows it
+    # changed, closing that gap and saving a query.
+    count = expired.update(
         status='expired',
         reason=f'Auto-expired after {expiry_days} days'
     )

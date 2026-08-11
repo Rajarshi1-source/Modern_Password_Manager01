@@ -885,6 +885,21 @@ class DeadProfileFieldTests(TestCase):
         )
         self.assertGreater(ramp[0], ramp[-1])
 
+    def test_rhythm_vector_sorts_string_keys_numerically(self):
+        # TypingSession.timing_profile is a JSONField; if a caller ever
+        # passes a stored profile back in, its keys arrive as STRINGS
+        # ('0', '1', ..., '10', ...), not ints -- a lexicographic sort
+        # would scramble the shape ('10' sorts before '2'). Same fixture
+        # as the ramp case above (slow start, fast end), string-keyed, to
+        # prove positions sort numerically regardless of key type.
+        int_keyed = AdaptivePasswordService._rhythm_vector(
+            {i: (400 if i < 8 else 100) for i in range(16)}
+        )
+        string_keyed = AdaptivePasswordService._rhythm_vector(
+            {str(i): (400 if i < 8 else 100) for i in range(16)}
+        )
+        self.assertEqual(string_keyed, int_keyed)
+
     def test_rhythm_vector_handles_unusable_sessions(self):
         self.assertIsNone(AdaptivePasswordService._rhythm_vector({}))
         self.assertIsNone(AdaptivePasswordService._rhythm_vector({0: 0, 1: 0}))

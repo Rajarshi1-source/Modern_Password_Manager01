@@ -146,11 +146,15 @@ CVE-2026-53878 exp:2026-10-15
 # torch.nn for inference and never calls torch.jit.script/.trace on any
 # input (grep: no jit.script/.trace/.load call sites anywhere in
 # password_manager/). Re-evaluate whether the upgrade can be scheduled on
-# each renewal, not as a reflex date bump.
-CVE-2025-3000 exp:2026-08-15
+# each renewal, not as a reflex date bump. Extended to the full 60-day cap
+# (2026-10-10) on the very next round rather than 2026-08-15: that date was
+# inherited from PYSEC-2025-194's existing neighbour to keep the two
+# aliases in sync, but for an ACTIVE renewal, 4 days of runway from the
+# renewal date defeats the point of renewing at all.
+CVE-2025-3000 exp:2026-10-10
 PYSEC-2025-192 exp:2026-08-15
 PYSEC-2025-193 exp:2026-08-15
-PYSEC-2025-194 exp:2026-08-15
+PYSEC-2025-194 exp:2026-10-10
 PYSEC-2025-195 exp:2026-08-20
 PYSEC-2025-196 exp:2026-08-20
 PYSEC-2025-197 exp:2026-08-20
