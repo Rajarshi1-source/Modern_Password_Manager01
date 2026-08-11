@@ -3120,9 +3120,26 @@ against fixtures and assert its return payload.
   is no such route today, so every security task runs on the default queue;
   adding one for these three would also relocate the breach, genetic and
   predictive-expiration tasks onto a queue no deployed worker consumes.
-- **Times moved off the plan's 4:15 / Mon 4:45**, both of which collide with
-  entries already in `beat_schedule` (`verify-random-merkle-proofs`,
-  `cleanup-genetic-trials`). Shipped: hourly `:15`, daily 4:45, Mondays 5:15.
+- **Times moved off the plan's daily 4:15 / weekly Mon 4:45 — corrected
+  here, round 12 review, since the original reason given for the second
+  move was wrong.** The daily slot (`cleanup_expired_adaptations`)
+  collides with the existing `verify-random-merkle-proofs`
+  (`hour=4, minute=15`) and moved to 4:45. The weekly slot
+  (`update_rl_model_from_feedback`) does **not** collide with
+  `cleanup-genetic-trials` (`hour=4, minute=30` — a different time; this
+  document previously claimed otherwise) — it collides with
+  `cleanup_expired_adaptations`'s own new 4:45 slot, which also lands
+  every Monday, and moved to Mon 5:15 to avoid that adaptive sibling
+  instead. The hourly `:15` aggregation job (`crontab(minute=15)`) was
+  **not** moved off `:15` — it still coincides with
+  `verify-random-merkle-proofs` once a day, at 4:15. That coincidence is
+  harmless and intentionally left as-is: the two tasks route to different
+  queues (`blockchain` vs this app's default) and touch disjoint tables,
+  and this schedule already tolerates the identical pattern elsewhere —
+  `anchor-vault-to-blockchain` (hourly `:00`) coincides daily with
+  `analyze-password-strength-daily` (2:00 AM) the same way, and
+  `bug-bounty-self-pentest-daily` / `recompute-ambient-signal-reliability`
+  already share 3:30 AM. Shipped: hourly `:15`, daily 4:45, Mondays 5:15.
 - **Found but deliberately not fixed here:** three *pre-existing*
   `beat_schedule` entries (`check-genetic-evolution-daily`,
   `cleanup-genetic-trials`, `refresh-dna-tokens-weekly`) name tasks that are
@@ -3973,6 +3990,54 @@ findings pointed at rather than trusting the prior rounds' pass/fail claim
 by citation — `test_scores_are_omitted_together_or_not_at_all` and
 `test_positive_feedback_raises_the_driving_feature_weight`, both still
 green.
+
+**12th review-fix round** (CodeRabbit full review, commit `cdeb3b7`): one
+Minor finding, applied — and it uncovered a second, unreported inaccuracy
+in this project's own prior documentation while fixing the first.
+
+- **Applied — the round-10-era comment on the adaptive beat schedule made
+  a claim that doesn't hold, and this document's own §5.6 bullet had a
+  DIFFERENT, also-wrong version of the same claim.** The finding: the
+  `celery.py` comment says times were "offset ... rather than reusing the
+  plan's 4:15 and 4:45, both of which are taken above," but
+  `adaptive-aggregate-typing-profiles`'s hourly `crontab(minute=15)`
+  still fires at 4:15 every day, coinciding with the pre-existing
+  `verify-random-merkle-proofs` (`hour=4, minute=15`) — the comment
+  claims an avoidance that didn't happen for that entry. Re-checked this
+  document's own §5.6 (the "Times moved off the plan's 4:15 / Mon 4:45"
+  bullet, now corrected above) and found it independently wrong in a
+  DIFFERENT way: it attributed the weekly task's move away from Mon 4:45
+  to a collision with `cleanup-genetic-trials`, but `cleanup-genetic-
+  trials` runs at `hour=4, minute=30` — a different time, no collision
+  possible. Grepped every `crontab(...)` call in `celery.py` (40 matches)
+  before concluding anything, rather than reasoning about just the two
+  flagged lines: found the real second collision is between the two NEW
+  adaptive tasks themselves (`adaptive-cleanup-expired-adaptations` moved
+  to 4:45 AM daily, which also lands every Monday, colliding with
+  `adaptive-update-rl-model-from-feedback`'s originally-planned Mon
+  4:45) — and found the hourly-vs-daily coincidence CodeRabbit flagged is
+  not a new pattern: `anchor-vault-to-blockchain` (hourly `:00`) already
+  coincides daily with `analyze-password-strength-daily` (2:00 AM) the
+  identical way, and `bug-bounty-self-pentest-daily` /
+  `recompute-ambient-signal-reliability` already share 3:30 AM outright —
+  both pre-dating this feature entirely. Chose the reviewer's
+  "document the intentional overlap" option over changing the schedule:
+  the coincidence is genuinely harmless (`blockchain` queue vs this app's
+  default queue, disjoint tables) and this file already tolerates the
+  identical shape twice over without incident, so forcing
+  `adaptive-aggregate-typing-profiles` off `:15` to manufacture a
+  collision-free schedule would be solving a problem this codebase has
+  never treated as one. Fixed both comments (`celery.py` lines 192-194,
+  this document's §5.6) to state the real reasons rather than the
+  previously-asserted, only-partially-true ones. No schedule value
+  changed, so `test_beat_schedule_entries_name_registered_tasks`
+  (`test_adaptive_password.py` line 1362, asserts all three `adaptive-*`
+  entries resolve to registered tasks) needed no changes — re-ran it
+  anyway rather than assuming a comment-only diff couldn't affect it.
+
+Verified: `test_beat_schedule_entries_name_registered_tasks` green,
+`python -c "import ast; ast.parse(...)"` confirms `celery.py` still
+parses. No other files touched.
 
 ---
 
