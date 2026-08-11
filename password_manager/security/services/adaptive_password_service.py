@@ -140,10 +140,18 @@ def normalize_memorability_weights(raw) -> Dict[str, float]:
     for name in MEMORABILITY_FEATURES:
         if name not in raw:
             return dict(DEFAULT_MEMORABILITY_WEIGHTS)
-        try:
-            value = float(raw[name])
-        except (TypeError, ValueError):
+        # isinstance, not a bare float(raw[name]): the wire value must be a
+        # genuine JSON number. float(None)/float('')/float(' ') already
+        # raise here, but float('0.5') and float(True) both silently
+        # succeed -- a numeric string or a JSON boolean would be accepted
+        # as a real weight, which the client's own type check (typeof
+        # value === 'number') would reject for the identical wire input.
+        # bool is excluded explicitly because Python's bool is an int
+        # subclass, so isinstance(True, int) is True.
+        raw_value = raw[name]
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
             return dict(DEFAULT_MEMORABILITY_WEIGHTS)
+        value = float(raw_value)
         # math.isfinite, not a bare `>= 0` test: float('inf') >= 0 is True and
         # float('nan') >= 0 is False, so neither is caught by the comparison
         # alone in the way a reader expects.

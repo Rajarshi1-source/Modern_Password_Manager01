@@ -740,11 +740,16 @@ function normalizeMemorabilityParams(params) {
       return { min, max, weights: { ...DEFAULT_MEMORABILITY_PARAMS.weights } };
     }
     // eslint-disable-next-line security/detect-object-injection
-    const value = Number(rawWeights[name]);
-    // Number.isFinite, not typeof/truthiness: a weight of Infinity would make
+    const value = rawWeights[name];
+    // typeof, not Number(...) coercion: the wire value must be a genuine
+    // JSON number. `Number(null)`/`Number('')`/`Number(' ')` all coerce to
+    // 0 -- a legitimate-looking weight -- while the server's `float()`
+    // equivalent raises on all three and falls back to defaults, a real
+    // mismatch for the identical wire input. Number.isFinite still guards
+    // genuine numbers against Infinity/NaN: a weight of Infinity would make
     // the normalized combination NaN for every password, and a NaN weight
     // would poison the sum silently.
-    if (!Number.isFinite(value) || value < 0) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       return { min, max, weights: { ...DEFAULT_MEMORABILITY_PARAMS.weights } };
     }
     // eslint-disable-next-line security/detect-object-injection
