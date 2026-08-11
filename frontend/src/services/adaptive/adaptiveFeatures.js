@@ -401,6 +401,30 @@ function errorAffinity(rates, position) {
 }
 
 /**
+ * Whether this position (or an adjacent one) has ANY recorded error data.
+ *
+ * `error_prone_positions` only ever gains an entry for a position that has
+ * erred at least once (see `_update_typing_profile`, server-side); a
+ * position absent from the map was never recorded as an error, which could
+ * mean "typed correctly every time" or "never typed at all" -- the map alone
+ * cannot distinguish the two. `errorAffinity` reads an absent position via
+ * `?? 0`, identical to an EXPLICIT zero-rate entry, which is the right call
+ * for the BOOST direction (nothing to boost about an unknown position) but
+ * wrong for the PENALTY direction: once errorRates has any entry at all, an
+ * unrelated, unobserved position was getting the same full penalty as a
+ * confirmed-good one. This gate keeps the penalty scoped to positions the
+ * map actually has something to say about, at or next to `position`.
+ *
+ * @param {Map<number, number>} rates - position → error rate in [0, 1].
+ * @param {number} position - Candidate position (index into the password).
+ * @returns {boolean}
+ * @private
+ */
+function hasErrorSignal(rates, position) {
+  return rates.has(position) || rates.has(position - 1) || rates.has(position + 1);
+}
+
+/**
  * Matches a canonical non-negative integer string: `'0'`, or a leading
  * nonzero digit followed by any digits (`'12'`, `'100'`). Rejects `''` and
  * `' '` (both of which `Number()` coerces to `0`, not "invalid"), leading
@@ -543,7 +567,7 @@ export function rankSuggestions(candidates, preferenceModel = null, options = {}
     // NOT clamped back into [0, 1]: the score is only ever compared against
     // other scores, and clamping would flatten exactly the extremes this term
     // exists to separate.
-    const score = useErrorTilt
+    const score = (useErrorTilt && hasErrorSignal(errorRates, candidate.position))
       ? baseScore + ERROR_POSITION_WEIGHT * (2 * errorAffinity(errorRates, candidate.position) - 1)
       : baseScore;
 

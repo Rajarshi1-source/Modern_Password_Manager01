@@ -193,10 +193,16 @@ app.conf.update(
         # already in this schedule rather than reusing the plan's 4:15 and
         # 4:45, both of which are taken above.
 
-        # Re-aggregate typing profiles for users with recent sessions (hourly)
+        # Re-aggregate typing profiles for users with recent sessions (hourly).
+        # `expires` matches the schedule interval: a tick queued during a
+        # broker/worker outage and still unconsumed an hour later is stale by
+        # the time it would run (the next tick already supersedes it), so it
+        # is dropped rather than piling up and firing a backlog of redundant
+        # runs once a worker recovers.
         'adaptive-aggregate-typing-profiles': {
             'task': 'security.tasks.adaptive_tasks.aggregate_typing_profiles',
             'schedule': crontab(minute=15),  # Every hour at :15
+            'options': {'expires': 3600},
         },
 
         # Expire stale adaptation suggestions (daily)

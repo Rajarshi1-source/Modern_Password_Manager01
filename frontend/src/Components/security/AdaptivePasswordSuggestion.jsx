@@ -472,13 +472,25 @@ const AdaptivePasswordSuggestion = ({
     const [practiceValue, setPracticeValue] = useState('');
     const [practiceResult, setPracticeResult] = useState(null);
 
+    // Escape and outside-click must not be able to dismiss the dialog while
+    // an accept is in flight: `applyToVault` (the parent's `onAccept`) reads
+    // `pendingRef.current` ONCE at the start and does not re-check it before
+    // writing to the vault, so a dismissal mid-flight only hides the dialog
+    // -- the vault write still lands afterward, changing the credential the
+    // user believes they just cancelled. The explicit Accept/Reject buttons
+    // below are already `disabled={isLoading}`; this closes the same gap for
+    // the two dismiss paths that aren't button clicks.
+    const handleClose = useCallback(() => {
+        if (!isLoading) onClose();
+    }, [isLoading, onClose]);
+
     // Keyboard/screen-reader users must not be able to reach the page behind
     // this dialog while it's open. Declared before the early `return null`
     // below (hooks can't be conditional), gated on the same
     // `has_suggestion` check the render itself uses.
     const modalRef = useRef(null);
     const isDialogOpen = Boolean(suggestion?.has_suggestion);
-    useModalFocusTrap(modalRef, isDialogOpen, onClose);
+    useModalFocusTrap(modalRef, isDialogOpen, handleClose);
 
     // Calculate actual passwords (for internal use only)
     const adaptedPassword = useMemo(() => {
@@ -573,7 +585,7 @@ const AdaptivePasswordSuggestion = ({
             : (guesses_log10_after - guesses_log10_before);
 
     return (
-        <Overlay onClick={onClose}>
+        <Overlay onClick={handleClose}>
             <Modal
                 ref={modalRef}
                 tabIndex={-1}
