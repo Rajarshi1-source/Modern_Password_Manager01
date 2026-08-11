@@ -820,7 +820,11 @@ const AdaptivePasswordDashboard = () => {
                         check a credential manually below.
                     </Note>
                 )}
-                {message && <Note $error={messageIsError}>{message}</Note>}
+                {message && (
+                    <Note $error={messageIsError} role="status" aria-live="polite">
+                        {message}
+                    </Note>
+                )}
             </Panel>
 
             {/* The tab bar and "Your data" are NOT gated on `enabled` as a

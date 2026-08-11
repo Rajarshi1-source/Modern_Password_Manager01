@@ -170,12 +170,17 @@ export function generateCandidates(password) {
  * @private
  */
 function lookupNested(table, fromChar, toChar) {
-  if (!table || !Object.hasOwn(table, fromChar)) return undefined;
+  // Object.prototype.hasOwnProperty.call, not Object.hasOwn: the latter is
+  // ES2022, this project's Vite build.target/esbuildOptions.target are both
+  // 'es2020' with no polyfill wired in (@vitejs/plugin-legacy is installed
+  // but never added to the plugins array), so Object.hasOwn would throw
+  // TypeError on any genuinely ES2020-only runtime.
+  if (!table || !Object.prototype.hasOwnProperty.call(table, fromChar)) return undefined;
   // Keys are our own substitution classes (own enumerable props, guarded by
-  // Object.hasOwn above); the model is server-exported data, never code.
+  // hasOwnProperty above); the model is server-exported data, never code.
   // eslint-disable-next-line security/detect-object-injection
   const row = table[fromChar];
-  if (!row || !Object.hasOwn(row, toChar)) return undefined;
+  if (!row || !Object.prototype.hasOwnProperty.call(row, toChar)) return undefined;
   // eslint-disable-next-line security/detect-object-injection
   return row[toChar];
 }
@@ -337,7 +342,7 @@ export function detectSubstitutionClasses(password) {
   const seen = new Set();
   const classes = [];
   for (const ch of password) {
-    const from = Object.hasOwn(REVERSE_LEET_MAP, ch)
+    const from = Object.prototype.hasOwnProperty.call(REVERSE_LEET_MAP, ch)
       // eslint-disable-next-line security/detect-object-injection
       ? REVERSE_LEET_MAP[ch]
       : undefined;
@@ -736,7 +741,7 @@ function normalizeMemorabilityParams(params) {
   const weights = {};
   let total = 0;
   for (const name of MEMORABILITY_FEATURES) {
-    if (!Object.hasOwn(rawWeights, name)) {
+    if (!Object.prototype.hasOwnProperty.call(rawWeights, name)) {
       return { min, max, weights: { ...DEFAULT_MEMORABILITY_PARAMS.weights } };
     }
     // eslint-disable-next-line security/detect-object-injection
@@ -1027,12 +1032,12 @@ let defaultEstimatorPromise = null;
  * @private
  */
 function interopNamed(mod, name) {
-  if (mod && Object.hasOwn(mod, name)) {
+  if (mod && Object.prototype.hasOwnProperty.call(mod, name)) {
     // eslint-disable-next-line security/detect-object-injection
     return mod[name];
   }
   const fallback = mod && mod.default;
-  if (fallback && Object.hasOwn(fallback, name)) {
+  if (fallback && Object.prototype.hasOwnProperty.call(fallback, name)) {
     // eslint-disable-next-line security/detect-object-injection
     return fallback[name];
   }
