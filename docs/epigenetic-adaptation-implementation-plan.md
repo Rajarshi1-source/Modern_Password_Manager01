@@ -3808,6 +3808,51 @@ Django `check` clean, pip-audit-ignores.txt re-validated against the
 workflow's own expiry parser (zero expired, zero malformed, both touched
 dates within the 60-day cap).
 
+**9th review-fix round** (CodeRabbit full review, commit `59462fa`): one
+actionable finding, re-verified against current code (not assumed from the
+report's own framing) before acting.
+
+- **Applied — a real client/server type-validation mismatch in the
+  memorability weight normalizers, confirmed by reading both sides'
+  literal coercion behaviour, not by trusting the finding's claim.**
+  `normalizeMemorabilityParams` (client) used `Number(rawWeights[name])`;
+  `normalize_memorability_weights` (server) used `float(raw[name])` inside
+  a `try`/`except (TypeError, ValueError)`. The two coercions disagree in
+  BOTH directions for the identical wire value: `Number(null)` /
+  `Number('')` / `Number(' ')` all silently become `0` — a "valid" weight,
+  accepted — while `float(None)` / `float('')` / `float(' ')` all raise,
+  correctly falling back to full defaults; conversely `float('0.5')` and
+  `float(True)` both silently succeed (`0.5`, `1.0`), values the client's
+  *naive* fix (a bare `typeof` check) would have rejected, which the
+  finding's own verification script explicitly flagged as "a client-only
+  type check would create another mismatch." Fixed BOTH sides
+  symmetrically to require a genuine JSON number: the client now checks
+  `typeof value !== 'number'` before the existing `Number.isFinite`/`< 0`
+  checks; the server now checks `isinstance(raw_value, bool) or not
+  isinstance(raw_value, (int, float))` before `float()` (excluding `bool`
+  explicitly, since Python's `bool` is an `int` subclass — `isinstance(True,
+  int)` is `True`, and JSON's `boolean` type is distinct from `number`).
+  Confirmed no legitimate data flow is affected: `UserTypingProfile.
+  memorability_weights` has exactly one writer
+  (`normalize_memorability_weights`'s own output, always real floats), so
+  no code path ever legitimately stores a string/null/bool weight.
+  Extended the existing `test_non_finite_stored_weights_fall_back` (rather
+  than duplicating it) with `None`, `''`, `' '`, `'0.5'`, `True` — the same
+  "one bad value in an otherwise-valid blob must fall back to full
+  defaults" mechanism the test already covered for `inf`/`nan`/`-1.0`/`'x'`.
+  Added a matching JS test (`normalizeMemorabilityParams` isn't exported,
+  so exercised via `scoreMemorability`, matching this file's own existing
+  pattern for testing that function). Both mutation-checked: reverting the
+  Python fix to the bare `try`/`except` makes the test fail specifically on
+  `'0.5'` (the exact case the finding predicted, not a coincidental one);
+  reverting the JS fix to `Number(...)` produces a genuinely different
+  score (0.806 vs 0.716), not a rounding-tolerance fluke.
+
+Verified: adaptive backend and frontend suites both green (backend
+`MemorabilityModelTests`, 10/10; frontend `scoreMemorability` suite,
+89/89), Django `check` clean, both new/changed tests mutation-checked
+individually.
+
 ---
 
 ## 8. Sequencing and risk
