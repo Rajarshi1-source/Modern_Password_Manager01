@@ -3912,6 +3912,68 @@ Verified: frontend `adaptiveFeatures.test.js` suite green (89/89,
 unchanged — a semantic-preserving refactor needs no new test), 0 ESLint
 errors on both touched files.
 
+**11th review-fix round** (CodeRabbit full review, commit `031b9d9`): both
+findings re-verified from scratch against current code and against this
+document's own prior analysis rather than cited from memory; both declined,
+zero files changed.
+
+- **Declined — third re-raise of "reject a lone memorability score", no new
+  information.** The suggestion (this time framed as "the client gets no
+  signal the reading was ignored," rather than round 6/7's framing): make
+  `AdaptationApplySerializer.validate` raise a `ValidationError` when
+  `memorability_score_before`/`_after` arrive without its pair. Re-read
+  `validate()` (`adaptive_serializers.py` lines 656-661) and confirmed it
+  still has no pairing check — the finding's premise is accurate. But
+  `apply_adaptation_v2` (`adaptive_password_service.py` lines 1215-1260)
+  still deliberately stores neither score when only one arrives, with the
+  round-6 comment explaining why still in place; and
+  `test_scores_are_omitted_together_or_not_at_all`
+  (`test_adaptive_zk_v2.py` lines 1043-1054) still locks in `HTTP_200_OK`
+  with both columns `None` for exactly the payload shape this suggestion
+  would turn into a `400`. Applying it would flip a tested, intentional
+  "accept and silently normalize" contract into "reject the whole
+  request" for the third time running — a behavior change, not a bug fix,
+  breaking a currently-passing test. The "client gets no signal" framing
+  is a real UX observation, not a new technical claim: adding a
+  best-effort signal (a response field, a log line) without rejecting the
+  request would be new scope for a review-fix round, not implicated by
+  any test gap.
+- **Declined — new framing of an already-analyzed limitation, not a new
+  bug.** The suggestion: thread the selected memorability feature's signed
+  before/after delta onto the apply payload, and have
+  `nudge_memorability_weights` account for both feedback polarity and that
+  delta's sign, rather than just polarity + the driver's identity. Re-read
+  `nudge_memorability_weights` (`adaptive_password_service.py` lines
+  168-232) and `scoreMemorability`/`memorabilityDriver`
+  (`adaptiveFeatures.js` lines 945-988) fresh: confirmed the reviewer's
+  concrete example is arithmetically correct (`password` → `p@ssw0rd`
+  drives `variety` 1.00 → 0.33; a "yes" still raises `weights['variety']`
+  toward 1.0) — but this exact scenario, with these exact numbers, was
+  already worked through in round 5's correction (§4.6 above) and recorded
+  as "a limitation of the four-feature model, recorded rather than
+  hidden," not a defect to close. The original §4.2 spec text commits to
+  this explicitly: "EMA, not a regression — the sample size does not
+  support anything heavier." `weights` is an *importance* coefficient over
+  four already-correctly-oriented features (`memorabilityFeatures`'
+  own docstring: "higher always means easier to remember"), not a
+  direction signal — nudging it toward whichever feature the user says
+  mattered, independent of that feature's own delta, is the documented
+  design, not an oversight. `test_positive_feedback_raises_the_driving_
+  feature_weight` (`test_adaptive_zk_v2.py` lines 708-725) constructs the
+  identical case (driver `variety`, positive feedback, no delta supplied
+  at all) and asserts the weight rises — locking in the behavior the
+  suggestion asks to change. The reviewer's own label, "🏗️ Heavy lift,"
+  agrees this is a mechanism change (new wire field, new serializer
+  field, a materially different learning rule, new tests), not a minimal
+  fix, and it would require rewriting a currently-passing, deliberately-
+  authored test to land.
+
+Verified: no code touched. Re-ran the two locked-in tests this round's
+findings pointed at rather than trusting the prior rounds' pass/fail claim
+by citation — `test_scores_are_omitted_together_or_not_at_all` and
+`test_positive_feedback_raises_the_driving_feature_weight`, both still
+green.
+
 ---
 
 ## 8. Sequencing and risk
