@@ -1228,6 +1228,34 @@ class CeleryTaskTests(TestCase):
 
         self.assertEqual(result, {'processed': 0, 'errors': 0})
 
+    def test_aggregate_typing_profiles_reraises_celery_control_flow(self):
+        """`SoftTimeLimitExceeded`/`Retry` must propagate, not be swallowed as
+        a per-user error -- the same reasoning already applied to
+        `update_rl_model_from_feedback`. A broad `except Exception` here
+        would let the loop keep going past the soft deadline until the
+        uncatchable hard limit SIGKILLs the worker mid-batch instead of
+        winding down gracefully.
+        """
+        from unittest.mock import patch
+
+        from celery.exceptions import SoftTimeLimitExceeded
+
+        from security.models import TypingSession, UserTypingProfile
+        from security.tasks.adaptive_tasks import aggregate_typing_profiles
+
+        TypingSession.objects.create(
+            user=self.user, password_fingerprint='fp-softlimit-0',
+            length_bucket=3, success=True, error_positions=[],
+            error_count=0, timing_profile={}, total_time_ms=1000,
+        )
+
+        with patch.object(
+            UserTypingProfile.objects, 'get_or_create',
+            side_effect=SoftTimeLimitExceeded(),
+        ):
+            with self.assertRaises(SoftTimeLimitExceeded):
+                aggregate_typing_profiles()
+
     def test_update_rl_model_credits_feedback_and_reports_it(self):
         """The RL task credits an arm, stamps the row, and is idempotent."""
         from security.models import (
