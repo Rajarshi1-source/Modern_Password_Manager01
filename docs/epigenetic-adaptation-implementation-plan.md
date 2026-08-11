@@ -3853,6 +3853,65 @@ Verified: adaptive backend and frontend suites both green (backend
 89/89), Django `check` clean, both new/changed tests mutation-checked
 individually.
 
+**10th review-fix round** (CodeRabbit full review, commit `2434bf4`): one
+Major finding applied, verified empirically before acting rather than taken
+on the report's word; one Trivial accessibility nitpick applied; one Trivial
+nitpick declined as a third re-raise with no new information.
+
+- **Applied — `Object.hasOwn` throws on this project's own declared browser
+  target.** Confirmed directly rather than assumed: `frontend/vite.config.js`
+  sets both `build.target` and `optimizeDeps.esbuildOptions.target` to
+  `'es2020'`; `Object.hasOwn` is an ES2022 runtime API (Vite's `target`
+  transpiles *syntax*, it does not polyfill missing *built-ins*);
+  `@vitejs/plugin-legacy` is listed in `package.json` but never added to
+  `vite.config.js`'s `plugins` array, so no polyfill is actually wired in.
+  On a genuinely ES2020-only browser, every call site would throw
+  `TypeError: Object.hasOwn is not a function`. The reviewer flagged one
+  call site (in `normalizeMemorabilityParams`, touched by round 9's own
+  fix); grepping the file found `Object.hasOwn` at SIX production call
+  sites total (`lookupNested` ×2, `detectSubstitutionClasses`,
+  `normalizeMemorabilityParams`, `interopNamed` ×2), all introduced in the
+  original Phase 4 feature commit (`72b000e`), not by any review-fix
+  round — confirmed via `git log -S`. Fixed all six with
+  `Object.prototype.hasOwnProperty.call(obj, key)`, the exact ES2020-safe
+  equivalent, rather than just the one named site. Left the test file's
+  own `Object.hasOwn` usage untouched — it runs under Vitest/Node (native
+  support since Node 16.9), never bundled for a browser, so the same
+  compatibility constraint does not apply. Pure semantic-preserving
+  refactor (both forms are identical own-property checks); the existing
+  89-test `adaptiveFeatures.test.js` suite, which already exercises every
+  touched function, passing unchanged is the verification — no new test
+  needed for a mechanical substitution with no behavior change.
+- **Applied — the dashboard's status message had no ARIA live region.**
+  `{message && <Note $error={messageIsError}>{message}</Note>}` renders
+  the result of every async action (enable, unlock, suggest, rollback,
+  feedback, delete) with no `role`/`aria-live`, so a screen reader never
+  announces it. Added `role="status" aria-live="polite"`. Confirmed safe:
+  `Note` is a plain `styled.p` consuming only the `$error` transient prop
+  for styling, so the two new attributes pass through to the DOM
+  unchanged. No test added — same reasoning as round 6's identical
+  dashboard fix: no existing test harness for this
+  `useVault()`-dependent component, and this is a pure additive
+  ARIA-attribute change with no logic to regress.
+- **Declined — third re-raise of `_learn_optimal_length_band`'s unbounded
+  per-request aggregation, no new information.** Round 1 declined it
+  ("advice, not a defect," CodeRabbit's own label); round 4 declined the
+  identical re-raise; this round re-raises it a third time, still labeled
+  Trivial, still with the same two suggested remedies (an index, or
+  persist/bound via `aggregate_typing_profiles`), and its own text
+  concedes "the current behavior is correct... a scaling concern for
+  long-tenured users only." Re-read the current implementation before
+  declining rather than citing the prior rounds' conclusion — unchanged
+  since round 4. Same reasoning stands: this PR has not shipped to
+  production, so there is no accumulated per-user session history yet for
+  the scaling concern to bite, and persisting a learned band would be a
+  larger refactor than "keep changes minimal" calls for on a
+  three-times-Trivial nitpick.
+
+Verified: frontend `adaptiveFeatures.test.js` suite green (89/89,
+unchanged — a semantic-preserving refactor needs no new test), 0 ESLint
+errors on both touched files.
+
 ---
 
 ## 8. Sequencing and risk
