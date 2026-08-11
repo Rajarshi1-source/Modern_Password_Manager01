@@ -3543,6 +3543,95 @@ new/changed tests mutation-checked individually. Django `check` clean, 0
 ESLint errors on touched files (4 pre-existing warnings, confirmed via `git
 diff --stat` to predate this round's changes).
 
+**6th review-fix round** (CodeRabbit full review, commit `daed5bd`): every
+finding re-verified against current code before acting. Two real gaps
+applied, one mutation-checked; four declined, two of them because the
+reviewer's own suggested fix would have contradicted an already-tested,
+deliberate design decision rather than closed a real gap.
+
+- **Applied: `AdaptivePasswordDashboard`'s consent dialog had the SAME
+  dismiss-while-loading gap round 5 fixed in `AdaptivePasswordSuggestion`,
+  on a different dialog.** `handleConfirmConsent` sets `busy` before
+  `await adaptivePasswordService.enable()` and only clears the dialog /
+  shows a success toast in its own `try`/`finally`, with nothing checking
+  whether the user backed out in the meantime. Escape (via
+  `useModalFocusTrap`) and the Cancel button both called
+  `setShowConsent(false)` directly, ungated by `busy` — dismissing mid-
+  request only hid the dialog; the enable request still landed, turning on
+  adaptive collection after the user believed they had cancelled it. Fixed
+  with the identical `if (!busy) setShowConsent(false)` guard, wired to both
+  paths, and `disabled={busy}` added to Cancel (Confirm was already gated).
+  **No automated regression test added**: unlike `AdaptivePasswordSuggestion`,
+  this component has no existing test file, and it depends on `useVault()`
+  (context), `adaptivePasswordService` (axios), and `CryptoService` — none of
+  which any current test mocks for a *consumer* component (only
+  `VaultContext`'s own tests exist). Building that harness from scratch to
+  cover one guard clause would be a larger, riskier addition than the fix
+  itself, for a mechanism already proven correct and mutation-checked in
+  round 5 on the sibling dialog. ESLint clean on the touched file (ran
+  directly rather than assumed).
+- **Applied, low-risk (reviewer's own label: Trivial):**
+  `aggregate_typing_profiles` ran a redundant second query to find
+  `last_session_at`. `recent_ids` was already `order_by('-created_at')`, so
+  its first element is the newest session — but the code then built `recent
+  = TypingSession.objects.filter(id__in=recent_ids)` and re-queried it with
+  its own `order_by('-created_at').first()` to recover the same timestamp a
+  second time. This redundancy only became fully visible after round 5
+  removed `recent`'s other use (`successful = recent.filter(success=True)
+  .count()`), leaving the second query with nothing left to justify it.
+  Fixed by fetching `(id, created_at)` pairs in the one query and reading
+  `recent[0][1]` directly. Mutation-checked: swapping the tuple index (`[0]`
+  for `[1]`) makes the existing `test_aggregate_typing_profiles_recomputes_
+  last_session_at` fail with `fromisoformat: argument must be str` (an id
+  assigned to a `DateTimeField`), not just a wrong value — the test genuinely
+  exercises which element is read. All 10 `CeleryTaskTests` still pass.
+- **Declined — the primary half of this finding contradicts an existing,
+  deliberately-tested design decision.** The suggestion: reject a request
+  that sends `memorability_score_after` without `_before` (or vice versa).
+  Checked `apply_adaptation_v2` first: it already handles this, by design —
+  storing neither score when only one arrives, with a comment explaining
+  exactly why ("storing only ONE of the pair would be worse than storing
+  neither"). `test_scores_are_omitted_together_or_not_at_all` locks this in,
+  asserting `HTTP_200_OK` and both columns `None` for exactly the payload
+  shape this suggestion would make a `400`. Applying the suggested serializer-
+  level rejection would flip a tested, intentional "accept and silently
+  normalize" contract into "reject the whole request" — a behavior change,
+  not a bug fix, and one that would break an existing passing test.
+- **Declined — the secondary half validates a field with no real downstream
+  consequence.** The suggestion also asks that `memorability_improvement` be
+  checked against `after - before` for consistency. Traced where
+  `memorability_improvement` actually goes: it is **not a model field** (no
+  match in `models/core.py`) and is never compared against anything —
+  it only appends to a free-text `reason` string on the `PasswordAdaptation`
+  audit record (`"; client-reported memorability Δ={value:+.2f}"`). Every
+  real, queryable metric (`get_evolution_stats`' `average_memorability_
+  improvement`, the GDPR export delta) is computed FROM the stored `before`/
+  `after` columns directly, never from this field. Adding strict-equality
+  rejection here would risk hard-failing legitimate client payloads over
+  floating-point rounding in a value whose only consequence is a debug
+  string's wording, for zero protection of anything actually computed.
+- **Declined — reviewer's own labels: Trivial, Low value, Optional.** A
+  single shared constants module for `MEMORABILITY_FEATURE_NAMES` (currently
+  declared separately in the model's `choices=`, the service's
+  `MEMORABILITY_FEATURES`, and the serializer's `MEMORABILITY_FEATURE_NAMES`,
+  all agreeing today); `scoreMemorability`/`memorabilityDriver` each
+  re-normalizing the same `memorabilityParams` blob rather than sharing one
+  normalized value; and an `adaptive_password.test.tsx` assertion using
+  `getByText(/Adaptation/i)` instead of a more specific query. None is a bug;
+  each is a cross-cutting refactor or cosmetic change disproportionate to
+  "keep changes minimal" for a review-fix round, with the reviewer's own
+  severity/value labels agreeing.
+- **No action — unchanged since round 5.** The failing "Dependency
+  Vulnerability Scan" check: same `pip-audit-ignores.txt` entries
+  (`CVE-2025-3000`, `PYSEC-2025-189/190/191`, `exp:2026-08-10`), still
+  expired, still zero dependency/ignore files touched by this branch
+  (re-confirmed via `git diff --stat`).
+
+Verified: 219 adaptive backend tests (unchanged count — this round renamed
+no tests and added none, only changed the internal query shape of an
+already-covered function), Django `check` clean, `makemigrations --check
+--dry-run` clean, 0 ESLint errors on touched files.
+
 ---
 
 ## 8. Sequencing and risk
