@@ -189,9 +189,22 @@ app.conf.update(
         # genetic and predictive-expiration tasks to a queue no deployed worker
         # currently consumes.
         #
-        # Times are offset from the 2:00 / 3:30 / 4:15 / 4:30 / 5:00 jobs
-        # already in this schedule rather than reusing the plan's 4:15 and
-        # 4:45, both of which are taken above.
+        # `adaptive-cleanup-expired-adaptations` moved off the plan's 4:15
+        # (taken by `verify-random-merkle-proofs` above) to 4:45.
+        # `adaptive-update-rl-model-from-feedback` moved off the plan's Mon
+        # 4:45 to Mon 5:15 -- not because of `cleanup-genetic-trials`
+        # (4:30, a different time; an earlier comment here wrongly named
+        # it), but because `adaptive-cleanup-expired-adaptations` itself
+        # now also lands on 4:45 every Monday.
+        # `adaptive-aggregate-typing-profiles`'s hourly `:15` schedule was
+        # left alone: it still coincides with `verify-random-merkle-proofs`
+        # once a day, at 4:15. Harmless and consistent with this file's own
+        # existing pattern -- `anchor-vault-to-blockchain` (hourly `:00`)
+        # already coincides daily with `analyze-password-strength-daily`
+        # (2:00 AM) the same way, and `bug-bounty-self-pentest-daily` /
+        # `recompute-ambient-signal-reliability` already share 3:30 AM --
+        # because the two tasks route to different queues (`blockchain` vs
+        # this app's default) and touch disjoint tables.
 
         # Re-aggregate typing profiles for users with recent sessions (hourly).
         # `expires` matches the schedule interval: a tick queued during a
