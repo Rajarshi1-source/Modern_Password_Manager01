@@ -4084,7 +4084,7 @@ item) and left for a dedicated session.
 
 All three independently verified (targeted test suites, ESLint, `npm run
 build`) per the targeted-testing preference — no full-suite reruns for
-single-file, low-blast-radius changes. See [[epigenetic-adaptation-phases]]
+narrowly-scoped, low-blast-radius changes. See [[epigenetic-adaptation-phases]]
 (memory) for full narrative detail on each.
 
 ---
