@@ -1333,6 +1333,14 @@ function App() {
       try {
         await sessionVaultCryptoV3.unlockWithMasterPassword(loginData.password);
         v3Ready = true;
+        // Clear a degraded flag raised by an EARLIER login this tab (the flag
+        // never expires on its own -- see its declaration above). A clean
+        // unlock here is the normal way the desync this flag reports gets
+        // resolved: the user went through account-recovery, or the
+        // wrapped-DEK row was otherwise fixed server-side, and this is the
+        // first fresh read since. Without this, the toast below would keep
+        // reporting a problem this login just proved is gone.
+        setVaultV3Degraded(false);
       } catch (v3Err) {
         const v3ErrKind = classifyV3UnlockError(v3Err);
         if (v3ErrKind === V3_UNLOCK_NOT_ENROLLED) {
@@ -1631,6 +1639,18 @@ function App() {
       // Use JWT logout from useAuth hook
       await authLogout();
 
+      // The only way back to `handleLogin` in this tab is through here, so
+      // this is also where a stale `vaultV3Degraded` flag from an earlier
+      // account needs to stop applying to whoever logs in next -- otherwise
+      // the NEXT account to sign in on this tab could see a desync toast
+      // that was never true for them (e.g. a shared device, or a fresh
+      // never-enrolled account that takes the NOT_ENROLLED migration path
+      // below rather than the raw-success reset above). The next
+      // `handleLogin` re-derives the real state fresh regardless, so
+      // clearing it here optimistically is safe even if the same problem
+      // recurs for the same account.
+      setVaultV3Degraded(false);
+
       // Drop the in-memory vault encryption key so it cannot be reused after
       // logout and so a subsequent login for a different user starts clean.
       sessionVaultCrypto.clearSessionKey();
@@ -1669,7 +1689,15 @@ function App() {
   // this session) replaces rather than stacks, since react-hot-toast keys on
   // `id`. A plain `console.warn` is what let this go unnoticed before.
   useEffect(() => {
-    if (!vaultV3Degraded) return undefined;
+    if (!vaultV3Degraded) {
+      // Clears a toast raised by an earlier render of this same effect --
+      // now that `vaultV3Degraded` reads false, whatever set it (a login or
+      // a logout, both above) already made it stop being true. The stable
+      // `id` below is what makes this reach the right toast instead of
+      // dismissing an unrelated one.
+      toast.dismiss('vault-v3-degraded');
+      return undefined;
+    }
     toast.error(
       (t) => (
         <span>
