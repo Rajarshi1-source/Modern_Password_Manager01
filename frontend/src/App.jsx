@@ -25,6 +25,11 @@ import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
 import sessionVaultCrypto from './services/sessionVaultCrypto';
 import sessionVaultCryptoV3 from './services/sessionVaultCryptoV3';
+import {
+  classifyV3UnlockError,
+  V3_UNLOCK_NOT_ENROLLED,
+  V3_UNLOCK_DESYNC,
+} from './services/vaultV3UnlockClassifier';
 import { decryptEnvelope } from './services/vaultEnvelope';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
@@ -940,6 +945,13 @@ function App() {
   // only form/error state and signals changes via the 'vault:updated' event.
   const [error, setError] = useState(null);
   const [appInitialized, setAppInitialized] = useState(false);
+  // Set when the post-login v3 wrapped-DEK unlock fails for a reason OTHER
+  // than "not enrolled yet" (see handleLogin) -- a genuine desync between the
+  // account password and the vault's wrapped key, not something a page
+  // reload fixes. Persists as component state (not a one-shot toast) so it
+  // survives client-side navigation for the rest of this session; the toast
+  // itself is raised by the effect declared after `handleLogout` below.
+  const [vaultV3Degraded, setVaultV3Degraded] = useState(false);
 
   // Post-Quantum Cryptography and FHE status (for test assertions)
   const [pqCryptoInitialized, setPqCryptoInitialized] = useState(false);
@@ -1322,7 +1334,8 @@ function App() {
         await sessionVaultCryptoV3.unlockWithMasterPassword(loginData.password);
         v3Ready = true;
       } catch (v3Err) {
-        if (v3Err?.message === 'NOT_ENROLLED') {
+        const v3ErrKind = classifyV3UnlockError(v3Err);
+        if (v3ErrKind === V3_UNLOCK_NOT_ENROLLED) {
           try {
             legacyMigrationModule = await import(
               './services/legacyVaultMigration'
@@ -1342,11 +1355,38 @@ function App() {
           } catch (migErr) {
             console.warn('Legacy-to-v3 vault migration failed:', migErr);
           }
+        } else if (v3ErrKind === V3_UNLOCK_DESYNC) {
+          // Genuine desync, not a typo: `login` above already verified this
+          // exact password against the account server-side, so a rejection
+          // here means the wrapped-DEK row and the account password have
+          // drifted apart (e.g. a password change that didn't go through
+          // `sessionVaultCryptoV3.changeMasterPassword`, or a corrupted
+          // blob) — not something a retry on this device fixes. The legacy
+          // v2 session key is still live, so the vault stays USABLE, but any
+          // item already re-encrypted under v3 (the one-time legacy sweep
+          // writes v3) will keep showing as unreadable this session, and
+          // recovery factors won't work. Silently warning here is what let
+          // this go unnoticed before: `console.error`, not `warn`, for
+          // telemetry, plus an actual signal instead of a log line only the
+          // user's own devtools console would ever show them.
+          //
+          // Only sets state here — the toast itself is raised by the
+          // `vaultV3Degraded` effect below, declared after `handleLogout`.
+          // `handleLogout` is a `useCallback` declared LATER in this
+          // component (it clears both session keys and calls the JWT
+          // logout endpoint, so it's the one true "sign out" path, not
+          // reimplemented here) — referencing it from THIS callback's own
+          // dependency array would read it before its declaration runs on
+          // this render pass and throw. Routing through state + a
+          // later-declared effect sidesteps that ordering constraint.
+          console.error('v3 wrapped-DEK unlock failed (master-password desync):', v3Err);
+          setVaultV3Degraded(true);
         } else {
-          // Unexpected error from v3 unlock — log and continue. The
-          // legacy v2 session key is still live, so the vault remains
-          // usable; recovery factors just won't work this session.
-          console.warn('v3 wrapped-DEK unlock failed:', v3Err);
+          // Anything else (network error, 5xx, a malformed response) is
+          // transient: `WRAPPED_DEK_URL` will be re-fetched fresh next
+          // login, so this is not a lasting vault problem worth surfacing
+          // to the user the way a genuine desync is.
+          console.warn('v3 wrapped-DEK unlock failed (transient):', v3Err);
         }
       }
 
@@ -1616,6 +1656,50 @@ function App() {
       setIsLoggingOut(false);
     }
   }, [authLogout, navigate]);
+
+  // Raises the persistent, user-facing signal for the v3 wrapped-DEK desync
+  // `handleLogin` detects (see its `DEK_UNWRAP_FAILURE_MESSAGE` branch).
+  // Declared here, AFTER `handleLogout`, purely so its CTA can close over
+  // `handleLogout` without a temporal-dead-zone reference error — `handleLogin`
+  // is declared earlier in this component and cannot reference it directly.
+  //
+  // `toast.error` with `duration: Infinity` and a stable `id`: this survives
+  // client-side navigation (the `<Toaster/>` is mounted once, outside
+  // `<Routes>`) and re-triggering this effect (e.g. a second failed unlock
+  // this session) replaces rather than stacks, since react-hot-toast keys on
+  // `id`. A plain `console.warn` is what let this go unnoticed before.
+  useEffect(() => {
+    if (!vaultV3Degraded) return undefined;
+    toast.error(
+      (t) => (
+        <span>
+          Some vault items may be unreadable this session, and account-recovery
+          factors are unavailable, until this is fixed.
+          {' '}
+          <button
+            type="button"
+            onClick={async () => {
+              toast.dismiss(t.id);
+              await handleLogout();
+              navigate('/password-recovery');
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              color: '#fff',
+              textDecoration: 'underline',
+              cursor: 'pointer',
+            }}
+          >
+            Sign out and recover vault access
+          </button>
+        </span>
+      ),
+      { id: 'vault-v3-degraded', duration: Infinity },
+    );
+    return undefined;
+  }, [vaultV3Degraded, handleLogout, navigate]);
 
   const toggleAuthMode = useCallback(() => {
     setIsLoginMode(prev => !prev);

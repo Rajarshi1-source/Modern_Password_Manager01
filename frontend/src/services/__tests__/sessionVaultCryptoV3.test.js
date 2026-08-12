@@ -94,12 +94,18 @@ describe('sessionVaultCryptoV3 — unlock paths', () => {
     expect(pt).toEqual({ title: 'gmail', password: 's3cret' });
   });
 
-  it('rejects the wrong password with a generic error', async () => {
+  it('rejects the wrong password with the exported DEK_UNWRAP_FAILURE_MESSAGE', async () => {
+    // Asserts against the module's own exported constant, not a hardcoded
+    // duplicate of the string — App.jsx's classifyV3UnlockError() compares
+    // against this same export to detect a genuine password/vault-key
+    // desync, so a drift between the literal thrown here and that constant
+    // would silently break that classification without failing any test
+    // that only re-typed the string.
     const v3 = await import('../sessionVaultCryptoV3.js');
     await v3.enrollWithMasterPassword('correct-horse-battery-staple');
     v3.clearSessionKey();
     await expect(v3.unlockWithMasterPassword('wrong-password'))
-      .rejects.toThrow('Incorrect password or corrupted vault key.');
+      .rejects.toThrow(v3.DEK_UNWRAP_FAILURE_MESSAGE);
   });
 });
 
