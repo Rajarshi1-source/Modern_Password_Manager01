@@ -620,6 +620,8 @@ const AdaptivePasswordDashboard = () => {
                             memorabilityScoreBefore: accepted.memorability_score_before,
                             memorabilityScoreAfter: accepted.memorability_score_after,
                             memorabilityDriver: accepted.memorability_driver,
+                            memorabilityDriverDelta:
+                                accepted.memorability_driver_delta,
                         },
                     );
                     say('Password updated in your vault.');

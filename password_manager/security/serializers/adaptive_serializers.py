@@ -621,8 +621,20 @@ class ApplyAdaptationV2Serializer(
     memorability_driver = serializers.ChoiceField(
         choices=MEMORABILITY_FEATURE_NAMES, required=False, allow_blank=True,
     )
+    # The driver feature's own SIGNED before→after change. Bounded [-1, 1]
+    # because each feature score is bounded [0, 1]. The sign is the whole point:
+    # `memorability_driver` is picked by largest ABSOLUTE movement, so the
+    # dominant feature is frequently the one that got worse, and without this the
+    # server cannot tell whether that feature predicted the user's later
+    # "was it easier to remember?" answer or contradicted it.
+    memorability_driver_delta = serializers.FloatField(
+        required=False, min_value=-1.0, max_value=1.0
+    )
 
     def validate_memorability_improvement(self, value):
+        return _validate_finite(value)
+
+    def validate_memorability_driver_delta(self, value):
         return _validate_finite(value)
 
     def validate_memorability_score_before(self, value):

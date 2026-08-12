@@ -27,6 +27,7 @@ import {
   scoreMemorability,
   memorabilityFeatures,
   memorabilityDriver,
+  memorabilityDriverDetail,
 } from '../adaptiveFeatures';
 
 // A small preference model in the v2 wire shape (see plan §4): the server
@@ -1095,6 +1096,37 @@ describe('memorabilityDriver', () => {
     for (let i = 0; i < 5; i += 1) {
       expect(memorabilityDriver('password', 'p@ssw0rd')).toBe('variety');
     }
+  });
+});
+
+describe('memorabilityDriverDetail', () => {
+  it('returns a NEGATIVE delta for the canonical leetspeak case', () => {
+    // The headline reason this function exists: `variety` is the driver here,
+    // but its score FALLS (1.00 -> 0.33 -- more character classes is less
+    // memorable by this model's definition). A server relying on the driver
+    // name alone cannot tell this apart from a driver whose score rose.
+    const { name, delta } = memorabilityDriverDetail('password', 'p@ssw0rd');
+    expect(name).toBe('variety');
+    expect(delta).toBeLessThan(0);
+    expect(delta).toBeCloseTo(0.33 - 1.0, 1);
+  });
+
+  it('agrees with memorabilityDriver on the selected feature name', () => {
+    // memorabilityDriver is a thin wrapper -- same selection rule, one
+    // implementation. Assert they never diverge rather than trusting it by
+    // inspection.
+    const original = 'password';
+    const adapted = 'p@ssw0rd';
+    expect(memorabilityDriverDetail(original, adapted).name).toBe(
+      memorabilityDriver(original, adapted),
+    );
+  });
+
+  it('returns a zero delta and a null name when nothing moved', () => {
+    expect(memorabilityDriverDetail('password', 'password')).toEqual({
+      name: null,
+      delta: 0,
+    });
   });
 });
 

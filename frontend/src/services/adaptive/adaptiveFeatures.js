@@ -955,13 +955,55 @@ export function scoreMemorability(password, memorabilityParams = null) {
 }
 
 /**
- * Identify which memorability feature an adaptation moved most.
+ * Identify which memorability feature an adaptation moved most, and by how much.
  *
  * The server cannot compute this — it never sees either password — but plan
  * §4.2 needs it to attribute a user's "was this easier to remember?" feedback to
- * a feature before nudging that feature's weight. Sending the *name* of the
- * dominant feature (one of four fixed strings) rather than the delta vector
- * keeps the wire surface to a single categorical value.
+ * a feature before nudging that feature's weight.
+ *
+ * The returned `delta` is **signed**, and that sign is load-bearing. The driver
+ * is selected by largest ABSOLUTE movement, so it is frequently the feature that
+ * got *worse* — canonical leetspeak (`password` → `p@ssw0rd`) drives `variety`
+ * 1.00 → 0.33, a delta of −0.67. Without the sign the server cannot tell whether
+ * the driver *predicted* the user's later answer or contradicted it, and a "yes,
+ * easier" would raise the weight of a feature that just mispredicted.
+ *
+ * Still one categorical value plus one scalar on the wire — not the full
+ * per-feature delta vector, which would say more about the password's shape for
+ * no extra learning value.
+ *
+ * @param {string} original - The original password (stays on the client).
+ * @param {string} adapted - The adapted password (stays on the client).
+ * @param {object|null} [memorabilityParams=null] - Server memorability params.
+ * @returns {{ name: string|null, delta: number }} The dominant feature and its
+ *   signed change. `{ name: null, delta: 0 }` when no feature moved at all.
+ */
+export function memorabilityDriverDetail(original, adapted, memorabilityParams = null) {
+  const before = memorabilityFeatures(original, memorabilityParams);
+  const after = memorabilityFeatures(adapted, memorabilityParams);
+  let name = null;
+  let delta = 0;
+  let largest = 0;
+  for (const feature of MEMORABILITY_FEATURES) {
+    // eslint-disable-next-line security/detect-object-injection
+    const signed = after[feature] - before[feature];
+    const magnitude = Math.abs(signed);
+    // Strict >: MEMORABILITY_FEATURES is a fixed order, so ties resolve to the
+    // first-listed feature deterministically rather than by object key order.
+    if (magnitude > largest) {
+      largest = magnitude;
+      name = feature;
+      delta = signed;
+    }
+  }
+  return { name, delta };
+}
+
+/**
+ * The dominant memorability feature's name alone.
+ *
+ * Thin wrapper over {@link memorabilityDriverDetail} so the selection rule has
+ * exactly one implementation.
  *
  * @param {string} original - The original password (stays on the client).
  * @param {string} adapted - The adapted password (stays on the client).
@@ -970,21 +1012,7 @@ export function scoreMemorability(password, memorabilityParams = null) {
  *   moved at all (nothing to attribute).
  */
 export function memorabilityDriver(original, adapted, memorabilityParams = null) {
-  const before = memorabilityFeatures(original, memorabilityParams);
-  const after = memorabilityFeatures(adapted, memorabilityParams);
-  let driver = null;
-  let largest = 0;
-  for (const name of MEMORABILITY_FEATURES) {
-    // eslint-disable-next-line security/detect-object-injection
-    const delta = Math.abs(after[name] - before[name]);
-    // Strict >: MEMORABILITY_FEATURES is a fixed order, so ties resolve to the
-    // first-listed feature deterministically rather than by object key order.
-    if (delta > largest) {
-      largest = delta;
-      driver = name;
-    }
-  }
-  return driver;
+  return memorabilityDriverDetail(original, adapted, memorabilityParams).name;
 }
 
 // =============================================================================

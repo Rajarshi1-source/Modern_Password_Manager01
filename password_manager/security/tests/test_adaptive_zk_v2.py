@@ -225,7 +225,7 @@ class V2FieldValidationTests(TestCase):
         # strict JSON renderer would later blow up echoing it back.
         for field in (
             'memorability_improvement', 'memorability_score_before',
-            'memorability_score_after',
+            'memorability_score_after', 'memorability_driver_delta',
         ):
             for bad in (float('nan'), float('inf'), float('-inf')):
                 serializer = self._apply_serializer(**{field: bad})
@@ -705,41 +705,101 @@ class MemorabilityModelTests(TestCase):
                 f'{bad!r} should have been rejected',
             )
 
-    def test_positive_feedback_raises_the_driving_feature_weight(self):
+    def _nudge(self, driver, delta, improved, rating=3):
+        """Drive one nudge for a (driver, signed delta, feedback) combination."""
         adaptation = PasswordAdaptation.objects.create(
             user=self.user, adaptation_type='substitution',
             confidence_score=0.8, status='active',
             substitutions_applied={'0': {'from': 'o', 'to': '0'}},
-            memorability_driver='variety',
+            memorability_driver=driver,
+            memorability_driver_delta=delta,
         )
         feedback = AdaptationFeedback.objects.create(
-            adaptation=adaptation, user=self.user, rating=5,
-            memorability_improved=True,
+            adaptation=adaptation, user=self.user, rating=rating,
+            memorability_improved=improved,
         )
+        return nudge_memorability_weights(adaptation, feedback)
 
+    # ---- The 2x2 rule: a weight tracks PREDICTIVE ACCURACY, not polarity ----
+    #
+    # `memorability_driver` is chosen by largest ABSOLUTE movement, so it is
+    # frequently the feature that got worse. The driver's signed delta is the
+    # model's prediction of the direction; `memorability_improved` is what the
+    # user observed. Agreement raises the weight, disagreement lowers it.
+
+    def test_agreement_raises_the_weight_positive_feedback_positive_delta(self):
         before = DEFAULT_MEMORABILITY_WEIGHTS['variety']
-        weights = nudge_memorability_weights(adaptation, feedback)
+        weights = self._nudge('variety', 0.42, improved=True, rating=5)
 
         self.assertIsNotNone(weights)
         self.assertGreater(weights['variety'], before)
         self.assertAlmostEqual(sum(weights.values()), 1.0, places=9)
 
-    def test_negative_feedback_lowers_the_driving_feature_weight(self):
+    def test_agreement_raises_the_weight_negative_feedback_negative_delta(self):
+        # The case the OLD polarity-only rule got wrong in the other direction:
+        # the feature correctly predicted "this got harder" and the user agreed,
+        # so it earned confidence -- but a bare "no lowers it" punished it for
+        # being right.
+        before = DEFAULT_MEMORABILITY_WEIGHTS['pronounceable']
+        weights = self._nudge('pronounceable', -0.57, improved=False, rating=2)
+
+        self.assertIsNotNone(weights)
+        self.assertGreater(weights['pronounceable'], before)
+        self.assertAlmostEqual(sum(weights.values()), 1.0, places=9)
+
+    def test_disagreement_lowers_the_weight_positive_feedback_negative_delta(self):
+        # The headline case (CodeRabbit's original request, and round 5's own
+        # worked example): `password` -> `p@ssw0rd` drives `variety` 1.00 ->
+        # 0.33, so the model predicted "harder to remember". The user says it
+        # is EASIER. Variety mispredicted, so it should carry LESS weight --
+        # which makes future low-variety candidates penalized less, exactly
+        # what the user's experience implies. The old rule raised it, making
+        # them penalized more.
+        before = DEFAULT_MEMORABILITY_WEIGHTS['variety']
+        weights = self._nudge('variety', -0.67, improved=True, rating=5)
+
+        self.assertIsNotNone(weights)
+        self.assertLess(weights['variety'], before)
+        self.assertAlmostEqual(sum(weights.values()), 1.0, places=9)
+
+    def test_disagreement_lowers_the_weight_negative_feedback_positive_delta(self):
+        before = DEFAULT_MEMORABILITY_WEIGHTS['patterns']
+        weights = self._nudge('patterns', 0.31, improved=False, rating=2)
+
+        self.assertIsNotNone(weights)
+        self.assertLess(weights['patterns'], before)
+
+    def test_an_absent_or_zero_driver_delta_teaches_nothing(self):
+        # No delta: a client predating the field, or a row written before it
+        # existed. Zero delta: the feature did not move, so it predicted
+        # nothing. Both are "we cannot tell whether it was right", which is not
+        # the same as "it was wrong" -- inferring a direction from either would
+        # be learning from the absence of data.
+        self.assertIsNone(self._nudge('variety', None, improved=True))
+        self.assertIsNone(self._nudge('variety', 0.0, improved=True))
+        self.assertFalse(
+            UserTypingProfile.objects.filter(user=self.user)
+            .exclude(memorability_weights={}).exists()
+        )
+
+    def test_the_delta_is_not_inferred_from_the_aggregate_score_pair(self):
+        # The stored before/after pair mixes all four WEIGHTED features, so its
+        # sign can disagree with the driver's own. Falling back to it would
+        # reintroduce exactly the imprecision the explicit delta removes, so a
+        # row carrying scores but no driver delta must still teach nothing.
         adaptation = PasswordAdaptation.objects.create(
             user=self.user, adaptation_type='substitution',
             confidence_score=0.8, status='active',
-            memorability_driver='pronounceable',
+            memorability_driver='variety',
+            memorability_driver_delta=None,
+            memorability_score_before=0.55,
+            memorability_score_after=0.25,
         )
         feedback = AdaptationFeedback.objects.create(
-            adaptation=adaptation, user=self.user, rating=2,
-            memorability_improved=False,
+            adaptation=adaptation, user=self.user, rating=5,
+            memorability_improved=True,
         )
-
-        before = DEFAULT_MEMORABILITY_WEIGHTS['pronounceable']
-        weights = nudge_memorability_weights(adaptation, feedback)
-
-        self.assertIsNotNone(weights)
-        self.assertLess(weights['pronounceable'], before)
+        self.assertIsNone(nudge_memorability_weights(adaptation, feedback))
 
     def test_unanswered_or_undriven_feedback_teaches_nothing(self):
         # `memorability_improved = None` is "we do not know", which is not the
@@ -777,6 +837,11 @@ class MemorabilityModelTests(TestCase):
         adaptation = PasswordAdaptation.objects.create(
             user=self.user, adaptation_type='substitution',
             confidence_score=0.8, status='active', memorability_driver='variety',
+            # A POSITIVE delta against "no, harder" feedback: the two disagree,
+            # which is what drives the weight DOWN under the accuracy rule. The
+            # combination matters now -- with a negative delta this same
+            # feedback would raise the weight and test nothing about the floor.
+            memorability_driver_delta=0.5,
         )
         # One feedback row, applied repeatedly: AdaptationFeedback is unique
         # per (adaptation, user), and it is the weekly task's
@@ -1059,6 +1124,28 @@ class MemorabilityScorePersistenceTests(APITestCase):
             self.assertEqual(
                 response.status_code, status.HTTP_400_BAD_REQUEST, field
             )
+
+    def test_out_of_range_driver_delta_is_rejected(self):
+        # Bounded [-1, 1], same as the score fields, since each feature score
+        # (and therefore its delta) is bounded [0, 1].
+        for bad in (1.5, -1.5):
+            response = self._apply(
+                memorability_driver='variety', memorability_driver_delta=bad,
+            )
+            self.assertEqual(
+                response.status_code, status.HTTP_400_BAD_REQUEST, bad
+            )
+
+    def test_a_driver_delta_without_a_driver_is_dropped_not_rejected(self):
+        # Same "accept and silently normalize" contract as a lone score: a
+        # delta naming no feature cannot be attributed to a weight, so it is
+        # worse to store than to omit -- not a reason to fail the whole
+        # request, matching test_scores_are_omitted_together_or_not_at_all.
+        response = self._apply(memorability_driver_delta=0.4)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        adaptation = PasswordAdaptation.objects.get(user=self.user)
+        self.assertIsNone(adaptation.memorability_driver_delta)
 
     def test_reason_text_derives_delta_from_scores_not_the_raw_client_value(self):
         # Real gap (round 7 review): memorability_improvement and the
