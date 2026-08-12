@@ -3010,7 +3010,7 @@ minimal" review-fix round (round 11 on PR #475, reviewer's own label "Heavy
 lift" — see the 11th review-fix round entry below), it shipped as its own
 scoped change once out from under that constraint. `nudge_memorability_weights`
 now compares the driver's *signed* delta (a new `memorability_driver_delta`
-field, client-computed, wired through `AdaptationApplySerializer` and stored
+field, client-computed, wired through `ApplyAdaptationV2Serializer` and stored
 on `PasswordAdaptation` only alongside a driver, migration `0030`) against
 `memorability_improved`: the weight rises when the two AGREE in direction —
 the feature correctly predicted what the user experienced — and falls when
@@ -3959,7 +3959,7 @@ zero files changed.
 - **Declined — third re-raise of "reject a lone memorability score", no new
   information.** The suggestion (this time framed as "the client gets no
   signal the reading was ignored," rather than round 6/7's framing): make
-  `AdaptationApplySerializer.validate` raise a `ValidationError` when
+  `ApplyAdaptationV2Serializer.validate` raise a `ValidationError` when
   `memorability_score_before`/`_after` arrive without its pair. Re-read
   `validate()` (`adaptive_serializers.py` lines 656-661) and confirmed it
   still has no pairing check — the finding's premise is accurate. But

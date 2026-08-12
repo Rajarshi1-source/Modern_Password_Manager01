@@ -784,6 +784,10 @@ def export_adaptive_data(request):
                 (a.memorability_score_after or 0) - (a.memorability_score_before or 0)
             ) if a.memorability_score_before is not None else None,
             'memorability_driver': a.memorability_driver or None,
+            # Same completeness reasoning as the profile fields above: this is
+            # the signed value that actually drove a weight update, and the
+            # export is incomplete without it once a client sends one.
+            'memorability_driver_delta': a.memorability_driver_delta,
         }
         for a in adaptations
     ]

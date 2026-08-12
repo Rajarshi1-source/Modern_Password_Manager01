@@ -245,6 +245,61 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
     // would 400 the whole apply request over an informational field.
     expect(withNaN).not.toHaveProperty('memorability_driver_delta');
   });
+
+  it('applyAdaptation accepts a driver delta at the [-1, 1] boundary, drops one past it', async () => {
+    // CodeRabbit (PR #477 review): the server bounds this field to [-1, 1]
+    // (ApplyAdaptationV2Serializer); a hand-built caller passing something
+    // outside that range would otherwise 400 the whole apply request over
+    // an informational field, the same failure mode the NaN case above
+    // already guards against. Every real delta from `memorabilityDriverDetail`
+    // is already within range by construction, so this only matters for a
+    // caller that builds the options object directly rather than going
+    // through `suggestAdaptation`.
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator, explore: false });
+
+    for (const boundary of [-1, 1]) {
+      vi.mocked(axios.post).mockClear();
+      await adaptivePasswordService.applyAdaptation(
+        SECRET, suggestion.substitutions,
+        {
+          fingerprint, fpKeyVersion: FP_KEY_VERSION,
+          memorabilityDriver: 'variety', memorabilityDriverDelta: boundary,
+        },
+      );
+      const body = vi.mocked(axios.post).mock.calls.at(-1)[1];
+      expect(body.memorability_driver_delta).toBe(boundary);
+    }
+
+    for (const outOfRange of [1.1, -1.1]) {
+      vi.mocked(axios.post).mockClear();
+      await adaptivePasswordService.applyAdaptation(
+        SECRET, suggestion.substitutions,
+        {
+          fingerprint, fpKeyVersion: FP_KEY_VERSION,
+          memorabilityDriver: 'variety', memorabilityDriverDelta: outOfRange,
+        },
+      );
+      const body = vi.mocked(axios.post).mock.calls.at(-1)[1];
+      expect(body).not.toHaveProperty('memorability_driver_delta');
+    }
+  });
+
+  it('applyAdaptation drops a driver delta sent without a valid driver name', async () => {
+    // The delta is unattributable without a driver -- same "together or not
+    // at all" pairing the driver-name guard already enforces for itself.
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator, explore: false });
+
+    await adaptivePasswordService.applyAdaptation(
+      SECRET, suggestion.substitutions,
+      {
+        fingerprint, fpKeyVersion: FP_KEY_VERSION,
+        memorabilityDriver: 'not-a-real-feature', memorabilityDriverDelta: 0.5,
+      },
+    );
+    const body = vi.mocked(axios.post).mock.calls.at(-1)[1];
+    expect(body).not.toHaveProperty('memorability_driver');
+    expect(body).not.toHaveProperty('memorability_driver_delta');
+  });
 });
 
 describe('adaptive ZK v2 — fingerprint key era', () => {
