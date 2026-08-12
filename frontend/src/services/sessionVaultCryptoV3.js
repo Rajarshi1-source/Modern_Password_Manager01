@@ -25,6 +25,13 @@ import axios from 'axios';
 
 const BLOB_VERSION = 'wdek-1';
 const PAYLOAD_VERSION = 'svc-gcm-2';
+// Exported (not just used below) so a caller of `unlockWithMasterPassword` can
+// tell a genuine wrong-password/corrupted-blob failure apart from anything
+// else that can reject the same promise (a network error, a 5xx) WITHOUT
+// re-deriving or duplicating this literal at the call site -- see App.jsx's
+// login flow, where only this specific failure is worth surfacing to the user
+// (anything else is transient and self-heals next login).
+export const DEK_UNWRAP_FAILURE_MESSAGE = 'Incorrect password or corrupted vault key.';
 // OWASP-2024-aligned interactive Argon2id params (matches the medium
 // preset in `secureVaultCrypto.js`).
 const DEFAULT_KDF = { t: 3, m: 65536, p: 2 };
@@ -125,7 +132,7 @@ async function unwrapDEK(blob, secret, { extractable = false } = {}) {
   } catch {
     // Wrong secret, wrong salt, or corrupted blob — AES-GCM raises the
     // same OperationError. Generic message by design.
-    throw new Error('Incorrect password or corrupted vault key.');
+    throw new Error(DEK_UNWRAP_FAILURE_MESSAGE);
   }
 }
 
