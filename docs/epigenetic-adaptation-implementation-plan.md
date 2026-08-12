@@ -3025,6 +3025,60 @@ find it harder — punishing a correct prediction. §4.2's own "EMA, not a
 regression" reasoning still holds and is unaffected — this changes what the
 EMA targets, not that it is one.
 
+**1st review-fix round** (PR #477, CodeRabbit + Codex on commit `9cf0f42`):
+three findings, all real, all applied with minimal changes; one pre-merge
+metric warning declined.
+
+- **Applied (Codex) — the new field was missing from the GDPR export.**
+  `export_adaptive_data`'s `adaptations_data` already serialized
+  `memorability_driver` but not the new `memorability_driver_delta`, even
+  though it is the signed value that actually drives a weight update — the
+  same completeness gap this function's own comment already names for the
+  Phase 4 profile fields, just one field short of applying that principle
+  to this PR's own addition. Added it; extended the existing
+  `test_gdpr_export_includes_the_learned_memorability_fields` rather than
+  duplicating it.
+- **Applied (CodeRabbit) — the client sent an out-of-range delta without
+  checking it was paired with a valid driver.** `applyAdaptation` guarded
+  `memorability_driver_delta` with only `Number.isFinite`, unlike the
+  sibling `memorability_driver` field's own `MEMORABILITY_FEATURES.includes`
+  check — a hand-built out-of-range value (the server bounds it to
+  `[-1, 1]`) would 400 the whole apply request over an informational field,
+  the identical failure mode the adjacent NaN guard already exists to
+  prevent. Matched the guard to the driver field's own established
+  defense-in-depth pattern. Confirmed every real delta from
+  `memorabilityDriverDetail` is already in range by construction (each
+  feature score is clamped to `[0, 1]`, so no difference of two can exceed
+  1 in magnitude) — this only matters for a caller building the payload
+  directly. Added boundary tests (`-1`/`1` accepted, `1.1`/`-1.1` dropped)
+  and a driver-less-delta case; mutation-checked (reverting the guard fails
+  exactly the two new tests, nothing else).
+- **Applied (CodeRabbit) — this document cited a serializer class that does
+  not exist.** The "Superseded" paragraph above named
+  `AdaptationApplySerializer`; the real class the apply view constructs is
+  `ApplyAdaptationV2Serializer`. Grepped the WHOLE document for the wrong
+  name rather than fixing just the flagged line, and found a second,
+  independent instance of the identical error predating this PR — round
+  11's own declined-finding text (above), unrelated to PR #477's diff.
+  Fixed both.
+- **Declined — the docstring-coverage pre-merge warning (22.22% vs an 80%
+  threshold).** Verified rather than assumed: every substantive new
+  function already carries documentation matching this codebase's
+  established convention — full JSDoc on the two new
+  `memorabilityDriverDetail`/`memorabilityDriver` exports,
+  `validate_memorability_driver_delta` as a one-line delegate matching
+  three PRE-EXISTING undocumented sibling validators in the same
+  serializer class, and the nine new test methods following this test
+  file's own 100%-consistent no-docstring convention across its existing
+  ~2000 lines. The remaining drag on the percentage is Django's
+  auto-generated migration boilerplate, never docstringed anywhere in this
+  repo's `migrations/` directories. The metric measures a threshold this
+  shape of diff was never going to clear, not a real documentation gap.
+
+Verified: 27 backend memorability/GDPR tests (up from 25), 184 frontend
+tests, `makemigrations --check --dry-run` clean, 0 new ESLint errors,
+`npm run build` green.
+
 **Deviations from the plan text:**
 
 - **§4.2's EMA runs in the weekly Celery task, not in `export_preference_model`.**
