@@ -156,4 +156,32 @@ describe('sessionVaultCryptoV3 master-password verification', () => {
       /incorrect password/i,
     );
   });
+
+  it('keeps the old password verifiable when a rotation PUT fails', async () => {
+    // Pins the ordering the source comment calls load-bearing (changeMaster
+    // Password refreshes the cache AFTER, not before, the PUT succeeds): the
+    // rotation test above only ever exercises the success path, so nothing
+    // failed if that assignment were hoisted above the await.
+    const NEW = 'a-brand-new-master-password';
+    await enroll(RIGHT);
+    vi.mocked(axios.get).mockResolvedValue({
+      data: {
+        enrolled: true,
+        blob: vi.mocked(axios.put).mock.calls.at(-1)[1].blob,
+        dek_id: DEK_ID,
+      },
+    });
+    vi.mocked(axios.put).mockRejectedValue(new Error('network down'));
+
+    await expect(v3.changeMasterPassword(RIGHT, NEW)).rejects.toThrow(
+      'network down',
+    );
+
+    // The server never accepted the new envelope, so the cache must still
+    // describe the password actually in force.
+    await expect(v3.verifyMasterPassword(RIGHT)).resolves.toBe(true);
+    await expect(v3.verifyMasterPassword(NEW)).rejects.toThrow(
+      /incorrect password/i,
+    );
+  });
 });
