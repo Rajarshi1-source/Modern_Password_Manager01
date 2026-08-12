@@ -736,8 +736,18 @@ export const adaptivePasswordService = {
             // be attributed to a weight. Same Number.isFinite guard as the
             // score fields above, for the same reason (a NaN would 400 the
             // whole apply and lose the adaptation record over a learning
-            // signal). The server also bounds it to [-1, 1].
-            ...(Number.isFinite(driverDelta)
+            // signal). The server also bounds it to [-1, 1]
+            // (`ApplyAdaptationV2Serializer`) -- checked here too, same
+            // defense-in-depth as the driver-name guard above: every real
+            // delta from `memorabilityDriverDetail` is already within range
+            // by construction (each feature score is clamped to [0, 1], so
+            // no difference of two can exceed 1 in magnitude), but a future
+            // caller building this object by hand could pass anything.
+            ...(typeof driver === 'string'
+                && MEMORABILITY_FEATURES.includes(driver)
+                && Number.isFinite(driverDelta)
+                && driverDelta >= -1
+                && driverDelta <= 1
                 ? { memorability_driver_delta: driverDelta }
                 : {}),
         }, { timeout: ADAPTIVE_API_TIMEOUT_MS });

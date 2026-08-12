@@ -1192,8 +1192,11 @@ class MemorabilityScorePersistenceTests(APITestCase):
     def test_gdpr_export_includes_the_learned_memorability_fields(self):
         # A real gap: export_adaptive_data was written before Phase 4 and
         # never updated, so a GDPR export stopped being complete the moment
-        # a user's first feedback nudged their memorability weights.
-        self._apply(memorability_driver='variety')
+        # a user's first feedback nudged their memorability weights. Same
+        # class of gap for `memorability_driver_delta` (Codex, PR #477
+        # review): it is the signed value that actually drives a weight
+        # update, so the export is incomplete without it too.
+        self._apply(memorability_driver='variety', memorability_driver_delta=-0.67)
         UserTypingProfile.objects.create(
             user=self.user,
             memorability_weights={'length': 0.1, 'patterns': 0.2,
@@ -1217,6 +1220,9 @@ class MemorabilityScorePersistenceTests(APITestCase):
         )
         self.assertEqual(
             export['adaptations'][0]['memorability_driver'], 'variety',
+        )
+        self.assertAlmostEqual(
+            export['adaptations'][0]['memorability_driver_delta'], -0.67, places=6,
         )
 
     def test_export_reports_a_zero_before_score_as_a_real_delta(self):
