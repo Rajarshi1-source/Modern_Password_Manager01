@@ -41,6 +41,15 @@ const RECOVERY_FACTORS_URL = '/api/auth/vault/recovery-factors/';
 
 let sessionDEK = null; // CryptoKey, non-extractable
 let sessionDEKId = null; // UUID string from server
+// The wrapped-DEK envelope currently in force for this session, kept so
+// `verifyMasterPassword` can re-attempt the unwrap WITHOUT a network call.
+// Not a secret: it is ciphertext, it is exactly what the server already
+// stores, and the ZK invariant is about the DEK/master password never
+// leaving the browser, not the envelope. Caching it is what makes
+// verification free -- `WRAPPED_DEK_URL` is served by a view throttled at
+// 3 requests/hour/user (RecoveryThrottle), a budget login already spends
+// one of, so a verify-by-GET would starve the NEXT login's unlock.
+let sessionWrappedBlob = null;
 
 // ─── Encoding helpers ───────────────────────────────────────────────
 const toB64 = (b) => {
@@ -168,6 +177,7 @@ export async function enrollWithMasterPassword(masterPassword) {
   // extractable handle after this point.
   sessionDEK = await reimportNonExtractable(dek);
   sessionDEKId = data.dek_id;
+  sessionWrappedBlob = blob;
   return { dekId: sessionDEKId };
 }
 
@@ -178,6 +188,7 @@ export async function unlockWithMasterPassword(masterPassword) {
   }
   sessionDEK = await unwrapDEK(data.blob, masterPassword, { extractable: false });
   sessionDEKId = data.dek_id;
+  sessionWrappedBlob = data.blob;
   return { dekId: sessionDEKId };
 }
 
@@ -189,6 +200,12 @@ export async function changeMasterPassword(oldPassword, newPassword) {
   const kek = await deriveKEK(newPassword, saltBytes);
   const blob = await wrapDEK(dekX, kek, DEFAULT_KDF, saltBytes);
   await axios.put(WRAPPED_DEK_URL, { blob, dek_id: sessionDEKId });
+  // Refresh AFTER the PUT succeeds, so a failed rotation leaves the cache
+  // describing the password that is still in force. Skipping this would
+  // make `verifyMasterPassword` keep accepting the OLD password and reject
+  // the new one -- a worse bug than the unverified derivation it exists to
+  // close.
+  sessionWrappedBlob = blob;
 }
 
 // ─── Public API: recovery factor enroll / use ─────────────────────
@@ -355,6 +372,10 @@ export async function rewrapMasterPasswordFromRecovery({
   // Install the same DEK as the live session key, non-extractable.
   sessionDEK = await reimportNonExtractable(dekX);
   sessionDEKId = dekId;
+  // Same reasoning as `changeMasterPassword`: `newPassword` is now the
+  // master password in force, so the cache must describe it, not the
+  // pre-recovery one.
+  sessionWrappedBlob = blob;
   return { dekId };
 }
 
@@ -371,7 +392,56 @@ export const getSessionDEKId = () => sessionDEKId;
 export const clearSessionKey = () => {
   sessionDEK = null;
   sessionDEKId = null;
+  sessionWrappedBlob = null;
 };
+
+/**
+ * Whether {@link verifyMasterPassword} can answer at all this session.
+ *
+ * False before any unlock/enroll, and after `clearSessionKey()`. Callers
+ * that treat an unverifiable password as a hard stop should check this
+ * first so they can say something actionable ("sign in again") instead of
+ * surfacing a generic failure.
+ *
+ * @returns {boolean}
+ */
+export const canVerifyMasterPassword = () => sessionWrappedBlob !== null;
+
+/**
+ * Check a typed master password against the session's wrapped-DEK envelope.
+ *
+ * Exists because Argon2id has no "wrong password" outcome: it derives
+ * different-but-well-formed key material from any input, so any feature
+ * that re-asks for the master password and derives from it directly will
+ * silently succeed on a typo. The AES-GCM unwrap below is the actual
+ * check -- it fails loudly on the wrong KEK.
+ *
+ * Deliberately does NOT touch `sessionDEK` / `sessionDEKId`: this is a
+ * question, not an unlock. That non-mutation is what makes it safe to call
+ * from an unrelated feature, and is precisely why the v2
+ * `sessionVaultCrypto.unlockWithVaultPassword` (which reassigns the live
+ * session key, and is scoped to the OAuth/no-master-password flow) is not
+ * a substitute.
+ *
+ * Costs one Argon2id derivation and no network request.
+ *
+ * @param {string} masterPassword - The password to check.
+ * @returns {Promise<true>} Resolves `true` when the password is correct.
+ * @throws {Error} `'Vault key unavailable...'` when nothing is cached to
+ *   check against; `'Incorrect password or corrupted vault key.'` (from
+ *   `unwrapDEK`) when the password is wrong.
+ */
+export async function verifyMasterPassword(masterPassword) {
+  if (!sessionWrappedBlob) {
+    throw new Error(
+      'Vault key unavailable in this session — sign out and back in to verify '
+      + 'your master password.',
+    );
+  }
+  // Result discarded on purpose: we want the throw/no-throw, not the key.
+  await unwrapDEK(sessionWrappedBlob, masterPassword, { extractable: false });
+  return true;
+}
 
 export async function encryptItem(obj) {
   if (!sessionDEK) throw new Error('Vault is locked.');
@@ -430,6 +500,8 @@ export default {
   hasSessionKey,
   getSessionDEKId,
   clearSessionKey,
+  canVerifyMasterPassword,
+  verifyMasterPassword,
   encryptItem,
   decryptItem,
 };

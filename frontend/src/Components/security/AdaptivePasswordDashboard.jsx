@@ -18,6 +18,11 @@
  *     fingerprint key (Argon2id, client-side). It is cleared on unmount and on
  *     lock. There is no app-wide unlocked CryptoService to borrow, and adding
  *     one would be a worse trade than asking for an explicit re-entry.
+ *   - It is VERIFIED before it is derived from, against the v3 wrapped-DEK
+ *     envelope cached at login (`sessionVaultCryptoV3.verifyMasterPassword`).
+ *     Argon2id succeeds on any input, so without that check a typo would
+ *     fingerprint the whole session under the wrong key. The check is local
+ *     and does not unlock anything.
  *   - Everything that reaches the server is a keyed fingerprint, a masked
  *     preview, a substitution *class*, or a coarse aggregate score.
  */
@@ -27,6 +32,10 @@ import styled from 'styled-components';
 import { Fingerprint, Lock, RefreshCw, Shield, ShieldAlert } from 'lucide-react';
 
 import { CryptoService } from '../../services/cryptoService';
+import {
+    canVerifyMasterPassword,
+    verifyMasterPassword,
+} from '../../services/sessionVaultCryptoV3';
 import { applySubstitutions } from '../../services/adaptive/adaptiveFeatures';
 import { useVault } from '../../contexts/VaultContext';
 import { useModalFocusTrap } from '../../hooks/useModalFocusTrap';
@@ -455,6 +464,38 @@ const AdaptivePasswordDashboard = () => {
             if (!masterPassword) return;
             setBusy(true);
             try {
+                // VERIFY BEFORE DERIVING. Argon2id has no "wrong password"
+                // outcome -- it derives DIFFERENT but equally well-formed key
+                // material from any input -- so deriving first would let a
+                // typo "succeed" and silently fingerprint under the wrong key
+                // for the rest of the session, orphaning this feature's
+                // rollback chain and history. (The credential itself was never
+                // at risk: the vault write uses the vault's own authenticated
+                // session key, not this password.)
+                //
+                // `verifyMasterPassword` re-attempts the v3 wrapped-DEK unwrap
+                // against the envelope cached at login; AES-GCM fails loudly on
+                // the wrong KEK. It is the same secret this component asks for
+                // -- login unwraps that envelope with the very same master
+                // password -- and it neither issues a network request (the
+                // endpoint is throttled at 3/hour/user) nor mutates the v3
+                // session key. That is what makes it usable here, unlike v2's
+                // `unlockWithVaultPassword`, which is scoped to the OAuth
+                // no-master-password flow and reassigns the live session key.
+                if (!canVerifyMasterPassword()) {
+                    // Fail closed. Proceeding unverified is exactly the bug
+                    // this guard exists to prevent, and an adaptive session
+                    // keyed off an unverified password produces bookkeeping
+                    // that silently never links up.
+                    say(
+                        'Cannot verify your master password in this session. '
+                        + 'Sign out and back in, then enable adaptive learning.',
+                        true,
+                    );
+                    return;
+                }
+                await verifyMasterPassword(masterPassword);
+
                 const crypto = new CryptoService(masterPassword);
                 const fingerprint = adaptivePasswordService.makeFingerprinter(
                     crypto,
@@ -462,36 +503,7 @@ const AdaptivePasswordDashboard = () => {
                 );
                 // Derive once here rather than lazily at apply time, so
                 // deriving is a one-time cost rather than paid on every
-                // fingerprint call. This does NOT verify the password itself:
-                // Argon2id has no "wrong password" outcome, it deterministically
-                // derives DIFFERENT (but equally well-formed) key material from
-                // any input, so a mistyped password "succeeds" here and silently
-                // fingerprints under the wrong key for the rest of the session.
-                // The vault write later still uses the vault's own, correctly
-                // authenticated session key, so the credential itself is never
-                // at risk — only this feature's own fingerprint-keyed
-                // bookkeeping (rollback chain, history) gets orphaned. Verifying
-                // the typed password against the vault's already-unlocked key
-                // material would close this, but needs plumbing this component
-                // doesn't have (a stored auth-hash/salt, or a decrypt-and-compare
-                // against a known item) — flagged as a follow-up rather than
-                // built here under time pressure.
-                // Investigated (round 3 review) whether `sessionVaultCrypto.
-                // unlockWithVaultPassword` could be reused directly: it DOES
-                // genuinely verify a password (AES-GCM unwrap of a stored
-                // wrapped DEK fails loudly on the wrong key), but it's scoped
-                // to the OAuth/social-login path specifically ("the user has
-                // no master password" per its own caller's docstring,
-                // VaultUnlockModal.jsx) — calling it here would conflate two
-                // potentially-different secrets and mutate that module's own
-                // session-key state as a side effect. Standard (non-OAuth)
-                // login never calls it either (grepped VaultContext.jsx and
-                // useAuth.jsx: zero hits), so no drop-in "verify the master
-                // password" primitive exists for the common case today. A
-                // real fix needs tracing the actual login-time key-derivation
-                // flow end to end, not a same-round graft of an
-                // OAuth-specific helper onto a different authentication
-                // concept.
+                // fingerprint call.
                 await fingerprint('adaptive-probe');
                 // `fingerprint` is a closure over `crypto`, and CryptoService
                 // keeps the raw password on `this.masterPassword` for the
