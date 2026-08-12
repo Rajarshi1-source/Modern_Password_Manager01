@@ -1268,6 +1268,26 @@ class PasswordAdaptation(models.Model):
             "adaptation (empty when nothing moved or a pre-Phase-4 client)."
         ),
     )
+    # The SIGNED before→after delta of `memorability_driver`'s own feature score.
+    # Each feature score is in [0, 1], so this is in [-1, 1].
+    #
+    # Needed because the driver name alone cannot say whether the model predicted
+    # the adaptation would be easier or harder to remember -- `memorability_driver`
+    # is chosen by LARGEST ABSOLUTE movement, so it is frequently the feature that
+    # got worse. `nudge_memorability_weights` compares this sign against the user's
+    # answer to decide whether that feature PREDICTED their experience correctly,
+    # which is what its weight is supposed to track.
+    #
+    # Null for any adaptation recorded before this field existed, and for a client
+    # that sends a driver without a delta; such rows teach the weight model nothing
+    # rather than teaching it something unattributable.
+    memorability_driver_delta = models.FloatField(
+        null=True, blank=True,
+        help_text=(
+            "Signed before→after change in the driver feature's own score, in "
+            "[-1, 1]. Negative means the driver feature got LESS memorable."
+        ),
+    )
 
     # Status tracking
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, 

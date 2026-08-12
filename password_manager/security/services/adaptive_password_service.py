@@ -168,15 +168,49 @@ def normalize_memorability_weights(raw) -> Dict[str, float]:
 def nudge_memorability_weights(adaptation, feedback) -> Optional[Dict[str, float]]:
     """Nudge one user's memorability weights from one feedback row (plan §4.2).
 
-    The user answered "was this easier to remember?"; the client already told us
-    which feature that adaptation moved most (``memorability_driver``). A "yes"
-    raises that feature's weight, a "no" lowers it, by an EMA step — then all
-    four are renormalized so they still sum to 1.
+    **A weight tracks how well that feature PREDICTS this user's experience, not
+    whether this user liked the adaptation.** That distinction is the whole rule.
 
-    Deliberately a no-op (returning ``None``) when the feedback left
-    ``memorability_improved`` unanswered, or when the adaptation carries no
-    driver: both are the "we do not know" case, and nudging a weight on a
-    non-answer would teach the model from the absence of data.
+    ``weights[f]`` scales feature ``f`` inside ``scoreMemorability``
+    (``Σ weights[f] · features[f]``), and every feature is oriented so higher
+    always means "easier to remember". So the driver's signed delta
+    (``memorability_driver_delta``) is the model's *prediction* of which way
+    memorability moved, and ``memorability_improved`` is what the user actually
+    *observed*. Agreement means the feature explained this user; disagreement
+    means it mispredicted. Hence:
+
+    ==================  ===================  ==========================
+    user says           driver delta         action
+    ==================  ===================  ==========================
+    yes, easier         positive             raise (predicted correctly)
+    yes, easier         negative             lower (mispredicted)
+    no, harder          positive             lower (mispredicted)
+    no, harder          negative             raise (predicted correctly)
+    ==================  ===================  ==========================
+
+    ...applied as an EMA step toward 1.0 (agree) or 0.0 (disagree), after which
+    all four are renormalized to sum to 1.
+
+    The sign matters because ``memorability_driver`` is selected by largest
+    ABSOLUTE movement, so it is frequently the feature that got *worse* --
+    canonical leetspeak (``password`` → ``p@ssw0rd``) drives ``variety`` 1.00 →
+    0.33. Before this rule the weight rose on any "yes", so a user telling us
+    their leetspeak password was easier to remember made the model score future
+    low-variety candidates *less* memorable -- backwards. It also lowered the
+    weight of a feature that had correctly predicted "this got harder", punishing
+    it for being right.
+
+    Deliberately a no-op (returning ``None``) whenever the signal is not
+    conclusive: ``memorability_improved`` unanswered, no driver, no recorded
+    driver delta (a pre-delta client, or a row written before the field existed),
+    or a delta of exactly 0.0 (the feature did not move, so it predicted
+    nothing). Nudging on any of these would teach the model from the absence of
+    data.
+
+    Note the delta is NOT inferred from ``memorability_score_after -
+    _before`` when absent: that aggregate mixes all four weighted features and
+    can disagree in sign with the driver's own delta, which would reintroduce
+    exactly the imprecision this field exists to remove.
 
     Runs from the weekly policy task rather than from ``export_preference_model``
     as the plan's §4.2 text implies. Learning is a write and export is a read;
@@ -209,6 +243,15 @@ def nudge_memorability_weights(adaptation, feedback) -> Optional[Dict[str, float
     driver = (adaptation.memorability_driver or '').strip()
     if driver not in MEMORABILITY_FEATURES:
         return None
+    delta = adaptation.memorability_driver_delta
+    # `is None` then `== 0.0`, not a single falsy test: 0.0 and None mean
+    # different things here (feature did not move / client never told us), even
+    # though both are no-ops, and conflating them would hide which is which from
+    # anyone reading this later.
+    if delta is None:
+        return None
+    if not math.isfinite(delta) or delta == 0.0:
+        return None
 
     profile, _ = UserTypingProfile.objects.select_for_update().get_or_create(
         user=adaptation.user,
@@ -219,7 +262,10 @@ def nudge_memorability_weights(adaptation, feedback) -> Optional[Dict[str, float
         },
     )
     weights = normalize_memorability_weights(profile.memorability_weights)
-    target = 1.0 if improved else 0.0
+    # Did the driver feature predict what the user reported? `improved` is the
+    # observed direction, `delta > 0` the predicted one.
+    predicted_correctly = (delta > 0.0) == bool(improved)
+    target = 1.0 if predicted_correctly else 0.0
     weights[driver] = max(
         MIN_MEMORABILITY_WEIGHT,
         weights[driver] * (1 - MEMORABILITY_WEIGHT_EMA_ALPHA)
@@ -1104,6 +1150,7 @@ class AdaptivePasswordService:
         memorability_score_before: Optional[float] = None,
         memorability_score_after: Optional[float] = None,
         memorability_driver: Optional[str] = None,
+        memorability_driver_delta: Optional[float] = None,
         expected_fp_key_version: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Apply/record an adaptation under the zero-knowledge v2 contract.
@@ -1126,6 +1173,11 @@ class AdaptivePasswordService:
             memorability_driver: Which of the four memorability features moved
                 most, per the client. Only used later, to attribute a user's
                 ``memorability_improved`` feedback to a feature weight.
+            memorability_driver_delta: That feature's own SIGNED before→after
+                change, in ``[-1, 1]``. Stored only alongside a driver — a delta
+                with no feature to attribute it to teaches nothing. Read by
+                ``nudge_memorability_weights`` to tell whether the driver
+                predicted the user's answer or mispredicted it.
             expected_fp_key_version: The era the caller's serializer already
                 validated the client's ``fp_key_version`` against. See
                 ``record_typing_session_v2`` for why this is re-checked here
@@ -1259,6 +1311,15 @@ class AdaptivePasswordService:
                         memorability_score_after if has_score_pair else None
                     ),
                     memorability_driver=memorability_driver or '',
+                    # Same "together or not at all" reasoning as the score pair
+                    # above, for the same reason: a delta with no driver names no
+                    # feature to attribute it to, so nudge_memorability_weights
+                    # could never use it. Accept-and-normalize rather than
+                    # reject, matching this endpoint's established contract for
+                    # an incomplete memorability payload.
+                    memorability_driver_delta=(
+                        memorability_driver_delta if memorability_driver else None
+                    ),
                     status='active',
                     decided_at=timezone.now(),
                     reason=reason,

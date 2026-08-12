@@ -1315,6 +1315,11 @@ class CeleryTaskTests(TestCase):
             status='active',
             substitutions_applied={'0': {'from': 'o', 'to': '0'}},
             memorability_driver='variety',
+            # Positive delta + "yes, easier" = the driver predicted the user's
+            # answer correctly, so the weight rises. Both halves are needed:
+            # nudge_memorability_weights no-ops without a delta, and its
+            # DIRECTION now depends on whether the two signs agree.
+            memorability_driver_delta=0.4,
         )
         feedback = AdaptationFeedback.objects.create(
             adaptation=adaptation, user=self.user, rating=5,

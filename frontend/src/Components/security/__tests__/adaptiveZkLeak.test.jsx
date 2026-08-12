@@ -218,6 +218,33 @@ describe('adaptive ZK v2 — no plaintext on the wire', () => {
 
     assertNoSecret(vi.mocked(axios.post).mock.calls);
   });
+
+  it('applyAdaptation includes a finite driver delta, omits a non-finite one', async () => {
+    const suggestion = await adaptivePasswordService.suggestAdaptation(SECRET, { estimator: neutralEstimator, explore: false });
+
+    await adaptivePasswordService.applyAdaptation(
+      SECRET, suggestion.substitutions,
+      {
+        fingerprint, fpKeyVersion: FP_KEY_VERSION,
+        memorabilityDriver: 'variety', memorabilityDriverDelta: -0.67,
+      },
+    );
+    const withDelta = vi.mocked(axios.post).mock.calls.at(-1)[1];
+    expect(withDelta.memorability_driver_delta).toBe(-0.67);
+
+    vi.mocked(axios.post).mockClear();
+    await adaptivePasswordService.applyAdaptation(
+      SECRET, suggestion.substitutions,
+      {
+        fingerprint, fpKeyVersion: FP_KEY_VERSION,
+        memorabilityDriver: 'variety', memorabilityDriverDelta: NaN,
+      },
+    );
+    const withNaN = vi.mocked(axios.post).mock.calls.at(-1)[1];
+    // Same failure mode the score fields already guard against: a NaN here
+    // would 400 the whole apply request over an informational field.
+    expect(withNaN).not.toHaveProperty('memorability_driver_delta');
+  });
 });
 
 describe('adaptive ZK v2 — fingerprint key era', () => {

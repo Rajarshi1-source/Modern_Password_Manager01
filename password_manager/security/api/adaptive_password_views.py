@@ -439,12 +439,17 @@ def apply_adaptation(request):
         "memorability_improvement": -0.30,
         "memorability_score_before": 0.55,
         "memorability_score_after": 0.24,
-        "memorability_driver": "variety"
+        "memorability_driver": "variety",
+        "memorability_driver_delta": -0.67
     }
 
-    The four memorability fields are Phase 4 additions and remain optional: a
+    The five memorability fields are Phase 4 additions and remain optional: a
     client that omits them records an adaptation exactly as before, with both
     scores left NULL and excluded from `average_memorability_improvement`.
+    `memorability_driver_delta` carries the SIGN of the driver feature's own
+    movement — the driver is chosen by largest *absolute* change, so it is
+    frequently the feature that got worse, and the weight learner needs the sign
+    to tell a correct prediction from a mispredicted one.
     """
     user = request.user
 
@@ -464,6 +469,7 @@ def apply_adaptation(request):
         memorability_score_before=data.get('memorability_score_before'),
         memorability_score_after=data.get('memorability_score_after'),
         memorability_driver=data.get('memorability_driver'),
+        memorability_driver_delta=data.get('memorability_driver_delta'),
         expected_fp_key_version=data['fp_key_version'],
     )
     if 'error' in result:

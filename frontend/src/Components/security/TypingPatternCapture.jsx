@@ -29,7 +29,7 @@ import {
     filterByStrength,
     detectSubstitutionClasses,
     scoreMemorability,
-    memorabilityDriver,
+    memorabilityDriverDetail,
     MEMORABILITY_FEATURES,
     REJECT_DE_LEET,
 } from '../../services/adaptive/adaptiveFeatures';
@@ -595,6 +595,9 @@ export const adaptivePasswordService = {
         const memorability_score_after = scoreMemorability(adapted, memorabilityParams);
         const memorability_improvement =
             memorability_score_after - memorability_score_before;
+        const driverDetail = memorabilityDriverDetail(
+            password, adapted, memorabilityParams,
+        );
 
         return {
             has_suggestion: true,
@@ -605,11 +608,15 @@ export const adaptivePasswordService = {
             memorability_score_before,
             memorability_score_after,
             memorability_improvement,
-            // Which of the four features moved most. Needed by the server to
-            // attribute a later "was this easier to remember?" answer to a
-            // feature weight (plan §4.2); a single categorical value out of
-            // four, not a per-feature delta vector.
-            memorability_driver: memorabilityDriver(password, adapted, memorabilityParams),
+            // Which of the four features moved most, and by how much (SIGNED).
+            // Needed by the server to attribute a later "was this easier to
+            // remember?" answer to a feature weight (plan §4.2). The driver is
+            // picked by largest ABSOLUTE movement, so it is frequently the
+            // feature that got worse -- the sign is what lets the server tell a
+            // correct prediction from a mispredicted one. One categorical value
+            // plus one scalar, not a per-feature delta vector.
+            memorability_driver: driverDetail.name,
+            memorability_driver_delta: driverDetail.delta,
             guesses_log10_before,
             guesses_log10_after,
             guesses_log10_delta,
@@ -641,6 +648,11 @@ export const adaptivePasswordService = {
      * @param {number} [opts.memorabilityScoreAfter] - Same, for the adapted one.
      * @param {string|null} [opts.memorabilityDriver] - Which memorability
      *   feature moved most, for §4.2's weight attribution.
+     * @param {number} [opts.memorabilityDriverDelta] - That feature's SIGNED
+     *   before→after change, in [-1, 1]. The driver is picked by largest
+     *   *absolute* movement, so it is often the feature that got worse; the
+     *   sign is what lets the server tell whether it predicted the user's
+     *   later feedback or contradicted it.
      */
     async applyAdaptation(
         originalPassword,
@@ -652,6 +664,7 @@ export const adaptivePasswordService = {
             memorabilityScoreBefore,
             memorabilityScoreAfter,
             memorabilityDriver: driver,
+            memorabilityDriverDelta: driverDelta,
         } = {},
     ) {
         if (typeof fingerprint !== 'function') {
@@ -717,6 +730,15 @@ export const adaptivePasswordService = {
             // object by hand.
             ...(typeof driver === 'string' && MEMORABILITY_FEATURES.includes(driver)
                 ? { memorability_driver: driver }
+                : {}),
+            // Only meaningful alongside a driver -- the server stores it only
+            // when one is present, since a delta with no feature named cannot
+            // be attributed to a weight. Same Number.isFinite guard as the
+            // score fields above, for the same reason (a NaN would 400 the
+            // whole apply and lose the adaptation record over a learning
+            // signal). The server also bounds it to [-1, 1].
+            ...(Number.isFinite(driverDelta)
+                ? { memorability_driver_delta: driverDelta }
                 : {}),
         }, { timeout: ADAPTIVE_API_TIMEOUT_MS });
         // Return the locally-computed adapted password alongside the server

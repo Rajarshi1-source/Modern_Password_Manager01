@@ -3003,6 +3003,28 @@ what a user says mattered to *them*, which is a different thing from moving
 the aggregate delta toward any particular value. That is a limitation of the
 four-feature model, recorded rather than hidden.
 
+**Superseded (separate follow-up PR, off `main` after PR #475 merged): the
+above was recorded as an accepted limitation, then closed properly rather
+than left as one.** Declined twice as out-of-scope for a "keep changes
+minimal" review-fix round (round 11 on PR #475, reviewer's own label "Heavy
+lift" — see the 11th review-fix round entry below), it shipped as its own
+scoped change once out from under that constraint. `nudge_memorability_weights`
+now compares the driver's *signed* delta (a new `memorability_driver_delta`
+field, client-computed, wired through `AdaptationApplySerializer` and stored
+on `PasswordAdaptation` only alongside a driver, migration `0030`) against
+`memorability_improved`: the weight rises when the two AGREE in direction —
+the feature correctly predicted what the user experienced — and falls when
+they disagree, regardless of which one is nominally "positive." Re-run
+against the identical worked example above: driver `variety`, delta −0.67,
+user says "yes, easier" — signs disagree (delta negative, feedback positive),
+so `variety`'s weight now **falls**, the reverse of what the old
+polarity-only rule did. This also fixes a second, previously unnoticed half
+of the same bug: under the old rule a "no, harder" always lowered the
+driver's weight even when the driver had genuinely predicted the user would
+find it harder — punishing a correct prediction. §4.2's own "EMA, not a
+regression" reasoning still holds and is unaffected — this changes what the
+EMA targets, not that it is one.
+
 **Deviations from the plan text:**
 
 - **§4.2's EMA runs in the weekly Celery task, not in `export_preference_model`.**
@@ -3983,7 +4005,11 @@ zero files changed.
   agrees this is a mechanism change (new wire field, new serializer
   field, a materially different learning rule, new tests), not a minimal
   fix, and it would require rewriting a currently-passing, deliberately-
-  authored test to land.
+  authored test to land. **Since closed as its own scoped follow-up PR,
+  off `main` after PR #475 merged — see §4.6's "Superseded" note above.**
+  `test_positive_feedback_raises_the_driving_feature_weight`, cited above
+  as locking in the old behavior, no longer exists in that form; it was
+  replaced by the full agree/disagree test matrix that follow-up PR added.
 
 Verified: no code touched. Re-ran the two locked-in tests this round's
 findings pointed at rather than trusting the prior rounds' pass/fail claim
