@@ -146,8 +146,32 @@ jobs:
       - name: Push SBOM as OCI artifact (ORAS)
         # Attaching to the pushed manifest only makes sense when we published it.
         if: github.event_name == 'push'
+        # Bounded retry with backoff on the download, matching this file's
+        # own Syft install step above (and security-multi-scanner.yml's
+        # Grype install): a transient GitHub releases-API blip here would
+        # otherwise hard-fail the whole job on a push to main, since this
+        # step -- unlike the scanners -- has no continue-on-error. SBOM
+        # attestation on a just-published image is not best-effort, so a
+        # genuine failure should still fail the job; only the retry is new.
         run: |
-          curl -sSfL https://github.com/oras-project/oras/releases/download/v1.1.0/oras_1.1.0_linux_amd64.tar.gz | tar -xz
+          set -o pipefail
+          attempts=0
+          max_attempts=5
+          backoff=10
+          while : ; do
+            attempts=$((attempts + 1))
+            if curl -sSfL https://github.com/oras-project/oras/releases/download/v1.1.0/oras_1.1.0_linux_amd64.tar.gz \
+              | tar -xz; then
+              break
+            fi
+            if [ "$attempts" -ge "$max_attempts" ]; then
+              echo "ERROR: Could not download/extract oras after $max_attempts attempts" >&2
+              exit 1
+            fi
+            echo "oras download attempt $attempts/$max_attempts failed; retrying in ${backoff}s..." >&2
+            sleep "$backoff"
+            backoff=$((backoff * 2))
+          done
           sudo mv oras /usr/local/bin/oras
           oras version
           oras attach ${{ env.IMAGE }} sbom.image.cyclonedx.json --artifact-type application/vnd.cyclonedx+json
