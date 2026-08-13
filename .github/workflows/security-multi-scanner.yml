@@ -377,9 +377,32 @@ jobs:
           # matching this file's own stated policy (header comment,
           # "FIX #2: All actions pinned to immutable commit hashes") that
           # every OTHER remote reference in this file already follows.
+          #
+          # Bounded retry with backoff, matching ci-sbom.yml's Syft install
+          # step exactly: this step previously made exactly one attempt, so
+          # a single transient GitHub releases-API blip marked Grype
+          # "Unavailable" for the whole scan even though the identical
+          # failure class is already retried elsewhere in this repo (Syft's
+          # own install above it in that file, Gitleaks' docker pull,
+          # pip-audit).
           set -o pipefail
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/b5fa92bbcbef655497e3be840a2f718380e2cdd3/install.sh \
-            | sh -s -- -b /usr/local/bin
+          attempts=0
+          max_attempts=5
+          backoff=10
+          while : ; do
+            attempts=$((attempts + 1))
+            if curl -sSfL https://raw.githubusercontent.com/anchore/grype/b5fa92bbcbef655497e3be840a2f718380e2cdd3/install.sh \
+              | sh -s -- -b /usr/local/bin; then
+              break
+            fi
+            if [ "$attempts" -ge "$max_attempts" ]; then
+              echo "ERROR: Could not install Grype after $max_attempts attempts" >&2
+              exit 1
+            fi
+            echo "Grype install attempt $attempts/$max_attempts failed; retrying in ${backoff}s..." >&2
+            sleep "$backoff"
+            backoff=$((backoff * 2))
+          done
         continue-on-error: true
 
       - name: Run Grype Scan
