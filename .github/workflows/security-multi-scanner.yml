@@ -300,6 +300,7 @@ jobs:
       # =====================================================================
       
       - name: Run Trivy Scan
+        id: trivy_scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: 'fs'
@@ -313,12 +314,18 @@ jobs:
           scanners: 'vuln,secret,config'
           trivy-config: trivy.yaml
         continue-on-error: true
-      
+
       - name: Ensure Trivy SARIF File is Valid
         if: always()
         run: |
-          # Create a valid minimal SARIF if file is missing, empty, or invalid
-          if [ ! -f trivy-fs.sarif ] || [ ! -s trivy-fs.sarif ] || ! grep -q '"runs"' trivy-fs.sarif; then
+          # JSON-aware, not a `grep -q '"runs"'` substring match: the grep
+          # form also accepts truncated/malformed JSON that merely CONTAINS
+          # the literal text "runs" (e.g. a file cut off mid-write), and a
+          # non-array or empty `runs` value, neither of which a real
+          # completed Trivy scan would ever produce. jq ships on
+          # ubuntu-latest by default.
+          if ! jq -e 'type == "object" and (.runs | type == "array" and length > 0)' \
+            trivy-fs.sarif > /dev/null 2>&1; then
             echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy"}}}]}' > trivy-fs.sarif
           fi
 
@@ -329,17 +336,20 @@ jobs:
         with:
           sarif_file: 'trivy-fs.sarif'
           category: 'trivy-fs'
-      
+
       # =====================================================================
       # Scanner 2: Grype (Filesystem Scan)
       # =====================================================================
-      
+
       - name: Install Grype
+        id: grype_install
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
         continue-on-error: true
 
       - name: Run Grype Scan
+        id: grype_scan
+        if: steps.grype_install.outcome == 'success'
         run: |
           grype dir:. -o sarif > grype-fs.sarif
           # Determine if we should fail (manually checking for vulnerabilities if needed, or rely on SARIF upload)
@@ -349,16 +359,19 @@ jobs:
       - name: Ensure Grype SARIF File Exists
         if: always()
         run: |
-          # Same three-way check as Trivy's fallback above (missing, empty, or
-          # missing "runs") -- an empty `runs: []` array is REJECTED by
-          # upload-sarif ("1 item required; only 0 were supplied"), which was
-          # failing this job outright whenever Install/Run Grype failed (e.g.
-          # a transient GitHub releases-API 503) even though both steps above
-          # are allowed to fail without stopping the scan.
-          if [ ! -f grype-fs.sarif ] || [ ! -s grype-fs.sarif ] || ! grep -q '"runs"' grype-fs.sarif; then
+          # Same JSON-aware check as Trivy's fallback above, for the same
+          # reason -- a `grep -q '"runs"'` substring match would accept a
+          # truncated file or an empty `runs: []` array, and upload-sarif
+          # REJECTS an empty runs array outright ("1 item required; only 0
+          # were supplied"), which was failing this job whenever
+          # Install/Run Grype failed (e.g. a transient GitHub releases-API
+          # 503) even though both are allowed to fail without stopping the
+          # scan.
+          if ! jq -e 'type == "object" and (.runs | type == "array" and length > 0)' \
+            grype-fs.sarif > /dev/null 2>&1; then
             echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Grype"}}}]}' > grype-fs.sarif
           fi
-      
+
       # FIX #2: Pinned to commit hash
       - name: Upload Grype Results
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
@@ -366,20 +379,31 @@ jobs:
         with:
           sarif_file: grype-fs.sarif
           category: 'grype-fs'
-      
+
       # =====================================================================
       # Generate Scan Report
       # =====================================================================
-      
+
       - name: Generate Scan Summary
         if: always()
+        env:
+          # A scanner is only genuinely "Complete" if it actually ran; the
+          # steps above are ALL continue-on-error (a scanner blip must not
+          # fail this job), so without this the summary claimed "Complete"
+          # unconditionally even when a scanner never ran at all -- reporting
+          # zero findings from a scanner that never scanned is indistinguishable
+          # from a real clean result, silently masking whatever it would have
+          # found. Only the Security tab's own SARIF (empty when unavailable)
+          # is authoritative; this table is just a human-readable label for it.
+          TRIVY_STATUS: ${{ steps.trivy_scan.outcome == 'success' && 'Complete' || 'Unavailable (see workflow logs)' }}
+          GRYPE_STATUS: ${{ (steps.grype_install.outcome == 'success' && steps.grype_scan.outcome == 'success') && 'Complete' || 'Unavailable (see workflow logs)' }}
         run: |
           echo "## Security Scan Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Scanner | Status | Findings |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---------|--------|----------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Trivy (FS) | Complete | See Security tab |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Grype (FS) | Complete | See Security tab |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Trivy (FS) | $TRIVY_STATUS | See Security tab |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Grype (FS) | $GRYPE_STATUS | See Security tab |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Scan Details" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Scope:** Filesystem (PR Content)" >> "$GITHUB_STEP_SUMMARY"
