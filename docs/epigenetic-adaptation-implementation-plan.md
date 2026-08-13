@@ -4132,40 +4132,53 @@ cross-device data loss) was scanned and planned but deliberately NOT shipped —
 flagged as the riskiest of the batch (touches live encryption for every vault
 item) and left for a dedicated session.
 
-- **PR #476** (`feat/adaptive-verify-master-password`) — verifies the typed
-  master password before deriving the adaptive fingerprint key, closing a gap
-  flagged 3x across this PR's own review rounds (Codex 1-2, CodeRabbit round 3)
-  and deferred each time for want of a verification primitive. Found one on the
-  standard login path: `sessionVaultCryptoV3.unlockWithMasterPassword` already
-  unwraps the same secret via AES-GCM, which fails loudly on the wrong KEK.
-  Constraint that shaped the design: the wrapped-DEK endpoint is throttled at
-  3/hour/user and login already spends one, so verification had to cost zero
-  network calls — solved by caching the wrapped envelope (non-secret
-  ciphertext) and adding a verify-only re-attempt that discards its result.
-  **Round-1 review-fix** (CodeRabbit, commit `40c6110`): added the one
-  proposed Trivial test (pins `changeMasterPassword`'s "refresh the cache only
-  after the PUT succeeds" ordering on a failed PUT, mutation-checked); declined
-  the same finding's twin ask for `rewrapMasterPasswordFromRecovery` — that
-  function has zero pre-existing test coverage of any kind, so building a full
-  recovery-flow harness from scratch is out of proportion to a Trivial nitpick.
-  Neither Greptile nor Codex have posted on this PR (confirmed via `gh api`,
-  matching the pattern on every other PR in this feature).
-- **PR #477** (`feat/adaptive-delta-aware-memorability-weights`) — closes the
-  memorability-weight-learning gap round 11 (above) declined as out-of-scope.
-  See §4.6's "Superseded" note for the full mechanism change.
-- **PR #478** (`fix/vault-v3-unlock-degraded-mode`) — surfaces the v3
+- **PR #476, MERGED** (`feat/adaptive-verify-master-password`) — verifies the
+  typed master password before deriving the adaptive fingerprint key, closing
+  a gap flagged 3x across this PR's own review rounds (Codex 1-2, CodeRabbit
+  round 3) and deferred each time for want of a verification primitive. Found
+  one on the standard login path: `sessionVaultCryptoV3.unlockWithMasterPassword`
+  already unwraps the same secret via AES-GCM, which fails loudly on the wrong
+  KEK. Constraint that shaped the design: the wrapped-DEK endpoint is
+  throttled at 3/hour/user and login already spends one, so verification had
+  to cost zero network calls — solved by caching the wrapped envelope
+  (non-secret ciphertext) and adding a verify-only re-attempt that discards
+  its result. **Round-1 review-fix** (CodeRabbit, commit `40c6110`): added the
+  one proposed Trivial test (pins `changeMasterPassword`'s "refresh the cache
+  only after the PUT succeeds" ordering on a failed PUT, mutation-checked);
+  declined the same finding's twin ask for `rewrapMasterPasswordFromRecovery`
+  — that function has zero pre-existing test coverage of any kind, so
+  building a full recovery-flow harness from scratch is out of proportion to
+  a Trivial nitpick. **Round-2** (CodeRabbit): fixed this document's own
+  inaccurate "single-file" verification-scope claim about all three PRs (only
+  #478 is single-file; this PR alone touched 4 files across two commits).
+  Neither Greptile nor Codex ever posted on this PR (confirmed via `gh api`).
+- **PR #477, MERGED** (`feat/adaptive-delta-aware-memorability-weights`) —
+  closes the memorability-weight-learning gap round 11 (above) declined as
+  out-of-scope. See §4.6's "Superseded" note for the full mechanism change
+  and its own round-1 review-fix entry.
+- **PR #478, OPEN** (`fix/vault-v3-unlock-degraded-mode`) — surfaces the v3
   login-unlock desync `App.jsx` previously swallowed into a bare
   `console.warn`. The originally-planned repair action
   (`changeMasterPassword`) turned out to be impossible for this exact case
   (requires an already-live v3 session that, by definition, never existed if
   the unlock just failed) — caught by reading the guard clause rather than
   trusting the plan's own prior text. Real repair routes through the existing
-  recovery flow via a sign-out-first CTA.
+  recovery flow via a sign-out-first CTA. **Round-1 review-fix** (CodeRabbit):
+  `vaultV3Degraded` was only ever set `true`, never reset — fixed to clear on
+  a clean re-unlock and on logout, with the stable toast now dismissed on that
+  transition. **Round-2** (CI infrastructure, not a review-bot finding): two
+  genuinely-failing checks (`build-and-sbom`, `Codebase Security Scan (FS)`)
+  both traced to a transient GitHub releases-API 503 hitting a third-party
+  tool's install step with no resilience, unlike a sibling step in the SAME
+  workflow file that already handles this failure class — matched Grype's
+  install/SARIF-fallback to Trivy's already-working pattern, and Syft's
+  install to the SBOM-generation step's own existing retry-with-backoff. See
+  trap 71 in memory for the general lesson.
 
-All three independently verified (targeted test suites, ESLint, `npm run
-build`) per the targeted-testing preference — no full-suite reruns for
-narrowly-scoped, low-blast-radius changes. See [[epigenetic-adaptation-phases]]
-(memory) for full narrative detail on each.
+All independently verified (targeted test suites, ESLint, `npm run build`)
+per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
+low-blast-radius changes. See [[epigenetic-adaptation-phases]] (memory) for
+full narrative detail on each.
 
 ---
 
