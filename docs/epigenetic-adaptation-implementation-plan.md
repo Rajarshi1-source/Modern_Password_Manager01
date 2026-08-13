@@ -4261,7 +4261,22 @@ item) and left for a dedicated session.
   bounded retry-with-backoff shape `ci-sbom.yml` already uses. Verified
   with a syntax check plus two throwaway simulations (always-failing
   curl exhausts all 5 attempts; a curl succeeding on its 3rd call breaks
-  out correctly) before trusting it. See trap 76.
+  out correctly) before trusting it. See trap 76. **Round-8**
+  (user-directed follow-up, not a review-bot finding): revisited
+  `ci-sbom.yml`'s `oras` download step, which round-7 had scoped out as
+  "different pipe shape, push-only, no continue-on-error." Re-examined
+  rather than re-asserting that dismissal: confirmed empirically that
+  `tar -xz`, unlike `sh`, already fails loudly on empty/truncated input
+  (`false | tar -xz` exits 2; `false | sh` exits 0), so there's no
+  silent-success pipefail bug there — round-7's call was correct on that
+  point. But a separate, real gap remained: zero retry on the same
+  GitHub-releases-download class already fixed for Gitleaks/Syft/Grype
+  in this PR, combined with no `continue-on-error`, so a single
+  transient blip hard-fails the whole `build-and-sbom` job on every push
+  to main. Applied the same proven retry-with-backoff shape to just the
+  download+extract, leaving the fail-after-retries-exhausted behavior
+  unchanged on purpose. Verified with the same syntax-check-plus-
+  simulation approach used for Grype.
 
 All independently verified (targeted test suites, ESLint, `npm run build`)
 per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
