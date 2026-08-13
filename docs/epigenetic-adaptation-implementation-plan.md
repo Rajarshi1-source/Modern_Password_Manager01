@@ -4248,7 +4248,20 @@ item) and left for a dedicated session.
   `handleLogout`, and the hook's own `refreshToken` (the only other
   caller of `logout()`) has zero call sites anywhere else in the app.
   Same conclusion holds; added an in-file pointer comment this time
-  since it's now been raised twice. See trap 75.
+  since it's now been raised twice. See trap 75. **Round-7** (CodeRabbit,
+  `@coderabbitai full review`): fixed Grype's install step in
+  `security-multi-scanner.yml` — one `curl | sh` attempt only, so a
+  transient GitHub releases-API blip marked the whole scanner
+  "Unavailable" for the run, unlike `ci-sbom.yml`'s Syft install, which
+  already retries with backoff. This project's own memory record read as
+  if Grype's install already had a retry loop from an earlier round —
+  `git show` on the actual round-2/round-4 commits proved that loop was
+  only ever added to Syft, so this was a real, never-addressed gap, not
+  a duplicate. Wrapped the existing pinned `curl | sh` in the identical
+  bounded retry-with-backoff shape `ci-sbom.yml` already uses. Verified
+  with a syntax check plus two throwaway simulations (always-failing
+  curl exhausts all 5 attempts; a curl succeeding on its 3rd call breaks
+  out correctly) before trusting it. See trap 76.
 
 All independently verified (targeted test suites, ESLint, `npm run build`)
 per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
