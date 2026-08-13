@@ -4173,7 +4173,19 @@ item) and left for a dedicated session.
   workflow file that already handles this failure class — matched Grype's
   install/SARIF-fallback to Trivy's already-working pattern, and Syft's
   install to the SBOM-generation step's own existing retry-with-backoff. See
-  trap 71 in memory for the general lesson.
+  trap 71 in memory for the general lesson. **Round-3** (CodeRabbit,
+  reviewing round-2's own diff): three findings, all applied. `unwrapDEK`
+  conflated a malformed server response (bad base64 in `blob.wrapped`/
+  `blob.iv`) with a genuine wrong-password failure — both threw
+  `DEK_UNWRAP_FAILURE_MESSAGE`, which `classifyV3UnlockError` reads as a
+  desync worth the persistent recovery CTA; moved the decoding outside the
+  `catch`, matching how `blob.salt` was already handled two lines above.
+  Both SARIF fallback checks switched from a `grep -q '"runs"'` substring
+  match (accepts truncated JSON and non-array/empty `runs` values) to a
+  JSON-aware `jq -e` predicate. The scan summary now reports "Unavailable"
+  instead of an unconditional "Complete" when a scanner's steps didn't all
+  succeed. See trap 72: round 2's own fix had itself introduced the
+  silently-wrong-reporting gap round 3 caught.
 
 All independently verified (targeted test suites, ESLint, `npm run build`)
 per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
