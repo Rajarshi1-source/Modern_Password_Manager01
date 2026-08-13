@@ -36,6 +36,13 @@ export const DEK_UNWRAP_FAILURE_MESSAGE = 'Incorrect password or corrupted vault
 // preset in `secureVaultCrypto.js`).
 const DEFAULT_KDF = { t: 3, m: 65536, p: 2 };
 
+// `wrapDEK` below always produces exactly these byte lengths: a fresh
+// 96-bit GCM IV, and (32-byte AES-256 raw key + 16-byte GCM tag) for the
+// wrapped DEK. Used by `unwrapDEK` to reject a malformed SERVER envelope
+// before it reaches `unwrapKey` -- see the comment there.
+const WRAPPED_DEK_IV_BYTES = 12;
+const WRAPPED_DEK_KEY_BYTES = 32 + 16; // AES-256 raw key + AES-GCM tag
+
 const WRAPPED_DEK_URL = '/api/auth/vault/wrapped-dek/';
 // Anonymous post-recovery rotation endpoint. The recovery pages run
 // while the user is NOT yet authenticated (they forgot the master
@@ -130,6 +137,16 @@ async function unwrapDEK(blob, secret, { extractable = false } = {}) {
   // step -- belongs inside the catch.
   const wrappedBytes = fromB64(blob.wrapped);
   const ivBytes = fromB64(blob.iv);
+  // Length-checked too, for the same reason as the decode above: a
+  // valid-Base64 but wrong-length field (e.g. a 1-byte IV) still reaches
+  // `unwrapKey` and throws the SAME generic OperationError as a genuine
+  // wrong password -- confirmed empirically (a 1-byte IV and a 4-byte
+  // wrapped value both throw `OperationError`, indistinguishable from a
+  // wrong-KEK failure by error shape alone) -- so leaving this check out
+  // would let the catch below relabel it DEK_UNWRAP_FAILURE_MESSAGE too.
+  if (ivBytes.length !== WRAPPED_DEK_IV_BYTES || wrappedBytes.length !== WRAPPED_DEK_KEY_BYTES) {
+    throw new Error('Malformed wrapped-DEK envelope from server.');
+  }
   try {
     return await window.crypto.subtle.unwrapKey(
       'raw',

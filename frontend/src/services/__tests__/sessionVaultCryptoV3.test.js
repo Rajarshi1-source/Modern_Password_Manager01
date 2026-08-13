@@ -129,6 +129,32 @@ describe('sessionVaultCryptoV3 — unlock paths', () => {
       serverState.wrappedDek[field] = good;
     }
   });
+
+  it('does not classify a valid-Base64 but wrong-length wrapped/iv field as a password desync', async () => {
+    // CodeRabbit (PR #478 round-6 review): the previous test above only
+    // covers fields that fail base64 DECODING. A field that decodes fine
+    // but has the wrong BYTE LENGTH (e.g. a 1-byte IV) skips that guard
+    // entirely and reaches `unwrapKey`, which throws the exact same
+    // generic OperationError a real wrong-password failure does --
+    // relabeling it DEK_UNWRAP_FAILURE_MESSAGE (a "desync") too, unless
+    // unwrapDEK checks decoded length before attempting the unwrap.
+    const v3 = await import('../sessionVaultCryptoV3.js');
+    await v3.enrollWithMasterPassword('correct-horse-battery-staple');
+    v3.clearSessionKey();
+
+    const cases = {
+      iv: 'AA==', // valid base64, decodes to 1 byte (needs 12)
+      wrapped: 'AQIDBA==', // valid base64, decodes to 4 bytes (needs 48)
+    };
+    for (const [field, malformed] of Object.entries(cases)) {
+      const good = serverState.wrappedDek[field];
+      serverState.wrappedDek[field] = malformed;
+      await expect(
+        v3.unlockWithMasterPassword('correct-horse-battery-staple'),
+      ).rejects.not.toThrow(v3.DEK_UNWRAP_FAILURE_MESSAGE);
+      serverState.wrappedDek[field] = good;
+    }
+  });
 });
 
 describe('sessionVaultCryptoV3 — payload versioning', () => {
