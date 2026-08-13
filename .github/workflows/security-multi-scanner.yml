@@ -344,9 +344,15 @@ jobs:
           fi
 
       # FIX #2: Pinned to commit hash
+      #
+      # Gated on `valid == 'true'`: the fallback SARIF written above when the
+      # scan didn't produce real output represents a "completed, no results"
+      # run. Uploading it unconditionally would misrepresent an unavailable
+      # scanner as a clean pass in the Security tab. Only upload when Trivy
+      # actually produced real results (mirrors the Gitleaks upload gate above).
       - name: Upload Trivy Results
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
-        if: always()
+        if: always() && steps.trivy_sarif_check.outputs.valid == 'true'
         with:
           sarif_file: 'trivy-fs.sarif'
           category: 'trivy-fs'
@@ -407,9 +413,14 @@ jobs:
           fi
 
       # FIX #2: Pinned to commit hash
+      #
+      # Gated on `valid == 'true'` for the same reason as the Trivy upload
+      # above: the fallback SARIF stands in for a "completed, no results" run,
+      # and uploading it unconditionally would misrepresent an unavailable
+      # scanner as a clean pass.
       - name: Upload Grype Results
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e  # v4.36.2
-        if: always()
+        if: always() && steps.grype_sarif_check.outputs.valid == 'true'
         with:
           sarif_file: grype-fs.sarif
           category: 'grype-fs'
