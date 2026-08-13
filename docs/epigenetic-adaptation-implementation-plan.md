@@ -4224,7 +4224,31 @@ item) and left for a dedicated session.
   still-unfixed sibling undid the improvement. Also fixed this document's
   own §5.7b PR #476 entry, which had described #478 as "single-file" —
   false when written and more so by round 5, when #478 spans 22 files
-  (services, tests, `App.jsx`, two CI workflows, this doc).
+  (services, tests, `App.jsx`, two CI workflows, this doc). **Round-6**
+  (CodeRabbit, `@coderabbitai full review` manually triggered): two
+  findings. Real, confirmed empirically before fixing: round-3's own fix
+  moved `fromB64(blob.wrapped)`/`fromB64(blob.iv)` decoding outside the
+  catch so a non-Base64 field wouldn't be relabeled a password desync,
+  but a field that decodes fine with the WRONG BYTE LENGTH (a 1-byte IV,
+  a 4-byte wrapped value) still reaches `unwrapKey` and throws the exact
+  same generic `OperationError` a real wrong-password unwrap does — a
+  throwaway Node WebCrypto probe confirmed all three cases (bad length
+  IV, bad length wrapped key, genuine wrong KEK) are indistinguishable
+  by error shape, and confirmed the real wrapped-key length at exactly
+  48 bytes (32-byte AES-256 key + 16-byte GCM tag) rather than assuming
+  it from the spec. Fixed with an explicit length check
+  (`WRAPPED_DEK_IV_BYTES = 12`, `WRAPPED_DEK_KEY_BYTES = 48`) before the
+  unwrap attempt, mutation-checked. Re-raised and re-declined: the
+  `NOT_ENROLLED` migration-success branch not resetting
+  `vaultV3Degraded` — the identical suggestion round-1 already declined
+  ("every reachable path back to the login form passes through
+  `handleLogout` first"). Re-derived fresh rather than citing that
+  conclusion: grepped `useAuth.jsx` and confirmed exactly one
+  `setIsAuthenticated(false)` call site, always paired with the reset via
+  `handleLogout`, and the hook's own `refreshToken` (the only other
+  caller of `logout()`) has zero call sites anywhere else in the app.
+  Same conclusion holds; added an in-file pointer comment this time
+  since it's now been raised twice. See trap 75.
 
 All independently verified (targeted test suites, ESLint, `npm run build`)
 per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
