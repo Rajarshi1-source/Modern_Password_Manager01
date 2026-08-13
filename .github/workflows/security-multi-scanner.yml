@@ -316,6 +316,7 @@ jobs:
         continue-on-error: true
 
       - name: Ensure Trivy SARIF File is Valid
+        id: trivy_sarif_check
         if: always()
         run: |
           # JSON-aware, not a `grep -q '"runs"'` substring match: the grep
@@ -324,8 +325,21 @@ jobs:
           # non-array or empty `runs` value, neither of which a real
           # completed Trivy scan would ever produce. jq ships on
           # ubuntu-latest by default.
-          if ! jq -e 'type == "object" and (.runs | type == "array" and length > 0)' \
+          #
+          # `valid` output records whether trivy-fs.sarif was ALREADY good
+          # before this step touched it -- i.e. whether Trivy actually
+          # completed and wrote real results. This is deliberately NOT the
+          # same thing as `trivy_scan`'s own step outcome: `exit-code: 1`
+          # above makes that step report failure on real FINDINGS too (the
+          # scan working exactly as designed), not only when the scanner
+          # itself never ran -- Trivy writes the SARIF report before it
+          # applies that exit-code gate, so a "failed" step here can still
+          # have produced a perfectly valid file.
+          if jq -e 'type == "object" and (.runs | type == "array" and length > 0)' \
             trivy-fs.sarif > /dev/null 2>&1; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
             echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Trivy"}}}]}' > trivy-fs.sarif
           fi
 
@@ -344,7 +358,22 @@ jobs:
       - name: Install Grype
         id: grype_install
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          # `set -o pipefail`: without it, a failing `curl` (network error,
+          # a transient 503) produces no stdout, `sh` receives an EMPTY
+          # script on its stdin and exits 0 (nothing to run is not an
+          # error), and the pipeline's own exit code is `sh`'s -- so this
+          # step reports SUCCESS even though nothing was installed.
+          # Verified empirically (`false | sh` exits 0 without pipefail, 1
+          # with it) rather than assumed; confirmed via the actual job log
+          # that THIS step's shell is `bash -e {0}`, not GitHub's
+          # `-o pipefail`-including default some other actions in this same
+          # job get. Pinned to a specific commit of the installer script,
+          # matching this file's own stated policy (header comment,
+          # "FIX #2: All actions pinned to immutable commit hashes") that
+          # every OTHER remote reference in this file already follows.
+          set -o pipefail
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/b5fa92bbcbef655497e3be840a2f718380e2cdd3/install.sh \
+            | sh -s -- -b /usr/local/bin
         continue-on-error: true
 
       - name: Run Grype Scan
@@ -357,6 +386,7 @@ jobs:
         continue-on-error: true
 
       - name: Ensure Grype SARIF File Exists
+        id: grype_sarif_check
         if: always()
         run: |
           # Same JSON-aware check as Trivy's fallback above, for the same
@@ -366,9 +396,13 @@ jobs:
           # were supplied"), which was failing this job whenever
           # Install/Run Grype failed (e.g. a transient GitHub releases-API
           # 503) even though both are allowed to fail without stopping the
-          # scan.
-          if ! jq -e 'type == "object" and (.runs | type == "array" and length > 0)' \
+          # scan. Same `valid` output as Trivy's check, for the same reason:
+          # a real, meaningful result vs. a synthesized empty placeholder.
+          if jq -e 'type == "object" and (.runs | type == "array" and length > 0)' \
             grype-fs.sarif > /dev/null 2>&1; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "valid=false" >> "$GITHUB_OUTPUT"
             echo '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Grype"}}}]}' > grype-fs.sarif
           fi
 
@@ -387,16 +421,27 @@ jobs:
       - name: Generate Scan Summary
         if: always()
         env:
-          # A scanner is only genuinely "Complete" if it actually ran; the
-          # steps above are ALL continue-on-error (a scanner blip must not
-          # fail this job), so without this the summary claimed "Complete"
-          # unconditionally even when a scanner never ran at all -- reporting
-          # zero findings from a scanner that never scanned is indistinguishable
-          # from a real clean result, silently masking whatever it would have
-          # found. Only the Security tab's own SARIF (empty when unavailable)
-          # is authoritative; this table is just a human-readable label for it.
-          TRIVY_STATUS: ${{ steps.trivy_scan.outcome == 'success' && 'Complete' || 'Unavailable (see workflow logs)' }}
-          GRYPE_STATUS: ${{ (steps.grype_install.outcome == 'success' && steps.grype_scan.outcome == 'success') && 'Complete' || 'Unavailable (see workflow logs)' }}
+          # A scanner is only genuinely "Complete" if it actually produced a
+          # real result; the steps above are ALL continue-on-error (a
+          # scanner blip must not fail this job), so without this the
+          # summary claimed "Complete" unconditionally even when a scanner
+          # never ran at all -- reporting zero findings from a scanner that
+          # never scanned is indistinguishable from a real clean result,
+          # silently masking whatever it would have found. Only the
+          # Security tab's own SARIF (empty when unavailable) is
+          # authoritative; this table is just a human-readable label for it.
+          #
+          # Deliberately keyed on the SARIF-validity check's own `valid`
+          # output, not the scan steps' `outcome` -- `trivy_scan.outcome`
+          # is 'failure' both when the scanner never ran AND when it ran
+          # perfectly and found real vulnerabilities (`exit-code: 1` above
+          # is intentional: fail on findings), and those two cases must not
+          # collapse into the same "Unavailable" label. `valid` reflects
+          # whether the SARIF the earlier step inspected was already good,
+          # which is true in the "ran and found things" case and false only
+          # when nothing usable was produced at all.
+          TRIVY_STATUS: ${{ steps.trivy_sarif_check.outputs.valid == 'true' && 'Complete' || 'Unavailable (see workflow logs)' }}
+          GRYPE_STATUS: ${{ steps.grype_sarif_check.outputs.valid == 'true' && 'Complete' || 'Unavailable (see workflow logs)' }}
         run: |
           echo "## Security Scan Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
