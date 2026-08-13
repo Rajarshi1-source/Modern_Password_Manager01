@@ -1344,6 +1344,18 @@ function App() {
       } catch (v3Err) {
         const v3ErrKind = classifyV3UnlockError(v3Err);
         if (v3ErrKind === V3_UNLOCK_NOT_ENROLLED) {
+          // No `setVaultV3Degraded(false)` here (raised twice by CodeRabbit,
+          // declined both times, re-verified fresh the second time rather
+          // than cited): `vaultV3Degraded` is in-memory React state, and the
+          // ONLY place that flips `isAuthenticated` back to false while this
+          // tab stays mounted is `logout()` in useAuth.jsx (grepped: single
+          // call site, in its own `finally` block) -- which App.jsx's
+          // `handleLogout` always wraps together with its own
+          // `setVaultV3Degraded(false)` a few hundred lines below. There is
+          // no live path that reaches this migration branch with a stale
+          // `true` still set. A hard reload doesn't need this either: it
+          // resets ALL component state, including this flag, to its
+          // `useState(false)` default.
           try {
             legacyMigrationModule = await import(
               './services/legacyVaultMigration'
