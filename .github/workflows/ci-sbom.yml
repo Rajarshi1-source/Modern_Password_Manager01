@@ -73,13 +73,27 @@ jobs:
         # Syft's own image resolution -- but until now this step had no
         # retry of its own, so a blip here failed the whole job before the
         # SBOM generation step's resilience ever got a chance to matter.
+        #
+        # `set -o pipefail`: without it, a failing `curl` produces no
+        # stdout, `sh` receives an empty script on stdin and exits 0
+        # (nothing to run is not an error), and the pipeline's exit code is
+        # `sh`'s -- so the `if curl | sh; then break; fi` below would
+        # report SUCCESS on the very first attempt even though curl failed
+        # and nothing was installed, making this retry loop a no-op for
+        # exactly the failure it exists to retry. Verified empirically
+        # (`false | sh` exits 0 without pipefail, 1 with it) and confirmed
+        # via the actual job log that this step's shell does not set it by
+        # default. Pinned the installer URL to a specific commit, matching
+        # this repo's stated policy elsewhere of pinning remote references
+        # to immutable hashes rather than a mutable branch.
         run: |
+          set -o pipefail
           attempts=0
           max_attempts=5
           backoff=10
           while : ; do
             attempts=$((attempts + 1))
-            if curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            if curl -sSfL https://raw.githubusercontent.com/anchore/syft/2293641e3bd628a01bb37639318d62c0ebe89b39/install.sh \
               | sh -s -- -b /usr/local/bin v1.0.1; then
               break
             fi
