@@ -4149,8 +4149,12 @@ item) and left for a dedicated session.
   — that function has zero pre-existing test coverage of any kind, so
   building a full recovery-flow harness from scratch is out of proportion to
   a Trivial nitpick. **Round-2** (CodeRabbit): fixed this document's own
-  inaccurate "single-file" verification-scope claim about all three PRs (only
-  #478 is single-file; this PR alone touched 4 files across two commits).
+  inaccurate "single-file" verification-scope claim about all three PRs (this
+  PR alone touched 4 files across two commits). That fix introduced a new,
+  narrower version of the same error — it called #478 single-file, which
+  was already false the moment it was written and stayed false as #478
+  grew; caught and removed during #478's own round-5 review-fix (below),
+  not a round of #476's.
   Neither Greptile nor Codex ever posted on this PR (confirmed via `gh api`).
 - **PR #477, MERGED** (`feat/adaptive-delta-aware-memorability-weights`) —
   closes the memorability-weight-learning gap round 11 (above) declined as
@@ -4205,7 +4209,22 @@ item) and left for a dedicated session.
   (`exit-code: 1` fires on both) by keying both scanners' status off the
   SARIF-validity check's own output instead of the scan steps' raw
   outcome. See trap 73 (the pipefail lesson) and trap 72 (recurring a
-  second time, one round after it was named).
+  second time, one round after it was named). **Round-5** (CodeRabbit,
+  reviewing round-4's own diff): two findings. The Upload Trivy/Grype
+  Results steps still uploaded unconditionally (`if: always()`) even
+  after three rounds of refining what the SARIF-validity check's `valid`
+  output meant and who consumed it — so an unavailable scanner's
+  synthetic placeholder SARIF still reached the Security tab, reading as
+  a completed zero-finding scan rather than "scanner didn't run." Gated
+  both upload steps on `valid == 'true'`, matching the Gitleaks upload
+  step's own pre-existing pattern in the same file. See trap 74: trap
+  72's shape recurring a third time on the same twelve lines — three
+  rounds each fixed an adjacent piece (the validity check itself, then
+  the summary label, then the upload gate) without checking whether a
+  still-unfixed sibling undid the improvement. Also fixed this document's
+  own §5.7b PR #476 entry, which had described #478 as "single-file" —
+  false when written and more so by round 5, when #478 spans 22 files
+  (services, tests, `App.jsx`, two CI workflows, this doc).
 
 All independently verified (targeted test suites, ESLint, `npm run build`)
 per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
