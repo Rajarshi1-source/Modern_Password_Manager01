@@ -107,6 +107,28 @@ describe('sessionVaultCryptoV3 — unlock paths', () => {
     await expect(v3.unlockWithMasterPassword('wrong-password'))
       .rejects.toThrow(v3.DEK_UNWRAP_FAILURE_MESSAGE);
   });
+
+  it('does not classify a malformed wrapped/iv field as a password desync', async () => {
+    // CodeRabbit (PR #478 review): fromB64(blob.wrapped)/fromB64(blob.iv)
+    // used to run INSIDE the same catch as unwrapKey, so a corrupt server
+    // response (bad base64, not a wrong password) was indistinguishable
+    // from DEK_UNWRAP_FAILURE_MESSAGE -- which classifyV3UnlockError reads
+    // as a genuine desync and surfaces the persistent "sign out and
+    // recover" CTA for. A malformed response should classify as
+    // transient instead (this module's own docstring already says so).
+    const v3 = await import('../sessionVaultCryptoV3.js');
+    await v3.enrollWithMasterPassword('correct-horse-battery-staple');
+    v3.clearSessionKey();
+
+    for (const field of ['wrapped', 'iv']) {
+      const good = serverState.wrappedDek[field];
+      serverState.wrappedDek[field] = '***not valid base64***';
+      await expect(
+        v3.unlockWithMasterPassword('correct-horse-battery-staple'),
+      ).rejects.not.toThrow(v3.DEK_UNWRAP_FAILURE_MESSAGE);
+      serverState.wrappedDek[field] = good;
+    }
+  });
 });
 
 describe('sessionVaultCryptoV3 — payload versioning', () => {

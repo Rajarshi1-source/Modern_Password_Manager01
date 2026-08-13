@@ -119,19 +119,30 @@ async function unwrapDEK(blob, secret, { extractable = false } = {}) {
   }
   const saltBytes = fromB64(blob.salt);
   const kek = await deriveKEK(secret, saltBytes, blob.kdf_params || DEFAULT_KDF);
+  // Decoded OUTSIDE the try/catch below, matching how `blob.salt` above is
+  // already handled: a malformed field here is a corrupt/malformed SERVER
+  // RESPONSE, not a password/KEK mismatch, and must not be relabeled as
+  // DEK_UNWRAP_FAILURE_MESSAGE -- classifyV3UnlockError (vaultV3UnlockClassifier.js)
+  // treats that exact message as a genuine desync worth a persistent
+  // "sign out and recover" prompt, while this module's own docstring already
+  // says a malformed response should fall through to the transient bucket
+  // instead. Only `unwrapKey` itself -- the actual AES-GCM authentication
+  // step -- belongs inside the catch.
+  const wrappedBytes = fromB64(blob.wrapped);
+  const ivBytes = fromB64(blob.iv);
   try {
     return await window.crypto.subtle.unwrapKey(
       'raw',
-      fromB64(blob.wrapped),
+      wrappedBytes,
       kek,
-      { name: 'AES-GCM', iv: fromB64(blob.iv) },
+      { name: 'AES-GCM', iv: ivBytes },
       { name: 'AES-GCM', length: 256 },
       extractable,
       ['encrypt', 'decrypt'],
     );
   } catch {
-    // Wrong secret, wrong salt, or corrupted blob — AES-GCM raises the
-    // same OperationError. Generic message by design.
+    // Wrong secret or corrupted wrapped-key ciphertext -- AES-GCM raises the
+    // same OperationError either way. Generic message by design.
     throw new Error(DEK_UNWRAP_FAILURE_MESSAGE);
   }
 }
