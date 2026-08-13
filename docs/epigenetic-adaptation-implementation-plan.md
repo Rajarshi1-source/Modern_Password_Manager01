@@ -4185,7 +4185,27 @@ item) and left for a dedicated session.
   JSON-aware `jq -e` predicate. The scan summary now reports "Unavailable"
   instead of an unconditional "Complete" when a scanner's steps didn't all
   succeed. See trap 72: round 2's own fix had itself introduced the
-  silently-wrong-reporting gap round 3 caught.
+  silently-wrong-reporting gap round 3 caught. **Round-4** (CodeRabbit,
+  reviewing round-3's own diff): three findings. Critical, verified
+  empirically before believing it: the round-2 `curl | sh` retry loops
+  (Syft install, Grype install) never actually retried a failing `curl` —
+  without `set -o pipefail`, a failed `curl` piped to `sh` reports `sh`'s
+  own exit code (0: empty stdin is not an error to `sh`), so the retry
+  loop "succeeds" on attempt 1 regardless of whether curl worked. Verified
+  two ways (a bare `false | sh; echo $?` test, and rebuilding the actual
+  retry-loop structure with a simulated failure) rather than trusting the
+  claim; confirmed via the original round-2 job log that this step's own
+  shell was `bash -e {0}`, missing pipefail, unlike some sibling
+  action-internal steps in the same job. Also pinned both installer URLs
+  to a specific commit (`git log -S` confirmed the mutable-`main` fetch
+  predates all of PR #478's work, but it contradicts this workflow file's
+  own stated "pin to immutable hashes" policy that every other remote
+  reference already follows), and fixed `TRIVY_STATUS` conflating
+  "scanner never ran" with "scanner ran and found real vulnerabilities"
+  (`exit-code: 1` fires on both) by keying both scanners' status off the
+  SARIF-validity check's own output instead of the scan steps' raw
+  outcome. See trap 73 (the pipefail lesson) and trap 72 (recurring a
+  second time, one round after it was named).
 
 All independently verified (targeted test suites, ESLint, `npm run build`)
 per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
