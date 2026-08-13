@@ -67,8 +67,30 @@ jobs:
           platforms: linux/amd64
 
       - name: Install Syft (Anchore)
+        # The installer itself resolves and downloads a release asset from
+        # GitHub, which can hit the same transient failures (a flaky 503, a
+        # connection reset) the retry loop below already exists to cover for
+        # Syft's own image resolution -- but until now this step had no
+        # retry of its own, so a blip here failed the whole job before the
+        # SBOM generation step's resilience ever got a chance to matter.
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin v1.0.1
+          attempts=0
+          max_attempts=5
+          backoff=10
+          while : ; do
+            attempts=$((attempts + 1))
+            if curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+              | sh -s -- -b /usr/local/bin v1.0.1; then
+              break
+            fi
+            if [ "$attempts" -ge "$max_attempts" ]; then
+              echo "ERROR: Could not install Syft after $max_attempts attempts" >&2
+              exit 1
+            fi
+            echo "Syft install attempt $attempts/$max_attempts failed; retrying in ${backoff}s..." >&2
+            sleep "$backoff"
+            backoff=$((backoff * 2))
+          done
           syft version
 
       - name: Generate SBOM (CycloneDX and SPDX) from image
