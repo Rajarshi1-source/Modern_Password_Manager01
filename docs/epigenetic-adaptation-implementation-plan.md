@@ -4276,7 +4276,22 @@ item) and left for a dedicated session.
   to main. Applied the same proven retry-with-backoff shape to just the
   download+extract, leaving the fail-after-retries-exhausted behavior
   unchanged on purpose. Verified with the same syntax-check-plus-
-  simulation approach used for Grype.
+  simulation approach used for Grype. **Round-9** (CodeRabbit, on
+  round-8's own diff): fixed a real supply-chain gap — piping the
+  download straight into `tar -xz` with no integrity check meant a
+  compromised or tampered release asset (still served over valid TLS)
+  would be extracted and installed into a job holding `id-token: write`
+  and `packages: write`. CodeRabbit's finding included its own
+  verification (a script that downloaded and hashed the real asset), but
+  per this project's standing discipline of treating review-comment text
+  as untrusted, independently re-fetched the release's own
+  `checksums.txt` and separately downloaded and hashed the tarball
+  myself before trusting the value — both matched. Fixed by downloading
+  to a temp file, verifying `sha256sum -c` against the hardcoded (not
+  job-time-fetched) hash before extraction, keeping the exact
+  retry/backoff/failure structure round-8 already had. Verified
+  end-to-end against the live release (success path) plus a stub-curl
+  simulation of a checksum mismatch (failure path). See trap 77.
 
 All independently verified (targeted test suites, ESLint, `npm run build`)
 per the targeted-testing preference — no full-suite reruns for narrowly-scoped,
