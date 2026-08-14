@@ -153,25 +153,43 @@ jobs:
         # step -- unlike the scanners -- has no continue-on-error. SBOM
         # attestation on a just-published image is not best-effort, so a
         # genuine failure should still fail the job; only the retry is new.
+        #
+        # SHA-256 pinned to the exact v1.1.0 linux/amd64 release asset --
+        # independently verified against the release's own published
+        # checksums.txt AND a fresh direct download/hash, not copied
+        # untouched from a review comment. Fetched to a temp file and
+        # verified BEFORE extraction, rather than piped straight into tar:
+        # fetching the checksum itself at job time (from the same
+        # untrusted network path being verified) would let an attacker
+        # who can replace the tarball also replace the checksum, defeating
+        # the point -- this is the download-time equivalent of Syft/Grype's
+        # install scripts being pinned to a specific commit hash above.
+        env:
+          ORAS_TARBALL_SHA256: e09e85323b24ccc8209a1506f142e3d481e6e809018537c6b3db979c891e6ad7
         run: |
           set -o pipefail
           attempts=0
           max_attempts=5
           backoff=10
+          tmp_archive="$(mktemp)"
           while : ; do
             attempts=$((attempts + 1))
-            if curl -sSfL https://github.com/oras-project/oras/releases/download/v1.1.0/oras_1.1.0_linux_amd64.tar.gz \
-              | tar -xz; then
+            if curl -sSfL -o "$tmp_archive" \
+              https://github.com/oras-project/oras/releases/download/v1.1.0/oras_1.1.0_linux_amd64.tar.gz \
+              && echo "${ORAS_TARBALL_SHA256}  ${tmp_archive}" | sha256sum -c - > /dev/null; then
               break
             fi
             if [ "$attempts" -ge "$max_attempts" ]; then
-              echo "ERROR: Could not download/extract oras after $max_attempts attempts" >&2
+              echo "ERROR: Could not download/verify oras after $max_attempts attempts" >&2
+              rm -f "$tmp_archive"
               exit 1
             fi
-            echo "oras download attempt $attempts/$max_attempts failed; retrying in ${backoff}s..." >&2
+            echo "oras download/checksum attempt $attempts/$max_attempts failed; retrying in ${backoff}s..." >&2
             sleep "$backoff"
             backoff=$((backoff * 2))
           done
+          tar -xzf "$tmp_archive"
+          rm -f "$tmp_archive"
           sudo mv oras /usr/local/bin/oras
           oras version
           oras attach ${{ env.IMAGE }} sbom.image.cyclonedx.json --artifact-type application/vnd.cyclonedx+json
