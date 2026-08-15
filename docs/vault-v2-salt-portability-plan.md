@@ -72,6 +72,54 @@ correct because CodeRabbit said so) before any change:
    implemented, not a scope increase, and the auto-generated "fix" prompt
    attached to it oversold the ask relative to its own title.
 
+**Round-3 review-fix (PR #480, CodeRabbit, 2026-08-16):** 3 findings — 1 real
+functional bug (Major), confirmed and fixed; 2 doc nitpicks, one confirmed and
+fixed, one checked empirically and **declined** (the claim was wrong):
+1. **Real bug, confirmed and fixed:** `VaultContext.jsx` — the dashboard's
+   edit gate (`canEdit`, derived from `sessionUnlocked`) and its two write
+   paths (`addItem`, `updateItem`) all gated on `sessionVaultCrypto.hasSessionKey()`
+   (v2) alone, at 5 separate call sites, while the thing they actually call to
+   encrypt (`encryptEnvelope`) prefers v3 and only falls back to v2. A v3-only
+   session — v2 init transiently failed at login, or v2 eventually retired —
+   would encrypt fine through `encryptEnvelope` but was reported as locked by
+   `VaultContext`, blocking every add/edit through the dashboard: the
+   *primary* vault-management UI, more so than `App.jsx`'s legacy `/vault`
+   form that round-1/round-2 already fixed. This directly undercuts this
+   PR's own premise (route writes through v3). Fixed with one small module-
+   level helper (`hasVaultSessionKey`, an OR of both layers, mirroring
+   `App.jsx`'s already-fixed check) and 5 one-line call-site edits — no new
+   abstraction beyond that helper. Three new tests added per CodeRabbit's
+   explicit ask ("Add tests covering v3-only sessions for canEdit, add, and
+   update behavior") — see §5. Also found and fixed in passing:
+   `VaultContext.lock.test.jsx`'s existing mock for `sessionVaultCryptoV3`
+   defined `clearSessionKey` but not `hasSessionKey` — harmless today only
+   because `||` short-circuits on v2's mocked `true` before ever reaching it,
+   which would have silently broken the moment a future test in that file
+   set v2 to `false`. Made the mock complete rather than leaving that latent
+   trap for later.
+2. **Doc fix, confirmed and applied:** the Step 1b description of
+   `setupVaultPassword`'s persistence still described the write as
+   "deliberately unguarded" — true of round-1's code, false since round-2
+   moved it after the generation check. Corrected (§4 Step 1b).
+3. **Doc nitpick, checked and declined:** CodeRabbit's claim that mutation
+   check #1's third listed test ("does not resurrect a stale cached
+   foreign-salt key…") stays green under the foreign-salt mutation was
+   **re-run, not re-read** — and found incorrect. Their reasoning traced only
+   the test's *final* assertion (a rejected decrypt after a password change,
+   which the mutation does satisfy); it missed that the SAME test makes an
+   earlier assertion first (a *successful* decrypt after re-initializing with
+   the *same* password but a freshly-minted, different salt — the "warm the
+   cache" step), which the mutation breaks immediately, before the test ever
+   reaches the assertion CodeRabbit analyzed. Actually running the mutation
+   confirms all 3 originally-listed tests fail, exactly as originally
+   documented. The plan doc's mutation-check entry was **not** changed;
+   §5 now records the empirical re-verification and why the suggested
+   correction doesn't hold, so a future reader doesn't relitigate it. This is
+   the same "verify claims against the running code, not just the reasoning"
+   discipline applied throughout this PR's review-fix rounds — it cuts both
+   ways: sometimes the review is right and the code needs to change,
+   sometimes the review's own analysis has a gap and the doc should say so.
+
 ---
 
 ## 1. The bug
@@ -236,9 +284,13 @@ committing. `unlockWithVaultPassword`'s check sits **after** its own
 unwrap-failure `catch` (which throws `'Incorrect vault password.'`), so a
 superseded-guard rejection can never be mislabeled as a wrong-password one.
 `setupVaultPassword`'s `localStorage.setItem` (persisting the wrapped-DEK
-record) stays **unguarded** — deliberately: the persisted record is valid
-regardless of which in-memory commit wins, and a later `unlockWithVaultPassword`
-call can still open it.
+record) is **guarded by the same check**, moved there in round-2 review-fix:
+the write originally ran *before* the generation check on the reasoning that
+"the persisted record is valid regardless of which commit wins" — that
+reasoning missed that persistence order follows *completion* order, not
+*start* order, so a stale (superseded) call could still overwrite a newer,
+already-committed record if it happened to finish writing last. See the
+round-2 changelog entry below for the full account.
 
 `keyForSalt` (the foreign-salt derivation inside `decryptItem`) is **not**
 guarded the same way and does not need to be: it never writes module-level
@@ -370,6 +422,26 @@ still-pending call resolving after it.
   a second call for the same `userId` (salt already exists) does not log
   again.
 
+**Round-3 review addition:** three new tests exercising a v3-only session
+(v2 `hasSessionKey()` false, v3 `hasSessionKey()` true) against the
+`hasVaultSessionKey` fix (§4 round-3 fix 1) — requested explicitly by
+CodeRabbit ("Add tests covering v3-only sessions for canEdit, add, and update
+behavior"):
+- `frontend/src/contexts/__tests__/VaultContext.lock.test.jsx` — `canEdit` is
+  `true` for a v3-only session. Required first completing that file's
+  `sessionVaultCryptoV3` mock with a `hasSessionKey` stub (previously only
+  `clearSessionKey` was mocked; harmless before this round only because `||`
+  short-circuited on v2's mocked `true`).
+- `frontend/src/contexts/__tests__/VaultContext.addItem.test.jsx` — `addItem`
+  succeeds for a v3-only session (new `sessionVaultCryptoV3` mock added to
+  this file, previously absent/using the real module).
+- `frontend/src/contexts/__tests__/VaultContext.updateItem.test.jsx` — same,
+  for `updateItem`.
+
+All three were confirmed to fail (with `hasVaultSessionKey` reverted to
+`sessionVaultCrypto.hasSessionKey()` alone) before the fix landed, and pass
+now.
+
 **Mutation checks** (per the recurring lesson from PRs #454/#475 — a test that
 passes against the broken code proves nothing). Each entry below is
 independently reproducible: apply the described edit, run the named command,
@@ -389,6 +461,18 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    with a different password`. The other 9 tests in that file stay green
    (they don't exercise the foreign-salt path). Revert the edit; re-run to
    confirm all 12 pass again.
+
+   *(Re-verified empirically in review round 3 after CodeRabbit questioned
+   whether the third test actually fails here, reasoning that its final
+   assertion — `decryptItem(envelope)` rejecting after a password change —
+   is satisfied by the mutation too, for the wrong reason, so the test would
+   stay green. Running the mutation shows this is incorrect: that same test
+   makes an EARLIER assertion first — `decryptItem(envelope)` must *resolve*
+   after re-initializing with the SAME password but a freshly-minted,
+   different salt (the "warm the cache" step) — and the mutation breaks that
+   one immediately, before the test ever reaches its final assertion. All
+   three listed tests were confirmed failing by actually running this
+   mutation, not by re-reading the source.)*
 
 2. **v3-preferred writes.** In `vaultEnvelope.js`'s `encryptEnvelope`, replace
    the body with the old unconditional `return sessionVaultCrypto.encryptItem(data);`
@@ -426,8 +510,20 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    overwrite a newer one's persisted record`. Revert; re-run (without `-t`)
    to confirm all 15 pass again.
 
-All four were performed and confirmed during PR #480 development (round 1 and
-round 2 review-fix passes); the commands above reproduce them exactly.
+5. **`hasVaultSessionKey` v2-only regression (round-3 addition).** In
+   `VaultContext.jsx`, revert `hasVaultSessionKey` to
+   `const hasVaultSessionKey = () => sessionVaultCrypto.hasSessionKey();`
+   (drop the `sessionVaultCryptoV3.hasSessionKey()` half of the OR).
+   ```bash
+   cd frontend && npx vitest run src/contexts/__tests__/ -t "v3-only"
+   ```
+   Expected failures (3): `canEdit is true for a v3-only session (v2 absent,
+   v3 present)`, `adds an item for a v3-only session (v2 absent, v3
+   present)`, `updates an item for a v3-only session (v2 absent, v3
+   present)`. Revert; re-run (without `-t`) to confirm all 8 pass again.
+
+All five were performed and confirmed during PR #480 development (rounds 1
+through 3 review-fix passes); the commands above reproduce them exactly.
 
 ---
 

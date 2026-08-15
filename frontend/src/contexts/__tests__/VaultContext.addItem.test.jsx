@@ -22,6 +22,9 @@ vi.mock('axios', () => ({
 vi.mock('../../services/sessionVaultCrypto', () => ({
   default: { hasSessionKey: vi.fn(() => true) },
 }));
+vi.mock('../../services/sessionVaultCryptoV3', () => ({
+  default: { hasSessionKey: vi.fn(() => false) },
+}));
 vi.mock('../../services/vaultEnvelope', () => ({
   encryptEnvelope: vi.fn(() => Promise.resolve('CIPHERTEXT')),
   decryptEnvelope: vi.fn(() => Promise.resolve({ name: 'x' })),
@@ -47,6 +50,7 @@ vi.mock('../../services/vaultService', () => ({
 
 import axios from 'axios';
 import sessionVaultCrypto from '../../services/sessionVaultCrypto';
+import sessionVaultCryptoV3 from '../../services/sessionVaultCryptoV3';
 import { encryptEnvelope } from '../../services/vaultEnvelope';
 import { VaultProvider, useVault } from '../VaultContext';
 
@@ -62,6 +66,7 @@ const ITEM = {
 beforeEach(() => {
   vi.clearAllMocks();
   sessionVaultCrypto.hasSessionKey.mockReturnValue(true);
+  sessionVaultCryptoV3.hasSessionKey.mockReturnValue(false);
   axios.post.mockResolvedValue({ data: { id: 7, item_id: 'new-1', created_at: 'now', updated_at: 'now' } });
   axios.get.mockResolvedValue({ data: { items: [] } });
   encryptEnvelope.mockResolvedValue('CIPHERTEXT');
@@ -105,5 +110,19 @@ describe('VaultContext.addItem (PR G)', () => {
     expect(caught.message).toMatch(/Unlock your vault/);
     expect(encryptEnvelope).not.toHaveBeenCalled();
     expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  test('adds an item for a v3-only session (v2 absent, v3 present)', async () => {
+    sessionVaultCrypto.hasSessionKey.mockReturnValue(false);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+    const { result } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(axios.get).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.addItem(ITEM);
+    });
+
+    expect(encryptEnvelope).toHaveBeenCalledWith(ITEM.data);
+    expect(axios.post).toHaveBeenCalledTimes(1);
   });
 });

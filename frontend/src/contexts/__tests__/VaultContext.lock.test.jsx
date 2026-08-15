@@ -22,7 +22,7 @@ vi.mock('../../services/sessionVaultCrypto', () => ({
   default: { hasSessionKey: vi.fn(() => true), clearSessionKey: vi.fn() },
 }));
 vi.mock('../../services/sessionVaultCryptoV3', () => ({
-  default: { clearSessionKey: vi.fn() },
+  default: { hasSessionKey: vi.fn(() => false), clearSessionKey: vi.fn() },
 }));
 vi.mock('../../services/vaultEnvelope', () => ({
   encryptEnvelope: vi.fn(() => Promise.resolve('CIPHERTEXT')),
@@ -75,5 +75,18 @@ describe('VaultContext lock (PR G)', () => {
     expect(sessionVaultCryptoV3.clearSessionKey).toHaveBeenCalledTimes(1);
     // Edit gate is locked after the keys are dropped.
     expect(result.current.canEdit).toBe(false);
+  });
+
+  test('canEdit is true for a v3-only session (v2 absent, v3 present)', async () => {
+    // v2 init transiently failed at login, or v2 has been fully retired --
+    // encryptEnvelope would still happily write via v3, so canEdit must not
+    // report locked here.
+    sessionVaultCrypto.hasSessionKey.mockReturnValue(false);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+
+    const { result } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(axios.get).toHaveBeenCalled());
+
+    expect(result.current.canEdit).toBe(true);
   });
 });

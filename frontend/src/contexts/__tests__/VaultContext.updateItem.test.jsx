@@ -24,6 +24,9 @@ vi.mock('axios', () => ({
 vi.mock('../../services/sessionVaultCrypto', () => ({
   default: { hasSessionKey: vi.fn(() => true) },
 }));
+vi.mock('../../services/sessionVaultCryptoV3', () => ({
+  default: { hasSessionKey: vi.fn(() => false) },
+}));
 vi.mock('../../services/vaultEnvelope', () => ({
   encryptEnvelope: vi.fn(() => Promise.resolve('CIPHERTEXT')),
   decryptEnvelope: vi.fn(() => Promise.resolve({ name: 'x' })),
@@ -49,6 +52,7 @@ vi.mock('../../services/vaultService', () => ({
 
 import axios from 'axios';
 import sessionVaultCrypto from '../../services/sessionVaultCrypto';
+import sessionVaultCryptoV3 from '../../services/sessionVaultCryptoV3';
 import { encryptEnvelope } from '../../services/vaultEnvelope';
 import { VaultProvider, useVault } from '../VaultContext';
 
@@ -65,6 +69,7 @@ const ITEM = {
 beforeEach(() => {
   vi.clearAllMocks();
   sessionVaultCrypto.hasSessionKey.mockReturnValue(true);
+  sessionVaultCryptoV3.hasSessionKey.mockReturnValue(false);
   axios.patch.mockResolvedValue({ data: { updated_at: '2026-06-19T00:00:00Z' } });
   axios.get.mockResolvedValue({ data: { items: [] } });
   encryptEnvelope.mockResolvedValue('CIPHERTEXT');
@@ -105,5 +110,19 @@ describe('VaultContext.updateItem (PR F)', () => {
     expect(caught.message).toMatch(/Unlock your vault/);
     expect(encryptEnvelope).not.toHaveBeenCalled();
     expect(axios.patch).not.toHaveBeenCalled();
+  });
+
+  test('updates an item for a v3-only session (v2 absent, v3 present)', async () => {
+    sessionVaultCrypto.hasSessionKey.mockReturnValue(false);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+    const { result } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(axios.get).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.updateItem(ITEM);
+    });
+
+    expect(encryptEnvelope).toHaveBeenCalledWith(ITEM.data);
+    expect(axios.patch).toHaveBeenCalledTimes(1);
   });
 });
