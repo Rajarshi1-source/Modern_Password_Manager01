@@ -63,6 +63,18 @@ let sessionPassword = null;
 // Never holds `sessionSaltB64`; that case short-circuits to `sessionKey`.
 const foreignSaltKeys = new Map();
 
+// Bumped by `clearSessionKey` and by every async session-establishing call
+// (`initSessionKeyFromPassword`, `setupVaultPassword`, `unlockWithVaultPassword`)
+// before their first await. Each such call captures its own value and only
+// commits `sessionKey`/`sessionSaltB64`/`sessionPassword` if the generation is
+// still current when its derivation resolves. Without this, a `clearSessionKey()`
+// (logout) that lands while one of those derivations is still in flight would
+// have its result silently overwritten a moment later by the stale call --
+// resurrecting a session the user just logged out of. The same guard also
+// makes a newer call always win over an older one that is still resolving
+// (e.g. a fast account switch), rather than whichever happens to settle last.
+let sessionGeneration = 0;
+
 const toB64 = (bytes) => {
   let binary = '';
   const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -180,8 +192,14 @@ const deriveKEK = async (password, saltB64) => {
  */
 export const initSessionKeyFromPassword = async (password, userId) => {
   if (!password) throw new Error('initSessionKeyFromPassword: password required');
+  const generation = ++sessionGeneration;
   const saltB64 = getOrCreateUserSalt(userId);
   const key = await deriveDirectKey(password, saltB64);
+  if (generation !== sessionGeneration) {
+    // Superseded by `clearSessionKey()` or a newer init while this was
+    // pending -- see `sessionGeneration`. Do not resurrect/clobber.
+    throw new Error('Vault session initialization was superseded by a newer request.');
+  }
   // Assign only after the derivation resolves, so a failed init leaves the
   // previous session state intact rather than half-replaced.
   sessionSaltB64 = saltB64;
@@ -217,6 +235,7 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
   }
   if (!userId) throw new Error('setupVaultPassword: userId required');
 
+  const generation = ++sessionGeneration;
   const saltB64 = getOrCreateUserSalt(userId);
   const kek = await deriveKEK(vaultPassword, saltB64);
 
@@ -242,6 +261,12 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
   };
   localStorage.setItem(wrappedStorageKey(userId), JSON.stringify(record));
 
+  if (generation !== sessionGeneration) {
+    // See `initSessionKeyFromPassword`. The wrapped-DEK record above is left
+    // persisted (a later `unlockWithVaultPassword` can still open it); only
+    // the in-memory session commit is skipped.
+    throw new Error('Vault session initialization was superseded by a newer request.');
+  }
   sessionSaltB64 = saltB64;
   sessionKey = dek;
   // Path (B) installs a DEK, not a password-derived key: there is nothing to
@@ -271,10 +296,12 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
     throw new Error('Unsupported vault key record version.');
   }
 
+  const generation = ++sessionGeneration;
   const kek = await deriveKEK(vaultPassword, record.salt);
 
+  let dek;
   try {
-    const dek = await window.crypto.subtle.unwrapKey(
+    dek = await window.crypto.subtle.unwrapKey(
       'raw',
       fromB64(record.wrapped),
       kek,
@@ -283,15 +310,21 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
       false,
       ['encrypt', 'decrypt']
     );
-    sessionSaltB64 = record.salt;
-    sessionKey = dek;
-    // See `setupVaultPassword` — path (B) has no password to memoize against.
-    sessionPassword = null;
-    foreignSaltKeys.clear();
   } catch {
-    // AES-GCM unwrap failure is the canonical "wrong password" signal.
+    // AES-GCM unwrap failure is the canonical "wrong password" signal. Kept
+    // in its own try/catch so a stale-generation throw below (unrelated to
+    // whether the password was right) can never be relabeled as this.
     throw new Error('Incorrect vault password.');
   }
+  if (generation !== sessionGeneration) {
+    // See `initSessionKeyFromPassword`.
+    throw new Error('Vault session initialization was superseded by a newer request.');
+  }
+  sessionSaltB64 = record.salt;
+  sessionKey = dek;
+  // See `setupVaultPassword` — path (B) has no password to memoize against.
+  sessionPassword = null;
+  foreignSaltKeys.clear();
 };
 
 /**
@@ -310,6 +343,8 @@ export const clearWrappedKey = (userId) => {
 export const hasSessionKey = () => sessionKey !== null;
 
 export const clearSessionKey = () => {
+  // Invalidates any in-flight init/setup/unlock call -- see `sessionGeneration`.
+  sessionGeneration += 1;
   sessionKey = null;
   sessionSaltB64 = null;
   sessionPassword = null;

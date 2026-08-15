@@ -12,6 +12,21 @@ first and are **merged**:
 | B | `fix/vault-v3-unlock-degraded-mode` | #478 | Merged 2026-08-14 |
 | **C** | **`fix/vault-v2-salt-portability`** | **this one** | In progress |
 
+**Round-1 review-fix (PR #480, CodeRabbit, 2026-08-15):** 3 actionable findings,
+all verified against the shipped code before any change and confirmed real —
+none were re-raises of already-declined items:
+1. Session-generation guard added to `initSessionKeyFromPassword`,
+   `setupVaultPassword`, `unlockWithVaultPassword` (§4 Step 1b) — closes a
+   real logout/account-switch race that Step 1's password retention made
+   newly possible.
+2. `App.jsx`'s separate auto-unlock `useEffect` (`:1137-1145`) brought in
+   line with `handleSubmit`'s already-fixed OR-of-both-keys locked check
+   (§4 Step 2 addendum).
+3. Two documentation nitpicks fixed in place: the foreign-salt-only cache
+   description (§4 Step 1) and reproducible mutation-check commands (§5).
+   Plus one documentation addition requested as "Major": the `sessionPassword`
+   security-trade-off note (§4 Step 1).
+
 ---
 
 ## 1. The bug
@@ -119,13 +134,80 @@ would be a strict downgrade. See §7.
   a key derived from it for the whole session and already clears both in
   `clearSessionKey`; the password joins that same lifecycle and is cleared in
   the same place.
-- Add `Map<saltB64, CryptoKey>` memoizing derived keys per salt. Seed it with
-  the session salt at init.
+
+  **Security trade-off, stated explicitly** (raised in PR #480 review): unlike
+  `sessionKey` (a derived, non-extractable `CryptoKey`), `sessionPassword` is
+  *raw authentication material* held in a plain JS variable for as long as the
+  session lasts. This is accepted, not accidental — it is what makes
+  cross-device foreign-salt re-derivation possible at all (§ recovery
+  material). The cleanup boundaries that bound its lifetime are: **logout**
+  (`App.jsx`'s `handleLogout` calls `sessionVaultCrypto.clearSessionKey()`),
+  **vault lock** (any caller of `clearSessionKey()`), and **user-switch**,
+  which is just a second `initSessionKeyFromPassword` call — verified below
+  that a re-init immediately discards the old password (Step 1's
+  `sessionGeneration` guard makes this atomic against races too, see the new
+  "Session-generation guard" subsection). No new cleanup path was added
+  because none was missing: `clearSessionKey` already nulled every session
+  variable that existed before this PR; `sessionPassword` was simply added to
+  that same, already-correct list.
+- Add `Map<saltB64, CryptoKey>` memoizing derived keys — **for foreign salts
+  only**. An envelope whose salt is absent or equal to `sessionSaltB64` is
+  answered directly from `sessionKey` and never touches this map; it is not
+  seeded with the session salt at init. Derivation cost is therefore one
+  session-key derivation at init, plus exactly one further derivation per
+  *distinct foreign salt* subsequently encountered (memoized as an in-flight
+  promise, so N items sharing one foreign salt still cost one derivation, not
+  N). *(Corrected from an earlier draft of this section, which described the
+  map as seeded with the session salt — CodeRabbit PR #480 review, round 1:
+  the shipped code never does this; `keyForSalt`'s fast path returns
+  `sessionKey` directly and only populates `foreignSaltKeys` on a genuine
+  cache miss for a non-session salt.)*
 - In `decryptItem`, when `parsed.salt` is present and differs from
   `sessionSaltB64`, resolve a key for *that* salt from the cache (deriving
   lazily via the existing `deriveDirectKey` on first encounter) and decrypt with
   it. Absent/equal salt keeps the current fast path exactly.
 - `clearSessionKey` clears the password and the cache.
+
+### Step 1b — Session-generation guard (round-1 review addition)
+
+Not in the original plan; added in PR #480 review round 1 after CodeRabbit
+correctly identified a race that Step 1's password retention made newly
+possible: `initSessionKeyFromPassword`, `setupVaultPassword`, and
+`unlockWithVaultPassword` each `await` a PBKDF2/Argon-class derivation
+(~100 ms) before committing `sessionKey`/`sessionSaltB64`/`sessionPassword`.
+If `clearSessionKey()` (logout) ran while one of those was still pending, the
+stale call's continuation would commit anyway a moment later — **resurrecting
+a session the user just logged out of**. The same unguarded-commit shape also
+let an *older* call clobber a *newer* one on a fast account switch, whichever
+happened to resolve last.
+
+Fix: a single module-level `sessionGeneration` counter. `clearSessionKey`
+increments it; each of the three functions above captures
+`const generation = ++sessionGeneration` before its first await and only
+commits session state if `generation === sessionGeneration` when the
+derivation resolves — otherwise it throws
+`'Vault session initialization was superseded by a newer request.'` instead of
+committing. `unlockWithVaultPassword`'s check sits **after** its own
+unwrap-failure `catch` (which throws `'Incorrect vault password.'`), so a
+superseded-guard rejection can never be mislabeled as a wrong-password one.
+`setupVaultPassword`'s `localStorage.setItem` (persisting the wrapped-DEK
+record) stays **unguarded** — deliberately: the persisted record is valid
+regardless of which in-memory commit wins, and a later `unlockWithVaultPassword`
+call can still open it.
+
+`keyForSalt` (the foreign-salt derivation inside `decryptItem`) is **not**
+guarded the same way and does not need to be: it never writes module-level
+session state, only returns a value to the one `decryptItem` call that is
+already awaiting it. A stale return there is an ordinary "caller moved on"
+situation, not a session-resurrection risk.
+
+Tests: `sessionVaultCrypto.salt.test.js`, describe block
+`"session-generation guard against stale async commits"` — one test stalls
+`crypto.subtle.deriveKey` via a controllable mock, clears the session
+mid-flight, and asserts the stale call rejects with `/superseded/i` and
+`hasSessionKey()` stays `false`; a second stalls an *older* call, lets a
+*newer* one complete normally, and asserts the newer session's own encrypted
+item still decrypts after the stale older call finally resolves and rejects.
 
 Deliberately **not** re-deriving per decrypt call: PBKDF2 at 310 000 iterations
 is ~100 ms; a 200-item vault spanning three devices would otherwise add ~20 s to
@@ -154,6 +236,40 @@ it carry that path's own salt and continue to decrypt via the session key.
   `sessionVaultCrypto.hasSessionKey()` alone, which would wrongly show the
   vault-unlock prompt to a v3-ready user.
 - Correct the false comment at `:1303-1305` (§2).
+- **Round-1 review addition:** a *second*, separate `useEffect` (`:1137-1145`)
+  auto-opens `VaultUnlockModal` whenever `isAuthenticated`/`user?.id`/
+  `user?.email` change, and — before this fix — checked
+  `sessionVaultCrypto.hasSessionKey()` alone, same as `handleSubmit` used to.
+  CodeRabbit (PR #480 review, round 1) correctly flagged that fixing
+  `handleSubmit`'s gate without fixing this parallel one leaves them
+  inconsistent: a fully-usable v3-only session (v2 init failed or hasn't run
+  this login, v3 succeeded) would save items fine via `handleSubmit`, yet this
+  effect would still open — or leave open — the "your vault is locked" modal
+  over it. Fixed with the identical OR-of-both-keys condition, so both gates
+  agree on what "locked" means.
+
+  **Deliberately not fixed in this PR:** the effect still does not *re-run* to
+  auto-dismiss the modal if a key becomes available asynchronously after it
+  already fired (its deps are React state/props, not the module-level
+  `sessionKey`/`sessionDEK` variables, which are not reactive). That is a
+  pre-existing timing gap in the effect, not something this PR's write-path
+  change introduced, and closing it would mean either polling or converting
+  session-key presence into React state — a materially larger, riskier change
+  than "keep this effect's locked-check consistent with `handleSubmit`'s."
+  Left as a known limitation; not tracked further here since it predates this
+  plan's scope.
+
+  **Test coverage note:** CodeRabbit also asked for a regression test
+  asserting the modal doesn't stay open for a v3-only session. No test file
+  for `App.jsx` exists anywhere in this codebase (verified — none of its
+  effects, including this one, have ever had dedicated test coverage); adding
+  the scaffolding needed for one (mocking `useAuth`, routing, `VaultUnlockModal`,
+  etc.) to cover a single `useEffect` condition would be a disproportionately
+  large addition for a one-line consistency fix, and out of step with "keep
+  changes minimal." The two service-level test files already added exercise
+  the actual OR-of-both-keys logic this fix uses (`vaultEnvelope.test.js`'s
+  v3-preferred/v2-fallback tests share the same predicate shape). Not covered
+  by an automated test; flagged here so it is not silently forgotten.
 
 ### Step 3 — Stop silent minting
 
@@ -188,12 +304,60 @@ original plan called for.
 mocks `encryptEnvelope`, so those tests stay valid unchanged; that is the point
 of routing `App.handleSubmit` through the same helper.
 
-**Mutation checks** (per the recurring lesson from PRs #454/#475 — a test that
-passes against the broken code proves nothing):
+**Round-1 review addition:** `sessionVaultCrypto.salt.test.js` also covers the
+session-generation guard (§4, Step 1b) — one test stalls a pending
+`initSessionKeyFromPassword` derivation, clears the session mid-flight, and
+asserts the stale call rejects (`/superseded/i`) without resurrecting the
+cleared session; a second asserts a newer call's session survives an older,
+still-pending call resolving after it.
 
-1. Restore `decryptItem`'s unconditional use of `sessionKey` → the foreign-salt
-   test must fail.
-2. Force `encryptEnvelope` back to v2-always → the v3-preference test must fail.
+**Mutation checks** (per the recurring lesson from PRs #454/#475 — a test that
+passes against the broken code proves nothing). Each entry below is
+independently reproducible: apply the described edit, run the named command,
+confirm exactly the named test(s) fail (and nothing else), then revert.
+
+1. **Foreign-salt decrypt.** In `sessionVaultCrypto.js`'s `decryptItem`, replace
+   `const key = await keyForSalt(parsed.salt);` with the old unconditional
+   `if (!sessionKey) throw new Error(...); const key = sessionKey;` (i.e. drop
+   the `keyForSalt` call entirely).
+   ```bash
+   cd frontend && npx vitest run src/services/__tests__/sessionVaultCrypto.salt.test.js
+   ```
+   Expected failures (3): `decrypts an envelope written under a different
+   (foreign) salt, given the correct password`, `derives a foreign salt key
+   once and reuses it across concurrently-decrypted items`, `does not
+   resurrect a stale cached foreign-salt key after clearSessionKey + re-init
+   with a different password`. The other 9 tests in that file stay green
+   (they don't exercise the foreign-salt path). Revert the edit; re-run to
+   confirm all 12 pass again.
+
+2. **v3-preferred writes.** In `vaultEnvelope.js`'s `encryptEnvelope`, replace
+   the body with the old unconditional `return sessionVaultCrypto.encryptItem(data);`
+   (drop the `sessionVaultCryptoV3.hasSessionKey()` branch).
+   ```bash
+   cd frontend && npx vitest run src/services/__tests__/vaultEnvelope.test.js
+   ```
+   Expected failure (1): `encryptEnvelope > prefers v3 when a v3 session key
+   is present`. The `falls back to v2` test stays green (v2-always trivially
+   satisfies "falls back to v2"). Revert; re-run to confirm all 7 pass again
+   (the file also covers `decryptEnvelope`, untouched by this mutation).
+
+3. **Session-generation guard.** In `sessionVaultCrypto.js`, delete the
+   `const generation = ++sessionGeneration;` line and the following
+   `if (generation !== sessionGeneration) { throw ...; }` block from
+   `initSessionKeyFromPassword` (the other two guarded functions can be left
+   alone — this one mutation is sufficient to demonstrate the check matters).
+   ```bash
+   cd frontend && npx vitest run src/services/__tests__/sessionVaultCrypto.salt.test.js -t "generation guard"
+   ```
+   Expected failures (2, both in describe block `session-generation guard
+   against stale async commits`): `does not resurrect a session cleared while
+   initSessionKeyFromPassword was still deriving`, `lets a newer
+   initSessionKeyFromPassword call win when an older one is still pending`.
+   Revert; re-run (without `-t`) to confirm all 12 pass again.
+
+All three were performed and confirmed during PR #480 development (round 1
+review-fix pass); the commands above reproduce them exactly.
 
 ---
 
