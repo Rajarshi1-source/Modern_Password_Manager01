@@ -8,6 +8,17 @@ import sessionVaultCrypto from '../services/sessionVaultCrypto';
 import sessionVaultCryptoV3 from '../services/sessionVaultCryptoV3';
 import { decryptEnvelope, encryptEnvelope } from '../services/vaultEnvelope';
 
+// Round-3 review fix: the dashboard's edit gate (canEdit) and its two write
+// paths (addItem/updateItem) were checking `sessionVaultCrypto.hasSessionKey()`
+// (v2) alone, while `encryptEnvelope` (the thing they actually call to encrypt)
+// prefers v3 and only falls back to v2. A v3-only session -- v2 init transiently
+// failed at login, or v2 is eventually retired -- would encrypt fine through
+// `encryptEnvelope` but was reported as locked here, blocking every add/edit.
+// Matches the identical OR-of-both-keys check already used by
+// `App.jsx`'s `handleSubmit` and its auto-unlock effect.
+const hasVaultSessionKey = () =>
+  sessionVaultCrypto.hasSessionKey() || sessionVaultCryptoV3.hasSessionKey();
+
 const VaultContext = createContext();
 
 // Default auto-lock timeout in minutes
@@ -38,12 +49,12 @@ export const VaultProvider = ({ children }) => {
   const [decryptedItems, setDecryptedItems] = useState(new Map());
   const [lazyLoadEnabled, setLazyLoadEnabled] = useState(true);
   // PR F: the dashboard's edit gate (canEdit). Editing re-encrypts the secret,
-  // so it requires a live session key. The authoritative crypto unlock is
-  // sessionVaultCrypto (v2) — set during login and cleared on logout — NOT the
-  // never-initialised vaultService.encryptionKey the old `isUnlocked` tracked.
+  // so it requires a live session key on EITHER crypto layer (`hasVaultSessionKey`)
+  // — set during login and cleared on logout — NOT the never-initialised
+  // vaultService.encryptionKey the old `isUnlocked` tracked.
   // Recomputed on auth change and on 'vault:updated' (which the login flow now
   // dispatches once the session key is established).
-  const [sessionUnlocked, setSessionUnlocked] = useState(() => sessionVaultCrypto.hasSessionKey());
+  const [sessionUnlocked, setSessionUnlocked] = useState(() => hasVaultSessionKey());
   const { isAuthenticated, user } = useAuth(); // Get auth status + identity
 
   // Fix #8: Use useMemo for vaultService
@@ -175,13 +186,13 @@ export const VaultProvider = ({ children }) => {
     // plaintext.
     setItems([]);
     setDecryptedItems(new Map());
-    setSessionUnlocked(sessionVaultCrypto.hasSessionKey());
+    setSessionUnlocked(hasVaultSessionKey());
     refreshItems();
     // 'vault:updated' fires from the add/edit write paths AND from the login
     // flow once the session key is established — recompute canEdit on each.
     const onVaultUpdated = () => {
       refreshItems();
-      setSessionUnlocked(sessionVaultCrypto.hasSessionKey());
+      setSessionUnlocked(hasVaultSessionKey());
     };
     window.addEventListener('vault:updated', onVaultUpdated);
     return () => window.removeEventListener('vault:updated', onVaultUpdated);
@@ -602,11 +613,12 @@ export const VaultProvider = ({ children }) => {
   }, [lastSyncTime, vaultService]);
 
   // Add a new item. Mirrors the proven /vault add flow (App.handleSubmit):
-  // encrypt via sessionVaultCrypto (encryptEnvelope) and POST to the detail
-  // route — NOT the never-initialised vaultService.cryptoService. Gated on a
-  // live session key; only ciphertext (never the plaintext `data`) is sent.
+  // encrypt via encryptEnvelope (v3-preferred, v2-fallback) and POST to the
+  // detail route — NOT the never-initialised vaultService.cryptoService. Gated
+  // on a live session key on EITHER crypto layer (`hasVaultSessionKey`); only
+  // ciphertext (never the plaintext `data`) is sent.
   const addItem = useCallback(async (item) => {
-    if (!sessionVaultCrypto.hasSessionKey()) {
+    if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to add items.');
       if (isMountedRef.current) setError(lockedErr.message);
       throw lockedErr;
@@ -680,10 +692,11 @@ export const VaultProvider = ({ children }) => {
   }, [firebaseInitialized, syncVault]);
 
   // PR F: edit re-encrypts the secret and persists it via the proven detail
-  // route (/api/vault/{id}/). Crypto goes through sessionVaultCrypto (v2) via
-  // encryptEnvelope — the same key the /vault add flow and list use — NOT the
-  // never-initialised vaultService.cryptoService. Gated on a live session key;
-  // only the ciphertext (never the plaintext `data`) is sent to the server.
+  // route (/api/vault/{id}/). Crypto goes through encryptEnvelope (v3-preferred,
+  // v2-fallback) — the same helper the /vault add flow and list use — NOT the
+  // never-initialised vaultService.cryptoService. Gated on a live session key on
+  // EITHER crypto layer (`hasVaultSessionKey`); only the ciphertext (never the
+  // plaintext `data`) is sent to the server.
   //
   // PATCH, not PUT: EncryptedVaultItemSerializer exposes `user` as a writable
   // (non-read-only) field, so a full PUT would require `user` in the body and
@@ -691,7 +704,7 @@ export const VaultProvider = ({ children }) => {
   // touches `favorite` (owned by the metadata-only toggleFavorite PATCH) or
   // `item_type`, so an edit can't clobber a concurrent favorite change.
   const updateItem = useCallback(async (item) => {
-    if (!sessionVaultCrypto.hasSessionKey()) {
+    if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to edit items.');
       if (isMountedRef.current) setError(lockedErr.message);
       throw lockedErr;
