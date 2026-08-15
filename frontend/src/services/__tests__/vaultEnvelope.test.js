@@ -17,6 +17,7 @@ vi.mock('../sessionVaultCrypto', () => ({
 vi.mock('../sessionVaultCryptoV3', () => ({
   default: {
     decryptItem: vi.fn(),
+    encryptItem: vi.fn(),
     hasSessionKey: vi.fn(),
   },
 }));
@@ -85,14 +86,29 @@ describe('decryptEnvelope', () => {
 });
 
 describe('encryptEnvelope', () => {
-  test('delegates to sessionVaultCrypto.encryptItem', async () => {
-    sessionVaultCrypto.encryptItem.mockResolvedValue('sealed-envelope');
+  test('prefers v3 when a v3 session key is present', async () => {
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+    sessionVaultCryptoV3.encryptItem.mockResolvedValue('v3-sealed-envelope');
     const data = { name: 'New', password: 'secret' };
 
     const out = await encryptEnvelope(data);
 
-    expect(out).toBe('sealed-envelope');
+    expect(out).toBe('v3-sealed-envelope');
+    expect(sessionVaultCryptoV3.encryptItem).toHaveBeenCalledWith(data);
+    // v3 owns the write: v2 must not also be asked to seal the same item.
+    expect(sessionVaultCrypto.encryptItem).not.toHaveBeenCalled();
+  });
+
+  test('falls back to v2 when no v3 session key is present', async () => {
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(false);
+    sessionVaultCrypto.encryptItem.mockResolvedValue('v2-sealed-envelope');
+    const data = { name: 'New', password: 'secret' };
+
+    const out = await encryptEnvelope(data);
+
+    expect(out).toBe('v2-sealed-envelope');
     expect(sessionVaultCrypto.encryptItem).toHaveBeenCalledWith(data);
     expect(sessionVaultCrypto.encryptItem).toHaveBeenCalledTimes(1);
+    expect(sessionVaultCryptoV3.encryptItem).not.toHaveBeenCalled();
   });
 });
