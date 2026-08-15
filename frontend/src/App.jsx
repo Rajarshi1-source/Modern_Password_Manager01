@@ -1139,7 +1139,11 @@ function App() {
       setShowVaultUnlock(false);
       return;
     }
-    if (!sessionVaultCrypto.hasSessionKey()) {
+    // Either layer having a key means the vault is usable — mirrors the same
+    // OR check in `handleSubmit` below. Checking v2 alone would re-open this
+    // prompt for a session that unlocked successfully via v3 but never
+    // established a v2 key (e.g. a transient v2 init failure at login).
+    if (!sessionVaultCrypto.hasSessionKey() && !sessionVaultCryptoV3.hasSessionKey()) {
       setShowVaultUnlock(true);
     }
   }, [isAuthenticated, user?.id, user?.email]);

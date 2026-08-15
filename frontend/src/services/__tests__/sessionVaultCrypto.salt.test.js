@@ -24,9 +24,24 @@ import {
   encryptItem,
   decryptItem,
   clearSessionKey,
+  hasSessionKey,
 } from '../sessionVaultCrypto';
 
 const saltStorageKey = (userId) => `vaultKeySalt:${userId}`;
+
+// Polls (via macrotask ticks, not just microtasks) until `predicate()` is
+// true. Used to wait for a stalled `deriveKey` mock's executor to actually
+// run — it fires one macro/microtask tier deeper than the call site, after
+// the real (unmocked) `importKey` call inside `deriveDirectKey` resolves.
+const waitUntil = async (predicate, timeoutMs = 1000) => {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error('waitUntil: timed out waiting for condition');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+};
 
 beforeEach(() => {
   localStorage.clear();
@@ -136,6 +151,58 @@ describe('sessionVaultCrypto — cross-device salt portability', () => {
     // the old, correct-password-derived key instead of failing.
     await initSessionKeyFromPassword('a-different-password', 'grace');
     await expect(decryptItem(envelope)).rejects.toThrow();
+  });
+});
+
+describe('sessionVaultCrypto — session-generation guard against stale async commits', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not resurrect a session cleared while initSessionKeyFromPassword was still deriving', async () => {
+    // Stall the PBKDF2 derivation so we can clear the session mid-flight and
+    // control exactly when the stalled call resolves.
+    let releaseDerive;
+    vi.spyOn(window.crypto.subtle, 'deriveKey').mockImplementation(
+      () => new Promise((resolve) => { releaseDerive = resolve; }),
+    );
+
+    const initPromise = initSessionKeyFromPassword('pw', 'ivy');
+    // Wait for execution to actually reach the mocked `deriveKey` call (it's
+    // one await deeper than this call site, behind the real `importKey`).
+    await waitUntil(() => typeof releaseDerive === 'function');
+    // The PBKDF2 call above is now suspended; nothing has committed yet.
+    clearSessionKey();
+    vi.restoreAllMocks();
+
+    // Let the stalled (now-stale) derivation resolve.
+    releaseDerive({});
+
+    await expect(initPromise).rejects.toThrow(/superseded/i);
+    // The commit must have been skipped entirely -- not just re-cleared.
+    expect(hasSessionKey()).toBe(false);
+  });
+
+  it('lets a newer initSessionKeyFromPassword call win when an older one is still pending', async () => {
+    let releaseFirstDerive;
+    const deriveKeySpy = vi.spyOn(window.crypto.subtle, 'deriveKey').mockImplementationOnce(
+      () => new Promise((resolve) => { releaseFirstDerive = resolve; }),
+    );
+
+    const firstInit = initSessionKeyFromPassword('old-account-password', 'judy');
+    await waitUntil(() => typeof releaseFirstDerive === 'function');
+    // `firstInit` is now suspended mid-derivation. A second call (e.g. a fast
+    // account switch) starts and completes normally before the first resolves.
+    deriveKeySpy.mockRestore();
+    await initSessionKeyFromPassword('new-account-password', 'judy');
+    const envelope = await encryptItem({ secret: 'newer session' });
+
+    // Now let the stale first call's derivation resolve.
+    releaseFirstDerive({});
+    await expect(firstInit).rejects.toThrow(/superseded/i);
+
+    // The newer session must still be the one in force.
+    await expect(decryptItem(envelope)).resolves.toEqual({ secret: 'newer session' });
   });
 });
 
