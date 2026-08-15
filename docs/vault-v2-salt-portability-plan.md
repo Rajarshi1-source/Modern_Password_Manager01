@@ -27,6 +27,51 @@ none were re-raises of already-declined items:
    Plus one documentation addition requested as "Major": the `sessionPassword`
    security-trade-off note (§4 Step 1).
 
+**Round-2 review-fix (PR #480, CodeRabbit, 2026-08-16):** 3 actionable
+findings, all independently verified against the round-1 code (not assumed
+correct because CodeRabbit said so) before any change:
+1. **Real bug, confirmed and fixed:** `setupVaultPassword`'s
+   `localStorage.setItem` ran *before* the round-1 generation check, so it
+   was unguarded — a stale (superseded) call could still persist its own
+   wrapped-DEK record, and if it happened to finish writing *after* the
+   newer, winning call, it would silently overwrite the newer password's
+   record with the older one's. Reproduced empirically before fixing (a
+   scratch mutation test showed the placeholder `wrapped` value from the
+   stale call landing in `localStorage` over the real newer record), fixed by
+   moving the `localStorage.setItem` after the check (§4 Step 1b), and locked
+   in with a new permanent regression test — see §5.
+2. **Real gap, confirmed and fixed (narrowly):** `login()` (`useAuth.jsx`)
+   sets `isAuthenticated` true *before* `handleLogin` (`App.jsx`) reaches the
+   v2/v3 key bootstrap — confirmed by reading both files, not taken on faith.
+   The auto-unlock `useEffect` (`:1137-1145`) fires on that early
+   `isAuthenticated` flip, can see both keys still absent, and open
+   `VaultUnlockModal` — and nothing was closing it again once the keys
+   actually finished establishing a few hundred ms later, for what could be
+   *every* password login, not just the failure-mode edge case round-1's
+   note described. Fixed with a single targeted line in `handleLogin`,
+   immediately after the v2/v3 bootstrap block: close the modal if either
+   layer is now ready (§4 Step 2 addendum, updated). This is deliberately
+   **not** the full reactive-state rewrite CodeRabbit's longer suggestion
+   described (exposing key readiness through React state with an ordering
+   guarantee) — the targeted close call resolves the concrete "stuck open"
+   failure mode CodeRabbit demonstrated without that larger, riskier change.
+   No new test added for this one — see the reasoning already on record in
+   §4 Step 2 addendum for why an `App.jsx`-level test harness is out of scope
+   here; unchanged by this round.
+3. **Documentation fix (Minor):** `vaultEnvelope.js`'s header comment claimed
+   v2 items are readable only on the device that wrote them — true before
+   round-1's Step 1, false after it for path (A) (password-login; `keyForSalt`
+   now recovers foreign-salt items on any device). The device-local limit is
+   real only for path (B) (OAuth's wrapped-DEK fallback, which has no
+   password to re-derive from). Corrected.
+4. **Nitpick, addressed:** Step 3's salt-minting/logging behavior had no
+   dedicated test coverage. Added two — see §5. Did **not** expand Step 3's
+   actual behavior beyond what round-1 shipped (a log line, not the
+   distinct-signal UI the original plan sketched and round-1 explicitly
+   declined as disproportionate) — the nitpick asked for coverage of what's
+   implemented, not a scope increase, and the auto-generated "fix" prompt
+   attached to it oversold the ask relative to its own title.
+
 ---
 
 ## 1. The bug
@@ -311,6 +356,20 @@ asserts the stale call rejects (`/superseded/i`) without resurrecting the
 cleared session; a second asserts a newer call's session survives an older,
 still-pending call resolving after it.
 
+**Round-2 review addition:** three more tests in the same file.
+- `setupVaultPassword`'s own localStorage-ordering bug (§4 Step 1b, round-2
+  fix 1) — stalls a first call's `wrapKey`, lets a second (different-password)
+  call complete and persist, then releases the stale first call and asserts
+  `localStorage` still holds the *second* call's record, not the first's. This
+  test is the direct regression check for the bug; it was confirmed to fail
+  against the pre-fix ordering before the fix landed (the stale call's
+  placeholder `wrapped` bytes were observed overwriting the real record), and
+  passes now.
+- Two tests for Step 3's minting log (§4 Step 3): a brand-new `userId` logs
+  once via `console.info` matching `/minted a new device-local vault salt/i`;
+  a second call for the same `userId` (salt already exists) does not log
+  again.
+
 **Mutation checks** (per the recurring lesson from PRs #454/#475 — a test that
 passes against the broken code proves nothing). Each entry below is
 independently reproducible: apply the described edit, run the named command,
@@ -356,8 +415,19 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    initSessionKeyFromPassword call win when an older one is still pending`.
    Revert; re-run (without `-t`) to confirm all 12 pass again.
 
-All three were performed and confirmed during PR #480 development (round 1
-review-fix pass); the commands above reproduce them exactly.
+4. **`setupVaultPassword` persistence ordering (round-2 addition).** In
+   `sessionVaultCrypto.js`, move the `localStorage.setItem(...)` call in
+   `setupVaultPassword` back to *before* the `if (generation !== ...)` check
+   (i.e. revert to the pre-round-2 ordering).
+   ```bash
+   cd frontend && npx vitest run src/services/__tests__/sessionVaultCrypto.salt.test.js -t "does not let a stale setupVaultPassword"
+   ```
+   Expected failure (1): `does not let a stale setupVaultPassword call
+   overwrite a newer one's persisted record`. Revert; re-run (without `-t`)
+   to confirm all 15 pass again.
+
+All four were performed and confirmed during PR #480 development (round 1 and
+round 2 review-fix passes); the commands above reproduce them exactly.
 
 ---
 

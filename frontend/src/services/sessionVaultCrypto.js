@@ -259,14 +259,18 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
     wrapped: toB64(new Uint8Array(wrapped)),
     salt: saltB64,
   };
-  localStorage.setItem(wrappedStorageKey(userId), JSON.stringify(record));
 
   if (generation !== sessionGeneration) {
-    // See `initSessionKeyFromPassword`. The wrapped-DEK record above is left
-    // persisted (a later `unlockWithVaultPassword` can still open it); only
-    // the in-memory session commit is skipped.
+    // See `initSessionKeyFromPassword`. Checked BEFORE the localStorage
+    // write (moved here in review round 2): persisting unconditionally let a
+    // stale call's record win the write race against a NEWER, already-
+    // completed setupVaultPassword call whenever the stale one happened to
+    // finish writing last -- overwriting the newer password's record with
+    // the older one's. The user would then be locked out with the password
+    // they just set, because the persisted blob no longer matched it.
     throw new Error('Vault session initialization was superseded by a newer request.');
   }
+  localStorage.setItem(wrappedStorageKey(userId), JSON.stringify(record));
   sessionSaltB64 = saltB64;
   sessionKey = dek;
   // Path (B) installs a DEK, not a password-derived key: there is nothing to

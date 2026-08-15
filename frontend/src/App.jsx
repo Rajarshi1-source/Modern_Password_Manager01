@@ -1427,6 +1427,22 @@ function App() {
         }
       }
 
+      // Round-2 review fix: `login()` above sets `isAuthenticated` true
+      // BEFORE this function reaches the v2/v3 bootstrap above it -- so the
+      // separate `[isAuthenticated, ...]` effect that auto-opens
+      // VaultUnlockModal can fire, see both keys absent, and open it, in the
+      // race window that closes only once the two `await`s above finish.
+      // Nothing else ever closes that modal for a password login (it isn't
+      // OAuth's setup/unlock flow), so without this line a login whose vault
+      // key auto-opened the modal during that window would leave it stuck
+      // open even though the vault is now genuinely unlocked. This is the
+      // first point in `handleLogin` where the true lock state is known, so
+      // close it here if either layer is actually ready; a no-op if the
+      // effect never opened it.
+      if (sessionVaultCrypto.hasSessionKey() || sessionVaultCryptoV3.hasSessionKey()) {
+        setShowVaultUnlock(false);
+      }
+
       // PR F: the session vault key is now established (v2 above, plus v3 when
       // available). Signal VaultContext so its dashboard edit gate (canEdit,
       // derived from sessionVaultCrypto.hasSessionKey()) flips to unlocked and

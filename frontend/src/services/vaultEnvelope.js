@@ -40,12 +40,16 @@ export async function decryptEnvelope(encrypted_data) {
  * Prefers v3 (`svc-gcm-2`) and falls back to v2 (`svc-gcm-1`).
  *
  * v3 first, because v2's key is derived from a salt that lives in this device's
- * localStorage and is never sent to the server — so a v2 item is only readable
- * on the device that wrote it (`sessionVaultCrypto`'s `keyForSalt` recovers
- * existing ones, but there is no reason to keep MAKING them). v3's DEK is
- * wrapped server-side, survives master-password rotation, and is the format the
- * login-time sweep in `legacyVaultMigration` rewrites everything into anyway —
- * writing v2 here just queued each new item for a rewrite on the next login.
+ * localStorage and is never sent to the server. For path (A) (password-login,
+ * the common case) this is no longer a hard portability wall — `sessionVaultCrypto`'s
+ * `keyForSalt` reads the envelope's OWN salt and re-derives on any device, given
+ * the master password — but path (B) (OAuth's wrapped-DEK fallback) has no
+ * password to re-derive from, so ITS items stay genuinely device-local. Either
+ * way there is no reason to keep MAKING new v2 items when v3 is available: v3's
+ * DEK is wrapped server-side, survives master-password rotation, and is the
+ * format the login-time sweep in `legacyVaultMigration` rewrites everything into
+ * anyway — writing v2 here just queued each new item for a rewrite on the next
+ * login.
  *
  * The v2 fallback is not vestigial and must stay:
  *   * OAuth sessions have no master password, so no v3 DEK — path (B)'s
