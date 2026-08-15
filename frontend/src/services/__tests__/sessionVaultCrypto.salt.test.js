@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 import {
   initSessionKeyFromPassword,
+  setupVaultPassword,
   encryptItem,
   decryptItem,
   clearSessionKey,
@@ -28,6 +29,7 @@ import {
 } from '../sessionVaultCrypto';
 
 const saltStorageKey = (userId) => `vaultKeySalt:${userId}`;
+const wrappedStorageKey = (userId) => `vaultWrappedDEK:${userId}`;
 
 // Polls (via macrotask ticks, not just microtasks) until `predicate()` is
 // true. Used to wait for a stalled `deriveKey` mock's executor to actually
@@ -51,6 +53,29 @@ beforeEach(() => {
 afterEach(() => {
   clearSessionKey();
   localStorage.clear();
+});
+
+describe('sessionVaultCrypto — salt minting is logged (Step 3)', () => {
+  it('logs once via console.info when a salt is minted for a brand-new userId', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    expect(localStorage.getItem(saltStorageKey('minerva'))).toBeNull();
+
+    await initSessionKeyFromPassword('pw', 'minerva');
+
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    expect(infoSpy.mock.calls[0][0]).toMatch(/minted a new device-local vault salt/i);
+    infoSpy.mockRestore();
+  });
+
+  it('does not log again on a subsequent call once the salt already exists', async () => {
+    await initSessionKeyFromPassword('pw', 'minerva');
+
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    await initSessionKeyFromPassword('pw', 'minerva');
+
+    expect(infoSpy).not.toHaveBeenCalled();
+    infoSpy.mockRestore();
+  });
 });
 
 describe('sessionVaultCrypto — cross-device salt portability', () => {
@@ -203,6 +228,33 @@ describe('sessionVaultCrypto — session-generation guard against stale async co
 
     // The newer session must still be the one in force.
     await expect(decryptItem(envelope)).resolves.toEqual({ secret: 'newer session' });
+  });
+
+  it('does not let a stale setupVaultPassword call overwrite a newer one\'s persisted record', async () => {
+    // Stall `wrapKey` -- the last crypto op before the record is built -- for
+    // the first call only, so a second call can complete (persist + commit)
+    // before the first's late completion tries to persist its own record.
+    let releaseFirstWrap;
+    const wrapKeySpy = vi.spyOn(window.crypto.subtle, 'wrapKey').mockImplementationOnce(
+      () => new Promise((resolve) => { releaseFirstWrap = resolve; }),
+    );
+
+    const firstSetup = setupVaultPassword('old-vault-password', 'nadia');
+    await waitUntil(() => typeof releaseFirstWrap === 'function');
+    wrapKeySpy.mockRestore();
+
+    await setupVaultPassword('new-vault-password', 'nadia');
+    const recordAfterNewerCall = localStorage.getItem(wrappedStorageKey('nadia'));
+    expect(recordAfterNewerCall).not.toBeNull();
+
+    // Let the stale first call's wrapKey resolve (any ArrayBuffer works --
+    // `toB64` just base64-encodes whatever bytes it's given).
+    releaseFirstWrap(new ArrayBuffer(8));
+    await expect(firstSetup).rejects.toThrow(/superseded/i);
+
+    // The persisted record must still be the NEWER call's, not clobbered by
+    // the stale older call finishing last.
+    expect(localStorage.getItem(wrappedStorageKey('nadia'))).toBe(recordAfterNewerCall);
   });
 });
 
