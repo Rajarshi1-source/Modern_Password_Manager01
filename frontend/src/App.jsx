@@ -30,7 +30,7 @@ import {
   V3_UNLOCK_NOT_ENROLLED,
   V3_UNLOCK_DESYNC,
 } from './services/vaultV3UnlockClassifier';
-import { decryptEnvelope } from './services/vaultEnvelope';
+import { decryptEnvelope, encryptEnvelope } from './services/vaultEnvelope';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
 
@@ -1168,14 +1168,22 @@ function App() {
     // The server only ever sees AES-GCM ciphertext. If the vault is locked
     // (typical for fresh OAuth sessions), prompt the user to set up or
     // unlock a vault password instead of silently persisting plaintext.
-    if (!sessionVaultCrypto.hasSessionKey()) {
+    // Either layer having a key means we can seal this item: `encryptEnvelope`
+    // prefers v3 and falls back to v2. Checking v2 ALONE would show the
+    // vault-unlock prompt to a perfectly unlocked v3-only session — which is
+    // every user whose legacy items have finished migrating, since nothing
+    // re-establishes a v2 key for them beyond login.
+    if (!sessionVaultCrypto.hasSessionKey() && !sessionVaultCryptoV3.hasSessionKey()) {
       setShowVaultUnlock(true);
       setError('Your vault is locked. Please set up or unlock your vault password to save items.');
       return;
     }
 
     try {
-      const encryptedPayload = await sessionVaultCrypto.encryptItem({
+      // Through the shared helper, not `sessionVaultCrypto.encryptItem`
+      // directly: this was a second write path that silently diverged from
+      // VaultContext's (v2-only, while the rest of the app moved to v3).
+      const encryptedPayload = await encryptEnvelope({
         name: formData.name,
         username: formData.username,
         password: formData.password,
@@ -1314,7 +1322,12 @@ function App() {
       // wrapped-DEK session. If the user has never been enrolled in v3
       // before, run the legacy-to-v3 migration. The legacy v2 session
       // key above stays live so any items still encrypted under
-      // svc-gcm-1 keep decrypting; new items go through v3.
+      // svc-gcm-1 keep decrypting; new items go through v3 via
+      // `encryptEnvelope`, which prefers v3 whenever the unlock below
+      // succeeded. (That last clause was false until the salt-portability
+      // PR: BOTH write paths were v2, so every "new" item was written in
+      // the legacy format and then rewritten by the sweep below on the
+      // next login.)
       //
       // The migration is split into "first-time enrollment" (await'd —
       // the user is blocked while we mint their wrapped DEK and run the

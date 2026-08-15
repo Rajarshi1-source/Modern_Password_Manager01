@@ -35,14 +35,32 @@ export async function decryptEnvelope(encrypted_data) {
 }
 
 /**
- * Encrypt a plaintext vault item object into a v2 `encrypted_data` envelope.
+ * Encrypt a plaintext vault item object into an `encrypted_data` envelope.
  *
- * Delegates to sessionVaultCrypto (v2) — the format the detail-route write path
- * already round-trips. Throws if the vault is locked (no session key).
+ * Prefers v3 (`svc-gcm-2`) and falls back to v2 (`svc-gcm-1`).
+ *
+ * v3 first, because v2's key is derived from a salt that lives in this device's
+ * localStorage and is never sent to the server — so a v2 item is only readable
+ * on the device that wrote it (`sessionVaultCrypto`'s `keyForSalt` recovers
+ * existing ones, but there is no reason to keep MAKING them). v3's DEK is
+ * wrapped server-side, survives master-password rotation, and is the format the
+ * login-time sweep in `legacyVaultMigration` rewrites everything into anyway —
+ * writing v2 here just queued each new item for a rewrite on the next login.
+ *
+ * The v2 fallback is not vestigial and must stay:
+ *   * OAuth sessions have no master password, so no v3 DEK — path (B)'s
+ *     wrapped DEK in `sessionVaultCrypto` is their only key.
+ *   * PR #478's degraded mode deliberately keeps the vault USABLE through v2
+ *     when the v3 wrapped-DEK unlock fails on a master-password desync.
+ *     Hard-failing writes here would undo that.
  *
  * @param {object} data The plaintext item fields to encrypt.
- * @returns {Promise<string>} The serialized v2 envelope.
+ * @returns {Promise<string>} The serialized envelope (v3 when available).
+ * @throws If the vault is locked on both layers.
  */
 export async function encryptEnvelope(data) {
+  if (sessionVaultCryptoV3.hasSessionKey()) {
+    return sessionVaultCryptoV3.encryptItem(data);
+  }
   return sessionVaultCrypto.encryptItem(data);
 }

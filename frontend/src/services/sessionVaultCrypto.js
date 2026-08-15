@@ -21,6 +21,19 @@
  * Item payload format (JSON string):
  *   { v: 'svc-gcm-1', iv: base64, ct: base64, salt: base64 }
  *
+ * Cross-device portability: the per-user salt is device-local (localStorage,
+ * never sent to the server), so path (A)'s session key only opens items sealed
+ * on THIS device. `decryptItem` therefore keys off the envelope's OWN `salt`
+ * field rather than the session salt, re-deriving (and memoizing) a key per
+ * distinct salt it encounters — see `keyForSalt`. Without this, items written
+ * on another device, or on this one before site data was cleared, render as
+ * "Decryption failed" despite a correct master password.
+ *
+ * Write path: v2 no longer takes new writes when v3 is available —
+ * `vaultEnvelope.encryptEnvelope` prefers `sessionVaultCryptoV3`, whose DEK is
+ * server-wrapped and has no salt-portability problem at all. v2 `encryptItem`
+ * remains the fallback for OAuth sessions and for v3-degraded logins.
+ *
  * Backward compatibility: `decryptItem` detects legacy plaintext JSON payloads
  * (no `v` field) and returns them as-is so existing vault rows still render.
  */
@@ -33,6 +46,22 @@ const WRAPPED_DEK_STORAGE_KEY = 'vaultWrappedDEK';
 
 let sessionKey = null;
 let sessionSaltB64 = null;
+// Retained ONLY for path (A) (direct derivation), so `decryptItem` can derive a
+// key for an envelope written under a DIFFERENT salt than this device's -- see
+// `keyForSalt`. This does not widen the master password's blast radius: the
+// module already held `sessionKey`, derived from this exact password, for the
+// whole session, and both are dropped together in `clearSessionKey`. Path (B)
+// (wrapped DEK) never sets this -- it has no password to retain.
+let sessionPassword = null;
+// Memoized foreign-salt keys: `saltB64 -> Promise<CryptoKey>`.
+//
+// Promises, not resolved keys, on purpose. `decryptItem` is called concurrently
+// (App.jsx maps the vault list through `Promise.all`), so caching only the
+// settled key would let N items sharing one foreign salt each kick off their own
+// PBKDF2 run before the first finished -- N * 310 000 iterations instead of one.
+//
+// Never holds `sessionSaltB64`; that case short-circuits to `sessionKey`.
+const foreignSaltKeys = new Map();
 
 const toB64 = (bytes) => {
   let binary = '';
@@ -58,6 +87,24 @@ const saltStorageKey = (userId) =>
 const wrappedStorageKey = (userId) =>
   userId ? `${WRAPPED_DEK_STORAGE_KEY}:${userId}` : WRAPPED_DEK_STORAGE_KEY;
 
+/**
+ * Read this device's per-user salt, minting one on first use.
+ *
+ * Minting is correct for a genuinely new device and unavoidable for path (A)
+ * (there is nothing server-side to fetch). What it is NOT is a signal that the
+ * user has no data: a returning user whose site data was cleared takes the same
+ * branch, and every item they already own was sealed under the salt that just
+ * disappeared.
+ *
+ * That used to be silent data loss. It no longer is — `decryptItem` recovers
+ * those items from each envelope's own `salt` field (see `keyForSalt`) — so the
+ * mint is now a recoverable event rather than a terminal one. It is still worth
+ * a log line: it is the fingerprint of a cleared/new device, and a mint that
+ * appears on a device the user has been using is the one shape here that would
+ * indicate something genuinely wrong (evicted localStorage, a changed userId
+ * key). Without this, the only evidence was a vault full of items that quietly
+ * needed re-derivation.
+ */
 const getOrCreateUserSalt = (userId) => {
   const storageKey = saltStorageKey(userId);
   let salt = localStorage.getItem(storageKey);
@@ -65,6 +112,12 @@ const getOrCreateUserSalt = (userId) => {
     const raw = window.crypto.getRandomValues(new Uint8Array(16));
     salt = toB64(raw);
     localStorage.setItem(storageKey, salt);
+    // eslint-disable-next-line no-console
+    console.info(
+      'sessionVaultCrypto: minted a new device-local vault salt. Existing items '
+      + 'sealed under a previous salt stay readable — they are re-derived from '
+      + 'each envelope\'s own salt.',
+    );
   }
   return salt;
 };
@@ -128,8 +181,15 @@ const deriveKEK = async (password, saltB64) => {
 export const initSessionKeyFromPassword = async (password, userId) => {
   if (!password) throw new Error('initSessionKeyFromPassword: password required');
   const saltB64 = getOrCreateUserSalt(userId);
+  const key = await deriveDirectKey(password, saltB64);
+  // Assign only after the derivation resolves, so a failed init leaves the
+  // previous session state intact rather than half-replaced.
   sessionSaltB64 = saltB64;
-  sessionKey = await deriveDirectKey(password, saltB64);
+  sessionKey = key;
+  sessionPassword = password;
+  // A re-init (different account, or the same one after a password change)
+  // invalidates every memoized key -- they were derived from the OLD password.
+  foreignSaltKeys.clear();
 };
 
 // ----------------------------------------------------------------------------
@@ -184,6 +244,11 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
 
   sessionSaltB64 = saltB64;
   sessionKey = dek;
+  // Path (B) installs a DEK, not a password-derived key: there is nothing to
+  // derive foreign-salt keys FROM, so drop any path-(A) leftovers rather than
+  // letting `keyForSalt` derive with a password that doesn't match this session.
+  sessionPassword = null;
+  foreignSaltKeys.clear();
 };
 
 /**
@@ -220,6 +285,9 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
     );
     sessionSaltB64 = record.salt;
     sessionKey = dek;
+    // See `setupVaultPassword` — path (B) has no password to memoize against.
+    sessionPassword = null;
+    foreignSaltKeys.clear();
   } catch {
     // AES-GCM unwrap failure is the canonical "wrong password" signal.
     throw new Error('Incorrect vault password.');
@@ -244,6 +312,62 @@ export const hasSessionKey = () => sessionKey !== null;
 export const clearSessionKey = () => {
   sessionKey = null;
   sessionSaltB64 = null;
+  sessionPassword = null;
+  foreignSaltKeys.clear();
+};
+
+/**
+ * Resolve the AES-GCM key that opens an envelope written under `saltB64`.
+ *
+ * The v2 salt is device-local: `getOrCreateUserSalt` mints it into
+ * localStorage and never sends it to the server. So an item encrypted on
+ * another device (or on this one before site data was cleared) was sealed
+ * under a salt this device has never seen, and the session key cannot open
+ * it — which is why such items rendered as "Decryption failed" even with the
+ * correct master password.
+ *
+ * The fix needs no migration and no new server field, because `encryptItem`
+ * has always stamped `salt: sessionSaltB64` into every envelope (see below).
+ * The salt each item needs is already stored alongside it; it was simply
+ * never read. Given the master password — retained by
+ * `initSessionKeyFromPassword` for exactly this — the original key is
+ * re-derivable on any device.
+ *
+ * @param {unknown} saltB64 The envelope's `salt` field.
+ * @returns {Promise<CryptoKey>} The session key when `saltB64` is absent or
+ *   matches this session's salt; otherwise a key derived for that salt.
+ */
+const keyForSalt = async (saltB64) => {
+  if (!sessionKey) {
+    throw new Error('Vault is locked: session encryption key is not initialized.');
+  }
+  // Fast path: the overwhelmingly common case (item written on this device),
+  // plus pre-salt envelopes, which predate the field and can only ever have
+  // been written under this device's salt anyway.
+  if (typeof saltB64 !== 'string' || !saltB64 || saltB64 === sessionSaltB64) {
+    return sessionKey;
+  }
+  // Foreign salt, but no password to derive from — path (B) wrapped-DEK
+  // sessions. Fall through to the session key: it won't open the item, but
+  // that is exactly today's behaviour and the caller already handles the throw.
+  if (!sessionPassword) {
+    return sessionKey;
+  }
+  let pending = foreignSaltKeys.get(saltB64);
+  if (!pending) {
+    pending = deriveDirectKey(sessionPassword, saltB64);
+    foreignSaltKeys.set(saltB64, pending);
+    // Don't let a transient WebCrypto failure poison the cache for the rest of
+    // the session — a retry should be allowed to derive again. `.catch` here
+    // only unregisters; the rejection still propagates to the awaiting caller
+    // through `pending` itself.
+    pending.catch(() => {
+      if (foreignSaltKeys.get(saltB64) === pending) {
+        foreignSaltKeys.delete(saltB64);
+      }
+    });
+  }
+  return pending;
 };
 
 /**
@@ -302,15 +426,15 @@ export const decryptItem = async (payloadStr) => {
     return { _legacyPlaintext: true };
   }
 
-  if (!sessionKey) {
-    throw new Error('Vault is locked: session encryption key is not initialized.');
-  }
+  // Decrypt under the salt the envelope was SEALED with, not this device's.
+  // `keyForSalt` throws the locked-vault error when there is no session key.
+  const key = await keyForSalt(parsed.salt);
 
   const iv = fromB64(parsed.iv);
   const ct = fromB64(parsed.ct);
   const ptBuf = await window.crypto.subtle.decrypt(
     { name: 'AES-GCM', iv },
-    sessionKey,
+    key,
     ct
   );
   const text = new TextDecoder().decode(ptBuf);
