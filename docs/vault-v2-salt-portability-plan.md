@@ -1,6 +1,7 @@
 # Vault v2 Salt Portability — Implementation Plan
 
-Status as of 2026-08-15. Branch `fix/vault-v2-salt-portability`.
+Status as of 2026-08-16 (initial snapshot 2026-08-15; rounds 2-5 below are
+2026-08-16). Branch `fix/vault-v2-salt-portability`.
 
 Originally drafted as "PLAN C — v2 key derivation: device-local salt and no
 verifier", the third of three independent follow-ups. The other two shipped
@@ -193,6 +194,42 @@ it was blocking this PR's checks):
    CI's own validator script (extracted from
    `.github/workflows/security-multi-scanner.yml`) against the edited
    manifest before pushing: 27 entries, zero malformed, zero expired.
+
+**Round-6 review-fix (PR #480, CodeRabbit, 2026-08-16):** 1 real functional
+bug (Minor, confirmed and fixed) + 2 trivial doc/test-precision nitpicks,
+both confirmed and fixed:
+1. **Real bug, confirmed and fixed:** `App.jsx`'s `VaultUnlockModal
+   onUnlocked` callback — the OAuth vault-password setup/unlock completion
+   path — only did `setShowVaultUnlock(false); setError(null);`. Verified by
+   reading `VaultUnlockModal.jsx`'s `handleSubmit` that `onUnlocked()` fires
+   *only* after `setupVaultPassword`/`unlockWithVaultPassword` already
+   succeeded (the v2 session key is live by then), and by reading
+   `VaultContext.jsx` that `canEdit` (`sessionUnlocked`) is only recomputed
+   on an auth-identity change or a `'vault:updated'` event — neither of
+   which this completion path was triggering. Also confirmed
+   `VaultDashboard.jsx:501` gates real edit attempts on `canEdit` with
+   `toast.error('Unlock your vault to edit items.')` — so an OAuth user who
+   just successfully set up or unlocked their vault password would
+   immediately hit that exact "locked" error on their next edit attempt,
+   until something unrelated happened to refresh `canEdit`. Fixed with one
+   line — `window.dispatchEvent(new CustomEvent('vault:updated'))` inside
+   `onUnlocked`, matching the identical dispatch `handleLogin` already does
+   right after establishing the v2/v3 keys on a password login. No new test:
+   same reasoning as round-3's `App.jsx`-level gap (§4 Step 2 addendum) — no
+   `App.jsx` test file exists anywhere in this codebase, and building the
+   scaffolding for one to cover a single callback would be disproportionate
+   to "keep changes minimal."
+2. **Nitpick, confirmed and fixed:** the round-5 test's
+   `rejects.toThrow(/session/i)` also matches `keyForSalt`'s unrelated
+   `'Vault is locked: session encryption key is not initialized.'` message —
+   so the test could in principle pass for the wrong reason if a future
+   change altered *when* that check fires relative to the generation guard.
+   Tightened to match the exact guard message
+   (`/session changed while decrypting/i`).
+3. **Nitpick, confirmed and fixed:** this doc's status line still said
+   "2026-08-15" after rounds 2-5 (all dated 2026-08-16) were added.
+   Corrected, labeling 2026-08-15 explicitly as the initial snapshot date
+   rather than silently overwriting it.
 
 ---
 
