@@ -384,6 +384,25 @@ check **discovered independently** while re-verifying it:
    mutation to paper over it, which would have been scope beyond this round's
    actual findings.
 
+**Round-12 review-fix (PR #480, CodeRabbit, 2026-08-16):** 2 doc findings —
+1 **declined as factually incorrect**, 1 **confirmed and fixed** (a
+self-contradiction introduced by round 11's own edit):
+1. **Declined:** CodeRabbit claimed the round-5 verification note's "27
+   entries" for `pip-audit-ignores.txt` should read 26. Re-ran the CI's own
+   validator script against the current manifest before changing anything
+   (same script used for the original verification): 27 entries, 0
+   malformed, 0 expired — counted the list twice, by script and by hand.
+   The doc was already correct; CodeRabbit's claim was wrong. Left
+   unchanged.
+2. **Confirmed and fixed:** §5's mutation-checks closing line said "All
+   seven were performed... the commands above reproduce them exactly" —
+   directly contradicting check 5's own entry two paragraphs above it (added
+   in round 11: "This mutation no longer applies as written... zero effect
+   ... Left as a documented gap"). Round 11 added the honest caveat to check
+   5 but never propagated it to the summary line. Corrected the summary to
+   say 6 of 7 are reproducible and confirmed, with check 5 explicitly called
+   out as retired rather than silently re-claimed as passing.
+
 ---
 
 ## 1. The bug
@@ -895,8 +914,17 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    they instead pin that each call site still calls whatever
    `hasVaultSessionKey` resolves to, which is what matters for them.)
 
-All seven were performed and confirmed during PR #480 development (rounds 1
-through 10 review-fix passes); the commands above reproduce them exactly.
+Six of the seven are currently reproducible via the commands above and were
+performed and confirmed during PR #480 development (rounds 1 through 10
+review-fix passes). **Check 5 is retired, not reproducible**: as documented
+in its own entry above (round 11), round 10's refactor moved the code it
+targets into a module every consuming test file now mocks wholesale, so the
+source-code mutation it describes no longer has any effect on the tests it
+names — confirmed by actually running it, not assumed. Left as a documented
+gap rather than restated as passing. *(Corrected in review round 12 — this
+line previously claimed "all seven," contradicting check 5's own entry two
+paragraphs above it, added in the same round-11 edit that should have
+updated this line too.)*
 
 ---
 
