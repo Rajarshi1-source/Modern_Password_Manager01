@@ -2056,6 +2056,15 @@ function App() {
               onUnlocked={() => {
                 setShowVaultUnlock(false);
                 setError(null);
+                // VaultUnlockModal only calls this after `setupVaultPassword`/
+                // `unlockWithVaultPassword` already succeeded, so the v2
+                // session key is live now -- but VaultContext's canEdit
+                // (sessionUnlocked) is only recomputed on auth change or this
+                // event, neither of which this OAuth setup/unlock flow was
+                // triggering. Without it, the dashboard's canEdit gate
+                // (VaultDashboard.jsx) stayed locked -- "Unlock your vault to
+                // edit items" -- immediately after the user did exactly that.
+                window.dispatchEvent(new CustomEvent('vault:updated'));
               }}
               onClose={() => setShowVaultUnlock(false)}
             />

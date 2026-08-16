@@ -293,8 +293,10 @@ describe('sessionVaultCrypto — session-generation guard against stale async co
 
     // The derivation resolves to the cryptographically CORRECT key for
     // `envelope` -- decryption would succeed and return real plaintext if
-    // nothing checked that the session changed underneath it.
-    await expect(decryptPromise).rejects.toThrow(/session/i);
+    // nothing checked that the session changed underneath it. Matched on the
+    // exact generation-guard message, not a loose /session/i, so this test
+    // can't pass because of an unrelated locked-vault rejection instead.
+    await expect(decryptPromise).rejects.toThrow(/session changed while decrypting/i);
   });
 });
 
