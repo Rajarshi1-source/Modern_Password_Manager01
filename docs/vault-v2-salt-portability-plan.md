@@ -28,7 +28,7 @@ none were re-raises of already-declined items:
    Plus one documentation addition requested as "Major": the `sessionPassword`
    security-trade-off note (§4 Step 1).
 
-**Round-2 review-fix (PR #480, CodeRabbit, 2026-08-16):** 3 actionable
+**Round-2 review-fix (PR #480, CodeRabbit, 2026-08-16):** 4 actionable
 findings, all independently verified against the round-1 code (not assumed
 correct because CodeRabbit said so) before any change:
 1. **Real bug, confirmed and fixed:** `setupVaultPassword`'s
@@ -272,6 +272,20 @@ that this conflates two distinct outcomes: `_legacyPlaintext` only for
 parsed JSON lacking valid v2 fields; `{}` for empty or non-JSON payloads
 (which never reach the field check at all). Split into two accurate bullets.
 
+**Round-9 review-fix (PR #480, CodeRabbit, 2026-08-16):** 2 trivial doc
+nitpicks, both confirmed and fixed; no code changes this round.
+1. The "Round-2 review-fix" heading said "3 actionable findings" while its
+   own numbered list had 4 items — a plain counting error, confirmed by
+   counting. Corrected to 4.
+2. §4 Step 2's `handleSubmit` lock-gate bullet said "today it checks
+   `sessionVaultCrypto.hasSessionKey()` alone" — accurate when written
+   (describing the pre-fix state that justified the change), but confirmed
+   stale now that the gate has shipped as an OR-of-both-layers check (see
+   `App.jsx`'s `handleSubmit`, and the very next bullet in this same
+   section, which already documents the fix). "today" read as
+   present-tense-as-of-now to anyone reading the doc post-fix. Reworded to
+   "before this PR."
+
 ---
 
 ## 1. The bug
@@ -494,9 +508,9 @@ it carry that path's own salt and continue to decrypt via the session key.
 - `handleSubmit` (`:1178`) goes through `encryptEnvelope` instead of calling
   `sessionVaultCrypto.encryptItem` directly — removing the second, divergent
   write path rather than teaching it the same trick.
-- Its lock gate (`:1171`) must accept a v3-only session; today it checks
-  `sessionVaultCrypto.hasSessionKey()` alone, which would wrongly show the
-  vault-unlock prompt to a v3-ready user.
+- Its lock gate (`:1171`) must accept a v3-only session; before this PR it
+  checked `sessionVaultCrypto.hasSessionKey()` alone, which would wrongly
+  show the vault-unlock prompt to a v3-ready user.
 - Correct the false comment at `:1303-1305` (§2).
 - **Round-1 review addition:** a *second*, separate `useEffect` (`:1137-1145`)
   auto-opens `VaultUnlockModal` whenever `isAuthenticated`/`user?.id`/
