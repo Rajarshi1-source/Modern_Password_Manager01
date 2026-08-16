@@ -341,6 +341,49 @@ actionable (Minor, doc), 3 nitpicks (all confirmed and fixed):
    would have been technically accurate but would leave a future reader
    confused about why an unrelated-sounding test fails there.
 
+**Round-11 review-fix (PR #480, CodeRabbit, 2026-08-16):** 3 findings — 1
+re-raise **declined** (already declined in round 7, nothing changed since),
+1 **declined** as factually incorrect (already fixed), 1 doc-count staleness
+**confirmed and fixed**, plus a deeper staleness in an adjacent mutation
+check **discovered independently** while re-verifying it:
+1. **Declined, re-raise of round 7:** bound `foreignSaltKeys` with an LRU
+   cache. Same substantive claim as round 7's already-declined nitpick
+   (reworded: "8-16" instead of "8" entries), same self-inflicted-at-best
+   threat model, same CodeRabbit-acknowledged "Trivial | Low value" rating.
+   Nothing in the code or threat model has changed since round 7's decision
+   — see that entry above for the full reasoning. Not re-litigated.
+2. **Declined, factually incorrect:** CodeRabbit claimed
+   `VaultContext.addItem.test.jsx` (line 79) and `VaultContext.updateItem.test.jsx`
+   (line 82) reset only `sessionVaultCryptoV3.hasSessionKey` in `beforeEach`,
+   not `sessionVaultCrypto.hasSessionKey` — the same class of gap round 10
+   fixed in `VaultContext.lock.test.jsx`. Read both files directly before
+   changing anything: **both already reset both mocks**, exactly as round 10
+   left them (`sessionVaultCrypto.hasSessionKey.mockReturnValue(true);` /
+   `sessionVaultCryptoV3.hasSessionKey.mockReturnValue(false);`, both present,
+   confirmed at the cited line numbers). The requested fix is already
+   shipped; applying it again would be a no-op at best. Likely a stale or
+   diff-confused read on CodeRabbit's side (round 10's diff for these two
+   files shows the v3 line being ADDED next to an unchanged v2 line — easy to
+   misread as "only v3 present" from the diff alone without checking the
+   resulting file).
+3. **Confirmed and fixed, plus an independent discovery:** §5's mutation
+   check counts for `vaultEnvelope.test.js` (7 → 10, round 10 added 3 tests)
+   and §8 Risk's "Both mutation checks above must be demonstrated failing"
+   (a leftover from the original 2-check draft, never updated across 10
+   rounds — round 4's own grep audit for this exact phrase searched the doc
+   but missed this specific line). Both corrected. **CodeRabbit's own claim
+   that the context suite is "9 tests, not 8" was checked and found wrong**
+   — ran it directly: 8, matching what the doc already said; left unchanged.
+   **While re-verifying mutation check 5 (not something CodeRabbit flagged),
+   found it no longer reproducible as written:** round 10 moved
+   `hasVaultSessionKey` out of `VaultContext.jsx` into `vaultEnvelope.js`, and
+   every `VaultContext.*.test.jsx` file mocks that module wholesale — so
+   mutating the real, now-relocated function has zero effect on the 3 tests
+   this check names (verified by actually running the mutation: all 8 tests
+   still passed). Documented as a discovered gap rather than inventing a new
+   mutation to paper over it, which would have been scope beyond this round's
+   actual findings.
+
 ---
 
 ## 1. The bug
@@ -759,8 +802,9 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    ```
    Expected failure (1): `encryptEnvelope > prefers v3 when a v3 session key
    is present`. The `falls back to v2` test stays green (v2-always trivially
-   satisfies "falls back to v2"). Revert; re-run to confirm all 7 pass again
-   (the file also covers `decryptEnvelope`, untouched by this mutation).
+   satisfies "falls back to v2"). Revert; re-run to confirm all 10 pass again
+   (the file also covers `decryptEnvelope` and, since round 10,
+   `hasVaultSessionKey`, both untouched by this mutation).
 
 3. **Session-generation guard.** In `sessionVaultCrypto.js`, delete the
    `const generation = ++sessionGeneration;` line and the following
@@ -791,17 +835,37 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    against the current 16-test file: still exactly 1. Revert; re-run
    (without `-t`) to confirm all 16 pass again.
 
-5. **`hasVaultSessionKey` v2-only regression (round-3 addition).** In
-   `VaultContext.jsx`, revert `hasVaultSessionKey` to
+5. **`hasVaultSessionKey` v2-only regression (round-3 addition; mechanism
+   changed by round 10, see note below).** Originally: in `VaultContext.jsx`,
+   revert `hasVaultSessionKey` to
    `const hasVaultSessionKey = () => sessionVaultCrypto.hasSessionKey();`
-   (drop the `sessionVaultCryptoV3.hasSessionKey()` half of the OR).
+   (drop the `sessionVaultCryptoV3.hasSessionKey()` half of the OR), then:
    ```bash
    cd frontend && npx vitest run src/contexts/__tests__/ -t "v3-only"
    ```
-   Expected failures (3): `canEdit is true for a v3-only session (v2 absent,
+   expecting failures (3): `canEdit is true for a v3-only session (v2 absent,
    v3 present)`, `adds an item for a v3-only session (v2 absent, v3
    present)`, `updates an item for a v3-only session (v2 absent, v3
-   present)`. Revert; re-run (without `-t`) to confirm all 8 pass again.
+   present)`; revert; re-run (without `-t`) to confirm all 8 pass again.
+
+   **This mutation no longer applies as written, discovered in round 11
+   while re-verifying it:** since round 10, `VaultContext.jsx` has no local
+   `hasVaultSessionKey` to revert — it imports the shared one from
+   `vaultEnvelope.js`. Mutating THAT export instead was tried and produces
+   **zero effect** — all 8 tests still pass — because every
+   `VaultContext.*.test.jsx` file mocks `vaultEnvelope.js` wholesale; the
+   mocked `hasVaultSessionKey` (a `vi.hoisted()` closure hardcoding
+   `mockV2HasSessionKey() || mockV3HasSessionKey()`, added in round 10) never
+   calls through to the real implementation, so a source-code mutation to it
+   is invisible to these tests. There is no longer a source-code edit that
+   reproduces this specific regression through this test file: the "does
+   `VaultContext` correctly compute `canEdit`/`addItem`/`updateItem` from
+   whatever `hasVaultSessionKey` returns" guarantee these 3 tests exercise is
+   now fixed by construction of the mock itself, and the "does the real
+   `hasVaultSessionKey` compute correctly" guarantee is check 7's job, not
+   this one's. Left as a documented gap rather than inventing a new
+   multi-call-site mutation to keep this check technically reproducible —
+   that would be new scope beyond what round 11's review asked for.
 
 6. **`decryptItem` post-derivation session check (round-5 addition).** In
    `sessionVaultCrypto.js`, remove both
@@ -871,5 +935,9 @@ vault item. Mitigations actually in force:
   runs where today's code throws. No currently-working decrypt changes behaviour.
 - Step 2's v2 fallback means a v3 outage degrades to today's behaviour rather
   than to a write failure.
-- Both mutation checks above must be demonstrated failing before merge.
+- All seven documented mutation checks (§5) must be demonstrated failing
+  before merge. *(Corrected in review round 11 — this line was leftover
+  from the original 2-check draft and was never updated as rounds 1-10 grew
+  the list to seven; round 4's own audit for stray "both mutation checks"
+  phrasing searched the doc but missed this specific line.)*
 - Shipped alone, never alongside Plan A or B (both already merged regardless).
