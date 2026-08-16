@@ -150,6 +150,50 @@ review ("Actionable comments posted: 2") contained only the two below.
    checks exists anywhere in the doc (grepped) — that part of the review
    comment didn't match anything in the current file.
 
+**Round-5 review-fix (PR #480, CodeRabbit, 2026-08-16):** 1 real security
+finding (Major, confirmed and fixed) plus the CI-blocking pip-audit
+suppression expiry (unrelated to the code review, fixed alongside it since
+it was blocking this PR's checks):
+1. **Real bug, confirmed and fixed:** `decryptItem` could return real
+   plaintext to a caller **after logout**. A foreign-salt `keyForSalt`
+   derivation is a ~100ms PBKDF2 run — long enough for `clearSessionKey()`
+   to land mid-flight. `keyForSalt`'s own no-guard reasoning ("never writes
+   module state") is still correct as far as it goes, but it doesn't cover
+   the case where the STALE-but-still-valid key it returns is used to
+   successfully decrypt the envelope it was derived for, handing real
+   plaintext back to whatever called `decryptItem` before the logout — a
+   confidentiality problem distinct from the module-state-resurrection risk
+   the original reasoning addressed. **Reproduced empirically before
+   fixing**, not assumed from the report: a new test gates the real
+   `deriveKey` call behind a controllable delay (not a mock returning a
+   placeholder — that would make the test pass for the wrong reason, since
+   `decryptItem` would then fail on an invalid-key error regardless of any
+   fix), calls `clearSessionKey()` while the derivation is pending, then
+   releases it; against the pre-fix code this resolved with the real
+   plaintext (`{secret: 'stale-plaintext'}`) instead of rejecting, proving
+   the bug. Fixed exactly as proposed: `decryptItem` captures
+   `sessionGeneration` before calling `keyForSalt`, and checks it again both
+   after `keyForSalt` resolves and after `subtle.decrypt` resolves — two
+   checks, not one, because `subtle.decrypt` is its own async gap where a
+   logout could equally land. `keyForSalt` itself is intentionally left
+   unguarded, per the (now-corrected, not reversed) reasoning above the
+   round-1 changelog entry. Plan-doc claim revised — see § "1b" above.
+2. **Unrelated but blocking, fixed alongside:** the CI's
+   `pip-audit-ignores.txt` suppression check was failing — two entries
+   (`PYSEC-2025-192`, `PYSEC-2025-193`, both torch advisories) expired
+   2026-08-15. **Not a routine date bump:** queried OSV directly
+   (`api.osv.dev`) for both before touching anything, per this file's own
+   "verify, don't assume" convention (already established for the sibling
+   PYSEC-2025-189/190/191 removal earlier in this same file) — both cap at
+   `last_affected: 2.6.0`, and the project's actual pin
+   (`torch==2.12.0+cpu`, `requirements-lock.txt`) is well past that ceiling,
+   so pip-audit's own version-range match no longer flags either against
+   this pin at all. Removed rather than renewed, matching the identical
+   precedent already in the file. Verified the fix locally by running the
+   CI's own validator script (extracted from
+   `.github/workflows/security-multi-scanner.yml`) against the edited
+   manifest before pushing: 27 entries, zero malformed, zero expired.
+
 ---
 
 ## 1. The bug
@@ -322,11 +366,24 @@ reasoning missed that persistence order follows *completion* order, not
 already-committed record if it happened to finish writing last. See the
 round-2 changelog entry below for the full account.
 
-`keyForSalt` (the foreign-salt derivation inside `decryptItem`) is **not**
-guarded the same way and does not need to be: it never writes module-level
-session state, only returns a value to the one `decryptItem` call that is
-already awaiting it. A stale return there is an ordinary "caller moved on"
-situation, not a session-resurrection risk.
+`keyForSalt` (the foreign-salt derivation inside `decryptItem`) itself is
+still **not** guarded, and that half of the original claim holds: it never
+writes module-level session state, so a stale `keyForSalt` return can't
+resurrect or clobber a session the way an unguarded `initSessionKeyFromPassword`
+commit could.
+
+**The second half of the original claim — "not a session-resurrection risk,
+[full stop]" — was incomplete, corrected in round 5.** A stale-but-still-
+cryptographically-valid key returned by `keyForSalt` can still successfully
+decrypt the SAME envelope it was derived for and hand real plaintext back to
+whatever called `decryptItem` — even after `clearSessionKey()` (logout) ran
+while that derivation was still in flight. That's not module-state
+resurrection, but it's a distinct, real confidentiality problem: plaintext
+flowing out of the crypto layer to a caller that requested it before logout.
+`decryptItem` now guards against this itself (see the round-5 changelog entry
+below) — captures the generation before calling `keyForSalt`, and rejects if
+it has changed by the time `keyForSalt` OR the subsequent `subtle.decrypt`
+resolves, rather than returning plaintext into a post-logout world.
 
 Tests: `sessionVaultCrypto.salt.test.js`, describe block
 `"session-generation guard against stale async commits"` — one test stalls
@@ -484,6 +541,17 @@ All three were confirmed to fail (with `hasVaultSessionKey` reverted to
 `sessionVaultCrypto.hasSessionKey()` alone) before the fix landed, and pass
 now.
 
+**Round-5 review addition:** one new test in
+`sessionVaultCrypto.salt.test.js`, in the same generation-guard describe
+block — `rejects a foreign-salt decrypt whose derivation outlives
+clearSessionKey (logout mid-flight)`. Gates the REAL `crypto.subtle.deriveKey`
+call behind a controllable delay (wraps and awaits a manually-released gate,
+then calls through to the original implementation) rather than mocking it to
+return a placeholder — deliberately, so that if the test passes it's because
+the fix's generation check rejected it, not because a fake key incidentally
+failed to decrypt. Confirmed failing against the pre-fix code first (resolved
+with the real plaintext instead of rejecting) before the fix landed.
+
 **Mutation checks** (per the recurring lesson from PRs #454/#475 — a test that
 passes against the broken code proves nothing). Each entry below is
 independently reproducible: apply the described edit, run the named command,
@@ -564,8 +632,20 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    present)`, `updates an item for a v3-only session (v2 absent, v3
    present)`. Revert; re-run (without `-t`) to confirm all 8 pass again.
 
-All five were performed and confirmed during PR #480 development (rounds 1
-through 3 review-fix passes); the commands above reproduce them exactly.
+6. **`decryptItem` post-derivation session check (round-5 addition).** In
+   `sessionVaultCrypto.js`, remove both
+   `if (generation !== sessionGeneration) { throw ...; }` blocks from
+   `decryptItem` (and the `const generation = sessionGeneration;` line).
+   ```bash
+   cd frontend && npx vitest run src/services/__tests__/sessionVaultCrypto.salt.test.js -t "outlives clearSessionKey"
+   ```
+   Expected failure (1): `rejects a foreign-salt decrypt whose derivation
+   outlives clearSessionKey (logout mid-flight)` — the mutated code resolves
+   with the real plaintext (`{secret: 'stale-plaintext'}`) instead of
+   rejecting. Revert; re-run (without `-t`) to confirm all 16 pass again.
+
+All six were performed and confirmed during PR #480 development (rounds 1
+through 5 review-fix passes); the commands above reproduce them exactly.
 
 ---
 

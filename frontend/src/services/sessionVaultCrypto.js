@@ -465,9 +465,26 @@ export const decryptItem = async (payloadStr) => {
     return { _legacyPlaintext: true };
   }
 
+  // Captured BEFORE the two awaits below, which is where the session can
+  // change out from under this call -- a foreign-salt `keyForSalt` derivation
+  // is a ~100ms PBKDF2 run, easily long enough for `clearSessionKey()`
+  // (logout) to land mid-flight. `keyForSalt` itself intentionally doesn't
+  // guard against that (see its own comment: it never writes module state,
+  // so a stale RETURN VALUE there was judged harmless) -- but that reasoning
+  // stops at the module boundary. The stale-but-still-cryptographically-valid
+  // key it returns can still successfully decrypt THIS envelope's ciphertext
+  // and hand real plaintext back to whatever called `decryptItem` before
+  // logout, which is a confidentiality problem `keyForSalt`'s own guard was
+  // never meant to cover. Checked again after `subtle.decrypt` too: that
+  // call is also async, and a logout landing during ITS gap is the same risk.
+  const generation = sessionGeneration;
+
   // Decrypt under the salt the envelope was SEALED with, not this device's.
   // `keyForSalt` throws the locked-vault error when there is no session key.
   const key = await keyForSalt(parsed.salt);
+  if (generation !== sessionGeneration) {
+    throw new Error('Vault session changed while decrypting.');
+  }
 
   const iv = fromB64(parsed.iv);
   const ct = fromB64(parsed.ct);
@@ -476,6 +493,9 @@ export const decryptItem = async (payloadStr) => {
     key,
     ct
   );
+  if (generation !== sessionGeneration) {
+    throw new Error('Vault session changed while decrypting.');
+  }
   const text = new TextDecoder().decode(ptBuf);
   return JSON.parse(text);
 };
