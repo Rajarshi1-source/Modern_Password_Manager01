@@ -120,6 +120,36 @@ fixed, one checked empirically and **declined** (the claim was wrong):
    ways: sometimes the review is right and the code needs to change,
    sometimes the review's own analysis has a gap and the doc should say so.
 
+**Round-4 review-fix (PR #480, CodeRabbit, 2026-08-16):** 2 doc-only
+findings, both confirmed and fixed — no code changes this round. Note:
+CodeRabbit's GitHub UI also re-displayed the round-3 "foreign-salt mutation
+result" comment in the same page view the user pasted; that is the *same*
+comment already investigated and declined in round 3 (§ above) with an
+empirical re-run proving it wrong, not a new finding — the actual latest
+review ("Actionable comments posted: 2") contained only the two below.
+1. **Doc fix, confirmed and applied:** §4 Step 3's description claimed
+   `getOrCreateUserSalt` "gains a caller-facing distinction between 'first
+   ever use' … and 'salt absent but this account has items'" — this was
+   never implemented; the shipped function still mints unconditionally on any
+   missing salt and only adds a `console.info` log line. This was the plan
+   doc getting ahead of its own shipped code (the paragraph dates to the
+   original pre-implementation draft and was never walked back to match the
+   simplified, log-only Step 3 actually built) — a documentation bug, not a
+   code bug. Corrected to describe the diagnostic-only behavior as shipped.
+2. **Doc fix, confirmed and applied:** the mutation-check counts in §5 for
+   `sessionVaultCrypto.salt.test.js` were stale. Mutation check #1's "the
+   other 9 tests stay green … confirm all 12 pass again" dated to when the
+   file had 12 tests, before round-2 added 3 more (bringing it to 15);
+   mutation check #3 had the same "confirm all 12 pass again" staleness.
+   Re-ran mutation check #1 against the current 15-test file before fixing
+   the count — confirmed empirically as 3 failed / 12 passed, not assumed by
+   arithmetic. Both corrected to 12/15. Checked the rest of §5 for the same
+   class of drift: `vaultEnvelope.test.js`'s "confirm all 7 pass" (mutation
+   check #2, a different file, unaffected by `salt.test.js`'s growth) is
+   still accurate; no stray "both" phrasing referring to only 2 mutation
+   checks exists anywhere in the doc (grepped) — that part of the review
+   comment didn't match anything in the current file.
+
 ---
 
 ## 1. The bug
@@ -370,12 +400,24 @@ it carry that path's own salt and continue to decrypt via the session key.
 
 ### Step 3 — Stop silent minting
 
-`getOrCreateUserSalt` gains a caller-facing distinction between "first ever use"
-(mint, correct) and "salt absent but this account has items" (do not silently
-mint a salt guaranteed to mismatch). With step 1 in place this is no longer a
-data-loss path — stranded items now decrypt via their own envelope salt — so
-this reduces to a diagnostic signal rather than the recoverable-state UI the
-original plan called for.
+**As shipped, this is diagnostic-only** — `getOrCreateUserSalt` still mints
+unconditionally on a missing salt, exactly as before this PR; the only change
+is a `console.info` log line at the mint site. It does **not** expose any
+caller-facing distinction between "first ever use" and "salt absent but this
+account has items" — no new parameter, return value, or signal reaches
+callers; `initSessionKeyFromPassword`/`setupVaultPassword` call it exactly as
+they always did. *(Corrected in review round 4 — the paragraph here
+previously claimed a distinction that was never implemented; that was this
+plan doc getting ahead of its own shipped code, not a code bug.)*
+
+The reduction in scope from the original plan's recoverable-state UI is
+justified the same way regardless: with Step 1 in place this is no longer a
+data-loss path — stranded items now decrypt via their own envelope salt (see
+`keyForSalt`) whichever branch `getOrCreateUserSalt` takes — so a log line is
+sufficient. Building the actual first-use/existing-account distinction would
+require either a server-side signal (whether this account has any items) or
+inferring it from local state that isn't reliably available at this call
+site, which is why it was scoped down to logging in the first place.
 
 ---
 
@@ -458,9 +500,9 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    (foreign) salt, given the correct password`, `derives a foreign salt key
    once and reuses it across concurrently-decrypted items`, `does not
    resurrect a stale cached foreign-salt key after clearSessionKey + re-init
-   with a different password`. The other 9 tests in that file stay green
+   with a different password`. The other 12 tests in that file stay green
    (they don't exercise the foreign-salt path). Revert the edit; re-run to
-   confirm all 12 pass again.
+   confirm all 15 pass again.
 
    *(Re-verified empirically in review round 3 after CodeRabbit questioned
    whether the third test actually fails here, reasoning that its final
@@ -497,7 +539,7 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    against stale async commits`): `does not resurrect a session cleared while
    initSessionKeyFromPassword was still deriving`, `lets a newer
    initSessionKeyFromPassword call win when an older one is still pending`.
-   Revert; re-run (without `-t`) to confirm all 12 pass again.
+   Revert; re-run (without `-t`) to confirm all 15 pass again.
 
 4. **`setupVaultPassword` persistence ordering (round-2 addition).** In
    `sessionVaultCrypto.js`, move the `localStorage.setItem(...)` call in
