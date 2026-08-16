@@ -6,18 +6,7 @@ import api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import sessionVaultCrypto from '../services/sessionVaultCrypto';
 import sessionVaultCryptoV3 from '../services/sessionVaultCryptoV3';
-import { decryptEnvelope, encryptEnvelope } from '../services/vaultEnvelope';
-
-// Round-3 review fix: the dashboard's edit gate (canEdit) and its two write
-// paths (addItem/updateItem) were checking `sessionVaultCrypto.hasSessionKey()`
-// (v2) alone, while `encryptEnvelope` (the thing they actually call to encrypt)
-// prefers v3 and only falls back to v2. A v3-only session -- v2 init transiently
-// failed at login, or v2 is eventually retired -- would encrypt fine through
-// `encryptEnvelope` but was reported as locked here, blocking every add/edit.
-// Matches the identical OR-of-both-keys check already used by
-// `App.jsx`'s `handleSubmit` and its auto-unlock effect.
-const hasVaultSessionKey = () =>
-  sessionVaultCrypto.hasSessionKey() || sessionVaultCryptoV3.hasSessionKey();
+import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from '../services/vaultEnvelope';
 
 const VaultContext = createContext();
 

@@ -30,7 +30,7 @@ import {
   V3_UNLOCK_NOT_ENROLLED,
   V3_UNLOCK_DESYNC,
 } from './services/vaultV3UnlockClassifier';
-import { decryptEnvelope, encryptEnvelope } from './services/vaultEnvelope';
+import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from './services/vaultEnvelope';
 import VaultUnlockModal from './Components/auth/VaultUnlockModal';
 import zkProof from './services/zkProof';
 
@@ -1140,10 +1140,10 @@ function App() {
       return;
     }
     // Either layer having a key means the vault is usable — mirrors the same
-    // OR check in `handleSubmit` below. Checking v2 alone would re-open this
+    // check in `handleSubmit` below. Checking v2 alone would re-open this
     // prompt for a session that unlocked successfully via v3 but never
     // established a v2 key (e.g. a transient v2 init failure at login).
-    if (!sessionVaultCrypto.hasSessionKey() && !sessionVaultCryptoV3.hasSessionKey()) {
+    if (!hasVaultSessionKey()) {
       setShowVaultUnlock(true);
     }
   }, [isAuthenticated, user?.id, user?.email]);
@@ -1177,7 +1177,7 @@ function App() {
     // vault-unlock prompt to a perfectly unlocked v3-only session — which is
     // every user whose legacy items have finished migrating, since nothing
     // re-establishes a v2 key for them beyond login.
-    if (!sessionVaultCrypto.hasSessionKey() && !sessionVaultCryptoV3.hasSessionKey()) {
+    if (!hasVaultSessionKey()) {
       setShowVaultUnlock(true);
       setError('Your vault is locked. Please set up or unlock your vault password to save items.');
       return;
@@ -1439,13 +1439,13 @@ function App() {
       // first point in `handleLogin` where the true lock state is known, so
       // close it here if either layer is actually ready; a no-op if the
       // effect never opened it.
-      if (sessionVaultCrypto.hasSessionKey() || sessionVaultCryptoV3.hasSessionKey()) {
+      if (hasVaultSessionKey()) {
         setShowVaultUnlock(false);
       }
 
       // PR F: the session vault key is now established (v2 above, plus v3 when
       // available). Signal VaultContext so its dashboard edit gate (canEdit,
-      // derived from sessionVaultCrypto.hasSessionKey()) flips to unlocked and
+      // derived from vaultEnvelope.hasVaultSessionKey()) flips to unlocked and
       // it refetches the canonical list. Without this the context only
       // recomputes canEdit on auth change, which can race ahead of the key.
       window.dispatchEvent(new CustomEvent('vault:updated'));
