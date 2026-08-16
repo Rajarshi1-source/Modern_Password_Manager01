@@ -125,11 +125,21 @@ CVE-2026-53878 exp:2026-10-15
 # same "our pin is outside it, nothing to suppress" resolution as
 # PYSEC-2025-183/PYSEC-2024-277 above.
 #
+# PYSEC-2025-192/193 — REMOVED 2026-08-16, not renewed. Re-checked against
+# OSV directly (api.osv.dev), not assumed, on expiry: both cap at
+# `last_affected: 2.6.0` (PYSEC-2025-192 = CVE-2025-2998,
+# torch.nn.utils.rnn.pad_packed_sequence; PYSEC-2025-193 = CVE-2025-2999,
+# unpack_sequence — both memory corruption, local access required). Our pin
+# (torch==2.12.0+cpu, requirements-lock.txt) is well past that ceiling, so
+# pip-audit's own version-range match no longer flags these against this
+# pin at all — same "our pin is outside it, nothing to suppress"
+# resolution as PYSEC-2025-189/190/191 above.
+
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the
 # model as already-validated tensors via ml_dark_web/ml_services.py,
-# never as torch.jit scripts or pt2 binaries. Nine IDs total (was
-# twelve; three removed above, not renewed).
+# never as torch.jit scripts or pt2 binaries. Seven IDs total (was
+# twelve; five removed above, not renewed).
 #
 # CVE-2025-3000 (GHSA-rrmf-rvhw-rf47, same advisory as PYSEC-2025-194 below
 # under a different ID alias — dates kept in sync) is the torch.jit.script
@@ -152,8 +162,6 @@ CVE-2026-53878 exp:2026-10-15
 # aliases in sync, but for an ACTIVE renewal, 4 days of runway from the
 # renewal date defeats the point of renewing at all.
 CVE-2025-3000 exp:2026-10-10
-PYSEC-2025-192 exp:2026-08-15
-PYSEC-2025-193 exp:2026-08-15
 PYSEC-2025-194 exp:2026-10-10
 PYSEC-2025-195 exp:2026-08-20
 PYSEC-2025-196 exp:2026-08-20
