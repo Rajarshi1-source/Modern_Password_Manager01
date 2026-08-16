@@ -231,6 +231,38 @@ both confirmed and fixed:
    Corrected, labeling 2026-08-15 explicitly as the initial snapshot date
    rather than silently overwriting it.
 
+**Round-7 review-fix (PR #480, CodeRabbit, 2026-08-16):** 1 doc nitpick
+confirmed and fixed; 1 code nitpick investigated and **declined**:
+1. **Doc fix, confirmed and applied:** §4 Step 3's "reduction in scope"
+   paragraph claimed stranded items decrypt via their envelope salt
+   "whichever branch `getOrCreateUserSalt` takes" — true for password-login
+   (path A) sessions, false for OAuth wrapped-DEK (path B) ones, which
+   `keyForSalt`'s own code excludes from foreign-salt recovery (no password
+   to re-derive with — `if (!sessionPassword) { return sessionKey; }`,
+   falling through to the wrong key for a foreign envelope). Confirmed
+   against the code before fixing; the claim was genuinely overbroad, not
+   just imprecisely worded. Scoped the sentence to path A explicitly and
+   restated path B's continuing device-local limitation.
+2. **Investigated and declined:** bound `foreignSaltKeys` with an LRU cap
+   (CodeRabbit's own severity label: "Trivial | Low value"). The underlying
+   fact checks out — `foreignSaltKeys` is an unbounded `Map`, and `App.jsx`'s
+   legacy `/vault` list page does eagerly `Promise.all` over every item
+   (confirmed by reading `decryptOne`/`Promise.all(items.map(decryptOne))`),
+   so a list with many distinct envelope salts genuinely would trigger one
+   310 000-iteration PBKDF2 run per distinct salt, concurrently. Declined
+   anyway, because the threat model doesn't hold up under scrutiny: vault
+   items can only be written through an authenticated session's own
+   `encryptEnvelope` call, scoped to that account — an attacker able to
+   inject many distinct-salt items into a victim's vault would need write
+   access to that SAME account already, at which point stalling their own
+   tab is the least of the available damage; this is not a cross-user attack
+   surface. CodeRabbit's own text agrees this "is not a problem today." An
+   LRU (or any eviction policy) adds real complexity and regression risk to
+   a `Map`-based cache that 16 existing tests already pin precise
+   clear/reuse/memoize semantics against, for a self-acknowledged low-value
+   hardening against a self-inflicted-at-best scenario — the opposite
+   trade-off from "keep changes minimal." No code change made.
+
 ---
 
 ## 1. The bug
@@ -505,11 +537,18 @@ previously claimed a distinction that was never implemented; that was this
 plan doc getting ahead of its own shipped code, not a code bug.)*
 
 The reduction in scope from the original plan's recoverable-state UI is
-justified the same way regardless: with Step 1 in place this is no longer a
-data-loss path — stranded items now decrypt via their own envelope salt (see
-`keyForSalt`) whichever branch `getOrCreateUserSalt` takes — so a log line is
-sufficient. Building the actual first-use/existing-account distinction would
-require either a server-side signal (whether this account has any items) or
+justified the same way regardless: **for password-login (path A) sessions**,
+Step 1 removes this as a data-loss path — stranded items now decrypt via
+their own envelope salt (see `keyForSalt`), regardless of which branch
+`getOrCreateUserSalt` takes for THIS device's own salt — so a log line is
+sufficient. *(Scoped to path A in review round 7 — the original wording
+here overstated this as universal. `keyForSalt` itself is explicit that path
+(B), OAuth's wrapped-DEK sessions, has no password to re-derive a foreign
+salt from (`if (!sessionPassword) { return sessionKey; }`) and falls through
+to the — wrong, for a foreign envelope — session key instead. Those sessions'
+items remain genuinely device-local; nothing in this PR changes that.)*
+Building the actual first-use/existing-account distinction would require
+either a server-side signal (whether this account has any items) or
 inferring it from local state that isn't reliably available at this call
 site, which is why it was scoped down to logging in the first place.
 
