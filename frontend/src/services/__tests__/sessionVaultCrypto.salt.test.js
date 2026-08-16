@@ -256,6 +256,46 @@ describe('sessionVaultCrypto — session-generation guard against stale async co
     // the stale older call finishing last.
     expect(localStorage.getItem(wrappedStorageKey('nadia'))).toBe(recordAfterNewerCall);
   });
+
+  it('rejects a foreign-salt decrypt whose derivation outlives clearSessionKey (logout mid-flight)', async () => {
+    await initSessionKeyFromPassword('pw', 'olivia');
+    const envelope = await encryptItem({ secret: 'stale-plaintext' });
+    clearSessionKey();
+
+    // Simulate a different device / cleared storage: re-init mints a NEW,
+    // different salt, so `envelope` (sealed under the OLD salt) is foreign
+    // to this session and `decryptItem` must derive a key for it.
+    localStorage.removeItem(saltStorageKey('olivia'));
+    await initSessionKeyFromPassword('pw', 'olivia');
+
+    // Gate (not replace) the real `deriveKey` call: the mock still computes
+    // the REAL, correct key once released, so if this test passes it is
+    // because the session-change check rejected it -- not because we handed
+    // back a bogus key that would have failed to decrypt anyway.
+    let deriveKeyCalled = false;
+    let releaseDerive;
+    const gate = new Promise((resolve) => { releaseDerive = resolve; });
+    const originalDeriveKey = window.crypto.subtle.deriveKey.bind(window.crypto.subtle);
+    vi.spyOn(window.crypto.subtle, 'deriveKey').mockImplementation(async (...args) => {
+      deriveKeyCalled = true;
+      await gate;
+      return originalDeriveKey(...args);
+    });
+
+    const decryptPromise = decryptItem(envelope);
+    await waitUntil(() => deriveKeyCalled);
+
+    // Logout WHILE the foreign-salt derivation for `envelope` is still
+    // in flight.
+    clearSessionKey();
+    vi.restoreAllMocks();
+    releaseDerive();
+
+    // The derivation resolves to the cryptographically CORRECT key for
+    // `envelope` -- decryption would succeed and return real plaintext if
+    // nothing checked that the session changed underneath it.
+    await expect(decryptPromise).rejects.toThrow(/session/i);
+  });
 });
 
 describe('sessionVaultCrypto — legacy/malformed envelopes unaffected', () => {
