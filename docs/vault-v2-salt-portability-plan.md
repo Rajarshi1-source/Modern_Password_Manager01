@@ -263,6 +263,15 @@ confirmed and fixed; 1 code nitpick investigated and **declined**:
    hardening against a self-inflicted-at-best scenario — the opposite
    trade-off from "keep changes minimal." No code change made.
 
+**Round-8 review-fix (PR #480, CodeRabbit, 2026-08-16):** 1 doc nitpick,
+confirmed and fixed; no code changes this round. §5's test-coverage bullet
+list said "Legacy/plaintext and malformed envelopes keep returning
+`_legacyPlaintext`" — confirmed against both `decryptItem`'s code and the
+three tests in the `legacy/malformed envelopes unaffected` describe block
+that this conflates two distinct outcomes: `_legacyPlaintext` only for
+parsed JSON lacking valid v2 fields; `{}` for empty or non-JSON payloads
+(which never reach the field check at all). Split into two accurate bullets.
+
 ---
 
 ## 1. The bug
@@ -565,7 +574,9 @@ site, which is why it was scoped down to logging in the first place.
   foreign salt.
 - Per-salt derivation is memoized — N items sharing a foreign salt derive once.
 - `clearSessionKey` drops the cache and the retained password.
-- Legacy/plaintext and malformed envelopes keep returning `_legacyPlaintext`.
+- Legacy JSON envelopes without valid v2 fields return `_legacyPlaintext`;
+  empty and non-JSON payloads return `{}` — two distinct outcomes, not one
+  (corrected in review round 8: the prior single bullet conflated them).
 
 `frontend/src/services/__tests__/vaultEnvelope.test.js` (extend)
 
