@@ -68,3 +68,20 @@ export async function encryptEnvelope(data) {
   }
   return sessionVaultCrypto.encryptItem(data);
 }
+
+/**
+ * Whether either crypto layer has a live session key -- the single source of
+ * truth for "is the vault usable," matching `encryptEnvelope`'s own
+ * v3-preferred-else-v2 write rule above.
+ *
+ * Extracted in review round 10 after this exact OR-of-both-layers check had
+ * drifted out of sync 4 separate times across `App.jsx` (3 inline copies) and
+ * `VaultContext.jsx` (1 copy) — including a real bug (round 3) where
+ * `VaultContext`'s copy lagged a v2-only check after `App.jsx`'s had already
+ * been fixed. A single exported predicate next to the write rule it mirrors
+ * makes that drift structurally harder to reintroduce.
+ *
+ * @returns {boolean}
+ */
+export const hasVaultSessionKey = () =>
+  sessionVaultCrypto.hasSessionKey() || sessionVaultCryptoV3.hasSessionKey();

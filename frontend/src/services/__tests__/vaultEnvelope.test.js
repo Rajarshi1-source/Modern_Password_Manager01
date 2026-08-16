@@ -24,7 +24,7 @@ vi.mock('../sessionVaultCryptoV3', () => ({
 
 import sessionVaultCrypto from '../sessionVaultCrypto';
 import sessionVaultCryptoV3 from '../sessionVaultCryptoV3';
-import { decryptEnvelope, encryptEnvelope } from '../vaultEnvelope';
+import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from '../vaultEnvelope';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -110,5 +110,28 @@ describe('encryptEnvelope', () => {
     expect(sessionVaultCrypto.encryptItem).toHaveBeenCalledWith(data);
     expect(sessionVaultCrypto.encryptItem).toHaveBeenCalledTimes(1);
     expect(sessionVaultCryptoV3.encryptItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasVaultSessionKey', () => {
+  test('true when only v2 has a session key', () => {
+    sessionVaultCrypto.hasSessionKey.mockReturnValue(true);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(false);
+
+    expect(hasVaultSessionKey()).toBe(true);
+  });
+
+  test('true when only v3 has a session key', () => {
+    sessionVaultCrypto.hasSessionKey.mockReturnValue(false);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+
+    expect(hasVaultSessionKey()).toBe(true);
+  });
+
+  test('false when neither layer has a session key', () => {
+    sessionVaultCrypto.hasSessionKey.mockReturnValue(false);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(false);
+
+    expect(hasVaultSessionKey()).toBe(false);
   });
 });

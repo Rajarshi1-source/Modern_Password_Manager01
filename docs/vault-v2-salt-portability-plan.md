@@ -286,6 +286,61 @@ nitpicks, both confirmed and fixed; no code changes this round.
    present-tense-as-of-now to anyone reading the doc post-fix. Reworded to
    "before this PR."
 
+**Round-10 review-fix (PR #480, CodeRabbit, 2026-08-16):** 4 findings — 1
+actionable (Minor, doc), 3 nitpicks (all confirmed and fixed):
+1. **DRY refactor, confirmed and applied — with a real regression caught and
+   fixed along the way:** the "v2 OR v3 session key" predicate existed in 4
+   places — `VaultContext.jsx`'s own `hasVaultSessionKey`, plus 3 separate
+   inline copies in `App.jsx` (CodeRabbit named 2; a third exists at the
+   auto-unlock effect, `handleSubmit`, AND the round-2 post-login close-modal
+   check — verified by grep, not assumed from the report). Extracted a single
+   `hasVaultSessionKey` export from `vaultEnvelope.js` next to `encryptEnvelope`
+   (the write rule it mirrors), imported into both `VaultContext.jsx` and
+   `App.jsx`, replacing all 4 inline copies. **This immediately broke 8 of the
+   9 tests across the 3 `VaultContext.*.test.jsx` files** — each mocks
+   `vaultEnvelope.js` wholesale (`vi.mock('.../vaultEnvelope', () => ({
+   encryptEnvelope: ..., decryptEnvelope: ... }))`), so the newly-imported
+   `hasVaultSessionKey` was `undefined` in every one of them, caught by the
+   normal test run (not a contrived mutation) the moment it was attempted.
+   CodeRabbit's own "Quick win" label undersold the actual blast radius — it
+   didn't account for `vaultEnvelope.js` being fully mocked in 3 test files.
+   Fixed by restructuring each affected file's mocks with `vi.hoisted()` so
+   the mocked `hasVaultSessionKey` delegates to the SAME `hasSessionKey` mock
+   functions the test bodies already configure via
+   `sessionVaultCrypto.hasSessionKey.mockReturnValue(...)` — zero changes
+   needed to the actual test bodies. Added 3 new direct-unit tests for the
+   real (unmocked) implementation in `vaultEnvelope.test.js`, since none of
+   the mocked call sites exercise it. Mutation-checked (see §5 check 7).
+2. **Nitpick, confirmed and fixed:** `sessionVaultCrypto.salt.test.js`'s
+   Step-3 minting-log tests (`infoSpy`) called `mockRestore()` only AFTER
+   their assertions — if an assertion threw first, the spy would leak into
+   later tests in the file. Confirmed real for those 2 tests specifically;
+   the generation-guard describe block already had its own local
+   `afterEach(() => vi.restoreAllMocks())` and was NOT at risk. Fixed by
+   moving `vi.restoreAllMocks()` to the file-level `afterEach` (covering the
+   previously-unprotected tests too) and removing the now-redundant local one.
+3. **Nitpick, confirmed and fixed:** `VaultContext.lock.test.jsx`'s
+   `beforeEach` called `vi.clearAllMocks()` (clears call history, NOT
+   configured return values) then reset only `sessionVaultCrypto.hasSessionKey`
+   — never `sessionVaultCryptoV3.hasSessionKey`. Didn't break either CURRENT
+   test (declaration order happens to put the v3-setting test last), but was
+   a real landmine for the next test added to that file. Fixed by resetting
+   both explicitly.
+4. **Actionable, confirmed and fixed — with a genuine new finding along the
+   way:** §5's mutation checks 1, 3, and 4 for `sessionVaultCrypto.salt.test.js`
+   still said "confirm all 15 pass again," stale since round-5 grew the file
+   to 16. Re-ran all three against the current file rather than just fixing
+   the arithmetic. Checks 3 and 4 reproduced exactly as before (2 and 1
+   failures respectively, now against 16). **Check 1 surprised**: it now
+   produces 4 failures, not 3 — round-5's own "outlives clearSessionKey" test
+   ALSO fails under it, but incidentally: that mutation makes `decryptItem`
+   skip `keyForSalt`/`deriveDirectKey` entirely, so round-5's test never
+   triggers the `crypto.subtle.deriveKey` call it stalls-and-releases, and
+   its `waitUntil` times out instead of hitting a clean assertion. Documented
+   this precisely rather than just updating "3" to "4" — a bare count change
+   would have been technically accurate but would leave a future reader
+   confused about why an unrelated-sounding test fails there.
+
 ---
 
 ## 1. The bug
@@ -665,13 +720,24 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    ```bash
    cd frontend && npx vitest run src/services/__tests__/sessionVaultCrypto.salt.test.js
    ```
-   Expected failures (3): `decrypts an envelope written under a different
-   (foreign) salt, given the correct password`, `derives a foreign salt key
-   once and reuses it across concurrently-decrypted items`, `does not
-   resurrect a stale cached foreign-salt key after clearSessionKey + re-init
-   with a different password`. The other 12 tests in that file stay green
-   (they don't exercise the foreign-salt path). Revert the edit; re-run to
-   confirm all 15 pass again.
+   Expected failures (4, re-verified in round 10 against the current 16-test
+   file — was 3/15 before round 5 added a 16th test): the original 3 —
+   `decrypts an envelope written under a different (foreign) salt, given the
+   correct password`, `derives a foreign salt key once and reuses it across
+   concurrently-decrypted items`, `does not resurrect a stale cached
+   foreign-salt key after clearSessionKey + re-init with a different
+   password` — **plus round-5's `rejects a foreign-salt decrypt whose
+   derivation outlives clearSessionKey (logout mid-flight)`, which now ALSO
+   fails here, incidentally.** That 4th failure is not a second confirmation
+   of the same guarantee: this mutation makes `decryptItem` skip
+   `keyForSalt`/`deriveDirectKey` entirely, so the round-5 test's own
+   `crypto.subtle.deriveKey` stall-and-release setup never gets invoked, and
+   its `waitUntil(() => deriveKeyCalled)` times out (visible as a ~1.1s test
+   plus an unhandled-rejection log, instead of a clean assertion failure).
+   Mutation check 6 below is the correct, isolated way to verify round-5's
+   guarantee on its own; this one's job is only the original 3. The other 12
+   tests in the file stay green. Revert the edit; re-run to confirm all 16
+   pass again.
 
    *(Re-verified empirically in review round 3 after CodeRabbit questioned
    whether the third test actually fails here, reasoning that its final
@@ -708,7 +774,10 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    against stale async commits`): `does not resurrect a session cleared while
    initSessionKeyFromPassword was still deriving`, `lets a newer
    initSessionKeyFromPassword call win when an older one is still pending`.
-   Revert; re-run (without `-t`) to confirm all 15 pass again.
+   Re-verified in round 10 against the current 16-test file: still exactly 2
+   (this mutation only touches `initSessionKeyFromPassword`, so it doesn't
+   interact with round-5's test the way mutation 1 does). Revert; re-run
+   (without `-t`) to confirm all 16 pass again.
 
 4. **`setupVaultPassword` persistence ordering (round-2 addition).** In
    `sessionVaultCrypto.js`, move the `localStorage.setItem(...)` call in
@@ -718,8 +787,9 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    cd frontend && npx vitest run src/services/__tests__/sessionVaultCrypto.salt.test.js -t "does not let a stale setupVaultPassword"
    ```
    Expected failure (1): `does not let a stale setupVaultPassword call
-   overwrite a newer one's persisted record`. Revert; re-run (without `-t`)
-   to confirm all 15 pass again.
+   overwrite a newer one's persisted record`. Re-verified in round 10
+   against the current 16-test file: still exactly 1. Revert; re-run
+   (without `-t`) to confirm all 16 pass again.
 
 5. **`hasVaultSessionKey` v2-only regression (round-3 addition).** In
    `VaultContext.jsx`, revert `hasVaultSessionKey` to
@@ -745,8 +815,24 @@ confirm exactly the named test(s) fail (and nothing else), then revert.
    with the real plaintext (`{secret: 'stale-plaintext'}`) instead of
    rejecting. Revert; re-run (without `-t`) to confirm all 16 pass again.
 
-All six were performed and confirmed during PR #480 development (rounds 1
-through 5 review-fix passes); the commands above reproduce them exactly.
+7. **`hasVaultSessionKey` extraction (round-10 addition).** In
+   `vaultEnvelope.js`, replace the body of the exported `hasVaultSessionKey`
+   with `() => false`.
+   ```bash
+   cd frontend && npx vitest run src/services/__tests__/vaultEnvelope.test.js -t "hasVaultSessionKey"
+   ```
+   Expected failures (2): `true when only v2 has a session key`, `true when
+   only v3 has a session key`. The `false when neither layer has a session
+   key` test stays green (trivially satisfied). Revert; re-run (without
+   `-t`) to confirm all 10 pass again. (This only exercises the real
+   implementation directly, unmocked — `VaultContext.jsx`'s and `App.jsx`'s
+   own 3 call sites now import this same function, so their existing tests,
+   which mock `vaultEnvelope` entirely, aren't a signal for THIS mutation;
+   they instead pin that each call site still calls whatever
+   `hasVaultSessionKey` resolves to, which is what matters for them.)
+
+All seven were performed and confirmed during PR #480 development (rounds 1
+through 10 review-fix passes); the commands above reproduce them exactly.
 
 ---
 

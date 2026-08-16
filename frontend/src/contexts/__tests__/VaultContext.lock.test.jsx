@@ -18,15 +18,25 @@ vi.mock('axios', () => ({
     isCancel: () => false,
   },
 }));
+// Shared mock fns, hoisted above the `vi.mock` calls below so the
+// `vaultEnvelope` mock's `hasVaultSessionKey` can delegate to the SAME
+// `hasSessionKey` mocks the test body configures via
+// `sessionVaultCrypto.hasSessionKey.mockReturnValue(...)` -- keeping the real
+// module's "v2 OR v3" contract without duplicating mock state.
+const { mockV2HasSessionKey, mockV3HasSessionKey } = vi.hoisted(() => ({
+  mockV2HasSessionKey: vi.fn(() => true),
+  mockV3HasSessionKey: vi.fn(() => false),
+}));
 vi.mock('../../services/sessionVaultCrypto', () => ({
-  default: { hasSessionKey: vi.fn(() => true), clearSessionKey: vi.fn() },
+  default: { hasSessionKey: mockV2HasSessionKey, clearSessionKey: vi.fn() },
 }));
 vi.mock('../../services/sessionVaultCryptoV3', () => ({
-  default: { hasSessionKey: vi.fn(() => false), clearSessionKey: vi.fn() },
+  default: { hasSessionKey: mockV3HasSessionKey, clearSessionKey: vi.fn() },
 }));
 vi.mock('../../services/vaultEnvelope', () => ({
   encryptEnvelope: vi.fn(() => Promise.resolve('CIPHERTEXT')),
   decryptEnvelope: vi.fn(() => Promise.resolve({ name: 'x' })),
+  hasVaultSessionKey: vi.fn(() => mockV2HasSessionKey() || mockV3HasSessionKey()),
 }));
 vi.mock('../../hooks/useAuth', () => ({
   useAuth: () => ({ isAuthenticated: true, user: { id: 1, email: 'u@e.com' } }),
@@ -56,7 +66,11 @@ const wrapper = ({ children }) => <VaultProvider>{children}</VaultProvider>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `vi.clearAllMocks()` clears call history but NOT configured return
+  // values -- reset both explicitly so the v3-only test below can't leak
+  // its `mockReturnValue(true)` into a later test that assumes v3 absent.
   sessionVaultCrypto.hasSessionKey.mockReturnValue(true);
+  sessionVaultCryptoV3.hasSessionKey.mockReturnValue(false);
   axios.get.mockResolvedValue({ data: { items: [] } });
 });
 

@@ -53,6 +53,11 @@ beforeEach(() => {
 afterEach(() => {
   clearSessionKey();
   localStorage.clear();
+  // File-level so a spy left installed by a FAILED assertion (e.g. `infoSpy`
+  // below, whose `mockRestore()` sits after the assertions it guards) can't
+  // leak into later tests -- a describe-local `afterEach` only protects the
+  // tests within that block, and this file has spies outside any such block.
+  vi.restoreAllMocks();
 });
 
 describe('sessionVaultCrypto — salt minting is logged (Step 3)', () => {
@@ -180,9 +185,8 @@ describe('sessionVaultCrypto — cross-device salt portability', () => {
 });
 
 describe('sessionVaultCrypto — session-generation guard against stale async commits', () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  // No local afterEach here -- the file-level one now calls
+  // vi.restoreAllMocks() too, covering this block the same way.
 
   it('does not resurrect a session cleared while initSessionKeyFromPassword was still deriving', async () => {
     // Stall the PBKDF2 derivation so we can clear the session mid-flight and
