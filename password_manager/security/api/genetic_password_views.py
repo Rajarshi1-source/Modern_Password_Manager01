@@ -972,7 +972,12 @@ def trigger_evolution(request):
         
         # Trigger evolution
         evolution_manager = get_evolution_manager()
-        evolved, message = async_to_sync(evolution_manager.check_and_evolve)(
+        # Called directly: `check_and_evolve` is sync. It used to be declared
+        # `async def` despite awaiting nothing and doing sync ORM throughout, so
+        # this `async_to_sync` wrapper drove it straight into
+        # `SynchronousOnlyOperation` -- swallowed by the handler below into a
+        # generic 500, which is why triggering an evolution here never worked.
+        evolved, message = evolution_manager.check_and_evolve(
             request.user,
             connection,
             force=force

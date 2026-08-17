@@ -306,56 +306,71 @@ def check_genetic_evolution(user_id: int):
             logger.info(f"No subscription for user {user_id}")
             return {'checked': False, 'reason': 'no_subscription'}
         
-        # Check for evolution
-        result = epigenetic_evolution_manager.check_and_evolve(user)
-        
-        if result.get('evolved'):
+        # Check for evolution.
+        #
+        # `check_and_evolve(user, dna_connection, force=False)` returns a
+        # `(evolved, message)` tuple. This used to call it as
+        # `check_and_evolve(user)` and read the result as a dict, which could
+        # only ever raise -- the task's blanket `except Exception` below turned
+        # that into a soft `{'checked': False}`, so the failure never surfaced.
+        # Snapshot the pre-call values first: `check_and_evolve` mutates and
+        # saves `dna_connection` itself on success.
+        old_generation = dna_connection.evolution_generation
+        previous_age = dna_connection.last_biological_age
+
+        evolved, message = epigenetic_evolution_manager.check_and_evolve(
+            user, dna_connection,
+        )
+
+        if evolved:
+            # Read back off the instance the manager just mutated -- it has
+            # already written `evolution_generation`, `last_biological_age` and
+            # `last_epigenetic_update`, so re-assigning them here (as this task
+            # used to) would be a redundant second write.
+            new_generation = dna_connection.evolution_generation
+            biological_age = dna_connection.last_biological_age
+
             logger.info(
                 f"Evolution triggered for user {user_id}: "
-                f"Gen {result.get('old_generation')} -> {result.get('new_generation')}"
+                f"Gen {old_generation} -> {new_generation}"
             )
-            
-            # Update the DNA connection
-            dna_connection.evolution_generation = result.get('new_generation', 1)
-            dna_connection.last_biological_age = result.get('biological_age')
-            dna_connection.last_epigenetic_update = timezone.now()
-            dna_connection.save()
-            
+
             # Log the evolution (idempotent: dedup by user + generation + date)
             today = timezone.now().date()
-            evo_dedup_key = f"evo_dedup:{user_id}:{result.get('new_generation')}:{today}"
+            evo_dedup_key = f"evo_dedup:{user_id}:{new_generation}:{today}"
             if not cache.get(evo_dedup_key):
                 GeneticEvolutionLog.objects.create(
                     user=user,
                     trigger_type='automatic',
-                    old_evolution_gen=result.get('old_generation', 1),
-                    new_evolution_gen=result.get('new_generation', 2),
-                    biological_age_before=result.get('previous_age'),
-                    biological_age_after=result.get('biological_age'),
+                    old_evolution_gen=old_generation,
+                    new_evolution_gen=new_generation,
+                    biological_age_before=previous_age,
+                    biological_age_after=biological_age,
                     success=True,
                     completed_at=timezone.now()
                 )
                 cache.set(evo_dedup_key, True, 86400)  # 24h TTL
             else:
                 logger.info(f"Evolution log deduplicated for user {user_id}")
-            
+
             # Update subscription usage
             subscription.evolutions_triggered = (subscription.evolutions_triggered or 0) + 1
             subscription.save()
-            
+
             return {
                 'checked': True,
                 'evolved': True,
-                'old_generation': result.get('old_generation'),
-                'new_generation': result.get('new_generation'),
-                'biological_age': result.get('biological_age'),
+                'old_generation': old_generation,
+                'new_generation': new_generation,
+                'biological_age': biological_age,
+                'message': message,
             }
-        
+
         return {
             'checked': True,
             'evolved': False,
             'current_generation': dna_connection.evolution_generation,
-            'reason': 'no_significant_change',
+            'reason': message or 'no_significant_change',
         }
         
     except User.DoesNotExist:
@@ -377,15 +392,28 @@ def daily_genetic_evolution_check():
     - Epigenetic evolution enabled
     - Premium or trial subscription
     """
-    from ..models import DNAConnection, GeneticSubscription
-    
-    # Find users with active DNA connections and epigenetic features
+    from ..models import DNAConnection
+
+    # Find users with active DNA connections and epigenetic features.
+    #
+    # The reverse lookup is `genetic_subscription`, not `geneticsubscription`:
+    # `GeneticSubscription.user` declares `related_name='genetic_subscription'`,
+    # which replaces the default lowercased-model-name query term. The old
+    # spelling raised `FieldError` on every run, so this task could never have
+    # completed once it was actually scheduled.
+    #
+    # `last_biological_age__isnull=False` is not just an optimisation:
+    # `check_and_evolve` bails out with "No biological age data available" for
+    # those rows, so excluding them yields identical outcomes while keeping the
+    # fan-out at zero until an epigenetic provider is configured (none is
+    # today) or a biological age is entered manually.
     eligible_connections = DNAConnection.objects.filter(
         is_active=True,
-        user__geneticsubscription__epigenetic_evolution_enabled=True,
-        user__geneticsubscription__status='active',
+        user__genetic_subscription__epigenetic_evolution_enabled=True,
+        user__genetic_subscription__status='active',
+        last_biological_age__isnull=False,
     ).select_related('user')
-    
+
     queued_count = 0
     
     for connection in eligible_connections:
@@ -494,36 +522,40 @@ def cleanup_expired_genetic_trials():
 @shared_task
 def refresh_dna_tokens():
     """
-    Weekly task to refresh OAuth tokens for DNA providers.
-    
-    Refreshes tokens that are about to expire to maintain access
-    to DNA provider APIs.
+    Weekly task to survey OAuth tokens for DNA providers.
+
+    NOTE: the actual refresh is NOT implemented yet. This task resolves each
+    connection's provider and counts how many hold a refresh token, but it does
+    not decrypt anything, makes no outbound request, and writes no rows. It
+    reports `implemented: False` so that a green run is never mistaken for
+    "tokens are being kept alive" -- an earlier version counted every surveyed
+    connection as `refreshed`, which would have made monitoring report healthy
+    token rotation while tokens silently expired.
     """
     from ..models import DNAConnection
     from ..services.dna_provider_service import get_dna_provider
-    
+
     # Find connections with tokens that might need refresh
     # (tokens typically expire after a certain period)
     active_connections = DNAConnection.objects.filter(
         is_active=True,
         status='connected',
     )
-    
-    refreshed_count = 0
+
+    needs_refresh = 0
     failed_count = 0
-    
+
     for connection in active_connections:
         try:
-            provider = get_dna_provider(connection.provider)
-            
-            if connection.encrypted_refresh_token:
-                # Decrypt and refresh token
-                # This is a placeholder - actual implementation would decrypt
-                # and call the provider's refresh endpoint
-                
-                logger.debug("Provider OAuth refresh queued for user %s", connection.user_id)
-                refreshed_count += 1
-                
+            get_dna_provider(connection.provider)
+
+            # The field is `refresh_token_encrypted`. This read used to be
+            # `connection.encrypted_refresh_token`, which does not exist on the
+            # model -- an AttributeError that the `except ValueError` below does
+            # not catch, so the task died on the first active connection.
+            if connection.refresh_token_encrypted:
+                needs_refresh += 1
+
         # get_dna_provider raises ValueError for an unknown/misconfigured
         # provider — a legitimate per-connection failure we count and skip.
         # (When the real refresh call lands, add its own network/decrypt errors
@@ -535,11 +567,22 @@ def refresh_dna_tokens():
                 connection.user_id, e,
             )
             failed_count += 1
-    
-    logger.info("Provider OAuth refresh complete: %s refreshed, %s failed", refreshed_count, failed_count)
+
+    if needs_refresh:
+        logger.warning(
+            "Provider OAuth refresh is not implemented: %s connection(s) hold a "
+            "refresh token but no refresh was performed.",
+            needs_refresh,
+        )
+    logger.info(
+        "Provider OAuth survey complete: %s awaiting refresh, %s failed",
+        needs_refresh, failed_count,
+    )
     return {
-        'refreshed': refreshed_count,
+        'refreshed': 0,
+        'needs_refresh': needs_refresh,
         'failed': failed_count,
+        'implemented': False,
     }
 
 
