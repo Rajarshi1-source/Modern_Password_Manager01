@@ -188,6 +188,50 @@ command executes cleanly, not that production has no backlog).
 
 **Still outstanding**: run this against production before deploying this PR.
 
+## 5c. Scheduling it: CronJob in k8s/cronjobs.yaml, not a one-off Job
+
+User asked whether to check the command into `k8s/` alongside
+`migrate-job.yaml`, explicitly "only if it is the best choice ... decide
+intelligently after scanning infrastructure." Scanned `k8s/` and
+`.github/workflows/ci.yml` before answering rather than just copying the
+pattern that was suggested.
+
+**Chose a CronJob in `cronjobs.yaml` instead.** That file's own header states
+its purpose: "maintenance tasks that must run even when Celery beat is
+unhealthy." A Time-Lock backlog is exactly that symptom — beat not
+processing `check_dead_mans_switches`/`check_escrow_deadlines`, whether
+because beat is down (ongoing risk after this PR ships) or because the
+schedule was never wired up (today's specific bug). `migrate-job.yaml`'s
+shape (standalone one-off Job) fits work needed on *every* deploy and is
+wired into CI by explicit path (`ci.yml` line ~757); gating every future
+unrelated deploy on a Time-Lock-specific check doesn't make sense, and
+nothing would have run this new file automatically without also editing the
+CI pipeline — out of scope for what was asked. Added as
+`check-time-lock-backlog` (daily 06:00 UTC, clear of the two existing
+CronJobs' 03:30/Sun-04:00 schedules), `backoffLimit: 0` (unlike the two
+siblings' `backoffLimit: 2` — a backlog finding is a real signal, retrying
+the same read-only query doesn't shrink it, just triples the log line). The
+one-off pre-#483-deploy run is still available on demand:
+`kubectl create job --from=cronjob/check-time-lock-backlog <name> -n password-manager`.
+
+**Two things found while scanning, flagged to the user rather than fixed
+(out of this task's scope)**:
+
+- `ci.yml`'s production deploy step applies `kubectl apply -f k8s/production/`,
+  a directory that does not exist anywhere in this repo. `migrate-job.yaml`
+  is the only `k8s/*.yaml` file with confirmed CI wiring (explicit path
+  reference); nothing here proves `cronjobs.yaml` is actually part of an
+  automated deploy pipeline.
+- `network-policy.yaml` is default-deny-all with explicit per-`component`
+  allow rules (`backend`, `websocket`, `celery`, `cache`/redis,
+  `database`/postgres, `frontend`) — but `component: maintenance`, the label
+  both pre-existing CronJobs (`cleanup-old-logs`, `db-backup`) already use
+  and what this new one uses too, has no database-egress allow rule
+  anywhere in that file. Either NetworkPolicy enforcement isn't actually
+  active in this cluster (the file's own comment: "Requires a CNI plugin
+  that supports NetworkPolicy"), or those two existing CronJobs already
+  can't reach Postgres. Pre-existing, not introduced here.
+
 ## 6. Test results
 
 - `pytest security/tests/test_time_lock_tasks.py -v`: 17 passed, 4 subtests
