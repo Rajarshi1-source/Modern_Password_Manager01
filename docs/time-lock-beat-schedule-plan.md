@@ -80,6 +80,7 @@ I have no access to production data to check whether such a backlog exists.
 **This must be checked before deploying**, not just before merging:
 
 ```python
+from datetime import timedelta
 from security.models import PasswordWill, EscrowAgreement
 from django.utils import timezone
 now = timezone.now()
@@ -89,10 +90,20 @@ overdue_wills = [
     if (w.trigger_type == 'inactivity' and now >= w.last_check_in + timedelta(days=w.inactivity_days))
     or (w.trigger_type == 'date' and w.target_date and now >= w.target_date)
 ]
-overdue_escrows = EscrowAgreement.objects.filter(
-    is_released=False, is_disputed=False, approval_deadline__lte=now,
-)
+# `approval_deadline__lte=now` alone isn't "releasable" -- check_escrow_deadlines
+# itself queries this same filter, then gates the actual release on
+# `escrow.can_release` (a property, not a method).
+overdue_escrows = [
+    e for e in EscrowAgreement.objects.filter(
+        is_released=False, is_disputed=False, approval_deadline__lte=now,
+    ).select_related('capsule')
+    if e.can_release
+]
 ```
+
+(This snippet is illustrative — the actual pre-deploy tool is the
+`check_time_lock_backlog` management command built in §5b, which implements
+this exact logic.)
 
 If either is non-empty, `check_dead_mans_switches` / `check_escrow_deadlines`
 will trigger all of them on the first tick post-deploy. Flagging this
@@ -243,3 +254,114 @@ one-off pre-#483-deploy run is still available on demand:
   0 failed.
 - `pytest security/tests/test_check_time_lock_backlog_command.py -v`: 8
   passed (added in a follow-up commit, §5b).
+
+## 7. Review-fix round 1 on PR #483 (CodeRabbit)
+
+Three findings across `check_time_lock_backlog.py` and this plan doc.
+Verified each critically against the actual pinned/installed environment and
+the real production task before changing anything, per instruction. One
+finding's *severity claim* turned out to be factually wrong for this
+codebase; a second finding's own *suggested fix code* was syntactically
+broken. Neither invalidated the underlying point in each case, so both were
+still worth acting on, just not as literally suggested.
+
+### 7.1 "Critical": `timezone.timedelta` doesn't exist in Django 5.1 (severity claim wrong, fixed anyway)
+
+CodeRabbit's claim: `will.last_check_in + timezone.timedelta(days=...)`
+(line ~54) calls an attribute Django 5.1 doesn't provide, so the inactivity
+branch raises `AttributeError` before the command can report anything.
+
+Checked directly against this repo's actual pinned/installed Django,
+**not** taken on the bot's word:
+
+```
+DEBUG=True canny/Scripts/python.exe -c "from django.utils import timezone; print(hasattr(timezone, 'timedelta')); print(timezone.timedelta)"
+# -> True
+# -> <class 'datetime.timedelta'>
+```
+
+`django/utils/timezone.py` in the installed 5.1.15 (pinned identically in
+`requirements.txt`, `requirements-core.txt`, `requirements-lock.txt`,
+`requirements-prod.txt`, `requirements-constraints.txt`) does
+`from datetime import datetime, timedelta, timezone, tzinfo` at module
+level — a real, working import, not a stub. `timezone.timedelta` **is**
+`datetime.timedelta` in this exact pinned version, confirmed both by source
+inspection and by this command's own tests already passing against it
+before this round (`test_reports_overdue_inactivity_will` exercises this
+exact line). The "raises AttributeError" claim does not hold for this
+codebase as it actually runs. CodeRabbit's sandbox likely resolved a
+different Django version than what's pinned here.
+
+**Fixed anyway**: relying on an implicit module-namespace side effect
+(`timezone.timedelta`) rather than importing `timedelta` from `datetime`
+directly is fragile against a future Django refactor of `timezone.py`
+dropping that import, and the change costs nothing — same object, verified
+identical behavior. Added `from datetime import timedelta`, used `timedelta`
+directly. Zero behavior change; purely a dependency-on-an-implementation-detail
+removal.
+
+### 7.2 Escrow query doesn't check `can_release` (real, but suggested fix code was broken)
+
+CodeRabbit's claim: `approval_deadline__lte=now` alone doesn't mean an
+escrow is releasable, so the command could over-report and block a deploy
+unnecessarily.
+
+**Confirmed real** by re-reading the actual production task,
+`check_escrow_deadlines` (`security/tasks/time_lock_tasks.py`): it queries
+this *exact same* broad filter, then gates the real `.release()` call on
+`if escrow.can_release:`. An `EscrowAgreement` with `release_condition=
+'all_approve'` and an elapsed `approval_deadline` but insufficient
+approvals matches the command's old query yet would never actually be
+auto-released by the task — a genuine over-report.
+
+**CodeRabbit's own suggested diff was wrong**, though: it wrote
+`if escrow.can_release()`. `can_release` is decorated `@property`
+(`security/models/core.py`) — calling it as a method raises
+`TypeError: 'bool' object is not callable`. Applying the suggested diff
+verbatim would have replaced a (real but narrower) over-reporting issue with
+a hard crash on every single escrow candidate. Fixed as `escrow.can_release`
+(no parens), matching the property's actual definition and mirroring the
+production task's own gate exactly.
+
+**Regression caught while fixing this**: the existing test
+`test_reports_overdue_escrow` created its escrow with `release_condition=
+'date'` but never moved `capsule.unlock_at` into the past (the `make_capsule`
+helper's default is `now + 1h`). `can_release` for the `'date'` condition
+checks `now >= capsule.unlock_at`, which would have been `False` under the
+new gated logic — the existing test would have started failing the moment
+the fix landed, silently proving the fix "broken" rather than proving the
+escrow it built was never actually releasable in the first place. Fixed the
+test's capsule setup to also set `unlock_at` into the past. Also added a new
+test, `test_does_not_report_escrow_with_unmet_approval_condition`, exercising
+the exact scenario CodeRabbit's finding described (`all_approve`, deadline
+elapsed, insufficient approvals) — this is the regression guard for the
+actual bug, not just the crash CodeRabbit's own suggested code would have
+introduced.
+
+### 7.3 PII in routine CronJob output (real, fixed as suggested)
+
+CodeRabbit's claim: the per-row output lines include `owner.username`,
+`capsule.title`, and `escrow.title` — since this command runs daily as a
+k8s CronJob (§5c), that PII lands in whatever log aggregation the cluster
+uses by default, visible to a broader audience than someone deliberately
+looking up a specific finding.
+
+Confirmed by reading the command's own output lines — the claim is exactly
+right, no ambiguity to verify here. Fixed as suggested: dropped
+`owner={will.owner.username!r}` and `capsule={will.capsule.title!r}` from
+the will lines, `title={escrow.title!r}` from the escrow lines. Rows are
+still fully actionable by ID
+(`PasswordWill.objects.get(id=...)` / `EscrowAgreement.objects.get(id=...)`)
+for whoever needs to actually investigate a finding — the fix removes PII
+from *routine* output, not the ability to look a row up deliberately.
+Updated `test_reports_overdue_inactivity_will` and `test_reports_overdue_escrow`
+to assert the username/titles are *absent* from output (previously one
+asserted the username *was* present) and that the row ID is present instead.
+
+### 7.4 Test results (targeted, per instruction)
+
+`pytest security/tests/test_check_time_lock_backlog_command.py -v` — 9
+passed (8 existing + 1 new: `test_does_not_report_escrow_with_unmet_approval_condition`).
+Not re-run against the full suite this round: nothing outside this one
+command and its own test file was touched, so the full-suite run from §6
+still stands for everything else in this PR's footprint.

@@ -48,7 +48,7 @@ class CheckTimeLockBacklogCommandTests(TestCase):
 
     def test_reports_overdue_inactivity_will(self):
         capsule = make_capsule(self.owner, 'will')
-        PasswordWill.objects.create(
+        will = PasswordWill.objects.create(
             owner=self.owner,
             capsule=capsule,
             trigger_type='inactivity',
@@ -65,7 +65,12 @@ class CheckTimeLockBacklogCommandTests(TestCase):
         self.assertIn('BACKLOG FOUND', out.getvalue())
         self.assertIn('1 PasswordWill row(s)', out.getvalue())
         self.assertIn('0 EscrowAgreement row(s)', out.getvalue())
-        self.assertIn(self.owner.username, out.getvalue())
+        # Row is identified by ID only in routine output -- no owner
+        # username or capsule title (CodeRabbit, PR #483: that PII has no
+        # business in a daily CronJob's stdout).
+        self.assertIn(str(will.id), out.getvalue())
+        self.assertNotIn(self.owner.username, out.getvalue())
+        self.assertNotIn(capsule.title, out.getvalue())
 
     def test_reports_overdue_date_based_will(self):
         capsule = make_capsule(self.owner, 'will')
@@ -116,7 +121,14 @@ class CheckTimeLockBacklogCommandTests(TestCase):
         self.assertIn('No backlog', out.getvalue())
 
     def test_reports_overdue_escrow(self):
-        capsule = make_capsule(self.owner, 'escrow')
+        # `release_condition='date'` gates `can_release` on
+        # `capsule.unlock_at`, not on `approval_deadline` -- both need to be
+        # in the past for this escrow to actually be releasable (CodeRabbit,
+        # PR #483: the command now checks `can_release`, matching what
+        # check_escrow_deadlines itself gates the real release on).
+        capsule = make_capsule(
+            self.owner, 'escrow', unlock_at=timezone.now() - timedelta(hours=1),
+        )
         escrow = EscrowAgreement.objects.create(
             capsule=capsule,
             title='Overdue Escrow',
@@ -132,6 +144,32 @@ class CheckTimeLockBacklogCommandTests(TestCase):
         self.assertEqual(ctx.exception.code, 1)
         self.assertIn('0 PasswordWill row(s)', out.getvalue())
         self.assertIn('1 EscrowAgreement row(s)', out.getvalue())
+        self.assertIn(str(escrow.id), out.getvalue())
+        self.assertNotIn(escrow.title, out.getvalue())
+
+    def test_does_not_report_escrow_with_unmet_approval_condition(self):
+        """Deadline elapsed but `can_release` is False -- must not be
+        reported. This is the exact gap CodeRabbit caught: the query alone
+        (`approval_deadline__lte=now`) does not mean the escrow is actually
+        releasable, and check_escrow_deadlines would skip this row too.
+        """
+        capsule = make_capsule(self.owner, 'escrow')
+        escrow = EscrowAgreement.objects.create(
+            capsule=capsule,
+            title='Needs more approvals',
+            release_condition='all_approve',
+            approval_deadline=timezone.now() - timedelta(hours=2),
+        )
+        other_party = User.objects.create_user(
+            'otherparty', 'other@example.com', 'pass123!',
+        )
+        escrow.parties.add(self.owner, other_party)
+        # Only one of two parties approved -- can_release is False.
+        escrow.approve(self.owner.id)
+
+        out = StringIO()
+        call_command('check_time_lock_backlog', stdout=out)
+        self.assertIn('No backlog', out.getvalue())
 
     def test_does_not_report_disputed_escrow(self):
         capsule = make_capsule(self.owner, 'escrow')
