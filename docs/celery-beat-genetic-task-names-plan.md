@@ -388,3 +388,109 @@ Full `pytest security/tests/ shared/tests/`: 1148 passed, 7 skipped
 (pre-existing), 0 failed — up from round 1's 1138 by the 10 new tests added
 this round (3 explicit registry-resolution tests, 5 dark-protocol task
 tests, 2 shared-session-cleanup tests).
+
+## 9. Review-fix round 1 on PR #482 (CodeRabbit, commit afdc51a)
+
+CodeRabbit's full review on commit `afdc51a` flagged 1 Major finding and 1
+Nitpick. Verified both critically against the actual current code (not
+taken on the bot's word) before changing anything, per instruction. Both
+confirmed real; both fixed. A third item (docstring coverage 73.53% < 80%
+threshold) was deliberately left alone — a repo-wide advisory metric, not a
+specific defect, and chasing it across unrelated functions would work
+against the "keep changes minimal" instruction for this pass.
+
+### 9.1 Major: `check_genetic_evolution` double-writes the evolution log and counter (CONFIRMED)
+
+CodeRabbit's claim: `EpigeneticEvolutionManager.check_and_evolve`
+(`epigenetic_service.py`) already creates the `GeneticEvolutionLog` row and
+increments `subscription.evolutions_triggered` on a successful evolution.
+The task's own `check_genetic_evolution` (`breach_tasks.py`), added in round
+1 of this same PR, did *both* of those again right after a successful call
+— two `GeneticEvolutionLog` rows and a double-incremented counter per
+trigger.
+
+Verified by reading both functions in full at their current line numbers
+rather than trusting the bot's line references (which were from the diff,
+not necessarily current HEAD):
+- `epigenetic_service.py` `check_and_evolve`, lines 355–381: increments
+  `subscription.evolutions_triggered` then creates a
+  `GeneticEvolutionLog.objects.create(...)`, using field names
+  `old_biological_age`/`new_biological_age`.
+- `breach_tasks.py` `check_genetic_evolution`, lines 338–358 (pre-fix):
+  creates its *own* `GeneticEvolutionLog.objects.create(...)` (behind a
+  24h cache-based dedup key that does nothing to stop this *first* write
+  from duplicating the manager's) and its own
+  `subscription.evolutions_triggered` increment, using field names
+  `biological_age_before`/`biological_age_after` — a genuinely separate
+  write, not an accidental re-run of the same one.
+
+Root cause of how this got in: this task-level logging code pre-dates round
+1 of this PR. Before round 1's fix, the task called
+`check_and_evolve(user)` (wrong arity) and read the result as a dict (wrong
+type) — a call that could only ever raise, caught by the task's own blanket
+`except Exception`, so this logging code had never actually executed in
+production. Round 1 fixed the call shape, which made the `if evolved:`
+branch reachable for the first time — and exposed the dormant duplicate
+write that had been sitting there unreachable the whole time.
+
+**Fix** (`security/tasks/breach_tasks.py`): removed the task's own
+`GeneticEvolutionLog.objects.create(...)`, its dedup-cache guard, and the
+`subscription.evolutions_triggered` increment/save. The task now only reads
+back `new_generation`/`biological_age` off the `dna_connection` instance the
+manager already mutated (as round 1 already did) and returns them in its
+result dict — no persistence besides what `check_and_evolve` itself does.
+`previous_age` (only used by the removed block) and the local
+`GeneticEvolutionLog` import (also only used there) were dropped along with
+it. `cache` stays imported at module level — used by an unrelated function
+elsewhere in the same file (`process_forced_rotation`'s rotation-event
+dedup). Persistence living solely in the manager also matches the API view
+(`genetic_password_views.py`), which already calls `check_and_evolve`
+directly and relies on the manager's own side effects with no task-layer
+duplicate in front of it.
+
+**Test** (`security/tests/test_genetic_password.py`,
+`test_check_genetic_evolution_task`): CodeRabbit's own suggestion was to
+"model the manager persistence and verify exactly one log is created and
+the usage counter increments once" — implemented literally. The
+`fake_check_and_evolve` mock side effect now also creates the
+`GeneticEvolutionLog` row and increments `subscription.evolutions_triggered`
+itself (mirroring what the real manager does), and the test asserts
+`GeneticEvolutionLog.objects.filter(user=self.user).count() == 1` and
+`subscription.evolutions_triggered == 1` after `refresh_from_db()` — a
+regression guard against the double-write recurring.
+
+### 9.2 Nitpick: unused `message` binding (CONFIRMED)
+
+`security/tests/test_genetic_password.py`,
+`EpigeneticEvolutionManagerSyncTestCase.test_check_and_evolve_runs_without_async_error`:
+`evolved, message = epigenetic_evolution_manager.check_and_evolve(...)` —
+`message` bound, never read (Ruff RUF059). Confirmed real by direct read;
+only match for the pattern in the file (grepped for the unpacking call
+site). Fixed by renaming to `_message` (CodeRabbit's own first suggested
+option) rather than asserting on the exact message string, which would make
+the test brittle against message-wording changes that aren't bugs.
+
+### 9.3 Declined: docstring coverage warning
+
+73.53% vs. an 80% threshold, flagged as a pre-merge check warning (not a
+failure — the PR's actual CI checks are green: "1 neutral, 6 skipped, 27
+successful"). Not a specific, locatable defect the way the two findings
+above are; satisfying it would mean writing docstrings across an
+unspecified set of functions this PR didn't necessarily touch. Left alone
+per this round's explicit "keep changes minimal, surgical" instruction —
+revisit only if asked to address it directly.
+
+### 9.4 Test results (targeted, per this round's testing guidance)
+
+Ran only the tests touching the changed code, not the full suite, per
+explicit instruction to prefer targeted runs over routine full-suite runs:
+
+- `pytest security/tests/test_genetic_password.py::GeneticEvolutionTaskTestCase security/tests/test_genetic_password.py::EpigeneticEvolutionManagerSyncTestCase -v`
+  — 8 passed.
+- Broader confirmation once the fix was stable, scoped to this PR's actual
+  footprint (not the full repo suite):
+  `pytest security/tests/test_genetic_password.py security/tests/test_celery_beat_registry.py -q`
+  — 67 passed, 8 subtests passed, 0 failed. This round added no new test
+  functions (both changes strengthened an existing test's assertions/target
+  variable, not new coverage), so the count reflects rounds 1+2's additions,
+  not this round's.

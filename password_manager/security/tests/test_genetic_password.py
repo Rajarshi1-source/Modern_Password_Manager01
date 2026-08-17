@@ -854,11 +854,32 @@ class GeneticEvolutionTaskTestCase(TestCase):
 
         def fake_check_and_evolve(user, dna_connection, force=False):
             # Mirror what the real manager does on a successful evolution: it
-            # mutates and saves the connection itself.
+            # mutates and saves the connection, creates its own
+            # GeneticEvolutionLog, and increments the subscription counter
+            # itself (EpigeneticEvolutionManager.check_and_evolve). The task
+            # must not repeat any of that -- it used to (CodeRabbit, PR #482
+            # round 1), double-writing both the log and the counter on every
+            # successful trigger, dormant only because the pre-fix call
+            # shape raised before ever reaching that code.
             dna_connection.evolution_generation = 2
             dna_connection.last_biological_age = 36.5
             dna_connection.last_epigenetic_update = timezone.now()
             dna_connection.save()
+
+            subscription = user.genetic_subscription
+            subscription.evolutions_triggered += 1
+            subscription.save()
+
+            GeneticEvolutionLog.objects.create(
+                user=user,
+                trigger_type='automatic',
+                old_evolution_gen=1,
+                new_evolution_gen=2,
+                old_biological_age=None,
+                new_biological_age=36.5,
+                success=True,
+                completed_at=timezone.now(),
+            )
             return True, 'Evolution triggered: generation 1 → 2'
 
         mock_manager.check_and_evolve.side_effect = fake_check_and_evolve
@@ -876,10 +897,19 @@ class GeneticEvolutionTaskTestCase(TestCase):
         self.assertEqual(call_args.args[0], self.user)
         self.assertEqual(call_args.args[1], self.connection)
 
+        # Exactly one log and one counter increment -- the manager's side
+        # effect, and only the manager's. Regression guard for the
+        # double-write CodeRabbit caught in round 1.
+        self.assertEqual(
+            GeneticEvolutionLog.objects.filter(user=self.user).count(), 1,
+        )
         log = GeneticEvolutionLog.objects.get(user=self.user)
         self.assertEqual(log.old_evolution_gen, 1)
         self.assertEqual(log.new_evolution_gen, 2)
-        self.assertEqual(log.biological_age_after, 36.5)
+        self.assertEqual(log.new_biological_age, 36.5)
+
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.evolutions_triggered, 1)
 
     def test_check_genetic_evolution_not_evolved(self):
         """When the manager declines to evolve, the task reports why."""
@@ -1031,7 +1061,7 @@ class EpigeneticEvolutionManagerSyncTestCase(TestCase):
         # force=True bypasses the CHECK_INTERVAL_DAYS/threshold gates so this
         # exercises the ORM writes (save/create) that are what actually trip
         # SynchronousOnlyOperation under an async def.
-        evolved, message = epigenetic_evolution_manager.check_and_evolve(
+        evolved, _message = epigenetic_evolution_manager.check_and_evolve(
             self.user, self.connection, force=True,
         )
 
