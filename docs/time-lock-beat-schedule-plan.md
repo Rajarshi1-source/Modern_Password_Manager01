@@ -170,6 +170,24 @@ SMTP connection.
 
 Run with the `canny` venv and `DEBUG=True`.
 
+## 5b. Pre-deploy backlog check
+
+User asked to check the backlog before deploying. No production DB access
+from this session (`DB_NAME` is unset here, so this environment only ever
+touches the local dev SQLite) -- the query in §3 can't actually be run
+against production from here. Instead, added
+`python manage.py check_time_lock_backlog`
+(`security/management/commands/check_time_lock_backlog.py`): a read-only
+command mirroring `check_dead_mans_switches`'/`check_escrow_deadlines`'s own
+trigger logic exactly, reporting owner/capsule/overdue-by for each match and
+exiting 1 if anything is found (0 otherwise) -- safe to gate a deploy script
+on, or just run by hand. Covered by 8 tests
+(`security/tests/test_check_time_lock_backlog_command.py`), and also run
+manually against the local dev DB (empty, as expected -- confirms the
+command executes cleanly, not that production has no backlog).
+
+**Still outstanding**: run this against production before deploying this PR.
+
 ## 6. Test results
 
 - `pytest security/tests/test_time_lock_tasks.py -v`: 17 passed, 4 subtests
@@ -179,3 +197,5 @@ Run with the `canny` venv and `DEBUG=True`.
   regress the existing API/model-layer coverage for the same feature).
 - Full `pytest security/tests/`: 1147 passed, 7 skipped (pre-existing),
   0 failed.
+- `pytest security/tests/test_check_time_lock_backlog_command.py -v`: 8
+  passed (added in a follow-up commit, §5b).
