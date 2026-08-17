@@ -132,6 +132,33 @@ except ImportError as e:
     TIME_LOCK_TASKS_AVAILABLE = False
 
 
+# ============================================================================
+# Dark Protocol Tasks
+# ============================================================================
+#
+# Each `@shared_task` in dark_protocol_tasks.py carries an explicit
+# `name='dark_protocol.<func>'` that already matches what celery.py's beat
+# schedule expects -- but `@shared_task` only registers a task once its
+# defining module is imported, and nothing imported this one. The five
+# `dark-protocol-*` beat entries had never run as a result. Importing here
+# (mirroring the try/except pattern above) is the fix; celery.py needed no
+# changes.
+
+try:
+    from .dark_protocol_tasks import (
+        rotate_network_paths,
+        generate_cover_traffic,
+        health_check_nodes,
+        cleanup_expired_sessions as cleanup_expired_dark_protocol_sessions,
+        analyze_traffic_patterns,
+        register_node,
+    )
+    DARK_PROTOCOL_TASKS_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"Could not import dark protocol tasks: {e}")
+    DARK_PROTOCOL_TASKS_AVAILABLE = False
+
+
 try:
     from ..services.pattern_analysis_engine import PatternAnalysisEngine
     from ..services.predictive_expiration_service import PredictiveExpirationService
@@ -180,5 +207,15 @@ if TIME_LOCK_TASKS_AVAILABLE:
         'send_will_reminder',
         'notify_beneficiary',
         'process_vdf_computation',
+    ])
+
+if DARK_PROTOCOL_TASKS_AVAILABLE:
+    __all__.extend([
+        'rotate_network_paths',
+        'generate_cover_traffic',
+        'health_check_nodes',
+        'cleanup_expired_dark_protocol_sessions',
+        'analyze_traffic_patterns',
+        'register_node',
     ])
 
