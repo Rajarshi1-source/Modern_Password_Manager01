@@ -86,7 +86,7 @@ user__geneticsubscription__epigenetic_evolution_enabled=True
 so the reverse query name is `genetic_subscription`, not the default
 `geneticsubscription`. Confirmed empirically:
 
-```
+```text
 FieldError: Unsupported lookup 'geneticsubscription' for ForeignKey or join on the field not permitted.
 ```
 
@@ -123,7 +123,7 @@ coroutine, and a tuple treated as a dict.
 `GeneticEvolutionLog.objects.create`, `subscription.save()`). Django rejects
 that:
 
-```
+```text
 SynchronousOnlyOperation: You cannot call this from an async context - use a thread or sync_to_async.
 ```
 
@@ -494,3 +494,18 @@ explicit instruction to prefer targeted runs over routine full-suite runs:
   functions (both changes strengthened an existing test's assertions/target
   variable, not new coverage), so the count reflects rounds 1+2's additions,
   not this round's.
+
+## 10. Review-fix round 2 on PR #482 (CodeRabbit, MD040)
+
+One finding: two fenced blocks in this doc itself (§3.2, §3.3 — the
+`FieldError` and `SynchronousOnlyOperation` error-text blocks) opened with
+a bare ` ``` ` instead of a language tag, tripping markdownlint's MD040
+(`fenced-code-language`). Verified before fixing: grepped every bare
+` ^```$ ` line in the file and classified each as an opening or closing
+fence by reading its surrounding context — exactly 2 were unlabeled
+*openings* (lines 89, 126 at the time of the finding); every other bare
+match was the legitimate closing fence of a block whose opener already
+carried `python`/`bash`. No other unflagged instances existed to fix for
+consistency. Tagged both `text` (they're plain error-message output, not
+executable Python). Doc-only, zero code/behavior impact — no test run
+needed for this round.
