@@ -127,3 +127,67 @@ spec:
             emptyDir: {}
           - name: tmp
             emptyDir: {}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: check-time-lock-backlog
+  namespace: password-manager
+  labels:
+    app: password-manager
+    component: maintenance
+spec:
+  # Daily is enough: a stuck/dead beat process building a Time-Lock backlog
+  # is a slow-forming problem, not one that needs sub-hour detection. Clear
+  # of cleanup-old-logs (Sun 04:00) and db-backup (daily 03:30).
+  schedule: "0 6 * * *"  # Daily 06:00 UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # A backlog finding (exit 1) is a real signal, not a transient
+      # failure -- retrying the same read-only query doesn't make it
+      # smaller. backoffLimit: 0 means one clean Failed job per scheduled
+      # run instead of backoffLimit-many duplicate log entries for the
+      # same finding.
+      backoffLimit: 0
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: password-manager
+            component: maintenance
+            job: check-time-lock-backlog
+        spec:
+          restartPolicy: Never
+          serviceAccountName: password-manager-sa
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+          containers:
+          - name: check-time-lock-backlog
+            image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+            command: ["python", "manage.py", "check_time_lock_backlog"]
+            envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: app-secrets
+            resources:
+              requests:
+                cpu: "50m"
+                memory: "128Mi"
+              limits:
+                cpu: "200m"
+                memory: "256Mi"
+            securityContext:
+              readOnlyRootFilesystem: true
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
