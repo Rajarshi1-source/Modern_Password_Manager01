@@ -283,7 +283,7 @@ def check_genetic_evolution(user_id: int):
     Returns:
         dict: Evolution status and results
     """
-    from ..models import DNAConnection, GeneticEvolutionLog, GeneticSubscription
+    from ..models import DNAConnection, GeneticSubscription
     from ..services.epigenetic_service import epigenetic_evolution_manager
     
     try:
@@ -313,10 +313,9 @@ def check_genetic_evolution(user_id: int):
         # `check_and_evolve(user)` and read the result as a dict, which could
         # only ever raise -- the task's blanket `except Exception` below turned
         # that into a soft `{'checked': False}`, so the failure never surfaced.
-        # Snapshot the pre-call values first: `check_and_evolve` mutates and
-        # saves `dna_connection` itself on success.
+        # Snapshot the pre-call generation first: `check_and_evolve` mutates
+        # and saves `dna_connection` itself on success.
         old_generation = dna_connection.evolution_generation
-        previous_age = dna_connection.last_biological_age
 
         evolved, message = epigenetic_evolution_manager.check_and_evolve(
             user, dna_connection,
@@ -326,7 +325,18 @@ def check_genetic_evolution(user_id: int):
             # Read back off the instance the manager just mutated -- it has
             # already written `evolution_generation`, `last_biological_age` and
             # `last_epigenetic_update`, so re-assigning them here (as this task
-            # used to) would be a redundant second write.
+            # used to) would be a redundant second write. The manager also
+            # already creates the GeneticEvolutionLog row and increments
+            # `subscription.evolutions_triggered` itself (see
+            # EpigeneticEvolutionManager.check_and_evolve) -- this task doing
+            # so too, as it used to, double-wrote both of those on every
+            # successful trigger (CodeRabbit, PR #482 round 1: the old call
+            # `check_and_evolve(user)` above raised before ever reaching this
+            # branch, so the duplicate writes were dormant until the call fix
+            # made this branch reachable for the first time). Persistence
+            # lives in the manager alone now, since the trigger-evolution API
+            # view calls it directly and needs the same side effects without
+            # a second, task-only copy of them.
             new_generation = dna_connection.evolution_generation
             biological_age = dna_connection.last_biological_age
 
@@ -334,28 +344,6 @@ def check_genetic_evolution(user_id: int):
                 f"Evolution triggered for user {user_id}: "
                 f"Gen {old_generation} -> {new_generation}"
             )
-
-            # Log the evolution (idempotent: dedup by user + generation + date)
-            today = timezone.now().date()
-            evo_dedup_key = f"evo_dedup:{user_id}:{new_generation}:{today}"
-            if not cache.get(evo_dedup_key):
-                GeneticEvolutionLog.objects.create(
-                    user=user,
-                    trigger_type='automatic',
-                    old_evolution_gen=old_generation,
-                    new_evolution_gen=new_generation,
-                    biological_age_before=previous_age,
-                    biological_age_after=biological_age,
-                    success=True,
-                    completed_at=timezone.now()
-                )
-                cache.set(evo_dedup_key, True, 86400)  # 24h TTL
-            else:
-                logger.info(f"Evolution log deduplicated for user {user_id}")
-
-            # Update subscription usage
-            subscription.evolutions_triggered = (subscription.evolutions_triggered or 0) + 1
-            subscription.save()
 
             return {
                 'checked': True,
