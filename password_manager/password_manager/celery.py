@@ -509,8 +509,59 @@ app.conf.update(
             'task': 'security.tasks.daily_predictive_scan',
             'schedule': crontab(hour=2, minute=15),
         },
+
     },
 )
+
+# =============================================================================
+# Time-Lock: Password Will / Dead Man's Switch / Escrow
+# =============================================================================
+#
+# `time_lock_tasks.py` defines its own CELERY_BEAT_SCHEDULE dict (4 entries:
+# check_capsule_unlocks, check_dead_mans_switches, check_expired_capsules,
+# check_escrow_deadlines), already correctly named (`time_lock.<func>`,
+# matching each task's own `@shared_task(name=...)` exactly) and already
+# imported by security/tasks/__init__.py as TIME_LOCK_BEAT_SCHEDULE -- but
+# nothing had ever merged it into this file's beat_schedule above, so none of
+# the four were ever actually scheduled despite being fully implemented.
+#
+# Merged via `on_after_finalize` rather than a plain import above: this
+# module is imported eagerly as a side effect of `password_manager/__init__.py`
+# (`from .celery import app as celery_app`), which itself runs the moment
+# ANYTHING imports the `password_manager` package -- including Django's own
+# `django.setup()`, which imports `password_manager.settings` as one of its
+# first steps, before `apps.populate()` has finished. An eager
+# `from security.tasks import ...` here (even placed after
+# `app.autodiscover_tasks()`, which does NOT block on that promise -- it's
+# deliberately lazy for exactly this reason) hits
+# `django.core.exceptions.AppRegistryNotReady` at import time, because
+# `security.tasks` pulls in `breach_tasks.py`, which does
+# `from django.contrib.auth.models import User` at module level. Confirmed
+# empirically: an eager version of this import crashed startup.
+# `on_after_finalize` is Celery's own mechanism for exactly this kind of
+# deferred setup -- it only fires once the app is finalized (first real task
+# lookup, well after django.setup() has completed in normal boot), the same
+# safe point `autodiscover_tasks()`'s own deferred imports rely on.
+#
+# SAFETY NOTE FOR DEPLOYMENT (not something this merge can fix from the code
+# alone): `check-dead-mans-switches` and `check-escrow-deadlines` have real,
+# externally-visible effects the first time they run --
+# `trigger_password_will` unlocks a capsule and emails beneficiaries;
+# `check_escrow_deadlines` can auto-release an escrow and email all parties.
+# Because this beat entry has never existed, ANY PasswordWill
+# (is_active=True, is_triggered=False, deadline already elapsed) or
+# EscrowAgreement (is_released=False, approval_deadline already elapsed)
+# sitting in production today will all fire in a single batch on the first
+# tick after this deploys, rather than each having fired individually at its
+# own due date. Check for a backlog before deploying -- see
+# docs/time-lock-beat-schedule-plan.md §3 for the query.
+
+
+@app.on_after_finalize.connect
+def _merge_time_lock_beat_schedule(sender, **kwargs):
+    from security.tasks import TIME_LOCK_BEAT_SCHEDULE
+
+    sender.conf.beat_schedule.update(TIME_LOCK_BEAT_SCHEDULE)
 
 
 @app.task(bind=True, ignore_result=True)
