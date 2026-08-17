@@ -834,24 +834,71 @@ class GeneticEvolutionTaskTestCase(TestCase):
             evolution_generation=1
         )
 
-    @patch('security.services.epigenetic_service.epigenetic_evolution_manager')
+    @patch(
+        'security.services.epigenetic_service.epigenetic_evolution_manager',
+        autospec=True,
+    )
     def test_check_genetic_evolution_task(self, mock_manager):
-        """Test the check_genetic_evolution Celery task."""
+        """Test the check_genetic_evolution Celery task.
+
+        `autospec=True` makes this mock enforce the real
+        `check_and_evolve(user, dna_connection, force=False)` signature and its
+        `(evolved, message)` tuple return. A bare `MagicMock` (the previous
+        setup here) accepts any call shape and silently returns whatever is
+        assigned to `.return_value`, which is exactly why this test kept
+        passing while the task called `check_and_evolve(user)` and read a
+        dict off a method that returns a tuple -- a call that could only ever
+        raise against the real manager.
+        """
         from ..tasks import check_genetic_evolution
-        
-        mock_manager.check_and_evolve.return_value = {
-            'evolved': True,
-            'old_generation': 1,
-            'new_generation': 2,
-            'biological_age': 36.5,
-            'previous_age': 35.0
-        }
-        
+
+        def fake_check_and_evolve(user, dna_connection, force=False):
+            # Mirror what the real manager does on a successful evolution: it
+            # mutates and saves the connection itself.
+            dna_connection.evolution_generation = 2
+            dna_connection.last_biological_age = 36.5
+            dna_connection.last_epigenetic_update = timezone.now()
+            dna_connection.save()
+            return True, 'Evolution triggered: generation 1 → 2'
+
+        mock_manager.check_and_evolve.side_effect = fake_check_and_evolve
+
         result = check_genetic_evolution(self.user.id)
-        
+
         self.assertTrue(result['checked'])
         self.assertTrue(result['evolved'])
+        self.assertEqual(result['old_generation'], 1)
         self.assertEqual(result['new_generation'], 2)
+        self.assertEqual(result['biological_age'], 36.5)
+
+        mock_manager.check_and_evolve.assert_called_once()
+        call_args = mock_manager.check_and_evolve.call_args
+        self.assertEqual(call_args.args[0], self.user)
+        self.assertEqual(call_args.args[1], self.connection)
+
+        log = GeneticEvolutionLog.objects.get(user=self.user)
+        self.assertEqual(log.old_evolution_gen, 1)
+        self.assertEqual(log.new_evolution_gen, 2)
+        self.assertEqual(log.biological_age_after, 36.5)
+
+    def test_check_genetic_evolution_not_evolved(self):
+        """When the manager declines to evolve, the task reports why."""
+        from ..tasks import check_genetic_evolution
+
+        with patch(
+            'security.services.epigenetic_service.epigenetic_evolution_manager',
+            autospec=True,
+        ) as mock_manager:
+            mock_manager.check_and_evolve.return_value = (
+                False, 'No biological age data available',
+            )
+
+            result = check_genetic_evolution(self.user.id)
+
+        self.assertTrue(result['checked'])
+        self.assertFalse(result['evolved'])
+        self.assertEqual(result['reason'], 'No biological age data available')
+        self.assertFalse(GeneticEvolutionLog.objects.filter(user=self.user).exists())
 
     def test_check_evolution_no_connection(self):
         """Test evolution check with no DNA connection."""
@@ -881,6 +928,119 @@ class GeneticEvolutionTaskTestCase(TestCase):
         expired_sub.refresh_from_db()
         self.assertEqual(expired_sub.status, 'expired')
         self.assertEqual(result['expired_trials_cleaned'], 1)
+
+    def test_daily_genetic_evolution_check_selects_eligible_connections(self):
+        """`daily_genetic_evolution_check` must not raise FieldError.
+
+        The task used to filter on `user__geneticsubscription__...`, but
+        `GeneticSubscription.user` declares
+        `related_name='genetic_subscription'`, so that reverse lookup name
+        does not exist and every run raised `FieldError` before queuing
+        anything.
+        """
+        from ..tasks import daily_genetic_evolution_check
+
+        # self.connection (set up in setUp) is active, belongs to an active
+        # premium subscription with evolution enabled, but has no
+        # last_biological_age set -- so it must be excluded from the fan-out.
+        self.assertIsNone(self.connection.last_biological_age)
+
+        eligible_user = User.objects.create_user(
+            'eligible', 'eligible@test.com', 'pass123!',
+        )
+        GeneticSubscription.objects.create(
+            user=eligible_user,
+            tier='premium',
+            status='active',
+            epigenetic_evolution_enabled=True,
+        )
+        eligible_connection = DNAConnection.objects.create(
+            user=eligible_user,
+            provider='sequencing',
+            status='connected',
+            is_active=True,
+            evolution_generation=1,
+            last_biological_age=40.0,
+        )
+
+        with patch('security.tasks.breach_tasks.check_genetic_evolution') as mock_check:
+            result = daily_genetic_evolution_check()
+
+        self.assertEqual(result['queued'], 1)
+        mock_check.delay.assert_called_once_with(eligible_connection.user_id)
+
+    def test_refresh_dna_tokens_reports_unimplemented(self):
+        """`refresh_dna_tokens` must not raise AttributeError.
+
+        The task used to read `connection.encrypted_refresh_token`, but the
+        model field is `refresh_token_encrypted`; that mismatch is an
+        AttributeError, uncaught by the task's `except ValueError`, so it died
+        on the first active connection. It also must not report a connection
+        as `refreshed` -- the refresh call itself is a placeholder that
+        performs no decrypt and no network request, so claiming success would
+        be false telemetry.
+        """
+        from ..tasks import refresh_dna_tokens
+
+        self.connection.status = 'connected'
+        self.connection.refresh_token_encrypted = b'encrypted-placeholder'
+        self.connection.save()
+
+        result = refresh_dna_tokens()
+
+        self.assertEqual(result['refreshed'], 0)
+        self.assertEqual(result['needs_refresh'], 1)
+        self.assertEqual(result['failed'], 0)
+        self.assertFalse(result['implemented'])
+
+
+class EpigeneticEvolutionManagerSyncTestCase(TestCase):
+    """`check_and_evolve` must be callable from a sync context.
+
+    It used to be declared `async def` while containing zero `await`
+    expressions and doing sync ORM work throughout (`user.genetic_subscription`,
+    `dna_connection.save()`, `GeneticEvolutionLog.objects.create`). Both real
+    callers -- the `check_genetic_evolution` Celery task and the
+    trigger-evolution API view -- are sync, so calling it (directly, or via
+    `async_to_sync`) raised `django.core.exceptions.SynchronousOnlyOperation`
+    every time.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='syncuser', email='sync@example.com', password='testpassword123!',
+        )
+        GeneticSubscription.objects.create(
+            user=self.user, tier='premium', status='active',
+            epigenetic_evolution_enabled=True,
+        )
+        self.connection = DNAConnection.objects.create(
+            user=self.user, provider='sequencing', status='connected',
+            is_active=True, evolution_generation=1, last_biological_age=30.0,
+        )
+
+    def test_check_and_evolve_is_not_a_coroutine_function(self):
+        import inspect
+        from ..services.epigenetic_service import epigenetic_evolution_manager
+
+        self.assertFalse(inspect.iscoroutinefunction(epigenetic_evolution_manager.check_and_evolve))
+
+    def test_check_and_evolve_runs_without_async_error(self):
+        from ..services.epigenetic_service import epigenetic_evolution_manager
+
+        # force=True bypasses the CHECK_INTERVAL_DAYS/threshold gates so this
+        # exercises the ORM writes (save/create) that are what actually trip
+        # SynchronousOnlyOperation under an async def.
+        evolved, message = epigenetic_evolution_manager.check_and_evolve(
+            self.user, self.connection, force=True,
+        )
+
+        self.assertTrue(evolved)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.evolution_generation, 2)
+        self.assertTrue(
+            GeneticEvolutionLog.objects.filter(user=self.user, new_evolution_gen=2).exists()
+        )
 
 
 # =============================================================================

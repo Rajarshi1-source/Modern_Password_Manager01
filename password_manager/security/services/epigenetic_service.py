@@ -291,7 +291,7 @@ class EpigeneticEvolutionManager:
     def __init__(self, epigenetic_provider: EpigeneticProvider = None):
         self.provider = epigenetic_provider or HumanityHealthProvider()
     
-    async def check_and_evolve(
+    def check_and_evolve(
         self,
         user,
         dna_connection,
@@ -299,7 +299,17 @@ class EpigeneticEvolutionManager:
     ) -> Tuple[bool, Optional[str]]:
         """
         Check if evolution is needed and trigger if so.
-        
+
+        Sync on purpose. This method contains no ``await`` expressions and does
+        sync ORM work throughout (``user.genetic_subscription``,
+        ``dna_connection.save()``, ``GeneticEvolutionLog.objects.create``), so
+        as an ``async def`` it raised ``SynchronousOnlyOperation`` on its first
+        query no matter how it was driven -- Django refuses sync ORM from an
+        async context, and wrapping the call in ``async_to_sync`` puts it in
+        exactly such a context rather than out of one. Both callers are sync
+        (the ``check_genetic_evolution`` Celery task and the trigger-evolution
+        API view), so dropping ``async`` is the fix; there is nothing to await.
+
         Args:
             user: Django User instance
             dna_connection: DNAConnection model instance

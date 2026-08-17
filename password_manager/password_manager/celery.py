@@ -149,21 +149,46 @@ app.conf.update(
         # Genetic Password Evolution Tasks
         # =================================================================
         
-        # Daily genetic evolution check (for premium users)
+        # These three entries named `security.tasks.<func>`, which is not what
+        # these tasks are registered as: they are defined in `breach_tasks.py`
+        # under a bare `@shared_task`, and `@shared_task` derives the name from
+        # the DEFINING module -- so the real names carry a `breach_tasks`
+        # segment. Beat still published the message (the scheduler falls back to
+        # `send_task` for a name it cannot resolve locally), but the worker
+        # rejected every one as `NotRegistered`, so all three jobs had never run.
+        #
+        # Corrected the entries rather than pinning `name='security.tasks.<func>'`
+        # on the decorators: nothing outside this file referred to the short
+        # names (the task package and tests import the Python symbols, which are
+        # unaffected either way), renaming a registered task would leave workers
+        # on older code unable to resolve it mid-rollout, and a name that
+        # disagrees with its defining module is exactly what kept this bug
+        # invisible. Same call made for the adaptive tasks below.
+        #
+        # The four siblings in `breach_tasks.py` that DO carry an explicit
+        # `name='security.tasks.<func>'` are deliberately left alone -- they
+        # resolve correctly today and have live beat entries.
+
+        # Daily genetic evolution check (for premium users).
+        # Inert until an epigenetic provider is configured: the fan-out selects
+        # only connections that already carry a biological age.
         'check-genetic-evolution-daily': {
-            'task': 'security.tasks.daily_genetic_evolution_check',
+            'task': 'security.tasks.breach_tasks.daily_genetic_evolution_check',
             'schedule': crontab(hour=5, minute=0),  # 5:00 AM daily
         },
-        
+
         # Cleanup expired genetic trials (daily)
         'cleanup-genetic-trials': {
-            'task': 'security.tasks.cleanup_expired_genetic_trials',
+            'task': 'security.tasks.breach_tasks.cleanup_expired_genetic_trials',
             'schedule': crontab(hour=4, minute=30),  # 4:30 AM daily
         },
-        
-        # Refresh DNA provider OAuth tokens (weekly)
+
+        # Refresh DNA provider OAuth tokens (weekly).
+        # The provider refresh call itself is still unimplemented; the task
+        # reports `implemented: False` rather than claiming a refresh it did not
+        # perform. See `refresh_dna_tokens` in breach_tasks.py.
         'refresh-dna-tokens-weekly': {
-            'task': 'security.tasks.refresh_dna_tokens',
+            'task': 'security.tasks.breach_tasks.refresh_dna_tokens',
             'schedule': crontab(day_of_week=6, hour=3, minute=0),  # Saturday 3:00 AM
         },
         
