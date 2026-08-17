@@ -8,9 +8,29 @@ scheduler falls back to `send_task` for a name it cannot resolve locally -- and
 the worker rejects it as `NotRegistered`. Nothing raises in beat, nothing shows
 up as a failed task, and the job simply never runs.
 
-Three genetic/DNA entries sat broken that way (`security.tasks.<func>` instead
-of `security.tasks.breach_tasks.<func>`). This module is the check that would
-have caught them.
+An audit of all 42 entries once found 11 broken this way, for three different
+underlying reasons -- all now fixed, and asserted explicitly below rather than
+just falling out of the whole-schedule sweep, so a regression on any one of
+them points straight at its cause instead of at a generic list:
+
+- 3 genetic/DNA entries scheduled `security.tasks.<func>` instead of the real
+  `security.tasks.breach_tasks.<func>` (wrong module prefix).
+- 5 Dark Protocol entries scheduled the CORRECT name
+  (`dark_protocol.<func>`, matching each task's explicit `name=`) but nothing
+  ever imported `dark_protocol_tasks.py`, so the decorators never registered
+  it (missing import, not a wrong name).
+- 1 entry (`update-threat-intel`) scheduled `ml_security.tasks.update_threat_intelligence`
+  for a task that is actually `security.tasks.update_threat_intelligence`
+  (wrong app prefix).
+
+The remaining 2 of the original 11 were handled differently:
+`cleanup-expired-sessions` named a task that genuinely did not exist yet
+(`shared` had no `tasks.py`) -- implemented rather than renamed, since Django
+ships this exact cleanup as `clearsessions`. `analyze-password-strength-daily`
+was removed outright: no such task exists anywhere, and writing one would mean
+the server decrypting every user's stored passwords, which conflicts with the
+zero-knowledge design `daily_predictive_scan` (security/tasks/breach_tasks.py)
+already documents for this exact kind of daily analysis.
 """
 
 import functools
@@ -68,31 +88,16 @@ def _worker_registry():
 
 
 # Beat entries that are known-broken for reasons OUTSIDE this change's scope.
-# Each names a task no worker can resolve today, so each is a job that has never
-# run. They are quarantined rather than fixed here because every one of them
-# belongs to a different feature area and fixing it means turning that feature's
-# scheduled work on -- a decision that needs its own review.
+# Currently empty: the 11 broken entries an earlier audit found have all been
+# fixed (or, for `analyze-password-strength-daily`, deliberately removed --
+# see the module docstring). Kept as a named, exported quarantine point rather
+# than deleted outright, so the NEXT broken beat entry this guard test catches
+# has an obvious, already-wired place to go if it turns out to need one.
 #
-#   * `ml_security` and `shared` have no `tasks.py` at all.
-#   * `update-threat-intel` points at `ml_security.tasks.update_threat_intelligence`,
-#     but the task exists as `security.tasks.update_threat_intelligence`.
-#   * The Dark Protocol tasks are defined in `security/tasks/dark_protocol_tasks.py`,
-#     which `security/tasks/__init__.py` never imports; `dark_protocol` is also
-#     not in INSTALLED_APPS, so the `dark_protocol.*` prefix cannot resolve
-#     either.
-#
-# `test_quarantine_list_has_not_rotted` below fails if one of these is fixed or
-# removed without also updating this dict, so the list cannot quietly go stale.
-KNOWN_UNREGISTERED = {
-    'analyze-password-strength-daily': 'ml_security.tasks.analyze_all_passwords',
-    'update-threat-intel': 'ml_security.tasks.update_threat_intelligence',
-    'cleanup-expired-sessions': 'shared.tasks.cleanup_expired_sessions',
-    'dark-protocol-rotate-paths': 'dark_protocol.rotate_network_paths',
-    'dark-protocol-health-check': 'dark_protocol.health_check_nodes',
-    'dark-protocol-cover-traffic': 'dark_protocol.generate_cover_traffic',
-    'dark-protocol-cleanup': 'dark_protocol.cleanup_expired_sessions',
-    'dark-protocol-traffic-analysis': 'dark_protocol.analyze_traffic_patterns',
-}
+# `test_quarantine_list_has_not_rotted` below fails if an entry sitting here
+# gets fixed or removed without also updating this dict, so the list cannot
+# quietly go stale.
+KNOWN_UNREGISTERED = {}
 
 
 class CeleryBeatScheduleRegistryTests(SimpleTestCase):
@@ -147,6 +152,69 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
                 self.assertIn(entry, beat_schedule)
                 self.assertEqual(beat_schedule[entry]['task'], task_name)
                 self.assertIn(task_name, registered)
+
+    def test_update_threat_intel_entry_resolves(self):
+        """Was `ml_security.tasks.update_threat_intelligence` (wrong app
+        prefix); the task is `security.tasks.update_threat_intelligence`."""
+        registered = _worker_registry()
+        beat_schedule = self._beat_schedule()
+
+        self.assertEqual(
+            beat_schedule['update-threat-intel']['task'],
+            'security.tasks.update_threat_intelligence',
+        )
+        self.assertIn('security.tasks.update_threat_intelligence', registered)
+
+    def test_dark_protocol_entries_resolve(self):
+        """The five Dark Protocol entries: correct names, missing import.
+
+        Each `@shared_task` already carried the right `name=`; nothing
+        imported `dark_protocol_tasks.py`, so none of the five ever
+        registered. Fixed via the import in `security/tasks/__init__.py` --
+        these beat entries needed no change at all.
+        """
+        registered = _worker_registry()
+        beat_schedule = self._beat_schedule()
+
+        expected = {
+            'dark-protocol-rotate-paths': 'dark_protocol.rotate_network_paths',
+            'dark-protocol-health-check': 'dark_protocol.health_check_nodes',
+            'dark-protocol-cover-traffic': 'dark_protocol.generate_cover_traffic',
+            'dark-protocol-cleanup': 'dark_protocol.cleanup_expired_sessions',
+            'dark-protocol-traffic-analysis': 'dark_protocol.analyze_traffic_patterns',
+        }
+
+        for entry, task_name in expected.items():
+            with self.subTest(entry=entry):
+                self.assertEqual(beat_schedule[entry]['task'], task_name)
+                self.assertIn(task_name, registered)
+
+    def test_cleanup_expired_django_sessions_entry_resolves(self):
+        """`shared.tasks.cleanup_expired_sessions` -- shared had no
+        `tasks.py` at all; implemented in `shared/tasks.py` rather than
+        renamed, since it names a real, standard piece of Django hygiene."""
+        registered = _worker_registry()
+        beat_schedule = self._beat_schedule()
+
+        self.assertEqual(
+            beat_schedule['cleanup-expired-sessions']['task'],
+            'shared.tasks.cleanup_expired_sessions',
+        )
+        self.assertIn('shared.tasks.cleanup_expired_sessions', registered)
+
+    def test_dead_password_strength_entry_was_removed_not_fixed(self):
+        """`analyze-password-strength-daily` must not silently reappear.
+
+        No task ever backed this name; renaming it to something real would
+        require the server to decrypt vault passwords to score them, which
+        conflicts with the zero-knowledge design this codebase already
+        commits to for daily password-risk analysis (see
+        `daily_predictive_scan`). Removed rather than fixed -- this asserts
+        it stays gone rather than being silently reintroduced by a future
+        merge.
+        """
+        beat_schedule = self._beat_schedule()
+        self.assertNotIn('analyze-password-strength-daily', beat_schedule)
 
     def test_quarantine_list_has_not_rotted(self):
         """A quarantined entry must still exist AND still be unregistered.

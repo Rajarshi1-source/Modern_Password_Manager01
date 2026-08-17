@@ -551,7 +551,7 @@ class DarkProtocolTaskTests(TestCase):
     def test_cleanup_task(self):
         """Test cleanup expired sessions task."""
         from security.tasks.dark_protocol_tasks import cleanup_expired_sessions
-        
+
         # Create expired session
         self.GarlicSession.objects.create(
             user=self.user,
@@ -561,8 +561,58 @@ class DarkProtocolTaskTests(TestCase):
             expires_at=timezone.now() - timedelta(hours=1),
             status='active',
         )
-        
+
         result = cleanup_expired_sessions()
-        
+
         self.assertTrue(result['success'])
         self.assertEqual(result['expired_sessions'], 1)
+
+    def test_rotate_network_paths_task_noop_without_active_sessions(self):
+        """Smoke test: no active-session users, so nothing to rotate.
+
+        Was never scheduled (celery.py's `dark_protocol.*` beat entries
+        couldn't resolve until `security/tasks/__init__.py` started importing
+        this module) -- this confirms the task at least runs cleanly with the
+        current schema before that beat entry goes live.
+        """
+        from security.tasks.dark_protocol_tasks import rotate_network_paths
+
+        result = rotate_network_paths()
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['rotated_count'], 0)
+
+    def test_generate_cover_traffic_task_noop_without_active_sessions(self):
+        """Smoke test: no sessions with cover traffic enabled -> no-op."""
+        from security.tasks.dark_protocol_tasks import generate_cover_traffic
+
+        result = generate_cover_traffic()
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['generated_count'], 0)
+
+    def test_analyze_traffic_patterns_task_noop_without_patterns(self):
+        """Smoke test: no CoverTrafficPattern rows with learning enabled."""
+        from security.tasks.dark_protocol_tasks import analyze_traffic_patterns
+
+        result = analyze_traffic_patterns()
+
+        self.assertTrue(result['success'])
+        self.assertEqual(result['patterns_updated'], 0)
+
+    def test_dark_protocol_tasks_importable_from_security_tasks_package(self):
+        """The actual bug: nothing imported dark_protocol_tasks.py, so none
+        of its `@shared_task`-decorated functions ever registered despite
+        already carrying the correct `dark_protocol.<func>` names. Confirms
+        the fix -- `security/tasks/__init__.py` now imports this module."""
+        import security.tasks as tasks_pkg
+
+        self.assertTrue(tasks_pkg.DARK_PROTOCOL_TASKS_AVAILABLE)
+        for name in (
+            'rotate_network_paths',
+            'generate_cover_traffic',
+            'health_check_nodes',
+            'analyze_traffic_patterns',
+            'register_node',
+        ):
+            self.assertTrue(hasattr(tasks_pkg, name), f'missing {name}')

@@ -77,12 +77,21 @@ app.conf.update(
     
     # Beat schedule for periodic tasks
     beat_schedule={
-        # Password strength analysis (daily)
-        'analyze-password-strength-daily': {
-            'task': 'ml_security.tasks.analyze_all_passwords',
-            'schedule': crontab(hour=2, minute=0),  # 2:00 AM daily
-        },
-        
+        # `analyze-password-strength-daily` (-> ml_security.tasks.analyze_all_passwords)
+        # deliberately removed rather than fixed. No such task exists anywhere
+        # under any name, and the only thing in the codebase that scores
+        # password strength (`PasswordStrengthPredictor` in
+        # `ml_security/ml_models/password_strength.py`) is wired into the
+        # adversarial-AI red-team feature, not a per-user vault sweep.
+        # Writing one would mean the server decrypting every user's stored
+        # passwords, which conflicts with the zero-knowledge design already
+        # established elsewhere in this file: `daily_predictive_scan` below
+        # explicitly documents "the server never decrypts the vault". This
+        # entry reads as a leftover from a pre-zero-knowledge prototype;
+        # `predictive-daily-scan` (-> security.tasks.daily_predictive_scan)
+        # is the live, zero-knowledge-compatible daily risk analysis that
+        # supersedes it.
+
         # Breach monitoring (every 6 hours)
         'check-data-breaches': {
             'task': 'ml_dark_web.tasks.check_compromised_passwords',
@@ -127,21 +136,35 @@ app.conf.update(
             'schedule': crontab(hour=3, minute=30),  # 3:30 AM daily
         },
         
-        # Clean up expired sessions (daily)
+        # Clean up expired Django sessions (daily). `shared` had no
+        # `tasks.py` at all, so this named a task that could not exist; added
+        # `shared/tasks.py` with the standard `Session.objects.filter(
+        # expire_date__lt=now).delete()` sweep Django's own `clearsessions`
+        # management command runs (SESSION_ENGINE is the DB-backed default).
         'cleanup-expired-sessions': {
             'task': 'shared.tasks.cleanup_expired_sessions',
             'schedule': crontab(hour=3, minute=0),  # 3:00 AM daily
         },
-        
+
         # Clean up old logs (weekly)
         'cleanup-old-logs': {
             'task': 'logging_manager.tasks.cleanup_old_logs',
             'schedule': crontab(day_of_week=0, hour=4, minute=0),  # Sunday 4:00 AM
         },
-        
-        # Update threat intelligence (daily)
+
+        # Update threat intelligence (daily). Was scheduled under
+        # `ml_security.tasks.update_threat_intelligence`; the task is
+        # registered as `security.tasks.update_threat_intelligence`
+        # (breach_tasks.py, explicit `name=`). Not new capability: this same
+        # call already runs once a day as the first step of
+        # `daily_predictive_scan` below (`predictive-daily-scan`), so fixing
+        # this entry means the threat-feed refresh now runs twice daily
+        # (1:30 AM here, plus whenever the predictive scan's chord fires)
+        # instead of once -- redundant but harmless; `update_threat_intelligence`
+        # only upserts ThreatIntelFeed sync status and aggregates
+        # IndustryThreatLevel, no unbounded side effects from a second run.
         'update-threat-intel': {
-            'task': 'ml_security.tasks.update_threat_intelligence',
+            'task': 'security.tasks.update_threat_intelligence',
             'schedule': crontab(hour=1, minute=30),  # 1:30 AM daily
         },
         
@@ -260,7 +283,27 @@ app.conf.update(
         # =================================================================
         # 🌑 Dark Protocol Network Tasks
         # =================================================================
-        
+        #
+        # These five task names below were already correct -- each
+        # `@shared_task` in security/tasks/dark_protocol_tasks.py carries an
+        # explicit `name='dark_protocol.<func>'` matching exactly what these
+        # entries schedule. The bug was that `security/tasks/__init__.py`
+        # never imported that module, so those decorators never ran and
+        # nothing registered the names beat was asking for. Fixed by adding
+        # the missing import there, mirroring the existing try/except pattern
+        # already used for `time_lock_tasks` and `adaptive_tasks`; no changes
+        # needed here.
+        #
+        # Verified safe to turn on: none of the five task bodies (nor the
+        # service/generator code they call) perform outbound network I/O --
+        # `health_check_nodes` is explicitly a `random.random()` simulation
+        # ("in production, this would ping the node"), and the rest are pure
+        # DB reads/writes over DarkProtocolConfig/GarlicSession/RoutingPath/
+        # etc. Every query is gated on `is_enabled` / an active session
+        # existing, so each is a cheap no-op until Dark Protocol is actually
+        # in use by a real user. `health_check_nodes` and
+        # `cleanup_expired_sessions` already have passing direct task tests.
+
         # Rotate anonymous routing paths (every 5 minutes)
         'dark-protocol-rotate-paths': {
             'task': 'dark_protocol.rotate_network_paths',

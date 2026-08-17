@@ -2,6 +2,10 @@
 
 Branch: `fix/celery-beat-genetic-task-names` (off `main` @ `518b973`)
 
+**Update — round 2**: the user asked for the other 8 pre-existing broken
+entries (§4 below) to be fixed too, not just quarantined. See §7 for what
+changed and why. `KNOWN_UNREGISTERED` in the guard test is now empty.
+
 ## 1. The reported problem
 
 `password_manager/password_manager/celery.py` schedules three tasks under names
@@ -242,3 +246,145 @@ so they cannot be forgotten or quietly grow.
   work when called from a sync context.
 
 Run with the `canny` venv and `DEBUG=True`.
+
+## 7. Round 2 — the other 8 broken entries
+
+The user asked for §4's 8 quarantined entries to be fixed rather than left
+for follow-up PRs. Investigated each individually; they turned out to split
+into three different bug shapes, one dead entry, and one unrelated
+out-of-scope discovery.
+
+### 7.1 `update-threat-intel` — wrong app prefix
+
+Scheduled `ml_security.tasks.update_threat_intelligence`. The task is real,
+just registered elsewhere: `security.tasks.update_threat_intelligence`
+(`breach_tasks.py`, explicit `name=`). Fixed the beat entry's task string.
+
+Not new capability: `daily_predictive_scan` already calls
+`update_threat_intelligence()` directly (a plain function call, not
+`.delay()`) as its first step, and that scan has a working beat entry
+(`predictive-daily-scan`) today. Fixing this entry means the threat-feed
+refresh now runs twice a day instead of once — redundant, not harmful:
+`update_threat_intelligence` only upserts `ThreatIntelFeed` sync status and
+aggregates `IndustryThreatLevel`; re-running it early has no unbounded side
+effect.
+
+### 7.2 Dark Protocol × 5 — correct names, missing import
+
+This is where §4's original diagnosis was wrong. Re-reading
+`security/tasks/dark_protocol_tasks.py` shows every `@shared_task` there
+already carries an explicit `name='dark_protocol.<func>'` that matches
+`celery.py`'s beat entries **exactly**. The bug was never the name — it's that
+`security/tasks/__init__.py` never imported this module, so those decorators
+never executed and nothing ever registered the name beat was asking for.
+
+Fix: added an import block for `dark_protocol_tasks` in
+`security/tasks/__init__.py`, mirroring the existing try/except pattern
+already used for `time_lock_tasks` and `adaptive_tasks`. No changes to
+`celery.py` needed for these five at all.
+
+Verified safe to enable before wiring the import:
+- Confirmed the reverse-relation names used in the tasks' ORM filters
+  (`user__dark_protocol_sessions`, `user__dark_protocol_config`) actually
+  match the models' `related_name`s — the same class of bug that broke
+  `daily_genetic_evolution_check` in round 1 does NOT recur here.
+- Grepped the whole call chain (`dark_protocol_tasks.py`,
+  `dark_protocol_service.py`, `cover_traffic_generator.py`,
+  `noise_encryptor.py`) for `httpx`/`requests`/`socket`/etc: zero matches.
+  `health_check_nodes` is explicitly a `random.random()` simulation ("in
+  production, this would ping the node"); `rotate_network_paths`'s node
+  selection (`_select_path_nodes`) is a pure DB filter over
+  `DarkProtocolNode`, no dialing. None of the five make outbound network
+  calls.
+- Every task's query is gated on `is_enabled` / `cover_traffic_enabled` /
+  `learn_from_real_traffic` / an active session existing, so each is a cheap
+  empty-queryset no-op until Dark Protocol is actually in use by a real user.
+  `DARK_PROTOCOL['ENABLED']` defaults `True` in settings, but that only
+  affects whether the feature is *reachable*, not whether any
+  `DarkProtocolConfig` rows exist yet.
+- `health_check_nodes` and `cleanup_expired_sessions` (the Dark Protocol one,
+  distinct from §7.3) already had passing direct task tests
+  (`test_dark_protocol.py::DarkProtocolTaskTests`). Added matching smoke
+  tests for the other three (`rotate_network_paths`,
+  `generate_cover_traffic`, `analyze_traffic_patterns`), plus a test that
+  imports `security.tasks` and asserts `DARK_PROTOCOL_TASKS_AVAILABLE` is
+  `True` — the actual regression this whole fix is about.
+
+### 7.3 `cleanup-expired-sessions` — task genuinely didn't exist, implemented it
+
+`shared.tasks.cleanup_expired_sessions` named a task in an app
+(`shared`) that had no `tasks.py` at all — nothing to rename this into.
+Unlike the Dark Protocol case, this isn't a Django "sessions" feature that's
+niche or optional: `django.contrib.sessions` is installed with the DB-backed
+engine (`SESSION_ENGINE = django.contrib.sessions.backends.db`, confirmed),
+so `django_session` accumulates a row per login with nothing pruning it.
+Django ships exactly this cleanup as the `clearsessions` management command
+(`Session.objects.filter(expire_date__lt=now).delete()`); added
+`shared/tasks.py` with a Celery-task equivalent of that same query. No
+`celery.py` change needed — the name it already scheduled is now real.
+
+Also added `shared/tests/` (a `tests/` package; `shared` had none). Note for
+future work in this app: `pytest.ini` has no `python_files` override, so
+pytest's default `test_*.py` / `*_test.py` glob applies — the `tests.py`
+(bare, no underscore) files already present in several peer apps
+(`ml_security/tests.py`, `logging_manager/tests.py`, etc.) are NOT matched by
+that glob and are not part of the suite `pytest security/tests/` or a
+rootdir-wide `pytest` run collects; they only run if invoked by explicit
+path. Followed the pattern that's actually proven to be collected
+(`security/tests/test_*.py`) rather than the inconsistent one.
+
+### 7.4 `analyze-password-strength-daily` — removed, not fixed
+
+No task by this name, or any equivalent, exists anywhere in the codebase.
+The only thing that scores password strength
+(`PasswordStrengthPredictor` in `ml_security/ml_models/password_strength.py`)
+is wired into the adversarial-AI red-team feature (`adversarial_ai/`), not
+any per-user vault sweep — confirmed via `grep -rl PasswordStrengthPredictor`.
+
+Writing a new task under this name would require the server to decrypt every
+user's stored passwords to score them. That conflicts with the zero-knowledge
+design this same file already commits to for daily password-risk analysis:
+`daily_predictive_scan`'s own docstring states "the server never decrypts
+the vault — it only refreshes risk on stored structural metadata," and its
+`predictive-daily-scan` beat entry already runs that zero-knowledge-compatible
+daily analysis in production today.
+
+Asked the user rather than deciding unilaterally, since the two reasonable
+paths (remove the dead entry vs. build new architecture-conflicting
+functionality) diverge too far to pick silently. Chose: **removed the
+entry**. `daily_predictive_scan` / `evaluate_password_expiration_risk`
+already supersede whatever this was meant to do. Guarded by
+`test_dead_password_strength_entry_was_removed_not_fixed` so it can't
+silently reappear.
+
+### 7.5 Discovered, NOT fixed: Time-Lock beat schedule is never merged
+
+While reading `security/tasks/__init__.py` for the dark-protocol import
+pattern, noticed it also imports
+`time_lock_tasks.CELERY_BEAT_SCHEDULE as TIME_LOCK_BEAT_SCHEDULE` — but that
+name is never referenced again anywhere (grepped `celery.py` and this whole
+package). `time_lock_tasks.py` defines a real `CELERY_BEAT_SCHEDULE` dict
+(line 507) for `check_capsule_unlocks`, `check_dead_mans_switches`,
+`check_expired_capsules`, `check_escrow_deadlines`, etc. — the Password
+Will / Dead Man's Switch feature — and it is never merged into `celery.py`'s
+actual `app.conf.beat_schedule`. Those tasks are fully implemented and would
+work if invoked, but nothing ever schedules them; the beat process simply
+never asks for them.
+
+This is arguably more severe than anything in this PR — a dead man's switch
+that doesn't fire is a different failure mode than a genetic-evolution check
+that doesn't run — but it's a different feature with its own safety
+questions (inheritance/beneficiary notification correctness, what happens on
+a late trigger, whether time-based triggers need catch-up-on-restart
+semantics). Asked the user whether to expand this PR to cover it; they chose
+to flag it only. **Deliberately left untouched.** Follow-up PR needed.
+
+## 8. Round-2 test results
+
+`pytest shared/tests/ security/tests/test_dark_protocol.py
+security/tests/test_celery_beat_registry.py`: 40 passed (8 subtests).
+
+Full `pytest security/tests/ shared/tests/`: 1148 passed, 7 skipped
+(pre-existing), 0 failed — up from round 1's 1138 by the 10 new tests added
+this round (3 explicit registry-resolution tests, 5 dark-protocol task
+tests, 2 shared-session-cleanup tests).
