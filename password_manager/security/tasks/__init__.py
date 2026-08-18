@@ -165,8 +165,43 @@ try:
     )
     DARK_PROTOCOL_TASKS_AVAILABLE = True
 except ImportError as e:
-    logger.warning(f"Could not import dark protocol tasks: {e}")
+    # CodeRabbit, PR #482: celery.py's beat schedule statically lists four
+    # 'dark_protocol.*' entries regardless of whether this import succeeds --
+    # it can't check this flag, since it's a plain dict built at Celery app
+    # definition time in a different module. Left as a bare `AVAILABLE =
+    # False` (the pattern used by the two guarded blocks above this one),
+    # a failed import here would leave those four ticks firing into
+    # `NotRegistered` forever with nothing but a one-line startup warning to
+    # explain why. Mirrors the fail-loud stub pattern already used above for
+    # the predictive-expiration re-export (see its comment): register
+    # fallbacks under the same 'dark_protocol.*' names so a failure surfaces
+    # as a loud, visible task failure on every scheduled tick instead of
+    # silent `NotRegistered` noise.
+    logger.exception(f"Could not import dark protocol tasks: {e}")
+    _DARK_PROTOCOL_IMPORT_ERROR = e
     DARK_PROTOCOL_TASKS_AVAILABLE = False
+
+    def _dark_protocol_unavailable(task_name):
+        raise RuntimeError(
+            f"{task_name} is unavailable: security.tasks.dark_protocol_tasks "
+            f"failed to import ({_DARK_PROTOCOL_IMPORT_ERROR})"
+        )
+
+    @shared_task(name='dark_protocol.rotate_network_paths')
+    def rotate_network_paths(*args, **kwargs):
+        _dark_protocol_unavailable('rotate_network_paths')
+
+    @shared_task(name='dark_protocol.generate_cover_traffic')
+    def generate_cover_traffic(*args, **kwargs):
+        _dark_protocol_unavailable('generate_cover_traffic')
+
+    @shared_task(name='dark_protocol.cleanup_expired_sessions')
+    def cleanup_expired_dark_protocol_sessions(*args, **kwargs):
+        _dark_protocol_unavailable('cleanup_expired_sessions')
+
+    @shared_task(name='dark_protocol.analyze_traffic_patterns')
+    def analyze_traffic_patterns(*args, **kwargs):
+        _dark_protocol_unavailable('analyze_traffic_patterns')
 
 
 try:
