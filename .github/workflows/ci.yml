@@ -758,6 +758,40 @@ jobs:
           kubectl wait --for=condition=complete job/backend-migrate \
             -n password-manager --timeout=600s
 
+      # k8s/cronjobs.yaml is not part of k8s/production/ and nothing else in
+      # this workflow applies it, so its CronJobs (cleanup-old-logs,
+      # db-backup, check-time-lock-backlog) were never actually created in
+      # the cluster -- unlike k8s/tor.yaml below, these aren't an opt-in
+      # feature toggle; they're maintenance jobs that should always exist.
+      # Mirrors the migrate-job.yaml step above: envsubst resolves
+      # ${GITHUB_SHA} in each CronJob's image tag, then a plain `kubectl
+      # apply` is enough -- CronJobs don't need `kubectl set image` /
+      # `rollout status` the way the Deployments below do.
+      #
+      # Deliberately placed BEFORE "Deploy to Kubernetes (Production)", not
+      # after (CodeRabbit, PR #483 round 3): that step's first command is
+      # `kubectl apply -f k8s/production/`, and k8s/production/ does not
+      # exist anywhere in this repo -- `set -euo pipefail` means that step
+      # fails immediately if it ever actually runs, and GitHub Actions skips
+      # every step after a failed one by default, so a step positioned
+      # after it would never execute. Populating k8s/production/ (or
+      # repointing that apply path) is a real, separate, pre-existing gap
+      # this PR doesn't fix -- it predates the Time-Lock work entirely, and
+      # fixing it means authoring an actual production manifest set this
+      # repo has no spec for, well outside a CronJob-scheduling PR's scope.
+      # This ordering just makes the CronJob apply resilient to that
+      # unrelated failure, the same way migrate-job.yaml's step above
+      # already is by virtue of running first. CronJobs don't depend on the
+      # Deployments below being rolled out, so nothing is lost by applying
+      # them this early.
+      - name: Apply scheduled maintenance CronJobs
+        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          envsubst < k8s/cronjobs.yaml | kubectl apply -n password-manager -f -
+
       - name: Deploy to Kubernetes (Production)
         if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         run: |
@@ -785,27 +819,10 @@ jobs:
           kubectl set image deployment/frontend \
             frontend=${{ needs.setup.outputs.frontend_image }}:${{ github.sha }} \
             -n password-manager
-          
+
           # Wait for rollout
           kubectl rollout status deployment/backend -n password-manager --timeout=600s
           kubectl rollout status deployment/frontend -n password-manager --timeout=300s
-
-      # k8s/cronjobs.yaml is not part of k8s/production/ and nothing else in
-      # this workflow applies it, so its CronJobs (cleanup-old-logs,
-      # db-backup, check-time-lock-backlog) were never actually created in
-      # the cluster -- unlike k8s/tor.yaml below, these aren't an opt-in
-      # feature toggle; they're maintenance jobs that should always exist.
-      # Mirrors the migrate-job.yaml step above: envsubst resolves
-      # ${GITHUB_SHA} in each CronJob's image tag, then a plain `kubectl
-      # apply` is enough -- CronJobs don't need `kubectl set image` /
-      # `rollout status` the way the Deployments above do.
-      - name: Apply scheduled maintenance CronJobs
-        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
-        env:
-          GITHUB_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          envsubst < k8s/cronjobs.yaml | kubectl apply -n password-manager -f -
 
       # Dark Protocol's Tor workloads are OPT-IN: k8s/tor.yaml is applied by the
       # operator and is not part of k8s/production/, so these Deployments may

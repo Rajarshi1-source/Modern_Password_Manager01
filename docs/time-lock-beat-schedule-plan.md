@@ -278,7 +278,7 @@ branch raises `AttributeError` before the command can report anything.
 Checked directly against this repo's actual pinned/installed Django,
 **not** taken on the bot's word:
 
-```
+```text
 DEBUG=True canny/Scripts/python.exe -c "from django.utils import timezone; print(hasattr(timezone, 'timedelta')); print(timezone.timedelta)"
 # -> True
 # -> <class 'datetime.timedelta'>
@@ -479,3 +479,81 @@ passed. No code was touched outside this one test file this round (the
 `ci.yml` and doc changes are infra/prose, validated by YAML parsing and the
 envsubst dry-run above, not pytest), so no broader Python test run was
 needed.
+
+## 9. Review-fix round 3 on PR #483 (CodeRabbit)
+
+Two findings.
+
+### 9.1 MD040: unlabeled fence in this doc's own §8.1 (the `hasattr(timezone, 'timedelta')` verification block)
+
+Confirmed by grepping every `^```$` line in the file: this was the only
+genuinely unlabeled *opening* fence remaining (the other two bare matches
+are the correct closing fences of blocks already tagged `python`). Tagged
+`text`, consistent with the other error/command-output blocks already
+fixed this way in round 2 and in `celery-beat-genetic-task-names-plan.md`'s
+own MD040 round.
+
+### 9.2 "Deploy to Kubernetes (Production)" runs before the CronJob-apply step and would fail first if it ever actually ran (CONFIRMED, real — fixed by reordering, not by the heavy-lift fix suggested)
+
+CodeRabbit's own remediation was explicitly labeled "🏗️ Heavy lift":
+*"Create and populate k8s/production/, or replace the preceding apply path
+with the actual production manifest set."* Verified the underlying claim
+before deciding how to respond to it, not just the label:
+
+- `kubectl apply -f k8s/production/` (line ~766) is the first command in
+  "Deploy to Kubernetes (Production)"; that step opens with
+  `set -euo pipefail`. `k8s/production/` does not exist anywhere in this
+  repo (re-confirmed: `find k8s/production` — nothing). If this step ever
+  actually executes, that first command fails and the step exits
+  immediately.
+- GitHub Actions skips every subsequent step in a job by default once one
+  step fails (an `if:` that doesn't call `always()` doesn't override this).
+  The CronJob-apply step added in round 2 sat *after* this step in the
+  file, so a real failure here would have silently prevented it from ever
+  running — exactly the sequencing risk CodeRabbit flagged.
+- **But**: `deploy-production`'s own job condition is
+  `if: github.ref == 'refs/heads/main'` — it never runs on `pull_request`
+  events at all (confirmed independently: this PR's own checks list shows
+  "Deploy to Production (pull_request) — Skipped" for this exact reason).
+  And within the job, "Configure kubectl" sets `deploy_enabled=false` and
+  clean-exits when `KUBE_CONFIG_PRODUCTION` isn't set as a repo secret,
+  skipping every step gated on it. The PR's own merge panel shows *"This
+  branch has not been deployed. No deployments."* — consistent with that
+  secret never having been configured, meaning this entire step chain has
+  never actually executed in this repo's history. The failure mode is real
+  but currently latent, not something firing on any check today.
+
+Did **not** attempt the heavy-lift fix: authoring an actual production
+manifest set (Deployments/Services/ConfigMaps for backend, websocket,
+celery-worker, celery-beat, frontend) with no spec beyond what the existing
+`kubectl set image` calls imply would mean fabricating production
+infrastructure this repo has no documented topology for — a far larger,
+riskier, and more out-of-scope change than a CronJob-scheduling PR should
+make, and exactly the kind of guess that "no new regressions" warns
+against. That gap is real, pre-existing (predates the Time-Lock work
+entirely), and still unfixed after this round — worth its own dedicated
+effort by whoever has the actual production manifest specs.
+
+**Fix that stayed in scope**: reordered the "Apply scheduled maintenance
+CronJobs" step to run immediately after "Run database migrations
+(one-shot Job)" and *before* "Deploy to Kubernetes (Production)" —
+mirroring how `migrate-job.yaml`'s own step is already positioned ahead of
+that same fragile step, for the same reason. CronJobs don't depend on the
+Deployments being rolled out, so nothing is lost moving the step earlier,
+and it's now resilient to that pre-existing, unrelated failure instead of
+depending on it succeeding.
+
+Verified: `yaml.safe_load` on the full modified `ci.yml` still succeeds;
+re-ran the step ordering check
+(`yaml.safe_load(...)['jobs']['deploy-production']['steps']`) to confirm
+"Apply scheduled maintenance CronJobs" now sits between "Run database
+migrations" and "Deploy to Kubernetes (Production)"; re-ran the exact
+`envsubst < k8s/cronjobs.yaml | ...` dry-run to confirm all three CronJobs
+still resolve their image tags correctly after the move.
+
+### 9.3 Test results (targeted, per instruction)
+
+CI-workflow and doc-only changes this round — no Python code touched, so no
+pytest run was needed. Validated via `yaml.safe_load` (whole file parses)
+and the envsubst dry-run (exact command the new step runs, output
+re-parsed) instead.
