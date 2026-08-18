@@ -789,7 +789,24 @@ jobs:
           # Wait for rollout
           kubectl rollout status deployment/backend -n password-manager --timeout=600s
           kubectl rollout status deployment/frontend -n password-manager --timeout=300s
-      
+
+      # k8s/cronjobs.yaml is not part of k8s/production/ and nothing else in
+      # this workflow applies it, so its CronJobs (cleanup-old-logs,
+      # db-backup, check-time-lock-backlog) were never actually created in
+      # the cluster -- unlike k8s/tor.yaml below, these aren't an opt-in
+      # feature toggle; they're maintenance jobs that should always exist.
+      # Mirrors the migrate-job.yaml step above: envsubst resolves
+      # ${GITHUB_SHA} in each CronJob's image tag, then a plain `kubectl
+      # apply` is enough -- CronJobs don't need `kubectl set image` /
+      # `rollout status` the way the Deployments above do.
+      - name: Apply scheduled maintenance CronJobs
+        if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          envsubst < k8s/cronjobs.yaml | kubectl apply -n password-manager -f -
+
       # Dark Protocol's Tor workloads are OPT-IN: k8s/tor.yaml is applied by the
       # operator and is not part of k8s/production/, so these Deployments may
       # legitimately not exist. Update them only when they do — a cluster

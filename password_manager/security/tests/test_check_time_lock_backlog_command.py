@@ -172,7 +172,16 @@ class CheckTimeLockBacklogCommandTests(TestCase):
         self.assertIn('No backlog', out.getvalue())
 
     def test_does_not_report_disputed_escrow(self):
-        capsule = make_capsule(self.owner, 'escrow')
+        # unlock_at in the past too, so `is_disputed` is the ONLY reason
+        # this escrow is excluded -- with the default future unlock_at, a
+        # regression that dropped the query's `is_disputed=False` filter
+        # would still pass this test, since `can_release` would separately
+        # return False from the still-future unlock_at (CodeRabbit, PR #483
+        # round 2: same masking pattern already fixed for
+        # test_reports_overdue_escrow in round 1, missed here).
+        capsule = make_capsule(
+            self.owner, 'escrow', unlock_at=timezone.now() - timedelta(hours=1),
+        )
         escrow = EscrowAgreement.objects.create(
             capsule=capsule,
             title='Disputed',
@@ -187,7 +196,13 @@ class CheckTimeLockBacklogCommandTests(TestCase):
         self.assertIn('No backlog', out.getvalue())
 
     def test_does_not_report_already_released_escrow(self):
-        capsule = make_capsule(self.owner, 'escrow')
+        # Same fix as test_does_not_report_disputed_escrow above, same
+        # reason: unlock_at in the past so `is_released` is the only thing
+        # excluding this row, not an accidental assist from can_release's
+        # separate future-unlock_at check.
+        capsule = make_capsule(
+            self.owner, 'escrow', unlock_at=timezone.now() - timedelta(hours=1),
+        )
         escrow = EscrowAgreement.objects.create(
             capsule=capsule,
             title='Released',
