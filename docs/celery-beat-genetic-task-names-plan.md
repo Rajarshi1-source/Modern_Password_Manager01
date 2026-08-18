@@ -715,3 +715,111 @@ against the local test suite there).
   `pytest security/tests/test_genetic_password.py security/tests/test_celery_beat_registry.py security/tests/test_dark_protocol.py -q`
   — 102 passed, 3 warnings (pre-existing `datetime.utcnow()` deprecation
   noise, unrelated), 7 subtests passed, 0 failed.
+
+## 13. Review-fix round 5 on PR #482 (CodeRabbit full review, 2 actionable findings)
+
+CI was fully green (27 successful, 1 neutral Trivy config-not-found, 6
+skipped deploy/build jobs unrelated to this branch) when this round
+started — there was no failing check to chase. `@coderabbitai full review`
+surfaced two inline findings instead. The Multi-Scanner Security Report
+comment on the same PR is informational only (posts to the Security tab,
+not a required check); the 262 open code-scanning alerts it feeds are a
+pre-existing, repo-wide baseline (same `Django==5.1.15` on `main` and this
+branch, oldest alerts dated 2026-08-08, well before this branch existed) —
+out of scope for a surgical celery-beat fix and left untouched.
+
+### 13.1 Major: `check_and_evolve` gate-checks and writes run unlocked (CONFIRMED)
+
+CodeRabbit's claim: concurrent calls for the same user (the daily beat
+task and a manual "trigger now" hitting the same connection) can both pass
+the `CHECK_INTERVAL_DAYS`/threshold gates before either writes
+`last_epigenetic_update`, both decide to evolve, and then last-writer-wins
+on `dna_connection.save()`/`subscription.save()` — duplicating a
+generation transition in `GeneticEvolutionLog` while silently losing one
+of the two `evolutions_triggered` increments.
+
+Verified by reading the method (`epigenetic_service.py`, then lines
+294-424): confirmed no `transaction.atomic()`/`select_for_update()`
+anywhere in the file, and no DB-level uniqueness constraint on
+`DNAConnection.evolution_generation` or `GeneticEvolutionLog` that would
+catch a duplicate transition (`models/core.py`). `select_for_update()` +
+`transaction.atomic()` is an established pattern elsewhere in this app
+(`adaptive_password_service.py`'s `apply_adaptation_v2`/`rollback_to_v2`),
+so locking here is consistent with how this codebase already handles the
+same class of race, not a new pattern. Both real callers
+(`breach_tasks.check_genetic_evolution`, the trigger-evolution API view's
+`get_dna_connection`/`get_or_create_subscription`) always pass an
+already-persisted row, so locking by `pk` inside the method is safe — no
+caller ever passes an unsaved instance.
+
+**Fix**: wrapped the gate checks and all three writes
+(`dna_connection.save()`, `subscription.save()`,
+`GeneticEvolutionLog.objects.create()`) in one `transaction.atomic()`
+block, re-fetching both `dna_connection` and `subscription` with
+`select_for_update()` at the top of the block before evaluating any gate.
+This serializes concurrent callers for the same user: whichever call runs
+second blocks until the first commits, then re-reads the just-written
+state and re-evaluates the gates against it — so it correctly declines
+(interval/threshold gate) instead of double-evolving. Early-return paths
+(no subscription, interval not elapsed, no biological age, below
+threshold) still return before any write; exiting the `with` block via
+`return` there just commits an empty transaction, which is harmless.
+No schema change, no new migration.
+
+### 13.2 Major: Dark Protocol beat schedule can outlive its task registration (CONFIRMED, scoped down)
+
+CodeRabbit's claim: `celery.py`'s `beat_schedule` statically lists four
+`dark_protocol.*` entries; if the guarded import in
+`security/tasks/__init__.py` ever raises `ImportError`,
+`DARK_PROTOCOL_TASKS_AVAILABLE` silently becomes `False` (a
+`logger.warning` only) while those four entries keep firing into
+`NotRegistered` on every tick, forever, with no loud signal.
+
+Verified this is real but pre-existing and not unique to Dark Protocol:
+the identical `try/import ImportError → AVAILABLE=False` shape also guards
+`adaptive_tasks` and `time_lock_tasks` immediately above in the same file,
+and `DARK_PROTOCOL_TASKS_AVAILABLE`/its two siblings are used nowhere
+outside this file's own `__all__` construction — `celery.py`'s
+`beat_schedule` dict is built at Celery app definition time in a
+completely different module and has no way to read this flag even in
+principle. CodeRabbit's two suggested remediations don't fit cleanly:
+gating the beat entries on the flag would require `celery.py` to import
+`security.tasks` (a much larger, riskier change touching Celery app
+bootstrap for all three guarded feature areas, not just Dark Protocol);
+re-raising the `ImportError` would crash Celery worker/beat startup
+entirely on any transient issue in this or an unrelated guarded import,
+trading a silent degrade for a total outage — worse for the two other
+call sites this round didn't touch.
+
+**Fix, scoped to exactly what the finding names** (the four Dark Protocol
+beat entries, not the other two guarded blocks): mirrored the fail-loud
+stub pattern this file already uses one block above for the
+predictive-expiration re-export (`breach_tasks` import, lines ~43-88) —
+on `ImportError`, register `@shared_task`-decorated stubs under the same
+`dark_protocol.rotate_network_paths` / `dark_protocol.generate_cover_traffic`
+/ `dark_protocol.cleanup_expired_sessions` / `dark_protocol.analyze_traffic_patterns`
+names that raise `RuntimeError` when Beat actually invokes them, and
+upgraded the log call from `.warning` to `.exception` for a full
+traceback. `health_check_nodes` and `register_node` are deliberately not
+given stubs — neither has a beat entry (`health_check_nodes` was
+unscheduled in round 4 §12.2; `register_node` is called directly by
+application code, not Beat), so there is no scheduled tick that would
+otherwise resolve to `NotRegistered` for either. This branch is inert
+under normal operation: the import already succeeds today (confirmed by
+`test_dark_protocol_tasks_importable_from_security_tasks_package`), so
+this is a safety net for a failure mode that isn't currently occurring,
+not a behavior change to the success path.
+
+### 13.3 Test results (targeted, per instruction)
+
+- `pytest security/tests/test_genetic_password.py -q -k "EpigeneticEvolutionManagerSyncTestCase or EvolutionTrigger"`
+  — 5 passed (the 4 existing `check_and_evolve` behavior tests plus the
+  async→sync coroutine-check test; all still pass under the new lock —
+  none of them exercise concurrent calls, so this is a no-regression check
+  on the gate logic itself, not a new concurrency test).
+- `pytest security/tests/test_dark_protocol.py security/tests/test_celery_beat_registry.py -q`
+  — 39 passed, 3 warnings (pre-existing `datetime.utcnow()` deprecation
+  noise, unrelated), 7 subtests passed. Confirms the four Dark Protocol
+  beat entries still resolve to real registered tasks on the success path
+  (the `except ImportError` branch added in §13.2 doesn't execute in this
+  environment) and that `health_check_nodes` stays unscheduled per round 4.
