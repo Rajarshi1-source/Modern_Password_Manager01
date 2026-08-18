@@ -1072,6 +1072,29 @@ class EpigeneticEvolutionManagerSyncTestCase(TestCase):
             GeneticEvolutionLog.objects.filter(user=self.user, new_evolution_gen=2).exists()
         )
 
+    def test_check_and_evolve_updates_callers_own_instance(self):
+        """CodeRabbit, PR #482 round 6: the locking fix (round 5) re-fetches
+        `dna_connection` via `select_for_update().get(pk=...)`, which returns
+        a NEW Python object distinct from the one the caller passed in --
+        rebinding the local parameter name to it never touches the caller's
+        own reference. Without syncing that original instance back, every
+        caller (`check_genetic_evolution`, the trigger-evolution API view)
+        would read stale pre-evolution values off its own object right after
+        this call returns `evolved=True`. Deliberately does NOT call
+        `self.connection.refresh_from_db()` first -- that would mask exactly
+        the bug this test guards against.
+        """
+        from ..services.epigenetic_service import epigenetic_evolution_manager
+
+        evolved, _message = epigenetic_evolution_manager.check_and_evolve(
+            self.user, self.connection, force=True,
+        )
+
+        self.assertTrue(evolved)
+        self.assertEqual(self.connection.evolution_generation, 2)
+        self.assertEqual(self.connection.last_biological_age, 30.0)
+        self.assertIsNotNone(self.connection.last_epigenetic_update)
+
     def test_non_forced_evolution_succeeds_with_above_threshold_change(self):
         """CodeRabbit, PR #482: `check_and_evolve` read
         `dna_connection.last_biological_age` as both `current_bio_age` and
@@ -1166,6 +1189,41 @@ class EpigeneticEvolutionManagerSyncTestCase(TestCase):
         self.assertEqual(log.trigger_type, 'automatic')
         self.assertEqual(log.old_biological_age, 30.0)
         self.assertEqual(log.new_biological_age, 30.0)
+
+    def test_non_forced_evolution_ignores_incomplete_log_rows(self):
+        """CodeRabbit, PR #482 round 6: `new_biological_age` and
+        `completed_at` are both nullable on `GeneticEvolutionLog`, and
+        nothing enforces that a `success=True` row has them set --
+        `GeneticEvolutionLogModelTestCase.test_log_evolution_event` creates
+        exactly such a row today (via the legacy `biological_age_before`/
+        `biological_age_after` fields, `new_biological_age` left unset).
+        Before this fix, selecting a row like that as the baseline would
+        raise `TypeError` from `abs(current_bio_age - None)`, and
+        `order_by('-completed_at')` orders NULLs differently between SQLite
+        and PostgreSQL, making the choice of "latest" row backend-dependent.
+        Confirms the baseline query now skips incomplete rows outright
+        rather than crashing on one.
+        """
+        from ..services.epigenetic_service import epigenetic_evolution_manager
+
+        GeneticEvolutionLog.objects.create(
+            user=self.user,
+            trigger_type='automatic',
+            old_evolution_gen=1,
+            new_evolution_gen=1,
+            success=True,
+            # new_biological_age / completed_at deliberately left unset.
+        )
+
+        evolved, message = epigenetic_evolution_manager.check_and_evolve(
+            self.user, self.connection, force=False,
+        )
+
+        # The only existing log is incomplete, so there is no usable
+        # baseline -- treated the same as a brand-new user (see
+        # test_non_forced_evolution_seeds_baseline_for_new_user above):
+        # evolves and seeds a real baseline instead of raising.
+        self.assertTrue(evolved, message)
 
 
 # =============================================================================

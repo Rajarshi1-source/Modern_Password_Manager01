@@ -823,3 +823,146 @@ not a behavior change to the success path.
   beat entries still resolve to real registered tasks on the success path
   (the `except ImportError` branch added in §13.2 doesn't execute in this
   environment) and that `health_check_nodes` stays unscheduled per round 4.
+
+## 14. Review-fix round 6 on PR #482 (CodeRabbit full review, 2 Major + 3 nitpicks)
+
+Round 5's own fix (§13.1, locking `check_and_evolve`) introduced one of
+this round's two Major findings — a genuine "fix introduces a new bug"
+case, not a dormant pre-existing one, and worth naming plainly rather than
+folding into the same vague "CodeRabbit, PR #482" comment style used
+elsewhere. Verified all 5 findings against current code (not the bot's
+pasted snippets — the `breach_tasks.py` finding's own comment thread
+quoted a version of that file that does not match what's actually on this
+branch, most likely a stale render of an old diff hunk; read the real
+file directly instead of trusting the pasted code).
+
+### 14.1 Major: `check_and_evolve` callers read stale connection state (CONFIRMED, round-5 regression)
+
+CodeRabbit's claim: `select_for_update().get(pk=...)` (added in round 5)
+returns a new Python object; rebinding the local `dna_connection`
+parameter to it never touches the object the *caller* is holding, so
+`check_genetic_evolution` (`breach_tasks.py`) and the trigger-evolution
+API view (`genetic_password_views.py`) both report pre-evolution
+`evolution_generation`/`last_biological_age` immediately after a call that
+returned `evolved=True` and genuinely updated the database.
+
+Verified by reading the real, current `breach_tasks.py` (not the bot's
+pasted code block, which showed duplicate/conflicting keys — e.g. two
+different `'old_generation':` entries in the same dict literal — that
+don't exist in this file on this branch; almost certainly a stale diff
+render, not this repo's actual content) and `genetic_password_views.py`:
+confirmed `check_genetic_evolution` reads `dna_connection.evolution_generation`
+right after the call expecting the mutation, and the trigger-evolution view
+passes `connection` into `get_evolution_status(connection)` immediately
+after, same expectation. Both genuinely broken by round 5's locking fix:
+Python's object-reference semantics mean reassigning a parameter name
+inside a function is invisible to the caller's own variable.
+
+**Fix, centralized rather than CodeRabbit's 3-file spread**: rather than
+adding a `refresh_from_db()` call at each of the two call sites (plus
+updating the test's `fake_check_and_evolve` mock as CodeRabbit's own
+prompt suggested), fixed it once at the source: captured the caller's
+original instance as `caller_dna_connection` before the lock re-fetch
+rebinds the local name, then called `caller_dna_connection.refresh_from_db()`
+right after the successful-evolution writes commit (still inside the same
+`transaction.atomic()` block, so it reads the just-written state via the
+same connection/transaction — standard read-your-own-writes). Zero
+changes needed to `breach_tasks.py`, `genetic_password_views.py`, or the
+existing mock-based task test (`fake_check_and_evolve` already mutates the
+passed-in instance directly, which is exactly what the real method now
+also does) — a future third caller gets this correctness automatically
+rather than needing to remember its own `refresh_from_db()`. Added
+`test_check_and_evolve_updates_callers_own_instance`, deliberately NOT
+calling `refresh_from_db()` first (every other test in this class does,
+which is exactly what would have hidden this bug).
+
+### 14.2 Major: baseline query can select a `success=True` row with null fields (CONFIRMED, defensive fix)
+
+CodeRabbit's claim: `new_biological_age`/`completed_at` are both nullable
+on `GeneticEvolutionLog` (`models/core.py`); a `success=True` row with
+either null would make `abs(current_bio_age - last_bio_age)` raise
+`TypeError` if selected as the baseline, and PostgreSQL/SQLite order NULLs
+differently on `order_by('-completed_at')`, so which row counts as
+"latest" would be backend-dependent.
+
+Verified both nullable (`null=True, blank=True` on both fields) and that
+the model enforces nothing preventing this combination —
+`GeneticEvolutionLogModelTestCase.test_log_evolution_event`
+(`test_genetic_password.py:629`) already creates exactly such a row
+(`success=True`, via the legacy `biological_age_before`/
+`biological_age_after` fields, `new_biological_age` and `completed_at`
+both left unset) as a standalone model unit test. Confirmed the ONLY real
+(non-test) call site that creates a `GeneticEvolutionLog` row
+(`epigenetic_service.py`'s own `check_and_evolve`) always sets both
+fields, so this isn't reachable through any current production path —
+but the model doesn't prevent a future caller (a migration backfill, an
+admin action, a different task) from creating one that hits it, and the
+one-line filter costs nothing against today's well-formed rows.
+
+**Fix**: added `new_biological_age__isnull=False, completed_at__isnull=False`
+to the baseline query's filter, matching CodeRabbit's own suggested fix
+verbatim. Added `test_non_forced_evolution_ignores_incomplete_log_rows`
+(seeds an incomplete `success=True` log, confirms `check_and_evolve` no
+longer has anything to crash on and falls through to the same
+first-baseline path as a brand-new user).
+
+### 14.3 Nitpick, applied: strengthen the Dark Protocol registration test
+
+`test_dark_protocol_tasks_importable_from_security_tasks_package` only
+asserted `hasattr(tasks_pkg, name)`. Round 5 (§13.2) added fallback stub
+functions under the same names (`rotate_network_paths`, etc.) for the
+`ImportError` branch — `hasattr` alone can't tell a real registered task
+from one of those stubs by name collision alone. Applied CodeRabbit's
+suggested strengthening: assert `task.name == f'dark_protocol.{name}'` too
+(verified all 5 real tasks in `dark_protocol_tasks.py` carry that exact
+explicit `name=` already, so this doesn't change what passes today). Note
+for later: because round 5's stubs were deliberately named to match the
+real tasks' Celery names exactly (so Beat sees a registered handler either
+way), this strengthened assertion still can't distinguish "real task" from
+"stub" by name alone — it proves the object is a genuine registered Celery
+task (not just any importable symbol), which is what CodeRabbit actually
+asked for; distinguishing real-vs-stub would need `DARK_PROTOCOL_TASKS_AVAILABLE`
+directly, which the test already asserts on the line above.
+
+### 14.4 Nitpick, declined: Ruff S106 "hardcoded password" on a test fixture
+
+`User.objects.create_user(..., password='testpassword123!')` in
+`EpigeneticEvolutionManagerSyncTestCase.setUp` — CodeRabbit's own
+assessment labels this "Trivial | Low value" and states it's a false
+positive (standard Django test setup, not a real credential). Verified
+the identical literal appears 6 times in this one file alone and the same
+`create_user(..., password=...)` pattern appears throughout the rest of
+`security/tests/` — this is the codebase's pervasive, pre-existing test
+convention, not something new to this PR, and the "Lint & Code Quality" CI
+check has passed on every one of the last 5 rounds despite it. No `S106`
+reference exists in any repo lint config (searched for a `pyproject.toml`/
+`ruff.toml`/`.ruff.toml`; none define it), so there's no evidence the rule
+is even enabled. Declined: CodeRabbit's own suggested remediation is
+editing shared Ruff config to suppress a rule for the whole test path —
+broader blast radius than a minimal fix justifies for a bot-labeled
+trivial/low-value finding with no reproduction of an actual lint failure.
+
+### 14.5 Nitpick, declined: trim review-history commentary from code comments
+
+Asked to strip "CodeRabbit, PR #482 round N" / "the pre-round-3-fix code"
+references from the comment blocks this PR's fixes have added, keeping
+only the current invariant. Also self-labeled "Trivial | Low value" by
+CodeRabbit. Declined: this is the established, deliberate documentation
+convention across every round of this same PR (visible in every file this
+PR has touched — `epigenetic_service.py`, `breach_tasks.py`,
+`tasks/__init__.py`, `celery.py`, the test files), not an accident specific
+to the two spots flagged; selectively stripping it from just these two
+locations would make this PR internally inconsistent with its own
+established style for no functional gain. Matches how round 1's
+docstring-coverage nitpick was declined for the same class of reason
+(non-actionable style preference, not a bug).
+
+### 14.6 Test results (targeted, per instruction)
+
+- `pytest security/tests/test_genetic_password.py -q -k "EpigeneticEvolutionManagerSyncTestCase or GeneticEvolutionLogModelTestCase or CheckGeneticEvolutionTask or check_genetic_evolution"`
+  — 10 passed (the two new regression tests plus all pre-existing
+  evolution-manager/task/model tests, confirming no regression from either
+  fix).
+- `pytest security/tests/test_dark_protocol.py -q -k "importable_from_security_tasks_package"`
+  — 1 passed. Confirms the strengthened assertion still passes against the
+  real, currently-importing Dark Protocol tasks.

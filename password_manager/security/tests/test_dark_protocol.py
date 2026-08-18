@@ -615,4 +615,11 @@ class DarkProtocolTaskTests(TestCase):
             'analyze_traffic_patterns',
             'register_node',
         ):
-            self.assertTrue(hasattr(tasks_pkg, name), f'missing {name}')
+            # `hasattr` alone would also pass against the fail-loud fallback
+            # stubs `security/tasks/__init__.py` registers under these same
+            # names if the import ever fails (PR #482 round 5) -- asserting
+            # the registered Celery task name proves this is the real task,
+            # not just any importable symbol with a matching attribute name.
+            task = getattr(tasks_pkg, name, None)
+            self.assertIsNotNone(task, f'missing {name}')
+            self.assertEqual(task.name, f'dark_protocol.{name}')
