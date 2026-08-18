@@ -1072,6 +1072,72 @@ class EpigeneticEvolutionManagerSyncTestCase(TestCase):
             GeneticEvolutionLog.objects.filter(user=self.user, new_evolution_gen=2).exists()
         )
 
+    def test_non_forced_evolution_succeeds_with_above_threshold_change(self):
+        """CodeRabbit, PR #482: `check_and_evolve` read
+        `dna_connection.last_biological_age` as both `current_bio_age` and
+        (via a second read of the same field) `last_bio_age`, so age_change
+        was always 0 and non-forced evolution -- the daily scheduled task's
+        actual, default call shape -- could never succeed, for any user,
+        ever. The bug predates this PR; the earlier async->sync fix just
+        made this branch reachable for the first time.
+
+        Regression guard: seed a prior GeneticEvolutionLog recording an old
+        biological age well below the connection's current
+        last_biological_age, then confirm a force=False call correctly
+        detects the gap and evolves.
+        """
+        from ..services.epigenetic_service import epigenetic_evolution_manager
+
+        GeneticEvolutionLog.objects.create(
+            user=self.user,
+            trigger_type='manual',
+            old_evolution_gen=1,
+            new_evolution_gen=1,
+            new_biological_age=25.0,  # 5.0y below the connection's 30.0
+            success=True,
+            completed_at=timezone.now() - timedelta(days=60),
+        )
+        # last_epigenetic_update stays unset (None) -- setUp doesn't set it
+        # -- so the CHECK_INTERVAL_DAYS gate (line ~330) doesn't apply here.
+
+        evolved, message = epigenetic_evolution_manager.check_and_evolve(
+            self.user, self.connection, force=False,
+        )
+
+        self.assertTrue(evolved, message)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.evolution_generation, 2)
+        log = GeneticEvolutionLog.objects.get(user=self.user, new_evolution_gen=2)
+        self.assertEqual(log.trigger_type, 'automatic')
+        self.assertEqual(log.old_biological_age, 25.0)
+        self.assertEqual(log.new_biological_age, 30.0)
+
+    def test_non_forced_evolution_still_blocked_below_threshold(self):
+        """Same prior-log lookup as above, but the gap is deliberately kept
+        under EVOLUTION_THRESHOLD (0.5y) -- proves the fix compares against
+        the real prior measurement rather than always evolving.
+        """
+        from ..services.epigenetic_service import epigenetic_evolution_manager
+
+        GeneticEvolutionLog.objects.create(
+            user=self.user,
+            trigger_type='manual',
+            old_evolution_gen=1,
+            new_evolution_gen=1,
+            new_biological_age=29.8,  # 0.2y below the connection's 30.0
+            success=True,
+            completed_at=timezone.now() - timedelta(days=60),
+        )
+
+        evolved, message = epigenetic_evolution_manager.check_and_evolve(
+            self.user, self.connection, force=False,
+        )
+
+        self.assertFalse(evolved)
+        self.assertIn('below threshold', message)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.evolution_generation, 1)
+
 
 # =============================================================================
 # Phase D / D4 (2026-05): DNA OAuth token encryption — HKDF + legacy fallback
