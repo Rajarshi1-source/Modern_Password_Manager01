@@ -166,19 +166,23 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
         self.assertIn('security.tasks.update_threat_intelligence', registered)
 
     def test_dark_protocol_entries_resolve(self):
-        """The five Dark Protocol entries: correct names, missing import.
+        """Four of the five Dark Protocol entries: correct names, missing
+        import.
 
         Each `@shared_task` already carried the right `name=`; nothing
         imported `dark_protocol_tasks.py`, so none of the five ever
         registered. Fixed via the import in `security/tasks/__init__.py` --
         these beat entries needed no change at all.
+
+        `dark-protocol-health-check` is deliberately NOT among the four
+        checked here -- see `test_health_check_nodes_entry_stays_removed`
+        below for why.
         """
         registered = _worker_registry()
         beat_schedule = self._beat_schedule()
 
         expected = {
             'dark-protocol-rotate-paths': 'dark_protocol.rotate_network_paths',
-            'dark-protocol-health-check': 'dark_protocol.health_check_nodes',
             'dark-protocol-cover-traffic': 'dark_protocol.generate_cover_traffic',
             'dark-protocol-cleanup': 'dark_protocol.cleanup_expired_sessions',
             'dark-protocol-traffic-analysis': 'dark_protocol.analyze_traffic_patterns',
@@ -188,6 +192,26 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
             with self.subTest(entry=entry):
                 self.assertEqual(beat_schedule[entry]['task'], task_name)
                 self.assertIn(task_name, registered)
+
+    def test_health_check_nodes_entry_stays_removed(self):
+        """`dark-protocol-health-check` must not silently reappear.
+
+        CodeRabbit, PR #482 round 4: `health_check_nodes` (dark_protocol_tasks.py)
+        queries every `status='active'` DarkProtocolNode with no opt-in/config
+        gate, decides reachability via `random.random() > 0.05` (an explicit
+        simulation stub, not a real ping), and marks a node `status='inactive'`
+        -- a real, persistent mutation -- after 3 simulated failures in a
+        rolling 5-minute window. Scheduled every minute, a real node WILL
+        eventually rack up 3 unlucky coin flips purely by chance, at which
+        point this task takes it offline for a reason that has nothing to do
+        with whether it's actually reachable. The task is registered (and
+        still directly callable/tested, e.g. `test_dark_protocol.py`'s
+        `test_health_check_task`) but deliberately not beat-scheduled until
+        it does a real check or gets a config gate on the mutation. This
+        asserts it stays unscheduled rather than being silently reintroduced.
+        """
+        beat_schedule = self._beat_schedule()
+        self.assertNotIn('dark-protocol-health-check', beat_schedule)
 
     def test_cleanup_expired_django_sessions_entry_resolves(self):
         """`shared.tasks.cleanup_expired_sessions` -- shared had no

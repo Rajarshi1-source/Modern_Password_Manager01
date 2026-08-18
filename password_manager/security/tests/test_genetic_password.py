@@ -1138,6 +1138,35 @@ class EpigeneticEvolutionManagerSyncTestCase(TestCase):
         self.connection.refresh_from_db()
         self.assertEqual(self.connection.evolution_generation, 1)
 
+    def test_non_forced_evolution_seeds_baseline_for_new_user(self):
+        """CodeRabbit, PR #482 follow-up: with no prior GeneticEvolutionLog
+        at all (a brand-new user, self.connection's own setUp state), the
+        round-3 fix's fallback (`last_bio_age = current_bio_age`) made
+        age_change permanently 0 -- and since the threshold gate returned
+        False without writing anything, a new user's automatic daily check
+        could never start the evolution cycle, ever, without someone first
+        hitting "trigger now" manually. Confirms a force=False call on a
+        connection with zero evolution history now evolves and creates the
+        first baseline log row (old_biological_age == new_biological_age,
+        honestly recording "no measured change yet, this is the baseline"
+        rather than a fabricated delta).
+        """
+        from ..services.epigenetic_service import epigenetic_evolution_manager
+
+        self.assertFalse(GeneticEvolutionLog.objects.filter(user=self.user).exists())
+
+        evolved, message = epigenetic_evolution_manager.check_and_evolve(
+            self.user, self.connection, force=False,
+        )
+
+        self.assertTrue(evolved, message)
+        self.connection.refresh_from_db()
+        self.assertEqual(self.connection.evolution_generation, 2)
+        log = GeneticEvolutionLog.objects.get(user=self.user, new_evolution_gen=2)
+        self.assertEqual(log.trigger_type, 'automatic')
+        self.assertEqual(log.old_biological_age, 30.0)
+        self.assertEqual(log.new_biological_age, 30.0)
+
 
 # =============================================================================
 # Phase D / D4 (2026-05): DNA OAuth token encryption — HKDF + legacy fallback
