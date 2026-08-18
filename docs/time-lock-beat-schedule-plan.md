@@ -557,3 +557,69 @@ CI-workflow and doc-only changes this round — no Python code touched, so no
 pytest run was needed. Validated via `yaml.safe_load` (whole file parses)
 and the envsubst dry-run (exact command the new step runs, output
 re-parsed) instead.
+
+## 10. Failing CI check: `Dependency Vulnerability Scan` (real, unrelated to Time-Lock, fixed with a one-line-per-file version bump)
+
+Not a CodeRabbit finding — the "Multi-Scanner Security Scan / Dependency
+Vulnerability Scan" GitHub check itself was red on the PR. Investigated the
+same way as the round-2 flaky-test check: fetched the actual job log
+(`gh api .../actions/jobs/<id>/logs`) rather than trusting the badge.
+
+**Root cause, verified precisely rather than assumed**: the log contains
+two errors in sequence, and only one of them is what actually fails the
+job.
+- `Error: Invalid value for '--policy-file': Unable to load the Safety
+  Policy file ".safety-policy.yml"` — from the **"Run Safety check"** step
+  (`safety check --file requirements.txt --exit-code --json > ... || true`).
+  That trailing `|| true` swallows the failure; this step cannot fail the
+  job and is not the cause. Cosmetic pre-existing noise, not touched.
+- `##[error]pip-audit reported vulnerabilities or a non-transient error.`
+  followed by a JSON dependency report — from the **"Run pip-audit"** step,
+  which has no such swallow. This is what actually exits the job non-zero.
+  The JSON shows every dependency's `vulns` empty except one:
+  `sqlparse==0.5.4` carries four real CVEs (CVE-2026-71491, CVE-2026-59894,
+  CVE-2026-59893, CVE-2026-54284 — two ReDoS, one quadratic-complexity DoS,
+  one output-escaping code-injection in an opt-in formatter mode), all with
+  `fix_versions: ["0.6.0"]`. `pip-audit-ignores.txt` doesn't list any of
+  them — genuinely unsuppressed, not a broken suppression mechanism.
+
+**Confirmed unrelated to Time-Lock/this PR**: no file in this branch's diff
+touches `requirements*.txt` or anything sqlparse-adjacent; this dependency
+scan runs on every `pull_request` push and had been passing on this exact
+branch through rounds 1–3, so the CVEs were very likely just published
+between then and now (the CVE IDs' `2026` year prefix is consistent with
+"recently disclosed", and `pip-audit` queries the live OSV feed on every
+run) — the same "not caused by this branch" shape as round 2's flaky test,
+but this time a real, fixable finding rather than something to leave alone.
+
+**Fix, verified before applying**:
+- Confirmed `sqlparse` is pinned directly (not transitive) in all three
+  files that carry it: `requirements.txt`, `requirements-core.txt`,
+  `requirements-lock.txt` — all at `==0.5.4`, no compatibility comment
+  explaining the pin.
+- Confirmed `0.6.0` exists on PyPI (`pip index versions sqlparse`) and
+  satisfies Django 5.1.15's own declared constraint
+  (`importlib.metadata.requires('django')` → `sqlparse>=0.3.1`, no upper
+  bound).
+- Confirmed no code in this repo imports `sqlparse` directly (grepped) — it
+  is Django's own internal dependency, so a version bump can't break
+  application code that isn't there.
+- Installed `sqlparse==0.6.0` for real in the local dev venv (not just a
+  `--dry-run`) and verified: `python manage.py check` — 0 issues; the full
+  `security/tests/test_time_lock_tasks.py` suite (17 tests, 4 subtests,
+  exercises the ORM/query layer this PR's own tasks depend on) — all pass.
+- Bumped the pin to `==0.6.0` in all three files.
+
+Not fixed as part of this: whatever timing/notification gap let this land
+as a red check on an otherwise-unrelated PR rather than surfacing via
+Dependabot first — that's a repo-wide dependency-monitoring question, out
+of scope here.
+
+### 10.1 Test results (targeted, per instruction)
+
+`python manage.py check` (0 issues) and
+`pytest security/tests/test_time_lock_tasks.py -v` (17 passed, 4 subtests)
+against the locally-installed `sqlparse==0.6.0`, before committing the
+requirements-file bump. No broader suite run needed: the fix is a dependency
+version bump with zero application-code changes, and no code in this repo
+touches `sqlparse` directly.
