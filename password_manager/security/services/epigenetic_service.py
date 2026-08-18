@@ -321,6 +321,15 @@ class EpigeneticEvolutionManager:
         """
         from ..models import DNAConnection, GeneticEvolutionLog, GeneticSubscription
 
+        # `select_for_update().get(pk=...)` below returns a NEW Python object
+        # distinct from the `dna_connection` the caller passed in -- keep a
+        # handle on that original instance so it can be refreshed in place
+        # once the locked copy commits (CodeRabbit, PR #482 round 6): without
+        # this, `check_genetic_evolution` and the trigger-evolution API view
+        # both read stale pre-evolution values off their own instance right
+        # after this call, even though `evolved=True` and the DB was updated.
+        caller_dna_connection = dna_connection
+
         # CodeRabbit, PR #482: the gate checks and the writes below used to
         # run unlocked, outside any transaction. Two concurrent calls for the
         # same user (the daily beat task and a manual "trigger now" hitting
@@ -384,6 +393,7 @@ class EpigeneticEvolutionManager:
             # field or migration needed.
             last_log = GeneticEvolutionLog.objects.filter(
                 user=user, success=True,
+                new_biological_age__isnull=False, completed_at__isnull=False,
             ).order_by('-completed_at').first()
 
             if last_log is not None:
@@ -435,6 +445,11 @@ class EpigeneticEvolutionManager:
                 success=True,
                 completed_at=timezone.now(),
             )
+
+            # Sync the caller's own instance to what was just committed (see
+            # the `caller_dna_connection` comment above) so callers don't
+            # each need their own refresh_from_db() to see the new state.
+            caller_dna_connection.refresh_from_db()
 
         logger.info(
             f"Password evolution triggered for {user.username}: "
