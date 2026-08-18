@@ -256,11 +256,11 @@ if TIME_LOCK_TASKS_AVAILABLE:
 
 if DARK_PROTOCOL_TASKS_AVAILABLE:
     __all__.extend([
-        'rotate_network_paths',
+        'analyze_traffic_patterns',
+        'cleanup_expired_dark_protocol_sessions',
         'generate_cover_traffic',
         'health_check_nodes',
-        'cleanup_expired_dark_protocol_sessions',
-        'analyze_traffic_patterns',
         'register_node',
+        'rotate_network_paths',
     ])
 
