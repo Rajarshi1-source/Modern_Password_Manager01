@@ -345,29 +345,51 @@ class EpigeneticEvolutionManager:
             logger.exception("Failed to fetch biological age")
             return False, "Failed to fetch epigenetic data."
         
-        # Check if evolution threshold is met
-        last_bio_age = dna_connection.last_biological_age or current_bio_age
+        # Check if evolution threshold is met.
+        #
+        # `dna_connection.last_biological_age` is the only place a
+        # biological age lives on the connection -- it holds whatever was
+        # most recently written there (manual entry today; a live API sync
+        # once that's implemented), so reading it a second time here just
+        # compared it to itself: age_change was always 0, and non-forced
+        # evolution -- the daily scheduled task's default path -- could
+        # never succeed (CodeRabbit, PR #482: pre-existing, unreachable
+        # until the async->sync fix made this branch executable for the
+        # first time). The baseline to detect *change* against is
+        # "biological age as of the last successful evolution", which is
+        # exactly what `GeneticEvolutionLog.new_biological_age` already
+        # records below, every time this method evolves a user -- no new
+        # field or migration needed. No prior evolution means no baseline
+        # to compare against, so a user's first-ever check still falls back
+        # to `current_bio_age` (age_change == 0, only `force=True`
+        # proceeds), the same fallback semantics the old code already
+        # expressed via `dna_connection.last_biological_age or current_bio_age`.
+        from ..models import GeneticEvolutionLog
+
+        last_log = GeneticEvolutionLog.objects.filter(
+            user=user, success=True,
+        ).order_by('-completed_at').first()
+        last_bio_age = last_log.new_biological_age if last_log else current_bio_age
         age_change = abs(current_bio_age - last_bio_age)
-        
+
         if not force and age_change < self.EVOLUTION_THRESHOLD:
             return False, f"Age change ({age_change:.2f}y) below threshold ({self.EVOLUTION_THRESHOLD}y)"
-        
+
         # Trigger evolution
         old_generation = dna_connection.evolution_generation
         new_generation = old_generation + 1
-        
+
         # Update connection
         dna_connection.evolution_generation = new_generation
         dna_connection.last_biological_age = current_bio_age
         dna_connection.last_epigenetic_update = timezone.now()
         dna_connection.save()
-        
+
         # Update subscription counter
         subscription.evolutions_triggered += 1
         subscription.save()
-        
+
         # Log the evolution
-        from ..models import GeneticEvolutionLog
         GeneticEvolutionLog.objects.create(
             user=user,
             trigger_type='automatic' if not force else 'manual',

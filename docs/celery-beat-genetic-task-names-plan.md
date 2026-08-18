@@ -509,3 +509,67 @@ carried `python`/`bash`. No other unflagged instances existed to fix for
 consistency. Tagged both `text` (they're plain error-message output, not
 executable Python). Doc-only, zero code/behavior impact — no test run
 needed for this round.
+
+## 11. Review-fix round 3 on PR #482 (CodeRabbit, Major — non-forced evolution could never succeed)
+
+CodeRabbit's claim: after the async→sync fix (round 1) made this branch of
+`check_and_evolve` reachable, `dna_connection.last_biological_age` is read
+as `current_bio_age` (line ~339) and then read *again* as `last_bio_age`
+(line ~349) — the same field, unchanged in between — so `age_change` is
+always `0`, and `not force and age_change < EVOLUTION_THRESHOLD` rejects
+every `force=False` call. That's the daily scheduled task's actual, default
+call shape (`check_genetic_evolution.delay(...)` never passes `force=True`)
+— meaning automatic evolution could never succeed for any user, ever.
+
+Verified by reading the method fresh rather than trusting the line numbers
+in the finding: confirmed both reads target the identical
+`dna_connection.last_biological_age` attribute with no write in between,
+and confirmed via `git diff main` that round 1's fix never touched this
+logic at all (only the `async def`→`def` signature and its docstring) — the
+bug is genuinely pre-existing, not something introduced by this PR; round 1
+just made it reachable, the same "fix exposes a dormant pre-existing bug"
+shape as the double-write bug in round 1 itself.
+
+**The fix required actually understanding the data model, not just moving
+lines around**: `DNAConnection` has exactly one biological-age field
+(`last_biological_age`) — there is no second field anywhere to hold a
+genuinely distinct "prior" value, so no amount of reordering the two reads
+inside `check_and_evolve` could produce a real delta; both reads would
+still resolve to the one stored value. CodeRabbit's own suggested
+remediation ("capture the prior measurement before assigning or updating
+the current one") describes a live-refresh flow this codebase doesn't have
+yet — the API integration is still a stub (`# This would normally fetch
+from the API`).
+
+Found a fix that needs no new field or migration: `GeneticEvolutionLog`
+(the audit-log model this same method already writes to on every
+successful evolution) has its own `new_biological_age` column, which is
+*exactly* "biological age as of the last successful evolution" — the
+correct baseline to diff against, already populated, already scoped to
+`user` the same way this method's own log-creation call already is.
+Changed `last_bio_age` to come from
+`GeneticEvolutionLog.objects.filter(user=user, success=True).order_by('-completed_at').first()`
+(falling back to `current_bio_age` — i.e. `age_change == 0`, matching the
+old code's own fallback semantics — when a user has no prior evolution to
+compare against). Consolidated the pre-existing `from ..models import
+GeneticEvolutionLog` import to before this new query instead of duplicating
+it at its original (later) call site.
+
+**Regression tests added** (CodeRabbit asked for one; added a
+complementary second to prove the fix is precise, not just "always true
+now"): `test_non_forced_evolution_succeeds_with_above_threshold_change`
+seeds a prior `GeneticEvolutionLog` 5.0y below the connection's current
+`last_biological_age` and confirms a `force=False` call now evolves;
+`test_non_forced_evolution_still_blocked_below_threshold` seeds a prior log
+only 0.2y below (under the 0.5y `EVOLUTION_THRESHOLD`) and confirms the
+call still correctly declines.
+
+### 11.1 Test results (targeted, per instruction)
+
+- `pytest "security/tests/test_genetic_password.py::EpigeneticEvolutionManagerSyncTestCase" -v`
+  — 4 passed (2 pre-existing + 2 new).
+- Broader confirmation once stable, this PR's actual footprint (not the
+  full repo suite):
+  `pytest security/tests/test_genetic_password.py security/tests/test_celery_beat_registry.py -q`
+  — 69 passed (up from round 2's 67, by the 2 new tests), 8 subtests
+  passed, 0 failed.
