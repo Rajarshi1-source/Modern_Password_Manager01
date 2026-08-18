@@ -966,3 +966,67 @@ docstring-coverage nitpick was declined for the same class of reason
 - `pytest security/tests/test_dark_protocol.py -q -k "importable_from_security_tasks_package"`
   — 1 passed. Confirms the strengthened assertion still passes against the
   real, currently-importing Dark Protocol tasks.
+
+## 15. Review-fix round 7 on PR #482 (CodeRabbit full review, 1 actionable + 2 nitpicks)
+
+CI fully green at the time of review (25 successful, 1 neutral Trivy,
+6 skipped deploy/build, the one "in progress" Backend Tests check shown in
+the review comment had finished by the time this round started — verified
+via `gh pr checks 482`, no failing check found). CodeRabbit's own comment
+distinguishes "Actionable comments posted: 1" from a separate "Nitpick
+comments (2)" section — treated that as the bot's own priority signal.
+
+### 15.1 Minor, applied: `__all__.extend(...)` not alphabetically sorted (Ruff RUF022)
+
+The only actionable finding, and the only one this round with actual tool
+output attached (`ruff` itself: `[warning] 258-265: __all__ is not sorted
+(RUF022)`), unlike prior rounds' bot-inferred claims — verified by reading
+the flagged block directly rather than just trusting the label. Confirmed
+real: the `if DARK_PROTOCOL_TASKS_AVAILABLE: __all__.extend([...])` block
+in `security/tasks/__init__.py` (added earlier in this same PR, not
+pre-existing on `main`) lists its six names in declaration order, not
+alphabetical. Fixed exactly as suggested — reordered the six string
+literals alphabetically. Zero behavior change (`__all__` order has no
+runtime effect beyond `from module import *`).
+
+Deliberately did NOT also reorder the near-identical, equally-unsorted
+`if TIME_LOCK_TASKS_AVAILABLE: __all__.extend([...])` block immediately
+above it (lines 245-255) — Ruff's own output named only lines 258-265, and
+opportunistically fixing adjacent, unflagged code beyond what a review
+actually asked for is exactly the kind of scope creep "keep changes
+minimal" rules out, even when the same class of issue is visible a few
+lines away.
+
+### 15.2 Nitpick, declined (repeat of §14.5): condense review-history comments
+
+Same finding as round 6 §14.5, same self-label ("Trivial | Low value"),
+now pointed at four locations in `epigenetic_service.py` instead of two
+(the `caller_dna_connection` comment added in round 6 itself among them).
+Declined for the same reason as before: this is this PR's own established,
+deliberate documentation convention across every file it touches, not
+specific to the flagged spots, and stripping it selectively would make the
+file internally inconsistent with its own precedent for no functional
+gain. Not re-litigating further per round; see §14.5 for the full
+reasoning.
+
+### 15.3 Nitpick, skipped as already-correct: DNA token refresh tracking
+
+`breach_tasks.py`'s `refresh_dna_tokens` (lines 511-574) — the comment
+itself is descriptive rather than prescriptive ("No production consumer
+reads these result keys, so no migration is required. The task still only
+surveys connections and does not decrypt or refresh tokens."), with no
+proposed diff attached, unlike every other finding across all 7 rounds.
+Verified by reading the current function in full: it already does exactly
+what the comment describes as correct — survey-only via `get_dna_provider`,
+no decrypt, no outbound request, no writes, returns `implemented: False`
+— this was the deliberate design from the original round-1 fix (§3.4 of
+this doc, and `celery-beat-registry-fix.md` memory), not something this
+round changed. Nothing to fix; noted rather than silently ignored.
+
+### 15.4 Test results (targeted, per instruction)
+
+- `pytest security/tests/test_dark_protocol.py security/tests/test_celery_beat_registry.py -q`
+  — 39 passed, 3 warnings (pre-existing `datetime.utcnow()` deprecation
+  noise, unrelated), 7 subtests passed. Confirms the `__all__` reorder
+  doesn't change which names are importable from `security.tasks` or
+  disturb Dark Protocol task registration/beat-entry resolution.
