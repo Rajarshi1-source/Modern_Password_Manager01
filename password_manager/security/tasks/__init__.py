@@ -139,10 +139,20 @@ except ImportError as e:
 # Each `@shared_task` in dark_protocol_tasks.py carries an explicit
 # `name='dark_protocol.<func>'` that already matches what celery.py's beat
 # schedule expects -- but `@shared_task` only registers a task once its
-# defining module is imported, and nothing imported this one. The five
+# defining module is imported, and nothing imported this one. The
 # `dark-protocol-*` beat entries had never run as a result. Importing here
-# (mirroring the try/except pattern above) is the fix; celery.py needed no
-# changes.
+# (mirroring the try/except pattern above) is the fix.
+#
+# NOTE: importing a name here makes it *registered* (a worker can look it
+# up and run it if asked, e.g. `test_dark_protocol.py`'s direct task-level
+# tests) -- it does NOT make it *scheduled*. Whether a task actually runs
+# unattended is decided entirely by celery.py's beat_schedule, which this
+# import list has no control over. `health_check_nodes` is imported here
+# like its four siblings (all five are equally real, safe-to-call Python
+# functions), but celery.py deliberately does not schedule it (CodeRabbit,
+# PR #482 round 4: it mutates real node status based on simulated
+# `random.random()` data with no config gate) -- see the comment above
+# `dark-protocol-rotate-paths` in celery.py for the full reasoning.
 
 try:
     from .dark_protocol_tasks import (

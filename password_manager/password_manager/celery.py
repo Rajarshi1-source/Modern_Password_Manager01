@@ -284,38 +284,47 @@ app.conf.update(
         # 🌑 Dark Protocol Network Tasks
         # =================================================================
         #
-        # These five task names below were already correct -- each
-        # `@shared_task` in security/tasks/dark_protocol_tasks.py carries an
-        # explicit `name='dark_protocol.<func>'` matching exactly what these
-        # entries schedule. The bug was that `security/tasks/__init__.py`
-        # never imported that module, so those decorators never ran and
-        # nothing registered the names beat was asking for. Fixed by adding
-        # the missing import there, mirroring the existing try/except pattern
+        # These task names below were already correct -- each `@shared_task`
+        # in security/tasks/dark_protocol_tasks.py carries an explicit
+        # `name='dark_protocol.<func>'` matching exactly what these entries
+        # schedule. The bug was that `security/tasks/__init__.py` never
+        # imported that module, so those decorators never ran and nothing
+        # registered the names beat was asking for. Fixed by adding the
+        # missing import there, mirroring the existing try/except pattern
         # already used for `time_lock_tasks` and `adaptive_tasks`; no changes
         # needed here.
         #
-        # Verified safe to turn on: none of the five task bodies (nor the
+        # Verified safe to turn on: none of these task bodies (nor the
         # service/generator code they call) perform outbound network I/O --
-        # `health_check_nodes` is explicitly a `random.random()` simulation
-        # ("in production, this would ping the node"), and the rest are pure
-        # DB reads/writes over DarkProtocolConfig/GarlicSession/RoutingPath/
-        # etc. Every query is gated on `is_enabled` / an active session
-        # existing, so each is a cheap no-op until Dark Protocol is actually
-        # in use by a real user. `health_check_nodes` and
-        # `cleanup_expired_sessions` already have passing direct task tests.
+        # all pure DB reads/writes over DarkProtocolConfig/GarlicSession/
+        # RoutingPath/etc. Every query below is gated on `is_enabled` / an
+        # active session existing, so each is a cheap no-op until Dark
+        # Protocol is actually in use by a real user.
+        #
+        # `dark-protocol-health-check` (-> dark_protocol.health_check_nodes)
+        # is deliberately NOT among the entries below (CodeRabbit, PR #482
+        # round 4). That task is NOT a cheap no-op and is NOT gated on any
+        # `is_enabled`-style config -- correcting the claim above, which
+        # used to say otherwise. It queries every `status='active'`
+        # DarkProtocolNode unconditionally, decides reachability via
+        # `random.random() > 0.05` (an explicit simulation stub, not a real
+        # ping -- see the function's own comment), and marks a node
+        # `status='inactive'` -- a real, persistent mutation -- after 3
+        # simulated failures in a rolling 5-minute window. Scheduled every
+        # minute, a real node WILL eventually rack up 3 unlucky coin flips
+        # purely by chance and get taken offline for a reason unrelated to
+        # its actual reachability. The task stays registered (and callable
+        # directly, e.g. by `test_dark_protocol.py`) but is not beat-scheduled
+        # until it performs a real check or gets a config gate on the
+        # mutation -- see `test_health_check_nodes_entry_stays_removed` in
+        # `test_celery_beat_registry.py`.
 
         # Rotate anonymous routing paths (every 5 minutes)
         'dark-protocol-rotate-paths': {
             'task': 'dark_protocol.rotate_network_paths',
             'schedule': crontab(minute='*/5'),  # Every 5 minutes
         },
-        
-        # Health check network nodes (every minute)
-        'dark-protocol-health-check': {
-            'task': 'dark_protocol.health_check_nodes',
-            'schedule': crontab(minute='*'),  # Every minute
-        },
-        
+
         # Generate cover traffic for active sessions (every 2 minutes)
         'dark-protocol-cover-traffic': {
             'task': 'dark_protocol.generate_cover_traffic',

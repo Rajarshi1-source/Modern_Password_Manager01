@@ -573,3 +573,145 @@ call still correctly declines.
   `pytest security/tests/test_genetic_password.py security/tests/test_celery_beat_registry.py -q`
   — 69 passed (up from round 2's 67, by the 2 new tests), 8 subtests
   passed, 0 failed.
+
+## 12. Review-fix round 4 on PR #482 (CodeRabbit ×2 + a recurring failing CI check)
+
+Three items: one CodeRabbit follow-up on round 3's own fix, one CodeRabbit
+finding on code round 2 already touched but hadn't fully safety-reviewed,
+and the same `sqlparse` CVE already fixed on PR #483.
+
+### 12.1 Major: round 3's fix still couldn't start evolution for a brand-new user
+
+CodeRabbit's claim: "When no successful GeneticEvolutionLog exists, this
+code compares current_bio_age to itself and returns without writing a
+baseline. Later non-forced checks still have no log, so automatic
+evolution cannot start until a caller forces one manually."
+
+Verified by re-tracing round 3's own fallback line
+(`last_bio_age = last_log.new_biological_age if last_log else current_bio_age`):
+for a user with ZERO prior `GeneticEvolutionLog` rows, `last_bio_age` ==
+`current_bio_age` always, `age_change` is always `0`, the threshold gate
+returns `False` — and because that early return happens before any write,
+the NEXT check (days later, weeks later, forever) has exactly the same
+"zero rows" state and reaches exactly the same dead end. Confirmed accurate:
+round 3's fix solved "the comparison always yields zero even with real
+history" but not "there's no automatic way to ever CREATE that history" —
+a real gap in round 3's own fix, not something round 3 introduced (the
+pre-round-3 code's fallback — `dna_connection.last_biological_age or
+current_bio_age` — had the identical "always equals current" property, so
+this was already true before any of this PR's work; round 3 just preserved
+the old fallback's own semantics faithfully rather than questioning them).
+
+**Fix**: restructured so the threshold gate only applies when a prior log
+genuinely exists; a user's first-ever check (no prior log) now skips the
+gate entirely and falls through to the method's own existing
+evolve-and-log code path below, which creates the first
+`GeneticEvolutionLog` baseline row on its own — no new write path needed,
+no schema change. That first row honestly records
+`old_biological_age == new_biological_age` (no measured change yet, this
+*is* the baseline), so it doesn't fabricate a delta that didn't happen.
+
+Added the regression test CodeRabbit asked for
+(`test_non_forced_evolution_seeds_baseline_for_new_user`: confirms a
+`force=False` call on a connection with zero evolution history now
+evolves and writes that first log row). Caught and removed a second,
+slightly-misleading assertion of my own before it landed — my first draft
+also asserted a SECOND call now declines "because it compares against the
+baseline," but a second immediate call actually declines earlier, on the
+unrelated `CHECK_INTERVAL_DAYS` gate (30 days must pass since
+`last_epigenetic_update`), not the threshold gate my test claimed to be
+proving. `test_non_forced_evolution_still_blocked_below_threshold` (round
+3) already covers "declines against a real baseline" correctly with its
+own explicit prior-log setup, so the redundant, inaccurate assertion was
+dropped rather than fixed in place.
+
+### 12.2 Major: `health_check_nodes` mutates real node status from simulated data, no config gate
+
+CodeRabbit's claim: importing `dark_protocol_tasks` (round 2) registers
+`health_check_nodes` and activates its existing beat entry
+(`dark-protocol-health-check`, every minute). The task selects every
+`status='active'` `DarkProtocolNode` with no `is_enabled`-style gate,
+decides reachability via `random.random() > 0.05`, and marks a node
+`status='inactive'` — a real, persistent mutation — after 3 simulated
+failures within a rolling 5-minute window.
+
+**This is a genuine gap in round 2's own safety review**, not a new bug —
+re-read: round 2 verified "zero outbound network I/O" and "every query
+gated on `is_enabled` / an active session existing" for all five Dark
+Protocol tasks and called that sufficient for "safe to turn on." That
+network-I/O claim was correct, but the OVERALL safety conclusion missed a
+different, real problem this specific task has: it doesn't need real
+network access to still take a REAL node offline based on nothing but
+chance — the query it runs (`DarkProtocolNode.objects.filter(status='active')`)
+has no `is_enabled` gate at all (that's a session/config concept;
+`DarkProtocolNode` rows aren't scoped to any single user's opt-in). Run
+every minute forever, a genuinely healthy node WILL eventually roll 3
+unlucky 5%-chance failures inside some 5-minute window — it's a matter of
+when, not if.
+
+**Fix**: removed the `dark-protocol-health-check` beat entry from
+`celery.py` rather than attempting either of CodeRabbit's two suggested
+remediations in full:
+- "Prevent it from being registered" — not cleanly achievable: `@shared_task`
+  registers a name the moment its defining MODULE is imported, and
+  `security/tasks/__init__.py` imports `dark_protocol_tasks` as a whole for
+  its other 4 (safe) tasks — un-importing just `health_check_nodes`'s name
+  from that tuple would not stop its decorator from executing, since the
+  module still loads regardless. The only way to prevent registration
+  outright would be to stop importing the whole module, which would also
+  un-register the other four tasks that verified safe.
+- "Add a strict configuration gate that prevents status mutation" — the
+  task's body is a `random.random()` simulation stub throughout, not a
+  real check with one bad line; inventing a new settings flag and gating
+  logic inside `dark_protocol_tasks.py` (a file with no other changes in
+  this PR) is a larger, more speculative change than removing one
+  schedule entry, and touching unfamiliar simulation logic to make it
+  "safely fake" risks exactly the kind of guess this PR's own instruction
+  warns against.
+
+Un-scheduling is the part that's actually achievable and actually
+eliminates the harm: a registered-but-unscheduled Celery task simply never
+runs on its own, and nothing else in the codebase calls
+`health_check_nodes.delay()` (confirmed by grep) — beat is the only thing
+that would have invoked it periodically. The function itself is untouched
+and stays fully registered/callable (`test_dark_protocol.py`'s own
+`test_health_check_task` still calls and passes against it directly),
+available for manual invocation or once it gets a real implementation.
+
+Corrected the overstated safety-claim comment in `celery.py` (it used to
+say all five Dark Protocol tasks were uniformly gated/safe) and added a
+matching clarifying note to `security/tasks/__init__.py`'s import block,
+per CodeRabbit's request to "update the related task registration
+accordingly" there too — since importing a name only makes it
+*registered*, not *scheduled*, and that distinction is exactly what this
+finding turned on.
+
+Added `test_health_check_nodes_entry_stays_removed` (same "must not
+silently reappear" pattern as `analyze-password-strength-daily`'s removal
+in round 2 of the 8-broken-entries work), and updated
+`test_dark_protocol_entries_resolve` to check the remaining four entries
+instead of five.
+
+### 12.3 Recurring: `sqlparse==0.5.4` CVEs (same fix as PR #483)
+
+Identical finding to PR #483 round 4 — same 4 CVEs
+(CVE-2026-71491/59894/59893/54284), same `fix_versions: ["0.6.0"]`, same
+root cause (this branch, a separate branch off `main`, hadn't had the bump
+applied yet). No new verification needed beyond confirming the failing job
+log actually names `sqlparse` here too (it does — fetched via
+`gh api .../actions/jobs/<id>/logs`, identical dependency list and CVE
+payload). Bumped the same three files
+(`requirements.txt`/`requirements-core.txt`/`requirements-lock.txt`) to
+`0.6.0`, reusing the PR #483 verification (Django's own constraint
+satisfied, no direct imports in this codebase, already confirmed safe
+against the local test suite there).
+
+### 12.4 Test results (targeted, per instruction)
+
+- `pytest "security/tests/test_genetic_password.py::EpigeneticEvolutionManagerSyncTestCase" security/tests/test_celery_beat_registry.py -v`
+  — 13 passed, 7 subtests passed.
+- Broader confirmation once stable, this PR's actual footprint (now
+  including Dark Protocol, since this round touched its scheduling):
+  `pytest security/tests/test_genetic_password.py security/tests/test_celery_beat_registry.py security/tests/test_dark_protocol.py -q`
+  — 102 passed, 3 warnings (pre-existing `datetime.utcnow()` deprecation
+  noise, unrelated), 7 subtests passed, 0 failed.

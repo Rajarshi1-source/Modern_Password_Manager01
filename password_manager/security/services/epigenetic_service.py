@@ -359,21 +359,35 @@ class EpigeneticEvolutionManager:
         # "biological age as of the last successful evolution", which is
         # exactly what `GeneticEvolutionLog.new_biological_age` already
         # records below, every time this method evolves a user -- no new
-        # field or migration needed. No prior evolution means no baseline
-        # to compare against, so a user's first-ever check still falls back
-        # to `current_bio_age` (age_change == 0, only `force=True`
-        # proceeds), the same fallback semantics the old code already
-        # expressed via `dna_connection.last_biological_age or current_bio_age`.
+        # field or migration needed.
         from ..models import GeneticEvolutionLog
 
         last_log = GeneticEvolutionLog.objects.filter(
             user=user, success=True,
         ).order_by('-completed_at').first()
-        last_bio_age = last_log.new_biological_age if last_log else current_bio_age
-        age_change = abs(current_bio_age - last_bio_age)
 
-        if not force and age_change < self.EVOLUTION_THRESHOLD:
-            return False, f"Age change ({age_change:.2f}y) below threshold ({self.EVOLUTION_THRESHOLD}y)"
+        if last_log is not None:
+            last_bio_age = last_log.new_biological_age
+            age_change = abs(current_bio_age - last_bio_age)
+            if not force and age_change < self.EVOLUTION_THRESHOLD:
+                return False, f"Age change ({age_change:.2f}y) below threshold ({self.EVOLUTION_THRESHOLD}y)"
+        else:
+            # No prior evolution means no baseline to detect *change*
+            # against. Falling back to last_bio_age = current_bio_age (as
+            # the pre-round-3-fix code always did) makes age_change
+            # permanently 0 -- and since the threshold gate above returns
+            # False without writing anything, a brand-new user's automatic
+            # daily check could never start the evolution cycle at all,
+            # forever, without someone first hitting "trigger now" manually
+            # (CodeRabbit, PR #482: a gap round 3's fix inherited by
+            # deliberately preserving the old code's own fallback
+            # semantics, not one it introduced). A first observation is new
+            # information relative to having none, so skip the threshold
+            # gate entirely here and fall through to the existing
+            # evolve-and-log path below, which creates that first baseline
+            # GeneticEvolutionLog row on its own -- no separate
+            # baseline-only write path needed.
+            last_bio_age = current_bio_age
 
         # Trigger evolution
         old_generation = dna_connection.evolution_generation

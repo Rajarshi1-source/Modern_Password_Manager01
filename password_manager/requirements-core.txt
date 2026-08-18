@@ -56,7 +56,7 @@ redis==7.0.1
 
 # Database — psycopg3 (async-capable successor to psycopg2)
 psycopg[binary]==3.2.4
-sqlparse==0.5.4
+sqlparse==0.6.0
 
 # HTTP & Networking
 requests==2.33.0
