@@ -1224,6 +1224,12 @@ class EpigeneticEvolutionManagerSyncTestCase(TestCase):
         # test_non_forced_evolution_seeds_baseline_for_new_user above):
         # evolves and seeds a real baseline instead of raising.
         self.assertTrue(evolved, message)
+        baseline = GeneticEvolutionLog.objects.get(
+            user=self.user, new_evolution_gen=2,
+        )
+        self.assertEqual(baseline.old_biological_age, 30.0)
+        self.assertEqual(baseline.new_biological_age, 30.0)
+        self.assertIsNotNone(baseline.completed_at)
 
 
 # =============================================================================

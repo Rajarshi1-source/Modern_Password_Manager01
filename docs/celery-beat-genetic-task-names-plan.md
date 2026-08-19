@@ -1030,3 +1030,84 @@ round changed. Nothing to fix; noted rather than silently ignored.
   noise, unrelated), 7 subtests passed. Confirms the `__all__` reorder
   doesn't change which names are importable from `security.tasks` or
   disturb Dark Protocol task registration/beat-entry resolution.
+
+## 16. Review-fix round 8 on PR #482 (CodeRabbit full review, 1 actionable declined + 4 nitpicks, 1 applied)
+
+CI fully green when this round started (27 successful, 1 neutral Trivy,
+6 skipped — confirmed via `gh pr checks 482`, no failing check found,
+matching the PR's own "All checks have passed" banner). This round's
+single "actionable" finding turned out to be the one worth declining, and
+the strongest fix came from a nitpick instead — a reminder that the bot's
+own actionable/nitpick split is a hint, not a verdict; each still needs
+independent verification.
+
+### 16.1 "Actionable" (Minor), declined: restrict `GeneticEvolutionLog` Django-admin writes
+
+CodeRabbit's claim: `GeneticEvolutionLogAdmin` lets staff add/edit rows
+(including `new_biological_age`) directly through Django admin, bypassing
+`check_and_evolve`'s row lock entirely.
+
+Verified technically true — `GeneticEvolutionLogAdmin` (`admin.py:182`) is
+a plain `admin.ModelAdmin` with `readonly_fields` covering only
+`triggered_at`/`completed_at`, no `has_add_permission`/
+`has_change_permission` override. But also verified this is NOT special
+to this one model: grepped the entire `admin.py` for
+`has_add_permission`/`has_change_permission`/`has_delete_permission` —
+zero matches, anywhere in the file. Every other registered admin class
+(`GeneticPasswordCertificateAdmin` — arguably more sensitive, holds
+password-derivation metadata; `DNAConsentRecordAdmin` — GDPR consent
+records; every other model in this app) is an equally plain `ModelAdmin`
+with full staff CRUD. Django admin access is already gated behind its own
+`is_staff`/superuser + per-model-permission system, a separate trust
+boundary from anything `check_and_evolve`'s locking touches.
+
+Declined: singling out just this one model for a write restriction that
+has zero precedent anywhere else in this codebase's admin surface would be
+an arbitrary, isolated inconsistency, not a "quick win" — it's a staff
+governance/access-control policy decision (should trusted admins be able
+to hand-correct or backfill this table?) that deserves its own deliberate
+call by the repo owner, not a bundled add-on to a Celery-beat concurrency
+PR. Out of scope: nothing in this PR's actual changes touches `admin.py`
+or created this admin registration — it's been this way since the model
+was first added, unrelated to round 5's locking fix.
+
+### 16.2 Nitpick, applied: strengthen the incomplete-log-row regression test
+
+`test_non_forced_evolution_ignores_incomplete_log_rows` (added round 6,
+§14.2) proved `evolved=True` and no crash, but never checked that the
+first-baseline row it creates actually has the fields a *later* call would
+need. Legitimate and low-risk — mirrors the assertions
+`test_non_forced_evolution_seeds_baseline_for_new_user` already makes for
+the equivalent brand-new-user path (same `self.connection` `setUp` value,
+`last_biological_age=30.0`). Applied as suggested: fetch the created
+`new_evolution_gen=2` row and assert `old_biological_age`/
+`new_biological_age` == 30.0 and `completed_at` is set.
+
+### 16.3 Nitpick, declined (3rd repeat): condense review-history comments
+
+Same finding as round 6 §14.5 / round 7 §15.2, still self-labeled "Trivial
+| Low value," now spanning the same four comment blocks. Not
+re-litigating further — see §14.5 for the standing reasoning (established,
+deliberate documentation convention across this entire PR).
+
+### 16.4 Nitpick, declined: "unreachable" try/except around the biological-age read
+
+CodeRabbit's claim: the `try: current_bio_age = dna_connection.last_biological_age ... except Exception:` block (lines 366-377) wraps a plain attribute read on an already-loaded model instance, which cannot raise — so the `except` branch is dead code.
+
+Technically correct in isolation (a loaded Django instance's field access is a pure Python attribute read, no I/O), but this block is pre-existing scaffolding from before this PR's work, sitting directly under a comment that already says "This would normally fetch from the API / For now, we'll check if manual input is available" — i.e. deliberately shaped for the live epigenetic-provider API call this feature doesn't have yet, not an accidental leftover. CodeRabbit's own suggested resolution offers two contradictory options ("remove it" or "keep it and add a TODO"), which itself signals this isn't a clear-cut fix. Declined: touching pre-existing, functionally-inert scaffolding unrelated to any of this PR's actual bug fixes is scope creep against "keep changes minimal," for a bot-self-labeled "Trivial | Low value" finding with no consensus suggested fix.
+
+### 16.5 Nitpick, declined: "track the unimplemented DNA refresh" / open a tracking issue
+
+Not a code-change request at all — no proposed diff, and the comment
+literally asks "Do you want me to open the tracking issue?" (a process
+suggestion, not a finding about this PR's code). Same underlying function
+(`refresh_dna_tokens`) CodeRabbit already confirmed correct as-is in round
+7 §15.3 (survey-only, `implemented: False` by design since the very first
+round of this PR's work). Nothing to change in source.
+
+### 16.6 Test results (targeted, per instruction)
+
+- `pytest security/tests/test_genetic_password.py -q -k "EpigeneticEvolutionManagerSyncTestCase"`
+  — 7 passed. Confirms the strengthened baseline-row assertions pass
+  against the real `check_and_evolve` output, and no regression in the
+  rest of the class.
