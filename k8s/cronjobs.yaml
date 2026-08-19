@@ -168,6 +168,11 @@ spec:
         spec:
           restartPolicy: Never
           serviceAccountName: password-manager-sa
+          # This Job only queries the app DB (see check_time_lock_backlog.py
+          # -- zero Kubernetes API/client usage) and has no legitimate reason
+          # to hold a K8s API token; mounting it anyway would be needless
+          # attack surface if the container were ever compromised.
+          automountServiceAccountToken: false
           securityContext:
             seccompProfile:
               type: RuntimeDefault
