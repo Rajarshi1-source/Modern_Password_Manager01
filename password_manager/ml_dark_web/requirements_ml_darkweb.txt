@@ -70,6 +70,6 @@ cryptography>=48.0.1 # not directly required, pinned to avoid GHSA-537c-gmf6-5cc
 setuptools>=78.1.1 # not directly required, pinned by Snyk to avoid a vulnerability
 
 # Security overrides for transitive dependencies (Dependabot)
-nltk>=3.9.4  # GHSA-gfwx-w7gr-fvh7 XSS, GHSA-jm6w-m3j8-898g unauth shutdown
+nltk>=3.10.0  # GHSA-gfwx-w7gr-fvh7 XSS, GHSA-jm6w-m3j8-898g unauth shutdown
 twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS
 ujson>=5.13.0  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump()
