@@ -865,3 +865,119 @@ test run), and §13.2 was an investigation that made no code change at
 all. The disposable `_rebase_probe` branch used for that investigation
 was deleted after `git rebase --abort`; the real branch and `origin` were
 never touched.
+
+## 14. Round 8 on PR #483: failing CI check fixed, CodeRabbit found nothing new, merge-conflict fixed (explicit authorization)
+
+CodeRabbit's own full review this round posted zero inline comments
+(confirmed via `gh api repos/.../pulls/483/comments` — empty result) and
+its PR-level comment was just "Full review finished" with no "Actionable
+comments posted" line at all, unlike every prior round. Nothing to fix
+there. Two other items this round: a genuinely failing CI check, and the
+merge-conflict fix from §13.2, now explicitly authorized by the user.
+
+### 14.1 Failing check: `Multi-Scanner Security Scan / Dependency Vulnerability Scan`
+
+Fetched the real job log (`gh api .../actions/jobs/<id>/logs`), same
+method as every prior CI-check investigation in this doc — not the badge.
+Root cause: `django==5.1.15` has one NEW, unsuppressed finding,
+`PYSEC-2026-3717` / `CVE-2026-15830` — unbounded recursion / segfault in
+`django.contrib.gis.geos.GEOSGeometry` when parsing a deeply nested
+`GEOMETRYCOLLECTION` from WKT/WKB/hex-WKB. `fix_versions: ["5.2.17",
+"6.0.8"]` — the same Django 5.2/6.0 minor-upgrade family already deferred
+for six sibling CVEs in `pip-audit-ignores.txt`'s existing "Django
+advisories disclosed 2026-08" block.
+
+**Verified non-reachable, not assumed**, the same rigor as every entry
+already in that file: zero `GEOSGeometry(`/`GeometryField`/`geos=True`
+anywhere in the codebase (grep); `django.contrib.gis` stays commented out
+of `INSTALLED_APPS`; the only `django.contrib.gis` import anywhere
+(`django.contrib.gis.geoip2.GeoIP2`, used in
+`honeypot_credentials/services/access_interceptor.py` and
+`logging_manager/models.py`) only ever calls `.city(ip)` and reads the
+returned dict's string keys — it never constructs a Geometry object, so
+no WKT/WKB reaches GEOS. Structurally identical to the file's existing
+`CVE-2026-53877` (GDALRaster) entry two bullets up — same subsystem
+family, same "GeoIP2 is the only door in, and it doesn't lead here"
+argument.
+
+**Fix**: added `CVE-2026-15830 exp:2026-10-20` to `pip-audit-ignores.txt`
+with a full threat-assessment comment, following this file's own required
+format exactly (checked the workflow's validator script,
+`.github/workflows/security-multi-scanner.yml` "Validate pip-audit ignore
+expiries" step, to confirm the `CVE-\d{4}-\d+` regex and non-expired-date
+requirements before adding the line — not just copying the visual
+pattern). Verified locally two ways: (1) replayed the validator's own
+parser against the file — 28 entries, zero malformed, zero expired,
+`CVE-2026-15830` present; (2) ran `pip-audit` directly against an
+isolated `Django==5.1.15`-only requirement with just
+`--ignore-vuln CVE-2026-15830`, confirming that specific ID drops out of
+the report (the other six pre-existing Django CVEs still showed, exactly
+as expected, since only one flag was passed in that isolated check).
+
+**Declined**: bumping Django itself to 5.2.17+. A Django MINOR version
+bump is a categorically larger, riskier change than every prior CVE fix
+in this whole engagement (sqlparse, torch, etc. are leaf/ML dependencies
+with no framework-wide blast radius) — exactly the reasoning the file's
+own existing Django block already established for its six other entries.
+Not this PR's scope (Time-Lock beat scheduling), and doing it opportunistically
+inside an unrelated PR risks exactly the kind of untested regression these
+rounds have been careful to avoid throughout.
+
+### 14.2 Merge-conflict fix (explicit authorization given this round)
+
+§13.2 found the root cause but deliberately did not act on it without
+explicit sign-off, since the fix requires rewriting and force-pushing a
+shared, already-reviewed branch's history. The user's next message
+explicitly authorized this ("fix the merge conflict problem... rebase and
+merge button is not working"), confirmed again via `AskUserQuestion`
+after the harness's own permission classifier blocked the first
+`git checkout` of the fix (a scratch-branch checkout, not yet anything
+destructive) pending explicit approval.
+
+**Method, verified at every step before anything touched the real branch
+or `origin`**:
+1. Built a disposable branch (`_history_rebuild`) from `origin/main`.
+2. Cherry-picked, in order, only the 12 non-duplicate commits identified
+   in §13.2 (`34bc672` through `67a426d`, the SECOND/final occurrence of
+   each duplicated commit plus the three genuinely-new round 5/6/7
+   commits) — deliberately skipping the first/stale duplicate chain
+   (`e8e99f7` through `4dbcf45`) and the self-merge commit (`230e093`)
+   entirely. All 12 applied with **zero conflicts** — direct confirmation
+   that the two duplicate chains really were content-identical, not just
+   message-identical.
+3. **Critical safety gate**: `git diff <old-branch-tip> <new-branch-tip>`
+   — empty. `git rev-parse <old>^{tree}` and `<new>^{tree}` — identical
+   hash (`c8afaec6...`) on both sides. This is not "looks the same"; it's
+   the same tree object. Only proceeded past this point because the
+   check passed.
+4. Applied §14.1's `pip-audit-ignores.txt` fix as one new 13th commit on
+   top of the verified-identical rebuilt history.
+5. Re-verified: `git merge-base --is-ancestor origin/main HEAD` true, and
+   `git rev-list --count origin/main..HEAD` == 13 — the branch is now a
+   genuinely linear descendant of `main`, which structurally guarantees
+   GitHub's "Rebase and merge" has nothing to replay against a different
+   base and can no longer conflict.
+6. Force-pushed with `--force-with-lease=<branch>:<known-remote-sha>`
+   (not a blind `--force`) after re-fetching to confirm the remote tip
+   hadn't moved since the last check — protects against clobbering a
+   concurrent push from anyone else.
+7. Reset the local branch (`git reset --hard origin/<branch>`, NOT
+   `git pull` — a plain pull here is exactly the mistake that created
+   this whole problem in the first place, per §13.2's own root-cause
+   finding) and deleted the disposable branch.
+
+**Result, confirmed via `gh pr view --json mergeable,mergeStateStatus,commits`**:
+`commitCount: 13` (down from 22), `mergeable: MERGEABLE`. Also confirmed
+locally with a direct `pip-audit` run against the suppression (§14.1) —
+not relying on GitHub's UI alone for either fix.
+
+### 14.3 Test results (targeted, per instruction)
+
+No Python test surface changed by either fix (a text-manifest suppression
+entry and a git-history operation, no application code touched). `ci.yml`
+re-validated as parseable YAML after the rebuild. `pip-audit` run locally
+against an isolated Django-only requirement (§14.1) is the direct
+functional verification for the CI-check fix; the tree-hash equality
+check (§14.2 step 3) is the direct functional verification for the
+history rewrite — both stronger guarantees than a `pytest` run would give
+for changes of this shape.
