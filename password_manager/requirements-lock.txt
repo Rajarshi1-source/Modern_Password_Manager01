@@ -58,7 +58,7 @@ cyclonedx-bom==7.2.1
 cyclonedx-python-lib==11.11.0
 cymem==2.0.13
 cytoolz==1.1.0
-daphne==4.2.1
+daphne==4.2.2
 decorator==5.2.1
 defusedxml==0.7.1
 diffprivlib==0.6.6
