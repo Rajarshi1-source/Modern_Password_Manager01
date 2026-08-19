@@ -116,6 +116,22 @@ CVE-2026-53877 exp:2026-10-12
 # response header. Zero usage of DomainNameValidator anywhere.
 CVE-2026-53878 exp:2026-10-15
 
+# CVE-2026-15830 (PYSEC-2026-3717, GHSA disclosed 2026-08, found on PR #483's
+# scan 2026-08-19 -- not part of the original six-CVE batch above, added here
+# as a 7th because it shares the exact same fix path (Django 5.2.17+/6.0.8+,
+# the same deferred minor upgrade) and the exact same non-reachability shape
+# as CVE-2026-53877 two entries up: unbounded recursion / segfault in
+# django.contrib.gis.geos.GEOSGeometry when parsing a deeply nested
+# GEOMETRYCOLLECTION from WKT/WKB/hex-WKB. Verified, not assumed: zero
+# `GEOSGeometry(`, `GeometryField`, or `geos=True` anywhere in the codebase
+# (grep), `django.contrib.gis` stays commented out of INSTALLED_APPS, and the
+# only django.contrib.gis import anywhere (`django.contrib.gis.geoip2.GeoIP2`,
+# honeypot_credentials/services/access_interceptor.py +
+# logging_manager/models.py) only ever calls `.city(ip)` and reads the
+# returned dict's string keys (`.get('country_name')`, `.get('city')`, etc.)
+# -- it never constructs a Geometry object, so no WKT/WKB ever reaches GEOS.
+CVE-2026-15830 exp:2026-10-20
+
 # PYSEC-2025-189/190/191 — REMOVED 2026-08-11, not renewed. Re-checked
 # against OSV directly rather than assumed stale: each has `last_affected`
 # capped at torch 2.6.0-cu124/2.6.0+cu124 (PYSEC-2025-189 = CVE-2025-2148,
