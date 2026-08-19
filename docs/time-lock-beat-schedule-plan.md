@@ -194,9 +194,12 @@ against production from here. Instead, added
 `python manage.py check_time_lock_backlog`
 (`security/management/commands/check_time_lock_backlog.py`): a read-only
 command mirroring `check_dead_mans_switches`'/`check_escrow_deadlines`'s own
-trigger logic exactly, reporting owner/capsule/overdue-by for each match and
-exiting 1 if anything is found (0 otherwise) -- safe to gate a deploy script
-on, or just run by hand. Covered by 8 tests
+trigger logic exactly, reporting record IDs and non-identifying
+trigger/release metadata and overdue-by duration for each match (owner
+usernames and capsule/escrow titles are deliberately left out of routine
+CronJob stdout -- see round 1's PII fix, §7) and exiting 1 if anything is
+found (0 otherwise) -- safe to gate a deploy script on, or just run by
+hand. Covered by 8 tests
 (`security/tests/test_check_time_lock_backlog_command.py`), and also run
 manually against the local dev DB (empty, as expected -- confirms the
 command executes cleanly, not that production has no backlog).
@@ -718,3 +721,61 @@ no application code path). Verified via YAML parsing instead (see §11.1),
 re-run after §11.2's `migrate-job.yaml` edit: both `ci.yml` and
 `k8s/migrate-job.yaml` still parse cleanly (`yaml.safe_load_all`, with
 `${BACKEND_IMAGE}`/`${GITHUB_SHA}` substituted for dummy values).
+
+## 12. Review-fix round 6 on PR #483 (CodeRabbit, 2 actionable findings)
+
+CI green when this round started (26 successful, 1 neutral Trivy, 6
+skipped, 1 in-progress Docker build unrelated to either finding — no
+failing check per `gh pr checks 483`). Both findings verified real against
+current code and fixed.
+
+### 12.1 Minor: plan doc's command description describes pre-fix (PII-including) output
+
+CodeRabbit's claim: §5b's prose says `check_time_lock_backlog` reports
+"owner/capsule/overdue-by for each match," but the actual command only
+emits record IDs and non-identifying metadata.
+
+Verified by reading the real command
+(`security/management/commands/check_time_lock_backlog.py` lines 95-117):
+confirmed it prints `will.id`/`trigger_type`/`overdue_by` and
+`escrow.id`/`release_condition`/`overdue_by`/`party_count` — no
+`owner.username`, no capsule/escrow title, with an explicit comment
+(lines 95-101) explaining why they're left out. The doc text was simply
+never updated after round 1 (§7) stripped that PII from the command's
+actual stdout — a stale description, not a code bug. Fixed by adopting
+CodeRabbit's suggested wording (accurate to the current command) and
+cross-referencing §7 for why the PII was removed.
+
+### 12.2 Major: `check-time-lock-backlog` Job mounts an unused Kubernetes API token
+
+CodeRabbit's claim: the Job's pod spec has no `automountServiceAccountToken:
+false`, so it gets the default ServiceAccount token mounted despite the
+command never touching the Kubernetes API.
+
+Verified by re-reading the full command (same file as §12.1): zero
+Kubernetes-client imports, zero `KUBERNETES_SERVICE_HOST`/`kubeconfig`
+references — purely Django ORM reads (`PasswordWill.objects.filter`,
+`EscrowAgreement.objects.filter`) and `stdout` writes. The token would be
+pure unused attack surface if this container were ever compromised via an
+unrelated dependency vulnerability. Fixed by adding
+`automountServiceAccountToken: false` to this Job's pod spec, alongside
+the existing `serviceAccountName`/`securityContext` block.
+
+**Also discovered, NOT fixed (out of scope, flagged for the repo owner)**:
+the same gap exists in this file's other two, pre-existing CronJobs
+(`cleanup-old-logs`, `db-backup` — both predate this PR; `git log
+--follow -- k8s/cronjobs.yaml` confirms `check-time-lock-backlog` is the
+only one this PR's own commits ever touched). Same shape as §11.1's
+`BACKEND_IMAGE` gap in `deployment.yaml`/`tor.yaml`: CodeRabbit's review
+only covers this PR's diff, so it never flagged the two Jobs it didn't
+add. Left alone this round; extend on request, same as §11.2's
+`migrate-job.yaml` follow-up.
+
+### 12.3 Test results (targeted, per instruction)
+
+No Python test surface for either change (doc prose + a pod-spec field,
+no application code path). Verified via YAML parsing:
+`k8s/cronjobs.yaml`'s three documents still parse cleanly with
+`${BACKEND_IMAGE}`/`${GITHUB_SHA}` substituted, and the third document's
+`spec.jobTemplate.spec.template.spec.automountServiceAccountToken` reads
+back as `False`.
