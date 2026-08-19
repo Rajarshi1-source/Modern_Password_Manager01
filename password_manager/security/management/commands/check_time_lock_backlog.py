@@ -3,9 +3,9 @@ Pre-deploy safety check for PR #483 (fix/time-lock-beat-schedule-not-merged).
 
 `check-dead-mans-switches` and `check-escrow-deadlines` have never run in
 production -- their beat entries didn't exist until that PR. The moment they
-start running, ANY PasswordWill or EscrowAgreement already past its deadline
-fires immediately, in a single batch, on the very first tick -- rather than
-each having fired individually at its own due date as the feature intends.
+start running, eligible overdue PasswordWill rows and releasable
+EscrowAgreement rows are processed in a single batch on the first tick,
+rather than at their individual due dates.
 `trigger_password_will` unlocks a capsule and emails real beneficiaries;
 `check_escrow_deadlines` can auto-release an escrow and email all parties.
 
