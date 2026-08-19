@@ -779,3 +779,89 @@ no application code path). Verified via YAML parsing:
 `${BACKEND_IMAGE}`/`${GITHUB_SHA}` substituted, and the third document's
 `spec.jobTemplate.spec.template.spec.automountServiceAccountToken` reads
 back as `False`.
+
+## 13. Review-fix round 7 on PR #483 (CodeRabbit, 1 actionable finding) + merge-conflict root-cause investigation
+
+CI green when this round started (27 successful, 1 neutral Trivy, 6
+skipped, no failing check per `gh pr checks 483`). One actionable
+CodeRabbit finding, plus a user-requested investigation into why GitHub
+reported "This branch cannot be rebased due to conflicts."
+
+### 13.1 Minor: module docstring overstates which rows actually fire on the first tick
+
+CodeRabbit's claim: `check_time_lock_backlog.py`'s module docstring says
+"ANY PasswordWill or EscrowAgreement already past its deadline fires
+immediately" — but the command (and the production tasks it mirrors) only
+process eligible rows: active/untriggered wills, and unreleased/
+undisputed escrows that additionally pass `can_release`.
+
+Verified by re-reading the command's actual query logic (lines 49-77,
+unchanged since round 1's `can_release` fix, §7): `PasswordWill.objects
+.filter(is_active=True, is_triggered=False)` plus the inactivity/date
+deadline check; `EscrowAgreement.objects.filter(is_released=False,
+is_disputed=False, approval_deadline__lte=now)` further filtered by
+`if escrow.can_release`. The code has always been correct on this point
+— round 1 specifically fixed the query to stop over-reporting non-
+releasable escrows. Only the top-of-file prose summary (written before
+that fix, never updated after) still used the looser "ANY... already past
+its deadline" phrasing. Fixed by adopting CodeRabbit's suggested wording,
+which matches the actual eligibility gates precisely.
+
+### 13.2 Investigated (not a CodeRabbit finding): "This branch cannot be rebased due to conflicts"
+
+GitHub's PR page showed this branch as `mergeStateStatus: CLEAN` /
+`mergeable: MERGEABLE` via `gh pr view 483 --json mergeable,mergeStateStatus`
+— the actual merge (via "Merge pull request" or "Squash and merge") is
+NOT blocked. Only GitHub's "Rebase and merge" option, which requires
+replaying every commit in the PR linearly onto `main`, was affected.
+
+**Root cause, found by reproducing the rebase in a disposable local
+branch** (`git branch -f _rebase_probe HEAD`, rebase there, inspect,
+`git rebase --abort`, delete the probe branch — never touched the real
+branch or origin): `git log --oneline --reverse origin/main..HEAD` shows
+this branch's own 20 commits contain the SAME logical work TWICE, under
+two different sets of commit hashes back-to-back (e.g.
+`fix(celery): merge the never-scheduled Time-Lock beat schedule` appears
+as both `e8e99f7` and, nine commits later, `34bc672` with matching later
+duplicates for every round-1/2/3 commit and the sqlparse bump). Traced to
+merge commit `230e093` ("Merge branch '...' of https://github.com/... into
+fix/time-lock-beat-schedule-not-merged") already present in this branch's
+history, with parents `4dbcf45` and `5220fb9` — and the PR's own commit
+timeline (pasted into this session by the user) independently confirms
+`Rajarshi1-source force-pushed the branch from 4dbcf45 to 5220fb9` shortly
+before that merge commit landed. Sequence: the remote branch was
+force-pushed to a rebased history (`5220fb9`, rewriting every earlier
+commit's hash); a `git pull origin fix/time-lock-beat-schedule-not-merged`
+run earlier in this same working session (a plain fetch+merge, not
+fetch+rebase) then joined that new remote tip with a stale pre-force-push
+local copy still sitting in this environment's repo (still at `4dbcf45`),
+producing merge commit `230e093` — which duplicates the entire commit
+sequence rather than cleanly fast-forwarding, because the two sides had
+diverged (different hashes) despite identical logical content. This merge
+commit is not just local: `origin/fix/time-lock-beat-schedule-not-merged`
+was subsequently pushed with it included (round 5/6 commits sit on top of
+it), so it's now part of the PR's public history, which is what trips up
+GitHub's linear-rebase check specifically.
+
+**Not fixed**: cleaning this up properly means rewriting this branch's
+history (e.g. resetting onto `origin/main` and replaying only the
+non-duplicate commits, or an interactive rebase dropping the redundant
+half) and force-pushing the result — a destructive operation on a shared,
+already-reviewed remote branch (CodeRabbit has commented against specific
+commit SHAs in this history). Per this session's own safety rules,
+force-pushing a branch other sessions/reviewers may be relying on needs
+explicit confirmation before acting, not just an instruction to "fix the
+merge conflict" in general — especially since the actual merge is not
+blocked today. Flagged for the user to decide: accept as-is (merge via
+the default button, history noise disappears once merged), or explicitly
+authorize a history rewrite + force-push if linear rebase-merge is
+required by repo policy.
+
+### 13.3 Test results (targeted, per instruction)
+
+No Python test surface for either item this round — §13.1 is a prose-only
+docstring edit with no behavior change (verified with `py_compile`, not a
+test run), and §13.2 was an investigation that made no code change at
+all. The disposable `_rebase_probe` branch used for that investigation
+was deleted after `git rebase --abort`; the real branch and `origin` were
+never touched.
