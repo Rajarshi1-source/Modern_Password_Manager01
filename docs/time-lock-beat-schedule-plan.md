@@ -623,3 +623,98 @@ against the locally-installed `sqlparse==0.6.0`, before committing the
 requirements-file bump. No broader suite run needed: the fix is a dependency
 version bump with zero application-code changes, and no code in this repo
 touches `sqlparse` directly.
+
+## 11. Review-fix round 5 on PR #483 (CodeRabbit, 1 actionable finding)
+
+CI green when this round started (25 successful, 1 neutral Trivy, 6
+skipped, the one "in progress" Backend Tests check from the review
+comment had finished by the time this round began). Single actionable
+finding, no nitpicks this round.
+
+### 11.1 Major: `k8s/cronjobs.yaml`'s three CronJobs hard-code a placeholder image, would ImagePullBackOff
+
+CodeRabbit's claim: `ci.yml`'s `setup` job computes the real backend image
+as `ghcr.io/<repo>/backend` (`needs.setup.outputs.backend_image`), but all
+three CronJobs in `k8s/cronjobs.yaml` (added by this PR: `cleanup-old-logs`,
+`db-backup`, `check-time-lock-backlog`) hard-code
+`ghcr.io/yourusername/password-manager/backend` instead — a placeholder
+that was never wired up to the real computed name. If the "Apply scheduled
+maintenance CronJobs" step (§8, round 2) ever actually runs, every one of
+these CronJobs would pull a nonexistent image and fail with
+`ImagePullBackOff`.
+
+Verified real: `grep -n "image:" k8s/cronjobs.yaml` confirmed all three
+occurrences hard-code the placeholder, and the step's `env:` block
+(`ci.yml`, "Apply scheduled maintenance CronJobs") only set `GITHUB_SHA`
+for `envsubst` — no `BACKEND_IMAGE`/equivalent variable existed anywhere
+in the workflow to resolve the placeholder even if it had been templated
+correctly.
+
+**Also discovered, NOT fixed (out of scope, flagged for the repo owner)**:
+the identical `ghcr.io/yourusername/password-manager/<name>` placeholder
+is hard-coded throughout the REST of `k8s/` too —
+`k8s/deployment.yaml` (7 occurrences: 6 `backend`, 1 `frontend`),
+`k8s/migrate-job.yaml` (1), `k8s/tor.yaml` (2) — and none of them are
+resolved by any `envsubst` variable in `ci.yml` either (the migrate-job
+apply step right above the CronJob one has the exact same gap: `env:`
+only sets `GITHUB_SHA`, never `BACKEND_IMAGE`). This is a pre-existing,
+repo-wide pattern that predates this PR entirely — `k8s/cronjobs.yaml` is
+the only file in this list this PR actually authored, and CodeRabbit's own
+review (scoped to this PR's diff) only flagged the file it added, not the
+five pre-existing manifests sharing the same gap. Fixing those is a much
+larger, riskier change (rewriting live Deployment/Job manifests this PR
+never touched, for workloads whose actual rollout path hasn't been
+audited here) — same class of decision as §9's `k8s/production/` gap:
+real, but out of scope for a minimal fix, left for the repo owner.
+`migrate-job.yaml` was subsequently fixed too, at the user's explicit
+follow-up request — see §11.2. `deployment.yaml` and `tor.yaml` remain
+unfixed and out of scope; nobody has asked for those yet.
+
+**Fix, scoped to exactly the two files CodeRabbit named**:
+- `.github/workflows/ci.yml`: added `BACKEND_IMAGE: ${{ needs.setup.outputs.backend_image }}`
+  to the "Apply scheduled maintenance CronJobs" step's `env:` block,
+  alongside the existing `GITHUB_SHA`. `deploy-production`'s `needs:
+  [setup, build-images, security-scan]` already makes `setup`'s output
+  available here — confirmed by the "Deploy to Kubernetes (Production)"
+  step later in the same job already using
+  `needs.setup.outputs.backend_image` directly.
+- `k8s/cronjobs.yaml`: replaced all three
+  `ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}` lines with
+  `${BACKEND_IMAGE}:${GITHUB_SHA}` (CodeRabbit's finding named all three
+  as affected, not just the one its inline comment anchored to — fixing
+  only one would leave two CronJobs still broken). Updated the file's own
+  header comment, which claimed the image handling matched
+  `deployment.yaml`'s (now inaccurate, since `deployment.yaml` still
+  hard-codes the placeholder per the out-of-scope note above).
+
+Verified both files still parse: `ci.yml` as valid YAML via
+`yaml.safe_load_all`, and `cronjobs.yaml`'s three documents parse cleanly
+with the `${...}` placeholders substituted for dummy values (envsubst
+syntax isn't valid bare YAML on its own, so this confirms structure
+without needing a real cluster).
+
+### 11.2 Follow-up (same round, explicit user request): fixed `migrate-job.yaml` too
+
+The user read §11.1's "discovered but not fixed" note and explicitly
+asked for `migrate-job.yaml` specifically (not `deployment.yaml`/
+`tor.yaml`, which stay out of scope — nobody asked for those). Same bug,
+same fix shape: the "Run database migrations (one-shot Job)" step in
+`ci.yml` (lines 749-758, the step §11.1 already identified as sharing the
+gap) only set `GITHUB_SHA` in its `env:` block; added `BACKEND_IMAGE:
+${{ needs.setup.outputs.backend_image }}` alongside it — same
+`deploy-production` job, same already-confirmed `needs: [setup, ...]`
+availability. In `k8s/migrate-job.yaml`, replaced the single
+`ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}` image line
+with `${BACKEND_IMAGE}:${GITHUB_SHA}` — no header comment to update here
+(unlike `cronjobs.yaml`, this file didn't claim to match another file's
+convention).
+
+### 11.3 Test results (targeted, per instruction)
+
+No Python test surface exists for either change (grepped `security/tests/`
+for `yourusername`/`BACKEND_IMAGE`/`cronjobs.yaml`/`migrate-job.yaml` —
+zero references; this is pure CI-workflow/Kubernetes-manifest content with
+no application code path). Verified via YAML parsing instead (see §11.1),
+re-run after §11.2's `migrate-job.yaml` edit: both `ci.yml` and
+`k8s/migrate-job.yaml` still parse cleanly (`yaml.safe_load_all`, with
+`${BACKEND_IMAGE}`/`${GITHUB_SHA}` substituted for dummy values).

@@ -750,6 +750,7 @@ jobs:
         if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         env:
           GITHUB_SHA: ${{ github.sha }}
+          BACKEND_IMAGE: ${{ needs.setup.outputs.backend_image }}
         run: |
           # Replaces the old per-pod `migrate` initContainer (which raced
           # across replicas: 3 backend pods on rollout).
@@ -788,6 +789,7 @@ jobs:
         if: steps.configure_kubectl.outputs.deploy_enabled == 'true'
         env:
           GITHUB_SHA: ${{ github.sha }}
+          BACKEND_IMAGE: ${{ needs.setup.outputs.backend_image }}
         run: |
           set -euo pipefail
           envsubst < k8s/cronjobs.yaml | kubectl apply -n password-manager -f -

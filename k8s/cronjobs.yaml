@@ -2,8 +2,13 @@
 # K8s CronJobs — cluster-native scheduling for maintenance tasks that must
 # run even when Celery beat is unhealthy.
 #
-# Image tags use ${GITHUB_SHA} placeholders (same as deployment.yaml).
+# Image is ${BACKEND_IMAGE}:${GITHUB_SHA} -- BACKEND_IMAGE is the canonical
+# ghcr.io/<repo>/backend name computed by ci.yml's setup job, not a
+# hardcoded placeholder (CodeRabbit, PR #483: the CronJobs originally
+# hardcoded ghcr.io/yourusername/password-manager/backend, which would
+# never resolve to a real image and made every CronJob ImagePullBackOff).
 # Deploy via:  envsubst < k8s/cronjobs.yaml | kubectl apply -f -
+# Requires both BACKEND_IMAGE and GITHUB_SHA in the shell environment.
 # =============================================================================
 
 ---
@@ -42,7 +47,7 @@ spec:
             fsGroup: 10001
           containers:
           - name: cleanup
-            image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+            image: ${BACKEND_IMAGE}:${GITHUB_SHA}
             command: ["python", "manage.py", "cleanup_old_logs"]
             envFrom:
             - configMapRef:
@@ -98,7 +103,7 @@ spec:
             fsGroup: 10001
           containers:
           - name: backup
-            image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+            image: ${BACKEND_IMAGE}:${GITHUB_SHA}
             command: ["python", "manage.py", "db_backup", "--output", "/backups"]
             envFrom:
             - configMapRef:
@@ -172,7 +177,7 @@ spec:
             fsGroup: 10001
           containers:
           - name: check-time-lock-backlog
-            image: ghcr.io/yourusername/password-manager/backend:${GITHUB_SHA}
+            image: ${BACKEND_IMAGE}:${GITHUB_SHA}
             command: ["python", "manage.py", "check_time_lock_backlog"]
             envFrom:
             - configMapRef:
