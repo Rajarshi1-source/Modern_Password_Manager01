@@ -159,7 +159,35 @@ spec:
     - protocol: TCP
       port: 6379
 
-# Postgres: accept ingress from backend, websocket, celery only
+# Maintenance CronJobs (cleanup-old-logs, db-backup, check-time-lock-backlog):
+# egress to postgres only. Neither cleanup_old_logs nor db_backup nor
+# check_time_lock_backlog touches redis/cache (grepped both management
+# commands, and check_time_lock_backlog.py is pure Django ORM against
+# PasswordWill/EscrowAgreement) -- unlike allow-celery below, no cache
+# egress rule is added, matching CodeRabbit's own scoped suggestion.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-maintenance
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: maintenance
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          component: database
+    ports:
+    - protocol: TCP
+      port: 5432
+
+# Postgres: accept ingress from backend, websocket, celery, maintenance only
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -186,6 +214,9 @@ spec:
         - key: component
           operator: In
           values: ["celery-worker", "celery-beat"]
+    - podSelector:
+        matchLabels:
+          component: maintenance
     ports:
     - protocol: TCP
       port: 5432

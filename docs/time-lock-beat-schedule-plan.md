@@ -981,3 +981,80 @@ functional verification for the CI-check fix; the tree-hash equality
 check (§14.2 step 3) is the direct functional verification for the
 history rewrite — both stronger guarantees than a `pytest` run would give
 for changes of this shape.
+
+## 15. Round 9 on PR #483: NetworkPolicy gap (CodeRabbit Major) + a stuck CI job re-run
+
+§14.1's fix confirmed working: `Dependency Vulnerability Scan` came back
+green on the rebuilt history. This round: one real CodeRabbit finding, and
+one genuinely-unrelated CI job that needed a re-run rather than a code fix.
+
+### 15.1 Major: `check-time-lock-backlog`'s Pod has no NetworkPolicy path to Postgres
+
+CodeRabbit's claim: `k8s/network-policy.yaml` is `default-deny-all`; no
+policy grants `component: maintenance` egress to Postgres, and
+`allow-postgres`'s ingress `from:` list doesn't include `maintenance`
+either — so this PR's own `check-time-lock-backlog` CronJob cannot reach
+the database at all if NetworkPolicy enforcement is active in the target
+cluster.
+
+**Not actually new** — this is the exact gap flagged (and deliberately
+not fixed) back in round 4 §"Scheduling decision": *"network-policy.yaml
+is default-deny-all with no database-egress rule for `component:
+maintenance` at all... worth this user following up on separately."*
+CodeRabbit is now surfacing the same gap formally against this round's
+diff, since `check-time-lock-backlog`'s pod (added by this PR) carries
+that same label. Re-verified directly rather than trusting the round-4
+note alone: read `network-policy.yaml` in full — confirmed no
+`NetworkPolicy` document selects `component: maintenance`, and
+`allow-postgres`'s `ingress[].from` list has exactly three entries
+(`backend`, `websocket`, `celery-worker`/`celery-beat`), no fourth for
+maintenance.
+
+Unlike round 4's assessment, decided this IS in scope this time: the
+`check-time-lock-backlog` Job is this PR's own resource, its entire
+purpose is querying Postgres (`PasswordWill`/`EscrowAgreement` via plain
+Django ORM — pure read, no cache/Redis touch, confirmed by grep), and the
+fix is a small, additive, well-scoped change (one new `NetworkPolicy`
+document mirroring the existing `allow-celery` pattern exactly, plus one
+list entry in `allow-postgres`) — not the "heavy lift" category that made
+`k8s/production/` and the Django minor-version bump correctly
+out-of-scope calls. It also incidentally fixes the same gap for the two
+pre-existing CronJobs (`cleanup-old-logs`, `db-backup`) that share the
+`component: maintenance` label, at no extra cost.
+
+**Fix**: added `allow-maintenance` (egress to `component: database` on
+5432 only — verified neither `cleanup_old_logs.py`, `db_backup.py`, nor
+`check_time_lock_backlog.py` touches redis/cache, so no cache-egress rule
+was added, matching CodeRabbit's own scoped suggestion exactly), and
+added `component: maintenance` as a fourth `from:` entry in
+`allow-postgres`'s ingress list. Verified the new policy's `podSelector`
+labels (`app: password-manager`, `component: maintenance`) match all
+three CronJobs' actual Pod-template labels in `k8s/cronjobs.yaml` (grepped
+directly, not assumed).
+
+### 15.2 Unrelated: `CI/CD Pipeline / Backend Tests` cancelled after 6 hours
+
+Not a CodeRabbit finding or a code bug. Fetched the job's step timeline
+(`gh api .../actions/jobs/<id>` steps array) rather than trusting the red
+badge: "Install dependencies" (the ~3-4GB torch/tensorflow/mediapipe pip
+install) started at 21:14:10 and was still running when GitHub's own
+6-hour job ceiling force-cancelled it at 03:12:34 — every step after it
+shows `skipped`, meaning the job never even reached the test-running
+steps. On the exact same commit, the separate, leaner "Backend CI/CD /
+Run Tests" workflow (a different workflow file) completed successfully in
+27 minutes — independent confirmation the actual code and tests are fine;
+this is a stuck/stalled dependency install, not a deterministic failure.
+Same "verify before touching code" discipline as round 2's flaky-test
+investigation: no code change would address a stuck `pip install`, so
+none was made. Re-triggered the job directly instead
+(`gh run rerun <run-id> --failed`) — a safe, reversible action, not a
+code change — rather than guessing at a fix for infrastructure the diff
+never touched.
+
+### 15.3 Test results (targeted, per instruction)
+
+No Python test surface for the NetworkPolicy change (pure K8s manifest,
+no application code path) — verified via `yaml.safe_load_all` (9 documents
+parse cleanly) and by confirming the new policy's `podSelector` matches
+the real Pod labels already in `k8s/cronjobs.yaml`, the same verification
+method used for every K8s-manifest fix in this doc (§11, §12).
