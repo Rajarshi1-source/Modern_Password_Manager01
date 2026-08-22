@@ -449,7 +449,76 @@ def generate_honeypot_stats():
         stats[f'breaches_{severity}'] = HoneypotBreachEvent.objects.filter(
             severity=severity
         ).count()
-    
+
     logger.info(f"Honeypot stats: {stats}")
-    
+
     return stats
+
+
+# =============================================================================
+# Task Scheduling Configuration (for Celery Beat)
+# =============================================================================
+#
+# Every 'task' string below must match the corresponding `@shared_task(name=...)`
+# in this module EXACTLY. A mismatch does not raise -- beat happily enqueues a
+# name no worker has registered, the message is discarded, and the task silently
+# never runs. That is precisely the Genetic/DNA beat bug documented in
+# docs/celery-beat-genetic-task-names-plan.md, so the names here are copied from
+# the decorators rather than reconstructed from the function names.
+#
+# Only the zero-argument tasks are scheduled. `check_honeypot_activity`,
+# `check_all_user_honeypots`, and `correlate_with_hibp` all take a required
+# positional id and are fan-out targets invoked BY the tasks below -- scheduling
+# them would enqueue a call with no argument and raise TypeError on the worker
+# every tick.
+#
+# This dict is inert on its own. It only takes effect because
+# security/tasks/__init__.py re-exports it and password_manager/celery.py merges
+# it into the app's beat_schedule -- see the comment block there for why that
+# merge is deferred to on_after_finalize rather than done as an eager import.
+
+CELERY_BEAT_SCHEDULE = {
+    # Polls each active alias with its provider. This is the actual detection
+    # loop -- "instant" breach detection is bounded by this interval.
+    'honeypot-scan-all': {
+        'task': 'security.scan_all_honeypots',
+        'schedule': 3600.0,  # Hourly
+    },
+    # Emails a reminder for each credential rotation still pending >24h and
+    # unconfirmed (it sends reminders only -- it does not rotate anything
+    # itself). Daily, not more often: the task has no record of when it last
+    # reminded a given rotation, so its filter matches the SAME stale rows on
+    # every tick until the user confirms. A short interval turns "reminder"
+    # into spam -- one stale rotation would get 96 emails/day at 15-minute
+    # cadence. Daily matches the 24h staleness window the query itself uses,
+    # so nothing goes un-reminded, but nothing is re-sent hours later either.
+    # A real fix (persisted last-reminded-at + resend interval) belongs on
+    # the task itself, not the schedule -- out of scope here since this PR
+    # only wires up scheduling for tasks that already existed.
+    'honeypot-process-pending-rotations': {
+        'task': 'security.process_pending_rotations',
+        'schedule': 86400.0,  # Daily
+    },
+    'honeypot-analyze-breach-patterns': {
+        'task': 'security.analyze_breach_patterns',
+        'schedule': 86400.0,  # Daily
+    },
+    'honeypot-cleanup-expired': {
+        'task': 'security.cleanup_expired_honeypots',
+        'schedule': 86400.0,  # Daily
+    },
+    'honeypot-generate-stats': {
+        'task': 'security.generate_honeypot_stats',
+        'schedule': 86400.0,  # Daily
+    },
+    # User-facing email. Daily, matching the task's own 24h query window
+    # (`detected_at__gte=now-24h`) and its own docstring ("Send daily breach
+    # digest"). A longer interval was tried first and is wrong: any breach
+    # detected more than 24h before the tick falls outside that window
+    # forever, so a weekly schedule would silently skip the majority of
+    # breaches rather than just delaying their digest.
+    'honeypot-send-breach-digest': {
+        'task': 'security.send_breach_digest',
+        'schedule': 86400.0,  # Daily
+    },
+}

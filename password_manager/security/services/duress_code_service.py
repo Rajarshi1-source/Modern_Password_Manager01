@@ -21,6 +21,7 @@ from security.models.duress_models import (
     DuressCode,
     DecoyVault,
     DuressEvent,
+    DuressSignal,
     EvidencePackage,
     TrustedAuthority,
 )
@@ -231,7 +232,29 @@ class DuressCodeService:
     ) -> Tuple[str, Optional[DuressCode]]:
         """
         Check if input is the master password or a duress code.
-        
+
+        .. warning::
+
+            **Never pass the master password to this method.** It compares the
+            supplied string server-side, so handing it a master password would
+            put that password in this process's memory, its logs on any
+            exception, and any APM/error-reporting hop in between -- exactly
+            what ``docs/adaptive-password-zk-remediation-plan.md`` §1-2
+            forbids (the server is assumable-hostile and must never receive a
+            value the master password can be recovered from).
+
+            This method exists for the SEPARATE, short duress *codes* entered
+            as a secondary factor -- the ``duress/test/`` endpoint and the
+            heartbeat-auth path. Those are low-entropy codes the user chooses
+            specifically to be checked by the server; they are not the vault
+            key and do not decrypt anything.
+
+            For master-password duress ("two master passwords, one opens a
+            decoy"), the decision is made CLIENT-side by decoding the
+            ``HiddenVaultBlob`` (see ``hidden_vault/SPEC.md``) and the alarm is
+            raised with a password-independent token via
+            ``consume_unlock_signal``. See ``DuressSignal``'s docstring.
+
         Returns:
             Tuple of (result_type, duress_code)
             - ('password', None) - input is the master password
@@ -293,9 +316,98 @@ class DuressCodeService:
         return self._check_duress_codes(user, input_code)
     
     # =========================================================================
+    # Duress Signals (zero-knowledge unlock reporting)
+    # =========================================================================
+
+    def register_signal_token(
+        self,
+        user: User,
+        token: str,
+        duress_code: Optional[DuressCode] = None,
+    ) -> DuressSignal:
+        """Store the hash of a client-generated duress signal token.
+
+        The token itself is generated on the client (256 bits of CSPRNG) and
+        never stored here -- only its SHA-256. See ``DuressSignal``'s docstring
+        for why this is a plain digest rather than a password hasher.
+
+        Registering a second token deactivates any earlier ones, so a user who
+        re-runs duress setup does not leave a stale token that would still fire
+        an alarm.
+
+        Two concurrent calls for the SAME user (double-submit, two tabs) used
+        to be able to both find zero active rows under READ COMMITTED (each
+        started before the other committed its INSERT), so both would insert
+        a new active signal and leave two live at once -- the deactivate-then-
+        create pattern above is not atomic against a second writer unless
+        something serialises them. Fixed by taking a row lock on the user's
+        `DuressCodeConfiguration` first: it is `OneToOneField`-unique per user
+        already, so it is a safe, pre-existing lock target with no new
+        migration needed. `get_or_create_config` is itself race-tolerant
+        (Django's `get_or_create` catches the `IntegrityError` a losing
+        concurrent creator would raise against that field's own uniqueness),
+        so the row is guaranteed to exist by the time `select_for_update`
+        locks it.
+        """
+        with transaction.atomic():
+            self.get_or_create_config(user)
+            # Locks this user's config row for the duration of the
+            # transaction. A second concurrent call for the same user blocks
+            # here until the first commits, so it always sees the first
+            # call's deactivation before running its own -- different users
+            # lock different rows and are unaffected.
+            DuressCodeConfiguration.objects.select_for_update().get(user=user)
+
+            DuressSignal.objects.filter(
+                user=user, is_active=True
+            ).update(is_active=False)
+
+            return DuressSignal.objects.create(
+                user=user,
+                token_hash=DuressSignal.hash_token(token),
+                duress_code=duress_code,
+            )
+
+    def consume_unlock_signal(
+        self,
+        user: User,
+        signal: str,
+        request_context: Dict[str, Any],
+    ) -> None:
+        """Enqueue verification of an unlock signal. ALWAYS enqueues.
+
+        Called on EVERY unlock, not only duress ones. The client always posts a
+        fixed-size opaque value -- the real token when its local decode landed
+        on the decoy slot, fresh random noise otherwise -- and this method does
+        not distinguish the two: it always does exactly one thing, unconditional
+        on the outcome. That is what makes a duress unlock indistinguishable
+        from a normal one on the wire.
+
+        Deliberately does NOT determine match/no-match on the request thread
+        at all, not even to decide whether to enqueue. An earlier version did:
+        it ran the digest-comparison loop here and called `.delay()` only on a
+        match. That still leaked, because `Task.delay()`/`apply_async()`
+        synchronously publish the task message to the broker before returning
+        -- real network I/O, not free -- so WHETHER that publish happened was
+        itself a smaller but real, still match-dependent timing signal. Both
+        the matching and the activation that may follow it now live entirely
+        in `activate_duress_signal_task` (see `security.tasks.duress_tasks`),
+        so this method's only job, every single time, is to enqueue that task
+        with the raw signal and return -- work that is identical regardless of
+        what the signal turns out to be.
+        """
+        from security.tasks.duress_tasks import activate_duress_signal_task
+
+        activate_duress_signal_task.delay(
+            user_id=user.id,
+            signal=signal,
+            request_context=request_context,
+        )
+
+    # =========================================================================
     # Duress Activation
     # =========================================================================
-    
+
     @transaction.atomic
     def activate_duress_mode(
         self,

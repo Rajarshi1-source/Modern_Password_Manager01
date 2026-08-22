@@ -133,6 +133,70 @@ except ImportError as e:
 
 
 # ============================================================================
+# Honeypot Email Tasks (breach canary)
+# ============================================================================
+#
+# Same defect the Dark Protocol block below documents, and the same fix.
+# `honeypot_tasks.py` carries nine `@shared_task(name='security.<func>')`
+# decorators, but `@shared_task` only registers a task once its defining module
+# is imported -- and nothing in production ever imported this one (before this
+# block, the only importers in the entire repo were tests, which import the
+# module path directly). Celery's `autodiscover_tasks()` does not close the gap
+# either: it imports the `security.tasks` PACKAGE, i.e. this __init__, so a
+# submodule that this file never names stays unimported and unregistered.
+#
+# The breach canary was therefore broken twice over: unregistered here, AND
+# absent from celery.py's beat_schedule. Fixing only one would not have helped
+# -- an entry for an unregistered name is discarded by the worker, and a
+# registered task with no entry is never enqueued.
+#
+# Unlike the Dark Protocol block, no fail-loud stub tasks are needed on the
+# error path. Those exist there because celery.py lists four 'dark_protocol.*'
+# entries STATICALLY, so they tick regardless of whether the import succeeded.
+# The honeypot entries are contributed by HONEYPOT_BEAT_SCHEDULE itself, so
+# falling back to an empty dict makes the merge in celery.py a no-op: a failed
+# import schedules nothing rather than scheduling names no worker can resolve.
+
+try:
+    from .honeypot_tasks import (
+        check_honeypot_activity,
+        check_all_user_honeypots,
+        scan_all_honeypots,
+        analyze_breach_patterns,
+        correlate_with_hibp,
+        process_pending_rotations,
+        cleanup_expired_honeypots,
+        send_breach_digest,
+        generate_honeypot_stats,
+        CELERY_BEAT_SCHEDULE as HONEYPOT_BEAT_SCHEDULE,
+    )
+    HONEYPOT_TASKS_AVAILABLE = True
+except ImportError as e:
+    logger.exception(f"Could not import honeypot tasks: {e}")
+    HONEYPOT_TASKS_AVAILABLE = False
+    HONEYPOT_BEAT_SCHEDULE = {}
+
+
+# ============================================================================
+# Duress Signal Activation Task
+# ============================================================================
+#
+# Not schedule-based -- this task is only ever enqueued by
+# DuressCodeService.consume_unlock_signal via `.delay()` when a signal
+# matches, never on a beat timer. It still needs the same explicit import
+# this whole file exists for: `@shared_task` registers a task only once its
+# defining module is imported, and a worker process that has never imported
+# `duress_tasks` would raise NotRegistered the first time this is enqueued.
+
+try:
+    from .duress_tasks import activate_duress_signal_task
+    DURESS_TASKS_AVAILABLE = True
+except ImportError as e:
+    logger.exception(f"Could not import duress tasks: {e}")
+    DURESS_TASKS_AVAILABLE = False
+
+
+# ============================================================================
 # Dark Protocol Tasks
 # ============================================================================
 #

@@ -32,6 +32,7 @@ from .duress_models import (
     DuressCode,
     DecoyVault,
     DuressEvent,
+    DuressSignal,
     EvidencePackage,
     TrustedAuthority,
 )

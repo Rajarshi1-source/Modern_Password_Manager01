@@ -6,8 +6,9 @@ trusted authorities, and duress events.
 """
 
 import logging
+from ipware import get_client_ip
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -722,3 +723,100 @@ def test_duress_activation(request):
             'success': False,
             'error': 'internal_error'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# =============================================================================
+# Duress Signal Endpoints (zero-knowledge unlock reporting)
+# =============================================================================
+
+# Fixed wire size for the signal value: base64 of 32 random bytes. Both the
+# real token and the decoy noise the client sends on a normal unlock are
+# exactly this length, so request size cannot distinguish them.
+_SIGNAL_B64_LENGTH = 44
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def duress_signal_register(request):
+    """Register the hash of a client-generated duress signal token.
+
+    The client generates 256 bits of CSPRNG output at duress setup, keeps the
+    token inside its decoy-slot payload, and sends it here ONCE. Only the
+    SHA-256 is stored. See ``DuressSignal``'s docstring for why the decision
+    of *which vault to open* stays on the client and never reaches this API.
+    """
+    token = request.data.get('token')
+
+    if not isinstance(token, str) or len(token) != _SIGNAL_B64_LENGTH:
+        return Response({
+            'success': False,
+            'error': 'token must be base64 of 32 random bytes',
+            'error_code': 'invalid_token',
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        service = get_duress_code_service()
+        signal = service.register_signal_token(request.user, token)
+        return Response({
+            'success': True,
+            'signal_id': str(signal.id),
+        }, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        logger.error(f"Duress signal registration failed: {e}")
+        return Response({
+            'success': False,
+            'error': 'internal_error',
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+# No throttle: this fires on every unlock, so the project's default
+# UserRateThrottle (60/min in production, SHARED across every endpoint that
+# doesn't override it, not scoped to this view) would return DRF's own 429
+# before this view even runs -- silently breaking the "always 204" contract
+# below under nothing more than ordinary heavy API use, let alone the
+# sustained-coercion case the duress feature exists for. Safe to disable
+# entirely: IsAuthenticated already bounds this to sessions that exist, and
+# each call does at most one small DB filter plus a digest compare.
+@throttle_classes([])
+def duress_signal_report(request):
+    """Receive the per-unlock signal. ALWAYS answers 204, match or not.
+
+    This endpoint is called on every vault unlock. Under duress the client
+    sends its real token; otherwise it sends fresh random noise of identical
+    length. The response is 204 No Content in both cases -- and on validation
+    failure, and on internal error.
+
+    That uniformity is the whole point and is why this view does not follow
+    the ``{'success': bool, ...}`` convention used elsewhere in this module:
+    ANY observable difference (status code, body, latency class) between the
+    duress and non-duress paths would hand a coercer a way to test whether the
+    password they extracted was the real one. An attacker who has the user's
+    session can call this endpoint freely; they must learn nothing from it,
+    including whether a duress signal is configured at all.
+
+    Errors are logged server-side but never surfaced. A client cannot act on
+    them anyway -- retrying a duress signal is not something a coerced user is
+    in a position to do.
+    """
+    signal = request.data.get('signal') if isinstance(request.data, dict) else None
+
+    if isinstance(signal, str) and len(signal) == _SIGNAL_B64_LENGTH:
+        try:
+            ip_address, _ = get_client_ip(request)
+            service = get_duress_code_service()
+            service.consume_unlock_signal(
+                user=request.user,
+                signal=signal,
+                request_context={
+                    'ip_address': ip_address or '127.0.0.1',  # nosec B104
+                    'user_agent': request.META.get('HTTP_USER_AGENT', ''),
+                },
+            )
+        except Exception as e:
+            # Swallowed deliberately: see the docstring. A 500 here would mark
+            # this request as different from its neighbours.
+            logger.error(f"Duress signal processing failed: {e}")
+
+    return Response(status=status.HTTP_204_NO_CONTENT)

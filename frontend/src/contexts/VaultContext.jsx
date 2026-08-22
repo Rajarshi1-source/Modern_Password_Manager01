@@ -7,6 +7,7 @@ import { useAuth } from '../hooks/useAuth';
 import sessionVaultCrypto from '../services/sessionVaultCrypto';
 import sessionVaultCryptoV3 from '../services/sessionVaultCryptoV3';
 import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from '../services/vaultEnvelope';
+import onionSyncService from '../services/onionSyncService';
 
 const VaultContext = createContext();
 
@@ -25,6 +26,14 @@ export const VaultProvider = ({ children }) => {
     parseInt(localStorage.getItem('autoLockTimeout')) || DEFAULT_AUTO_LOCK_TIMEOUT
   );
   const [syncStatus, setSyncStatus] = useState('idle');
+  // Which transport the last sync actually used, and whether that was a
+  // downgrade from what the user asked for. Consumers render privacy state
+  // from these rather than assuming the configured mode was honoured.
+  // 'none' until the first sync completes -- 'clearnet' would falsely claim
+  // a sync already happened over the normal connection before any sync has
+  // run at all. Set to 'onion'/'clearnet'/'none' by syncVault below.
+  const [syncTransport, setSyncTransport] = useState('none');
+  const [syncDegraded, setSyncDegraded] = useState(false);
   const [firebaseInitialized, setFirebaseInitialized] = useState(false);
   const [pendingChanges, setPendingChanges] = useState([]);
   // Fix stale closure in syncVault when called via setTimeout
@@ -518,10 +527,24 @@ export const VaultProvider = ({ children }) => {
       });
 
       try {
-        // Use the new syncVault method in vaultService
-        const response = await vaultService.syncVault(syncData);
+        // Routed through onionSyncService rather than calling
+        // vaultService.syncVault directly. When the user's privacy mode is
+        // 'off' (the default) this is byte-identical to the previous call --
+        // it delegates straight to the same vaultService method without even
+        // probing Tor capability. When onion sync is requested, this is what
+        // finally puts traffic on the Dark Protocol rails that PR #454 built
+        // and nothing ever used.
+        const syncResult = await onionSyncService.syncVault(syncData, { vaultService });
+        const response = syncResult.data;
 
         if (!isMountedRef.current) return;
+
+        // Surface a downgrade rather than swallowing it: the user asked for
+        // onion routing and did not get it. Reporting 'success' here would be
+        // a false privacy promise, which is the one outcome this feature has
+        // to avoid. ('require_onion' never reaches this line -- it throws.)
+        setSyncTransport(syncResult.transport);
+        setSyncDegraded(syncResult.degraded);
 
         // Check for expected response format
         if (response.success && response.items) {
@@ -590,7 +613,23 @@ export const VaultProvider = ({ children }) => {
       } catch (syncError) {
         console.error('Sync request failed:', syncError);
         setSyncStatus('error');
-        setError(syncError.message || 'Failed to sync with server');
+
+        if (syncError instanceof onionSyncService.OnionSyncUnavailableError) {
+          // Not a transport failure to retry blindly: the user set
+          // 'require_onion', and the sync was refused BEFORE any clearnet
+          // request went out. Say so plainly, or they will read it as a
+          // generic network error and never learn their data is not syncing
+          // by their own choice.
+          setSyncTransport('none');
+          setSyncDegraded(true);
+          setError(
+            'Sync was not sent: you have required onion routing, and the '
+            + 'anonymous route is unavailable right now. Nothing was sent '
+            + 'over the normal connection.'
+          );
+        } else {
+          setError(syncError.message || 'Failed to sync with server');
+        }
 
         // Don't clear pendingChanges so we can retry later
       }
@@ -924,6 +963,12 @@ export const VaultProvider = ({ children }) => {
     restoreBackup,
     syncStatus,
     syncVault,
+    // Privacy state of the last sync. `syncTransport` is 'onion', 'clearnet',
+    // or 'none' (require_onion refused before sending). `syncDegraded` means
+    // the user asked for onion routing and did not get it — surface it, never
+    // swallow it.
+    syncTransport,
+    syncDegraded,
     pendingChanges,
     lastSyncTime,
     decryptItem,  // New: on-demand decryption
@@ -931,7 +976,7 @@ export const VaultProvider = ({ children }) => {
     setLazyLoadEnabled  // New: toggle lazy loading
   }), [
     isInitialized, isUnlocked, sessionUnlocked, items, loading, error, autoLockTimeout,
-    syncStatus, pendingChanges, lastSyncTime, lazyLoadEnabled,
+    syncStatus, syncTransport, syncDegraded, pendingChanges, lastSyncTime, lazyLoadEnabled,
     lockVault, addItem, updateItem, deleteItem, refreshItems, toggleFavorite,
     syncVault, decryptItem
   ]);
