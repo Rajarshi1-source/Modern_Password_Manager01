@@ -745,13 +745,28 @@ class SecurityServiceIntegrationTests(TestCase):
             threat_level='high',
         )
     
-    def test_security_service_has_duress_check(self):
-        """Test that SecurityService has check_for_duress_code method"""
+    def test_check_for_duress_code_ignores_a_non_duress_code(self):
+        """A non-matching secondary code must not activate duress.
+
+        Replaces a `hasattr`/`callable` assertion that only checked the method
+        existed -- it passed whether or not the method did anything, and did so
+        for the entire period during which nothing called it. The negative case
+        is the one worth pinning: a false positive here would show a coerced
+        user the decoy vault during an ordinary login.
+        """
         from security.services.security_service import SecurityService
-        
-        service = SecurityService()
-        self.assertTrue(hasattr(service, 'check_for_duress_code'))
-        self.assertTrue(callable(service.check_for_duress_code))
+
+        mock_request = MagicMock()
+        mock_request.META = {'HTTP_USER_AGENT': 'Test Browser'}
+        mock_request.data = {}
+
+        result = SecurityService().check_for_duress_code(
+            self.user, 'not-the-duress-code', mock_request,
+        )
+
+        self.assertFalse(result['is_duress'])
+        self.assertIsNone(result['response'])
+        self.assertEqual(DuressEvent.objects.filter(user=self.user).count(), 0)
     
     @patch('security.services.security_service.get_client_ip')
     def test_check_for_duress_code_detects_duress(self, mock_get_ip):

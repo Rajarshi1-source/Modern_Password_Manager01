@@ -373,6 +373,11 @@ urlpatterns = [
     # Test Activation (Safe Mode)
     path('duress/test/', duress_code_views.test_duress_activation, name='duress-test'),
 
+    # Zero-knowledge duress signalling. `report` is called on EVERY unlock,
+    # not only duress ones, and always answers 204 -- see the view docstring.
+    path('duress/signal/register/', duress_code_views.duress_signal_register, name='duress-signal-register'),
+    path('duress/signal/', duress_code_views.duress_signal_report, name='duress-signal-report'),
+
     # ==========================================================================
     # 🍯 Honeypot Email Breach Detection Endpoints
     # ==========================================================================
