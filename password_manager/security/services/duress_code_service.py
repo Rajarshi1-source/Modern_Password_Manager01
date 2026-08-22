@@ -21,6 +21,7 @@ from security.models.duress_models import (
     DuressCode,
     DecoyVault,
     DuressEvent,
+    DuressSignal,
     EvidencePackage,
     TrustedAuthority,
 )
@@ -231,7 +232,29 @@ class DuressCodeService:
     ) -> Tuple[str, Optional[DuressCode]]:
         """
         Check if input is the master password or a duress code.
-        
+
+        .. warning::
+
+            **Never pass the master password to this method.** It compares the
+            supplied string server-side, so handing it a master password would
+            put that password in this process's memory, its logs on any
+            exception, and any APM/error-reporting hop in between -- exactly
+            what ``docs/adaptive-password-zk-remediation-plan.md`` §1-2
+            forbids (the server is assumable-hostile and must never receive a
+            value the master password can be recovered from).
+
+            This method exists for the SEPARATE, short duress *codes* entered
+            as a secondary factor -- the ``duress/test/`` endpoint and the
+            heartbeat-auth path. Those are low-entropy codes the user chooses
+            specifically to be checked by the server; they are not the vault
+            key and do not decrypt anything.
+
+            For master-password duress ("two master passwords, one opens a
+            decoy"), the decision is made CLIENT-side by decoding the
+            ``HiddenVaultBlob`` (see ``hidden_vault/SPEC.md``) and the alarm is
+            raised with a password-independent token via
+            ``consume_unlock_signal``. See ``DuressSignal``'s docstring.
+
         Returns:
             Tuple of (result_type, duress_code)
             - ('password', None) - input is the master password
@@ -293,9 +316,136 @@ class DuressCodeService:
         return self._check_duress_codes(user, input_code)
     
     # =========================================================================
+    # Duress Signals (zero-knowledge unlock reporting)
+    # =========================================================================
+
+    def register_signal_token(
+        self,
+        user: User,
+        token: str,
+        duress_code: Optional[DuressCode] = None,
+    ) -> DuressSignal:
+        """Store the hash of a client-generated duress signal token.
+
+        The token itself is generated on the client (256 bits of CSPRNG) and
+        never stored here -- only its SHA-256. See ``DuressSignal``'s docstring
+        for why this is a plain digest rather than a password hasher.
+
+        Registering a second token deactivates any earlier ones, so a user who
+        re-runs duress setup does not leave a stale token that would still fire
+        an alarm.
+        """
+        with transaction.atomic():
+            DuressSignal.objects.filter(
+                user=user, is_active=True
+            ).update(is_active=False)
+
+            return DuressSignal.objects.create(
+                user=user,
+                token_hash=DuressSignal.hash_token(token),
+                duress_code=duress_code,
+            )
+
+    def consume_unlock_signal(
+        self,
+        user: User,
+        signal: str,
+        request_context: Dict[str, Any],
+    ) -> bool:
+        """Match an unlock signal against the user's active duress token.
+
+        Called on EVERY unlock, not only duress ones. The client always posts a
+        fixed-size opaque value -- the real token when its local decode landed
+        on the decoy slot, fresh random noise otherwise -- and this returns
+        without distinguishing the two to the caller's response. That is what
+        makes a duress unlock indistinguishable from a normal one on the wire.
+
+        Returns True if the signal matched (alarm fired), False otherwise. The
+        VIEW must answer identically either way; the boolean is for internal
+        accounting and tests only.
+        """
+        candidate_hash = DuressSignal.hash_token(signal)
+
+        # Fetch all active signals and compare every one before returning,
+        # rather than letting the DB short-circuit on a hash lookup. A
+        # `.filter(token_hash=...)` would make the query time depend on whether
+        # a match exists, which is observable and would leak "this user has a
+        # duress signal configured" to anyone able to time the endpoint.
+        # Mirrors the constant-work loop in ``_check_duress_codes``.
+        active_signals = list(
+            DuressSignal.objects.filter(user=user, is_active=True)
+            .select_related('duress_code')
+        )
+
+        matched = None
+        for candidate in active_signals:
+            if secrets.compare_digest(candidate.token_hash, candidate_hash):
+                matched = candidate
+
+        if matched is None:
+            return False
+
+        # A duress signal is single-fire per registration in spirit, but we do
+        # NOT deactivate it here: a user under sustained coercion may unlock
+        # repeatedly, and silently disarming the alarm after the first use is
+        # the opposite of what this feature is for. Count instead.
+        matched.trigger_count += 1
+        matched.last_triggered_at = timezone.now()
+        matched.save(update_fields=['trigger_count', 'last_triggered_at'])
+
+        duress_code = matched.duress_code
+        if duress_code is None:
+            # A signal registered before any code was configured still has to
+            # raise something, or the alarm is silently swallowed. Fall back to
+            # the user's highest-severity active code, else log an event only.
+            #
+            # Severity is ranked in Python, NOT via `order_by('-threat_level')`:
+            # that column is a CharField, so descending sort is alphabetical
+            # and would rank 'medium' > 'low' > 'high' > 'critical' -- picking
+            # the mildest response for the most severe situation. Mirrors the
+            # explicit ordering in `TrustedAuthority.should_notify_for_level`.
+            severity = {'low': 0, 'medium': 1, 'high': 2, 'critical': 3}
+            duress_code = max(
+                DuressCode.objects.filter(user=user, is_active=True),
+                key=lambda code: severity.get(code.threat_level, -1),
+                default=None,
+            )
+
+        if duress_code is None:
+            logger.warning(
+                "Duress signal matched for user %s but no duress code is "
+                "configured; recording event without an action config",
+                user.username,
+            )
+            DuressEvent.objects.create(
+                user=user,
+                event_type='code_activated',
+                threat_level='high',
+                # `ip_address` is a non-nullable GenericIPAddressField, so a
+                # missing IP must fall back rather than pass None -- the same
+                # loopback default `check_for_duress_code` uses.
+                ip_address=request_context.get('ip_address') or '127.0.0.1',  # nosec B104
+                user_agent=request_context.get('user_agent', ''),
+                response_status='partial',
+                actions_taken=[{
+                    'action': 'signal_recorded',
+                    'note': 'no duress code configured; no response actions run',
+                }],
+            )
+            return True
+
+        self.activate_duress_mode(
+            user=user,
+            duress_code=duress_code,
+            request_context=request_context,
+            is_test=False,
+        )
+        return True
+
+    # =========================================================================
     # Duress Activation
     # =========================================================================
-    
+
     @transaction.atomic
     def activate_duress_mode(
         self,

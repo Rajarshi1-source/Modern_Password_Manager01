@@ -61,16 +61,33 @@ class SecurityService:
     
     def check_for_duress_code(self, user, password, request):
         """
-        Check if the provided password is actually a duress code.
-        
-        This should be called during login AFTER the password is validated.
-        If it's a duress code, activate duress mode and return True.
-        
+        Check if the provided secondary code is actually a duress code.
+
+        .. warning::
+
+            **Do not wire this into the master-password login flow.** An
+            earlier version of this docstring said "call during login AFTER
+            the password is validated", which would route the master password
+            into ``verify_password_or_duress`` and thus into server-side
+            comparison -- breaking the zero-knowledge invariant in
+            ``docs/adaptive-password-zk-remediation-plan.md`` §1-2. Nothing
+            ever called it, which is the only reason that instruction never
+            became a live vulnerability.
+
+            ``password`` here means a SEPARATE, short duress code submitted as
+            a secondary factor -- never the vault-decrypting master password.
+
+            Master-password duress is handled client-side: the
+            ``HiddenVaultBlob`` decode picks the slot locally and the alarm is
+            raised via the password-independent token flow
+            (``DuressCodeService.consume_unlock_signal`` /
+            ``POST /api/security/duress/signal/``).
+
         Args:
             user: The authenticated user
-            password: The password/code that was entered
+            password: The secondary duress code that was entered
             request: The HTTP request for context extraction
-            
+
         Returns:
             dict with:
                 - is_duress: bool - True if duress code was detected

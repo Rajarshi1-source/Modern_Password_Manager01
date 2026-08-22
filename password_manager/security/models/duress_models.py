@@ -736,3 +736,106 @@ class TrustedAuthority(models.Model):
                 self.minimum_threat_level, 99
             )
         return False
+
+
+class DuressSignal(models.Model):
+    """A password-independent token that lets a client report a duress unlock.
+
+    Why this exists at all
+    ----------------------
+    The obvious implementation of "two master passwords" is to send the entered
+    password to the server and let it decide which vault to return. That is
+    exactly what this project's zero-knowledge invariant forbids
+    (``docs/adaptive-password-zk-remediation-plan.md`` §1-2: the server is
+    assumable-hostile and must never receive a value from which the master
+    password can be recovered). ``DuressCodeService.verify_password_or_duress``
+    does do a server-side comparison, which is why it is scoped to short,
+    separate duress *codes* and must never be handed a master password.
+
+    The ZK-correct split is:
+
+      * the DECISION is made client-side. ``HiddenVaultBlob`` (see
+        ``hidden_vault/SPEC.md``) already encrypts a real vault in slot 0 and a
+        decoy in slot 1 under two independent passwords; the client decodes
+        with whatever was typed and learns the slot locally. The server is not
+        consulted and cannot infer the answer.
+      * the ALARM is a separate, password-independent secret. This model holds
+        SHA-256 of a 256-bit random token generated on the client at duress
+        setup. The client releases the token only after a slot-1 decode. The
+        server matches the hash and fires the existing silent-alarm machinery
+        without ever learning the password, or which slot exists, or even that
+        a decoy vault was configured until it actually fires.
+
+    Why a plain SHA-256 and not a password hasher
+    ---------------------------------------------
+    ``DuressCode.code_hash`` uses a slow KDF because it protects a
+    human-chosen code with low entropy. This token is 256 bits of CSPRNG
+    output, so it is not brute-forceable and a slow hash would buy nothing
+    while making the constant-work comparison in ``consume_unlock_signal``
+    (which must run on EVERY unlock, duress or not) needlessly expensive.
+
+    Indistinguishability
+    --------------------
+    The client posts a fixed-size opaque value on every unlock -- the real
+    token under duress, fresh random noise otherwise -- and the endpoint
+    answers 204 either way. An observer (including the server operator, absent
+    the token) cannot tell a duress unlock from a normal one by looking at
+    request shape, size, or response.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='duress_signals',
+    )
+
+    # SHA-256 hex of the client-generated token. The token itself is never
+    # stored, transmitted at rest, or recoverable from this column.
+    token_hash = models.CharField(
+        max_length=64,
+        db_index=True,
+        help_text="SHA-256 hex digest of the client-generated signal token",
+    )
+
+    # Which duress code / threat level this signal maps to, so the existing
+    # activation path can pick the configured response. Optional: a user may
+    # register a signal before configuring codes.
+    duress_code = models.ForeignKey(
+        'security.DuressCode',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='signals',
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_triggered_at = models.DateTimeField(null=True, blank=True)
+    trigger_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'security_duress_signal'
+        verbose_name = "Duress Signal"
+        verbose_name_plural = "Duress Signals"
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['token_hash']),
+        ]
+
+    def __str__(self):
+        # Deliberately does not include the hash: __str__ output lands in
+        # admin pages, logs, and error reports.
+        return f"Duress signal for {self.user.username} (active={self.is_active})"
+
+    @staticmethod
+    def hash_token(token: str) -> str:
+        """Hash a client-supplied token for storage/comparison.
+
+        ``token`` is expected to be the client's base64 of 32 random bytes.
+        Hashed as raw UTF-8 of that encoded string so client and server agree
+        without needing to share a decoding convention.
+        """
+        return hashlib.sha256(token.encode('utf-8')).hexdigest()
