@@ -449,7 +449,62 @@ def generate_honeypot_stats():
         stats[f'breaches_{severity}'] = HoneypotBreachEvent.objects.filter(
             severity=severity
         ).count()
-    
+
     logger.info(f"Honeypot stats: {stats}")
-    
+
     return stats
+
+
+# =============================================================================
+# Task Scheduling Configuration (for Celery Beat)
+# =============================================================================
+#
+# Every 'task' string below must match the corresponding `@shared_task(name=...)`
+# in this module EXACTLY. A mismatch does not raise -- beat happily enqueues a
+# name no worker has registered, the message is discarded, and the task silently
+# never runs. That is precisely the Genetic/DNA beat bug documented in
+# docs/celery-beat-genetic-task-names-plan.md, so the names here are copied from
+# the decorators rather than reconstructed from the function names.
+#
+# Only the zero-argument tasks are scheduled. `check_honeypot_activity`,
+# `check_all_user_honeypots`, and `correlate_with_hibp` all take a required
+# positional id and are fan-out targets invoked BY the tasks below -- scheduling
+# them would enqueue a call with no argument and raise TypeError on the worker
+# every tick.
+#
+# This dict is inert on its own. It only takes effect because
+# security/tasks/__init__.py re-exports it and password_manager/celery.py merges
+# it into the app's beat_schedule -- see the comment block there for why that
+# merge is deferred to on_after_finalize rather than done as an eager import.
+
+CELERY_BEAT_SCHEDULE = {
+    # Polls each active alias with its provider. This is the actual detection
+    # loop -- "instant" breach detection is bounded by this interval.
+    'honeypot-scan-all': {
+        'task': 'security.scan_all_honeypots',
+        'schedule': 3600.0,  # Hourly
+    },
+    # Rotates real credentials for services whose honeypot tripped. Short
+    # interval because this is the containment step after a confirmed breach.
+    'honeypot-process-pending-rotations': {
+        'task': 'security.process_pending_rotations',
+        'schedule': 900.0,  # Every 15 minutes
+    },
+    'honeypot-analyze-breach-patterns': {
+        'task': 'security.analyze_breach_patterns',
+        'schedule': 86400.0,  # Daily
+    },
+    'honeypot-cleanup-expired': {
+        'task': 'security.cleanup_expired_honeypots',
+        'schedule': 86400.0,  # Daily
+    },
+    'honeypot-generate-stats': {
+        'task': 'security.generate_honeypot_stats',
+        'schedule': 86400.0,  # Daily
+    },
+    # User-facing email. Weekly, deliberately the least frequent entry here.
+    'honeypot-send-breach-digest': {
+        'task': 'security.send_breach_digest',
+        'schedule': 604800.0,  # Weekly
+    },
+}
