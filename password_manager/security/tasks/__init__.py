@@ -178,6 +178,25 @@ except ImportError as e:
 
 
 # ============================================================================
+# Duress Signal Activation Task
+# ============================================================================
+#
+# Not schedule-based -- this task is only ever enqueued by
+# DuressCodeService.consume_unlock_signal via `.delay()` when a signal
+# matches, never on a beat timer. It still needs the same explicit import
+# this whole file exists for: `@shared_task` registers a task only once its
+# defining module is imported, and a worker process that has never imported
+# `duress_tasks` would raise NotRegistered the first time this is enqueued.
+
+try:
+    from .duress_tasks import activate_duress_signal_task
+    DURESS_TASKS_AVAILABLE = True
+except ImportError as e:
+    logger.exception(f"Could not import duress tasks: {e}")
+    DURESS_TASKS_AVAILABLE = False
+
+
+# ============================================================================
 # Dark Protocol Tasks
 # ============================================================================
 #

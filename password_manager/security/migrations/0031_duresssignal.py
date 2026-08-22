@@ -18,7 +18,7 @@ class Migration(migrations.Migration):
             name='DuressSignal',
             fields=[
                 ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
-                ('token_hash', models.CharField(db_index=True, help_text='SHA-256 hex digest of the client-generated signal token', max_length=64)),
+                ('token_hash', models.CharField(help_text='SHA-256 hex digest of the client-generated signal token', max_length=64)),
                 ('is_active', models.BooleanField(default=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('last_triggered_at', models.DateTimeField(blank=True, null=True)),

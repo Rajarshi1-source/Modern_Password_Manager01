@@ -363,6 +363,15 @@ class DuressCodeService:
         Returns True if the signal matched (alarm fired), False otherwise. The
         VIEW must answer identically either way; the boolean is for internal
         accounting and tests only.
+
+        On a match, this ONLY enqueues ``activate_duress_signal_task`` and
+        returns -- it does not run the activation inline. The activation path
+        (evidence packages, decoy-vault generation, and outbound
+        SilentAlarmService I/O via SMTP/webhook) previously ran synchronously
+        here, which meant a match took measurably longer than a non-match's
+        single digest comparison. That latency gap is itself an oracle for a
+        coercer holding the user's session, exactly the thing this endpoint
+        exists to deny. See ``security.tasks.duress_tasks`` for the moved work.
         """
         candidate_hash = DuressSignal.hash_token(signal)
 
@@ -374,7 +383,6 @@ class DuressCodeService:
         # Mirrors the constant-work loop in ``_check_duress_codes``.
         active_signals = list(
             DuressSignal.objects.filter(user=user, is_active=True)
-            .select_related('duress_code')
         )
 
         matched = None
@@ -385,60 +393,11 @@ class DuressCodeService:
         if matched is None:
             return False
 
-        # A duress signal is single-fire per registration in spirit, but we do
-        # NOT deactivate it here: a user under sustained coercion may unlock
-        # repeatedly, and silently disarming the alarm after the first use is
-        # the opposite of what this feature is for. Count instead.
-        matched.trigger_count += 1
-        matched.last_triggered_at = timezone.now()
-        matched.save(update_fields=['trigger_count', 'last_triggered_at'])
+        from security.tasks.duress_tasks import activate_duress_signal_task
 
-        duress_code = matched.duress_code
-        if duress_code is None:
-            # A signal registered before any code was configured still has to
-            # raise something, or the alarm is silently swallowed. Fall back to
-            # the user's highest-severity active code, else log an event only.
-            #
-            # Severity is ranked in Python, NOT via `order_by('-threat_level')`:
-            # that column is a CharField, so descending sort is alphabetical
-            # and would rank 'medium' > 'low' > 'high' > 'critical' -- picking
-            # the mildest response for the most severe situation. Mirrors the
-            # explicit ordering in `TrustedAuthority.should_notify_for_level`.
-            severity = {'low': 0, 'medium': 1, 'high': 2, 'critical': 3}
-            duress_code = max(
-                DuressCode.objects.filter(user=user, is_active=True),
-                key=lambda code: severity.get(code.threat_level, -1),
-                default=None,
-            )
-
-        if duress_code is None:
-            logger.warning(
-                "Duress signal matched for user %s but no duress code is "
-                "configured; recording event without an action config",
-                user.username,
-            )
-            DuressEvent.objects.create(
-                user=user,
-                event_type='code_activated',
-                threat_level='high',
-                # `ip_address` is a non-nullable GenericIPAddressField, so a
-                # missing IP must fall back rather than pass None -- the same
-                # loopback default `check_for_duress_code` uses.
-                ip_address=request_context.get('ip_address') or '127.0.0.1',  # nosec B104
-                user_agent=request_context.get('user_agent', ''),
-                response_status='partial',
-                actions_taken=[{
-                    'action': 'signal_recorded',
-                    'note': 'no duress code configured; no response actions run',
-                }],
-            )
-            return True
-
-        self.activate_duress_mode(
-            user=user,
-            duress_code=duress_code,
+        activate_duress_signal_task.delay(
+            signal_id=str(matched.id),
             request_context=request_context,
-            is_test=False,
         )
         return True
 
