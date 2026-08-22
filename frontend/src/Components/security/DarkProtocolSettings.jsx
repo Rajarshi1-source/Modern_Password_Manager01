@@ -18,10 +18,17 @@
 
 import React, { useState, useEffect } from 'react';
 import darkProtocolService from '../../services/darkProtocolService';
+import onionSyncService, { SYNC_PRIVACY_MODES } from '../../services/onionSyncService';
 import './DarkProtocolSettings.css';
 
 const DarkProtocolSettings = ({ onSave, onClose }) => {
     const [config, setConfig] = useState(null);
+    // Stored client-side only: this is a transport preference for this device,
+    // not account state. Reading it at mount keeps the control honest if the
+    // user changed it elsewhere in the app.
+    const [syncPrivacyMode, setSyncPrivacyModeState] = useState(
+        () => onionSyncService.getSyncPrivacyMode()
+    );
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
@@ -170,6 +177,58 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                             <span className="dp-switch-slider"></span>
                         </label>
                     </div>
+                </div>
+
+                {/* Vault Sync Privacy — the privacy-vs-speed choice */}
+                <div className="dp-settings-section">
+                    <h4>🧅 Vault Sync Privacy</h4>
+
+                    <div className="dp-setting-row">
+                        <label htmlFor="dp-sync-privacy">Sync routing</label>
+                        <select
+                            id="dp-sync-privacy"
+                            value={syncPrivacyMode}
+                            onChange={(e) => {
+                                onionSyncService.setSyncPrivacyMode(e.target.value);
+                                setSyncPrivacyModeState(e.target.value);
+                            }}
+                        >
+                            <option value={SYNC_PRIVACY_MODES.OFF}>
+                                Normal connection (fastest)
+                            </option>
+                            <option value={SYNC_PRIVACY_MODES.PREFER_ONION}>
+                                Prefer onion route (falls back if unavailable)
+                            </option>
+                            <option value={SYNC_PRIVACY_MODES.REQUIRE_ONION}>
+                                Require onion route (never falls back)
+                            </option>
+                        </select>
+                    </div>
+
+                    {/*
+                      The claim here is deliberately narrow. Onion routing hides
+                      the client IP; it does NOT unlink the sync from the
+                      account, because the vault proxy is authenticated and the
+                      JWT still names the user. Saying "the server can't
+                      identify you" would be a promise the architecture cannot
+                      keep — see docs/privacy-features-gap-remediation-plan.md
+                      §1.3 and §4.1 Phase 4.
+                    */}
+                    <p className="dp-setting-desc">
+                        Routes vault sync through the Tor onion service, which hides your
+                        IP address from the server and makes sync traffic harder to
+                        correlate. It does not hide <em>which account</em> is syncing —
+                        sync is still authenticated.
+                    </p>
+
+                    {syncPrivacyMode === SYNC_PRIVACY_MODES.REQUIRE_ONION && (
+                        <p className="dp-setting-desc">
+                            <strong>Strict mode:</strong> if the onion route is
+                            unavailable, sync will fail rather than fall back to a
+                            normal connection. Your changes stay queued locally until
+                            it succeeds.
+                        </p>
+                    )}
                 </div>
 
                 {/* Routing Hops */}
