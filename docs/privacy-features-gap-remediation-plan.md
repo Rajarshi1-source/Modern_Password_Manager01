@@ -203,9 +203,14 @@ were invisible to every assertion in the file — including the four
 beat entries was blind to precisely the deferred-merge mechanism used to fix
 them.
 
-Consequence: "detects breaches instantly", "automatically rotates real
-credentials", and the breach digest **never fire**. Alias activity is only ever
-polled if something calls the task by hand.
+Consequence: the original feature brief's own claims — "detects breaches
+instantly", "automatically rotates real credentials" — **never happened**, and
+neither did the breach digest. Alias activity was only ever polled if
+something called the task by hand. Both of those are the BRIEF's language,
+not the code's: the implemented `process_pending_rotations` only ever sends a
+reminder EMAIL for a stale rotation, and never rotates any credential itself
+— see §7.8 of the round-1 review-fix log below, where a scheduling mismatch
+this PR itself introduced surfaced that same distinction the hard way.
 
 This is the *same defect class* PR #483 just fixed for Time-Lock, and the
 comment block at `celery.py:519-556` describes it exactly: a module defines a
@@ -240,7 +245,13 @@ backend app — the backend already supports this operation.
    - `syncVault(syncData)` that:
      - `'off'` → delegate to `vaultService.syncVault` unchanged;
      - `'prefer_onion'` → call `darkProtocolService.getCapabilities()`; if
-       `anonymity_active && current_connection_is_anonymous`, call
+       `vault_proxy.available` (the backend's own
+       `anonymity_active AND request-arrived-over-onion-ingress` computation
+       — gate on this single server-derived field, not on
+       `anonymity_active`/`current_connection_is_anonymous` recombined
+       client-side, which is what the delivered implementation actually
+       does and is the stronger contract: the client cannot get this wrong
+       by checking the two halves differently than the server does), call
        `proxyVaultOperation('vault_sync', syncData)`; else fall back to clearnet
        **and return a flag saying it did**, so the UI can be honest;
      - `'require_onion'` → onion or **fail**; never silently downgrade. This
@@ -338,9 +349,14 @@ Follow the Time-Lock precedent exactly; it is already proven in this repo.
    entry task strings matching each `@shared_task(name=...)` **exactly** — the
    name mismatch was the original Genetic/DNA beat bug
    (`docs/celery-beat-genetic-task-names-plan.md`). Suggested cadence:
-   `scan_all_honeypots` hourly; `process_pending_rotations` every 15 min;
+   `scan_all_honeypots` hourly; `process_pending_rotations` daily;
    `analyze_breach_patterns` daily; `cleanup_expired_honeypots` daily;
-   `send_breach_digest` weekly; `generate_honeypot_stats` daily.
+   `send_breach_digest` daily; `generate_honeypot_stats` daily. (Originally
+   proposed as 15 min / weekly for these last two; both were tried during
+   implementation and found wrong — see §7.8/§7.9 of the round-1 review-fix
+   log below for why, corrected here so this plan doesn't keep pointing a
+   future reader at values already proven to spam and to silently drop
+   breaches, respectively.)
 2. Export it as `HONEYPOT_BEAT_SCHEDULE` from `security/tasks/__init__.py`,
    beside `TIME_LOCK_BEAT_SCHEDULE` (line 127).
 3. Merge it in `celery.py` inside the **existing** `@app.on_after_finalize`
@@ -351,8 +367,10 @@ Follow the Time-Lock precedent exactly; it is already proven in this repo.
    `_merge_time_lock_beat_schedule` (renaming it, e.g. `_merge_feature_beat_schedules`)
    rather than adding a second handler.
 4. **Pre-deploy backlog check — mandatory.** These tasks have externally-visible
-   effects: `process_pending_rotations` rotates real credentials and
-   `send_breach_digest` emails users. Exactly as with Time-Lock
+   effects: `process_pending_rotations` sends a reminder EMAIL for each stale
+   rotation (it does not itself rotate any credential — corrected here after
+   the original draft of this line got that wrong) and `send_breach_digest`
+   emails users. Exactly as with Time-Lock
    (`docs/time-lock-beat-schedule-plan.md` §3, and the safety note at
    `celery.py:546-556`), every pending rotation accumulated while the schedule
    was missing will fire in **one batch** on first tick. Add a
@@ -413,10 +431,21 @@ also remains open.
 
 ## 6. Acceptance criteria
 
-- [ ] `require_onion` sync fails closed; `prefer_onion` reports honest degradation.
-- [ ] `proxyVaultOperation` has real production callers, verified by grep in CI.
-- [ ] Desktop routes vault sync over a real Tor circuit end-to-end.
-- [ ] Sync privacy UI claims IP privacy only, until Phase 4 lands.
+- [x] `require_onion` sync fails closed; `prefer_onion` reports honest degradation
+      (`onionSyncService.test.js`: `test_fails_closed_rather_than_downgrading`,
+      `test_falls_back_to_clearnet_but_flags_the_downgrade`).
+- [x] `proxyVaultOperation` has a real production caller
+      (`onionSyncService.syncVault` → `darkProtocolService.proxyVaultOperation`,
+      wired into `VaultContext.syncVault`). Reworded from the original draft,
+      which claimed this was "verified by grep in CI" — no such CI step was
+      ever added; this was confirmed by direct inspection instead, which is
+      what actually backs the checkmark.
+- [ ] Desktop routes vault sync over a real Tor circuit end-to-end. (Phase 2,
+      explicitly out of scope for this PR — see §5.)
+- [x] Sync privacy UI claims IP privacy only, until Phase 4 lands
+      (`DarkProtocolSettings.jsx`: "hides your IP address", never "the server
+      can't identify you", including in the mode-dependent copy added in
+      round-2 review fixes).
 - [ ] Duress password opens the decoy vault from the main unlock modal.
 - [ ] No master password ever reaches the server on the duress path (contract test).
 - [ ] Duress and normal unlock are byte- and endpoint-indistinguishable.
@@ -600,3 +629,185 @@ once a feature is stable — the same discipline
 `docs/celery-beat-genetic-task-names-plan.md` document round-by-round), a
 full backend/frontend suite run was deferred to the end of this round rather
 than re-run after each individual finding.
+
+---
+
+## 8. Review-fix round 2 on PR #486 (CodeRabbit, second pass)
+
+Eleven findings (10 actionable, 1 nitpick), verified critically before
+changing anything. All eleven held up; none were false positives. Two are
+worth highlighting because they identify a real class of bug this whole PR
+exists to fix — and round 2 found an instance of it *inside this PR's own
+round-1 fix*.
+
+### 8.1 `activate_duress_signal_task.delay()` was still match-dependent (Major, confirmed — the most serious finding of round 2)
+
+Round 1 moved the *activation* work off the request thread, but
+`consume_unlock_signal` still ran the digest-comparison loop synchronously
+and called `.delay()` **only on a match**. CodeRabbit ran an actual web
+query to confirm the underlying Celery fact rather than asserting it:
+`Task.delay()`/`apply_async()` synchronously publish the task message to the
+broker before returning — real network I/O, not free. So whether that
+publish happened at all was itself a smaller but real, still match-dependent
+timing signal, which is exactly the property round 1's own docstring set out
+to eliminate ("ANY observable difference... would hand a coercer a way to
+test"). By that self-imposed bar, this was a genuine regression-in-miniature
+of the same bug round 1 fixed.
+
+Fixed by moving the match determination itself into the task, not just the
+activation that follows it: `consume_unlock_signal` now enqueues
+`activate_duress_signal_task` **unconditionally**, passing the raw signal;
+the digest loop and everything downstream of a match now run entirely
+inside the task, which is invisible to the HTTP response either way. The
+request thread's own work is now identical no matter what the signal turns
+out to be — one `.delay()` call, full stop.
+
+Consequence for tests: `consume_unlock_signal` can no longer report whether
+a signal matched (nothing on the request thread determines that anymore),
+so its return value changed from `bool` to `None`, and the four service-level
+tests that asserted match/no-match behavior moved to
+`DuressSignalActivationTaskTests` (which now takes `user_id, signal` and does
+its own lookup, rather than `signal_id`). Added
+`test_consume_unlock_signal_always_enqueues_identically`, asserting `.delay()`
+receives the exact same argument shape for a matching and a non-matching
+token — the direct regression test for this finding.
+
+### 8.2 `reportUnlockForSlot` had zero production callers (Major, confirmed — the second instance of the pattern)
+
+CodeRabbit's own investigation (ripgrep across `frontend/src`, an AST-based
+call-site verifier script, tracing `StegoVaultDashboard.jsx`'s decode flow)
+found that `reportUnlockForSlot` — the client function that reports a duress
+unlock to the server — was called from nowhere in production. Verified
+independently with the same grep: confirmed zero hits outside the service
+and its own test file. `StegoVaultDashboard.jsx`'s `onExtract` calls
+`extractVault` (the actual `HiddenVaultBlob` decode — per §2.4 above, the
+*only* place in the frontend this decode happens today) and got `slotIndex`
+back, but never told the server anything about it.
+
+This means the entire server-side duress-signalling feature — fully built,
+fully tested across two rounds of review fixes — was unreachable from any
+real user action. It is the identical defect class this whole PR exists to
+close (built the backend, never wired the caller — see the Honeypot Emails
+and Onion Sync findings in §1–§3 above), reproduced by this PR's own author
+inside the very code meant to fix instances of it elsewhere.
+
+Fixed by calling `reportUnlockForSlot(getAccessToken(), slotIndex, json)`
+after every successful extract in `onExtract`, using the same
+`useAuth().getAccessToken()` pattern already established in
+`DuressCodeSetup.jsx`. Not the same thing as wiring the master-password
+`VaultUnlockModal` (still correctly out of scope — see §5's "Not delivered"
+list): `StegoVaultDashboard` is a separate, already-shipped feature page, and
+this closes the one gap in it that this PR's own new service left open.
+
+### 8.3 `register_signal_token` had no protection against concurrent registration (Major, confirmed)
+
+`DuressSignal.objects.filter(is_active=True).update(is_active=False)`
+followed by `.create()`, both inside one `transaction.atomic()` block, is
+not atomic against a *second* concurrent caller: under READ COMMITTED, two
+transactions racing on the same user's first-ever registration can each see
+zero existing active rows (neither has committed its `INSERT` yet when the
+other's `UPDATE` runs), so both insert a new active signal and the user ends
+up with two.
+
+Fixed with `select_for_update()` on the user's `DuressCodeConfiguration` row
+— a pre-existing `OneToOneField`-unique-per-user row, so no new migration or
+constraint was needed; the second concurrent call simply blocks until the
+first commits. CodeRabbit's own suggested fix (a conditional
+`UniqueConstraint` plus catching the resulting `IntegrityError`) would also
+have worked but needs a schema migration and after-the-fact race handling;
+locking a row that already exists precisely because it's per-user, then
+deciding whether it's still worth doing given "keep changes minimal",
+resolves the same race without either. Added
+`RegisterSignalTokenConcurrencyTests` (a `TransactionTestCase` with real
+threads via `ThreadPoolExecutor`), mirroring the exact pattern already
+established in `test_adaptive_policy_bandit.py::ArmCeilingConcurrencyTests`
+— including the SQLite skip, since `select_for_update()` needs real MVCC row
+locking that SQLite doesn't provide (it serializes writers at the file
+level instead), so this genuinely validates only against CI's Postgres.
+
+### 8.4 Doc drift, four instances (Minor, all confirmed)
+
+- §3's "Consequence" paragraph read as a factual claim that
+  `process_pending_rotations` rotates credentials; it was meant as a quote of
+  the *original feature brief's* language, but read ambiguously either way.
+  Reworded to attribute it explicitly to the brief and state the actual
+  behavior (reminder emails only).
+- §4.3 step 4 (pre-deploy backlog check) had the same "rotates real
+  credentials" error, this time as a direct technical claim with no
+  brief-quoting excuse. Corrected.
+- §4.3's "Suggested cadence" list still proposed 15 min /
+  weekly for `process_pending_rotations`/`send_breach_digest` — the exact
+  values §7.8/§7.9 had already found wrong during implementation. A future
+  reader following the plan section literally would reintroduce the bug
+  those sections fixed. Corrected to daily/daily with a pointer to why.
+- §4.1 Phase 1's spec said the gate was
+  `anonymity_active && current_connection_is_anonymous`; the delivered
+  implementation (§5) correctly gates on the backend's own single
+  `vault_proxy.available` field instead — a stronger contract, since the
+  client can't get it wrong by recombining the two halves differently than
+  the server does. Updated the plan to describe what was actually built.
+- §6's acceptance checklist had four items already delivered per §5 but
+  left unchecked. Checked off three (`require_onion`/`prefer_onion`
+  behavior, `proxyVaultOperation` having a real caller, IP-only UI copy),
+  correcting the second one's wording along the way — it claimed a
+  grep-based CI verification step that was never actually built; the
+  checkmark is backed by direct inspection instead, which is what actually
+  supports it. Left the desktop-Tor-circuit item unchecked, correctly, since
+  that's Phase 2 and still out of scope.
+
+### 8.5 Sync-privacy UI copy claimed onion routing unconditionally (Minor, confirmed)
+
+The description under the sync-privacy dropdown was static regardless of
+`syncPrivacyMode` — including when the mode is `'off'` (the default!), where
+sync never touches Tor at all, and `'prefer_onion'`, which can silently fall
+back to clearnet. Claiming "routes through Tor" in either case is exactly
+the false privacy promise this feature exists to avoid. Made the copy
+mode-dependent (three variants), preserving the "IP privacy only, never
+identity" framing in every one — see §6's now-checked acceptance criterion.
+
+### 8.6 `syncTransport` initialized to `'clearnet'` before any sync ran (Minor, confirmed)
+
+`'clearnet'` reads as "the last sync used the normal connection," which is
+false before any sync has happened at all — no sync means no transport, not
+an implicit clearnet one. Changed the initial value to `'none'`, already a
+valid value in this field's own contract (used for the `require_onion`
+refused-before-sending case).
+
+### 8.7 Two `# nosec B106` suppressions should be `# noqa: S106` (Trivial, confirmed but low-stakes)
+
+CodeRabbit's own scanner runs Ruff; this project's actual CI gate is
+Bandit (`.github/workflows/ci.yml`), which excludes `tests/` entirely
+(`-x tests,venv`) and ignores its own exit code (`|| true`) — so neither
+suppression form is ever CI-checked either way. Fixed anyway since the
+change is free and this repo has no Ruff config of its own, meaning
+CodeRabbit's scanner is the only thing that will ever read these comments.
+Fixed exactly the one occurrence CodeRabbit flagged
+(`test_check_honeypot_backlog_command.py:33`) plus the equivalent new
+occurrences introduced in this same round's own test edits — deliberately
+not a repo-wide sweep of the many pre-existing `# nosec B106` occurrences
+elsewhere, which is out of scope for "keep changes minimal."
+
+### 8.8 Nitpick: `test_no_password_field_is_accepted_anywhere_in_this_flow` posted an unrelated token (Trivial, confirmed)
+
+The test posted `make_token()` (fresh, unrelated) as `signal` alongside the
+extra `password` field, so it never actually exercised the path where a
+match occurs — it "proved" the password field changes nothing while the
+signal itself could never have matched regardless. Fixed to post the
+actually-registered token, mock `.delay`, and assert both that it fires
+exactly once and that `password` never reaches the task's arguments —
+adapted for the §8.1 redesign (matching moved into the task, so the
+strongest assertion available at this layer is "the extra field never
+leaks into what gets enqueued," not "no alarm fires," which round 1's
+version had checked).
+
+### 8.9 Test results
+
+`security/tests/test_duress_signal.py` — 24 passed, 1 skipped (the new
+concurrency test, correctly skipped under SQLite; runs against CI's
+Postgres). `security/tests/test_check_honeypot_backlog_command.py` —
+unaffected by the suppression-comment change, re-run to confirm. Frontend:
+`duressSignalService.test.js` (14) and `onionSyncService.test.js` (16)
+unaffected by the wiring/copy changes, both re-run to confirm — 30 passed.
+ESLint clean on all four touched frontend files (one real error caught and
+fixed: an unescaped apostrophe introduced by this round's own new JSX copy,
+`react/no-unescaped-entities`).

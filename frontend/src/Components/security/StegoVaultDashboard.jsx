@@ -34,6 +34,7 @@ import {
   listStegoVaults,
   storeStegoImage,
 } from '../../services/stego/stegoApi';
+import { reportUnlockForSlot } from '../../services/duressSignalService';
 import { useAuth } from '../../hooks/useAuth';
 
 const panelStyle = {
@@ -121,7 +122,7 @@ const TIER_OPTIONS = [
 // -------------------------------------------------------------------------
 
 const StegoVaultDashboard = () => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, getAccessToken } = useAuth();
   const [config, setConfig] = useState(null);
   const [vaults, setVaults] = useState([]);
   const [events, setEvents] = useState([]);
@@ -286,12 +287,23 @@ const StegoVaultDashboard = () => {
         password: extractPassword,
       });
       setExtractResult({ slotIndex, json });
+
+      // Report the outcome to the server on EVERY successful extract, not
+      // just decoy ones -- reportUnlockForSlot itself decides whether to
+      // release the real duress token (slot 1) or fresh noise (slot 0), and
+      // that decision must not be visible here. This is the only place in
+      // the app that currently performs a HiddenVaultBlob decode (see
+      // docs/privacy-features-gap-remediation-plan.md §2.4), so it was the
+      // one production consumer this backend feature needed and never had.
+      // Awaited but errors are swallowed by reportUnlock itself -- never let
+      // a duress-reporting failure surface as an extraction error.
+      await reportUnlockForSlot(getAccessToken(), slotIndex, json);
     } catch (err) {
       setError(err?.message || 'Extraction failed. Wrong password or corrupt image.');
     } finally {
       setBusy(false);
     }
-  }, [extractBytes, extractPassword]);
+  }, [extractBytes, extractPassword, getAccessToken]);
 
   const onLoadServerVault = useCallback(
     async (vault) => {

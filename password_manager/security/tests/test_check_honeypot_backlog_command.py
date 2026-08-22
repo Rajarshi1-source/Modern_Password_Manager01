@@ -30,7 +30,7 @@ class CheckHoneypotBacklogCommandTests(TestCase):
         self.user = User.objects.create_user(
             username='canary-user',
             email='canary@example.com',
-            password='test-password-not-a-secret',  # nosec B106
+            password='test-password-not-a-secret',  # noqa: S106
         )
 
     def _run(self):

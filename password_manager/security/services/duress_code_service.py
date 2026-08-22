@@ -334,8 +334,30 @@ class DuressCodeService:
         Registering a second token deactivates any earlier ones, so a user who
         re-runs duress setup does not leave a stale token that would still fire
         an alarm.
+
+        Two concurrent calls for the SAME user (double-submit, two tabs) used
+        to be able to both find zero active rows under READ COMMITTED (each
+        started before the other committed its INSERT), so both would insert
+        a new active signal and leave two live at once -- the deactivate-then-
+        create pattern above is not atomic against a second writer unless
+        something serialises them. Fixed by taking a row lock on the user's
+        `DuressCodeConfiguration` first: it is `OneToOneField`-unique per user
+        already, so it is a safe, pre-existing lock target with no new
+        migration needed. `get_or_create_config` is itself race-tolerant
+        (Django's `get_or_create` catches the `IntegrityError` a losing
+        concurrent creator would raise against that field's own uniqueness),
+        so the row is guaranteed to exist by the time `select_for_update`
+        locks it.
         """
         with transaction.atomic():
+            self.get_or_create_config(user)
+            # Locks this user's config row for the duration of the
+            # transaction. A second concurrent call for the same user blocks
+            # here until the first commits, so it always sees the first
+            # call's deactivation before running its own -- different users
+            # lock different rows and are unaffected.
+            DuressCodeConfiguration.objects.select_for_update().get(user=user)
+
             DuressSignal.objects.filter(
                 user=user, is_active=True
             ).update(is_active=False)
@@ -351,55 +373,36 @@ class DuressCodeService:
         user: User,
         signal: str,
         request_context: Dict[str, Any],
-    ) -> bool:
-        """Match an unlock signal against the user's active duress token.
+    ) -> None:
+        """Enqueue verification of an unlock signal. ALWAYS enqueues.
 
         Called on EVERY unlock, not only duress ones. The client always posts a
         fixed-size opaque value -- the real token when its local decode landed
-        on the decoy slot, fresh random noise otherwise -- and this returns
-        without distinguishing the two to the caller's response. That is what
-        makes a duress unlock indistinguishable from a normal one on the wire.
+        on the decoy slot, fresh random noise otherwise -- and this method does
+        not distinguish the two: it always does exactly one thing, unconditional
+        on the outcome. That is what makes a duress unlock indistinguishable
+        from a normal one on the wire.
 
-        Returns True if the signal matched (alarm fired), False otherwise. The
-        VIEW must answer identically either way; the boolean is for internal
-        accounting and tests only.
-
-        On a match, this ONLY enqueues ``activate_duress_signal_task`` and
-        returns -- it does not run the activation inline. The activation path
-        (evidence packages, decoy-vault generation, and outbound
-        SilentAlarmService I/O via SMTP/webhook) previously ran synchronously
-        here, which meant a match took measurably longer than a non-match's
-        single digest comparison. That latency gap is itself an oracle for a
-        coercer holding the user's session, exactly the thing this endpoint
-        exists to deny. See ``security.tasks.duress_tasks`` for the moved work.
+        Deliberately does NOT determine match/no-match on the request thread
+        at all, not even to decide whether to enqueue. An earlier version did:
+        it ran the digest-comparison loop here and called `.delay()` only on a
+        match. That still leaked, because `Task.delay()`/`apply_async()`
+        synchronously publish the task message to the broker before returning
+        -- real network I/O, not free -- so WHETHER that publish happened was
+        itself a smaller but real, still match-dependent timing signal. Both
+        the matching and the activation that may follow it now live entirely
+        in `activate_duress_signal_task` (see `security.tasks.duress_tasks`),
+        so this method's only job, every single time, is to enqueue that task
+        with the raw signal and return -- work that is identical regardless of
+        what the signal turns out to be.
         """
-        candidate_hash = DuressSignal.hash_token(signal)
-
-        # Fetch all active signals and compare every one before returning,
-        # rather than letting the DB short-circuit on a hash lookup. A
-        # `.filter(token_hash=...)` would make the query time depend on whether
-        # a match exists, which is observable and would leak "this user has a
-        # duress signal configured" to anyone able to time the endpoint.
-        # Mirrors the constant-work loop in ``_check_duress_codes``.
-        active_signals = list(
-            DuressSignal.objects.filter(user=user, is_active=True)
-        )
-
-        matched = None
-        for candidate in active_signals:
-            if secrets.compare_digest(candidate.token_hash, candidate_hash):
-                matched = candidate
-
-        if matched is None:
-            return False
-
         from security.tasks.duress_tasks import activate_duress_signal_task
 
         activate_duress_signal_task.delay(
-            signal_id=str(matched.id),
+            user_id=user.id,
+            signal=signal,
             request_context=request_context,
         )
-        return True
 
     # =========================================================================
     # Duress Activation
