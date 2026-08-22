@@ -181,6 +181,25 @@ AnonAddy alias providers with webhook signature verification.
 2. `honeypot_tasks.py` contains **no** `CELERY_BEAT_SCHEDULE` dict at all.
 3. `security/tasks/__init__.py` exports only `TIME_LOCK_BEAT_SCHEDULE` (line 127).
 
+**Found during implementation — the feature was broken twice over.** Beyond
+being unscheduled, `honeypot_tasks.py` was never *imported* in production
+either: the only importers in the repo were tests, by module path. Since
+`@shared_task` registers a task only when its defining module is imported —
+and `autodiscover_tasks()` imports the `security.tasks` *package*, not
+submodules its `__init__` never names — none of the nine tasks were registered
+at all. Fixing only the schedule would have been inert: beat would enqueue
+names no worker could resolve. Both halves are required, and this is the exact
+defect the Dark Protocol block at `security/tasks/__init__.py:138-144` already
+documents for its own tasks.
+
+**Also found: `test_celery_beat_registry.py` could not have caught any of
+this.** Its `_beat_schedule()` helper read `app.conf.beat_schedule` without
+calling `app.finalize()`, so entries contributed by `@app.on_after_finalize`
+were invisible to every assertion in the file — including the four
+`time_lock.*` entries PR #483 added. The suite that exists to catch orphaned
+beat entries was blind to precisely the deferred-merge mechanism used to fix
+them.
+
 Consequence: "detects breaches instantly", "automatically rotates real
 credentials", and the breach digest **never fire**. Alias activity is only ever
 polled if something calls the task by hand.
@@ -352,7 +371,44 @@ unverified blast radius. Worth their own audit; extending
 
 ---
 
-## 5. Acceptance criteria
+## 5. Implementation status
+
+Delivered on `feat/privacy-features-gap-remediation`:
+
+**§4.3 Honeypot scheduling — done.** `CELERY_BEAT_SCHEDULE` added to
+`honeypot_tasks.py` (6 zero-arg tasks; the 3 argument-taking ones deliberately
+excluded), module imported and re-exported as `HONEYPOT_BEAT_SCHEDULE`, merged
+via the existing `on_after_finalize` handler (renamed
+`_merge_feature_beat_schedules`). `check_honeypot_backlog` command added,
+mirroring the task filters and exiting 1 so a deploy can gate on it. The
+`app.finalize()` fix to the registry test also brings PR #483's Time-Lock
+entries under real coverage for the first time.
+
+**§4.2 Duress unlock — done, backend + service layer.** New `DuressSignal`
+model, `register_signal_token` / `consume_unlock_signal`, and two endpoints:
+`duress/signal/register/` and `duress/signal/`. The report endpoint answers
+204 for match, no-match, malformed, and error alike. Frontend
+`duressSignalService.js` generates the token, registers it, and reports every
+unlock with a fixed-length value. `verify_password_or_duress` and
+`check_for_duress_code` now document that they must never receive a master
+password, and the tautological test is replaced.
+
+**§4.1 Phase 1 Onion sync — done.** `onionSyncService.js` with the three
+privacy modes, gating on `vault_proxy.available` (not `anonymity.available`),
+failing closed on `require_onion`, and flagging degradation on
+`prefer_onion`. Wired into `VaultContext.syncVault`, which now exposes
+`syncTransport` / `syncDegraded`. Privacy-vs-speed control added to
+`DarkProtocolSettings.jsx` with IP-privacy-only copy. Backend contract test
+guards the `vault_sync` route wiring.
+
+**Not delivered — deliberately out of scope for this PR:** §4.1 Phases 2–4
+(desktop Tor sidecar, mobile Orbot, anonymous credentials), and the §4.2
+`VaultUnlockModal` envelope integration, which needs the two-slot blob to be
+provisioned at vault setup — a migration path for existing vaults that
+deserves its own PR rather than being bolted onto this one. §4.4 orphan audit
+also remains open.
+
+## 6. Acceptance criteria
 
 - [ ] `require_onion` sync fails closed; `prefer_onion` reports honest degradation.
 - [ ] `proxyVaultOperation` has real production callers, verified by grep in CI.
