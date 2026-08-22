@@ -16,10 +16,10 @@ Smart Contract Automation (15), Honeypot Passwords (18), Honeypot Emails.
 | 12 | Plausible Deniability Vault | **Partial** | Management plane complete; **unlock plane unwired** |
 | 15 | Smart Contract Automation | **Complete** | — (no action) |
 | 18 | Honeypot Passwords | **Complete** | — (no action) |
-| — | Honeypot Emails (breach canary) | **Built, never runs** | 7 Celery tasks **absent from `beat_schedule`** |
+| — | Honeypot Emails (breach canary) | **Built, never runs** | 9 Celery tasks, all **absent from `beat_schedule`** (6 are schedulable) |
 
-Two of the five need work. One (10) is the headline gap and directly answers
-the question asked about PR #454.
+Three of the five need work. One (10) is the headline gap and directly
+answers the question asked about PR #454.
 
 ---
 
@@ -166,10 +166,13 @@ was built for.
 
 ## 3. Honeypot Emails — built, but never scheduled
 
-`security/tasks/honeypot_tasks.py` defines seven `@shared_task`s with explicit
-names: `scan_all_honeypots`, `check_honeypot_activity`, `check_all_user_honeypots`,
-`analyze_breach_patterns`, `correlate_with_hibp`, `process_pending_rotations`,
+`security/tasks/honeypot_tasks.py` defines **nine** `@shared_task`s with
+explicit names. Six take no arguments and are schedulable:
+`scan_all_honeypots`, `analyze_breach_patterns`, `process_pending_rotations`,
 `cleanup_expired_honeypots`, `send_breach_digest`, `generate_honeypot_stats`.
+Three take a required id and are fan-out targets invoked BY the six above, not
+scheduled directly: `check_honeypot_activity`, `check_all_user_honeypots`,
+`correlate_with_hibp`.
 
 Backing them: `HoneypotConfiguration`, `HoneypotEmail`, `HoneypotActivity`,
 `HoneypotBreachEvent`, `CredentialRotationLog`, plus working SimpleLogin and
@@ -417,5 +420,183 @@ also remains open.
 - [ ] Duress password opens the decoy vault from the main unlock modal.
 - [ ] No master password ever reaches the server on the duress path (contract test).
 - [ ] Duress and normal unlock are byte- and endpoint-indistinguishable.
-- [ ] All honeypot tasks appear in `app.conf.beat_schedule` at runtime (registry test).
+- [ ] All six schedulable (zero-argument) honeypot tasks appear in
+      `app.conf.beat_schedule` at runtime (registry test); the three
+      argument-taking fan-out targets stay absent (also asserted by the
+      registry test).
 - [ ] Honeypot backlog command exists and is run before the scheduling deploy.
+
+---
+
+## 7. Review-fix round 1 on PR #486 (CodeRabbit)
+
+Ten findings (7 actionable, 3 nitpick) plus one failing CI check
+(`Dependency Vulnerability Scan`). Verified each critically against the
+actual code before changing anything, per instruction — none were taken on
+the bot's word alone. All ten held up; none were false positives. Two
+(§7.5, §7.6) were more serious on inspection than their own text suggested.
+
+### 7.1 CI failure: expired pip-audit suppressions (unrelated to this PR's code, fixed anyway since it blocks merge)
+
+`PYSEC-2025-195/196/197` (torch advisories) expired 2026-08-20; today is
+2026-08-22/23. Checked git blame before renewing: these three had never been
+renewed since first added 2026-05-21 — a first renewal, not a repeat, so
+within `pip-audit-ignores.txt`'s own policy (flag for a tracking issue only
+after *two* renewals with no upstream fix).
+
+Re-verified the reachability argument rather than re-asserting it: re-ran
+the grep the neighbouring `CVE-2025-3000`/`PYSEC-2025-194` entries cite
+(`jit\.script\|jit\.trace\|torch\.load\|jit\.load`, excluding tests) — still
+zero `jit.script`/`jit.trace` call sites. The one `torch.load()` hit
+(`ml_dark_web/ml_services.py:294`) loads from the hard-coded
+`config.SIAMESE_MODEL_PATH`, never attacker input, already with
+`weights_only=True` (PyTorch's own mitigation restricting the unpickler to
+tensor data). Renewed to 2026-10-21 (60 days from the renewal date, matching
+the precedent set when 194/3000 were renewed 2026-08-11 → 2026-10-10).
+
+### 7.2 Doc: "Two of five need work" contradicted its own table (Minor, confirmed)
+
+The verdict table already marked three rows (10, 12, Honeypot Emails)
+incomplete; the prose said two. Also the honeypot task count said "seven"
+while listing nine names. Both are pre-existing errors from the initial
+verification pass, never corrected when implementation revealed the true
+count. Fixed in §0 and §3 above — "Three", and the full nine-task
+breakdown (6 schedulable / 3 argument-taking fan-out targets). Acceptance
+criterion in §6 corrected to match: "all honeypot tasks" would have been
+false for the delivered implementation, since 3 of 9 are deliberately never
+scheduled.
+
+### 7.3 `ipware` import inside a `try` the endpoint's own `except Exception` swallows (Trivial, confirmed)
+
+`duress_signal_report` imported `get_client_ip` inside its try block; a
+missing/renamed `ipware` package would raise `ImportError`, get caught by
+the endpoint's own `except Exception`, and log as an indistinguishable
+"Duress signal processing failed" — silently disarming the alarm with no
+loud startup failure. Checked the codebase's own convention first:
+`security_service.py` and `geofence_views.py` both import `ipware` at
+module level; this was the only inline import. Moved to module level.
+
+### 7.4 Missing negative-path test for token deactivation (Trivial, confirmed)
+
+`test_registering_again_deactivates_the_previous_token` asserted the
+`is_active` flag flipped, but nothing asserted the flag is actually
+*honoured* — that a deactivated token no longer fires. Added
+`test_a_deactivated_token_no_longer_fires`.
+
+### 7.5 Duplicate index on `DuressSignal.token_hash` (Trivial, confirmed)
+
+`db_index=True` on the field *and* `models.Index(fields=['token_hash'])` in
+`Meta.indexes` — two identical single-column indexes, confirmed in the
+generated migration (both `security_du_token_h_...` and a second implicit
+one). Since migration `0031_duresssignal.py` was created in this same
+unreleased PR and has never been deployed, edited it in place — a follow-up
+"remove the duplicate" migration would have been pure churn for something
+that never shipped. `makemigrations --check` confirms model and migration
+are back in sync.
+
+### 7.6 `duress_signal_report` inherits the shared `UserRateThrottle` (Major, confirmed — and larger than a one-line issue)
+
+Verified `DEFAULT_THROTTLE_CLASSES` in `settings/base.py` includes
+`UserRateThrottle` at 60/min in production, keyed by `scope='user'` and
+therefore **shared across every endpoint using the default throttle** for
+that user — not scoped to this view alone. `duress_signal_report` had no
+override, so DRF's `check_throttles()` returns 429 *before this view runs at
+all* once a user's combined API traffic crosses that shared budget — which
+this endpoint's own docstring says fires on every unlock, and which the
+sustained-coercion case explicitly anticipates ("a user under sustained
+coercion may unlock repeatedly"). A throttled request breaks the documented
+"always 204" contract outright, not just under attack but under ordinary
+heavy app use.
+
+Fixed with `@throttle_classes([])`: `IsAuthenticated` already bounds this to
+sessions that exist, and each call does at most one small DB filter plus a
+digest compare, so there is no new abuse surface from removing the shared
+budget. `register` keeps its default throttle unchanged — it fires once per
+duress setup, not per unlock, so the shared-budget problem doesn't apply
+there. Added `test_report_endpoint_carries_no_throttle`, asserting on the
+view's declared `throttle_classes` directly rather than firing 60+ real
+requests in a test.
+
+### 7.7 Match path leaked timing (Major, confirmed — the most serious finding)
+
+Verified by reading the call chain: on a match, `consume_unlock_signal` did
+`trigger_count` persistence inline, then either created a bare `DuressEvent`
+or called `activate_duress_mode`, which can create an `EvidencePackage`,
+look up/generate a `DecoyVault`, and — when silent alarms are enabled — call
+`SilentAlarmService.send_alerts()`, confirmed to perform blocking `send_mail`
+(SMTP) and `requests.post()` (outbound webhook). A non-match returned after
+a single digest comparison. That is a real, measurable, network-observable
+latency gap on the same endpoint — precisely the oracle this feature exists
+to deny an attacker holding the user's session, and it directly contradicted
+this PR's own docstring claim of uniform "latency class".
+
+Fixed as CodeRabbit's own sketch suggested: moved everything past the match
+determination (trigger_count write, severity fallback, `DuressEvent`
+creation, `activate_duress_mode`) into a new Celery task,
+`security.activate_duress_signal` (`security/tasks/duress_tasks.py`),
+dispatched via `.delay()` and registered in `security/tasks/__init__.py`
+following the exact "submodule must be explicitly imported to register"
+pattern already established there for Dark Protocol and Honeypot (§3 above)
+— `.delay()` on the calling side doesn't need local registration to enqueue,
+but a worker that never imported the module would raise `NotRegistered`
+when it tried to run the task. `consume_unlock_signal` now does identical
+synchronous work on match and non-match: the constant-time digest loop, then
+either nothing or one lightweight enqueue call.
+
+Test-level consequence: this codebase's own test settings use `memory://`
+for `CELERY_BROKER_URL` with tasks never executed under `.delay()` in tests
+(documented in `settings/base.py`, "matching existing behaviour"), so the
+four tests that used to assert on `consume_unlock_signal`'s sync side
+effects were restructured — moved to a new `DuressSignalActivationTaskTests`
+class that calls the task via `.apply()` (same pattern already used by
+`ml_dark_web/tests/test_check_compromised_passwords.py` for a bound task).
+Added two structural regression tests on the service method itself:
+`test_matching_signal_fires_but_defers_the_work` (mocks `.delay`, asserts no
+synchronous DB writes) and `test_matching_signal_never_calls_activate_duress_mode_inline`
+(asserts `activate_duress_mode` is never called from the request thread) —
+deterministic, not timing-based, so they can't be flaky in CI the way a
+wall-clock assertion would be.
+
+### 7.8 `process_pending_rotations` re-emails the same stale rotation every tick (Major, confirmed)
+
+The task's own filter (`status='pending', initiated_at__lt=now-24h,
+user_confirmed=False`) has no lower bound and no delivery-state tracking —
+confirmed by reading the full task body. Scheduled at 15 minutes (this PR's
+original choice), a single stale rotation would receive a reminder email
+every 15 minutes, forever, until the user confirms — up to 96 emails/day.
+The task itself is pre-existing code this PR didn't author, so adding
+persisted delivery state (CodeRabbit's primary suggestion) would mean a new
+model field and migration — out of scope for a review-fix round on a PR
+whose job was wiring up scheduling, not redesigning the task. Took
+CodeRabbit's own stated alternative instead: rescheduled to daily (86400s),
+matching the 24h staleness window already baked into the query, so nothing
+goes un-reminded but nothing is spammed either. Corrected an inaccurate
+comment in the same block while there: it said the task "rotates real
+credentials"; re-reading the task body confirms it only sends reminder
+emails and never rotates anything itself.
+
+### 7.9 `send_breach_digest` scheduled weekly against a 24h query window (Minor, confirmed)
+
+The task's own docstring says "Send **daily** breach digest" and its query
+is `detected_at__gte=now-24h`. This PR's original weekly schedule meant any
+breach detected more than 24h before the weekly tick fell outside that
+window permanently — not delayed, silently skipped forever, for the
+majority of breaches in a 7-day cycle. Rescheduled to daily (86400s),
+matching the task's own stated design.
+
+### 7.10 Test results
+
+Targeted re-run after all fixes above:
+`security/tests/test_duress_signal.py` — 22 passed (up from 17: added
+`test_a_deactivated_token_no_longer_fires`,
+`test_matching_signal_never_calls_activate_duress_mode_inline`,
+`test_report_endpoint_carries_no_throttle`, and the
+`DuressSignalActivationTaskTests` class replacing the four tests that used
+to assert on now-deferred side effects). `makemigrations --check` confirms
+`DuressSignal` model/migration parity after the index fix. Per the
+project's own testing guidance (targeted tests during iteration; full suite
+once a feature is stable — the same discipline
+`docs/time-lock-beat-schedule-plan.md` and
+`docs/celery-beat-genetic-task-names-plan.md` document round-by-round), a
+full backend/frontend suite run was deferred to the end of this round rather
+than re-run after each individual finding.

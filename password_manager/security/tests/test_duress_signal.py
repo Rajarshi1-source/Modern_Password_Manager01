@@ -11,6 +11,7 @@ and that no password is involved anywhere in the flow.
 
 import base64
 import secrets
+from unittest import mock
 
 from django.contrib.auth.models import User
 from django.test import TestCase
@@ -86,41 +87,78 @@ class DuressSignalServiceTests(TestCase):
         self.assertFalse(first.is_active)
         self.assertTrue(second.is_active)
 
-    def test_matching_signal_fires_and_counts(self):
+    def test_matching_signal_fires_but_defers_the_work(self):
+        """`consume_unlock_signal` must dispatch, not execute, on a match.
+
+        The activation work (DB writes beyond the signal row, evidence
+        packages, decoy-vault generation, and outbound SilentAlarmService I/O)
+        used to run inline here. That made a match measurably slower than a
+        non-match's single digest comparison -- a latency oracle for a
+        coercer holding the user's session. This asserts the fix structurally
+        (nothing heavy runs on this call) rather than by timing, which would
+        be flaky in CI.
+        """
         token = make_token()
         signal = self.service.register_signal_token(self.user, token)
 
-        fired = self.service.consume_unlock_signal(
-            self.user, token, self.context,
-        )
+        with mock.patch(
+            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
+        ) as mock_delay:
+            fired = self.service.consume_unlock_signal(
+                self.user, token, self.context,
+            )
 
-        signal.refresh_from_db()
         self.assertTrue(fired)
-        self.assertEqual(signal.trigger_count, 1)
-        self.assertIsNotNone(signal.last_triggered_at)
+        mock_delay.assert_called_once_with(
+            signal_id=str(signal.id), request_context=self.context,
+        )
+        # Nothing synchronous touched the signal row or created an event --
+        # that is now exclusively the enqueued task's job.
+        signal.refresh_from_db()
+        self.assertEqual(signal.trigger_count, 0)
+        self.assertEqual(DuressEvent.objects.count(), 0)
+
+    def test_matching_signal_never_calls_activate_duress_mode_inline(self):
+        """Direct guard against the timing regression: `activate_duress_mode`
+        (the entry point into evidence packages, decoy vaults, and
+        SilentAlarmService's blocking SMTP/webhook calls) must not be called
+        from the request thread at all."""
+        token = make_token()
+        self.service.register_signal_token(self.user, token)
+
+        with mock.patch.object(
+            self.service, 'activate_duress_mode'
+        ) as mock_activate:
+            self.service.consume_unlock_signal(self.user, token, self.context)
+
+        mock_activate.assert_not_called()
 
     def test_non_matching_signal_does_nothing(self):
         self.service.register_signal_token(self.user, make_token())
 
+        with mock.patch(
+            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
+        ) as mock_delay:
+            fired = self.service.consume_unlock_signal(
+                self.user, make_token(), self.context,
+            )
+
+        self.assertFalse(fired)
+        mock_delay.assert_not_called()
+        self.assertEqual(DuressEvent.objects.count(), 0)
+
+    def test_a_deactivated_token_no_longer_fires(self):
+        """The is_active flag is only meaningful if consume honours it."""
+        old_token = make_token()
+        self.service.register_signal_token(self.user, old_token)
+        self.service.register_signal_token(self.user, make_token())
+
         fired = self.service.consume_unlock_signal(
-            self.user, make_token(), self.context,
+            self.user, old_token, self.context,
         )
 
         self.assertFalse(fired)
         self.assertEqual(DuressEvent.objects.count(), 0)
-
-    def test_signal_does_not_deactivate_after_firing(self):
-        """Sustained coercion means repeated unlocks; silently disarming the
-        alarm after the first would defeat the feature."""
-        token = make_token()
-        signal = self.service.register_signal_token(self.user, token)
-
-        self.service.consume_unlock_signal(self.user, token, self.context)
-        self.service.consume_unlock_signal(self.user, token, self.context)
-
-        signal.refresh_from_db()
-        self.assertTrue(signal.is_active)
-        self.assertEqual(signal.trigger_count, 2)
 
     def test_another_users_token_never_matches(self):
         token = make_token()
@@ -135,16 +173,71 @@ class DuressSignalServiceTests(TestCase):
 
         self.assertFalse(fired)
 
-    def test_signal_with_no_configured_code_still_records_an_event(self):
-        """The alarm must not be silently swallowed."""
-        token = make_token()
-        self.service.register_signal_token(self.user, token)
 
-        fired = self.service.consume_unlock_signal(
-            self.user, token, self.context,
+class DuressSignalActivationTaskTests(TestCase):
+    """The work `consume_unlock_signal` now defers to Celery.
+
+    Run via `.apply()`, which executes the task body synchronously in-process
+    (no broker/worker needed) while still passing a real bound task instance
+    as `self` for the `bind=True` task -- the same pattern already used by
+    ml_dark_web/tests/test_check_compromised_passwords.py for a bound task.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='duress-user',
+            email='duress@example.com',
+            password='test-password-not-a-secret',  # nosec B106
+        )
+        self.service = get_duress_code_service()
+        self.context = {'ip_address': '203.0.113.10', 'user_agent': 'test-agent'}
+
+    def _run(self, signal):
+        from security.tasks.duress_tasks import activate_duress_signal_task
+
+        activate_duress_signal_task.apply(
+            kwargs={'signal_id': str(signal.id), 'request_context': self.context},
         )
 
-        self.assertTrue(fired)
+    def test_fires_and_counts(self):
+        signal = self.service.register_signal_token(self.user, make_token())
+
+        self._run(signal)
+
+        signal.refresh_from_db()
+        self.assertEqual(signal.trigger_count, 1)
+        self.assertIsNotNone(signal.last_triggered_at)
+
+    def test_does_not_deactivate_after_firing(self):
+        """Sustained coercion means repeated unlocks; silently disarming the
+        alarm after the first would defeat the feature."""
+        signal = self.service.register_signal_token(self.user, make_token())
+
+        self._run(signal)
+        self._run(signal)
+
+        signal.refresh_from_db()
+        self.assertTrue(signal.is_active)
+        self.assertEqual(signal.trigger_count, 2)
+
+    def test_missing_signal_does_not_raise(self):
+        """The signal can vanish between match and task execution (e.g. the
+        user re-runs duress setup in that window); must not crash the worker."""
+        from security.tasks.duress_tasks import activate_duress_signal_task
+
+        activate_duress_signal_task.apply(
+            kwargs={
+                'signal_id': '00000000-0000-0000-0000-000000000000',
+                'request_context': self.context,
+            },
+        )  # no exception
+
+    def test_no_configured_code_still_records_an_event(self):
+        """The alarm must not be silently swallowed."""
+        signal = self.service.register_signal_token(self.user, make_token())
+
+        self._run(signal)
+
         event = DuressEvent.objects.get(user=self.user)
         self.assertEqual(event.event_type, 'code_activated')
         self.assertEqual(event.ip_address, '203.0.113.10')
@@ -153,8 +246,7 @@ class DuressSignalServiceTests(TestCase):
         """`order_by('-threat_level')` on a CharField would rank
         medium > low > high > critical -- the mildest response for the worst
         situation. Severity must be ranked explicitly."""
-        token = make_token()
-        self.service.register_signal_token(self.user, token)
+        signal = self.service.register_signal_token(self.user, make_token())
         for level in ('low', 'medium', 'critical', 'high'):
             DuressCode.objects.create(
                 user=self.user,
@@ -163,10 +255,29 @@ class DuressSignalServiceTests(TestCase):
                 is_active=True,
             )
 
-        self.service.consume_unlock_signal(self.user, token, self.context)
+        self._run(signal)
 
         event = DuressEvent.objects.filter(user=self.user).first()
         self.assertEqual(event.threat_level, 'critical')
+
+    def test_prefers_the_signal_linked_code_over_severity_fallback(self):
+        """When a signal was registered with an explicit duress_code, that
+        code wins even if a higher-severity one also exists."""
+        low_code = DuressCode.objects.create(
+            user=self.user, code_hash='hash-low', threat_level='low', is_active=True,
+        )
+        DuressCode.objects.create(
+            user=self.user, code_hash='hash-critical', threat_level='critical',
+            is_active=True,
+        )
+        signal = self.service.register_signal_token(
+            self.user, make_token(), duress_code=low_code,
+        )
+
+        self._run(signal)
+
+        event = DuressEvent.objects.filter(user=self.user).first()
+        self.assertEqual(event.threat_level, 'low')
 
 
 class DuressSignalAPITests(TestCase):
@@ -272,3 +383,21 @@ class DuressSignalAPITests(TestCase):
         # The extra field is ignored, not honoured: no alarm, no error.
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(DuressEvent.objects.count(), 0)
+
+    def test_report_endpoint_carries_no_throttle(self):
+        """The default DEFAULT_THROTTLE_CLASSES (UserRateThrottle, 60/min in
+        production, SHARED across every endpoint that doesn't override it --
+        not scoped to this view) would make DRF return 429 from
+        check_throttles() before this view even runs, once a user's combined
+        API usage crosses that shared budget. That breaks the "always 204"
+        contract under nothing more than ordinary heavy app use, let alone
+        the sustained-coercion case this feature exists for.
+
+        Asserted on the view's own declared throttle_classes rather than by
+        firing 60+ real requests in a test -- deterministic and fast, and it
+        fails immediately if the `@throttle_classes([])` decorator is ever
+        removed, rather than only under load.
+        """
+        from security.api.duress_code_views import duress_signal_report
+
+        self.assertEqual(duress_signal_report.cls.throttle_classes, [])

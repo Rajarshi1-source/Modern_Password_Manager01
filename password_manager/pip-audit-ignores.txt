@@ -179,9 +179,22 @@ CVE-2026-15830 exp:2026-10-20
 # renewal date defeats the point of renewing at all.
 CVE-2025-3000 exp:2026-10-10
 PYSEC-2025-194 exp:2026-10-10
-PYSEC-2025-195 exp:2026-08-20
-PYSEC-2025-196 exp:2026-08-20
-PYSEC-2025-197 exp:2026-08-20
+
+# PYSEC-2025-195/196/197 renewed 2026-08-22 (first renewal for these three;
+# unlike 194/3000 above they had never been re-assessed since first added
+# 2026-05-21). Re-checked, not re-asserted: same torch reachability argument
+# as the rest of this block still holds today — grepped for new call sites
+# and found none (`jit\.script\|jit\.trace\|torch\.load\|jit\.load` across
+# password_manager/, excluding tests). The one hit, ml_dark_web/ml_services.py
+# torch.load() call, is unaffected: `model_path` defaults to the hard-coded
+# `config.SIAMESE_MODEL_PATH`, never attacker input, and is already called
+# with `weights_only=True` -- PyTorch's own mitigation restricting the
+# unpickler to tensor data. Torch bump remains out of scope here for the same
+# reason as 194/3000: this PR is privacy-feature remediation, not an ML
+# dependency upgrade.
+PYSEC-2025-195 exp:2026-10-21
+PYSEC-2025-196 exp:2026-10-21
+PYSEC-2025-197 exp:2026-10-21
 PYSEC-2025-210 exp:2026-08-25
 PYSEC-2026-139 exp:2026-08-25
 

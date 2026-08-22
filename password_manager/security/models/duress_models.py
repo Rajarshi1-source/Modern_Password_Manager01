@@ -795,7 +795,6 @@ class DuressSignal(models.Model):
     # stored, transmitted at rest, or recoverable from this column.
     token_hash = models.CharField(
         max_length=64,
-        db_index=True,
         help_text="SHA-256 hex digest of the client-generated signal token",
     )
 

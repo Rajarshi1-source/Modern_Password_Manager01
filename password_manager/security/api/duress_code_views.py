@@ -6,8 +6,9 @@ trusted authorities, and duress events.
 """
 
 import logging
+from ipware import get_client_ip
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -770,6 +771,15 @@ def duress_signal_register(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# No throttle: this fires on every unlock, so the project's default
+# UserRateThrottle (60/min in production, SHARED across every endpoint that
+# doesn't override it, not scoped to this view) would return DRF's own 429
+# before this view even runs -- silently breaking the "always 204" contract
+# below under nothing more than ordinary heavy API use, let alone the
+# sustained-coercion case the duress feature exists for. Safe to disable
+# entirely: IsAuthenticated already bounds this to sessions that exist, and
+# each call does at most one small DB filter plus a digest compare.
+@throttle_classes([])
 def duress_signal_report(request):
     """Receive the per-unlock signal. ALWAYS answers 204, match or not.
 
@@ -794,8 +804,6 @@ def duress_signal_report(request):
 
     if isinstance(signal, str) and len(signal) == _SIGNAL_B64_LENGTH:
         try:
-            from ipware import get_client_ip
-
             ip_address, _ = get_client_ip(request)
             service = get_duress_code_service()
             service.consume_unlock_signal(

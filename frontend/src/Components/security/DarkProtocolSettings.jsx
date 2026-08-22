@@ -189,8 +189,20 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                             id="dp-sync-privacy"
                             value={syncPrivacyMode}
                             onChange={(e) => {
-                                onionSyncService.setSyncPrivacyMode(e.target.value);
-                                setSyncPrivacyModeState(e.target.value);
+                                // setSyncPrivacyMode writes to localStorage, which can
+                                // throw (private-browsing storage restrictions, quota).
+                                // Only update the displayed state after the write
+                                // actually succeeds, so a failed save doesn't show the
+                                // user a mode that isn't the one sync will use.
+                                try {
+                                    onionSyncService.setSyncPrivacyMode(e.target.value);
+                                    setSyncPrivacyModeState(e.target.value);
+                                } catch {
+                                    setError(
+                                        'Could not save vault sync privacy preference. '
+                                        + 'Sync routing remains unchanged.'
+                                    );
+                                }
                             }}
                         >
                             <option value={SYNC_PRIVACY_MODES.OFF}>

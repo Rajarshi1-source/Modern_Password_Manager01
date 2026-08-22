@@ -484,11 +484,20 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'security.scan_all_honeypots',
         'schedule': 3600.0,  # Hourly
     },
-    # Rotates real credentials for services whose honeypot tripped. Short
-    # interval because this is the containment step after a confirmed breach.
+    # Emails a reminder for each credential rotation still pending >24h and
+    # unconfirmed (it sends reminders only -- it does not rotate anything
+    # itself). Daily, not more often: the task has no record of when it last
+    # reminded a given rotation, so its filter matches the SAME stale rows on
+    # every tick until the user confirms. A short interval turns "reminder"
+    # into spam -- one stale rotation would get 96 emails/day at 15-minute
+    # cadence. Daily matches the 24h staleness window the query itself uses,
+    # so nothing goes un-reminded, but nothing is re-sent hours later either.
+    # A real fix (persisted last-reminded-at + resend interval) belongs on
+    # the task itself, not the schedule -- out of scope here since this PR
+    # only wires up scheduling for tasks that already existed.
     'honeypot-process-pending-rotations': {
         'task': 'security.process_pending_rotations',
-        'schedule': 900.0,  # Every 15 minutes
+        'schedule': 86400.0,  # Daily
     },
     'honeypot-analyze-breach-patterns': {
         'task': 'security.analyze_breach_patterns',
@@ -502,9 +511,14 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'security.generate_honeypot_stats',
         'schedule': 86400.0,  # Daily
     },
-    # User-facing email. Weekly, deliberately the least frequent entry here.
+    # User-facing email. Daily, matching the task's own 24h query window
+    # (`detected_at__gte=now-24h`) and its own docstring ("Send daily breach
+    # digest"). A longer interval was tried first and is wrong: any breach
+    # detected more than 24h before the tick falls outside that window
+    # forever, so a weekly schedule would silently skip the majority of
+    # breaches rather than just delaying their digest.
     'honeypot-send-breach-digest': {
         'task': 'security.send_breach_digest',
-        'schedule': 604800.0,  # Weekly
+        'schedule': 86400.0,  # Daily
     },
 }
