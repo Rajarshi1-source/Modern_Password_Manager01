@@ -29,7 +29,10 @@ export const VaultProvider = ({ children }) => {
   // Which transport the last sync actually used, and whether that was a
   // downgrade from what the user asked for. Consumers render privacy state
   // from these rather than assuming the configured mode was honoured.
-  const [syncTransport, setSyncTransport] = useState('clearnet');
+  // 'none' until the first sync completes -- 'clearnet' would falsely claim
+  // a sync already happened over the normal connection before any sync has
+  // run at all. Set to 'onion'/'clearnet'/'none' by syncVault below.
+  const [syncTransport, setSyncTransport] = useState('none');
   const [syncDegraded, setSyncDegraded] = useState(false);
   const [firebaseInitialized, setFirebaseInitialized] = useState(false);
   const [pendingChanges, setPendingChanges] = useState([]);

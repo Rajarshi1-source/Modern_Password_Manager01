@@ -14,7 +14,7 @@ import secrets
 from unittest import mock
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -87,39 +87,56 @@ class DuressSignalServiceTests(TestCase):
         self.assertFalse(first.is_active)
         self.assertTrue(second.is_active)
 
-    def test_matching_signal_fires_but_defers_the_work(self):
-        """`consume_unlock_signal` must dispatch, not execute, on a match.
+    def test_consume_unlock_signal_always_enqueues_identically(self):
+        """The core regression test for round 2 of the timing fix.
 
-        The activation work (DB writes beyond the signal row, evidence
-        packages, decoy-vault generation, and outbound SilentAlarmService I/O)
-        used to run inline here. That made a match measurably slower than a
-        non-match's single digest comparison -- a latency oracle for a
-        coercer holding the user's session. This asserts the fix structurally
-        (nothing heavy runs on this call) rather than by timing, which would
-        be flaky in CI.
+        Round 1 moved the ACTIVATION work (evidence packages, decoy vaults,
+        SilentAlarmService's blocking SMTP/webhook I/O) into a Celery task,
+        but `consume_unlock_signal` still ran the digest-comparison loop on
+        the request thread and called `.delay()` ONLY on a match.
+        `Task.delay()` synchronously publishes to the broker before
+        returning -- real network I/O -- so whether that publish happened at
+        all was itself a smaller but real, still match-dependent timing
+        signal.
+
+        This asserts the round-2 fix structurally: for both a token that
+        will turn out to match and one that will not, `consume_unlock_signal`
+        does the exact same thing -- one `.delay()` call, identical argument
+        shape, no synchronous DB query for existing signals at all. The
+        matching itself no longer happens here, so there is nothing left on
+        this call whose cost could vary with the outcome.
         """
-        token = make_token()
-        signal = self.service.register_signal_token(self.user, token)
+        matching_token = make_token()
+        self.service.register_signal_token(self.user, matching_token)
+        non_matching_token = make_token()
 
         with mock.patch(
             'security.tasks.duress_tasks.activate_duress_signal_task.delay'
         ) as mock_delay:
-            fired = self.service.consume_unlock_signal(
-                self.user, token, self.context,
+            self.service.consume_unlock_signal(
+                self.user, matching_token, self.context,
+            )
+            self.service.consume_unlock_signal(
+                self.user, non_matching_token, self.context,
             )
 
-        self.assertTrue(fired)
-        mock_delay.assert_called_once_with(
-            signal_id=str(signal.id), request_context=self.context,
+        self.assertEqual(mock_delay.call_count, 2)
+        first_call, second_call = mock_delay.call_args_list
+        self.assertEqual(
+            first_call.kwargs,
+            {'user_id': self.user.id, 'signal': matching_token, 'request_context': self.context},
         )
-        # Nothing synchronous touched the signal row or created an event --
-        # that is now exclusively the enqueued task's job.
-        signal.refresh_from_db()
-        self.assertEqual(signal.trigger_count, 0)
+        self.assertEqual(
+            second_call.kwargs,
+            {'user_id': self.user.id, 'signal': non_matching_token, 'request_context': self.context},
+        )
+        # Neither call touched the database -- no DuressSignal query, no
+        # DuressEvent. Matching (and everything downstream of it) is now
+        # exclusively the enqueued task's job.
         self.assertEqual(DuressEvent.objects.count(), 0)
 
     def test_matching_signal_never_calls_activate_duress_mode_inline(self):
-        """Direct guard against the timing regression: `activate_duress_mode`
+        """Direct guard against the round-1 timing regression: `activate_duress_mode`
         (the entry point into evidence packages, decoy vaults, and
         SilentAlarmService's blocking SMTP/webhook calls) must not be called
         from the request thread at all."""
@@ -133,45 +150,91 @@ class DuressSignalServiceTests(TestCase):
 
         mock_activate.assert_not_called()
 
-    def test_non_matching_signal_does_nothing(self):
-        self.service.register_signal_token(self.user, make_token())
+    def test_consume_unlock_signal_returns_none(self):
+        """The return value no longer means "matched" -- matching moved to
+        the task, so nothing on the request thread can know the outcome. A
+        caller checking a truthy/falsy return for match status would be
+        silently wrong; pin the contract as None rather than leave it
+        implicit."""
+        result = self.service.consume_unlock_signal(
+            self.user, make_token(), self.context,
+        )
 
-        with mock.patch(
-            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
-        ) as mock_delay:
-            fired = self.service.consume_unlock_signal(
-                self.user, make_token(), self.context,
+        self.assertIsNone(result)
+
+
+class RegisterSignalTokenConcurrencyTests(TransactionTestCase):
+    """`register_signal_token` must hold "one active signal per user" under
+    real concurrent registration, not just sequential calls.
+
+    Deactivate-then-create is not atomic against a second writer on its own:
+    two transactions can both run their `.filter(is_active=True).update(...)`
+    before either commits its `.create()`, so under READ COMMITTED neither
+    sees the other's new row and both insert an active signal. A sequential
+    test cannot observe this -- it needs real interleaving, hence
+    `TransactionTestCase` + real threads rather than mocking the ORM.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='race-user',
+            email='race@example.com',
+            password='test-password-not-a-secret',  # noqa: S106
+        )
+
+    def test_concurrent_registrations_leave_exactly_one_active_signal(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+
+        from django.db import connection, connections
+
+        if connection.vendor == 'sqlite':
+            # Same reasoning as ArmCeilingConcurrencyTests
+            # (test_adaptive_policy_bandit.py) and EntangledDevicePairConcurrentInsertTests
+            # (test_quantum_entanglement.py): SQLite serializes writers at the
+            # file level rather than row-locking, so concurrent threads hit
+            # "database is locked" regardless of whether select_for_update()
+            # is correct. Real interleaving needs real MVCC row locks; this
+            # runs against Postgres in CI.
+            self.skipTest(
+                "select_for_update() row-locking needs real MVCC. SQLite "
+                "serializes writers at the file level instead, so concurrent "
+                "threads fail with 'database is locked' independent of the "
+                "fix under test. Runs against Postgres in CI."
             )
 
-        self.assertFalse(fired)
-        mock_delay.assert_not_called()
-        self.assertEqual(DuressEvent.objects.count(), 0)
+        n_threads = 8
+        start_gate = threading.Event()
+        errors = []
+        errors_lock = threading.Lock()
 
-    def test_a_deactivated_token_no_longer_fires(self):
-        """The is_active flag is only meaningful if consume honours it."""
-        old_token = make_token()
-        self.service.register_signal_token(self.user, old_token)
-        self.service.register_signal_token(self.user, make_token())
+        def worker(i):
+            service = get_duress_code_service()
+            try:
+                if not start_gate.wait(timeout=5):
+                    raise RuntimeError('start gate never opened')
+                service.register_signal_token(self.user, make_token())
+            except Exception as exc:  # noqa: BLE001 - surfaced on the main thread below
+                with errors_lock:
+                    errors.append(exc)
+            finally:
+                # Per-thread connections leak unless closed explicitly.
+                connections.close_all()
 
-        fired = self.service.consume_unlock_signal(
-            self.user, old_token, self.context,
+        with ThreadPoolExecutor(max_workers=n_threads) as executor:
+            futures = [executor.submit(worker, i) for i in range(n_threads)]
+            start_gate.set()
+            for f in futures:
+                f.result(timeout=10)
+
+        self.assertEqual(errors, [], f"worker threads failed: {errors}")
+        self.assertEqual(
+            DuressSignal.objects.filter(user=self.user, is_active=True).count(),
+            1,
+            "concurrent registrations left more than one active signal -- "
+            "the alarm token a coerced user's client releases would no "
+            "longer be the only thing being checked",
         )
-
-        self.assertFalse(fired)
-        self.assertEqual(DuressEvent.objects.count(), 0)
-
-    def test_another_users_token_never_matches(self):
-        token = make_token()
-        self.service.register_signal_token(self.user, token)
-        other = User.objects.create_user(
-            username='other-user',
-            email='other@example.com',
-            password='test-password-not-a-secret',  # nosec B106
-        )
-
-        fired = self.service.consume_unlock_signal(other, token, self.context)
-
-        self.assertFalse(fired)
 
 
 class DuressSignalActivationTaskTests(TestCase):
@@ -192,17 +255,22 @@ class DuressSignalActivationTaskTests(TestCase):
         self.service = get_duress_code_service()
         self.context = {'ip_address': '203.0.113.10', 'user_agent': 'test-agent'}
 
-    def _run(self, signal):
+    def _run(self, user, signal):
         from security.tasks.duress_tasks import activate_duress_signal_task
 
         activate_duress_signal_task.apply(
-            kwargs={'signal_id': str(signal.id), 'request_context': self.context},
+            kwargs={
+                'user_id': user.id,
+                'signal': signal,
+                'request_context': self.context,
+            },
         )
 
     def test_fires_and_counts(self):
-        signal = self.service.register_signal_token(self.user, make_token())
+        token = make_token()
+        signal = self.service.register_signal_token(self.user, token)
 
-        self._run(signal)
+        self._run(self.user, token)
 
         signal.refresh_from_db()
         self.assertEqual(signal.trigger_count, 1)
@@ -211,32 +279,70 @@ class DuressSignalActivationTaskTests(TestCase):
     def test_does_not_deactivate_after_firing(self):
         """Sustained coercion means repeated unlocks; silently disarming the
         alarm after the first would defeat the feature."""
-        signal = self.service.register_signal_token(self.user, make_token())
+        token = make_token()
+        signal = self.service.register_signal_token(self.user, token)
 
-        self._run(signal)
-        self._run(signal)
+        self._run(self.user, token)
+        self._run(self.user, token)
 
         signal.refresh_from_db()
         self.assertTrue(signal.is_active)
         self.assertEqual(signal.trigger_count, 2)
 
-    def test_missing_signal_does_not_raise(self):
-        """The signal can vanish between match and task execution (e.g. the
-        user re-runs duress setup in that window); must not crash the worker."""
+    def test_non_matching_signal_does_nothing(self):
+        """The matching decision itself now lives here, not on the request
+        thread -- this is the only place left where "does nothing" can be
+        verified for a token that was never registered."""
+        self.service.register_signal_token(self.user, make_token())
+
+        self._run(self.user, make_token())
+
+        self.assertEqual(DuressEvent.objects.count(), 0)
+
+    def test_deactivated_token_does_not_fire(self):
+        """The is_active flag is only meaningful if the task honours it."""
+        old_token = make_token()
+        old_signal = self.service.register_signal_token(self.user, old_token)
+        self.service.register_signal_token(self.user, make_token())
+
+        self._run(self.user, old_token)
+
+        old_signal.refresh_from_db()
+        self.assertEqual(old_signal.trigger_count, 0)
+        self.assertEqual(DuressEvent.objects.count(), 0)
+
+    def test_another_users_token_never_matches(self):
+        token = make_token()
+        self.service.register_signal_token(self.user, token)
+        other = User.objects.create_user(
+            username='other-user',
+            email='other@example.com',
+            password='test-password-not-a-secret',  # nosec B106
+        )
+
+        self._run(other, token)
+
+        self.assertEqual(DuressEvent.objects.count(), 0)
+
+    def test_missing_user_does_not_raise(self):
+        """The user can vanish between request and task execution (deleted
+        account, race in tests); must not crash the worker."""
         from security.tasks.duress_tasks import activate_duress_signal_task
 
         activate_duress_signal_task.apply(
             kwargs={
-                'signal_id': '00000000-0000-0000-0000-000000000000',
+                'user_id': 0,
+                'signal': make_token(),
                 'request_context': self.context,
             },
         )  # no exception
 
     def test_no_configured_code_still_records_an_event(self):
         """The alarm must not be silently swallowed."""
-        signal = self.service.register_signal_token(self.user, make_token())
+        token = make_token()
+        self.service.register_signal_token(self.user, token)
 
-        self._run(signal)
+        self._run(self.user, token)
 
         event = DuressEvent.objects.get(user=self.user)
         self.assertEqual(event.event_type, 'code_activated')
@@ -246,7 +352,8 @@ class DuressSignalActivationTaskTests(TestCase):
         """`order_by('-threat_level')` on a CharField would rank
         medium > low > high > critical -- the mildest response for the worst
         situation. Severity must be ranked explicitly."""
-        signal = self.service.register_signal_token(self.user, make_token())
+        token = make_token()
+        self.service.register_signal_token(self.user, token)
         for level in ('low', 'medium', 'critical', 'high'):
             DuressCode.objects.create(
                 user=self.user,
@@ -255,7 +362,7 @@ class DuressSignalActivationTaskTests(TestCase):
                 is_active=True,
             )
 
-        self._run(signal)
+        self._run(self.user, token)
 
         event = DuressEvent.objects.filter(user=self.user).first()
         self.assertEqual(event.threat_level, 'critical')
@@ -270,11 +377,12 @@ class DuressSignalActivationTaskTests(TestCase):
             user=self.user, code_hash='hash-critical', threat_level='critical',
             is_active=True,
         )
-        signal = self.service.register_signal_token(
-            self.user, make_token(), duress_code=low_code,
+        token = make_token()
+        self.service.register_signal_token(
+            self.user, token, duress_code=low_code,
         )
 
-        self._run(signal)
+        self._run(self.user, token)
 
         event = DuressEvent.objects.filter(user=self.user).first()
         self.assertEqual(event.threat_level, 'low')
@@ -370,19 +478,33 @@ class DuressSignalAPITests(TestCase):
         Neither endpoint may grow a password/master_password parameter. If one
         ever does, the decision has moved server-side and the invariant in
         docs/adaptive-password-zk-remediation-plan.md §1 is broken.
+
+        Posts the ACTUALLY REGISTERED token (not an unrelated random one) --
+        an earlier version of this test posted a fresh token that could never
+        match, so it "proved" the password field changes nothing while never
+        exercising the path where a real match occurs. Mocking `.delay` lets
+        this assert the extra field never reaches the enqueued task's
+        arguments, without needing the task itself to run.
         """
         token = make_token()
         get_duress_code_service().register_signal_token(self.user, token)
 
-        response = self.client.post(
-            self.report_url,
-            {'signal': make_token(), 'password': 'MyR3alP@ss'},
-            format='json',
-        )
+        with mock.patch(
+            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
+        ) as mock_delay:
+            response = self.client.post(
+                self.report_url,
+                {'signal': token, 'password': 'MyR3alP@ss'},  # noqa: S106
+                format='json',
+            )
 
-        # The extra field is ignored, not honoured: no alarm, no error.
+        # The extra field is ignored, not honoured: same response, and it
+        # never leaks into the task's arguments.
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        self.assertEqual(DuressEvent.objects.count(), 0)
+        self.assertEqual(response.content, b'')
+        mock_delay.assert_called_once()
+        self.assertEqual(mock_delay.call_args.kwargs['signal'], token)
+        self.assertNotIn('password', mock_delay.call_args.kwargs)
 
     def test_report_endpoint_carries_no_throttle(self):
         """The default DEFAULT_THROTTLE_CLASSES (UserRateThrottle, 60/min in

@@ -218,23 +218,47 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                     </div>
 
                     {/*
-                      The claim here is deliberately narrow. Onion routing hides
-                      the client IP; it does NOT unlink the sync from the
-                      account, because the vault proxy is authenticated and the
-                      JWT still names the user. Saying "the server can't
-                      identify you" would be a promise the architecture cannot
-                      keep — see docs/privacy-features-gap-remediation-plan.md
-                      §1.3 and §4.1 Phase 4.
+                      Text must depend on the selected mode, not describe onion
+                      routing unconditionally: 'off' (the default) never touches
+                      Tor at all, and 'prefer_onion' can silently fall back to a
+                      normal connection. Claiming "routes through Tor" while the
+                      actual mode is 'off' would be exactly the false privacy
+                      promise this whole feature exists to avoid making.
+
+                      The privacy claim itself stays deliberately narrow in every
+                      mode: onion routing hides the client IP; it does NOT unlink
+                      the sync from the account, because the vault proxy is
+                      authenticated and the JWT still names the user. Saying "the
+                      server can't identify you" would be a promise the
+                      architecture cannot keep — see
+                      docs/privacy-features-gap-remediation-plan.md §1.3 and
+                      §4.1 Phase 4.
                     */}
-                    <p className="dp-setting-desc">
-                        Routes vault sync through the Tor onion service, which hides your
-                        IP address from the server and makes sync traffic harder to
-                        correlate. It does not hide <em>which account</em> is syncing —
-                        sync is still authenticated.
-                    </p>
+                    {syncPrivacyMode === SYNC_PRIVACY_MODES.OFF && (
+                        <p className="dp-setting-desc">
+                            Vault sync uses your normal connection. Your IP address is
+                            visible to the server, as with any other request.
+                        </p>
+                    )}
+
+                    {syncPrivacyMode === SYNC_PRIVACY_MODES.PREFER_ONION && (
+                        <p className="dp-setting-desc">
+                            Vault sync tries the Tor onion service first, which hides your
+                            IP address from the server and makes sync traffic harder to
+                            correlate. If the onion route is unavailable, sync falls back
+                            to your normal connection instead of failing — you&apos;ll
+                            see that a sync used the normal connection when it happens.
+                            Neither route hides <em>which account</em> is syncing — sync
+                            is still authenticated either way.
+                        </p>
+                    )}
 
                     {syncPrivacyMode === SYNC_PRIVACY_MODES.REQUIRE_ONION && (
                         <p className="dp-setting-desc">
+                            Vault sync only uses the Tor onion service, which hides your
+                            IP address from the server and makes sync traffic harder to
+                            correlate. It does not hide <em>which account</em> is
+                            syncing — sync is still authenticated.{' '}
                             <strong>Strict mode:</strong> if the onion route is
                             unavailable, sync will fail rather than fall back to a
                             normal connection. Your changes stay queued locally until
