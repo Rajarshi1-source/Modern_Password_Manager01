@@ -106,6 +106,28 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
     def _beat_schedule(self):
         from password_manager.celery import app
 
+        # `app.finalize()` is REQUIRED here, not incidental tidying.
+        #
+        # Not every beat entry is in the static dict passed to `app.conf.update()`
+        # in celery.py. Feature modules that cannot be imported at module scope
+        # (they touch the Django app registry before `django.setup()` finishes)
+        # contribute their entries from an `@app.on_after_finalize` handler
+        # instead -- currently Time-Lock and Honeypot. That signal fires on
+        # finalization, which in a real worker/beat process happens during
+        # startup, but in a test process happens only when something forces it.
+        #
+        # Reading `app.conf.beat_schedule` without finalizing therefore returns
+        # a schedule MISSING exactly the entries most likely to be broken -- the
+        # deferred ones. That is not a hypothetical: before this call was added,
+        # the four `time_lock.*` entries were absent from every assertion in
+        # this file, including `test_every_beat_entry_names_a_registered_task`,
+        # so the very bug class this suite exists to catch was invisible for the
+        # entries fixed in PR #483.
+        #
+        # Idempotent -- Celery guards on `self.finalized`, so repeated calls
+        # across test methods are free and the signal fires once.
+        app.finalize()
+
         return app.conf.beat_schedule
 
     def test_every_beat_entry_names_a_registered_task(self):
@@ -239,6 +261,77 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
         """
         beat_schedule = self._beat_schedule()
         self.assertNotIn('analyze-password-strength-daily', beat_schedule)
+
+    def test_honeypot_entries_resolve(self):
+        """The six scheduled honeypot-email (breach canary) entries.
+
+        This feature was broken in BOTH ways the other tests in this file
+        cover separately, which is why it needs its own case:
+
+          * unregistered, like Dark Protocol -- nothing in production imported
+            `honeypot_tasks.py` (only tests did, by module path), so its nine
+            `@shared_task`s never registered. `autodiscover_tasks()` does not
+            help: it imports the `security.tasks` package, so a submodule this
+            package's __init__ never names stays unimported.
+          * unscheduled, like Time-Lock -- there were no `honeypot-*` beat
+            entries at all.
+
+        Fixing either alone would have been inert: an entry naming an
+        unregistered task is discarded by the worker, and a registered task
+        with no entry is never enqueued. This test asserts both halves.
+        """
+        registered = _worker_registry()
+        beat_schedule = self._beat_schedule()
+
+        expected = {
+            'honeypot-scan-all': 'security.scan_all_honeypots',
+            'honeypot-process-pending-rotations': 'security.process_pending_rotations',
+            'honeypot-analyze-breach-patterns': 'security.analyze_breach_patterns',
+            'honeypot-cleanup-expired': 'security.cleanup_expired_honeypots',
+            'honeypot-generate-stats': 'security.generate_honeypot_stats',
+            'honeypot-send-breach-digest': 'security.send_breach_digest',
+        }
+
+        for entry, task_name in expected.items():
+            with self.subTest(entry=entry):
+                self.assertIn(
+                    entry,
+                    beat_schedule,
+                    f'{entry} missing from beat_schedule — is '
+                    'HONEYPOT_BEAT_SCHEDULE still merged in celery.py?',
+                )
+                self.assertEqual(beat_schedule[entry]['task'], task_name)
+                self.assertIn(task_name, registered)
+
+    def test_argument_taking_honeypot_tasks_stay_unscheduled(self):
+        """Three honeypot tasks take a required id and must never be scheduled.
+
+        `check_honeypot_activity(honeypot_id)`, `check_all_user_honeypots(user_id)`
+        and `correlate_with_hibp(breach_id)` are fan-out targets, invoked BY the
+        scheduled tasks with an argument. A beat entry for any of them enqueues
+        a no-argument call that raises TypeError on the worker every single
+        tick -- a failure mode that looks like a broken worker rather than a
+        bad schedule, so it is worth pinning explicitly.
+        """
+        beat_schedule = self._beat_schedule()
+
+        must_not_be_scheduled = {
+            'security.check_honeypot_activity',
+            'security.check_all_user_honeypots',
+            'security.correlate_with_hibp',
+        }
+
+        scheduled = {
+            config['task']
+            for config in beat_schedule.values()
+            if 'task' in config
+        }
+
+        self.assertEqual(
+            must_not_be_scheduled & scheduled,
+            set(),
+            'argument-taking honeypot task(s) scheduled with no argument',
+        )
 
     def test_quarantine_list_has_not_rotted(self):
         """A quarantined entry must still exist AND still be unregistered.

@@ -557,11 +557,52 @@ app.conf.update(
 # docs/time-lock-beat-schedule-plan.md §3 for the query.
 
 
+# =============================================================================
+# Honeypot Emails: breach canary
+# =============================================================================
+#
+# `honeypot_tasks.py` implements the full canary loop -- poll each alias with
+# its provider (SimpleLogin / AnonAddy), raise a HoneypotBreachEvent when one
+# receives mail, rotate the real credential for the breached service, and email
+# the user a digest. None of it had ever run: the module was never imported (so
+# its nine `@shared_task`s were never registered) AND had no beat entries. See
+# the block in security/tasks/__init__.py for why both halves were needed.
+#
+# SAFETY NOTE FOR DEPLOYMENT -- same hazard as the Time-Lock merge above, and
+# for the same reason: entries that have never existed do not fire "from now
+# on", they fire the WHOLE accumulated backlog on the first tick. Two entries
+# carry real externally-visible effects, and they are NOT equally risky:
+#
+#   * `process_pending_rotations` -- the actual hazard. Its query
+#     (`status='pending', initiated_at__lt=now-24h, user_confirmed=False`) has
+#     no lower bound, so EVERY stale CredentialRotationLog ever accumulated
+#     gets a reminder email in a single batch on the first tick. Note it sends
+#     reminders; it does not itself rotate anything.
+#   * `scan_all_honeypots` -- calls the alias provider (SimpleLogin/AnonAddy)
+#     once per active honeypot. The first tick scans the entire backlog of
+#     never-scanned aliases at once, which can trip provider rate limits and
+#     can raise many HoneypotBreachEvents simultaneously.
+#
+# `send_breach_digest` is self-bounding (`detected_at__gte=now-24h`) and
+# `cleanup_expired_honeypots` is idempotent, so neither needs pre-deploy care.
+#
+# Run `python manage.py check_honeypot_backlog` before deploying -- it reports
+# the backlog without mutating anything. A non-zero backlog is not necessarily
+# a blocker, but it must be a decision, not a surprise.
+
+
 @app.on_after_finalize.connect
-def _merge_time_lock_beat_schedule(sender, **kwargs):
-    from security.tasks import TIME_LOCK_BEAT_SCHEDULE
+def _merge_feature_beat_schedules(sender, **kwargs):
+    """Merge beat schedules that live in their own feature modules.
+
+    Deferred to on_after_finalize rather than imported at module scope: see the
+    Time-Lock comment block above for the AppRegistryNotReady failure an eager
+    `from security.tasks import ...` causes here.
+    """
+    from security.tasks import HONEYPOT_BEAT_SCHEDULE, TIME_LOCK_BEAT_SCHEDULE
 
     sender.conf.beat_schedule.update(TIME_LOCK_BEAT_SCHEDULE)
+    sender.conf.beat_schedule.update(HONEYPOT_BEAT_SCHEDULE)
 
 
 @app.task(bind=True, ignore_result=True)
