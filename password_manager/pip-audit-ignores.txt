@@ -154,8 +154,8 @@ CVE-2026-15830 exp:2026-10-20
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the
 # model as already-validated tensors via ml_dark_web/ml_services.py,
-# never as torch.jit scripts or pt2 binaries. Seven IDs total (was
-# twelve; five removed above, not renewed).
+# never as torch.jit scripts or pt2 binaries. Four IDs total (was
+# twelve; eight removed above, not renewed).
 #
 # CVE-2025-3000 (GHSA-rrmf-rvhw-rf47, same advisory as PYSEC-2025-194 below
 # under a different ID alias — dates kept in sync) is the torch.jit.script

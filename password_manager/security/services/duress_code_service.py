@@ -398,10 +398,33 @@ class DuressCodeService:
         """
         from security.tasks.duress_tasks import activate_duress_signal_task
 
-        activate_duress_signal_task.delay(
-            user_id=user.id,
-            signal=signal,
-            request_context=request_context,
+        # apply_async(), not the .delay() shorthand: this call still does the
+        # real broker I/O `delay()` would (publishing is synchronous either
+        # way -- see the docstring above), so a broker outage still costs
+        # this request thread time, not a raised error the caller can't
+        # recover from (`duress_signal_report` already wraps this in a
+        # broad try/except and answers 204 regardless). Celery's own
+        # defaults already bound a single connection attempt
+        # (`broker_connection_timeout`, 4s) rather than blocking forever,
+        # but the DEFAULT publish-retry policy layers up to 3 more attempts
+        # on top of that -- too slow for an endpoint whose whole design is
+        # to answer promptly no matter what. Scoped to just this call
+        # (not a project-wide `broker_transport_options` change, which
+        # would also alter delivery guarantees for every other task in this
+        # codebase) since this is the one call site that must not be slow.
+        activate_duress_signal_task.apply_async(
+            kwargs={
+                'user_id': user.id,
+                'signal': signal,
+                'request_context': request_context,
+            },
+            retry=True,
+            retry_policy={
+                'max_retries': 1,
+                'interval_start': 0,
+                'interval_step': 0.1,
+                'interval_max': 0.1,
+            },
         )
 
     # =========================================================================

@@ -112,8 +112,8 @@ class DuressSignalServiceTests(TestCase):
         non_matching_token = make_token()
 
         with mock.patch(
-            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
-        ) as mock_delay:
+            'security.tasks.duress_tasks.activate_duress_signal_task.apply_async'
+        ) as mock_apply_async:
             self.service.consume_unlock_signal(
                 self.user, matching_token, self.context,
             )
@@ -121,14 +121,14 @@ class DuressSignalServiceTests(TestCase):
                 self.user, non_matching_token, self.context,
             )
 
-        self.assertEqual(mock_delay.call_count, 2)
-        first_call, second_call = mock_delay.call_args_list
+        self.assertEqual(mock_apply_async.call_count, 2)
+        first_call, second_call = mock_apply_async.call_args_list
         self.assertEqual(
-            first_call.kwargs,
+            first_call.kwargs['kwargs'],
             {'user_id': self.user.id, 'signal': matching_token, 'request_context': self.context},
         )
         self.assertEqual(
-            second_call.kwargs,
+            second_call.kwargs['kwargs'],
             {'user_id': self.user.id, 'signal': non_matching_token, 'request_context': self.context},
         )
         # Neither call touched the database -- no DuressSignal query, no
@@ -500,8 +500,8 @@ class DuressSignalAPITests(TestCase):
         get_duress_code_service().register_signal_token(self.user, token)
 
         with mock.patch(
-            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
-        ) as mock_delay:
+            'security.tasks.duress_tasks.activate_duress_signal_task.apply_async'
+        ) as mock_apply_async:
             response = self.client.post(
                 self.report_url,
                 {'signal': token, 'password': 'MyR3alP@ss'},  # noqa: S106
@@ -512,9 +512,10 @@ class DuressSignalAPITests(TestCase):
         # never leaks into the task's arguments.
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(response.content, b'')
-        mock_delay.assert_called_once()
-        self.assertEqual(mock_delay.call_args.kwargs['signal'], token)
-        self.assertNotIn('password', mock_delay.call_args.kwargs)
+        mock_apply_async.assert_called_once()
+        task_kwargs = mock_apply_async.call_args.kwargs['kwargs']
+        self.assertEqual(task_kwargs['signal'], token)
+        self.assertNotIn('password', task_kwargs)
 
     def test_report_endpoint_carries_no_throttle(self):
         """The default DEFAULT_THROTTLE_CLASSES (UserRateThrottle, 60/min in
@@ -575,12 +576,35 @@ class DuressSignalReportRateLimitTests(TestCase):
     def test_exceeding_budget_returns_false(self):
         from security.api.duress_code_views import (
             _REPORT_RATE_LIMIT,
+            _REPORT_RESERVE_LIMIT,
+            _within_report_budget,
+        )
+
+        # The primary budget alone is not the whole story any more -- the
+        # reserve slot (see test_reserve_survives_budget_exhaustion below)
+        # lets one more request through after it. Exhaust both before
+        # expecting a False.
+        for _ in range(_REPORT_RATE_LIMIT + _REPORT_RESERVE_LIMIT):
+            _within_report_budget(self.user.id)
+
+        self.assertFalse(_within_report_budget(self.user.id))
+
+    def test_reserve_survives_budget_exhaustion(self):
+        """A coercer who floods the primary budget with noise first must not
+        be able to silently suppress the next report for the rest of that
+        60s window -- the reserve slot still lets exactly one more through,
+        real signal or noise, bounding the suppression window to ~5s."""
+        from security.api.duress_code_views import (
+            _REPORT_RATE_LIMIT,
             _within_report_budget,
         )
 
         for _ in range(_REPORT_RATE_LIMIT):
             _within_report_budget(self.user.id)
 
+        self.assertTrue(_within_report_budget(self.user.id))
+        # The reserve slot itself is a single-shot allowance per its own
+        # window -- a second call right after it is exhausted too.
         self.assertFalse(_within_report_budget(self.user.id))
 
     def test_budget_is_tracked_per_user(self):
@@ -607,22 +631,43 @@ class DuressSignalReportRateLimitTests(TestCase):
         """The property that actually matters: exceeding the budget is
         silent. Same 204, same empty body, no observable difference from a
         normal call -- only the internal enqueue is skipped."""
-        from security.api.duress_code_views import _REPORT_RATE_LIMIT
+        from security.api.duress_code_views import (
+            _REPORT_RATE_LIMIT,
+            _REPORT_RESERVE_LIMIT,
+        )
 
         client = APIClient()
         client.force_authenticate(user=self.user)
         report_url = reverse('duress-signal-report')
 
-        for _ in range(_REPORT_RATE_LIMIT):
+        # Exhaust the primary budget AND the reserve slot -- only the request
+        # after both are spent should skip the enqueue.
+        for _ in range(_REPORT_RATE_LIMIT + _REPORT_RESERVE_LIMIT):
             client.post(report_url, {'signal': make_token()}, format='json')
 
         with mock.patch(
-            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
-        ) as mock_delay:
+            'security.tasks.duress_tasks.activate_duress_signal_task.apply_async'
+        ) as mock_apply_async:
             response = client.post(
                 report_url, {'signal': make_token()}, format='json',
             )
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(response.content, b'')
-        mock_delay.assert_not_called()
+        mock_apply_async.assert_not_called()
+
+    def test_cache_failure_fails_open(self):
+        """A Redis outage must not stop this endpoint answering 204 -- see
+        _within_report_budget's own docstring on why it fails open. Patches
+        the 'rate_limiting' alias with a mock whose add() raises, covering
+        the except-and-return-True branch the primary-budget tests above
+        never exercise (they all hit a working cache)."""
+        from security.api.duress_code_views import _within_report_budget
+
+        broken = mock.MagicMock()
+        broken.add.side_effect = ConnectionError('redis down')
+        with mock.patch(
+            'security.api.duress_code_views.caches',
+            {'rate_limiting': broken},
+        ):
+            self.assertTrue(_within_report_budget(self.user.id))
