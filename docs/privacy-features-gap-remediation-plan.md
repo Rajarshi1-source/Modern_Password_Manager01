@@ -1371,3 +1371,46 @@ explicitly.
 re-run in full: 17 passed (16 pre-existing + 1 new). `python -m py_compile`
 clean on all four touched backend files. ESLint clean on both touched
 frontend files.
+
+## 13. Review-fix round 7 on PR #486 (CodeRabbit, seventh pass)
+
+Two findings, both confirmed valid, both minor and copy/comment-scoped. All
+34 CI checks were green going into this round.
+
+### 13.1 Sync privacy mode descriptions didn't state the onion-ingress precondition (Minor, confirmed)
+
+`DarkProtocolSettings.jsx`'s PREFER_ONION/REQUIRE_ONION copy said sync
+"tries"/"only uses" the Tor onion service, without saying this client can
+only reach the vault proxy when the page itself is being served from the
+onion address. Verified against `onionSyncService.js`'s own doc comment:
+`isOnionSyncAvailable` gates on `vault_proxy.available`, computed
+server-side as "request arrived over the onion ingress" — on the ordinary
+clearnet web origin nearly every user is on, that is always false, so
+PREFER_ONION silently always falls back and REQUIRE_ONION always fails,
+regardless of the toggle. Not a functional bug (the fallback/fail-closed
+behavior is correct and already covered by
+`onionSyncService.test.js`) but exactly the class of overclaim §6's own
+acceptance criteria already guard against for this UI ("hides your IP
+address", never "the server can't identify you") — a user flipping this
+toggle from the normal web app would reasonably read "tries the Tor onion
+service" as doing something, not as a no-op. Added one clause to each
+description naming the actual precondition (accessing the app through its
+onion address, e.g. Tor Browser). No test file exists for this component
+(confirmed by search); ESLint clean, no new `react/no-unescaped-entities`
+issues (matched the file's existing `&apos;` pattern for the two new
+contractions).
+
+### 13.2 `pip-audit-ignores.txt`'s round-5 torch-count fix was itself imprecise (Minor, confirmed — a correction to this doc's own round-5 fix)
+
+§11.6 fixed "seven IDs total" to "Four IDs total (was twelve; eight removed
+above, not renewed)" — the *count* (8) was right, but "above" wasn't:
+verified by re-reading the file top to bottom, only 5 removed IDs
+(`PYSEC-2025-189/190/191`, `192/193`) are documented before this summary
+line; the other 3 (`PYSEC-2025-195/196/197`) are documented after it,
+below, since that removal was itself round-4's fix and predates this
+comment by position but not by file order. Changed "eight removed above"
+to "eight removed in this manifest" — true regardless of position, and
+avoids re-introducing a positional claim a future edit could just as easily
+get backwards again. Comment-only change; the suppression parser
+(`.github/workflows/security-multi-scanner.yml`, `_ID_RX`) only reads
+`<ID> exp:<date>` lines, confirmed unaffected.
