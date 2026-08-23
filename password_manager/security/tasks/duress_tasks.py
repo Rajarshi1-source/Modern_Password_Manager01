@@ -111,10 +111,20 @@ def activate_duress_signal_task(user_id, signal, request_context):
     # the increment atomically instead. `matched` is not read again after
     # this in the current task body, so no `refresh_from_db()` is needed to
     # see the new value locally.
-    DuressSignal.objects.filter(pk=matched.pk).update(
+    #
+    # `is_active=True` in the filter too, not just `pk=matched.pk`: `matched`
+    # was read above, and register_signal_token's deactivate-then-create can
+    # run for this same user between that read and this update (it holds no
+    # lock this task participates in). Without the extra check, a signal the
+    # DB now considers retired would still get counted and its (possibly
+    # stale) duress_code activated below. If the row no longer matches,
+    # treat it exactly like `matched is None` above.
+    updated = DuressSignal.objects.filter(pk=matched.pk, is_active=True).update(
         trigger_count=F('trigger_count') + 1,
         last_triggered_at=timezone.now(),
     )
+    if not updated:
+        return
 
     duress_code = matched.duress_code
     if duress_code is None:

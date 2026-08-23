@@ -737,7 +737,7 @@ established in `test_adaptive_policy_bandit.py::ArmCeilingConcurrencyTests`
 locking that SQLite doesn't provide (it serializes writers at the file
 level instead), so this genuinely validates only against CI's Postgres.
 
-### 8.4 Doc drift, four instances (Minor, all confirmed)
+### 8.4 Doc drift, five instances (Minor, all confirmed)
 
 - §3's "Consequence" paragraph read as a factual claim that
   `process_pending_rotations` rotates credentials; it was meant as a quote of
@@ -967,10 +967,11 @@ frontend files.
 
 ## 10. Review-fix round 4 on PR #486 (CodeRabbit, fourth pass)
 
-Six findings (5 actionable, 1 nitpick), verified critically before changing
-anything. All six held up and were fixed. No CI check was failing this
-round — the check fixed in round 1 (`Dependency Vulnerability Scan`) was
-green throughout, but this round's nitpick found the round-1 renewal had
+Seven findings (6 actionable, 1 filed as a nitpick — §10.1, which turned out
+Major on inspection rather than staying minor), verified critically before
+changing anything. All seven held up and were fixed. No CI check was failing
+this round — the check fixed in round 1 (`Dependency Vulnerability Scan`)
+was green throughout, but this round's nitpick found the round-1 renewal had
 itself been incomplete, so it is logged here as a correction, not a new
 failure.
 
@@ -1147,10 +1148,13 @@ allows exactly one more report through every
 primary 60/min budget is. This does not make suppression impossible -- no
 undifferentiated rate limit can, since the endpoint cannot tell real signal
 from noise without first doing the timing-sensitive work the whole design
-exists to avoid on the request thread -- but it bounds the worst case from
-"suppressed for up to 60s" down to "suppressed for at most ~5s," at the cost
-of a small, fixed amount of extra worker load (at most 12 additional
-enqueues/min/user). Updated `test_exceeding_budget_returns_false` and
+exists to avoid on the request thread. **Correction, round 8 (§14.3): this
+paragraph originally claimed the reserve "bounds the worst case... to at
+most ~5s" — wrong for a continuously-flooding attacker, who can keep
+winning the single reserve slot in every window indefinitely. See §14.3 for
+what this mechanism actually guarantees.** At the cost of a small, fixed
+amount of extra worker load (at most 12 additional enqueues/min/user).
+Updated `test_exceeding_budget_returns_false` and
 `test_over_budget_report_still_returns_204_and_skips_the_enqueue` (both
 previously asserted the request immediately after the primary budget was
 exhausted; that request now consumes the reserve slot instead) and added
@@ -1414,3 +1418,150 @@ avoids re-introducing a positional claim a future edit could just as easily
 get backwards again. Comment-only change; the suppression parser
 (`.github/workflows/security-multi-scanner.yml`, `_ID_RX`) only reads
 `<ID> exp:<date>` lines, confirmed unaffected.
+
+## 14. Review-fix round 8 on PR #486 (CodeRabbit, eighth pass)
+
+Four findings, all confirmed valid. All 34 CI checks were green going into
+this round. One finding (§14.3) is a correction to this document's and this
+codebase's own overclaimed security guarantee from round 5 — the most
+consequential kind of finding to get right, so it gets the fullest
+treatment below.
+
+### 14.1 §8.4's heading undercounted its own list (Minor, confirmed)
+
+"Doc drift, four instances" headed a list of five bullets. Simple
+miscount at authoring time — the five corrections listed were all already
+correct and unchanged; only the number in the heading was wrong. Corrected
+to "five instances".
+
+### 14.2 §10's finding count didn't match its own subsections (Minor, confirmed)
+
+"Six findings (5 actionable, 1 nitpick)" headed seven subsections
+(§10.1-§10.7). Recounted directly from the section's own structure rather
+than re-deriving from the original CodeRabbit comment: seven findings,
+still one originally filed as a nitpick (§10.1), but that one's own heading
+already says it turned out "Major in practice" on inspection — the
+actionable/nitpick split in the summary line hadn't been updated to match
+that upgrade. Corrected to "Seven findings (6 actionable, 1 filed as a
+nitpick — §10.1, which turned out Major on inspection rather than staying
+minor)".
+
+### 14.3 The reserve counter's "~5s" bound (§11.1, round 5) does not hold against a continuously flooding attacker (Major, confirmed — a correction to our own prior work)
+
+This is CodeRabbit catching an overclaim in a security-relevant comment we
+wrote, not catching a new bug in the mechanism itself — the mechanism
+behaves exactly as coded; the claim about what it *guarantees* was wrong.
+
+**The claim, as written in round 5:** the reserve slot "bounds the
+worst-case suppression window from 60s down to 5s" for a genuine duress
+report an attacker is trying to suppress by flooding the endpoint.
+
+**Why it's wrong:** the reserve slot is claimed by `cache.add()` -- first
+well-formed request in each `_REPORT_RESERVE_WINDOW_SECONDS` (5s) window
+wins, exactly like the primary counter, and for the identical reason
+(neither counter may look at the signal's content to decide, or the
+request thread becomes a timing oracle for whether it matched -- the
+entire design principle §7's timing fix exists to protect). An attacker
+who sends noise once every 5 seconds forever, without pausing, wins the
+single reserve slot in every window, every time, for as long as they keep
+sending -- there is no mechanism that lets a request "queue" for the *next*
+window if it loses the current one. The real report, arriving at literally
+any point during a sustained flood, loses every window it arrives in
+exactly like the noise around it did. Suppression is bounded by how long
+the flood lasts, which is entirely the attacker's choice -- not by 5
+seconds, not by anything this endpoint controls.
+
+**What the reserve actually buys:** it is a real, correct fix for the
+narrower and arguably more common case round 5 also described --
+`_within_report_budget`'s docstring calls this "a small per-user cap", and
+the threat scenario originally motivating the reserve was a one-time burst
+(attacker sends 60 requests to exhaust the window, then the real report
+follows some time later in the same window). Against *that* shape of
+attack, the reserve is a full fix: burst-then-stop suppression drops from
+"rest of the 60s window" to "at most 5s". It only stops being a full fix
+once the attacker's own request budget is large enough, and their patience
+long enough, to keep flooding continuously -- a strictly harder attack to
+sustain than a one-time burst, but not one this mechanism, or any
+undifferentiated content-blind rate limit, can rule out.
+
+**Why no code change accompanies this entry:** CodeRabbit's own finding
+offered two options -- document the limitation, or redesign so reserve
+delivery is protected from attacker-controlled traffic -- and, unlike
+every code-level finding fixed in rounds 1-7, supplied no committable
+diff for the second option. Evaluated it anyway before choosing the first:
+every redesign considered (a larger reserve pool, per-source cooldowns, a
+debounce-and-flush-on-quiet design) reduces to the same structural limit,
+because the request thread has no signal available to weight one caller's
+request over another's -- an attacker holding the user's session is,
+architecturally, indistinguishable from the user themselves at this layer,
+which is the same property that makes the endpoint's indistinguishability
+guarantee (§7's original purpose) work in the first place. Closing this
+gap for real needs a channel this endpoint doesn't have today -- delivery
+redundant to network-layer flooding (a second transport, client-side
+retry-with-backoff across reconnects, or an out-of-band signal) -- which is
+new feature work, not a bug fix, and well outside "minimal, surgical,
+no new regressions" for a review-fix round. Documented the limitation
+honestly instead, in both places the false claim lived: this plan (§11.1,
+corrected in place with a pointer here) and the code comment above
+`_REPORT_RESERVE_WINDOW_SECONDS` in `duress_code_views.py`, which said the
+same thing and is read independently of this doc. Also corrected
+`test_reserve_survives_budget_exhaustion`'s docstring, which claimed the
+same bound the test doesn't actually establish — the test itself needed no
+change, since what it asserts (one more request gets through right after
+budget exhaustion) is true and unaffected by this correction; only the
+prose describing what that proves was wrong.
+
+**Recorded as a candidate for future work, not implemented:** an
+out-of-band or client-redundant duress delivery path would be the correct
+fix if this attack scenario (sustained-session-hijack-plus-continuous-flood,
+concurrent with the coerced unlock) is judged worth defending against
+specifically -- flagged here rather than filed as a silent TODO so a future
+reader has the reasoning, not just the gap.
+
+### 14.4 TOCTOU race between the signal match and its trigger-count update (Major, confirmed)
+
+`activate_duress_signal_task` reads `active_signals` (filtered
+`is_active=True`) and picks `matched`, then later runs
+`DuressSignal.objects.filter(pk=matched.pk).update(trigger_count=F(...)+1,
+...)` using only the primary key -- no `is_active` re-check. Between those
+two steps, nothing serialises against `register_signal_token`'s
+deactivate-then-create (§8's fix; it holds a lock on the user's
+`DuressCodeConfiguration` row, not on `DuressSignal`, so this task doesn't
+wait on it). If a concurrent re-registration deactivates this exact row in
+that window, the update still succeeds unconditionally on `pk` alone, and
+the task proceeds to activate `matched.duress_code` -- read from the
+now-stale in-memory object, not re-fetched -- for a signal the DB has
+already retired. Confirmed by reading both call sites directly, not
+assumed from the finding's description.
+
+Fixed with CodeRabbit's own proposed diff: added `is_active=True` to the
+update's filter and an early return when `updated` is falsy, mirroring
+exactly how `if matched is None: return` already handles the equivalent
+case one step earlier. Added
+`test_concurrent_deactivation_between_match_and_trigger_update_does_not_fire`
+to `DuressSignalActivationTaskTests`, simulating the race deterministically
+(no threads needed): `DuressSignal.objects.filter` is patched so that the
+specific `pk=matched.pk` call -- and only that call, not the earlier
+`user=user, is_active=True` lookup -- triggers a real, synchronous
+`filter(pk=signal.pk).update(is_active=False)` first, standing in for the
+concurrent `register_signal_token` call landing in exactly that window.
+Asserts the signal's `trigger_count`/`last_triggered_at` stay untouched and
+no `DuressEvent` is created, i.e. the stale match is treated exactly like
+no match at all.
+
+### 14.5 Test results
+
+`DuressSignalActivationTaskTests` (the class containing the new race test)
+re-run in isolation first per the project's targeted-testing preference (10
+passed) before the fuller run below. `security/tests/test_duress_signal.py`
+in full (`canny` venv, `DEBUG=True`, matching CI): 31 passed, 1 skipped
+(same pre-existing skip) -- 30 from round 5's §11.7 (unchanged by rounds 6
+and 7, which touched other files, not this one) plus this round's one new
+test; see §14.4. Round 6's 46-passed figure (§12.6) was three files
+combined (this one plus `test_celery_beat_registry.py` and
+`test_onion_vault_sync_route.py`), not this file alone -- noted here since
+an earlier draft of this section conflated the two counts before being
+caught in the same review pass that produced this section. `python -m
+py_compile` clean on the one touched Python source file (`duress_tasks.py`)
+and the one touched test file. No frontend files
+touched this round.

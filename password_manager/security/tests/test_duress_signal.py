@@ -289,6 +289,37 @@ class DuressSignalActivationTaskTests(TestCase):
         self.assertTrue(signal.is_active)
         self.assertEqual(signal.trigger_count, 2)
 
+    def test_concurrent_deactivation_between_match_and_trigger_update_does_not_fire(self):
+        """TOCTOU guard: `register_signal_token` can deactivate this exact
+        signal (its deactivate-then-create pattern) between the match loop's
+        read, above, and the trigger-count update that follows it -- the two
+        hold no lock in common. Simulates that race deterministically: the
+        signal is still `is_active=True` when the match loop reads it, but a
+        `filter(pk=...).update(is_active=False)` runs (standing in for the
+        concurrent `register_signal_token` call) between that read and the
+        task's own trigger-count update."""
+        token = make_token()
+        signal = self.service.register_signal_token(self.user, token)
+
+        real_filter = DuressSignal.objects.filter
+
+        def filter_with_race(*args, **kwargs):
+            queryset = real_filter(*args, **kwargs)
+            if kwargs.get('pk') == signal.pk:
+                real_filter(pk=signal.pk).update(is_active=False)
+            return queryset
+
+        with mock.patch.object(
+            DuressSignal.objects, 'filter', side_effect=filter_with_race,
+        ):
+            self._run(self.user, token)
+
+        signal.refresh_from_db()
+        self.assertFalse(signal.is_active)
+        self.assertEqual(signal.trigger_count, 0)
+        self.assertIsNone(signal.last_triggered_at)
+        self.assertEqual(DuressEvent.objects.count(), 0)
+
     def test_non_matching_signal_does_nothing(self):
         """The matching decision itself now lives here, not on the request
         thread -- this is the only place left where "does nothing" can be
@@ -590,10 +621,14 @@ class DuressSignalReportRateLimitTests(TestCase):
         self.assertFalse(_within_report_budget(self.user.id))
 
     def test_reserve_survives_budget_exhaustion(self):
-        """A coercer who floods the primary budget with noise first must not
-        be able to silently suppress the next report for the rest of that
-        60s window -- the reserve slot still lets exactly one more through,
-        real signal or noise, bounding the suppression window to ~5s."""
+        """A coercer who exhausts the primary budget with a one-time burst
+        of noise, then stops, must not be able to silently suppress the
+        next report for the rest of that 60s window -- the reserve slot
+        still lets exactly one more through, real signal or noise. This
+        does NOT cover a continuously flooding attacker, who can keep
+        winning the reserve's single slot every _REPORT_RESERVE_WINDOW_SECONDS
+        indefinitely -- see the reserve's own comment in
+        duress_code_views.py and plan doc §14.3."""
         from security.api.duress_code_views import (
             _REPORT_RATE_LIMIT,
             _within_report_budget,
