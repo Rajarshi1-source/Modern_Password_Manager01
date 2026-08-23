@@ -399,6 +399,16 @@ class DuressSignalAPITests(TestCase):
         self.client.force_authenticate(user=self.user)
         self.register_url = reverse('duress-signal-register')
         self.report_url = reverse('duress-signal-report')
+        # Same isolation fix as DuressSignalReportRateLimitTests.setUp: the
+        # 'rate_limiting' cache is process-wide and outlives the per-test
+        # transaction rollback, so a counter left by an earlier test class
+        # reusing this test's auto-incremented user PK would make
+        # _within_report_budget silently skip the enqueue here -- silent
+        # because the endpoint still answers 204 either way, so the only
+        # visible symptom is an exact-call-count assertion (e.g.
+        # mock_delay.assert_called_once()) failing for a reason unrelated to
+        # what it's actually testing.
+        caches['rate_limiting'].clear()
 
     def test_register_accepts_well_formed_token(self):
         response = self.client.post(

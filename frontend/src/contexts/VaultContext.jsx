@@ -608,7 +608,22 @@ export const VaultProvider = ({ children }) => {
         // Clear pending changes and update status
         setPendingChanges([]);
         setSyncStatus('success');
-        setError(null);
+        // Reuses the same `error` field App.jsx already renders in several
+        // places, rather than introducing a new UI surface for one Minor
+        // notice: `syncDegraded`/`syncTransport` were tracked from the start
+        // (see the comment above) specifically "so the UI can be honest",
+        // but nothing actually rendered them, which left the state honest
+        // and the UI silent -- functionally the same false privacy promise
+        // this feature exists to avoid, just moved from "reports success"
+        // to "reports nothing". The wording is deliberately not
+        // failure-shaped: this is a successful sync that used a different
+        // transport than requested, not an error.
+        setError(
+          syncResult.degraded
+            ? 'Vault synced, but not through the private onion route you '
+              + 'requested — it used a normal connection instead.'
+            : null
+        );
 
       } catch (syncError) {
         console.error('Sync request failed:', syncError);
