@@ -756,11 +756,25 @@ _REPORT_RATE_LIMIT = 60
 # otherwise pre-exhaust the primary budget above with well-formed noise,
 # then silently suppress the ONE genuine duress report the coerced user
 # sends for the rest of that 60s window -- exactly the failure this feature
-# exists to prevent. This reserve guarantees at least one report still gets
-# through every _REPORT_RESERVE_WINDOW_SECONDS regardless of how exhausted
-# the primary budget is, bounding the worst-case suppression window from 60s
-# down to 5s, at the cost of a small, fixed amount of extra worker load
-# (at most 60 / _REPORT_RESERVE_WINDOW_SECONDS additional enqueues/min/user).
+# exists to prevent. This reserve opens exactly one admission slot every
+# _REPORT_RESERVE_WINDOW_SECONDS regardless of how exhausted the primary
+# budget is, so a one-time/burst flood (exhaust the budget once, then stop)
+# no longer costs the rest of the 60s window -- only up to
+# _REPORT_RESERVE_WINDOW_SECONDS.
+#
+# It does NOT bound suppression against a CONTINUOUSLY flooding attacker:
+# the reserve slot is claimed by whichever well-formed report arrives first
+# in each window, real or noise, same as the primary counter -- it cannot
+# be otherwise, since neither counter may look at the signal to decide
+# (that would reopen the exact timing oracle this whole design avoids). An
+# attacker sending noise faster than one request per
+# _REPORT_RESERVE_WINDOW_SECONDS, without pause, can keep winning every
+# window's single slot indefinitely, holding the real report suppressed for
+# as long as the flood continues. No undifferentiated, content-blind rate
+# limit can close this against a same-session adversary who never stops --
+# see docs/privacy-features-gap-remediation-plan.md §14.3. Cost of the
+# reserve: a small, fixed amount of extra worker load (at most
+# 60 / _REPORT_RESERVE_WINDOW_SECONDS additional enqueues/min/user).
 _REPORT_RESERVE_WINDOW_SECONDS = 5
 _REPORT_RESERVE_LIMIT = 1
 
