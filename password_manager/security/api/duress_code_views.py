@@ -6,6 +6,7 @@ trusted authorities, and duress events.
 """
 
 import logging
+from django.core.cache import caches
 from ipware import get_client_ip
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
@@ -734,6 +735,62 @@ def test_duress_activation(request):
 # exactly this length, so request size cannot distinguish them.
 _SIGNAL_B64_LENGTH = 44
 
+# Dedicated budget for duress_signal_report, replacing the shared
+# UserRateThrottle that @throttle_classes([]) removes below. A per-user cap
+# is still needed: consume_unlock_signal now enqueues a Celery task
+# UNCONDITIONALLY on every accepted call (see duress_code_service.py), so an
+# authenticated session hammering this endpoint with no limit at all could
+# generate unbounded broker publishes and worker task executions -- and, on
+# the rare tick where the signal genuinely matches, unbounded full
+# activations (evidence packages, decoy-vault generation, real SMTP/webhook
+# alerts to trusted authorities). 60/min is a DEDICATED budget for this one
+# endpoint, not shared with the rest of the API the way the removed
+# UserRateThrottle was -- that distinction is what makes this safe to add
+# back without reintroducing the original problem (a legitimate high-
+# frequency unlock session getting starved by unrelated API traffic).
+_REPORT_RATE_WINDOW_SECONDS = 60
+_REPORT_RATE_LIMIT = 60
+
+
+def _within_report_budget(user_id) -> bool:
+    """Silent per-user cap. Never raises, never distinguishes match from
+    no-match -- callers skip the enqueue when this returns False and still
+    answer 204 exactly as they would otherwise. The decision depends only on
+    request rate, never on the signal itself, so it cannot become a second
+    oracle in place of the one @throttle_classes([]) removed.
+
+    Same atomic add-then-incr pattern, and the same dedicated 'rate_limiting'
+    cache alias, already established in
+    ai_assistant/services/claude_service.py::_check_rate_limit -- Redis-backed
+    in production (counters survive worker restarts, shared across
+    processes), locmem in development.
+    """
+    rate_cache = caches['rate_limiting']
+    cache_key = f'duress_signal_report_{user_id}'
+
+    # cache.add() is atomic: sets only if the key doesn't exist yet.
+    if rate_cache.add(cache_key, 1, _REPORT_RATE_WINDOW_SECONDS):
+        return True
+
+    try:
+        current_count = rate_cache.incr(cache_key)
+    except ValueError:
+        # Key expired between add() and incr() -- reset, first request in a
+        # fresh window.
+        rate_cache.set(cache_key, 1, _REPORT_RATE_WINDOW_SECONDS)
+        return True
+
+    if current_count > _REPORT_RATE_LIMIT:
+        # Server-side only -- never surfaced to the client, so logging this
+        # doesn't touch the indistinguishability contract.
+        logger.warning(
+            "duress_signal_report: per-user budget exceeded (user_id=%s); "
+            "skipping enqueue for this request", user_id,
+        )
+        return False
+
+    return True
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -802,7 +859,11 @@ def duress_signal_report(request):
     """
     signal = request.data.get('signal') if isinstance(request.data, dict) else None
 
-    if isinstance(signal, str) and len(signal) == _SIGNAL_B64_LENGTH:
+    if (
+        isinstance(signal, str)
+        and len(signal) == _SIGNAL_B64_LENGTH
+        and _within_report_budget(request.user.id)
+    ):
         try:
             ip_address, _ = get_client_ip(request)
             service = get_duress_code_service()

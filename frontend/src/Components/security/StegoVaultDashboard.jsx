@@ -34,7 +34,11 @@ import {
   listStegoVaults,
   storeStegoImage,
 } from '../../services/stego/stegoApi';
-import { reportUnlockForSlot } from '../../services/duressSignalService';
+import {
+  generateSignalToken,
+  registerSignalToken,
+  reportUnlockForSlot,
+} from '../../services/duressSignalService';
 import { useAuth } from '../../hooks/useAuth';
 
 const panelStyle = {
@@ -212,12 +216,28 @@ const StegoVaultDashboard = () => {
       }
       setBusy(true);
       try {
+        // Provision the duress alarm at the same moment the decoy vault
+        // itself is created, not as an afterthought. Without a registered
+        // token, onExtract's reportUnlockForSlot has nothing to read from
+        // the decoy payload (`payloadJson.__duress_signal` is simply
+        // absent), so it releases indistinguishable noise instead of the
+        // real alarm and duress mode never activates for a vault made here.
+        // Only the decoy payload gets the field -- injecting it into
+        // realVault too would put a literal alarm token in the one slot an
+        // inspector would actually expect to find real data in.
+        let decoyPayload = decoyVault;
+        if (decoyVault && decoyPassword) {
+          const duressToken = generateSignalToken();
+          await registerSignalToken(getAccessToken(), duressToken);
+          decoyPayload = { ...decoyVault, __duress_signal: duressToken };
+        }
+
         const { stegoPng, tier: chosenTier, blobBytes } = await embedVault({
           coverBytes,
           realPassword,
           realVault,
           decoyPassword: decoyPassword || null,
-          decoyVault,
+          decoyVault: decoyPayload,
           tier,
         });
         const coverHash = await computeCoverHash(coverBytes);
@@ -250,6 +270,7 @@ const StegoVaultDashboard = () => {
       tier,
       label,
       refresh,
+      getAccessToken,
     ],
   );
 
@@ -286,7 +307,17 @@ const StegoVaultDashboard = () => {
         stegoBytes: extractBytes,
         password: extractPassword,
       });
-      setExtractResult({ slotIndex, json });
+
+      // Never render the raw duress token: `json` (rendered below via
+      // JSON.stringify) is exactly what the on-screen JSON dump shows, and
+      // a coercer watching that screen during a "successful" decoy unlock
+      // must not see anything that reveals an alarm fired. Report from the
+      // untouched `json` first, THEN strip the field for display.
+      const displayJson = json ? { ...json } : json;
+      if (displayJson) {
+        delete displayJson.__duress_signal;
+      }
+      setExtractResult({ slotIndex, json: displayJson });
 
       // Report the outcome to the server on EVERY successful extract, not
       // just decoy ones -- reportUnlockForSlot itself decides whether to

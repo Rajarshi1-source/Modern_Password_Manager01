@@ -99,14 +99,14 @@ class CheckHoneypotBacklogCommandTests(TestCase):
     def test_does_not_report_confirmed_rotation(self):
         self._make_rotation(user_confirmed=True)
 
-        out, code = self._run()
+        _out, code = self._run()
 
         self.assertEqual(code, 0)
 
     def test_does_not_report_non_pending_rotation(self):
         self._make_rotation(status='completed')
 
-        out, code = self._run()
+        _out, code = self._run()
 
         self.assertEqual(code, 0)
 
@@ -134,7 +134,7 @@ class CheckHoneypotBacklogCommandTests(TestCase):
     def test_does_not_report_inactive_honeypot(self):
         self._make_honeypot(is_active=False)
 
-        out, code = self._run()
+        _out, code = self._run()
 
         self.assertEqual(code, 0)
 
@@ -142,7 +142,7 @@ class CheckHoneypotBacklogCommandTests(TestCase):
         """`status='expired'` is outside the task's `status__in` filter."""
         self._make_honeypot(status='expired')
 
-        out, code = self._run()
+        _out, code = self._run()
 
         self.assertEqual(code, 0)
 
