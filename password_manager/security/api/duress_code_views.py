@@ -786,10 +786,14 @@ def _within_report_budget(user_id) -> bool:
     view rather than being absorbed by it. A rate limiter is not allowed to
     be the reason this endpoint stops answering 204.
     """
-    rate_cache = caches['rate_limiting']
     cache_key = f'duress_signal_report_{user_id}'
 
     try:
+        # Alias lookup lives inside the try too: caches[...] raises
+        # InvalidCacheBackendError if 'rate_limiting' is ever missing from a
+        # settings profile, and that must fail open exactly like a live
+        # connection error would, not propagate past this function.
+        rate_cache = caches['rate_limiting']
         # cache.add() is atomic: sets only if the key doesn't exist yet.
         if rate_cache.add(cache_key, 1, _REPORT_RATE_WINDOW_SECONDS):
             return True

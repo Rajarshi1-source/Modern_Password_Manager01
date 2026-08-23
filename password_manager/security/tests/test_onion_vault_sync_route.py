@@ -51,7 +51,12 @@ class VaultSyncRouteContractTests(TestCase):
         except NoReverseMatch as exc:  # pragma: no cover - failure path
             self.fail(f"vault_sync names a route that does not reverse: {exc}")
 
-        self.assertTrue(url.endswith('/sync/'), url)
+        # Full path, not just the trailing segment: `/sync/` alone would
+        # still pass if `vault-sync` ever pointed at some other app's
+        # same-named endpoint, which defeats the point of this contract test
+        # (confirmed against the actual mount chain: password_manager/urls.py
+        # -> api/urls.py `vault/` -> vault/urls.py `sync/`).
+        self.assertTrue(url.endswith('/api/vault/sync/'), url)
 
     def test_every_declared_route_reverses(self):
         """Guard the whole table, not just the entry this feature needs."""

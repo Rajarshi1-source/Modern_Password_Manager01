@@ -141,7 +141,15 @@ export const syncVault = async (syncData, { vaultService, mode = null } = {}) =>
         throw new Error('onionSyncService.syncVault requires a vaultService dependency');
     }
 
-    const effectiveMode = mode || getSyncPrivacyMode();
+    const effectiveMode = mode ?? getSyncPrivacyMode();
+    if (!VALID_MODES.has(effectiveMode)) {
+        // An explicit-but-invalid override must fail loudly, not fall through
+        // to the degraded-clearnet branch below and quietly report
+        // `degraded: true` for a mode that was never a real onion request in
+        // the first place -- the same "no silent downgrade" invariant this
+        // module's own JSDoc states for REQUIRE_ONION.
+        throw new Error(`Unknown sync privacy mode: ${effectiveMode}`);
+    }
 
     if (effectiveMode === SYNC_PRIVACY_MODES.OFF) {
         // Byte-identical to the pre-existing path. No capability probe, so an

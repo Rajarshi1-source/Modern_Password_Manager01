@@ -303,6 +303,22 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
                 self.assertEqual(beat_schedule[entry]['task'], task_name)
                 self.assertIn(task_name, registered)
 
+    def test_honeypot_scan_all_matches_its_own_docstring_cadence(self):
+        """`scan_all_honeypots`'s docstring says "every 15-30 minutes" -- the
+        actual detection loop, since `HoneypotEmail.last_checked_at` is
+        never re-read on any other schedule. A beat interval outside that
+        range silently breaks the task's own stated contract without
+        raising anywhere, exactly like the name-mismatch bugs the rest of
+        this file guards against, just one level up (right task, wrong
+        cadence instead of wrong name)."""
+        beat_schedule = self._beat_schedule()
+
+        schedule = beat_schedule['honeypot-scan-all']['schedule']
+        seconds = schedule.total_seconds() if hasattr(schedule, 'total_seconds') else schedule
+
+        self.assertGreaterEqual(seconds, 900, 'faster than the documented 15-minute floor')
+        self.assertLessEqual(seconds, 1800, 'slower than the documented 30-minute ceiling')
+
     def test_argument_taking_honeypot_tasks_stay_unscheduled(self):
         """Three honeypot tasks take a required id and must never be scheduled.
 
