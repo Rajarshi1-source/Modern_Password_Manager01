@@ -668,6 +668,7 @@ class DuressSignalReportRateLimitTests(TestCase):
         normal call -- only the internal enqueue is skipped."""
         from security.api.duress_code_views import (
             _REPORT_RATE_LIMIT,
+            _REPORT_RATE_WINDOW_SECONDS,
             _REPORT_RESERVE_LIMIT,
         )
 
@@ -675,17 +676,28 @@ class DuressSignalReportRateLimitTests(TestCase):
         client.force_authenticate(user=self.user)
         report_url = reverse('duress-signal-report')
 
-        # Exhaust the primary budget AND the reserve slot -- only the request
-        # after both are spent should skip the enqueue.
-        for _ in range(_REPORT_RATE_LIMIT + _REPORT_RESERVE_LIMIT):
-            client.post(report_url, {'signal': make_token()}, format='json')
-
+        # The reserve slot's own window is only 5s (_REPORT_RESERVE_WINDOW_SECONDS);
+        # 61 real POSTs plus DB/cache overhead could exceed that on a slow
+        # runner, letting the reserve expire and the final request claim a
+        # fresh slot -- flaking the assertion below for a reason unrelated to
+        # the budget logic under test. Widened to match the primary window
+        # for this test only, so the outcome depends on request COUNT, not
+        # wall-clock time.
         with mock.patch(
-            'security.tasks.duress_tasks.activate_duress_signal_task.apply_async'
-        ) as mock_apply_async:
-            response = client.post(
-                report_url, {'signal': make_token()}, format='json',
-            )
+            'security.api.duress_code_views._REPORT_RESERVE_WINDOW_SECONDS',
+            _REPORT_RATE_WINDOW_SECONDS,
+        ):
+            # Exhaust the primary budget AND the reserve slot -- only the
+            # request after both are spent should skip the enqueue.
+            for _ in range(_REPORT_RATE_LIMIT + _REPORT_RESERVE_LIMIT):
+                client.post(report_url, {'signal': make_token()}, format='json')
+
+            with mock.patch(
+                'security.tasks.duress_tasks.activate_duress_signal_task.apply_async'
+            ) as mock_apply_async:
+                response = client.post(
+                    report_url, {'signal': make_token()}, format='json',
+                )
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(response.content, b'')
