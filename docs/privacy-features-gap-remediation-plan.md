@@ -1714,3 +1714,82 @@ enormous suite after every tiny change" guidance this project has followed
 since round 1. `python -m py_compile` clean on the one touched Python file
 (`test_duress_signal.py`). `eslint --max-warnings=0` clean on
 `StegoVaultDashboard.jsx`.
+
+## 16. Review-fix round 10 on PR #486 (CodeRabbit, tenth pass)
+
+Two findings, both confirmed valid. All 34 CI checks were green going into
+this round.
+
+### 16.1 Raw exception messages logged on both duress-signal paths that handle the secret token (Minor, confirmed)
+
+`duress_signal_register` and `duress_signal_report` both interpolate the
+caught exception directly into the log line (`f"...: {e}"`). Both handlers
+hold the raw 44-char signal/token value -- the actual secret this whole
+feature exists to keep server-side-hashed-only (`register`) or
+indistinguishable (`report`) -- as a local in the same scope as the `try`
+block. Nothing guarantees no exception anywhere in the call stack below
+(broker publish, Celery/kombu serialization, the ORM) ever embeds an
+argument's value in its own `str()`; this codebase already treats that
+possibility as real enough to act on elsewhere -- `DuressSignal.__str__`
+omits the hash for exactly this reason ("that output reaches logs and
+error reports"), and `_within_report_budget`'s own two `except Exception:`
+blocks (added rounds 4/8) already log a fixed message plus `user_id` only,
+never the caught exception. These two handlers were the only two in the
+file's ~13 `except Exception as e:` sites actually holding the secret
+token itself in scope, which is why the fix is scoped to just them rather
+than the other ~11 (config/duress-code/authority/event handlers in this
+same file, which don't touch this specific secret).
+
+Fixed by logging `type(e).__name__` instead of the exception body, at both
+sites. Verified no test asserts on either log message's content (searched
+both duress test files; none do), so no test needed updating. No test
+added either -- this changes only what appears in a log line on an
+already-swallowed exception path; the existing "swallowed error still
+returns the documented response" behavior (500+`internal_error` for
+`register`, 204 for `report`) is unchanged and already covered.
+
+### 16.2 The vault-sync route contract test only checked its own registry's metadata (Minor, confirmed)
+
+`test_vault_sync_posts_to_the_vault_sync_route` asserted
+`VAULT_OPERATION_ROUTES['vault_sync']['method'] == 'POST'` -- a string in a
+Python dict this same module defines, checked against itself. It never
+touched the actual Django URL pattern or view. If
+`vault/urls.py`'s `path('sync/', CrudVaultItemViewSet.as_view({'post':
+'sync'}), name='vault-sync')` ever changed which method maps to `sync`
+without someone remembering to update the unrelated `VAULT_OPERATION_ROUTES`
+dict to match, this test would keep passing while onion-routed sync
+actually got a 405 from the real endpoint -- the exact "wiring silently
+rots" failure mode this whole test file's own docstring says it exists to
+catch, just not yet covering this specific gap.
+
+Extended the same test (per CodeRabbit's own framing -- one cohesive
+"posts to the route" contract, not a second test) to resolve the real URL
+via `resolve(reverse(...))` and inspect the DRF ViewSet's own action
+mapping: `ViewSetMixin.as_view()` attaches the exact `{method: action}`
+dict it was built from as `view.actions` on the returned callable --
+confirmed directly against the installed `rest_framework.viewsets` source
+(`canny/Lib/site-packages/rest_framework/viewsets.py:139`,
+`view.actions = actions`) rather than assumed from memory of the DRF API.
+Asserts `resolved.func.actions.get('post') == 'sync'`. Chose this over a
+full request/response integration test (firing a real authenticated POST)
+because it checks the same fact -- which method maps to which action --
+without needing to build out auth/payload fixtures for a view this test
+file was never exercising end-to-end in the first place; the existing
+tests in this file are all structural/resolution checks, and this stays
+consistent with that style.
+
+### 16.3 Test results
+
+`security/tests/test_onion_vault_sync_route.py` in full (`canny` venv,
+`DEBUG=True`): 5 passed, confirming the extended §16.2 test. Targeted
+classes in `security/tests/test_duress_signal.py` covering both §16.1
+handlers (`DuressSignalAPITests`, which exercises `duress_signal_register`
+and `duress_signal_report`, plus `DuressSignalReportRateLimitTests`, which
+covers the report path's rate-limit branch, including §15.3's real-POST
+test): 14 passed. Notably faster this round (4m43s) than §15.4's ~19-minute
+figure for a similarly-shaped run -- the earlier number reflected
+contention at that specific point in the session, not a fixed cost of this
+file; don't treat either figure as a hard estimate for next time. `python
+-m py_compile` clean on both touched Python files. Searched both
+duress test files for any assertion on the two changed log messages'
+content; none exist, confirmed no test needed updating for §16.1.

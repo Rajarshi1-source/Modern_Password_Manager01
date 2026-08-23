@@ -885,7 +885,14 @@ def duress_signal_register(request):
             'signal_id': str(signal.id),
         }, status=status.HTTP_201_CREATED)
     except Exception as e:
-        logger.error(f"Duress signal registration failed: {e}")
+        # Exception type only, never the message: `token` (the raw 44-char
+        # secret this endpoint exists to protect) is a local in this scope,
+        # and nothing guarantees no exception anywhere in the DB/ORM call
+        # stack below ever embeds an argument's value in its own message --
+        # same reasoning DuressSignal.__str__ already applies to the hash.
+        logger.error(
+            "Duress signal registration failed (%s)", type(e).__name__,
+        )
         return Response({
             'success': False,
             'error': 'internal_error',
@@ -943,7 +950,14 @@ def duress_signal_report(request):
             )
         except Exception as e:
             # Swallowed deliberately: see the docstring. A 500 here would mark
-            # this request as different from its neighbours.
-            logger.error(f"Duress signal processing failed: {e}")
+            # this request as different from its neighbours. Exception type
+            # only, never the message, for the same reason as the
+            # registration handler above: `signal` (the raw 44-char value --
+            # the real duress token itself, on a match) is a local in this
+            # scope, and no exception in the broker/serializer/DB call stack
+            # below is guaranteed never to embed an argument's value.
+            logger.error(
+                "Duress signal processing failed (%s)", type(e).__name__,
+            )
 
     return Response(status=status.HTTP_204_NO_CONTENT)
