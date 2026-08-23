@@ -771,8 +771,9 @@ class DuressSignal(models.Model):
     ``DuressCode.code_hash`` uses a slow KDF because it protects a
     human-chosen code with low entropy. This token is 256 bits of CSPRNG
     output, so it is not brute-forceable and a slow hash would buy nothing
-    while making the constant-work comparison in ``consume_unlock_signal``
-    (which must run on EVERY unlock, duress or not) needlessly expensive.
+    while making the constant-work comparison in
+    ``activate_duress_signal_task`` (which runs for EVERY unlock, duress or
+    not) needlessly expensive.
 
     Indistinguishability
     --------------------

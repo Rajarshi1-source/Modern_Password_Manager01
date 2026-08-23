@@ -811,3 +811,142 @@ unaffected by the wiring/copy changes, both re-run to confirm — 30 passed.
 ESLint clean on all four touched frontend files (one real error caught and
 fixed: an unescaped apostrophe introduced by this round's own new JSX copy,
 `react/no-unescaped-entities`).
+
+---
+
+## 9. Review-fix round 3 on PR #486 (CodeRabbit, third pass)
+
+Eight findings (7 actionable, 1 nitpick), verified critically before
+changing anything. Seven held up and were fixed; one (`get_user_model()`)
+was checked against this project's actual settings and found not to apply —
+skipped, with the reasoning recorded rather than silently ignored.
+
+### 9.1 Decoy vaults created via `StegoVaultDashboard` never had a duress token to release (Major, confirmed — a third instance of "built the caller, forgot the other half")
+
+`onEmbed` passed the user's raw `decoyVaultJson` straight to `embedVault`
+with no `__duress_signal` field ever added. Round 2 wired `onExtract` to
+*read* `payloadJson.__duress_signal` and report it — but nothing had ever
+*written* that field into a decoy payload created through this dashboard, so
+every decoy vault made here would decode successfully on its decoy password
+and still release indistinguishable noise, never the real alarm token. Two
+built halves of the same feature, wired to each other, with the third half
+(provisioning) missing — found by CodeRabbit tracing the actual data flow
+from `onEmbed` through to what `onExtract` reads.
+
+Fixed by generating and registering a token inside `onEmbed`, exactly when a
+decoy vault and decoy password are both being set up, and injecting it into
+the decoy payload only:
+`decoyPayload = { ...decoyVault, __duress_signal: duressToken }`. The real
+vault payload is never touched, so there is no alarm-shaped field for anyone
+inspecting the real slot to find. Also fixed, since CodeRabbit's own
+recommendation called it out explicitly: `extractResult` — the raw JSON
+`JSON.stringify`'d onto the screen after a successful extract — would have
+displayed the literal token value on a decoy unlock, which is exactly the
+kind of thing a coercer watching the screen would notice. Stripped before
+render, reported (from the untouched payload) before that.
+
+### 9.2 `@throttle_classes([])` removed every limit, not just the one that broke the 204 contract (Major, confirmed)
+
+Round 1 correctly removed the shared `UserRateThrottle` from
+`duress_signal_report` because it could return a 429 before the view even
+ran. What that left behind: no limit at all. Since round 2 made
+`consume_unlock_signal` enqueue a Celery task on literally every accepted
+call, an authenticated session hammering this endpoint could generate
+unbounded broker publishes and worker task executions — and, on whichever
+call happens to carry a real matching signal, unbounded full activations:
+repeated evidence packages, repeated decoy-vault generation, repeated real
+SMTP/webhook alerts to trusted authorities.
+
+Fixed with a silent, per-user cap (`_within_report_budget`) called from
+inside the view body rather than registered as a DRF throttle class — a
+`BaseThrottle` subclass wired via `@throttle_classes([...])` would still
+trigger DRF's own automatic 429 the moment `allow_request()` returns False,
+which is the exact behavior round 1 removed this mechanism to avoid. Uses
+the *dedicated* `'rate_limiting'` cache alias and the atomic
+add-then-increment pattern already established in
+`ai_assistant/services/claude_service.py::_check_rate_limit` — not a new
+pattern invented for this fix. 60/min, **dedicated to this one endpoint**,
+not shared with the rest of the API the way the removed `UserRateThrottle`
+was; that distinction is what makes this safe to add back without
+reintroducing the original problem (a legitimate high-frequency unlock
+session getting starved by unrelated API traffic). The gate depends only on
+request rate, never on the signal itself, so it cannot become a second
+match/no-match oracle in place of the one round 1 closed.
+
+### 9.3 `max_retries=2` was dead configuration (Major, confirmed via CodeRabbit's own Celery doc lookup)
+
+CodeRabbit ran an actual query against Celery's docs to confirm:
+`max_retries` alone does nothing without `self.retry()` or `autoretry_for`
+somewhere in the task body. Neither existed. `bind=True` was equally dead —
+`self` was never referenced anywhere in the task. The three parameters
+together implied a retry guarantee the task never actually had; an uncaught
+exception always failed the task outright, exactly as it does now with them
+removed.
+
+Deliberately did NOT add real retry logic instead, which was CodeRabbit's
+own alternative suggestion — and its own severity tag agreed this is a
+"heavy lift", not a quick fix: `activate_duress_signal_task` creates a
+`DuressEvent`, may create an `EvidencePackage` and a decoy vault, and may
+call `SilentAlarmService.send_alerts()` (real outbound SMTP/webhook, not a
+side effect that's safe to run twice). A naive retry on transient failure
+risks re-running all of that and double-sending a genuine alert to trusted
+authorities during an actual emergency — a worse outcome than the failure
+being retried. Idempotent activation is real, separately-scoped follow-up
+work; removing the misleading configuration is the correct minimal fix
+*for this PR*.
+
+### 9.4 `trigger_count` incremented via Python read-modify-write (Minor, confirmed via CodeRabbit's own Django doc lookup)
+
+`matched.trigger_count += 1` then `.save(update_fields=[...])` is a lost-
+update race: two tasks processing matching reports for the same signal
+close together can each read the same starting count and each write back
+the same incremented value, silently losing one increment. Fixed with
+`DuressSignal.objects.filter(pk=matched.pk).update(trigger_count=F('trigger_count') + 1, ...)`,
+which performs the increment atomically in the database. `matched` (the
+in-memory instance) is not read again afterward in this task, so no
+`refresh_from_db()` was needed to keep it in sync — confirmed by reading the
+rest of the function body before deciding that, not assumed.
+
+### 9.5 `get_user_model()` — checked, found not to apply (Major claim, verified invalid for this codebase)
+
+CodeRabbit's own investigation was explicitly conditional: "if custom users
+are supported, update...". Checked directly: `grep -rn "^AUTH_USER_MODEL"
+password_manager/password_manager/settings/*.py` returns nothing — this
+project never overrides Django's default user model, and every other model
+in `duress_models.py` (including `DuressSignal.user` itself) already
+hardcodes `django.contrib.auth.models.User` the same way the task does.
+CodeRabbit's own text said "a task-only change is insufficient" — i.e., it
+did not even recommend doing just this. Not fixed: there is no real
+inconsistency to resolve, and changing only this one file would make it the
+one place in the codebase inconsistent with the (unanimous, if debatable)
+convention everywhere else.
+
+### 9.6 Two trivial Ruff-suppression cleanups (confirmed, same reasoning as round 2 §8.7)
+
+Four `_out` renames in `test_check_honeypot_backlog_command.py` (Ruff
+RUF059, unused unpacked variable — verified each of the 4 flagged lines
+genuinely never reads `out` afterward, unlike 5 sibling lines in the same
+file that do and were correctly left alone) and five more
+`# nosec B106` → `# noqa: S106` conversions in `test_duress_signal.py`
+(sites this round's own new tests had reintroduced, plus ones round 2
+missed within the same file). Same CI-irrelevance caveat as round 2: this
+project's actual gate is Bandit, which excludes `tests/` and ignores its
+own exit code either way.
+
+### 9.7 Nitpick: stale docstring cross-reference (confirmed, trivial)
+
+`DuressSignal`'s "why a plain SHA-256" rationale still named
+`consume_unlock_signal` as where the constant-work comparison runs — true
+before round 2, false after (§8.1 moved the comparison into
+`activate_duress_signal_task`). Corrected the reference.
+
+### 9.8 Test results
+
+`security/tests/test_duress_signal.py` — added
+`DuressSignalReportRateLimitTests` (4 new tests covering the §9.2 rate cap:
+within-budget, over-budget, per-user isolation, and the silent-204
+end-to-end check) on top of the existing 24 passed / 1 skipped from round 2.
+`security/tests/test_check_honeypot_backlog_command.py` — unaffected by the
+`_out` rename, re-run to confirm. `python -m py_compile` clean on all five
+touched backend files before running tests. ESLint clean on both touched
+frontend files.

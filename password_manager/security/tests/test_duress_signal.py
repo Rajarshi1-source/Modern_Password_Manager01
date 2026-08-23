@@ -14,6 +14,7 @@ import secrets
 from unittest import mock
 
 from django.contrib.auth.models import User
+from django.core.cache import caches
 from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from rest_framework import status
@@ -33,7 +34,7 @@ class DuressSignalModelTests(TestCase):
         self.user = User.objects.create_user(
             username='duress-user',
             email='duress@example.com',
-            password='test-password-not-a-secret',  # nosec B106
+            password='test-password-not-a-secret',  # noqa: S106
         )
 
     def test_hash_token_is_stable_and_not_reversible(self):
@@ -61,7 +62,7 @@ class DuressSignalServiceTests(TestCase):
         self.user = User.objects.create_user(
             username='duress-user',
             email='duress@example.com',
-            password='test-password-not-a-secret',  # nosec B106
+            password='test-password-not-a-secret',  # noqa: S106
         )
         self.service = get_duress_code_service()
         self.context = {'ip_address': '203.0.113.10', 'user_agent': 'test-agent'}
@@ -241,16 +242,15 @@ class DuressSignalActivationTaskTests(TestCase):
     """The work `consume_unlock_signal` now defers to Celery.
 
     Run via `.apply()`, which executes the task body synchronously in-process
-    (no broker/worker needed) while still passing a real bound task instance
-    as `self` for the `bind=True` task -- the same pattern already used by
-    ml_dark_web/tests/test_check_compromised_passwords.py for a bound task.
+    -- no broker/worker needed. The task is plain (not `bind=True`; see its
+    own docstring for why), so `.apply()` calls it directly with no `self`.
     """
 
     def setUp(self):
         self.user = User.objects.create_user(
             username='duress-user',
             email='duress@example.com',
-            password='test-password-not-a-secret',  # nosec B106
+            password='test-password-not-a-secret',  # noqa: S106
         )
         self.service = get_duress_code_service()
         self.context = {'ip_address': '203.0.113.10', 'user_agent': 'test-agent'}
@@ -317,7 +317,7 @@ class DuressSignalActivationTaskTests(TestCase):
         other = User.objects.create_user(
             username='other-user',
             email='other@example.com',
-            password='test-password-not-a-secret',  # nosec B106
+            password='test-password-not-a-secret',  # noqa: S106
         )
 
         self._run(other, token)
@@ -393,7 +393,7 @@ class DuressSignalAPITests(TestCase):
         self.user = User.objects.create_user(
             username='duress-user',
             email='duress@example.com',
-            password='test-password-not-a-secret',  # nosec B106
+            password='test-password-not-a-secret',  # noqa: S106
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
@@ -523,3 +523,96 @@ class DuressSignalAPITests(TestCase):
         from security.api.duress_code_views import duress_signal_report
 
         self.assertEqual(duress_signal_report.cls.throttle_classes, [])
+
+
+class DuressSignalReportRateLimitTests(TestCase):
+    """The silent per-user cap that replaced the shared UserRateThrottle
+    @throttle_classes([]) removed from duress_signal_report.
+
+    Not a DRF throttle class: those return a 429 from check_throttles()
+    before the view runs, which is exactly what @throttle_classes([]) was
+    added to avoid. This is a plain function the view calls internally and
+    branches on silently -- 204 either way, whether the request was
+    processed or the budget skipped it.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='rate-user',
+            email='rate@example.com',
+            password='test-password-not-a-secret',  # noqa: S106
+        )
+        # The 'rate_limiting' cache is process-wide and NOT part of Django's
+        # per-test transaction rollback -- unlike the DB, it persists across
+        # test methods. Django's auto-incremented user PKs get reused across
+        # tests in the same run (each TestCase's transaction rolls back,
+        # resetting the sequence), so a stale counter from an EARLIER test
+        # that happened to create a user with the same numeric id would leak
+        # into this one and desync the count from what each test expects.
+        # Confirmed empirically, not assumed: this exact test failed with a
+        # stale count before this clear() was added.
+        caches['rate_limiting'].clear()
+
+    def test_within_budget_allows_every_request(self):
+        from security.api.duress_code_views import (
+            _REPORT_RATE_LIMIT,
+            _within_report_budget,
+        )
+
+        for _ in range(_REPORT_RATE_LIMIT):
+            self.assertTrue(_within_report_budget(self.user.id))
+
+    def test_exceeding_budget_returns_false(self):
+        from security.api.duress_code_views import (
+            _REPORT_RATE_LIMIT,
+            _within_report_budget,
+        )
+
+        for _ in range(_REPORT_RATE_LIMIT):
+            _within_report_budget(self.user.id)
+
+        self.assertFalse(_within_report_budget(self.user.id))
+
+    def test_budget_is_tracked_per_user(self):
+        """Exhausting one user's budget must not affect another's -- a
+        shared counter would let one coerced/compromised session silence
+        alarms for every other user on the same worker."""
+        from security.api.duress_code_views import (
+            _REPORT_RATE_LIMIT,
+            _within_report_budget,
+        )
+
+        other = User.objects.create_user(
+            username='other-rate-user',
+            email='other-rate@example.com',
+            password='test-password-not-a-secret',  # noqa: S106
+        )
+
+        for _ in range(_REPORT_RATE_LIMIT):
+            _within_report_budget(self.user.id)
+
+        self.assertTrue(_within_report_budget(other.id))
+
+    def test_over_budget_report_still_returns_204_and_skips_the_enqueue(self):
+        """The property that actually matters: exceeding the budget is
+        silent. Same 204, same empty body, no observable difference from a
+        normal call -- only the internal enqueue is skipped."""
+        from security.api.duress_code_views import _REPORT_RATE_LIMIT
+
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+        report_url = reverse('duress-signal-report')
+
+        for _ in range(_REPORT_RATE_LIMIT):
+            client.post(report_url, {'signal': make_token()}, format='json')
+
+        with mock.patch(
+            'security.tasks.duress_tasks.activate_duress_signal_task.delay'
+        ) as mock_delay:
+            response = client.post(
+                report_url, {'signal': make_token()}, format='json',
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response.content, b'')
+        mock_delay.assert_not_called()

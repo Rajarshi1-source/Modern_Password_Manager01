@@ -31,20 +31,30 @@ import logging
 import secrets
 
 from celery import shared_task
+from django.db.models import F
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(
-    name='security.activate_duress_signal',
-    bind=True,
-    max_retries=2,
-    default_retry_delay=30,
-)
-def activate_duress_signal_task(self, user_id, signal, request_context):
+@shared_task(name='security.activate_duress_signal')
+def activate_duress_signal_task(user_id, signal, request_context):
     """Determine whether ``signal`` matches an active duress token for
     ``user_id``, and if so, run the full duress response.
+
+    Deliberately NOT ``bind=True``/``max_retries``/``autoretry_for``: those
+    only take effect if something in the body calls ``self.retry()``, which
+    this never did -- the parameters were dead configuration that implied a
+    retry guarantee this task never actually had (a genuine finding: an
+    uncaught exception here always failed the task outright, exactly as it
+    does now). Real retries are NOT a safe drop-in fix either, not without
+    first making the activation path idempotent: it creates a
+    ``DuressEvent``, may create an ``EvidencePackage`` and a decoy vault, and
+    may call ``SilentAlarmService.send_alerts()`` (real outbound SMTP/
+    webhook). A naive retry on transient failure would risk re-running all of
+    that and double-sending a genuine alert to trusted authorities -- worse
+    than the failure it was retrying. Idempotent activation is real,
+    separately-scoped follow-up work, not a one-line addition to this task.
 
     Mirrors exactly what ``DuressCodeService.consume_unlock_signal`` used to
     do inline (both the matching loop and, on a match, the activation
@@ -93,9 +103,18 @@ def activate_duress_signal_task(self, user_id, signal, request_context):
     # NOT deactivate it here: a user under sustained coercion may unlock
     # repeatedly, and silently disarming the alarm after the first use is
     # the opposite of what this feature is for. Count instead.
-    matched.trigger_count += 1
-    matched.last_triggered_at = timezone.now()
-    matched.save(update_fields=['trigger_count', 'last_triggered_at'])
+    #
+    # F()-expression update, not `matched.trigger_count += 1` then `.save()`:
+    # the Python-side read-modify-write is a lost-update race under real
+    # concurrent unlocks (two matching reports for the same signal, close
+    # together, each task reads the same starting count) -- the DB performs
+    # the increment atomically instead. `matched` is not read again after
+    # this in the current task body, so no `refresh_from_db()` is needed to
+    # see the new value locally.
+    DuressSignal.objects.filter(pk=matched.pk).update(
+        trigger_count=F('trigger_count') + 1,
+        last_triggered_at=timezone.now(),
+    )
 
     duress_code = matched.duress_code
     if duress_code is None:
