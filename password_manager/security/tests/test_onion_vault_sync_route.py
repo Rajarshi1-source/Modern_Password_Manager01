@@ -11,7 +11,7 @@ back to clearnet, which for PREFER_ONION users looks like nothing is wrong).
 """
 
 from django.test import TestCase
-from django.urls import NoReverseMatch, reverse
+from django.urls import NoReverseMatch, resolve, reverse
 
 from security.services.dark_protocol_service import VAULT_OPERATION_ROUTES
 
@@ -32,6 +32,20 @@ class VaultSyncRouteContractTests(TestCase):
         # POST, not GET: the sync view reads its payload from the request body.
         self.assertEqual(route['method'], 'POST')
         self.assertEqual(route['route'], 'vault-sync')
+
+        # The assertions above only check VAULT_OPERATION_ROUTES' OWN
+        # metadata -- self-consistency, not reality. If `vault/urls.py`'s
+        # `path('sync/', CrudVaultItemViewSet.as_view({'post': 'sync'}), ...)`
+        # ever changed which HTTP method maps to `sync` without this dict
+        # being updated to match, this test would still pass while the
+        # actual onion-routed sync request got a 405. Resolve the real URL
+        # and inspect the DRF ViewSet's own action mapping instead of
+        # trusting the registry a second time -- `ViewSetMixin.as_view()`
+        # attaches the exact `{method: action}` dict it was built from as
+        # `view.actions`, a stable DRF introspection API (confirmed against
+        # the installed `rest_framework.viewsets` source).
+        resolved = resolve(reverse(route['route']))
+        self.assertEqual(resolved.func.actions.get('post'), 'sync')
 
     def test_vault_sync_needs_no_object_id(self):
         """Sync is a collection-level operation.
