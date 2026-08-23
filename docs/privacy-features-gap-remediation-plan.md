@@ -1793,3 +1793,96 @@ file; don't treat either figure as a hard estimate for next time. `python
 -m py_compile` clean on both touched Python files. Searched both
 duress test files for any assertion on the two changed log messages'
 content; none exist, confirmed no test needed updating for §16.1.
+
+## 17. Review-fix round 11 on PR #486 (CodeRabbit, eleventh pass)
+
+One finding, confirmed and found to run deeper than the specific lines
+flagged -- the correction it required, once actually carried out against
+CI's real input rather than the stand-in every prior round used, applied to
+the whole torch suppression block, not just the three IDs the flagged note
+was about. All 34 CI checks were green going into this round.
+
+### 17.1 Every torch renewal since round 1 verified against the wrong pip-audit input (Minor claim, Major once traced through)
+
+CodeRabbit's claim, narrowly: the round-5 removal note for
+`PYSEC-2025-195/196/197` says it verified with `pip-audit -r
+<torch==2.12.0>` -- a placeholder-style single-package check, not
+`requirements.txt`, the file CI's own "Run pip-audit" step
+(`security-multi-scanner.yml`) actually scans (`cd password_manager &&
+pip-audit -r requirements.txt --desc --format json`). `requirements.txt`
+declares `torch>=2.12.0` -- an open floor, no ceiling -- not
+`requirements-lock.txt`'s exact `torch==2.12.0+cpu` pin every round from 1
+through 10 checked against instead. Update the note to describe the real
+CI input, keeping the conclusion only if a CI-equivalent audit confirms it.
+
+**Traced what "CI-equivalent" actually means and ran it, using the `canny`
+venv the user pointed at:**
+
+- `pip install --dry-run "torch>=2.12.0"` (the same resolution step
+  `pip-audit -r <file>` performs internally for an unpinned requirement)
+  resolves to **torch 2.13.0**, not 2.12.0. Confirmed this isn't an
+  artifact of only checking torch in isolation: re-ran it alongside
+  `transformers>=4.35.1` (the one real torch-consuming package actually
+  declared in `requirements.txt` -- confirmed by grep that nothing else in
+  the file names torch), and the resolution is unchanged. Confirmed the
+  wheel exists for CI's actual platform, not just this machine's: CI's job
+  pins `python-version: '3.11'` on (implicitly) a Linux runner; torch
+  2.13.0's published files on PyPI include
+  `torch-2.13.0-cp311-cp311-manylinux_2_28_x86_64.whl`, so the resolution
+  isn't a Windows/Python-3.13-only artifact of this dev machine.
+- `pip-audit -r <torch==2.13.0>` (the resolved version) reports **zero
+  vulnerabilities** for torch -- not just the three IDs the flagged note
+  named, all of them, including the two still-active entries
+  (`CVE-2025-3000`/`PYSEC-2025-194`) every prior round's reachability
+  argument was built to justify keeping.
+- Attempted the literal full-file audit CI runs (`pip-audit -r
+  requirements.txt`, all 146 declared packages) to remove any doubt
+  entirely, rather than stop at the isolated check above. It did not
+  complete: `pip install --dry-run` on the full file fails building
+  `scipy` from source on this Windows machine (no Fortran compiler
+  available for `meson`'s build backend) -- a Windows/local-toolchain gap
+  unrelated to torch, and exactly the kind of platform difference from
+  CI's Linux runner that motivated checking the isolated resolution
+  against CI's actual Python version and OS family above rather than
+  taking a Windows result on faith.
+
+**Two of the four remaining torch entries were about to make this moot in
+the worst possible way.** `PYSEC-2025-210`/`PYSEC-2026-139` carried
+`exp:2026-08-25` -- tomorrow, relative to today (2026-08-24). This
+manifest's own validation step (`Validate pip-audit ignore expiries`,
+`security-multi-scanner.yml`) hard-fails the build (`sys.exit(3)`) on any
+expired entry. Left alone, correcting only the flagged note's wording would
+have fixed a documentation accuracy issue while leaving a real CI failure
+one day out, on entries the SAME corrected verification already showed
+don't apply. Removed both, following this file's own established "REMOVED,
+not renewed" pattern, rather than renewing them a fourth time on the
+lock-file-pin basis just shown to be the wrong check.
+
+**`CVE-2025-3000`/`PYSEC-2025-194` were deliberately left alone.**
+Same verification shows they don't apply to torch 2.13.0 either, but
+CodeRabbit's finding didn't name them, and their `exp:2026-10-10` isn't
+imminent -- removing them now would be the same scope-creep round 4 (§10.1)
+and round 8 (§14.3) both already declined for adjacent-but-unflagged
+findings in this exact file. Added a note in their own comment block
+instead, so their next renewal starts from the corrected input rather than
+re-verifying against the lock file's pin out of habit and reaching the same
+stale conclusion a fourth time.
+
+Updated: the block's own summary count (`Four IDs total` →
+`Two IDs total`, ten removed rather than eight), the 195/196/197 note
+(added a pointer to the corrected-methodology block above it rather than
+rewriting its own already-accurate per-ID reasoning), and the
+CVE-2025-3000/PYSEC-2025-194 block (added the "already-patched, not
+removed this round" paragraph without touching its exp date or the two
+active `ID exp:date` lines themselves).
+
+### 17.2 Validation
+
+No Python test references `pip-audit-ignores.txt` (confirmed by search) --
+the only thing that reads it is `security-multi-scanner.yml`'s own inline
+validation step and, at audit time, `pip-audit` itself. Ran the exact same
+parser CI uses (transcribed from the workflow file, not re-approximated)
+against the updated manifest locally: 23 active entries (was 25), zero
+malformed, **zero expired** -- confirming §17.1's removal lands before
+tomorrow's would-be failure, not after it. No `pytest` run for this round:
+nothing else changed.

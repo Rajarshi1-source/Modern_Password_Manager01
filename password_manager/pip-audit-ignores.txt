@@ -154,29 +154,35 @@ CVE-2026-15830 exp:2026-10-20
 # torch advisories — all require LOCAL host access. Torch runs inside
 # a non-root container with no shell access; user input reaches the
 # model as already-validated tensors via ml_dark_web/ml_services.py,
-# never as torch.jit scripts or pt2 binaries. Four IDs total (was
-# twelve; eight removed in this manifest, not renewed).
+# never as torch.jit scripts or pt2 binaries. Two IDs total (was twelve;
+# ten removed in this manifest, not renewed).
+#
+# Every prior renewal round here (through 2026-08-23) verified against a
+# manually-pinned `torch==2.12.0` — matching requirements-lock.txt, but
+# NOT what CI's own pip-audit step actually scans: `security-multi-
+# scanner.yml`'s "Run pip-audit" step runs `pip-audit -r requirements.txt`
+# from `password_manager/`, and that file declares `torch>=2.12.0` (an
+# open floor, no ceiling), not the lock file's exact pin. Caught on review
+# (CodeRabbit, round 11) and re-verified properly this time, against the
+# actual CI input rather than a stand-in for it: `pip install --dry-run
+# "torch>=2.12.0"` (the same resolution pip-audit performs internally)
+# resolves to torch 2.13.0 — confirmed independent of the rest of
+# requirements.txt too, since nothing else in the file declares torch and
+# `transformers>=4.35.1` (the one real torch consumer here) imposes no
+# upper bound that would pull it back down. `pip-audit -r <torch==2.13.0>`
+# reports zero findings for torch. Every ID below was re-checked against
+# THIS number, not the lock file's.
 #
 # CVE-2025-3000 (GHSA-rrmf-rvhw-rf47, same advisory as PYSEC-2025-194 below
 # under a different ID alias — dates kept in sync) is the torch.jit.script
-# memory-corruption disclosed 2026-06. Correction on renewal (2026-08-11):
-# the prior "NO upstream fix" note was wrong — re-checked against OSV
-# directly rather than re-asserted, and it lists `fixed: 2.13.0` with a
-# real fix commit. Our pin (2.12.0) is inside the affected range (last
-# affected 2.12.1), so this is a deferred-upgrade suppression like the
-# Django block below, not a no-fix one: the actual blocker is scheduling
-# and testing a torch bump against `ml_dark_web/ml_services.py`, out of
-# scope for this PR (adaptive password feature, not an ML dependency
-# bump). The reachability argument still independently applies as this
-# PR's mitigation — re-checked, not re-asserted: the codebase imports
-# torch.nn for inference and never calls torch.jit.script/.trace on any
-# input (grep: no jit.script/.trace/.load call sites anywhere in
-# password_manager/). Re-evaluate whether the upgrade can be scheduled on
-# each renewal, not as a reflex date bump. Extended to the full 60-day cap
-# (2026-10-10) on the very next round rather than 2026-08-15: that date was
-# inherited from PYSEC-2025-194's existing neighbour to keep the two
-# aliases in sync, but for an ACTIVE renewal, 4 days of runway from the
-# renewal date defeats the point of renewing at all.
+# memory-corruption disclosed 2026-06, fixed in 2.13.0. On the resolved
+# version CI actually installs, this is already patched — the reachability
+# argument this suppression used to lean on (no jit.script/.trace call
+# sites anywhere in password_manager/) is now moot rather than load-
+# bearing. Not removed this round: the finding that triggered this
+# correction didn't name these two IDs, and the exp date (2026-10-10) isn't
+# imminent — noted here so their own next renewal doesn't re-verify against
+# the lock-file pin again by habit. Worth removing outright at that point.
 CVE-2025-3000 exp:2026-10-10
 PYSEC-2025-194 exp:2026-10-10
 
@@ -191,8 +197,20 @@ PYSEC-2025-194 exp:2026-10-10
 # an ID the tool no longer raises is inert either way, but a stale entry
 # left in a manifest whose whole point is an accurate audit trail is its
 # own small hazard — the next renewal round taking it on faith again.
-PYSEC-2025-210 exp:2026-08-25
-PYSEC-2026-139 exp:2026-08-25
+# `torch==2.12.0` (requirements-lock.txt's pin) was never actually the
+# right check either — see the block comment above this section: CI scans
+# `requirements.txt`'s `torch>=2.12.0`, which resolves to 2.13.0. Doesn't
+# change the conclusion (`pip-audit -r <torch==2.13.0>` also reports zero
+# findings for these three IDs), only which input it should have been
+# checked against.
+#
+# PYSEC-2025-210/PYSEC-2026-139 — REMOVED 2026-08-24, not renewed (were due
+# to expire 2026-08-25). Same gap as above: both were carried forward on
+# 2026-08-23 checked only against the lock file's `torch==2.12.0` pin, not
+# CI's real `requirements.txt` target. Re-checked against the resolved
+# version (2.13.0): neither appears in `pip-audit -r <torch==2.13.0>`'s
+# output. Removed rather than renewed for a fourth time on an unverified
+# basis.
 
 # transformers — all require user-loaded malicious HuggingFace
 # checkpoints. ml_dark_web/ml_services.py only invokes from_pretrained
