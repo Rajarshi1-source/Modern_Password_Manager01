@@ -480,9 +480,19 @@ def generate_honeypot_stats():
 CELERY_BEAT_SCHEDULE = {
     # Polls each active alias with its provider. This is the actual detection
     # loop -- "instant" breach detection is bounded by this interval.
+    # `scan_all_honeypots`'s own docstring says "every 15-30 minutes"; this
+    # plan originally suggested hourly with no reconciliation against that
+    # contract (unlike process_pending_rotations/send_breach_digest below,
+    # whose cadences ARE reasoned through against their own tasks -- see
+    # §7.8/§7.9 of the round-1 review-fix log). Corrected to 30 minutes: the
+    # slower end of the task's documented range, so it satisfies the
+    # contract while still limiting calls to the alias provider
+    # (SimpleLogin/AnonAddy) to 2x/day more than hourly, not 4x as a 15-minute
+    # cadence would -- see celery.py's own SAFETY NOTE on this task tripping
+    # provider rate limits on a backlog tick.
     'honeypot-scan-all': {
         'task': 'security.scan_all_honeypots',
-        'schedule': 3600.0,  # Hourly
+        'schedule': 1800.0,  # Every 30 minutes
     },
     # Emails a reminder for each credential rotation still pending >24h and
     # unconfirmed (it sends reminders only -- it does not rotate anything

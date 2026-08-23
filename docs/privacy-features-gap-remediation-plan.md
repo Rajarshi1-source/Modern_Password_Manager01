@@ -1,7 +1,10 @@
 # Plan — Close the gaps in 5 privacy/anti-forensics features
 
 Verification performed on `main` @ `5e43b1d`. Every claim below was checked
-against the code, not inferred from filenames or docs.
+against the code, not inferred from filenames or docs. This scoping applies to
+§§0-6, the gap analysis and delivery plan; §7 onward (the review-fix rounds)
+are each verified against the PR branch at their own commit, named in that
+round's own text.
 
 **Scope.** Onion-Routed Vault Sync (10), Plausible Deniability Vault (12),
 Smart Contract Automation (15), Honeypot Passwords (18), Honeypot Emails.
@@ -352,14 +355,16 @@ Follow the Time-Lock precedent exactly; it is already proven in this repo.
    entry task strings matching each `@shared_task(name=...)` **exactly** — the
    name mismatch was the original Genetic/DNA beat bug
    (`docs/celery-beat-genetic-task-names-plan.md`). Suggested cadence:
-   `scan_all_honeypots` hourly; `process_pending_rotations` daily;
+   `scan_all_honeypots` every 30 minutes; `process_pending_rotations` daily;
    `analyze_breach_patterns` daily; `cleanup_expired_honeypots` daily;
    `send_breach_digest` daily; `generate_honeypot_stats` daily. (Originally
-   proposed as 15 min / weekly for these last two; both were tried during
-   implementation and found wrong — see §7.8/§7.9 of the round-1 review-fix
-   log below for why, corrected here so this plan doesn't keep pointing a
-   future reader at values already proven to spam and to silently drop
-   breaches, respectively.)
+   proposed as 15 min / weekly for these last two, and hourly for the
+   first; all three were tried during implementation and found wrong — see
+   §7.8/§7.9 of the round-1 review-fix log for the middle two, and §12.5 of
+   the round-6 log for `scan_all_honeypots` (its own docstring says "every
+   15-30 minutes", which hourly violated) — corrected here so this plan
+   doesn't keep pointing a future reader at values already proven to spam,
+   to silently drop breaches, or to run outside the task's own contract.)
 2. Export it as `HONEYPOT_BEAT_SCHEDULE` from `security/tasks/__init__.py`,
    beside `TIME_LOCK_BEAT_SCHEDULE` (line 127).
 3. Merge it in `celery.py` inside the **existing** `@app.on_after_finalize`
@@ -1253,7 +1258,116 @@ it, for their own renewal (`exp:2026-08-25`, two days out).
 [backend-ci.yml](../.github/workflows/backend-ci.yml) sets this explicitly
 for the pytest job; a local run without it 301-redirects every request via
 `SECURE_SSL_REDIRECT`, an unrelated pre-existing environment quirk, not a
-regression from this round): 30 passed, 1 skipped (pre-existing skip,
-unrelated). `test_celery_beat_registry.py -k honeypot` re-run to confirm
-§11.5's checkbox: 2 passed, 6 subtests passed. `python -m py_compile` clean
-on all four touched backend files.
+regression from this round): 30 passed, 1 skipped (the same pre-existing
+SQLite/Postgres concurrency skip noted in §8.9, still unrelated). That is
+§9.8's 28 passed / 1 skipped (24 from round 2's §8.9 + the 4 rate-limit tests
+round 3 added) plus this round's 2 new tests --
+`test_reserve_survives_budget_exhaustion` (§11.1) and
+`test_cache_failure_fails_open` (§11.3) -- round 4 added none to this file.
+`test_celery_beat_registry.py -k honeypot` re-run to confirm §11.5's
+checkbox: 2 passed, 6 subtests passed. `python -m py_compile` clean on all
+four touched backend files.
+
+## 12. Review-fix round 6 on PR #486 (CodeRabbit, sixth pass)
+
+Six findings (all actionable, no nitpicks this round), verified critically
+before changing anything. All six held up. No CI check was failing this
+round -- all 34 checks were green at the time of review; this round is a
+response to CodeRabbit's own comments, not a CI failure.
+
+### 12.1 `caches['rate_limiting']` looked up before the try block it's meant to be covered by (Minor, confirmed)
+
+`_within_report_budget` assigned `rate_cache = caches['rate_limiting']` one
+line above `try:`. `caches[...]` raises `InvalidCacheBackendError` if the
+alias isn't declared in the active settings profile's `CACHES` dict -- and
+unlike a live connection failure (already handled, §10.5), that lookup ran
+outside the function's own fail-open boundary. Today's settings always
+declare `'rate_limiting'` (confirmed by grep), so this was latent, not live
+-- but the whole point of a fail-open rate limiter is that it holds under
+every settings profile, not just the one currently deployed. Moved the
+lookup inside the `try:`, exactly as CodeRabbit's own patch proposed; no
+other line moved.
+
+### 12.2 `onionSyncService.syncVault`'s explicit `mode` override was never validated (Minor, confirmed, not reachable in production today)
+
+`effectiveMode = mode || getSyncPrivacyMode()` takes any truthy `mode`
+literally. `VaultContext.jsx` -- the only production caller -- never passes
+`mode` (confirmed by grep), so this path is not reachable today. But `mode`
+is a documented parameter of a shared service module ("override the stored
+preference"), already exercised directly by five cases in
+`onionSyncService.test.js`, so a future caller passing a misspelled mode
+string would silently fall through: not `OFF` (skips the cheap path), not a
+capability match if onion happens to be up, and if onion is down, not
+`REQUIRE_ONION` either -- so it lands on the degraded-clearnet return with
+`degraded: true`, having never actually been the mode it claimed to be. That
+is exactly the "quiet downgrade" this module's own JSDoc calls a false
+privacy promise, just reachable through the API surface rather than the
+UI. Fixed with CodeRabbit's own proposed patch: `mode ?? getSyncPrivacyMode()`
+(switched from `||` to `??` so an explicit empty string is treated as an
+invalid override, not "not provided") plus a `VALID_MODES.has(effectiveMode)`
+guard that throws. Added
+`rejects an explicit but invalid mode instead of silently downgrading` to
+`onionSyncService.test.js`.
+
+### 12.3 `honeypot-scan-all` scheduled outside its own task's documented cadence (Major, confirmed)
+
+`scan_all_honeypots`'s docstring says "Should be scheduled to run every
+15-30 minutes via Celery Beat" -- this is the actual breach-canary detection
+loop, so that window IS the feature's detection latency, not an arbitrary
+number. The schedule this PR shipped was hourly (3600s), double the
+documented ceiling. Traced the discrepancy to this plan doc's own §4.3,
+which suggested "hourly" for this one entry with no reasoning recorded,
+unlike its neighbours `process_pending_rotations`/`send_breach_digest`,
+whose cadences ARE reasoned through against their own tasks (§7.8/§7.9) --
+an oversight in the plan itself, carried straight through to
+implementation. Corrected to 1800s (30 minutes): the slower end of the
+task's documented range, chosen over 15 minutes because `celery.py`'s own
+SAFETY NOTE on this task already flags it for tripping the alias provider's
+(SimpleLogin/AnonAddy) rate limits on a backlog tick -- 30 minutes satisfies
+the docstring's floor while adding only 2x/day more provider calls than
+hourly, not 4x. Added
+`test_honeypot_scan_all_matches_its_own_docstring_cadence` to
+`test_celery_beat_registry.py`, asserting the schedule falls in `[900,
+1800]` seconds, per CodeRabbit's own request for a registry assertion (not
+just the config change) so a future edit can't silently drift back outside
+the documented range the way this one did. Updated §4.3's suggested cadence
+in this plan to match.
+
+### 12.4 Vault-sync route contract test only checked the trailing path segment (Minor, confirmed)
+
+`test_the_named_route_actually_reverses` asserted `url.endswith('/sync/')`.
+Any endpoint mounted at a different prefix but also literally ending
+`/sync/` would still pass -- which defeats the point of a contract test
+whose own module docstring says it exists so "a rename of the `vault-sync`
+URL name... would break onion sync in a way no existing test would catch."
+Traced the actual mount chain rather than assuming CodeRabbit's suggested
+path was right: `password_manager/urls.py` (`path('api/', ...)`) ->
+`api/urls.py` (`path('vault/', include('vault.urls'))`) -> `vault/urls.py`
+(`path('sync/', ..., name='vault-sync')`) resolves to exactly
+`/api/vault/sync/`, confirming the suggested fix. Tightened the assertion to
+the full suffix.
+
+### 12.5 Two documentation-scoping findings (Minor, both confirmed)
+
+The doc's opening line ("Verification performed on `main` @ `5e43b1d`")
+technically only covers §§0-6 (the original gap analysis); §7 onward
+describes review-fix rounds each verified against their own later PR-branch
+commit, named in that round's own text. Scoped the opening statement
+explicitly rather than leaving it to read as covering the whole file.
+Separately, §11.7's final test count (30 passed, 1 skipped) was correct but
+required a reader to sum deltas scattered across three earlier rounds'
+write-ups (24 from §8.9, +4 from §9.8, +0 from round 4, +2 from §11.1/§11.3)
+to reconcile against the PR description's original "17 duress-signal" figure
+-- not wrong, just not shown. Expanded §11.7 to state the arithmetic
+explicitly.
+
+### 12.6 Test results
+
+`security/tests/test_duress_signal.py`,
+`security/tests/test_celery_beat_registry.py`, and
+`security/tests/test_onion_vault_sync_route.py` re-run together (same
+`DEBUG=True` invocation as round 5, `canny` venv): 46 passed, 1 skipped
+(same pre-existing skip), 20 subtests passed. `onionSyncService.test.js`
+re-run in full: 17 passed (16 pre-existing + 1 new). `python -m py_compile`
+clean on all four touched backend files. ESLint clean on both touched
+frontend files.

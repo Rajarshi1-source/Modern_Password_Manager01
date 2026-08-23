@@ -195,6 +195,18 @@ describe('syncVault — contract', () => {
         await expect(syncVault(SYNC_DATA, {})).rejects.toThrow(/vaultService/);
     });
 
+    test('rejects an explicit but invalid mode instead of silently downgrading', async () => {
+        // A typo'd override must fail loudly -- falling through to the
+        // degraded-clearnet branch would report `degraded: true` for a mode
+        // that was never a real onion request, the same false-privacy-promise
+        // the REQUIRE_ONION fail-closed behaviour above exists to prevent.
+        await expect(
+            syncVault(SYNC_DATA, { vaultService, mode: 'sort_of_private' }),
+        ).rejects.toThrow(/Unknown sync privacy mode/);
+        expect(darkProtocolService.getCapabilities).not.toHaveBeenCalled();
+        expect(vaultService.syncVault).not.toHaveBeenCalled();
+    });
+
     test('default export exposes the documented surface', () => {
         expect(Object.keys(onionSyncService).sort()).toEqual([
             'OnionSyncUnavailableError',
