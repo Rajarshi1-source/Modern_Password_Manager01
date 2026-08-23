@@ -245,11 +245,13 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                         <p className="dp-setting-desc">
                             Vault sync tries the Tor onion service first, which hides your
                             IP address from the server and makes sync traffic harder to
-                            correlate. If the onion route is unavailable, sync falls back
-                            to your normal connection instead of failing — you&apos;ll
-                            see that a sync used the normal connection when it happens.
-                            Neither route hides <em>which account</em> is syncing — sync
-                            is still authenticated either way.
+                            correlate — available only when you&apos;re accessing this app
+                            through its onion address (e.g. in Tor Browser). If the onion
+                            route is unavailable, sync falls back to your normal connection
+                            instead of failing — you&apos;ll see that a sync used the
+                            normal connection when it happens. Neither route hides{' '}
+                            <em>which account</em> is syncing — sync is still authenticated
+                            either way.
                         </p>
                     )}
 
@@ -257,12 +259,14 @@ const DarkProtocolSettings = ({ onSave, onClose }) => {
                         <p className="dp-setting-desc">
                             Vault sync only uses the Tor onion service, which hides your
                             IP address from the server and makes sync traffic harder to
-                            correlate. It does not hide <em>which account</em> is
-                            syncing — sync is still authenticated.{' '}
+                            correlate — available only when you&apos;re accessing this app
+                            through its onion address (e.g. in Tor Browser). It does not
+                            hide <em>which account</em> is syncing — sync is still
+                            authenticated.{' '}
                             <strong>Strict mode:</strong> if the onion route is
-                            unavailable, sync will fail rather than fall back to a
-                            normal connection. Your changes stay queued locally until
-                            it succeeds.
+                            unavailable — including whenever you&apos;re on the normal web
+                            address — sync will fail rather than fall back to a normal
+                            connection. Your changes stay queued locally until it succeeds.
                         </p>
                     )}
                 </div>
