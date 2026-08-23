@@ -1565,3 +1565,152 @@ caught in the same review pass that produced this section. `python -m
 py_compile` clean on the one touched Python source file (`duress_tasks.py`)
 and the one touched test file. No frontend files
 touched this round.
+
+## 15. Review-fix round 9 on PR #486 (CodeRabbit, ninth pass)
+
+Three findings. Two fixed; one verified critically and found not to hold up
+as an actionable bug once traced through what it would actually take to fix
+-- recorded here with full reasoning rather than silently skipped, per this
+round's own instructions to "skip the rest with a brief reason" rather than
+fix speculatively. All CI checks that had completed were green going into
+this round (`Backend CI/CD / Run Tests` and two other backend jobs were
+still in progress at review time, per the PR's own check list, not failing).
+
+### 15.1 A second race window after round 8's fix, between the trigger update and activation (Major claim, checked and NOT applied)
+
+CodeRabbit's claim: round 8's `is_active=True` filter (§14.4) only protects
+the conditional trigger-count *update*. A concurrent `register_signal_token`
+call can still deactivate the same signal in the gap between that update
+succeeding and `activate_duress_mode` actually running, using the
+now-superseded `matched.duress_code`. Suggested fix: serialize registration
+and activation with the same per-user lock or transaction, and extend the
+regression test to cover this post-update interleaving.
+
+**The race window is real. Traced what "fixing" it would actually require,
+and concluded it should not be fixed the suggested way:**
+
+- The remaining window (between the confirmed-active update at
+  `duress_tasks.py` and the `activate_duress_mode` call a few lines later)
+  has no I/O boundary in it -- no DB query, no `await`. It is narrower by
+  a full DB round-trip than the window round 8 closed, and only reachable
+  by genuine OS-level concurrency (a separate Celery worker process running
+  a `register_signal_token` request at the exact same instant), not by
+  anything schedulable from a single request.
+- More importantly: `matched.duress_code` is not corrupted or wrong data if
+  this race is hit. A new registration creates a brand-new `DuressSignal`
+  row; it never modifies the FK on the OLD row this task already loaded via
+  `select_related`. The "staleness" CodeRabbit's finding describes is only
+  the OLD signal's `is_active` flag flipping to `False` moments after a
+  match that already, genuinely, correctly occurred against it while it was
+  still active. Firing the alarm for a match that was real when it happened
+  is not a data-integrity bug.
+- Whether firing is even undesirable is the real question, and the answer
+  is no: `activate_duress_signal_task`'s own docstring already establishes
+  the opposite design intent two paragraphs above this exact code --
+  "a duress signal is single-fire per registration in spirit, but we do NOT
+  deactivate it here: a user under sustained coercion may unlock
+  repeatedly, and silently disarming the alarm after the first use is the
+  opposite of what this feature is for." Suppressing an alarm for a
+  just-confirmed genuine match because an unrelated registration raced past
+  it a moment later is the same failure mode in a different guise -- a
+  coercer who could somehow trigger both events in that same instant would
+  gain a tool to silence the alarm, exactly backwards from what this
+  feature must guarantee.
+- The suggested remedy has a real cost the finding doesn't account for:
+  `activate_duress_mode` is not cheap -- it creates an evidence package, may
+  generate a decoy vault, and (when silent alarms are enabled) calls
+  `SilentAlarmService.send_alerts()`, real blocking SMTP and webhook I/O
+  (see §7's original timing-fix writeup for the same characterization).
+  Serializing it against `register_signal_token` with a shared lock would
+  mean a user's own legitimate attempt to register a NEW duress token --
+  ordinary account maintenance, not an attack -- blocks for however long
+  that I/O takes, any time it happens to land while an activation for their
+  OLD token is in flight. That is a availability regression traded for
+  closing a window that, per the point above, was not a real bug to begin
+  with.
+
+**Not applied.** No lock/transaction added, no new test -- a test asserting
+"no activation occurs" would be asserting behavior this analysis concludes
+is wrong to want. If this reasoning is ever revisited, the trigger to
+re-open it is a concrete report of the race actually mattering in
+practice, not a theoretical interleaving alone.
+
+### 15.2 `safeJson`'s output was assumed to always be a plain object (Minor, confirmed)
+
+`StegoVaultDashboard.jsx`'s `safeJson` is a bare `JSON.parse`, and its only
+existing guard (`!decoyVault` after parsing) rejects `null`/falsy results --
+not arrays, strings, or numbers, all of which parse successfully and are
+truthy. Two call sites then used object-spread assuming an object shape:
+`onEmbed`'s `{ ...decoyVault, __duress_signal: duressToken }` (embedding)
+and `onExtract`'s `{ ...json }` (the on-screen display copy, stripped of
+the signal field before rendering). Spreading a non-object silently
+corrupts it -- an array becomes `{0: ..., 1: ..., __duress_signal: ...}`,
+losing its array-ness entirely; a string becomes an object of its
+characters; a number or boolean spreads to `{}`. Confirmed by reading
+`safeJson` and both call sites directly: neither validates the parsed
+value's shape before this point, only that it's syntactically valid JSON.
+
+The embed-side instance is the more consequential of the two: it would
+silently create a decoy vault whose payload does not match what the user
+actually typed, without any error, for anyone whose vault JSON happens to
+be array-shaped (e.g. `[{"user":"a"},{"user":"b"}]`, a plausible way to
+represent a credential list) rather than a single object. The extract-side
+instance only affects the on-screen JSON dump after a decoy unlock, not the
+duress-reporting path itself (`reportUnlockForSlot` is called with the
+original untouched `json`, before the display copy is made).
+
+Added `isPlainObject` (object, non-null, non-array) next to `safeJson` and
+gated both call sites on it: `onEmbed` now shows a validation error
+("Decoy vault JSON must be an object, not an array or a bare value.")
+instead of silently embedding a corrupted payload; `onExtract` skips the
+clone-and-strip only when the extracted value isn't a plain object (the
+REAL vault can legitimately be array-shaped too, and never carries
+`__duress_signal` regardless -- see `onEmbed`'s own comment on why only the
+decoy payload gets the field). No test file exists for this component
+(confirmed by search, same as §13.1's finding on the sibling
+`DarkProtocolSettings.jsx`); verified with `--max-warnings=0` ESLint
+instead, clean.
+
+### 15.3 A wall-clock-dependent test could flake on a slow CI runner (Minor, confirmed)
+
+`test_over_budget_report_still_returns_204_and_skips_the_enqueue` sends 61
+real authenticated POSTs through the full view -- not a direct
+`_within_report_budget` call like its sibling tests in the same class --
+before asserting the 62nd is silently dropped. The reserve slot the test
+depends on has a hard 5-second TTL (`_REPORT_RESERVE_WINDOW_SECONDS`); if
+the loop plus final request takes longer than that on a loaded runner, the
+reserve key expires mid-test and the final request claims a fresh slot
+instead of being the one that's rejected, failing
+`mock_apply_async.assert_not_called()` for a reason unrelated to the budget
+logic under test. Confirmed this test is the only one of its siblings with
+this exposure: the others (`test_exceeding_budget_returns_false`,
+`test_reserve_survives_budget_exhaustion`, etc.) call
+`_within_report_budget` directly -- a plain LocMemCache read/write with no
+HTTP request/response cycle, no view dispatch, no real `apply_async`
+publish -- so 60-61 iterations complete in microseconds regardless of
+runner load; only the one test that goes through real POSTs is exposed.
+
+Fixed with CodeRabbit's own proposed patch: widened
+`_REPORT_RESERVE_WINDOW_SECONDS` to match the primary window
+(`_REPORT_RATE_WINDOW_SECONDS`, 60s) for the duration of this test via
+`mock.patch` on the module attribute, so the outcome depends on request
+*count* rather than how long the loop happened to take. No other test in
+the file needed the same change.
+
+### 15.4 Test results
+
+`security/tests/test_duress_signal.py -k RateLimit`
+(`DuressSignalReportRateLimitTests`, the class containing §15.3's fix; `canny`
+venv, `DEBUG=True`): 6 passed, confirming the widened-window fix without a
+full-file re-run -- §15.2's frontend change and §15.1's no-op both needed no
+Python test run at all (no test file exists for the former; the latter
+changed no code). Kept to this one targeted class deliberately: this file's
+own real-POST-based tests are measurably the slowest in it (this run alone
+took ~19 minutes for 6 tests, almost entirely the one test §15.3 touches,
+which now makes 62 real authenticated requests instead of erroring out
+early), so a full-file re-run for a single-test, non-logic change would cost
+several times that for no additional signal -- exactly the "don't run the
+enormous suite after every tiny change" guidance this project has followed
+since round 1. `python -m py_compile` clean on the one touched Python file
+(`test_duress_signal.py`). `eslint --max-warnings=0` clean on
+`StegoVaultDashboard.jsx`.

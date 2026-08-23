@@ -115,6 +115,15 @@ function safeJson(text) {
   }
 }
 
+// `safeJson` accepts any valid JSON, including arrays and primitives, but
+// `__duress_signal` is only ever injected/stripped via object spread --
+// `{...value}` silently reduces an array to an object of numeric-string
+// keys and drops a string/number/boolean entirely, corrupting the vault
+// rather than raising anything. Gate both call sites on this instead.
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 const TIER_OPTIONS = [
   { value: TIERS.TIER0_32K, label: '32 KB — smallest, fastest' },
   { value: TIERS.TIER1_128K, label: '128 KB — balanced (recommended)' },
@@ -238,6 +247,11 @@ const StegoVaultDashboard = () => {
         let decoyPayload = decoyVault;
         let duressToken = null;
         if (decoyVault && decoyPassword) {
+          if (!isPlainObject(decoyVault)) {
+            // setBusy(false) is handled by this try block's own `finally`.
+            setError('Decoy vault JSON must be an object, not an array or a bare value.');
+            return;
+          }
           duressToken = generateSignalToken();
           decoyPayload = { ...decoyVault, __duress_signal: duressToken };
         }
@@ -328,8 +342,14 @@ const StegoVaultDashboard = () => {
       // a coercer watching that screen during a "successful" decoy unlock
       // must not see anything that reveals an alarm fired. Report from the
       // untouched `json` first, THEN strip the field for display.
-      const displayJson = json ? { ...json } : json;
-      if (displayJson) {
+      //
+      // Only clone-and-strip for a plain object: `json` here can be the
+      // REAL vault too (never carries `__duress_signal` -- see onEmbed), and
+      // that one is under no object-shape requirement. `{ ...json }` on an
+      // array or primitive would silently corrupt it into a numeric-keyed
+      // object for display, which isPlainObject avoids.
+      const displayJson = isPlainObject(json) ? { ...json } : json;
+      if (isPlainObject(displayJson)) {
         delete displayJson.__duress_signal;
       }
       setExtractResult({ slotIndex, json: displayJson });
