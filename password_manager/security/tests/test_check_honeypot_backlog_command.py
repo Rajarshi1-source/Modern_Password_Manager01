@@ -162,3 +162,40 @@ class CheckHoneypotBacklogCommandTests(TestCase):
         self.assertNotIn('decoy-alias@example.com', out)
         self.assertNotIn('canary@example.com', out)
         self.assertNotIn('canary-user', out)
+
+    def test_large_backlog_reports_true_total_and_truncates_the_sample(self):
+        """A backlog past MAX_ROTATION_SAMPLES must not be loaded or printed
+        in full -- the summary count must still be the true total (a
+        .count(), not len() of a capped list), and the detail section must
+        say so explicitly rather than silently showing a partial list that
+        looks complete."""
+        from security.management.commands.check_honeypot_backlog import (
+            MAX_ROTATION_SAMPLES,
+        )
+
+        extra = 7
+        CredentialRotationLog.objects.bulk_create([
+            CredentialRotationLog(
+                user=self.user,
+                service_name=f'service-{i}.example',
+                status='pending',
+                user_confirmed=False,
+                initiated_at=timezone.now() - timedelta(hours=48, minutes=i),
+            )
+            for i in range(MAX_ROTATION_SAMPLES + extra)
+        ])
+
+        out, code = self._run()
+
+        self.assertEqual(code, 1)
+        self.assertIn(
+            f'BACKLOG FOUND: {MAX_ROTATION_SAMPLES + extra} '
+            'CredentialRotationLog',
+            out,
+        )
+        self.assertEqual(
+            out.count('CredentialRotationLog') ,
+            # One mention in the summary line, one per printed sample row.
+            1 + MAX_ROTATION_SAMPLES,
+        )
+        self.assertIn(f'... and {extra} more', out)

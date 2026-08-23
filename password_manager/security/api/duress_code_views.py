@@ -764,20 +764,38 @@ def _within_report_budget(user_id) -> bool:
     ai_assistant/services/claude_service.py::_check_rate_limit -- Redis-backed
     in production (counters survive worker restarts, shared across
     processes), locmem in development.
+
+    Fails OPEN on any cache backend error (Redis connection failure, etc.).
+    This project does not set IGNORE_EXCEPTIONS on the 'rate_limiting' alias,
+    so django-redis re-raises rather than degrading quietly -- and the caller
+    invokes this from inside its own `if` condition, BEFORE its try/except
+    begins, so an uncaught exception here would propagate straight past the
+    view rather than being absorbed by it. A rate limiter is not allowed to
+    be the reason this endpoint stops answering 204.
     """
     rate_cache = caches['rate_limiting']
     cache_key = f'duress_signal_report_{user_id}'
 
-    # cache.add() is atomic: sets only if the key doesn't exist yet.
-    if rate_cache.add(cache_key, 1, _REPORT_RATE_WINDOW_SECONDS):
-        return True
-
     try:
-        current_count = rate_cache.incr(cache_key)
-    except ValueError:
-        # Key expired between add() and incr() -- reset, first request in a
-        # fresh window.
-        rate_cache.set(cache_key, 1, _REPORT_RATE_WINDOW_SECONDS)
+        # cache.add() is atomic: sets only if the key doesn't exist yet.
+        if rate_cache.add(cache_key, 1, _REPORT_RATE_WINDOW_SECONDS):
+            return True
+
+        try:
+            current_count = rate_cache.incr(cache_key)
+        except ValueError:
+            # Key expired between add() and incr() -- reset, first request in
+            # a fresh window. Distinct from a backend failure: this ValueError
+            # is cache.incr()'s documented behaviour for a missing key, not an
+            # error condition, so it is handled here rather than falling
+            # through to the fail-open branch below.
+            rate_cache.set(cache_key, 1, _REPORT_RATE_WINDOW_SECONDS)
+            return True
+    except Exception:
+        logger.error(
+            "duress_signal_report: rate-limit cache unavailable "
+            "(user_id=%s); failing open", user_id,
+        )
         return True
 
     if current_count > _REPORT_RATE_LIMIT:

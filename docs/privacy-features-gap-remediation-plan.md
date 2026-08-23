@@ -239,9 +239,12 @@ Modular-monolith placement: new frontend service beside its peers, no new
 backend app — the backend already supports this operation.
 
 1. New `frontend/src/services/onionSyncService.js`:
-   - `getSyncPrivacyMode()` / `setSyncPrivacyMode(mode)` over the existing
-     `preferencesService`, with modes `'off' | 'prefer_onion' | 'require_onion'`
-     (default `'off'`, preserving today's behaviour).
+   - `getSyncPrivacyMode()` / `setSyncPrivacyMode(mode)` reading/writing
+     `localStorage` directly (a device-local transport preference, not
+     account state — the delivered implementation does not route this
+     through `preferencesService`, unlike the original draft of this plan),
+     with modes `'off' | 'prefer_onion' | 'require_onion'` (default `'off'`,
+     preserving today's behaviour).
    - `syncVault(syncData)` that:
      - `'off'` → delegate to `vaultService.syncVault` unchanged;
      - `'prefer_onion'` → call `darkProtocolService.getCapabilities()`; if
@@ -950,3 +953,148 @@ end-to-end check) on top of the existing 24 passed / 1 skipped from round 2.
 `_out` rename, re-run to confirm. `python -m py_compile` clean on all five
 touched backend files before running tests. ESLint clean on both touched
 frontend files.
+
+---
+
+## 10. Review-fix round 4 on PR #486 (CodeRabbit, fourth pass)
+
+Six findings (5 actionable, 1 nitpick), verified critically before changing
+anything. All six held up and were fixed. No CI check was failing this
+round — the check fixed in round 1 (`Dependency Vulnerability Scan`) was
+green throughout, but this round's nitpick found the round-1 renewal had
+itself been incomplete, so it is logged here as a correction, not a new
+failure.
+
+### 10.1 Nitpick, upgraded on inspection: the round-1 torch renewal never checked whether pip-audit still raised the IDs at all (Trivial claim, Major in practice)
+
+CodeRabbit's claim: `PYSEC-2025-195/196/197`'s vulnerable version ranges end
+below this project's actual torch minimum (`>=2.12.0` in `requirements.txt`,
+locked to exactly `2.12.0` in `requirements-lock.txt`), so the suppressions
+are simply stale. Verified directly against the tool itself rather than
+trusted: `pip-audit -r <torch==2.12.0>` reports exactly one torch finding —
+`PYSEC-2025-194`/`CVE-2025-3000`, already suppressed separately — and 195,
+196, 197 do not appear at all.
+
+This is a real gap in round 1's own renewal, not just a stale-suppression
+tidy-up: round 1 re-verified the *reachability argument* (no
+`jit.script`/`jit.trace` call sites, the one `torch.load()` hit uses
+`weights_only=True` on a hard-coded path) but never checked whether
+pip-audit would raise these three IDs against the pin *at all* — it should
+have, and the omission would have repeated at every future renewal round
+had it gone uncaught. Removed the three entries, following the exact
+"REMOVED, not renewed" pattern this file already uses for other IDs that
+turned out not to apply (see the pyjwt/joblib/Twisted entries near the top).
+
+Noted but NOT acted on: the same `pip-audit -r` query suggests
+`PYSEC-2025-210`/`PYSEC-2026-139` (the block's remaining two torch entries)
+might be similarly stale — they were not in the query's output either. Not
+flagged by CodeRabbit this round, and their `exp:2026-08-25` dates were not
+expired at time of writing, so removing them now would be scope beyond what
+was actually raised. Worth checking at their own next renewal.
+
+### 10.2 Doc drift: plan described a storage mechanism that isn't what shipped (Minor, confirmed)
+
+§4.1 step 1 said `getSyncPrivacyMode()`/`setSyncPrivacyMode()` go "over the
+existing `preferencesService`". Verified against `onionSyncService.js`:
+both read/write `localStorage` directly; `preferencesService` is never
+imported. Updated the plan to describe the delivered device-local
+preference contract instead of the originally-drafted one.
+
+### 10.3 `StegoVaultDashboard.onEmbed` registered the duress token before confirming the embed would succeed (Major, confirmed)
+
+`registerSignalToken` deactivates the user's previous active signal as part
+of installing the new one — and `embedVault` is a pure client-side PNG
+encode with no guarantee of success (cover-image capacity, corrupt bytes,
+etc.). Registering first meant a failed embed would deactivate whatever
+decoy vault the user already had *working*, leaving the new token
+registered server-side with no PNG anywhere that actually embeds it — a
+silent, invisible breakage of existing duress protection triggered by an
+unrelated encode failure. Fixed by generating the token before the embed
+(it needs to be embedded in the payload) but registering it only after
+`embedVault` resolves successfully, immediately before the file is
+exported — exactly the ordering CodeRabbit's own diff proposed.
+
+### 10.4 `syncDegraded`/`syncTransport` were tracked but never rendered anywhere (Minor, confirmed — a fourth instance of the recurring pattern)
+
+Verified via grep: zero references to either field outside
+`VaultContext.jsx` itself. The state was added in §5's Phase 1 delivery
+specifically "so the UI can be honest" about a `prefer_onion` fallback to
+clearnet, but with no consumer, the UI was exactly as silent about the
+downgrade as it would have been with no tracking at all — the false-
+privacy-promise gap moved from "reports success" to "reports nothing",
+which is not actually progress.
+
+Deliberately did NOT build new UI infrastructure for this: `syncStatus`
+itself (a field that predates this entire PR) has never been rendered
+anywhere in the app either, so a dedicated sync-status banner/badge would be
+new surface area disproportionate to a Minor finding. Instead reused the
+existing `error` field from `useVault()`, already rendered in several places
+in `App.jsx` — on a degraded sync, `setError()` now carries a non-alarming,
+clearly-not-a-failure message ("Vault synced, but not through the private
+onion route you requested...") instead of being unconditionally cleared to
+`null`. Minimal: one conditional replacing one unconditional call, no new
+component, no new state.
+
+### 10.5 `_within_report_budget` did not fail open on cache backend errors (Major, confirmed via CodeRabbit's own django-redis doc lookup)
+
+Verified this project sets no `IGNORE_EXCEPTIONS` anywhere (`grep -rn
+"IGNORE_EXCEPTIONS" password_manager/password_manager/settings/*.py` →
+nothing), and CodeRabbit's own doc lookup confirms django-redis re-raises
+connection errors by default without it. `_within_report_budget` is called
+from inside `duress_signal_report`'s own `if` condition, **before** the
+view's `try/except` begins (confirmed by reading the exact call site) — so
+an uncaught cache backend exception (Redis unreachable, connection pool
+exhausted, etc.) would propagate straight past the view, breaking the
+"always 204" guarantee this endpoint exists to provide, exactly the class
+of regression §9.2 introduced this mechanism to prevent in the first place.
+
+Fixed by wrapping the cache operations in a broad `except Exception` that
+fails OPEN (returns `True`, i.e. "within budget, proceed") — kept distinct
+from the existing `except ValueError` handling for the documented "key
+expired between add() and incr()" case, which is normal cache behaviour,
+not a backend failure. A rate limiter must not be the reason this endpoint
+stops answering 204.
+
+### 10.6 `check_honeypot_backlog` loaded and printed an unbounded backlog (Major, confirmed)
+
+The command's own query has no historical lower bound — read literally, a
+large enough backlog (a badly out-of-sync production system, not the
+one-time pre-deploy check this tool was designed for, but not impossible)
+would load every matching row into memory via `list(...)` and print every
+one to stdout, which lands in cluster log aggregation per the file's own
+existing privacy comment. Fixed with a bounded sample: the summary count is
+now a cheap `.count()` on the full queryset (the TRUE total, never
+truncated), while the per-row detail section is capped at
+`MAX_ROTATION_SAMPLES = 100` (the longest-pending rows, via
+`.order_by('initiated_at')`) with an explicit "... and N more" notice when
+the total exceeds the sample — so the report is always numerically accurate
+even when it can't enumerate every row. Added
+`test_large_backlog_reports_true_total_and_truncates_the_sample`, creating
+`MAX_ROTATION_SAMPLES + 7` rows via `bulk_create` and asserting the summary
+shows the true total while exactly `MAX_ROTATION_SAMPLES` detail rows print.
+
+### 10.7 `DuressSignalAPITests` had the identical cache-isolation gap `DuressSignalReportRateLimitTests` was fixed for in round 3 (Minor, confirmed)
+
+Same root cause as §9's own fix, in a sibling class round 3 didn't touch:
+Django's `TestCase` reuses auto-incremented user PKs across test methods
+(transaction rollback resets the sequence), and the `'rate_limiting'` cache
+is process-wide, not covered by that rollback. If
+`DuressSignalReportRateLimitTests` (which deliberately exhausts a user's
+budget) runs before `DuressSignalAPITests` and both happen to reuse the
+same numeric PK, a leaked counter would make
+`test_no_password_field_is_accepted_anywhere_in_this_flow`'s
+`mock_delay.assert_called_once()` fail for a reason unrelated to what it
+actually tests. Today's alphabetical test ordering happens to avoid it, but
+that's incidental, not a guarantee — `--reverse`, parallel runners, or a
+class rename would all break it. Added the identical `caches['rate_limiting'].clear()`
+call to this class's `setUp`, matching round 3's fix exactly.
+
+### 10.8 Test results
+
+`security/tests/test_duress_signal.py` and
+`security/tests/test_check_honeypot_backlog_command.py` (the latter with
+one new test for §10.6) re-run to confirm; full frontend suite (711 tests)
+re-run to confirm the `StegoVaultDashboard`/`VaultContext` changes.
+`python -m py_compile` clean on all four touched backend files. ESLint
+clean on both touched frontend files. `pip-audit-ignores.txt` re-validated
+locally against the exact CI parser logic after the §10.1 removal.

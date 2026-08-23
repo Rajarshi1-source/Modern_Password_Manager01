@@ -225,10 +225,20 @@ const StegoVaultDashboard = () => {
         // Only the decoy payload gets the field -- injecting it into
         // realVault too would put a literal alarm token in the one slot an
         // inspector would actually expect to find real data in.
+        //
+        // Generated here (needed for the embed below) but NOT registered
+        // yet: registerSignalToken deactivates the user's previous signal as
+        // part of installing the new one, and embedVault is a pure local
+        // encode with no guarantee of success (bad cover capacity, corrupt
+        // bytes, etc.). Registering first and having the embed then fail
+        // would deactivate whatever decoy vault the user already has working
+        // and leave the new token orphaned -- registered server-side with no
+        // PNG anywhere that actually contains it. Register only once the
+        // encode has actually produced the bytes it needs to be embedded in.
         let decoyPayload = decoyVault;
+        let duressToken = null;
         if (decoyVault && decoyPassword) {
-          const duressToken = generateSignalToken();
-          await registerSignalToken(getAccessToken(), duressToken);
+          duressToken = generateSignalToken();
           decoyPayload = { ...decoyVault, __duress_signal: duressToken };
         }
 
@@ -240,6 +250,11 @@ const StegoVaultDashboard = () => {
           decoyVault: decoyPayload,
           tier,
         });
+
+        if (duressToken) {
+          await registerSignalToken(getAccessToken(), duressToken);
+        }
+
         const coverHash = await computeCoverHash(coverBytes);
         const filename = `${label || 'stego'}.png`;
         downloadBytes(stegoPng, filename);

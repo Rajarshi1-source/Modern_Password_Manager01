@@ -35,6 +35,15 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+# Cap on how many individual rows this command evaluates in detail and
+# prints. The summary count above the list is always the TRUE total (a
+# cheap .count(), not len() of a loaded list) -- only the per-row detail
+# section is capped, so a very large backlog is reported accurately without
+# the command loading every row into memory or flooding whatever log
+# aggregation its stdout lands in. This is a read-only reporting tool with
+# no historical lower bound on its own query, so nothing else caps it.
+MAX_ROTATION_SAMPLES = 100
+
 
 class Command(BaseCommand):
     help = (
@@ -53,12 +62,14 @@ class Command(BaseCommand):
         # ago, and not yet confirmed by the user. Every row this matches gets
         # one reminder email on the first tick.
         rotation_cutoff = now - timedelta(hours=24)
+        stale_rotation_query = CredentialRotationLog.objects.filter(
+            status='pending',
+            initiated_at__lt=rotation_cutoff,
+            user_confirmed=False,
+        )
+        stale_rotation_count = stale_rotation_query.count()
         stale_rotations = list(
-            CredentialRotationLog.objects.filter(
-                status='pending',
-                initiated_at__lt=rotation_cutoff,
-                user_confirmed=False,
-            ).select_related('user')
+            stale_rotation_query.order_by('initiated_at')[:MAX_ROTATION_SAMPLES]
         )
 
         # Mirrors scan_all_honeypots' filter exactly. Each of these triggers
@@ -68,7 +79,7 @@ class Command(BaseCommand):
             status__in=['active', 'triggered'],
         ).count()
 
-        if not stale_rotations and not active_honeypots:
+        if not stale_rotation_count and not active_honeypots:
             self.stdout.write(self.style.SUCCESS(
                 'No backlog: 0 stale CredentialRotationLog rows, 0 active '
                 'honeypots to scan. Safe to deploy -- the first beat tick '
@@ -77,7 +88,7 @@ class Command(BaseCommand):
             return
 
         self.stdout.write(self.style.WARNING(
-            f'BACKLOG FOUND: {len(stale_rotations)} CredentialRotationLog '
+            f'BACKLOG FOUND: {stale_rotation_count} CredentialRotationLog '
             f'row(s) will each receive a reminder email, and '
             f'{active_honeypots} active honeypot(s) will be scanned against '
             f'their provider, all on the first beat tick.'
@@ -94,6 +105,13 @@ class Command(BaseCommand):
             self.stdout.write(
                 f'  CredentialRotationLog {rotation.id} -- '
                 f'pending_for={pending_for}'
+            )
+
+        if stale_rotation_count > len(stale_rotations):
+            self.stdout.write(
+                f'  ... and {stale_rotation_count - len(stale_rotations)} '
+                f'more (showing the {len(stale_rotations)} longest-pending '
+                f'rows; the count above is the true total).'
             )
 
         if active_honeypots:
