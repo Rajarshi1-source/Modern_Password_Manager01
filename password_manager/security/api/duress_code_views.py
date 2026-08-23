@@ -751,6 +751,19 @@ _SIGNAL_B64_LENGTH = 44
 _REPORT_RATE_WINDOW_SECONDS = 60
 _REPORT_RATE_LIMIT = 60
 
+# An attacker who already holds the user's session (this endpoint's own
+# stated threat model -- see duress_signal_report's docstring) could
+# otherwise pre-exhaust the primary budget above with well-formed noise,
+# then silently suppress the ONE genuine duress report the coerced user
+# sends for the rest of that 60s window -- exactly the failure this feature
+# exists to prevent. This reserve guarantees at least one report still gets
+# through every _REPORT_RESERVE_WINDOW_SECONDS regardless of how exhausted
+# the primary budget is, bounding the worst-case suppression window from 60s
+# down to 5s, at the cost of a small, fixed amount of extra worker load
+# (at most 60 / _REPORT_RESERVE_WINDOW_SECONDS additional enqueues/min/user).
+_REPORT_RESERVE_WINDOW_SECONDS = 5
+_REPORT_RESERVE_LIMIT = 1
+
 
 def _within_report_budget(user_id) -> bool:
     """Silent per-user cap. Never raises, never distinguishes match from
@@ -799,11 +812,28 @@ def _within_report_budget(user_id) -> bool:
         return True
 
     if current_count > _REPORT_RATE_LIMIT:
+        reserve_key = f'duress_signal_report_reserve_{user_id}'
+        try:
+            # Same atomic claim-by-add pattern as the primary counter, just
+            # with a short fixed window and a single slot: whichever request
+            # claims it first in a given _REPORT_RESERVE_WINDOW_SECONDS
+            # window gets through, real signal or noise -- the decision still
+            # depends only on arrival order, never on the signal's content.
+            if rate_cache.add(reserve_key, 1, _REPORT_RESERVE_WINDOW_SECONDS):
+                return True
+        except Exception:
+            logger.error(
+                "duress_signal_report: reserve rate-limit cache unavailable "
+                "(user_id=%s); failing open", user_id,
+            )
+            return True
+
         # Server-side only -- never surfaced to the client, so logging this
         # doesn't touch the indistinguishability contract.
         logger.warning(
-            "duress_signal_report: per-user budget exceeded (user_id=%s); "
-            "skipping enqueue for this request", user_id,
+            "duress_signal_report: per-user budget and reserve both "
+            "exhausted (user_id=%s); skipping enqueue for this request",
+            user_id,
         )
         return False
 

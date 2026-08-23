@@ -181,11 +181,14 @@ except ImportError as e:
 # Duress Signal Activation Task
 # ============================================================================
 #
-# Not schedule-based -- this task is only ever enqueued by
-# DuressCodeService.consume_unlock_signal via `.delay()` when a signal
-# matches, never on a beat timer. It still needs the same explicit import
-# this whole file exists for: `@shared_task` registers a task only once its
-# defining module is imported, and a worker process that has never imported
+# Not schedule-based -- this task is enqueued by
+# DuressCodeService.consume_unlock_signal UNCONDITIONALLY, on every unlock
+# report regardless of whether the signal matches (see that method's own
+# docstring for why: match determination itself had to move into this task
+# too, or which branch ran on the request thread became a timing oracle),
+# never on a beat timer. It still needs the same explicit import this whole
+# file exists for: `@shared_task` registers a task only once its defining
+# module is imported, and a worker process that has never imported
 # `duress_tasks` would raise NotRegistered the first time this is enqueued.
 
 try:

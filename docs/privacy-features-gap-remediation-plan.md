@@ -412,8 +412,10 @@ entries under real coverage for the first time.
 model, `register_signal_token` / `consume_unlock_signal`, and two endpoints:
 `duress/signal/register/` and `duress/signal/`. The report endpoint answers
 204 for match, no-match, malformed, and error alike. Frontend
-`duressSignalService.js` generates the token, registers it, and reports every
-unlock with a fixed-length value. `verify_password_or_duress` and
+`duressSignalService.js` generates the token, registers it, and reports
+supported embedded-vault unlocks through `StegoVaultDashboard.jsx` with a
+fixed-length value -- not yet wired into the main `VaultUnlockModal` flow,
+see "Not delivered" below. `verify_password_or_duress` and
 `check_for_duress_code` now document that they must never receive a master
 password, and the tautological test is replaced.
 
@@ -452,10 +454,12 @@ also remains open.
 - [ ] Duress password opens the decoy vault from the main unlock modal.
 - [ ] No master password ever reaches the server on the duress path (contract test).
 - [ ] Duress and normal unlock are byte- and endpoint-indistinguishable.
-- [ ] All six schedulable (zero-argument) honeypot tasks appear in
+- [x] All six schedulable (zero-argument) honeypot tasks appear in
       `app.conf.beat_schedule` at runtime (registry test); the three
       argument-taking fan-out targets stay absent (also asserted by the
-      registry test).
+      registry test) --
+      `test_celery_beat_registry.py::CeleryBeatScheduleRegistryTests::test_honeypot_entries_resolve`
+      and `::test_argument_taking_honeypot_tasks_stay_unscheduled`.
 - [ ] Honeypot backlog command exists and is run before the scheduling deploy.
 
 ---
@@ -1098,3 +1102,158 @@ re-run to confirm the `StegoVaultDashboard`/`VaultContext` changes.
 `python -m py_compile` clean on all four touched backend files. ESLint
 clean on both touched frontend files. `pip-audit-ignores.txt` re-validated
 locally against the exact CI parser logic after the §10.1 removal.
+
+## 11. Review-fix round 5 on PR #486 (CodeRabbit, fifth pass)
+
+Six findings (5 actionable, 1 nitpick), verified critically before changing
+anything. All six held up in some form; two of the "Major" security findings
+were real but narrower than the headline claim once checked against this
+project's actual Celery defaults and test isolation, so the fix was scoped to
+what the verification actually supported rather than the broadest version of
+the suggested change. No CI check was failing this round.
+
+### 11.1 `_within_report_budget` could be exhausted by an attacker to silently suppress a genuine duress report (Major, confirmed)
+
+CodeRabbit's claim: since the per-user report budget counts every
+well-formed report regardless of content (it has to -- see the function's own
+docstring on why it cannot look at the signal), an attacker who already holds
+the user's session (this endpoint's own stated threat model) can post 60
+throwaway 44-char values to exhaust the window, then the coerced user's real
+duress unlock in that same window gets silently dropped: nothing queued,
+nothing retried, still 204.
+
+Confirmed by reading `duress_signal_report` and `_within_report_budget`
+directly (`security/api/duress_code_views.py`): the over-budget branch
+returns `False` unconditionally, and the caller skips the enqueue entirely on
+`False` with no fallback. This is exactly the failure mode the feature exists
+to prevent, reachable by the adversary the docstring already assumes.
+
+Implemented CodeRabbit's own first suggested option (a small reserved
+allowance the over-budget path may still consume) rather than the second
+(coalescing multiple reports into one delayed enqueue): coalescing would mean
+the LATEST report in a window wins, which does not help if the attacker's
+flood continues *after* the real signal, and required a new delivery
+mechanism (nothing today flushes a coalesced value except the next request)
+that was a larger, less bounded change for the same guarantee. Added a
+second, independently-keyed counter (`duress_signal_report_reserve_{user_id}`,
+same atomic `cache.add()` claim pattern as the primary counter) that always
+allows exactly one more report through every
+`_REPORT_RESERVE_WINDOW_SECONDS` (5s), regardless of how exhausted the
+primary 60/min budget is. This does not make suppression impossible -- no
+undifferentiated rate limit can, since the endpoint cannot tell real signal
+from noise without first doing the timing-sensitive work the whole design
+exists to avoid on the request thread -- but it bounds the worst case from
+"suppressed for up to 60s" down to "suppressed for at most ~5s," at the cost
+of a small, fixed amount of extra worker load (at most 12 additional
+enqueues/min/user). Updated `test_exceeding_budget_returns_false` and
+`test_over_budget_report_still_returns_204_and_skips_the_enqueue` (both
+previously asserted the request immediately after the primary budget was
+exhausted; that request now consumes the reserve slot instead) and added
+`test_reserve_survives_budget_exhaustion`.
+
+### 11.2 `activate_duress_signal_task.delay()` has no explicit broker connection/publish bound (Major, confirmed but narrower than framed)
+
+CodeRabbit's claim, as framed: no `broker_transport_options` or connection
+timeout is configured anywhere in this project, so a broker outage could
+block the unlock response "indefinitely."
+
+Verified the "no explicit config" half directly: grepped
+`password_manager/settings/base.py` and `password_manager/celery.py` for
+`broker_transport_options`/`broker_connection_timeout`/`BROKER_TRANSPORT_OPTIONS`
+-- neither appears anywhere in this project. But "indefinitely" overstates
+Celery 5.6.3's actual behaviour: `broker_connection_timeout` defaults to
+4 seconds (not unset/unbounded), and this project's own `TESTING` settings
+block already documents the real number empirically --
+`password_manager/settings/base.py` around `CELERY_BROKER_URL = 'memory://'`
+notes "every task .delay()/.apply_async() blocks ~4.2s on a broker connect
+before OperationalError" when Redis is absent, which is exactly the
+connection-timeout default at work, not an infinite hang. Layered on top,
+Celery's default publish-retry policy adds up to 3 more attempts, so the
+real worst case today is roughly 4s × up to 4 attempts ≈ mid-teens of
+seconds, not unbounded -- still far too slow for an endpoint whose entire
+design is to answer 204 promptly no matter what (see
+`duress_signal_report`'s own docstring), but not the crash/hang CodeRabbit's
+phrasing implied, and the response was never at risk of erroring: the view
+already wraps this call in its own `try/except` and answers 204 regardless
+of what the publish does.
+
+Fixed by switching this one call from `.delay()` to `.apply_async(kwargs=...,
+retry=True, retry_policy={'max_retries': 1, 'interval_start': 0,
+'interval_step': 0.1, 'interval_max': 0.1})` -- scoped to this call site via
+the per-call `retry_policy` argument rather than a project-wide
+`broker_transport_options` change in `celery.py`, which would also alter
+publish-retry behaviour for every other task in this large codebase (blockchain
+anchoring, ML pipelines, breach scans, etc.) for a latency concern specific to
+one endpoint. This does not touch `broker_connection_timeout` itself (that is
+an app-level, not a per-call, setting, and 4s is already Celery's own bound,
+not something this project left unset by oversight) -- it only caps the
+publish-retry layer on top of it, cutting the worst case roughly in half.
+Updated the three tests that mocked `.delay()` on this task
+(`test_consume_unlock_signal_does_identical_work_on_match_and_non_match`,
+`test_no_password_field_is_accepted_anywhere_in_this_flow`, and §11.1's
+budget-exhaustion test) to mock `.apply_async()` instead and read the task
+kwargs from `call_args.kwargs['kwargs']`.
+
+### 11.3 Nitpick: no test for `_within_report_budget`'s fail-open branch (Trivial, confirmed)
+
+The round-4 fix (§10.5) added a broad `except Exception` so a cache backend
+failure fails open, but no test exercised that branch -- every existing test
+in `DuressSignalReportRateLimitTests` hits a working LocMemCache. Added
+`test_cache_failure_fails_open`, patching the `caches` dict with a mock whose
+`add()` raises `ConnectionError`, asserting `_within_report_budget` still
+returns `True`, exactly as CodeRabbit's suggested patch.
+
+### 11.4 Doc drift: two statements described round-1 behaviour that round-2 changed (Minor, confirmed)
+
+`docs/privacy-features-gap-remediation-plan.md` §5 said
+`duressSignalService.js` "reports every unlock," and
+`security/tasks/__init__.py`'s comment on `activate_duress_signal_task` said
+it "is only ever enqueued... when a signal matches." Both were accurate
+descriptions of the feature's FIRST version and stale after round 2 changed
+both halves: `reportUnlockForSlot` is wired only into
+`StegoVaultDashboard.jsx`'s `onExtract` (confirmed by grep -- `VaultUnlockModal`
+never calls it, exactly as §5's own "Not delivered" list already said in a
+different sentence), and `consume_unlock_signal` enqueues unconditionally on
+every report, match or not, with matching now decided entirely inside the
+task (see §8's round-2 write-up). Corrected both to describe the delivered
+behaviour instead of the pre-round-2 one.
+
+### 11.5 Acceptance criterion left unchecked despite being covered (Minor, confirmed)
+
+§6's honeypot-registry bullet described exactly what
+`test_celery_beat_registry.py::CeleryBeatScheduleRegistryTests::test_honeypot_entries_resolve`
+and `::test_argument_taking_honeypot_tasks_stay_unscheduled` already assert
+(all six zero-argument tasks present, all three argument-taking fan-out
+targets absent) but was left as `[ ]`. Ran both tests to confirm before
+checking the box; named them in the acceptance line so the claim is
+traceable the way the other checked items in §6 already are.
+
+### 11.6 pip-audit-ignores.txt torch inventory count was stale after this round's own removal (Minor, confirmed)
+
+The block's own summary comment said "Seven IDs total (was twelve; five
+removed above)" -- correct as of round 4, but round 4 itself removed three
+more (`PYSEC-2025-195/196/197`, §10.1), leaving four active
+(`CVE-2025-3000`, `PYSEC-2025-194`, `PYSEC-2025-210`, `PYSEC-2026-139`) and
+eight removed total. The summary line was never updated after that edit.
+Corrected to "Four IDs total (was twelve; eight removed above)."
+
+Re-ran `pip-audit -r <torch==2.12.0>` directly (not assumed) while verifying
+this: confirms exactly one torch finding, `PYSEC-2025-194`/`CVE-2025-3000`,
+already suppressed. Also re-confirms round 4's own open note in §10.1:
+`PYSEC-2025-210`/`PYSEC-2026-139` don't appear in the tool's output either,
+which is consistent with them being similarly stale -- but they were not
+flagged by CodeRabbit this round, and touching them now would be scope
+neither CodeRabbit nor the user asked for. Left exactly as round 4 deferred
+it, for their own renewal (`exp:2026-08-25`, two days out).
+
+### 11.7 Test results
+
+`security/tests/test_duress_signal.py` re-run in full (matches CI's actual
+`DEBUG=True` test invocation --
+[backend-ci.yml](../.github/workflows/backend-ci.yml) sets this explicitly
+for the pytest job; a local run without it 301-redirects every request via
+`SECURE_SSL_REDIRECT`, an unrelated pre-existing environment quirk, not a
+regression from this round): 30 passed, 1 skipped (pre-existing skip,
+unrelated). `test_celery_beat_registry.py -k honeypot` re-run to confirm
+§11.5's checkbox: 2 passed, 6 subtests passed. `python -m py_compile` clean
+on all four touched backend files.
