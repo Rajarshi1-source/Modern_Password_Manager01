@@ -1,15 +1,21 @@
 """
-Tests for `check_expired_deaddrops`.
+Tests for `check_expired_deaddrops` and `notify_owner_deaddrop_expired`.
 
-This task was never scheduled in production until
+`check_expired_deaddrops` was never scheduled in production until
 docs/privacy-features-gap-remediation-plan.md §21 -- see
 `password_manager/celery.py`'s beat_schedule merge. Its first activation (or
 any future beat/worker outage lasting past several ticks) could otherwise
 find an unbounded backlog and process the entire thing in one task
-invocation: one DB write plus one notification-task publish per row. These
-tests exist to pin the batch cap that bounds that, and the filter boundaries
+invocation: one DB write plus one notification-task publish per row.
+`CheckExpiredDeaddropsTests` pins the batch cap that bounds that, the
+publish-before-save ordering that keeps a broker hiccup from silently and
+permanently losing a row's notification, and the filter boundaries
 `check_deaddrop_backlog` (the pre-deploy report) mirrors and must stay in
 sync with.
+
+`NotifyOwnerDeaddropExpiredTests` covers the companion fix: `send_mail`
+failures used to be caught and logged with no way to ever recover them --
+now they propagate into the task's own `autoretry_for`.
 """
 
 from datetime import timedelta
@@ -23,6 +29,7 @@ from mesh_deaddrop.models import DeadDrop
 from mesh_deaddrop.tasks.deaddrop_tasks import (
     EXPIRE_BATCH_SIZE,
     check_expired_deaddrops,
+    notify_owner_deaddrop_expired,
 )
 
 
@@ -62,6 +69,37 @@ class CheckExpiredDeaddropsTests(TestCase):
         self.assertFalse(drop.is_active)
         mock_notify.assert_called_once_with(str(drop.id))
         self.assertEqual(result, {'expired_count': 1, 'deferred_count': 0})
+
+    def test_publish_failure_leaves_the_drop_unmarked_for_retry(self):
+        """Publish happens BEFORE the status write, not after. If it were the
+        other way around, a .delay() failure right after a successful
+        .save() would leave the row 'expired' -- which drops it out of this
+        task's own filter -- with no notification ever queued for it and no
+        future tick able to find it again. Publishing first means a failure
+        here instead leaves the row exactly as it was, so the same query
+        matches it again next tick. Also confirms a failure on one row
+        doesn't abort the rest of the batch."""
+        failing = self._make_drop()
+        healthy = self._make_drop()
+
+        def delay_side_effect(dead_drop_id):
+            if dead_drop_id == str(failing.id):
+                raise ConnectionError('broker unreachable')
+
+        with mock.patch(
+            'mesh_deaddrop.tasks.deaddrop_tasks.notify_owner_deaddrop_expired.delay',
+            side_effect=delay_side_effect,
+        ) as mock_notify:
+            result = check_expired_deaddrops()
+
+        failing.refresh_from_db()
+        healthy.refresh_from_db()
+        self.assertEqual(failing.status, 'active')
+        self.assertTrue(failing.is_active)
+        self.assertEqual(healthy.status, 'expired')
+        self.assertFalse(healthy.is_active)
+        self.assertEqual(mock_notify.call_count, 2)
+        self.assertEqual(result, {'expired_count': 1, 'deferred_count': 1})
 
     def test_caps_batch_size_and_defers_the_rest(self):
         """The behaviour this task exists to add: a backlog bigger than
@@ -150,3 +188,75 @@ class CheckExpiredDeaddropsTests(TestCase):
         mock_notify.assert_not_called()
         drop.refresh_from_db()
         self.assertFalse(drop.is_active)
+
+
+class NotifyOwnerDeaddropExpiredTests(TestCase):
+    """`.run()`, not `.delay()`/`.apply()`: this project's TESTING settings
+    point the Celery broker at `'memory://'` specifically so `.delay()`
+    never executes a task body in tests (see the settings comment on
+    CELERY_BROKER_URL) -- `.run()` is the standard way to exercise a
+    `@shared_task`'s own logic directly, bypassing that entirely along with
+    the `autoretry_for` dispatch wrapper this task now carries.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='deaddrop-owner',
+            email='owner@example.com',
+            password='test-password-not-a-secret',  # noqa: S106
+        )
+        self.drop = DeadDrop.objects.create(
+            owner=self.user,
+            title='drop',
+            latitude='51.500000',
+            longitude='-0.120000',
+            encrypted_secret=b'x',
+            secret_hash='hash',
+            status='expired',
+            is_active=False,
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+
+    def test_sends_the_email(self):
+        with mock.patch(
+            'mesh_deaddrop.tasks.deaddrop_tasks.send_mail'
+        ) as mock_send:
+            notify_owner_deaddrop_expired.run(str(self.drop.id))
+
+        mock_send.assert_called_once()
+        self.assertEqual(
+            mock_send.call_args.kwargs['recipient_list'], [self.user.email],
+        )
+
+    def test_send_mail_failure_is_no_longer_silently_swallowed(self):
+        """The bug this fixes: send_mail's exception used to be caught and
+        logged with no way to ever recover it. It must now propagate, so
+        the task-level autoretry_for=(Exception,) (see the @shared_task
+        decorator) actually gets a chance to retry it."""
+        with mock.patch(
+            'mesh_deaddrop.tasks.deaddrop_tasks.send_mail',
+            side_effect=ConnectionError('smtp relay unreachable'),
+        ):
+            with self.assertRaises(ConnectionError):
+                notify_owner_deaddrop_expired.run(str(self.drop.id))
+
+    def test_missing_drop_does_not_raise(self):
+        """Not a transient failure -- retrying would never fix it, so this
+        must still return quietly rather than propagate into autoretry."""
+        with mock.patch(
+            'mesh_deaddrop.tasks.deaddrop_tasks.send_mail'
+        ) as mock_send:
+            notify_owner_deaddrop_expired.run('00000000-0000-0000-0000-000000000000')
+
+        mock_send.assert_not_called()
+
+    def test_owner_with_no_email_does_not_raise(self):
+        self.user.email = ''
+        self.user.save()
+
+        with mock.patch(
+            'mesh_deaddrop.tasks.deaddrop_tasks.send_mail'
+        ) as mock_send:
+            notify_owner_deaddrop_expired.run(str(self.drop.id))
+
+        mock_send.assert_not_called()
