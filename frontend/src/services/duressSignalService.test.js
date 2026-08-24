@@ -6,6 +6,7 @@ import duressSignalService, {
     reportUnlock,
     reportUnlockForSlot,
     DECOY_SLOT_INDEX,
+    REPORT_TIMEOUT_MS,
 } from './duressSignalService';
 
 const AUTH = 'test-jwt';
@@ -27,6 +28,10 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.restoreAllMocks();
+    // Harmless no-op for every test but the fake-timers one below -- defends
+    // the rest of the file against a fake-timers leak if that test fails
+    // before reaching its own cleanup.
+    vi.useRealTimers();
 });
 
 const bodyOf = (call) => JSON.parse(call.options.body);
@@ -102,6 +107,32 @@ describe('reportUnlock', () => {
         global.fetch = vi.fn(() => Promise.reject(new Error('offline')));
 
         await expect(reportUnlock(AUTH, generateSignalToken())).resolves.toBeUndefined();
+    });
+
+    test('resolves instead of hanging forever when the connection never answers', async () => {
+        // fetch() has no default timeout -- a connection accepted but never
+        // answered would otherwise leave this promise pending forever, and
+        // callers that await reportUnlock (indirectly, via reportUnlockForSlot)
+        // would hang with it. Mock fetch to only ever settle via its own abort
+        // signal, the same contract a real hung connection has.
+        vi.useFakeTimers();
+        let capturedSignal;
+        global.fetch = vi.fn((url, options) => {
+            capturedSignal = options.signal;
+            return new Promise((_resolve, reject) => {
+                options.signal.addEventListener('abort', () => {
+                    reject(new DOMException('Aborted', 'AbortError'));
+                });
+            });
+        });
+
+        const pending = reportUnlock(AUTH, generateSignalToken());
+        await vi.advanceTimersByTimeAsync(REPORT_TIMEOUT_MS);
+
+        await expect(pending).resolves.toBeUndefined();
+        expect(capturedSignal.aborted).toBe(true);
+
+        vi.useRealTimers();
     });
 
     test('never throws when noise generation fails on a normal unlock', async () => {

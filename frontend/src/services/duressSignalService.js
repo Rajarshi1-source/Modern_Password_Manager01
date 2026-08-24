@@ -47,6 +47,18 @@ const SIGNAL_BYTES = 32;
 /** Slot index that holds the decoy vault, per hiddenVault/SPEC.md. */
 export const DECOY_SLOT_INDEX = 1;
 
+/**
+ * Deadline for the report POST, in ms. `fetch()` has no default timeout --
+ * a connection that's accepted but never answered (or a server hung behind
+ * a slow/flooded `duress_signal_report`, the exact endpoint this file's own
+ * request budget exists to bound server-side) would otherwise leave
+ * reportUnlock's promise pending forever. Generous for a same-origin POST
+ * this small, since an aborted report is a silently dropped one (same
+ * accepted tradeoff as the offline case below) -- long enough that only a
+ * genuinely stuck connection hits it, not ordinary network jitter.
+ */
+export const REPORT_TIMEOUT_MS = 10000;
+
 const getHeaders = (authToken) => ({
     'Content-Type': 'application/json',
     Authorization: `Bearer ${authToken}`,
@@ -113,6 +125,14 @@ export const registerSignalToken = async (authToken, token) => {
  * @returns {Promise<void>} always resolves, never throws
  */
 export const reportUnlock = async (authToken, duressToken = null) => {
+    // Bounds the fetch below via AbortController -- unrelated to the
+    // `signal` local variable (the duress token/noise value): that one is
+    // this function's own domain concept, this one is the Fetch API's
+    // abort mechanism, and they happen to share a name only because both
+    // sides independently call their thing "signal".
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), REPORT_TIMEOUT_MS);
+
     try {
         // Noise is generated the same way as a real token so the two are
         // indistinguishable in both length and distribution. Generated
@@ -128,13 +148,18 @@ export const reportUnlock = async (authToken, duressToken = null) => {
             method: 'POST',
             headers: getHeaders(authToken),
             body: JSON.stringify({ signal }),
+            signal: deadline.signal,
         });
     } catch {
-        // Swallowed on purpose. A network error must not surface differently
-        // for the duress path, and a coerced user cannot act on it anyway.
-        // Notably this means an offline unlock raises no alarm -- an accepted
-        // limitation, documented rather than papered over: the server cannot
-        // be told anything while unreachable.
+        // Swallowed on purpose. A network error (including this function's
+        // own abort once REPORT_TIMEOUT_MS elapses) must not surface
+        // differently for the duress path, and a coerced user cannot act on
+        // it anyway. Notably this means an offline (or now, a sufficiently
+        // stuck) unlock raises no alarm -- an accepted limitation,
+        // documented rather than papered over: the server cannot be told
+        // anything while unreachable.
+    } finally {
+        clearTimeout(timer);
     }
 };
 

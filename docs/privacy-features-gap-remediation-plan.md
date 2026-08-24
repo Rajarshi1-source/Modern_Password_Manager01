@@ -1959,3 +1959,99 @@ ones. `eslint` on both touched frontend files: 0 errors (1 pre-existing
 warning on an untouched line in `toBase64`, confirmed via `git diff` that
 this edit's hunk doesn't include that line).
 `python -m py_compile` clean on the touched backend test file.
+
+## 19. Review-fix round 13 on PR #486 (CodeRabbit, thirteenth pass)
+
+Two findings, both confirmed. All 34 CI checks were green going into this
+round.
+
+### 19.1 A hung `fetch()` could leave the extraction UI stuck busy forever (Major, confirmed)
+
+`reportUnlock`'s `fetch()` call had no timeout -- native `fetch()` doesn't
+have one. A connection accepted but never answered (or a server hung
+behind a slow or flooded `duress_signal_report`, the exact endpoint
+`_within_report_budget` exists to bound server-side) would leave
+`reportUnlock`'s promise pending indefinitely: neither resolving nor
+rejecting, so its own `catch` block -- the thing that's supposed to
+guarantee "always resolves, never throws" -- never runs either, because
+that guarantee only covers what happens once the promise SETTLES, not
+whether it settles at all. `StegoVaultDashboard.jsx`'s `onExtract` awaited
+`reportUnlockForSlot` inside its own `try`, with `finally { setBusy(false)
+}` after it -- so a hung report would keep `busy` (and the UI it gates)
+stuck, even though the vault extraction itself had already genuinely
+succeeded and its result was already on screen. Confirmed the mechanism
+directly, not just accepted the claim: `node -e` reproduction with a
+never-settling promise inside try/finally shows the `finally` block simply
+never runs while the awaited promise is pending, exactly as described.
+
+Two independent fixes, both applied, because they address different
+things:
+
+- **`reportUnlock` itself now bounds the fetch** with an `AbortController`
+  and a 10s deadline (`REPORT_TIMEOUT_MS`, exported for tests), cleared in
+  a `finally`. This is the fix that matters regardless of who calls this
+  function or how: without it, an abandoned hung connection is a resource
+  leak (an open connection per stuck call, accumulating against the
+  browser's per-origin connection limit) independent of whether anything
+  is still awaiting the result.
+- **`onExtract` no longer awaits `reportUnlockForSlot`.** Even bounded to
+  10s, awaiting it would still stall the UI for up to that long on every
+  single extraction whenever the network is merely slow, not just
+  hung -- for a background telemetry call the user never sees the result of
+  either way. Fire-and-forget is safe here specifically because
+  `reportUnlock` is now verified (by the new test below) to always settle
+  and never reject; an un-awaited promise that COULD reject would risk an
+  unhandled rejection instead.
+
+Added `resolves instead of hanging forever when the connection never
+answers` to `duressSignalService.test.js`: mocks `fetch` to only ever
+settle via the `AbortSignal` it's given (mirroring a real hung connection's
+actual contract, not just returning a promise that manually rejects),
+advances fake timers past `REPORT_TIMEOUT_MS`, and asserts the call
+resolves with the signal having actually fired. `REPORT_TIMEOUT_MS` was
+exported specifically so this assertion tracks the real value instead of a
+duplicated literal that could drift, matching this codebase's own existing
+convention for `ADAPTIVE_API_TIMEOUT_MS` (`TypingPatternCapture.jsx`). Also
+added an unconditional `vi.useRealTimers()` to the file's shared
+`afterEach` -- a no-op for every other test, but it defends the rest of the
+file against a fake-timers leak if this one test fails before its own
+cleanup runs.
+
+### 19.2 `activate_duress_signal_task`'s "never raises" docstring wasn't actually true for the activation call (Minor claim, real gap once traced)
+
+The task's own docstring says "Never raises back to the caller... a
+missing user or activation failure should not crash the worker loop." The
+`User.DoesNotExist` half is handled; the activation half wasn't --
+`service.activate_duress_mode(...)` (real DB writes, decoy-vault
+generation, and, when enabled, `SilentAlarmService.send_alerts()`'s
+blocking SMTP + webhook calls) had no try/except around it at all. Since
+this task deliberately carries no retry (see the docstring's own
+reasoning: retrying isn't safe without first making activation
+idempotent, since a naive retry on transient failure could double-send a
+genuine alert), an uncaught exception here doesn't get a second attempt --
+it just fails the task outright, contradicting the docstring, and (per
+Celery's own default failure logging, which can include a task's args)
+risks the same class of leak round 10 (§16.1) already fixed for this exact
+secret in the request-thread handlers: `signal` is a task argument here
+too, and on a match it's the real duress token.
+
+Fixed by wrapping the `activate_duress_mode` call in try/except, logging
+`type(e).__name__` only -- never the exception message, same reasoning and
+same pattern as §16.1. Added `test_activation_failure_does_not_raise` to
+`DuressSignalActivationTaskTests`: mocks `activate_duress_mode` (via the
+service singleton `get_duress_code_service()` already returns, confirmed
+by reading its source -- module-level `_duress_code_service`, so patching
+the instance `self.service` already holds affects the task's own internal
+call to the same function) to raise, and asserts running the task via
+`.apply()` doesn't propagate the exception.
+
+### 19.3 Test results
+
+`duressSignalService.test.js` in full: 16 passed (15 from round 12's own
+count + 1 new). Targeted `DuressSignalActivationTaskTests` in
+`test_duress_signal.py` (`canny` venv, `DEBUG=True`): 11 passed (10
+pre-existing + 1 new). `eslint` on all three touched frontend files: 0
+errors (same one pre-existing warning on the untouched `toBase64` line as
+every prior round that touched this file). `python -m py_compile` clean on
+both touched backend
+files.

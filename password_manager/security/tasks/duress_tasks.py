@@ -168,9 +168,26 @@ def activate_duress_signal_task(user_id, signal, request_context):
         return
 
     service = get_duress_code_service()
-    service.activate_duress_mode(
-        user=user,
-        duress_code=duress_code,
-        request_context=request_context,
-        is_test=False,
-    )
+    try:
+        service.activate_duress_mode(
+            user=user,
+            duress_code=duress_code,
+            request_context=request_context,
+            is_test=False,
+        )
+    except Exception as e:
+        # The docstring's "never raises back to the caller" contract, actually
+        # enforced: activate_duress_mode does real DB writes, decoy-vault
+        # generation, and (when enabled) SilentAlarmService.send_alerts()
+        # (SMTP + webhook) -- any of which can fail, and nothing above this
+        # catches it. Uncaught, this task has no retry (see the docstring on
+        # why one isn't safe to add), so it would just fail outright, and
+        # Celery's own default failure logging can include the task's args --
+        # `signal` is the raw duress token on a match, the exact secret this
+        # whole feature exists to keep out of logs (same reasoning as the
+        # views' fix, security/api/duress_code_views.py). Exception type only,
+        # never the message, for the same reason.
+        logger.error(
+            "activate_duress_signal_task: activation failed for user %s (%s)",
+            user_id, type(e).__name__,
+        )

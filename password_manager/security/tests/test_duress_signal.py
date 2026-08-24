@@ -368,6 +368,22 @@ class DuressSignalActivationTaskTests(TestCase):
             },
         )  # no exception
 
+    def test_activation_failure_does_not_raise(self):
+        """The docstring's "never raises back to the caller" contract,
+        actually enforced: activate_duress_mode does real DB writes, decoy
+        generation, and (when enabled) SMTP/webhook alerts, any of which can
+        fail. This task has no retry, so an uncaught exception here would
+        just fail the task outright -- exactly what the try/except around
+        the activation call exists to prevent."""
+        token = make_token()
+        self.service.register_signal_token(self.user, token)
+
+        with mock.patch.object(
+            self.service, 'activate_duress_mode',
+            side_effect=RuntimeError('SMTP relay unreachable'),
+        ):
+            self._run(self.user, token)  # no exception
+
     def test_no_configured_code_still_records_an_event(self):
         """The alarm must not be silently swallowed."""
         token = make_token()
