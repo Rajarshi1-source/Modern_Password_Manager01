@@ -11,11 +11,15 @@ batch on the first tick rather than at each item's own due time.
 
 Two of the four have effects worth seeing in advance:
 
-  * `check_expired_deaddrops` marks every past-expiry dead drop expired AND
-    fires `notify_owner_deaddrop_expired` for each -- one real EMAIL per drop.
-    The query has no lower bound, so the whole backlog mails out at once. This
-    is the direct analogue of `process_pending_rotations` in
-    `check_honeypot_backlog`, and the reason this command exists.
+  * `check_expired_deaddrops` marks past-expiry dead drops expired and fires
+    `notify_owner_deaddrop_expired` for each -- one real EMAIL per drop. The
+    query itself has no lower bound, so this command's own count below is the
+    TRUE total backlog size regardless of how the task processes it -- but the
+    task caps itself at `EXPIRE_BATCH_SIZE` (deaddrop_tasks.py) per tick, so a
+    backlog larger than that cap mails out over several hourly ticks rather
+    than a single batch. This is the direct analogue of
+    `process_pending_rotations` in `check_honeypot_backlog`, and the reason
+    this command exists.
   * `cleanup_old_access_logs` hard-deletes DeadDropAccess and FragmentTransfer
     rows older than 90 days. Not user-visible, but the first tick deletes the
     entire accumulated backlog in one transaction -- on a large table that is a
@@ -56,8 +60,9 @@ MAX_DEADDROP_SAMPLES = 100
 class Command(BaseCommand):
     help = (
         "Read-only pre-deploy check: reports the expired-dead-drop email "
-        "backlog and the old-log deletion backlog that will be processed in a "
-        "single batch on the first mesh_deaddrop beat tick."
+        "backlog (capped and spread across ticks by EXPIRE_BATCH_SIZE) and "
+        "the old-log deletion backlog (processed in one uncapped batch) that "
+        "the mesh_deaddrop beat schedule will otherwise process as a surprise."
     )
 
     def handle(self, *args, **options):
@@ -67,12 +72,15 @@ class Command(BaseCommand):
             FragmentTransfer,
             MeshNode,
         )
+        from mesh_deaddrop.tasks.deaddrop_tasks import EXPIRE_BATCH_SIZE
 
         now = timezone.now()
 
         # Mirrors check_expired_deaddrops' own filter exactly
-        # (mesh_deaddrop/tasks/deaddrop_tasks.py). Every row this matches is
-        # marked expired AND gets one notification email on the first tick.
+        # (mesh_deaddrop/tasks/deaddrop_tasks.py). Every row this matches gets
+        # marked expired and one notification email eventually -- but that
+        # task caps itself at EXPIRE_BATCH_SIZE per tick, so this backlog
+        # count is the true total, not what any single tick actually sends.
         expired_query = DeadDrop.objects.filter(
             status__in=['pending', 'distributed', 'active'],
             expires_at__lt=now,
@@ -117,12 +125,22 @@ class Command(BaseCommand):
                 )
             return
 
+        if expired_count > EXPIRE_BATCH_SIZE:
+            ticks_needed = -(-expired_count // EXPIRE_BATCH_SIZE)  # ceil div
+            expiry_timing = (
+                f'over roughly {ticks_needed} hourly ticks '
+                f'({EXPIRE_BATCH_SIZE}/tick cap)'
+            )
+        else:
+            expiry_timing = 'on the first beat tick'
+
         self.stdout.write(self.style.WARNING(
             f'BACKLOG FOUND: {expired_count} dead drop(s) will each be marked '
-            f'expired and send their owner one email, and '
-            f'{stale_access_logs + stale_transfers} log row(s) '
+            f'expired and send their owner one email, {expiry_timing}. '
+            f'Separately, {stale_access_logs + stale_transfers} log row(s) '
             f'({stale_access_logs} access + {stale_transfers} transfer) will '
-            f'be deleted, all on the first beat tick.'
+            f'be deleted in one batch on the first beat tick -- that cleanup '
+            f'is not capped.'
         ))
 
         # IDs and non-identifying metadata only. This is a pre-deploy check
@@ -151,12 +169,12 @@ class Command(BaseCommand):
             )
 
         self.stdout.write(self.style.WARNING(
-            '\nOptions before deploying: (a) accept the batch -- expiry '
-            'notifications are benign if the volume is acceptable, (b) close '
-            'or extend genuinely-stale dead drops first so they fall out of '
-            "the query, or (c) deploy with 'check-expired-deaddrops' "
-            'temporarily removed and run it manually off-peak if the email '
-            'volume or the first DELETE is large.'
+            '\nOptions before deploying: (a) accept it -- the expiry-email '
+            'backlog is self-throttling (capped per tick) and benign if the '
+            'total volume is acceptable, (b) close or extend genuinely-stale '
+            'dead drops first so they fall out of the query, or (c) deploy '
+            "with 'cleanup-old-access-logs' temporarily removed and run it "
+            'manually off-peak if the first DELETE is large.'
         ))
 
         raise SystemExit(1)

@@ -26,38 +26,67 @@ logger = logging.getLogger(__name__)
 # Periodic Tasks
 # =============================================================================
 
+# Caps how many drops a single tick marks expired (and mails). Without this,
+# a backlog that accumulated while this schedule was never running (its own
+# first activation -- see docs/privacy-features-gap-remediation-plan.md §21
+# -- or recovery after an extended beat/worker outage in the future) would be
+# processed in one unbounded loop: one DB write plus one notify_owner_
+# deaddrop_expired.delay() broker publish per row, inside a single task
+# invocation. Celery's own task_time_limit (celery.py, 600s hard) would
+# eventually kill an oversized run mid-loop, but that is an accidental
+# safety net, not a designed one -- it logs as a crash (TimeLimitExceeded)
+# even though the actual outcome is benign (rows already saved stay expired
+# and notified; whatever the loop hadn't reached yet still matches the same
+# filter next tick, since expires_at__lt=now is re-evaluated fresh every
+# time). Capping deliberately gets the same "nothing lost, just spread
+# across more ticks" behaviour without ever depending on being killed to get
+# it, and keeps every tick's email burst and DB write count bounded and
+# predictable rather than proportional to however long a backlog was
+# allowed to accumulate. Mirrors MAX_DEADDROP_SAMPLES in
+# check_deaddrop_backlog (same shape, applied to the actual processing here
+# instead of just that read-only report).
+EXPIRE_BATCH_SIZE = 200
+
+
 @shared_task(name='mesh_deaddrop.check_expired_deaddrops')
 def check_expired_deaddrops():
     """
     Check for and mark expired dead drops.
-    
-    Runs every hour (configured in CELERY_BEAT_SCHEDULE).
+
+    Runs every hour (configured in CELERY_BEAT_SCHEDULE). Processes at most
+    EXPIRE_BATCH_SIZE per tick, oldest-overdue first; anything past that cap
+    is left matching the same filter for the next tick, not skipped.
     """
     from ..models import DeadDrop
-    
+
     now = timezone.now()
     expired = DeadDrop.objects.filter(
         status__in=['pending', 'distributed', 'active'],
         expires_at__lt=now,
         is_active=True
     )
-    
-    count = expired.count()
-    
-    for dead_drop in expired:
+
+    total_count = expired.count()
+    batch = list(expired.order_by('expires_at')[:EXPIRE_BATCH_SIZE])
+
+    for dead_drop in batch:
         dead_drop.status = 'expired'
         dead_drop.is_active = False
         dead_drop.save()
-        
+
         # Notify owner
         notify_owner_deaddrop_expired.delay(str(dead_drop.id))
-        
+
         logger.info(f"Marked dead drop {dead_drop.id} as expired")
-    
-    if count > 0:
-        logger.info(f"Expired {count} dead drops")
-    
-    return {'expired_count': count}
+
+    remaining = total_count - len(batch)
+    if batch:
+        logger.info(
+            f"Expired {len(batch)} dead drops"
+            + (f" ({remaining} more due, deferred to next tick)" if remaining else "")
+        )
+
+    return {'expired_count': len(batch), 'deferred_count': remaining}
 
 
 @shared_task(name='mesh_deaddrop.check_mesh_node_health')

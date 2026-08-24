@@ -2227,3 +2227,96 @@ restored, then:
   log-deletion cutoff, the no-identifying-metadata rule, and the
   `MAX_DEADDROP_SAMPLES` truncation guard.
 - `python -m py_compile` clean on all touched Python files.
+
+### 21.6 CodeRabbit review-fix round 1 on PR #488
+
+Two items this round: one CodeRabbit finding on the test added in §21.3, and
+one self-directed hardening of `check_expired_deaddrops` itself, done after the
+user asked to critically re-examine whether §21.2's own "the hazard" framing
+needed more than a pre-deploy check to actually close.
+
+#### 21.6.1 `test_mesh_deaddrop_static_and_merged_entries_agree` compared against a hand-typed duplicate, not the real static entry (Minor, confirmed)
+
+CodeRabbit's claim: the test asserted `MESH_SCHEDULE['flush-pending-sync']`
+against a dict *typed out inline in the test*, not against `celery.py`'s
+actual static entry. If the static entry drifted (schedule changed, task
+renamed) without someone also updating this hand-copied literal, the test
+would keep passing — exactly the "pin the real thing, not a duplicate" defect
+§21.3's own docstring claimed to avoid.
+
+Confirmed by reading the test: verified true. Also confirmed *why* the obvious
+fix (read `app.conf.beat_schedule` after import) doesn't work: every test in
+this class shares one process, and `_beat_schedule()` calls `app.finalize()`,
+which fires `_merge_feature_beat_schedules` — `sender.conf.beat_schedule.update(...)`
+mutates the SAME dict object `app.conf.update(beat_schedule=...)` was given
+(Celery stores it by reference), so once any test in the class has called
+`_beat_schedule()`, the "static" value is gone from every subsequent access in
+that process, regardless of import order. Fixed by parsing `celery.py`'s source
+with `ast` (same technique as `test_every_module_beat_schedule_is_merged`,
+this file's own established pattern one test below), extracting the static
+`beat_schedule={...}` dict literal's `'flush-pending-sync'` entry directly from
+text rather than from any runtime object. Negative-controlled per §20's lesson:
+temporarily changed the static entry's schedule in `celery.py`, confirmed the
+test now fails, reverted.
+
+#### 21.6.2 `check_expired_deaddrops` — reconsidered whether the pre-deploy check alone was sufficient
+
+Not a review finding — the user asked to critically re-examine §21.2's own
+"the hazard" characterization and decide whether it needed an actual code fix,
+not just a pre-deploy report.
+
+**The honeypot precedent doesn't fully transfer.** `process_pending_rotations`
+(#486) has the identical unbounded-backlog shape and was left uncapped, relying
+only on `check_honeypot_backlog` — but its inner loop only calls `.delay()` per
+row (no `.save()`). `check_expired_deaddrops` does one full model `.save()`
+*and* one `.delay()` per row, inside a single task invocation, for however many
+rows match. `task_time_limit` (celery.py, 600s hard) already bounds the
+worst case — but as a *kill*, not a *design*: a run large enough to hit it logs
+as `TimeLimitExceeded` (reads as a crash) even though the actual outcome is
+harmless (already-`.save()`d rows stay expired and notified; the rest still
+match the same filter next tick, since `expires_at__lt=now` is evaluated
+fresh every time — nothing is lost, only however far the loop got before being
+killed).
+
+**Decision: cap the batch, don't just document the risk.** Added
+`EXPIRE_BATCH_SIZE = 200` and `.order_by('expires_at')[:EXPIRE_BATCH_SIZE]` to
+the task itself. This achieves the same "spread across ticks, nothing skipped"
+outcome the time-limit kill would eventually produce anyway, deliberately
+instead of accidentally: predictable per-tick email/write volume regardless of
+backlog size, no `TimeLimitExceeded` noise in logs/monitoring, and oldest-overdue-first
+ordering so a steady trickle of newer expirations can never indefinitely starve
+the longest-overdue row. Mirrors `MAX_DEADDROP_SAMPLES` (§21, the read-only
+report) applied to the actual processing this time, not just the report.
+**Deliberately not applied** to `cleanup_old_access_logs` (a single bulk SQL
+`DELETE`, not a Python per-row loop — different risk shape, and capping a
+delete needs a batched-delete loop, meaningfully more machinery for a
+lower-severity, non-user-facing concern) or `cleanup_location_cache`
+(self-bounding small table) — scope stayed on the one task actually shaped
+like the hazard.
+
+Updated `check_deaddrop_backlog`'s own report text to stop claiming the
+expiry-email backlog mails out "all on the first beat tick" now that it
+doesn't — the command still reports the true total (unaffected by the cap),
+but now states plainly that a backlog past `EXPIRE_BATCH_SIZE` drains over
+multiple ticks; the log-deletion backlog's "single batch" language is kept,
+since that path is genuinely unchanged.
+
+Added `mesh_deaddrop/tests/test_deaddrop_tasks.py` (no test file covered this
+task at all before): correctness (marks expired, notifies), the cap itself
+(a backlog over `EXPIRE_BATCH_SIZE` processes exactly the cap and leaves the
+rest untouched, not skipped), oldest-first ordering, and the three query
+boundary cases (future expiry, already-`expired` status, `is_active=False`)
+that must keep matching `check_deaddrop_backlog`'s own filter.
+
+#### 21.6.3 Test results
+
+Targeted per file, per this project's testing preference:
+
+- `test_celery_beat_registry.py -k static_and_merged`: **1 passed**, then
+  negative-controlled (temporarily drifted the static entry — test failed as
+  expected — reverted, confirmed clean via `git status`).
+- `mesh_deaddrop/tests/test_deaddrop_tasks.py` (new file): **6 passed**.
+- `mesh_deaddrop/tests/test_check_deaddrop_backlog_command.py` (message text
+  changed): **10 passed** — unchanged count, confirms no assertion broke from
+  the reworded WARNING output.
+- `python -m py_compile` clean on all four touched/added Python files.
