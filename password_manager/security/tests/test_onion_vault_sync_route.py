@@ -73,11 +73,21 @@ class VaultSyncRouteContractTests(TestCase):
         self.assertTrue(url.endswith('/api/vault/sync/'), url)
 
     def test_every_declared_route_reverses(self):
-        """Guard the whole table, not just the entry this feature needs."""
+        """Guard the whole table, not just the entry this feature needs.
+
+        Reverses id-bearing routes positionally (`args=`), matching exactly
+        how `_dispatch_vault_operation` itself calls `reverse()`
+        (`dark_protocol_service.py`) rather than a `pk` kwarg: the two forms
+        only agree while every id-bearing pattern's capture group happens to
+        be named `pk`. A `kwargs={'pk': ...}` call would raise
+        `NoReverseMatch` here on a pattern that renamed its capture group
+        while production, calling positionally, kept working -- a false
+        failure pointing at the wrong cause.
+        """
         for operation, config in VAULT_OPERATION_ROUTES.items():
             with self.subTest(operation=operation):
-                kwargs = {'pk': 1} if config.get('needs_id') else {}
+                args = ['1'] if config.get('needs_id') else []
                 try:
-                    reverse(config['route'], kwargs=kwargs)
+                    reverse(config['route'], args=args)
                 except NoReverseMatch as exc:  # pragma: no cover - failure path
                     self.fail(f"{operation} names an unreversible route: {exc}")

@@ -1886,3 +1886,76 @@ against the updated manifest locally: 23 active entries (was 25), zero
 malformed, **zero expired** -- confirming §17.1's removal lands before
 tomorrow's would-be failure, not after it. No `pytest` run for this round:
 nothing else changed.
+
+## 18. Review-fix round 12 on PR #486 (CodeRabbit, twelfth pass)
+
+Two findings, both confirmed. All 34 CI checks were green going into this
+round.
+
+### 18.1 `reportUnlock`'s "always resolves, never throws" contract had a real gap (Minor claim, correctness bug in practice)
+
+`reportUnlock`'s own docstring promises `@returns {Promise<void>} always
+resolves, never throws` -- the whole point of swallowing the fetch failure
+in its `catch` block. But noise generation (`const signal = duressToken ||
+generateSignalToken();`) ran ONE LINE ABOVE that `try`, not inside it.
+`generateSignalToken()` calls `window.crypto.getRandomValues()`, which can
+throw in an unusual browser/extension environment -- confirmed this isn't
+hypothetical by checking every caller: `StegoVaultDashboard.jsx`'s
+`onExtract` (`security/api/duress_code_views.py`'s frontend counterpart --
+the ONLY production caller of `reportUnlockForSlot`, per round 2's own
+finding) awaits `reportUnlockForSlot` inside the SAME `try` block as the
+extraction itself, with no try/catch of its own around that one call. A
+`generateSignalToken()` throw on a NORMAL (non-decoy) unlock -- where
+`duressToken` is `null`, so the noise-generation branch is the one that
+runs -- would propagate straight through `reportUnlockForSlot` into
+`onExtract`'s `catch`, which sets `setError('Extraction failed...')` --
+*after* `setExtractResult(...)` already ran on the line above, meaning the
+vault extraction had already genuinely succeeded. The user would see a
+"wrong password or corrupt image" error on a successful extraction, for a
+reason entirely unrelated to the password or the image.
+
+Fixed at the source rather than at the one call site: moved noise
+generation inside `reportUnlock`'s own `try` block in
+`duressSignalService.js`, so the "always resolves, never throws" contract
+its docstring already claims is actually true for every caller, present
+and future, not just patched around the one call site CodeRabbit happened
+to trace it through. Added
+`test('never throws when noise generation fails on a normal unlock', ...)`
+to `duressSignalService.test.js`, spying on
+`window.crypto.getRandomValues` to throw and asserting `reportUnlock`
+still resolves with zero fetch calls made (confirming the throw is caught
+before `fetch` is ever reached, not just that some later step recovers).
+
+### 18.2 The route-reversibility test used a different `reverse()` call shape than production (Trivial, confirmed)
+
+`test_every_declared_route_reverses` reversed id-bearing routes with
+`reverse(config['route'], kwargs={'pk': 1})`. The actual dispatcher
+(`_dispatch_vault_operation`, `dark_protocol_service.py:851-855`) reverses
+the exact same routes with `reverse(route['route'], args=[str(item_id)])`
+-- positional, not a `pk` kwarg. Verified this isn't currently a live bug
+(both forms resolve identically today): traced every `needs_id: True`
+entry in `VAULT_OPERATION_ROUTES` to `api-vault-detail`
+(`vault/urls.py:52`, `router.register(r'', ApiVaultItemViewSet,
+basename='api-vault')`), and confirmed `ApiVaultItemViewSet` has no
+`lookup_field`/`lookup_url_kwarg` override, so DRF's router defaults its
+capture group to `pk` -- both call shapes happen to agree right now. But
+they agree only because of that default, not because the test exercises
+what production actually calls. A future renamed capture group would make
+this test raise `NoReverseMatch` while `_dispatch_vault_operation` (calling
+positionally) kept working fine -- a false failure pointing at the wrong
+cause, the same "test != what the code under test claims" gap this file's
+`test_the_named_route_actually_reverses` neighbour was already written to
+avoid for a single route. Fixed by mirroring the dispatcher's own call
+shape (`args=['1']` instead of `kwargs={'pk': 1}`) exactly as CodeRabbit's
+diff proposed.
+
+### 18.3 Test results
+
+`duressSignalService.test.js` in full: 15 passed (14 pre-existing + 1 new).
+`security/tests/test_onion_vault_sync_route.py` in full (`canny` venv,
+`DEBUG=True`): 5 passed, 7 subtests passed -- confirming §18.2's fix holds
+across every entry in `VAULT_OPERATION_ROUTES`, not just the id-bearing
+ones. `eslint` on both touched frontend files: 0 errors (1 pre-existing
+warning on an untouched line in `toBase64`, confirmed via `git diff` that
+this edit's hunk doesn't include that line).
+`python -m py_compile` clean on the touched backend test file.
