@@ -445,8 +445,22 @@ app.conf.update(
         # =================================================================
         # Mesh Dead Drop Password Sharing
         # =================================================================
-
-        # Drain queued fragment deliveries to online mesh nodes every minute.
+        #
+        # This is the ONLY one of `mesh_deaddrop`'s five schedulable tasks that
+        # has ever run: the other four live in that module's own
+        # CELERY_BEAT_SCHEDULE, which nothing merged until the
+        # MESH_DEADDROP_BEAT_SCHEDULE block below the beat_schedule was added.
+        #
+        # Deliberately left here STATICALLY as well, rather than deleted in
+        # favour of the merge. The merged dict defines `flush-pending-sync`
+        # identically (same task name, same 60.0 schedule -- asserted by
+        # `test_mesh_deaddrop_static_and_merged_entries_agree`, so the two
+        # cannot silently drift), so the merge overwrites this with an equal
+        # value and the duplication is a no-op. What it buys: this entry keeps
+        # ticking even if the merge's import fails, which matters more for a
+        # once-a-minute delivery drain than for the four daily/hourly sweeps.
+        # Same reasoning the Honeypot block in security/tasks/__init__.py gives
+        # for why Dark Protocol's entries are static and its own are not.
         'flush-pending-sync': {
             'task': 'mesh_deaddrop.flush_pending_sync',
             'schedule': 60.0,
@@ -591,6 +605,70 @@ app.conf.update(
 # a blocker, but it must be a decision, not a surprise.
 
 
+# =============================================================================
+# Mesh Dead Drop: the third instance of the orphaned-schedule defect
+# =============================================================================
+#
+# `mesh_deaddrop/tasks/deaddrop_tasks.py` defines its own CELERY_BEAT_SCHEDULE
+# (5 entries) that nothing ever merged -- flagged as a follow-up in
+# docs/privacy-features-gap-remediation-plan.md §4.4 with "unverified blast
+# radius", now verified and fixed here.
+#
+# UNLIKE Time-Lock and Honeypot, only the SCHEDULING half was broken, not
+# registration: `mesh_deaddrop/tasks/__init__.py` does `from .deaddrop_tasks
+# import *`, and `autodiscover_tasks()` imports each installed app's `tasks`
+# package, so all nine `@shared_task(name='mesh_deaddrop.*')` decorators have
+# always run. Proof it registers fine today: `flush-pending-sync` is in the
+# static beat_schedule above and works. So four fully-implemented tasks were
+# simply never enqueued:
+#
+#   * check_expired_deaddrops      (hourly)
+#   * check_mesh_node_health       (every 5 min)
+#   * cleanup_old_access_logs      (daily)
+#   * cleanup_location_cache       (every 6 hours)
+#
+# `rebalance_orphaned_fragments` is registered and zero-argument but is NOT in
+# that module's schedule dict and is not added here -- it is a fan-out target,
+# invoked by `check_mesh_node_health` only when that task actually marks nodes
+# offline. The three `notify_*` tasks take a required id and must likewise stay
+# unscheduled (a no-argument beat call would raise TypeError every tick).
+#
+# SAFETY NOTE FOR DEPLOYMENT -- same hazard as the Time-Lock and Honeypot
+# merges above, and for the same reason: an entry that has never existed does
+# not start firing "from now on", it fires the WHOLE accumulated backlog on the
+# first tick. Verified per task rather than assumed:
+#
+#   * `check_expired_deaddrops` -- THE hazard. Its query
+#     (`status__in=['pending','distributed','active'], expires_at__lt=now,
+#     is_active=True`) has no lower bound, so EVERY dead drop that has silently
+#     sat past its expiry is marked expired at once AND fires
+#     `notify_owner_deaddrop_expired.delay()` -- one real email per drop, in a
+#     single batch. Directly analogous to `process_pending_rotations`.
+#   * `cleanup_old_access_logs` -- deletes DeadDropAccess/FragmentTransfer rows
+#     older than 90 days. Not user-visible, but the first tick deletes the
+#     entire accumulated backlog in one transaction; on a large table that is a
+#     long-running DELETE worth scheduling deliberately.
+#   * `check_mesh_node_health` -- bounded and arguably corrective: nodes unseen
+#     for 10 minutes are currently left marked online forever. The first tick
+#     flips all genuinely-stale nodes offline and triggers ONE
+#     `rebalance_orphaned_fragments`. No notifications.
+#   * `cleanup_location_cache` -- deletes cache rows older than 24h. Same shape
+#     as the log cleanup but a smaller, self-bounding table. Low risk.
+#
+# Run `python manage.py check_deaddrop_backlog` before deploying -- it reports
+# the backlog without mutating anything, mirroring `check_honeypot_backlog`.
+#
+# `personality_auth/tasks.py` also defines a module-level CELERY_BEAT_SCHEDULE
+# and §4.4 named it as the same bug, but that turned out to be only half right:
+# both of its entries (`personality-nightly-inference`,
+# `personality-prune-expired-questions`) are already present in the static
+# beat_schedule above, so they DO run. It is a duplicate-definition drift
+# hazard rather than an orphan, and is deliberately NOT merged here -- doing so
+# would silently let the module's copy override the reviewed static one. It is
+# covered instead by `test_every_module_beat_schedule_is_merged`, which asserts
+# every module-level dict's entries reach the live schedule by SOME route.
+
+
 @app.on_after_finalize.connect
 def _merge_feature_beat_schedules(sender, **kwargs):
     """Merge beat schedules that live in their own feature modules.
@@ -599,10 +677,12 @@ def _merge_feature_beat_schedules(sender, **kwargs):
     Time-Lock comment block above for the AppRegistryNotReady failure an eager
     `from security.tasks import ...` causes here.
     """
+    from mesh_deaddrop.tasks import CELERY_BEAT_SCHEDULE as MESH_DEADDROP_BEAT_SCHEDULE
     from security.tasks import HONEYPOT_BEAT_SCHEDULE, TIME_LOCK_BEAT_SCHEDULE
 
     sender.conf.beat_schedule.update(TIME_LOCK_BEAT_SCHEDULE)
     sender.conf.beat_schedule.update(HONEYPOT_BEAT_SCHEDULE)
+    sender.conf.beat_schedule.update(MESH_DEADDROP_BEAT_SCHEDULE)
 
 
 @app.task(bind=True, ignore_result=True)
