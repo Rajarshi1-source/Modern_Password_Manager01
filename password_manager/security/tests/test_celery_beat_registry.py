@@ -417,14 +417,58 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
         failure of the merged dict) while `deaddrop_tasks.py` also defines it.
         The merge overwrites the static value, so the duplication is only safe
         while the two agree exactly -- otherwise the static entry is dead
-        weight that silently reads as the live config. Pin that here rather
-        than trusting a reader to notice.
+        weight that silently reads as the live config.
+
+        Compared against celery.py's ACTUAL static entry, not a hand-copied
+        literal -- an earlier version of this test compared MESH_SCHEDULE
+        against an inline dict typed out here, which meant this test would
+        happily keep passing even if the static entry in celery.py drifted,
+        as long as nobody also touched this file. Read from source via `ast`
+        rather than the live `app.conf.beat_schedule`: by the time any test in
+        this class calls `_beat_schedule()`, `app.finalize()` has already run
+        the merge, which overwrites `app.conf.beat_schedule['flush-pending-
+        sync']` in place -- there is no post-import way left in this process
+        to see the PRE-merge static value, since Celery's `conf.update()`
+        stores the dict by reference rather than copying it. Parsing the
+        source text sidesteps that entirely, and matches the pattern already
+        used one test below (`test_every_module_beat_schedule_is_merged`) for
+        the identical class of problem.
         """
+        import ast
+        import pathlib
+
         from mesh_deaddrop.tasks import CELERY_BEAT_SCHEDULE as MESH_SCHEDULE
 
+        celery_py = pathlib.Path(settings.BASE_DIR) / 'password_manager' / 'celery.py'
+        tree = ast.parse(celery_py.read_text(encoding='utf-8'), filename=str(celery_py))
+
+        static_entry = None
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == 'update'):
+                continue
+            for kw in node.keywords:
+                if kw.arg != 'beat_schedule' or not isinstance(kw.value, ast.Dict):
+                    continue
+                for key, value in zip(kw.value.keys, kw.value.values):
+                    if (isinstance(key, ast.Constant)
+                            and key.value == 'flush-pending-sync'
+                            and isinstance(value, ast.Dict)):
+                        static_entry = {
+                            k.value: v.value
+                            for k, v in zip(value.keys, value.values)
+                            if isinstance(k, ast.Constant) and isinstance(v, ast.Constant)
+                        }
+
+        self.assertIsNotNone(
+            static_entry,
+            "couldn't find a static 'flush-pending-sync' entry in "
+            'celery.py — has it been moved or renamed?',
+        )
         self.assertEqual(
             MESH_SCHEDULE['flush-pending-sync'],
-            {'task': 'mesh_deaddrop.flush_pending_sync', 'schedule': 60.0},
+            static_entry,
             'the merged flush-pending-sync no longer matches the static entry '
             'in celery.py — reconcile them or drop the static duplicate',
         )
