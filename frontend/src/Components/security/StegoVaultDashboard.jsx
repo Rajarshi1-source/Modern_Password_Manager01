@@ -361,9 +361,14 @@ const StegoVaultDashboard = () => {
       // the app that currently performs a HiddenVaultBlob decode (see
       // docs/privacy-features-gap-remediation-plan.md §2.4), so it was the
       // one production consumer this backend feature needed and never had.
-      // Awaited but errors are swallowed by reportUnlock itself -- never let
-      // a duress-reporting failure surface as an extraction error.
-      await reportUnlockForSlot(getAccessToken(), slotIndex, json);
+      //
+      // NOT awaited: reportUnlock() already swallows every error it can hit
+      // (including its own REPORT_TIMEOUT_MS abort) and always resolves, but
+      // "resolves" can still take up to that whole timeout on a stuck
+      // connection -- awaiting it here would leave `busy` (and this
+      // already-successful extraction result) stuck behind a background
+      // report the user never sees and cannot act on either way.
+      reportUnlockForSlot(getAccessToken(), slotIndex, json);
     } catch (err) {
       setError(err?.message || 'Extraction failed. Wrong password or corrupt image.');
     } finally {
