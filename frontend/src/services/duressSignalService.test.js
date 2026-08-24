@@ -104,6 +104,26 @@ describe('reportUnlock', () => {
         await expect(reportUnlock(AUTH, generateSignalToken())).resolves.toBeUndefined();
     });
 
+    test('never throws when noise generation fails on a normal unlock', async () => {
+        // generateSignalToken() -- called here to produce noise, since
+        // duressToken is null -- calls window.crypto.getRandomValues(),
+        // which can throw in an unusual browser/extension environment. That
+        // must be swallowed exactly like a fetch failure, not reject and
+        // propagate to whatever awaited this call (e.g. StegoVaultDashboard's
+        // onExtract, which would otherwise show "Extraction failed" after an
+        // extraction that actually succeeded).
+        const spy = vi
+            .spyOn(window.crypto, 'getRandomValues')
+            .mockImplementation(() => {
+                throw new Error('crypto unavailable');
+            });
+
+        await expect(reportUnlock(AUTH, null)).resolves.toBeUndefined();
+        expect(calls).toHaveLength(0);
+
+        spy.mockRestore();
+    });
+
     test('never sends a password field', async () => {
         await reportUnlock(AUTH, generateSignalToken());
 

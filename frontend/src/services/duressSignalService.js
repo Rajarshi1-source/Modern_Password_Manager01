@@ -113,11 +113,17 @@ export const registerSignalToken = async (authToken, token) => {
  * @returns {Promise<void>} always resolves, never throws
  */
 export const reportUnlock = async (authToken, duressToken = null) => {
-    // Noise is generated the same way as a real token so the two are
-    // indistinguishable in both length and distribution.
-    const signal = duressToken || generateSignalToken();
-
     try {
+        // Noise is generated the same way as a real token so the two are
+        // indistinguishable in both length and distribution. Generated
+        // INSIDE this try, not before it: generateSignalToken() calls
+        // window.crypto.getRandomValues(), which can throw in an unusual
+        // browser/extension environment -- this function's own contract is
+        // "always resolves, never throws" (see its docstring), so that
+        // throw must be swallowed exactly like the fetch failure below, not
+        // reject and propagate to the caller as if reporting failed loudly.
+        const signal = duressToken || generateSignalToken();
+
         await fetch(`${BASE_URL}/duress/signal/`, {
             method: 'POST',
             headers: getHeaders(authToken),
