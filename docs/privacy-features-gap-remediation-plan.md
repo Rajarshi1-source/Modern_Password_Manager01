@@ -458,7 +458,8 @@ guards the `vault_sync` route wiring.
 `VaultUnlockModal` envelope integration, which needs the two-slot blob to be
 provisioned at vault setup — a migration path for existing vaults that
 deserves its own PR rather than being bolted onto this one. §4.4 orphan audit
-also remains open.
+was also out of scope for this PR — since delivered in the PR #488 follow-up,
+see §4.4 and §21.
 
 ## 6. Acceptance criteria
 
@@ -2320,3 +2321,111 @@ Targeted per file, per this project's testing preference:
   changed): **10 passed** — unchanged count, confirms no assertion broke from
   the reworded WARNING output.
 - `python -m py_compile` clean on all four touched/added Python files.
+
+### 21.7 CodeRabbit review-fix round 2 on PR #488
+
+Three findings, all confirmed; one fixed as flagged, one fixed narrower than
+proposed with the reasoning recorded, one deliberately not built at the scope
+CodeRabbit suggested.
+
+#### 21.7.1 §5's delivery-status summary still said §4.4 "remains open" (Minor, confirmed)
+
+§4.4 itself was updated to "DONE" in round 1 (§21.6), but the separate
+`## 5. Implementation status` summary — a different section, listing what
+PR #486 itself did and didn't ship — still said "§4.4 orphan audit also
+remains open." Both statements were locally true when written (true for #486,
+now stale for the project as a whole) but read as contradictory side by side.
+Fixed by keeping §5's historical claim about #486 accurate (it WAS out of
+scope for that PR) while pointing forward to where it was actually delivered,
+rather than deleting the historical record.
+
+#### 21.7.2 Stale "single batch on first tick" wording survived in two places (Minor, confirmed)
+
+Round 1 (§21.6.2) capped `check_expired_deaddrops` and updated the ONE
+paragraph in `check_deaddrop_backlog.py` that specifically discusses it — but
+missed two more general framing statements that still made the same
+now-inaccurate blanket claim: the module docstring's OPENING paragraph in
+`check_deaddrop_backlog.py`, and `test_check_deaddrop_backlog_command.py`'s
+own module docstring, which went further and named `check_expired_deaddrops`
+as the "most visible" example of a single-batch dump — exactly backwards
+after round 1's fix. Corrected both to distinguish the capped task from the
+three still-uncapped ones, rather than repeat a blanket claim that stopped
+being true for one of the four.
+
+#### 21.7.3 `check_expired_deaddrops`'s save-before-publish ordering (Major claim, fixed narrower than proposed)
+
+CodeRabbit's claim: `dead_drop.save()` persists the expired state before
+`notify_owner_deaddrop_expired.delay()` publishes. A publish failure (or
+worker loss) after the save leaves the row `status='expired'` — which drops
+it out of this task's own filter — with no notification ever queued and no
+future tick able to find it again. Separately, `notify_owner_deaddrop_expired`
+caught `send_mail`'s exception and only logged it, so Celery had no failure to
+retry even when the mail send itself failed. Suggested fix: a persisted
+outbox/pending-notification record, processed with retries, made idempotent.
+
+**Confirmed the core claim directly**, not just accepted the description:
+read both call sites, confirmed there was no try/except around either the
+`.save()`/`.delay()` pair or (separately) around `send_mail`'s own failure
+that let it propagate — the swallow was real and total.
+
+**Did not build the suggested outbox.** This codebase already has one working
+example (`biometric_liveness`'s `LivenessPersistOutbox` model +
+`drain_liveness_persist_outbox` sweeper) — read it before deciding, rather
+than estimating from the name. It is a dedicated model, a migration, a
+beat-scheduled sweeper task, attempt-count tracking, and idempotent
+re-application logic: real, working machinery, but table stakes for it are a
+new model +
+migration + new task + new beat entry + failure-injection tests for the
+outbox itself — a genuinely disproportionate addition for a PR whose actual
+purpose is fixing an orphaned *schedule*, not redesigning this feature's
+notification delivery architecture. CodeRabbit's own "Heavy lift" label on
+this finding agrees.
+
+**Fixed the two failure modes CodeRabbit actually named, using mechanisms
+that already exist, at a fraction of the cost:**
+
+- **Reordered**: `.delay()` now runs before `.save()`, wrapped in a per-row
+  try/except so one row's publish failure can't abort the rest of the
+  batch. This does not make loss impossible — nothing short of the outbox
+  pattern does — but it flips the failure mode from *silent and permanent*
+  (a saved-but-never-notified row falls out of the filter forever) to
+  *safe and self-correcting* (the row stays unmarked, so the same query
+  matches it again next tick). At worst a duplicate notification if a
+  publish actually landed just before the exception surfaced — harmless
+  here specifically, unlike a duress alert (`security/tasks/duress_tasks.py`,
+  §7 of this doc), because this is a plain informational notice with no
+  security property that depends on exactly-once delivery.
+- **`notify_owner_deaddrop_expired`'s `send_mail` failure now propagates**
+  instead of being swallowed, and the task carries Celery's own
+  `autoretry_for=(Exception,)` (with backoff, capped retries) — no custom
+  retry machinery, just turning on a mechanism Celery already ships. The
+  `DeadDrop.DoesNotExist` and missing-email branches still `return` quietly
+  rather than raise: neither is transient, so retrying either would waste
+  attempts on a failure that can't self-resolve.
+
+**Deliberately left as a documented gap, not fixed:** the SIGKILL-between-two-lines
+case (process killed between the now-first `.delay()` and the now-second
+`.save()`, after the broker durably has the message) is not closed by this —
+only a real outbox with `transaction.on_commit()` coordination closes that
+class of dual-write problem in general. Recorded here rather than silently
+left unmentioned, so a future reader deciding whether to build the full
+outbox knows precisely what gap remains and why it wasn't judged worth this
+PR's scope: it requires an atomic crash exactly between two adjacent lines of
+Python, a categorically rarer event than "an exception was raised," which is
+the failure mode this fix actually targets.
+
+#### 21.7.4 Test results
+
+`mesh_deaddrop/tests/test_deaddrop_tasks.py` in full (`canny` venv,
+`DEBUG=True`) — **11 passed** (6 pre-existing plus 5 new: 1 in
+`CheckExpiredDeaddropsTests` for the reordering, 4 in a new
+`NotifyOwnerDeaddropExpiredTests` class using `.run()` rather than
+`.delay()`/`.apply()`, since this project's TESTING settings point the
+Celery broker at `'memory://'` specifically so `.delay()` never executes a
+task body in tests — `.run()` is the standard way to exercise a
+`@shared_task`'s own logic directly, bypassing both that and the new
+`autoretry_for` dispatch wrapper).
+`mesh_deaddrop/tests/test_check_deaddrop_backlog_command.py` in full —
+**10 passed**, unchanged from round 1's count, confirming the docstring-only
+text changes broke no assertion. `python -m py_compile` clean on all four
+touched files.

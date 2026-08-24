@@ -3,8 +3,13 @@ Tests for the `check_deaddrop_backlog` management command.
 
 This command is the pre-deploy safety check for the mesh dead-drop beat
 schedule. Four of those entries have never run, so the first tick after they
-are merged processes the whole accumulated backlog at once -- most visibly
-`check_expired_deaddrops`, which sends one real email per past-expiry drop.
+are merged processes the whole accumulated backlog rather than at each item's
+own due time -- as a single batch for most of them, or, for
+`check_expired_deaddrops` specifically, capped per tick and drained across
+several ticks once the backlog exceeds `EXPIRE_BATCH_SIZE`
+(`deaddrop_tasks.py`). Either way it's one real email per past-expiry drop,
+which is why this command reports the true backlog size regardless of how the
+task paces itself through it.
 
 Each filter here deliberately mirrors the corresponding task in
 `mesh_deaddrop/tasks/deaddrop_tasks.py`. A test that passes while the task's

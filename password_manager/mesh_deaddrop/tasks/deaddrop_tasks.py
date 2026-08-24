@@ -69,24 +69,50 @@ def check_expired_deaddrops():
     total_count = expired.count()
     batch = list(expired.order_by('expires_at')[:EXPIRE_BATCH_SIZE])
 
+    expired_count = 0
     for dead_drop in batch:
+        # Publish BEFORE marking expired, not after -- and catch a publish
+        # failure per row rather than let it abort the rest of the batch.
+        # 'expired' drops fall out of this task's own filter above, so a row
+        # marked expired with no notification ever queued for it (a save
+        # that lands, immediately followed by a broker hiccup on the
+        # .delay() call) would never be retried by any future tick -- a
+        # silent, permanent loss. Publishing first means the failure mode on
+        # a hiccup is the opposite and strictly safer: the row stays
+        # unmarked, so the SAME filter matches it again next tick and it
+        # gets a fresh .delay() -- at worst a duplicate notification if the
+        # earlier publish actually succeeded despite the row not yet being
+        # marked, never a silently dropped one. Harmless here specifically
+        # because this is a plain informational notice, not a signal this
+        # feature's own security guarantees depend on being sent exactly
+        # once (contrast security/tasks/duress_tasks.py, where a naive retry
+        # risks double-sending a genuine alert and idempotency has to come
+        # first -- that reasoning does not apply to this email).
+        try:
+            notify_owner_deaddrop_expired.delay(str(dead_drop.id))
+        except Exception:
+            logger.error(
+                "check_expired_deaddrops: failed to publish notification "
+                "for dead drop %s; leaving it unmarked for the next tick",
+                dead_drop.id,
+            )
+            continue
+
         dead_drop.status = 'expired'
         dead_drop.is_active = False
         dead_drop.save()
-
-        # Notify owner
-        notify_owner_deaddrop_expired.delay(str(dead_drop.id))
+        expired_count += 1
 
         logger.info(f"Marked dead drop {dead_drop.id} as expired")
 
-    remaining = total_count - len(batch)
-    if batch:
+    remaining = total_count - expired_count
+    if expired_count:
         logger.info(
-            f"Expired {len(batch)} dead drops"
+            f"Expired {expired_count} dead drops"
             + (f" ({remaining} more due, deferred to next tick)" if remaining else "")
         )
 
-    return {'expired_count': len(batch), 'deferred_count': remaining}
+    return {'expired_count': expired_count, 'deferred_count': remaining}
 
 
 @shared_task(name='mesh_deaddrop.check_mesh_node_health')
@@ -225,23 +251,41 @@ def cleanup_location_cache():
 # Notification Tasks
 # =============================================================================
 
-@shared_task(name='mesh_deaddrop.notify_owner_deaddrop_expired')
+@shared_task(
+    name='mesh_deaddrop.notify_owner_deaddrop_expired',
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    max_retries=5,
+)
 def notify_owner_deaddrop_expired(dead_drop_id: str):
     """
     Notify dead drop owner that their drop has expired.
+
+    Lets send_mail's own exception propagate rather than swallowing it --
+    autoretry_for above then retries automatically (Celery's built-in
+    mechanism, not a custom one) instead of the failure being logged once
+    and never recoverable. Safe to retry, including a rare duplicate send:
+    this is a plain informational notice, not a signal this feature's own
+    guarantees depend on being sent exactly once (contrast
+    security/tasks/duress_tasks.py's activation task, which deliberately
+    stays retry-free because a naive retry there risks double-sending a
+    genuine alert -- that reasoning does not apply to this email). The
+    DoesNotExist and missing-email cases below still `return` rather than
+    raise: neither is a transient failure retrying would fix.
     """
     from ..models import DeadDrop
-    
+
     try:
         dead_drop = DeadDrop.objects.select_related('owner').get(id=dead_drop_id)
     except DeadDrop.DoesNotExist:
         logger.error(f"Dead drop {dead_drop_id} not found")
         return
-    
+
     if not dead_drop.owner.email:
         logger.warning(f"Owner of dead drop {dead_drop_id} has no email")
         return
-    
+
     subject = f"Dead Drop Expired: {dead_drop.title}"
     message = f"""
 Hello {dead_drop.owner.username},
@@ -255,18 +299,15 @@ If you need to share the secret again, please create a new dead drop.
 Best regards,
 Password Manager Security Team
     """
-    
-    try:
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[dead_drop.owner.email],
-            fail_silently=False,
-        )
-        logger.info(f"Sent expiration notification for dead drop {dead_drop_id}")
-    except Exception as e:
-        logger.error(f"Failed to send expiration email: {e}")
+
+    send_mail(
+        subject=subject,
+        message=message,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[dead_drop.owner.email],
+        fail_silently=False,
+    )
+    logger.info(f"Sent expiration notification for dead drop {dead_drop_id}")
 
 
 @shared_task(name='mesh_deaddrop.notify_recipient_deaddrop_ready')

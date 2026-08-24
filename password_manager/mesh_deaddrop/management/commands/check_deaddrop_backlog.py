@@ -6,8 +6,10 @@ Four of `mesh_deaddrop`'s five schedulable tasks have never run in production:
 into the app's `beat_schedule` until the block in `password_manager/celery.py`
 was added. (Only `flush-pending-sync` ran, because that one entry was also
 written into the static schedule by hand.) The moment the other four start
-running, work that accumulated over that entire window is processed in a single
-batch on the first tick rather than at each item's own due time.
+running, work that accumulated over that entire window gets processed rather
+than at each item's own due time -- as a single batch on the first tick for
+three of them, or capped and spread over several ticks for
+`check_expired_deaddrops` specifically (see below).
 
 Two of the four have effects worth seeing in advance:
 
