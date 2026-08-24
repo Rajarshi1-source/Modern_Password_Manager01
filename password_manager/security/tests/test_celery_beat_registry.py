@@ -376,3 +376,178 @@ class CeleryBeatScheduleRegistryTests(SimpleTestCase):
             {},
             'KNOWN_UNREGISTERED is out of date: {}'.format(stale),
         )
+
+    def test_mesh_deaddrop_entries_resolve(self):
+        """The five mesh dead-drop entries, four of which never ran.
+
+        `deaddrop_tasks.py` has always defined these, and its tasks have
+        always REGISTERED correctly (unlike Honeypot's -- `mesh_deaddrop/
+        tasks/__init__.py` star-imports the module, so `autodiscover_tasks()`
+        reaches it). Only the scheduling half was missing: nothing merged that
+        module's CELERY_BEAT_SCHEDULE, so four fully-implemented tasks were
+        never enqueued. `flush-pending-sync` ran only because it was also
+        hand-written into celery.py's static schedule.
+        """
+        registered = _worker_registry()
+        beat_schedule = self._beat_schedule()
+
+        expected = {
+            'check-expired-deaddrops': 'mesh_deaddrop.check_expired_deaddrops',
+            'check-mesh-node-health': 'mesh_deaddrop.check_mesh_node_health',
+            'cleanup-old-access-logs': 'mesh_deaddrop.cleanup_old_access_logs',
+            'cleanup-location-cache': 'mesh_deaddrop.cleanup_location_cache',
+            'flush-pending-sync': 'mesh_deaddrop.flush_pending_sync',
+        }
+
+        for entry, task_name in expected.items():
+            with self.subTest(entry=entry):
+                self.assertIn(
+                    entry,
+                    beat_schedule,
+                    f'{entry} missing from beat_schedule — is '
+                    'MESH_DEADDROP_BEAT_SCHEDULE still merged in celery.py?',
+                )
+                self.assertEqual(beat_schedule[entry]['task'], task_name)
+                self.assertIn(task_name, registered)
+
+    def test_mesh_deaddrop_static_and_merged_entries_agree(self):
+        """`flush-pending-sync` is defined TWICE, deliberately.
+
+        celery.py keeps it in the static schedule (so it survives an import
+        failure of the merged dict) while `deaddrop_tasks.py` also defines it.
+        The merge overwrites the static value, so the duplication is only safe
+        while the two agree exactly -- otherwise the static entry is dead
+        weight that silently reads as the live config. Pin that here rather
+        than trusting a reader to notice.
+        """
+        from mesh_deaddrop.tasks import CELERY_BEAT_SCHEDULE as MESH_SCHEDULE
+
+        self.assertEqual(
+            MESH_SCHEDULE['flush-pending-sync'],
+            {'task': 'mesh_deaddrop.flush_pending_sync', 'schedule': 60.0},
+            'the merged flush-pending-sync no longer matches the static entry '
+            'in celery.py — reconcile them or drop the static duplicate',
+        )
+
+    def test_argument_taking_deaddrop_tasks_stay_unscheduled(self):
+        """Fan-out targets must never get a beat entry.
+
+        The three `notify_*` tasks take a required dead-drop id and are
+        invoked BY `check_expired_deaddrops`. `rebalance_orphaned_fragments`
+        takes no argument but is likewise a fan-out target, called by
+        `check_mesh_node_health` only when it actually marks nodes offline --
+        scheduling it independently would run a rebalance sweep on a cadence
+        nothing asked for. Same guard, same reasoning, as the honeypot case.
+        """
+        beat_schedule = self._beat_schedule()
+
+        must_not_be_scheduled = {
+            'mesh_deaddrop.notify_owner_deaddrop_expired',
+            'mesh_deaddrop.notify_recipient_deaddrop_ready',
+            'mesh_deaddrop.notify_owner_deaddrop_collected',
+            'mesh_deaddrop.rebalance_orphaned_fragments',
+        }
+
+        scheduled = {
+            config['task']
+            for config in beat_schedule.values()
+            if 'task' in config
+        }
+
+        self.assertEqual(
+            must_not_be_scheduled & scheduled,
+            set(),
+            'fan-out mesh_deaddrop task(s) scheduled directly',
+        )
+
+    def test_every_module_beat_schedule_is_merged(self):
+        """The generalised guard for this entire bug class.
+
+        Three separate features have now shipped a module-level
+        CELERY_BEAT_SCHEDULE that nothing merged -- Time-Lock (PR #483),
+        Honeypot (PR #486), and Mesh Dead Drop (this change). Each was found
+        by hand, one at a time, long after the feature was "done". The
+        per-feature tests above pin the entries we already know about; this
+        one closes the class, exactly as
+        docs/privacy-features-gap-remediation-plan.md §4.4 proposed: discover
+        every such dict in the tree and assert its entries actually reach the
+        live schedule.
+
+        Deliberately checks that each entry ARRIVES, not HOW. `personality_auth`
+        is the reason: its two entries are hand-copied into celery.py's static
+        schedule rather than merged from its module, which is a drift hazard
+        but not an orphan -- the tasks do run. Demanding a merge would fail a
+        working feature; demanding arrival catches the one thing that actually
+        breaks a user (a task that never runs).
+
+        The dicts are discovered by walking the source tree, not from a list
+        kept here, so a NEW feature module that repeats this mistake fails
+        this test the day it lands rather than whenever someone next audits.
+        """
+        import ast
+        import pathlib
+
+        beat_schedule = self._beat_schedule()
+        repo_root = pathlib.Path(settings.BASE_DIR)
+
+        # Parse rather than import: importing every module that defines a
+        # schedule would drag half the app into this process and pollute the
+        # shared @shared_task registry, the exact contamination
+        # `_worker_registry()` spawns a subprocess to avoid.
+        missing = {}
+        found_modules = []
+        for path in sorted(repo_root.rglob('*.py')):
+            if any(part in {'migrations', 'node_modules', '.venv', 'canny'}
+                   for part in path.parts):
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
+            except (SyntaxError, UnicodeDecodeError):  # pragma: no cover
+                continue
+
+            for node in tree.body:
+                if not isinstance(node, ast.Assign):
+                    continue
+                names = {t.id for t in node.targets if isinstance(t, ast.Name)}
+                if 'CELERY_BEAT_SCHEDULE' not in names:
+                    continue
+                if not isinstance(node.value, ast.Dict):  # pragma: no cover
+                    continue
+
+                rel = path.relative_to(repo_root).as_posix()
+                found_modules.append(rel)
+                for key, value in zip(node.value.keys, node.value.values):
+                    if not isinstance(key, ast.Constant):  # pragma: no cover
+                        continue
+                    entry = key.value
+                    task_name = None
+                    if isinstance(value, ast.Dict):
+                        for k, v in zip(value.keys, value.values):
+                            if (isinstance(k, ast.Constant) and k.value == 'task'
+                                    and isinstance(v, ast.Constant)):
+                                task_name = v.value
+                    if entry not in beat_schedule:
+                        missing[f'{rel}::{entry}'] = (
+                            'defined but never reaches app.conf.beat_schedule'
+                        )
+                    elif task_name and beat_schedule[entry]['task'] != task_name:
+                        missing[f'{rel}::{entry}'] = (
+                            'live schedule runs {!r}, module defines {!r}'
+                            .format(beat_schedule[entry]['task'], task_name)
+                        )
+
+        # Guard the guard: if the walk silently stops finding anything (a
+        # moved tree, a broken rglob), the assertion below would pass
+        # vacuously and this whole test would become decorative.
+        self.assertGreaterEqual(
+            len(found_modules), 4,
+            'expected to discover at least the 4 known module-level '
+            'CELERY_BEAT_SCHEDULE dicts, found: {}'.format(found_modules),
+        )
+
+        self.assertEqual(
+            missing,
+            {},
+            'module-level CELERY_BEAT_SCHEDULE entries that never run: {}'
+            .format(missing),
+        )

@@ -390,13 +390,34 @@ Follow the Time-Lock precedent exactly; it is already proven in this repo.
    exactly this class of bug; extend it to cover the honeypot entries so a
    future orphan fails CI.
 
-### 4.4 Out of scope but log as follow-ups
+### 4.4 Orphan audit — DONE (follow-up PR, see §21)
 
-`mesh_deaddrop/tasks/deaddrop_tasks.py:351` and `personality_auth/tasks.py:80`
-define `CELERY_BEAT_SCHEDULE` dicts that nothing merges — same orphan bug,
-unverified blast radius. Worth their own audit; extending
-`test_celery_beat_registry.py` to assert *every* module-level
-`CELERY_BEAT_SCHEDULE` is merged would catch all remaining instances at once.
+> Originally logged here as out of scope: "`mesh_deaddrop/tasks/deaddrop_tasks.py:351`
+> and `personality_auth/tasks.py:80` define `CELERY_BEAT_SCHEDULE` dicts that
+> nothing merges — same orphan bug, unverified blast radius. Worth their own
+> audit; extending `test_celery_beat_registry.py` to assert *every* module-level
+> `CELERY_BEAT_SCHEDULE` is merged would catch all remaining instances at once."
+
+Both halves are now done, in a follow-up PR off `main` after #486 merged. The
+blast radius was verified rather than assumed, and **the original claim was
+half wrong** — see §21 for the full write-up. In short:
+
+- **`mesh_deaddrop` — real, 4 tasks affected.** Confirmed orphaned and fixed:
+  `check_expired_deaddrops`, `check_mesh_node_health`, `cleanup_old_access_logs`,
+  `cleanup_location_cache` had never run. (`flush-pending-sync`, the fifth entry
+  in that module's dict, ran only because it was *also* hand-written into
+  `celery.py`'s static schedule.) Unlike Time-Lock and Honeypot, only the
+  scheduling half was broken — registration always worked.
+- **`personality_auth` — not an orphan.** Both of its entries are already
+  present in `celery.py`'s static schedule, so its tasks *do* run. It is a
+  duplicate-definition drift hazard, not a task that never fires. Deliberately
+  left unmerged; merging would let the module's copy silently override the
+  reviewed static one.
+- **The generalised guard suggested above was built**:
+  `test_every_module_beat_schedule_is_merged` walks the source tree with `ast`,
+  discovers every module-level `CELERY_BEAT_SCHEDULE`, and asserts each entry
+  reaches the live schedule — by *any* route, which is what lets it pass
+  `personality_auth` while still failing a genuine orphan.
 
 ---
 
@@ -2096,3 +2117,113 @@ test, not added one), confirming `mock_activate.assert_called_once()` now
 actually passes, i.e. the activation branch is genuinely reached. `python
 -m py_compile` clean on the one touched file. No frontend files touched
 this round.
+
+---
+
+## 21. §4.4 orphan audit — follow-up PR (post-#486)
+
+PR #486 is merged. This section covers the §4.4 follow-up, done on its own
+branch off the updated `main`. Scope was deliberately limited to §4.4 alone:
+the other three deferred items (§4.1 Phases 2–4, §4.2 `VaultUnlockModal`) are
+each larger workstreams that this plan itself scopes to their own PR or design
+doc, and two of them (a bundled Tor sidecar, native mobile Orbot integration)
+cannot be meaningfully verified from a dev machine — shipping them untested
+would reproduce the exact "built it, never wired it" pattern §§7–20 catalogue.
+
+### 21.1 What §4.4 got right, and what it got wrong
+
+§4.4 named two modules as having "the same orphan bug, unverified blast
+radius". Verified both against the live schedule rather than taking the pairing
+at face value:
+
+| Module | §4.4's claim | Reality |
+|---|---|---|
+| `mesh_deaddrop` | orphaned | **Confirmed** — 4 of 5 entries never ran |
+| `personality_auth` | orphaned | **Wrong** — both entries already in `celery.py`; the tasks run |
+
+`personality_auth`'s module dict is a *duplicate* of what `celery.py` already
+schedules statically, not an orphan. That distinction matters for the fix:
+merging it would have made the module's unreviewed copy silently override the
+static entries someone actually reviewed. Left unmerged, with the reasoning
+recorded in `celery.py` so a later reader doesn't "helpfully" merge it.
+
+### 21.2 `mesh_deaddrop` — only the scheduling half was broken
+
+Unlike Time-Lock (PR #483) and Honeypot (#486), which were broken *twice* over
+(unregistered **and** unscheduled), `mesh_deaddrop`'s tasks have always
+registered correctly: `mesh_deaddrop/tasks/__init__.py` does
+`from .deaddrop_tasks import *`, and `autodiscover_tasks()` imports each
+installed app's `tasks` package. Proof it works today rather than an argument
+that it should: `flush-pending-sync` is in the static schedule and runs.
+
+So four fully-implemented tasks were simply never enqueued. Blast radius,
+verified by reading each task body rather than inferred from its name:
+
+- **`check_expired_deaddrops` (hourly) — the hazard.** Query has no lower
+  bound, and each matched drop fires `notify_owner_deaddrop_expired.delay()`:
+  **one real email per past-expiry drop**, entire backlog in one batch on the
+  first tick. Direct analogue of `process_pending_rotations` (§7.8).
+- **`cleanup_old_access_logs` (daily).** Hard-deletes `DeadDropAccess` and
+  `FragmentTransfer` rows past 90 days. Not user-visible, but the first tick is
+  one large DELETE worth scheduling deliberately.
+- **`check_mesh_node_health` (5 min).** Bounded and corrective — nodes unseen
+  for 10 minutes are currently left marked online forever. First tick flips
+  genuinely-stale nodes offline and triggers one rebalance. No mail.
+- **`cleanup_location_cache` (6 h).** Self-bounding, small table. Low risk.
+
+`rebalance_orphaned_fragments` is zero-argument and registered but is **not** in
+that module's schedule dict and was not added: it is a fan-out target invoked by
+`check_mesh_node_health` only when nodes actually go offline. The three
+`notify_*` tasks take a required id and must likewise stay unscheduled — same
+guard as the honeypot fan-out targets, pinned by
+`test_argument_taking_deaddrop_tasks_stay_unscheduled`.
+
+### 21.3 `flush-pending-sync` is defined twice, deliberately
+
+The merged dict and `celery.py`'s static schedule both define it, identically.
+Rather than delete the static copy for tidiness, it stays: a contributed entry
+silently no-ops if its import fails, and a once-a-minute delivery drain is the
+one entry here where that failure mode matters. The duplication is only safe
+while the two agree exactly, so
+`test_mesh_deaddrop_static_and_merged_entries_agree` pins the merged value
+against the static one — drift fails the build instead of silently making the
+static entry dead weight.
+
+### 21.4 The generalised guard — closing the bug class
+
+§4.4's own suggestion, built: `test_every_module_beat_schedule_is_merged`
+walks the source tree with `ast`, finds every module-level
+`CELERY_BEAT_SCHEDULE`, and asserts each entry reaches the finalised
+`app.conf.beat_schedule`. Three design choices worth recording:
+
+1. **Parsed, not imported.** Importing every schedule-defining module would
+   drag half the app into the test process and pollute the shared
+   `@shared_task` registry — the exact contamination `_worker_registry()`
+   already spawns a subprocess to avoid.
+2. **Asserts entries *arrive*, not *how*.** This is what lets it pass
+   `personality_auth` (hand-copied but working) while still failing a genuine
+   orphan. Demanding a merge would fail a working feature; demanding arrival
+   catches the only thing that actually breaks a user — a task that never runs.
+3. **Discovery is a tree walk, not a list.** A new feature module that repeats
+   this mistake fails the day it lands, not whenever someone next audits by
+   hand. Guarded against going vacuous by asserting at least the 4 known dicts
+   are discovered — round 14's lesson (§20) that a passing test may not be
+   exercising anything.
+
+### 21.5 Test results
+
+Negative control first, per §20's lesson: with the merge line disabled, both new
+tests **fail** as intended (`test_mesh_deaddrop_entries_resolve` flags all 4
+orphaned entries; `test_every_module_beat_schedule_is_merged` fails too),
+confirming they exercise the real defect rather than passing vacuously. Merge
+restored, then:
+
+- `security/tests/test_celery_beat_registry.py` in full (`canny` venv,
+  `DEBUG=True`): **15 passed, 18 subtests passed** (was 11 tests before this
+  change; +4 new).
+- `mesh_deaddrop/tests/test_check_deaddrop_backlog_command.py`: **10 passed**,
+  covering the clean case, the exit-code gate, the three filter boundary cases
+  that pin correspondence with `check_expired_deaddrops`' own query, the
+  log-deletion cutoff, the no-identifying-metadata rule, and the
+  `MAX_DEADDROP_SAMPLES` truncation guard.
+- `python -m py_compile` clean on all touched Python files.
