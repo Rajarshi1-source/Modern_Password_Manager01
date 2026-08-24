@@ -374,15 +374,27 @@ class DuressSignalActivationTaskTests(TestCase):
         generation, and (when enabled) SMTP/webhook alerts, any of which can
         fail. This task has no retry, so an uncaught exception here would
         just fail the task outright -- exactly what the try/except around
-        the activation call exists to prevent."""
+        the activation call exists to prevent.
+
+        Needs an active DuressCode: with none configured, the task takes the
+        "no duress code configured" branch and returns before ever calling
+        activate_duress_mode, which would make this test pass vacuously --
+        no exception, but not because the try/except caught one.
+        """
         token = make_token()
-        self.service.register_signal_token(self.user, token)
+        code = DuressCode.objects.create(
+            user=self.user, code_hash='hash-medium', threat_level='medium',
+            is_active=True,
+        )
+        self.service.register_signal_token(self.user, token, duress_code=code)
 
         with mock.patch.object(
             self.service, 'activate_duress_mode',
             side_effect=RuntimeError('SMTP relay unreachable'),
-        ):
+        ) as mock_activate:
             self._run(self.user, token)  # no exception
+
+        mock_activate.assert_called_once()
 
     def test_no_configured_code_still_records_an_event(self):
         """The alarm must not be silently swallowed."""

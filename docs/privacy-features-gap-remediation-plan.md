@@ -2055,3 +2055,44 @@ errors (same one pre-existing warning on the untouched `toBase64` line as
 every prior round that touched this file). `python -m py_compile` clean on
 both touched backend
 files.
+
+## 20. Review-fix round 14 on PR #486 (CodeRabbit, fourteenth pass)
+
+One finding, confirmed -- a real bug in this same PR's own round-13 test,
+caught one round later. All 34 CI checks were green going into this round.
+
+### 20.1 §19.2's new test passed without ever exercising what it claims to test (Minor claim, real test-validity bug)
+
+`test_activation_failure_does_not_raise` (added last round to cover the
+new `activate_duress_mode` try/except) called `register_signal_token(user,
+token)` with no `duress_code`, and `setUp` creates no `DuressCode` at all.
+Traced the actual control flow in `activate_duress_signal_task` rather
+than trusting the finding on description alone: with `matched.duress_code`
+`None` and the severity-ranked fallback query (`DuressCode.objects.filter(
+user=user, is_active=True)`) returning nothing to rank, the task takes the
+"no duress code configured" branch -- logs a warning, creates a
+`DuressEvent`, and `return`s -- several lines before the
+`try: service.activate_duress_mode(...)` block this test exists to cover.
+The mocked `activate_duress_mode` was never called at all. The test
+"passed" -- no exception was raised -- but not because the try/except
+caught one; the code path that would have raised it was never reached. A
+regression that broke the try/except entirely (e.g. someone reordering the
+code, or a future refactor accidentally removing it) would not have failed
+this test.
+
+Fixed by creating an active `DuressCode` and passing it to
+`register_signal_token(..., duress_code=code)`, matching the exact pattern
+already established two tests earlier in this same file
+(`test_fallback_picks_highest_severity_code_not_alphabetical`), and adding
+`mock_activate.assert_called_once()` so the test now fails loudly if the
+activation branch is ever skipped again -- not just if it raises.
+
+### 20.2 Test results
+
+Targeted `DuressSignalActivationTaskTests` in `test_duress_signal.py`
+(`canny` venv, `DEBUG=True`, the class containing the fixed test): 11
+passed (unchanged count from round 13 -- this round fixed an existing
+test, not added one), confirming `mock_activate.assert_called_once()` now
+actually passes, i.e. the activation branch is genuinely reached. `python
+-m py_compile` clean on the one touched file. No frontend files touched
+this round.
