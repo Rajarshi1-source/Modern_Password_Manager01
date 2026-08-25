@@ -18,6 +18,13 @@
  *       unwraps the DEK back into module memory. `hasWrappedKey(userId)` tells
  *       the UI whether to show a setup or an unlock prompt.
  *
+ *       (C) `../hiddenVault/unlockEnvelopeStore.js` layers a two-slot duress
+ *       envelope on top of this same DEK — see its own header comment and
+ *       docs/vault-unlock-envelope-integration-plan.md. `installRawDek`,
+ *       `exportSessionDekRaw`, and `exportWrappedDekRaw` below exist only to
+ *       move that DEK's raw bytes into and out of that envelope; they are not
+ *       a third independent key.
+ *
  * Item payload format (JSON string):
  *   { v: 'svc-gcm-1', iv: base64, ct: base64, salt: base64 }
  *
@@ -117,7 +124,7 @@ const wrappedStorageKey = (userId) =>
  * key). Without this, the only evidence was a vault full of items that quietly
  * needed re-derivation.
  */
-const getOrCreateUserSalt = (userId) => {
+export const getOrCreateUserSalt = (userId) => {
   const storageKey = saltStorageKey(userId);
   let salt = localStorage.getItem(storageKey);
   if (!salt) {
@@ -340,6 +347,122 @@ export const clearWrappedKey = (userId) => {
   localStorage.removeItem(wrappedStorageKey(userId));
 };
 
+/**
+ * Re-derive the path (B) wrapped DEK as EXTRACTABLE raw bytes, without
+ * installing it as the session key.
+ *
+ * `unlockWithVaultPassword` above unwraps the same record but deliberately
+ * installs a NON-extractable key (`extractable: false` in its `unwrapKey`
+ * call) -- raw key material should not be exportable for the lifetime of a
+ * normal session. Provisioning the hidden-vault envelope
+ * (docs/vault-unlock-envelope-integration-plan.md §3.4 "upgrade" path) needs
+ * the opposite for one instant: the raw bytes, so the SAME DEK this record
+ * already protects can also be sealed into envelope slot 0. Rather than
+ * weaken `unlockWithVaultPassword`'s key for every caller, this does a
+ * second, independent unwrap with `extractable: true`. Keep this in sync
+ * with `unlockWithVaultPassword`'s record-parsing logic above if that ever
+ * changes.
+ *
+ * Does NOT touch module session state (`sessionKey` etc.) -- call
+ * `unlockWithVaultPassword` separately to actually unlock the session; this
+ * is a side channel for provisioning only.
+ */
+export const exportWrappedDekRaw = async (vaultPassword, userId) => {
+  if (!userId) throw new Error('exportWrappedDekRaw: userId required');
+  const raw = localStorage.getItem(wrappedStorageKey(userId));
+  if (!raw) throw new Error('No vault key has been set up for this account.');
+
+  let record;
+  try {
+    record = JSON.parse(raw);
+  } catch {
+    throw new Error('Vault key record is corrupt. Please reset the vault.');
+  }
+  if (!record || record.v !== WRAPPED_VERSION) {
+    throw new Error('Unsupported vault key record version.');
+  }
+
+  const kek = await deriveKEK(vaultPassword, record.salt);
+  let dek;
+  try {
+    dek = await window.crypto.subtle.unwrapKey(
+      'raw',
+      fromB64(record.wrapped),
+      kek,
+      { name: 'AES-GCM', iv: fromB64(record.iv) },
+      { name: 'AES-GCM', length: 256 },
+      true,
+      ['encrypt', 'decrypt']
+    );
+  } catch {
+    // See `unlockWithVaultPassword` — same canonical "wrong password" signal.
+    throw new Error('Incorrect vault password.');
+  }
+  const rawDek = await window.crypto.subtle.exportKey('raw', dek);
+  return { dekBytes: new Uint8Array(rawDek), saltB64: record.salt };
+};
+
+/**
+ * Export the CURRENT in-memory session DEK as raw bytes, if it is
+ * extractable.
+ *
+ * Only the fresh DEK `setupVaultPassword` just generated is extractable --
+ * `unlockWithVaultPassword` and `installRawDek` (below) both install
+ * NON-extractable keys, keeping raw key material out of reach for the
+ * lifetime of a normal session. So this is meant to be called immediately
+ * after `setupVaultPassword` resolves, to seed the hidden-vault envelope
+ * with the SAME key it just created — not as a general-purpose export. It
+ * throws for any other session shape rather than silently returning nothing.
+ */
+export const exportSessionDekRaw = async () => {
+  if (!sessionKey) {
+    throw new Error('exportSessionDekRaw: no session key installed');
+  }
+  let raw;
+  try {
+    raw = await window.crypto.subtle.exportKey('raw', sessionKey);
+  } catch {
+    throw new Error('exportSessionDekRaw: current session key is not extractable.');
+  }
+  return new Uint8Array(raw);
+};
+
+/**
+ * Install a raw 32-byte DEK as the session key.
+ *
+ * Used by the hidden-vault envelope unlock path
+ * (docs/vault-unlock-envelope-integration-plan.md §3.3), where the DEK
+ * arrives already decrypted from an envelope slot rather than unwrapped from
+ * the path (B) wrapped-DEK record. Mirrors `unlockWithVaultPassword`'s tail
+ * exactly (generation check, salt, session state) — keep the two in sync;
+ * see that function's comments for why each line here exists. The imported
+ * key is non-extractable, matching `unlockWithVaultPassword`'s posture.
+ */
+export const installRawDek = async (dekBytes, saltB64, userId) => {
+  if (!userId) throw new Error('installRawDek: userId required');
+  if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
+    throw new Error('installRawDek: dekBytes must be a 32-byte Uint8Array');
+  }
+
+  const generation = ++sessionGeneration;
+  const dek = await window.crypto.subtle.importKey(
+    'raw',
+    dekBytes,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  if (generation !== sessionGeneration) {
+    // See `initSessionKeyFromPassword`.
+    throw new Error('Vault session initialization was superseded by a newer request.');
+  }
+  sessionSaltB64 = saltB64;
+  sessionKey = dek;
+  // See `setupVaultPassword` — path (B)/(C) have no password to memoize against.
+  sessionPassword = null;
+  foreignSaltKeys.clear();
+};
+
 // ----------------------------------------------------------------------------
 // Session key + item encryption (shared by both paths).
 // ----------------------------------------------------------------------------
@@ -506,8 +629,12 @@ export default {
   unlockWithVaultPassword,
   hasWrappedKey,
   clearWrappedKey,
+  exportWrappedDekRaw,
+  exportSessionDekRaw,
+  installRawDek,
   hasSessionKey,
   clearSessionKey,
   encryptItem,
   decryptItem,
+  getOrCreateUserSalt,
 };
