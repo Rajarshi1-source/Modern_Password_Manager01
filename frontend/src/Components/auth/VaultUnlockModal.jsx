@@ -136,7 +136,11 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
     // No `envelopeUnusable` tag on a failure here: the envelope decoded
     // fine, so a throw at this point (chiefly the stale-generation guard)
     // must propagate as-is, never trigger the corrupt-envelope fallback.
-    await sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId, generation);
+    // isDecoy = slotIndex !== 0: tells sessionVaultCrypto to refuse new
+    // writes for this session, see installRawDek/encryptItem's own comments
+    // on why a decoy-session write would otherwise permanently corrupt a
+    // row in the real vault.
+    await sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId, generation, slotIndex !== 0);
     // Fire-and-forget, per §3.5 — see reportNoise above for why. Deliberately
     // NOT branching on slotIndex here beyond passing it through unchanged:
     // reportUnlockForSlot itself decides real-token-vs-noise from
