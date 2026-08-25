@@ -128,6 +128,30 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
     reportUnlockForSlot(getAccessToken?.(), slotIndex, { __duress_signal: duressToken });
   };
 
+  // A wrong password means the envelope decoded fine -- decode() parsed the
+  // header and derived both slot keys successfully; only the AES-GCM
+  // authentication failed -- and that must stay a normal retry, never a
+  // fallback (see runEnvelopeUnlock's comment on this exact message string).
+  // Anything else -- invalid base64 from a truncated localStorage write, a
+  // bad magic/version/tier, any other MalformedBlobError -- means the STORED
+  // envelope itself is unusable, not that the password was wrong. If the
+  // legacy wrapped-DEK record still exists, fall back to it rather than
+  // locking the user out of a vault it could still open: runUpgrade()'s own
+  // provisioning call overwrites the bad envelope with a fresh, valid one on
+  // success, so this also self-heals the corruption rather than just
+  // routing around it once.
+  const runEnvelopeUnlockWithFallback = async () => {
+    try {
+      await runEnvelopeUnlock();
+    } catch (err) {
+      if (err.message === 'Incorrect vault password.' || !sessionVaultCrypto.hasWrappedKey(userId)) {
+        throw err;
+      }
+      console.warn('VaultUnlockModal: stored envelope is unusable, falling back to the legacy unlock path.', err);
+      await runUpgrade();
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -153,7 +177,7 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
       if (internalMode === 'setup') {
         await runSetup();
       } else if (internalMode === 'envelope') {
-        await runEnvelopeUnlock();
+        await runEnvelopeUnlockWithFallback();
       } else {
         await runUpgrade();
       }

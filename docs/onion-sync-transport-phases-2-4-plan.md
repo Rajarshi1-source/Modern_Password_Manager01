@@ -57,7 +57,7 @@ This is the first phase where an ordinary user gets a real circuit.
 
 **A.1.1 There are two `main.js` files and only one of them runs.**
 
-```
+```text
 desktop/package.json:  "main": "main.js"
 desktop/main.js          556 lines  ← the real entry point
 desktop/src/main/main.js 281 lines  ← not loaded by anything
@@ -71,7 +71,7 @@ leaving the next contributor the same trap.
 **A.1.2 The existing IPC channel names are already broken, and this PR adds
 more of them.**
 
-```
+```text
 desktop/src/shared/constants.js:116-119   SECURE_STORAGE_SET: 'secure-storage:set'   (colon)
 desktop/main.js:317-347                   ipcMain.handle(IPC_CHANNELS.SECURE_STORAGE_*, …)
 desktop/src/main/preload.js:8-11          ipcRenderer.invoke('secure-storage-set', …)  (hyphen)
@@ -102,9 +102,16 @@ parity.
 2. `electron-builder` `extraResources`, **not** `files` — binaries must land
    outside the asar archive or they cannot be executed. Add to
    `desktop/package.json`:
+   ```json
+   "extraResources": [{ "from": "vendor/tor/${platform}", "to": "tor", "filter": ["**/*"] }]
    ```
-   "extraResources": [{ "from": "vendor/tor/${os}", "to": "tor", "filter": ["**/*"] }]
-   ```
+   Use `${platform}`, not `${os}` — electron-builder 24.6.4 expands `${os}` to
+   `mac`/`linux`/`win`, but `${platform}` expands to `process.platform`'s own
+   values (`darwin`/`linux`/`win32`), which is what the vendor directory names
+   above already are. Getting this macro wrong silently omits the Tor binary
+   from the Windows and macOS packages — a packaging smoke test across all
+   three targets is required in PR A precisely because this class of mistake
+   builds cleanly and fails silently.
 3. Resolve at runtime via `process.resourcesPath` in production and a repo-relative
    path in dev. `desktop/src/shared/utils.js` `PathUtils` already owns this kind
    of branch — extend it, do not add a second path helper.
@@ -120,24 +127,45 @@ parity.
 
 Single owner of the process. Exports:
 
-```
+```text
 start(): Promise<{ socksPort: number }>   // spawn, wait for bootstrap 100%
 stop(): Promise<void>                     // SIGTERM, then SIGKILL after a grace period
 getStatus(): { state, bootstrapPercent, socksPort, lastError }
 ```
 
 Requirements:
-- **Ephemeral SOCKS port.** Bind `SocksPort` to `127.0.0.1:0` and read the
-  actual port from the control port. Hardcoding 9050 collides with a
-  system Tor or Tor Browser the user already runs, and the failure mode
-  (silently using someone else's circuit) is worse than the collision.
+- **Ephemeral SOCKS port.** Bind `SocksPort` to `auto`, not `127.0.0.1:0` —
+  Tor's own manual treats port `0` as "disable this listener", not "pick one
+  for me"; `auto` is the documented way to get an OS-assigned port. Read the
+  actual port back from the control port, verify it bound to loopback only,
+  and confirm `start()` by completing one real SOCKS5 connection through it —
+  not just parsing "Bootstrapped 100%" — before reporting ready. Hardcoding
+  9050 would collide with a system Tor or Tor Browser the user already runs,
+  and the failure mode (silently using someone else's circuit) is worse than
+  the collision.
 - **Own `DataDirectory`** under `PathUtils.getUserDataPath()/tor`, mode 0700.
+- **Authenticated control port.** Tor allows any local process to drive an
+  unauthenticated control port — no credential is required by default, which
+  means another process on the machine could reconfigure or query this
+  sidecar's Tor instance. Require `CookieAuthentication 1`, restrict the
+  generated cookie file to the owning user, and add a test asserting an
+  unauthenticated control connection is rejected.
 - **Bootstrap gating.** Parse `NOTICE: Bootstrapped NN%` from stdout, or use the
-  control port. Do not report available before 100%.
-- **Kill on every exit path.** `app.on('will-quit')`, `app.on('before-quit')`,
-  and a `process.on('exit')` backstop. An orphaned `tor` holding a
-  `DataDirectory` lock makes the next launch fail in a way that looks like
-  corruption.
+  control port. Do not report available before 100% AND the real-connection
+  check above both pass.
+- **Kill on every exit path this process can actually observe.** `app.on('will-quit')` /
+  `app.on('before-quit')` with `event.preventDefault()`, awaiting one guarded
+  `stop()`, then quitting — this is the only path that can run async cleanup
+  at all. It is not the only exit path: `process.on('exit')` cannot await
+  anything (Node drops pending async work there), `app.exit()` skips
+  `before-quit`/`will-quit` entirely, and `SIGKILL` runs no JS. State this
+  limit rather than implying `process.on('exit')` closes it, and rely on an
+  OS-level mechanism (a Windows Job Object, a Unix process group kill, or
+  equivalent) as the actual backstop for those cases — an orphaned `tor`
+  holding a `DataDirectory` lock makes the next launch fail in a way that
+  looks like corruption, and JS-only cleanup cannot guarantee that never
+  happens. A test here has to exercise a real parent-kill, not just call
+  `stop()` and assert it resolves.
 - **Never auto-start.** Spawn only when the user's sync privacy mode is
   `prefer_onion` or `require_onion`. A password manager that opens a Tor circuit
   by default is a surprising and, in some jurisdictions, unsafe default.
@@ -150,29 +178,51 @@ The renderer must not gain network privileges. Keep the fetch in the main
 process.
 
 New `desktop/src/main/onionTransport.js`:
-- `socks-proxy-agent` as the `httpAgent`/`httpsAgent` for the bundled `axios`
-  (already a dependency, `desktop/package.json`).
+- `socks-proxy-agent` as the `httpAgent`/`httpsAgent` for the bundled `axios`.
+  **Add it to `desktop/package.json`'s dependencies in this PR** — it is not
+  there today, only `axios` is.
 - Target the `.onion` origin from `capabilities.anonymity.onion_address`,
-  fetched over clearnet on the first call and cached for the session.
+  fetched over clearnet on the first call and cached for the session (see
+  A.5 below for exactly which service that clearnet call goes through).
 - **Only `vault_sync` at first**, as §4.1 Phase 2 step 2 says. Extending to the
   rest of `VAULT_OPERATION_ROUTES` is a follow-up.
 - Do **not** set `Host` manually — requesting `https://<addr>.onion/...` sets it
   correctly, and that is condition 4 of `request_is_onion_ingress`. A
   hand-written `Host` is the single easiest way to get this subtly wrong.
+- **Fail closed on the transport itself, not just on the request.** Set
+  `proxy: false` on the Axios instance so it cannot pick up `http_proxy` /
+  `https_proxy` env vars and bypass the SOCKS agent entirely; use a
+  `socks5h://` (not `socks5://`) proxy URL so the `.onion` hostname resolves
+  on the Tor side, never locally; and set `maxRedirects: 0` (or validate any
+  redirect target stays on the exact `.onion` origin) so a malicious or
+  misconfigured response cannot redirect this client to a clearnet endpoint
+  it would then unknowingly call. Tests need to cover all three: an
+  environment proxy present but ignored, hostname resolution happening
+  proxy-side, and a redirect off-origin being rejected.
 - Enforce a request timeout (circuits stall); surface the failure rather than
   retrying over clearnet.
 
 Four new IPC channels in `IPC_CHANNELS` (colon-separated, matching the existing
 convention, and used by both sides — see A.1.2):
 
-```
+```text
 TOR_START:   'tor:start'
 TOR_STOP:    'tor:stop'
 TOR_STATUS:  'tor:status'
 TOR_PROXY:   'tor:proxy-vault-operation'
 ```
 
-`preload.js` exposes them as `window.electronAPI.tor.*`.
+`preload.js` exposes them as `window.electronAPI.tor.*`. **The `TOR_PROXY`
+handler in the MAIN process is the trust boundary, not the preload bridge or
+`onionSyncService`** — a compromised or buggy renderer can call
+`window.electronAPI.tor.proxyVaultOperation` with any `operation` string it
+likes. The `ipcMain.handle` implementation itself must check `operation`
+against the single-entry allowlist (`vault_sync` — see above) and validate
+the payload shape before it ever reaches `onionTransport.js`, and reject
+anything else with no dispatch. Relying on the renderer-side service layer to
+only ever send `'vault_sync'` is not a boundary; it is an assumption about a
+process this feature explicitly does not trust with network privileges (see
+"The renderer must not gain network privileges" above).
 
 ## A.5 Renderer: reuse the Phase 1 contract verbatim
 
@@ -180,21 +230,36 @@ TOR_PROXY:   'tor:proxy-vault-operation'
 desktop. It already can be, because `onionSyncService.syncVault` takes its
 collaborator by injection:
 
-```
+```text
 frontend/src/services/onionSyncService.js:135
   syncVault(syncData, { vaultService, mode = null } = {})
 ```
 
 Two small, additive changes, both in `frontend/src/services/`:
 
-1. **A transport shim.** New `desktopOnionTransport.js` implements the same two
-   methods `onionSyncService` calls on `darkProtocolService`
-   (`getCapabilities`, `proxyVaultOperation`), delegating to
-   `window.electronAPI.tor`.
-2. **Select it once.** `onionSyncService` currently imports `darkProtocolService`
-   at module scope (line 46). Change that single import to a
-   `getDarkProtocol()` accessor that returns the desktop shim when
-   `window.electronAPI?.isElectron` and the web service otherwise.
+1. **A transport shim, for `proxyVaultOperation` only.** New
+   `desktopOnionTransport.js` implements `proxyVaultOperation`, delegating to
+   `window.electronAPI.tor.proxyVaultOperation` (which the main-process
+   allowlist above gates to `vault_sync`).
+2. **`getCapabilities` stays on the clearnet service, always.** This is the
+   one place the original "swap the whole `darkProtocolService` import for a
+   desktop shim" sketch breaks: `isOnionSyncAvailable()` calls
+   `getCapabilities()` to learn `vault_proxy.available` and the `.onion`
+   address in the first place (A.4 above: "fetched over clearnet on the first
+   call and cached for the session"). If `getCapabilities` were ALSO routed
+   through the not-yet-connected onion transport, the very first call would
+   need the onion address to reach the endpoint that hands out the onion
+   address — a circular dependency with no first move. So only
+   `proxyVaultOperation` is selected per-platform; `getCapabilities` keeps
+   calling the web `darkProtocolService` unconditionally, on both web and
+   desktop. Change `onionSyncService`'s module-scope
+   `darkProtocolService` import (line 46) to two things instead of one
+   accessor: keep the existing import for `getCapabilities`, and add a
+   `getVaultProxyTransport()` accessor used only inside the `syncVault` branch
+   that calls `proxyVaultOperation`, returning the desktop shim when
+   `window.electronAPI?.isElectron` and the same web service otherwise. Add a
+   test for the first-call case specifically: no cached address yet, and the
+   capability fetch must still succeed.
 
 Everything else — the three modes, the fail-closed `require_onion` branch, the
 `degraded` flag, `VaultContext`, `DarkProtocolSettings.jsx` — is untouched.
@@ -253,7 +318,7 @@ is not one.
 Second constraint: `mobile/src/services/DarkProtocolService.js` has a
 **different signature** from the web service —
 
-```
+```text
 mobile/src/services/DarkProtocolService.js:318
   async proxyVaultOperation(token, operation, payload)   // token FIRST
 frontend/src/services/darkProtocolService.js:253
