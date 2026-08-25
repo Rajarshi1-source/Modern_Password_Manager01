@@ -36,7 +36,7 @@ import {
   open,
   MalformedSlotPayloadError,
 } from '../unlockEnvelopeStore';
-import { WrongPasswordError, TIERS, tierBytes } from '../hiddenVaultEnvelope';
+import { WrongPasswordError, TIERS, tierBytes, encode, jsonToBytes } from '../hiddenVaultEnvelope';
 
 const USER_ID = 'user-42';
 const REAL_PASSWORD = 'correct horse battery staple';
@@ -213,6 +213,32 @@ describe('open', () => {
   test('throws when no envelope has been provisioned', async () => {
     await expect(open({ userId: USER_ID, password: REAL_PASSWORD }))
       .rejects.toThrow(/no envelope/i);
+  });
+
+  test('rejects a payload whose dek decodes to the wrong byte length as MalformedSlotPayloadError, not a silent short DEK', async () => {
+    // Regression for a CodeRabbit finding on PR #489: parseSlotPayload used
+    // to accept ANY base64 string for `dek`, so a valid-base64-but-wrong-
+    // length value passed straight through and only failed later, in
+    // sessionVaultCrypto.installRawDek -- OUTSIDE the window
+    // VaultUnlockModal's runEnvelopeUnlock tags `envelopeUnusable` on. That
+    // skipped the legacy wrapped-DEK fallback entirely. Hand-crafts the
+    // malformed payload directly with encode()/jsonToBytes() (bypassing
+    // provision()'s own dekBytes-length guard on purpose, since the point is
+    // to prove parseSlotPayload itself now catches what a well-behaved
+    // caller never would).
+    const shortDekB64 = btoa(String.fromCharCode(...new Uint8Array(16).fill(9)));
+    const malformedPayload = jsonToBytes({ v: 'hv-slot-1', dek: shortDekB64, salt: SALT });
+    const blob = await encode({
+      realPassword: REAL_PASSWORD,
+      realPayload: malformedPayload,
+      decoyPassword: null,
+      decoyPayload: new Uint8Array(0),
+      tier: TIERS.TIER0_32K,
+    });
+    saveEnvelope(USER_ID, blob);
+
+    await expect(open({ userId: USER_ID, password: REAL_PASSWORD }))
+      .rejects.toBeInstanceOf(MalformedSlotPayloadError);
   });
 });
 

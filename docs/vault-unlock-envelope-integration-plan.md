@@ -1,8 +1,9 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across two CodeRabbit review rounds
-(§9, §10) — read both before relying on §3's original design as the literal
-shipped behavior.**
+**Implemented in PR #489, then hardened across three CodeRabbit review rounds
+(§9, §10, §11) — read all three before relying on §3's original design as the
+literal shipped behavior. §11.5 in particular is a real data-corruption fix,
+not a cosmetic one.**
 
 Deferred from PR #486 (`docs/privacy-features-gap-remediation-plan.md` §4.2,
 §5 "Not delivered"). PR #486 shipped the backend and the service layer; the
@@ -37,7 +38,7 @@ rails built, nothing riding them.
 §4.2 calls this "the main unlock modal". Read the file: it is **not** the
 master-password login path. It is the **OAuth wrapped-DEK** modal.
 
-```
+```text
 frontend/src/Components/auth/VaultUnlockModal.jsx:17-22
   mode = userId && sessionVaultCrypto.hasWrappedKey(userId) ? 'unlock' : 'setup'
 ```
@@ -60,11 +61,11 @@ as more than it is.
 
 ## 2. The constraint §5 worried about is smaller than it looked
 
-#486 §5 deferred this because it "needs the two-slot blob to be provisioned at
-vault setup — a migration path for existing vaults". Verified against the code,
-that migration is **device-local, not server-side**:
+PR `#486` §5 deferred this because it "needs the two-slot blob to be
+provisioned at vault setup — a migration path for existing vaults". Verified
+against the code, that migration is **device-local, not server-side**:
 
-```
+```text
 frontend/src/services/sessionVaultCrypto.js:43-44
   const USER_SALT_STORAGE_KEY   = 'vaultKeySalt';
   const WRAPPED_DEK_STORAGE_KEY = 'vaultWrappedDEK';
@@ -81,8 +82,8 @@ lives on the server. So:
 - A user on a device that *has* a wrapped key needs an **upgrade-on-unlock**
   step (§3.4). That is the entire migration.
 
-This is a real reduction in scope versus what #486 §5 assumed, and it is why
-this fits in one PR.
+This is a real reduction in scope versus what PR `#486` §5 assumed, and it is
+why this fits in one PR.
 
 ---
 
@@ -120,7 +121,7 @@ Owns storage and lifecycle of the per-user envelope. Storage key
 deliberately alongside `vaultWrappedDEK:<userId>`, because it is the same class
 of device-local secret material and inherits the same threat model.
 
-```
+```text
 export const hasEnvelope(userId): boolean
 export const loadEnvelope(userId): Uint8Array | null
 export const saveEnvelope(userId, blob: Uint8Array): void
@@ -144,7 +145,7 @@ export async function open({ userId, password }): Promise<{ slotIndex, payload }
 **Verified property this design leans on:** `encode()` gives an unpopulated slot
 a *throwaway random key* rather than leaving it empty —
 
-```
+```text
 hiddenVaultEnvelope.js:281-283
   async function keyFor(password, slotIndex) {
     if (password == null) return randomBytes(KEY_LEN); // throwaway
@@ -175,7 +176,7 @@ It must replicate the tail of `unlockWithVaultPassword` exactly — including th
 `sessionGeneration` staleness check (`sessionVaultCrypto.js:326-329`), setting
 `sessionSaltB64`, clearing `sessionPassword`, and `foreignSaltKeys.clear()`.
 Skipping the generation check would reintroduce the write-race that round 2 of
-#486 fixed in `setupVaultPassword`.
+PR `#486` fixed in `setupVaultPassword`.
 
 ### 3.4 `VaultUnlockModal` changes
 
@@ -237,8 +238,13 @@ module docstring.
 
 Not in `VaultUnlockModal`. Adding a "decoy password" field to the unlock modal
 would advertise the feature to anyone who coerces the user into opening the
-app. It belongs in the existing duress settings area (route `/security/duress`,
-which `StegoVaultDashboard.jsx:447` already links to):
+app. `StegoVaultDashboard.jsx:447` links to `/security/duress`, but that route
+does not exist — a dead link, pre-dating this PR, for an unrelated (stego
+image) decoy mechanism. Build a new, dedicated route instead:
+**`/security/vault-duress`**, wired into `App.jsx`'s route table and the
+sidebar (`Sidebar.jsx`, "Advanced Security" section, next to Dark Protocol) —
+this is the canonical route; do not reuse or repoint the dead
+`/security/duress` link:
 
 1. User enters the current vault password plus a new decoy password.
 2. Client generates a fresh decoy DEK and calls
@@ -284,10 +290,18 @@ security margin of the decoy.
 - `unlock` on slot 0 installs the DEK and calls `reportUnlockForSlot(_, 0, _)`.
 - `unlock` on slot 1 installs the decoy DEK and calls
   `reportUnlockForSlot(_, 1, _)`.
-- **Indistinguishability:** rendered DOM after a slot-0 unlock and after a
-  slot-1 unlock is identical. Assert on the serialized container, not on
-  hand-picked strings — a hand-picked assertion will not catch the next person
-  who adds a duress-conditional class name.
+- **Indistinguishability, scoped to `VaultUnlockModal` itself:** the
+  component's OWN rendered output after a slot-0 unlock and after a slot-1
+  unlock is identical — same success/error copy, same timing-relevant
+  markup, no duress-conditional class name or attribute. Assert on the
+  serialized container, not on hand-picked strings — a hand-picked assertion
+  will not catch the next person who adds one. This claim stops at the
+  modal's own DOM: it does NOT extend to the vault dashboard the app renders
+  next, which — per §7 and the known limitation already recorded on the
+  duress-setup screen — shows the real item list with each entry failing to
+  decrypt under the decoy DEK. That is a materially different, larger
+  problem (believable decoy contents) and is out of scope here; do not
+  read this bullet as claiming it is solved.
 - **Upgrade path:** a user with `vaultWrappedDEK` and no envelope unlocks
   successfully *and* has an envelope afterwards.
 - **Upgrade failure is non-fatal:** stub `provision` to throw; the unlock still
@@ -318,7 +332,10 @@ security margin of the decoy.
 - [ ] No master or decoy password appears in any request body on the unlock
       path (contract test).
 - [ ] Slot-0 and slot-1 unlocks are indistinguishable in endpoint, request byte
-      length, rendered DOM, and log output.
+      length, log output, and `VaultUnlockModal`'s own rendered DOM
+      (explicitly NOT the vault dashboard rendered after unlock — see §7 and
+      the duress-setup screen's own limitation notice for why that is a
+      separate, unsolved problem).
 - [ ] A decoy unlock creates a `DuressEvent`; a normal unlock does not.
 - [ ] An existing OAuth user with a wrapped DEK and no envelope is upgraded
       transparently on their next unlock, and a failed upgrade does not block
@@ -341,6 +358,8 @@ security margin of the decoy.
 | Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson (of the ORIGIN plan, `privacy-features-gap-remediation-plan.md` — not this plan's own §10). That ordering only prevents an orphaned token from a FAILED save; it does not by itself recover from registration failing AFTER a successful save. **Fixed in §9.2**: the failed token is retained and retried directly, never re-minted |
 | `installRawDek` drifts from `unlockWithVaultPassword`'s tail | Keep them adjacent in the file with a cross-reference comment; the generation-check assertion is part of the unit tests. **Extended in §10.1**: the drift risk was not hypothetical — `installRawDek`'s OWN generation bump ran too late to catch a race that started before it was even called, since its slow sibling (`unlockEnvelopeStore.open()`) lives in a different module and has no way to participate in the in-module bump-before/check-after pattern by itself |
 | A user sets the decoy password equal to the real vault password | `VaultDuressSetup.jsx`'s form already rejected this client-side, but `unlockEnvelopeStore.setDecoySlot()` itself did not — any other caller could bypass it and silently create an inert decoy (both slots decrypt under the one shared password, and `decode()` always resolves ties to slot 0, so the "decoy" password would just open the real vault). **Fixed in §10.4**: rejected in the service layer too, before any decode/re-encode work |
+| A decoy session's writes permanently corrupt a row in the real vault | The most serious risk found across all three review rounds. The decoy slot reuses the real slot's device salt (§3.2), so a v2 item written while a decoy DEK is installed is encrypted under that DEK but stamped with the real salt — `keyForSalt`'s matching-salt fast path later hands the REAL session's DEK to decrypt it, an unrecoverable AES-GCM failure. **Fixed in §11.5**: `sessionVaultCrypto.encryptItem` refuses to write for the lifetime of any session `installRawDek` marked as decoy (`isDecoySession()`); this is a write-time gate, not a salt change, because OAuth/envelope sessions have no password to re-derive a foreign-salt key from in the first place |
+| A malformed-but-valid-base64 slot payload skips the corrupt-envelope fallback | `parseSlotPayload` used to accept any base64 `dek`; a wrong-length one only failed later, in `installRawDek`, outside the window §9.1's fallback tags as `envelopeUnusable`. **Fixed in §11.6**: length-checked inside `parseSlotPayload` itself, so the failure happens where the existing fallback already catches it |
 
 ---
 
@@ -376,8 +395,7 @@ found in the actual PR #489 diff were real (verified against the code, not
 taken on the bot's word) and are now fixed. Recorded here so this plan stays
 the accurate description of what shipped, not just what was drafted.
 
-### 9.1 §3.4 `unlock` mode had no fallback for a corrupt (not just missing)
-### envelope
+### 9.1 §3.4 `unlock` mode had no fallback for a corrupt (not just missing) envelope
 
 `hasEnvelope(userId)` (`unlockEnvelopeStore.js`) only checks that
 `localStorage` HAS a value for the key — it never attempts to decode it. §6's
@@ -404,8 +422,7 @@ that must stay a normal retry, not a route into the legacy path. 4 new tests
 in `VaultUnlockModal.test.jsx` cover invalid base64, `MalformedBlobError`,
 the no-fallback-on-wrong-password case, and the no-wrapped-key dead end.
 
-### 9.2 §3.6 decoy setup had no recovery when registration failed AFTER a
-### successful save
+### 9.2 §3.6 decoy setup had no recovery when registration failed AFTER a successful save
 
 §3.6 step 3's ordering (save the envelope, register the token only after)
 correctly prevents orphaning a token when the SAVE fails. It does not, by
@@ -447,8 +464,7 @@ A second `@coderabbitai full review` on the same PR (after §9's fixes were
 pushed) found 4 more issues — one of them the most serious found on this PR
 so far. Verified against current code before fixing, same discipline as §9.
 
-### 10.1 A session change during `unlockEnvelopeStore.open()` could resurrect
-### a stale session
+### 10.1 A session change during `unlockEnvelopeStore.open()` could resurrect a stale session
 
 `open()` runs two Argon2id derivations before resolving — §3.7 already notes
 this can take over a second combined. `runEnvelopeUnlock()` then called
@@ -494,8 +510,7 @@ propagates without triggering the fallback (asserting
 `unlockWithVaultPassword` and `reportUnlockForSlot` are both never called),
 and the generation token is reserved before `open()` is called, not after.
 
-### 10.2 A decoy password equal to the real vault password silently makes
-### the decoy inert
+### 10.2 A decoy password equal to the real vault password silently makes the decoy inert
 
 `hiddenVaultEnvelope`'s `deriveSlotKey` bakes the slot index into the salt
 (a domain tag), so the same password string normally derives two DIFFERENT
@@ -520,8 +535,7 @@ already follows elsewhere in this codebase. New regression test in
 `unlockEnvelopeStore.test.js` asserts both the rejection and that the
 stored envelope is byte-unchanged afterward.
 
-### 10.3 The decoy-setup screen's own intro copy contradicted its own
-### limitation notice two paragraphs later
+### 10.3 The decoy-setup screen's own intro copy contradicted its own limitation notice two paragraphs later
 
 `VaultDuressSetup.jsx` claimed a decoy unlock "opens a separate, empty decoy
 vault" and that "the app behaves identically either way, so there is
@@ -539,8 +553,7 @@ very next paragraph disproves. No test added — this was a copy-only fix and
 CodeRabbit's own finding did not ask for coverage here, unlike the other
 three.
 
-### 10.4 `docs/onion-sync-transport-phases-2-4-plan.md`: A.5's own fix from
-### §9.3 had introduced a NEW, worse bug
+### 10.4 `docs/onion-sync-transport-phases-2-4-plan.md`: A.5's own fix from §9.3 had introduced a NEW, worse bug
 
 The prior round's A.5 fix (§9.3, "getCapabilities stays on the clearnet
 service, always") solved the chicken-and-egg problem it targeted but broke
@@ -571,8 +584,7 @@ porting the PRE-this-fix web gate to mobile would have carried the same bug
 forward, since mobile has the identical separate-process shape. See that
 document's own A.5 and B.3 for the full text.
 
-### 10.5 `docs/onion-sync-transport-phases-2-4-plan.md`: neither of B.3's
-### proposed SOCKS5 libraries actually provides HTTP-over-SOCKS5
+### 10.5 `docs/onion-sync-transport-phases-2-4-plan.md`: neither of B.3's proposed SOCKS5 libraries actually provides HTTP-over-SOCKS5
 
 A separate, unrelated finding in the same document: B.3 point 5 offered
 NetCipher's `StrongOkHttpClientBuilder` or `react-native-tcp-socket` as
@@ -587,8 +599,7 @@ corrected approach bypasses NetCipher's builder and uses OkHttp's native
 ...))`) behind a small custom native module — a real, complete stack, not
 two incomplete ones presented as alternatives.
 
-### 10.6 `docs/onion-sync-transport-phases-2-4-plan.md`: PR C's unlinkability
-### claim contradicted its own qualification two sections later
+### 10.6 `docs/onion-sync-transport-phases-2-4-plan.md`: PR C's unlinkability claim contradicted its own qualification two sections later
 
 §C.2 point 5 already said correctly that the server can still correlate
 issuance batch size, redemption timing, and sync payload size. §C.5's
@@ -600,3 +611,151 @@ an absolute "cannot be linked." Applies equally to any future UI copy for
 this feature: the Phase 1 discipline of never claiming more than the
 architecture backs (see `onionSyncService.js`'s own docstring) extends to
 this primitive too.
+
+---
+
+## 11. Implementation status — third CodeRabbit review round (2026-08-25)
+
+A third `@coderabbitai full review` found 7 more issues. Verified against
+current code before fixing. One of these (11.5) is a genuine security-severity
+fix — permanent data corruption of the real vault, not merely a UX gap.
+
+### 11.1 `docs/onion-sync-transport-phases-2-4-plan.md`: the onion origin was specified as `https://`, but the onion listener is plaintext
+
+`backend-onion` in `docker-compose.yml` runs plain `daphne -b 0.0.0.0 -p 8443
+...` — no `-e ssl:...`, no certificate. An `https://<addr>.onion` request
+would fail its TLS handshake before reaching the app. Fixed to `http://`,
+with an explanation of why this is correct rather than a workaround: Tor's
+own onion-service circuit already provides end-to-end encryption and the
+`.onion` address is itself self-authenticating, so plaintext HTTP over a
+genuine onion circuit is the normal pattern for hidden services — layering
+HTTPS on top would need an explicit, separately-tested TLS terminator to
+mean anything, not just a changed URL scheme.
+
+### 11.2 `docs/privacy-features-gap-remediation-plan.md`: the ORIGIN plan's own Phase 2/3 summary still described the pre-hardening design
+
+Two sentences in the origin plan (written before the detailed carry-over
+plans existed) directly contradicted the later, reviewed design:
+Phase 2 said "expose a SOCKS5 proxy to the renderer" — the detailed plan's
+A.4 explicitly rejects this ("The renderer must not gain network
+privileges. Keep the fetch in the main process.") for the same reason a
+compromised renderer with raw SOCKS5 access could reach anything on the
+circuit, not just `vault_sync`. Phase 3 said "iOS via an embedded Tor
+library" — the detailed plan's B.2 defers iOS entirely (no Orbot
+equivalent, App Store review risk). Both fixed with a superseded-by note
+pointing at the detailed plan, rather than silently rewriting history.
+
+### 11.3 `docs/vault-unlock-envelope-integration-plan.md` (this file): markdownlint MD040/MD018, plus a self-inflicted MD022 defect found while fixing them
+
+The specific findings (missing fence languages at 4 blocks; bare `#486` at
+the start of two wrapped lines, read by MD018 as a malformed heading) were
+fixed as asked. While verifying with `markdownlint-cli2` directly rather
+than trusting the fix by inspection alone, a separate, unflagged defect
+turned up: seven section headings from §9 and this file's own §10 had been
+authored as two adjacent `###` lines instead of one heading line-wrapped as
+plain text (e.g. `### 9.1 ... (not just missing)` immediately followed by
+`### envelope` as a SEPARATE heading) — a real authoring mistake from
+writing those sections in the two previous rounds, not something CodeRabbit
+flagged this time. Left in place, every markdown heading-extraction tool
+(including this repository's own table-of-contents tooling, if it has any)
+would show these as broken, truncated entries. Joined all seven into single
+heading lines.
+
+### 11.4 `docs/vault-unlock-envelope-integration-plan.md` §3.6: the plan described a route that was never the one actually built
+
+§3.6 said the decoy-password settings screen belongs at "the existing
+duress settings area (route `/security/duress`, which
+`StegoVaultDashboard.jsx:447` already links to)". Verified against
+`App.jsx` and `Sidebar.jsx`: the ACTUAL implementation is
+`/security/vault-duress`, a new route built from scratch — because, as
+recorded already in this repo's own implementation history,
+`/security/duress` is a dead link (pre-dating this PR, for an unrelated
+stego-image decoy mechanism) with no page behind it. The plan text had
+simply never been updated to match what was actually built. Fixed to
+describe the real route and state plainly that `/security/duress` is a
+dead link, not something to repoint.
+
+### 11.5 `frontend/src/services/hiddenVault/unlockEnvelopeStore.js`: a decoy-session write permanently corrupts a row in the REAL vault — the most serious finding across all three rounds
+
+`setDecoySlot()` stamps the decoy slot with the SAME device salt as the
+real slot (`realSaltB64` — reused deliberately, per that code's own
+comment, since there was no reason at the time to think it needed to
+differ). Traced forward, not just at the point CodeRabbit flagged: when a
+decoy session is active (`installRawDek` installed the decoy DEK), the
+existing v2 write path (`VaultContext`'s `addItem`/`updateItem`, both
+routed through `encryptEnvelope` → `sessionVaultCrypto.encryptItem` for any
+OAuth/envelope session, since those never carry a v3 key) has no gate
+beyond "is there a session key" — so a new item added during a decoy
+session gets encrypted under the DECOY DEK while `encryptItem` stamps it
+with `sessionSaltB64`, which is the REAL slot's salt. When the REAL session
+later encounters that item, `keyForSalt`'s matching-salt fast path hands it
+the REAL DEK — an AES-GCM authentication failure, because the item was
+never encrypted with that key. The item becomes **permanently unreadable**,
+a garbage row injected into the ONE shared, server-side item list, with no
+way to recover it (the decoy DEK that could decrypt it is never persisted
+anywhere outside that already-superseded decoy envelope).
+
+This is materially worse than the already-disclosed, accepted limitation
+(§7, and the duress-setup screen's own notice) that a decoy unlock shows
+the real item list with existing entries failing to decrypt — that
+limitation is about *visibility*, this bug is about *silent, irreversible
+data loss* triggered by ordinary use of the app while in a decoy session,
+whether by the coerced user or a coercer probing what the app can do.
+Changing the decoy slot's salt alone would NOT have fixed it: OAuth/envelope
+sessions never set `sessionPassword` (see that field's own comment), so
+`keyForSalt` already falls through to `sessionKey` for ANY foreign salt in
+this session shape — the failure is structural, not a salt-choice bug, and
+the actual fix has to stop the write, not relabel it.
+
+**Fix:** `sessionVaultCrypto.js` adds a `sessionIsDecoy` flag, set by a new
+optional 5th parameter on `installRawDek(dekBytes, saltB64, userId,
+expectedGeneration, isDecoy)`, exported as `isDecoySession()`, and reset by
+`clearSessionKey()`. `encryptItem()` refuses to write — throwing before any
+crypto runs — whenever `sessionIsDecoy` is true. `VaultUnlockModal.jsx`'s
+`runEnvelopeUnlock` passes `slotIndex !== 0` as `isDecoy` when installing
+the DEK, so this engages automatically the moment a decoy unlock succeeds,
+with no separate wiring needed elsewhere. New test file
+`sessionVaultCrypto.decoySession.test.js` (8 tests, real WebCrypto/
+localStorage, no mocks) covers the flag's lifecycle, the write refusal, that
+a real session is unaffected, and — using real encrypt/decrypt round trips
+rather than just asserting the throw — that the salt collision this fix
+prevents is a genuine, reproducible corruption, not a hypothetical one.
+
+**Deliberately not attempted:** giving reads a friendlier "you're in a
+decoy session" indicator, or making the write-refusal message
+indistinguishable from an unrelated save failure. Both are product/UX
+decisions belonging with the "believable decoy contents" work §7 already
+defers; this fix's scope is stopping the corruption, not polishing what a
+decoy session feels like to use.
+
+### 11.6 `frontend/src/services/hiddenVault/unlockEnvelopeStore.js`: `parseSlotPayload` didn't validate the decoded DEK's length
+
+A payload whose `dek` field was valid base64 but decoded to something other
+than 32 bytes passed `parseSlotPayload` unchanged, and only failed later, in
+`sessionVaultCrypto.installRawDek`'s own length guard — which runs AFTER
+`unlockEnvelopeStore.open()` has already returned successfully.
+`VaultUnlockModal.jsx`'s `runEnvelopeUnlock` only tags failures thrown
+*from* `open()` itself as `envelopeUnusable` (§10.1's fix), so this failure
+silently skipped the legacy wrapped-DEK fallback and left the user stuck,
+despite this being exactly the "stored envelope is corrupt" case that
+fallback exists to handle. Fixed: `parseSlotPayload` now checks
+`dekBytes.byteLength === 32` itself and throws `MalformedSlotPayloadError`
+for anything else, so the failure happens inside `open()`'s call stack
+where the existing fallback logic already catches it — no change needed to
+`VaultUnlockModal.jsx` at all. New regression test hand-crafts a payload
+with a 16-byte `dek` via `encode()`/`jsonToBytes()` directly (bypassing
+`provision()`'s own input guard on purpose) and asserts `open()` rejects
+with `MalformedSlotPayloadError`.
+
+### 11.7 The DOM-indistinguishability claim (§3.5, §5) was broader than what is actually true or tested
+
+"Rendered DOM after a slot-0 unlock and after a slot-1 unlock is identical"
+reads as an app-wide claim, but it is only true — and only tested — for
+`VaultUnlockModal`'s OWN rendered output. The vault dashboard the app
+renders next is NOT identical between the two cases (§7's own disclosed
+limitation: a decoy session shows the real item list with each entry
+failing to decrypt). Narrowed both the test-guidance bullet and the
+acceptance criterion to explicitly scope the claim to `VaultUnlockModal`
+itself and cross-reference the limitation for everything downstream of it,
+so a future reader cannot mistake "the modal looks the same" for "the app
+looks the same."

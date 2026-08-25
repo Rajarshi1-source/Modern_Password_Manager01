@@ -279,8 +279,16 @@ backend app — the backend already supports this operation.
 `desktop/` is Electron and can own a Tor process, which the browser cannot.
 
 1. Bundle `tor` (or `arti`) as a sidecar; manage lifecycle in `desktop/src/main/`.
-2. Expose a SOCKS5 proxy to the renderer; route the sync request — and only it,
-   at first — through the `.onion` from `getCapabilities()`.
+2. **Keep the SOCKS5 proxy, and the network fetch itself, in the main
+   process — never exposed to the renderer.** (Superseded from an earlier
+   draft of this line, which said to expose the proxy to the renderer; the
+   detailed design in `docs/onion-sync-transport-phases-2-4-plan.md` A.4
+   rejected that as an unnecessary widening of the renderer's privileges — a
+   compromised or buggy renderer with raw SOCKS5 access could reach anything
+   reachable from this machine's Tor circuit, not just `vault_sync`. Route
+   the sync request — and only it, at first — through the `.onion` from
+   `getCapabilities()`, via a narrow IPC channel the main process itself
+   validates against a fixed operation allowlist.)
 3. Reuse the Phase 1 service contract verbatim so the renderer code is identical
    across web and desktop; only the transport differs.
 4. Health/bootstrap UI: reuse `DarkProtocolDashboard.jsx`, which already renders
@@ -288,9 +296,16 @@ backend app — the backend already supports this operation.
 
 #### Phase 3 — mobile
 
-Android via Orbot (`TorService` / `NetCipher`); iOS via an embedded Tor library.
-Same service contract as Phases 1–2, wiring `mobile/src/services/DarkProtocolService.js`'s
-already-present-but-unused `proxyVaultOperation`.
+Android via Orbot (`TorService` / `NetCipher`). **iOS deferred, control
+disabled there** (superseded from an earlier draft of this line, which said
+"iOS via an embedded Tor library" — the detailed design in
+`docs/onion-sync-transport-phases-2-4-plan.md` B.2 found no Orbot equivalent
+for iOS; embedding Tor.framework carries App Store review risk and ongoing
+maintenance burden disproportionate to shipping this phase, so iOS ships
+with the sync-privacy control visibly disabled rather than a half-built
+transport). Same service contract as Phases 1–2, wiring
+`mobile/src/services/DarkProtocolService.js`'s already-present-but-unused
+`proxyVaultOperation`.
 
 #### Phase 4 — close the identity-correlation gap (optional, larger)
 
@@ -470,15 +485,24 @@ onion case):
   envelope integration. Note that plan's §2: the migration this paragraph
   worried about is device-local (the wrapped DEK lives in `localStorage`, not
   on the server), so it is smaller than assumed here. Implemented in PR #489;
-  that plan's own §9 and §10 (two CodeRabbit review rounds) record six
-  review-found bugs — a corrupt-envelope lockout, an orphaned duress token on
-  registration failure, a stale-session race across the envelope decode, a
-  decoy password silently equal to the real one, a self-contradicting UI
-  copy claim, and (in the OTHER carry-over plan, cross-referenced from §10.4
-  and §10.5) an onion-availability check that would never engage on desktop
-  or mobile plus two non-viable SOCKS5 library choices — and their fixes.
-  Read both sections before assuming §3's original text is the literal
-  shipped behavior.
+  that plan's own §9, §10, and §11 (three CodeRabbit review rounds) record
+  thirteen review-found bugs, the most serious of which (§11.5) is real data
+  corruption: a decoy session's writes were encrypted under the decoy DEK but
+  stamped with the real slot's salt, so the real session would later try —
+  and permanently fail — to decrypt them, injecting an unrecoverable garbage
+  row into the one shared, server-side item list. The others span a
+  corrupt-envelope lockout, an orphaned duress token on registration failure,
+  a stale-session race across the envelope decode, a decoy password silently
+  equal to the real one, a self-contradicting UI copy claim, a stale route
+  reference, an over-broad indistinguishability claim, and (in the OTHER
+  carry-over plan, cross-referenced from §10.4, §10.5, and §11.1) an
+  onion-availability check that would never engage on desktop or mobile, two
+  non-viable SOCKS5 library choices, a `https://` onion-origin scheme that
+  cannot work against this project's own plaintext listener, and a stale
+  Phase 2/3 summary in THIS document's own §4.1 that still described the
+  pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
+  corrected above. Read §9, §10, and §11 of the carry-over plan before
+  assuming its own §3's original text is the literal shipped behavior.
 
 ## 6. Acceptance criteria
 

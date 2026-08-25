@@ -143,15 +143,16 @@ describe('unlock mode — envelope already provisioned', () => {
     await submitPassword(getByLabelText, getByRole, 'real-password');
 
     await waitFor(() => expect(onUnlocked).toHaveBeenCalled());
-    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(DEK, 'salt-x', USER_ID, 1);
+    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(DEK, 'salt-x', USER_ID, 1, false);
     expect(reportUnlockForSlot).toHaveBeenCalledWith(TOKEN, 0, { __duress_signal: null });
     expect(sessionVaultCrypto.unlockWithVaultPassword).not.toHaveBeenCalled();
   });
 
-  test('slot 1 (decoy) installs the decoy DEK and reports with slotIndex 1 and the real token', async () => {
+  test('slot 1 (decoy) installs the decoy DEK, reports with slotIndex 1 and the real token, and marks the session as decoy', async () => {
+    const decoyDek = new Uint8Array(32).fill(9);
     unlockEnvelopeStore.open.mockResolvedValue({
       slotIndex: 1,
-      dekBytes: new Uint8Array(32).fill(9),
+      dekBytes: decoyDek,
       saltB64: 'salt-x',
       duressToken: 'the-real-duress-token',
     });
@@ -162,6 +163,10 @@ describe('unlock mode — envelope already provisioned', () => {
 
     await waitFor(() => expect(onUnlocked).toHaveBeenCalled());
     expect(reportUnlockForSlot).toHaveBeenCalledWith(TOKEN, 1, { __duress_signal: 'the-real-duress-token' });
+    // isDecoy=true is the flag sessionVaultCrypto uses to refuse writes for
+    // this session (see sessionVaultCrypto.js's encryptItem) -- this is the
+    // regression guard that it is actually threaded through from slotIndex.
+    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(decoyDek, 'salt-x', USER_ID, 1, true);
   });
 
   test('a wrong password surfaces the identical string regardless of the underlying error', async () => {
@@ -322,7 +327,7 @@ describe('unlock mode — the session changes while open() is pending', () => {
 
     await waitFor(() => expect(sessionVaultCrypto.installRawDek).toHaveBeenCalled());
     expect(callOrder).toEqual(['reserve', 'open']);
-    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(DEK, 'salt-x', USER_ID, 7);
+    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(DEK, 'salt-x', USER_ID, 7, false);
   });
 });
 

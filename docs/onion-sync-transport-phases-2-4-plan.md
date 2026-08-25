@@ -186,7 +186,19 @@ New `desktop/src/main/onionTransport.js`:
   A.5 below for exactly which service that clearnet call goes through).
 - **Only `vault_sync` at first**, as §4.1 Phase 2 step 2 says. Extending to the
   rest of `VAULT_OPERATION_ROUTES` is a follow-up.
-- Do **not** set `Host` manually — requesting `https://<addr>.onion/...` sets it
+- **Use `http://<addr>.onion/...`, not `https://`.** `backend-onion` in
+  `docker-compose.yml` runs plain `daphne -b 0.0.0.0 -p 8443 ...` with no `-e
+  ssl:...` — there is no TLS certificate on this listener, so an `https://`
+  request would fail its TLS handshake before ever reaching the app. This is
+  not a shortcut: Tor's own onion-service circuit already provides
+  end-to-end encryption and the `.onion` address is itself
+  self-authenticating (a hash of the service's public key), which is exactly
+  why plaintext HTTP over a genuine onion circuit is the normal, expected
+  pattern for hidden services — layering HTTPS on top would be redundant
+  encryption for no additional guarantee unless an explicit TLS terminator
+  is deliberately added and tested (not assumed). Apply the same `http://`
+  scheme to the mobile client (B.3) once it exists.
+- Do **not** set `Host` manually — requesting `http://<addr>.onion/...` sets it
   correctly, and that is condition 4 of `request_is_onion_ingress`. A
   hand-written `Host` is the single easiest way to get this subtly wrong.
 - **Fail closed on the transport itself, not just on the request.** Set

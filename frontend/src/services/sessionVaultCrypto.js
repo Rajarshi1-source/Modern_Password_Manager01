@@ -53,6 +53,15 @@ const WRAPPED_DEK_STORAGE_KEY = 'vaultWrappedDEK';
 
 let sessionKey = null;
 let sessionSaltB64 = null;
+// True only when `installRawDek` installed the DECOY slot's DEK (path C).
+// `encryptItem` refuses to write while this is set -- see its own comment.
+// Without this, a new item added during a decoy session would be encrypted
+// under the decoy DEK but stamped with the REAL slot's salt (setDecoySlot
+// reuses it, see unlockEnvelopeStore.js), and the real session would later
+// try to open it with the REAL DEK because `keyForSalt` fast-paths on a
+// matching salt -- an AES-GCM auth failure that permanently corrupts a row
+// in the one shared, server-side item list. Never set by any other path.
+let sessionIsDecoy = false;
 // Retained ONLY for path (A) (direct derivation), so `decryptItem` can derive a
 // key for an envelope written under a DIFFERENT salt than this device's -- see
 // `keyForSalt`. This does not widen the master password's blast radius: the
@@ -468,8 +477,12 @@ export const reserveSessionGeneration = () => ++sessionGeneration;
  *   to the original self-contained behaviour (generation captured and
  *   checked entirely within this call) — used only by callers with no slow
  *   step of their own to protect.
+ * @param {boolean} [isDecoy] - true when `dekBytes` came from the hidden-vault
+ *   envelope's DECOY slot (unlockEnvelopeStore.open()'s `slotIndex === 1`).
+ *   Sets `sessionIsDecoy`, which `encryptItem` refuses to write under — see
+ *   that flag's own comment for why this must never be left to default true.
  */
-export const installRawDek = async (dekBytes, saltB64, userId, expectedGeneration = null) => {
+export const installRawDek = async (dekBytes, saltB64, userId, expectedGeneration = null, isDecoy = false) => {
   if (!userId) throw new Error('installRawDek: userId required');
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
     throw new Error('installRawDek: dekBytes must be a 32-byte Uint8Array');
@@ -492,6 +505,7 @@ export const installRawDek = async (dekBytes, saltB64, userId, expectedGeneratio
   }
   sessionSaltB64 = saltB64;
   sessionKey = dek;
+  sessionIsDecoy = isDecoy;
   // See `setupVaultPassword` — path (B)/(C) have no password to memoize against.
   sessionPassword = null;
   foreignSaltKeys.clear();
@@ -503,12 +517,16 @@ export const installRawDek = async (dekBytes, saltB64, userId, expectedGeneratio
 
 export const hasSessionKey = () => sessionKey !== null;
 
+/** True only for a session installed from the hidden-vault envelope's decoy slot. */
+export const isDecoySession = () => sessionIsDecoy;
+
 export const clearSessionKey = () => {
   // Invalidates any in-flight init/setup/unlock call -- see `sessionGeneration`.
   sessionGeneration += 1;
   sessionKey = null;
   sessionSaltB64 = null;
   sessionPassword = null;
+  sessionIsDecoy = false;
   foreignSaltKeys.clear();
 };
 
@@ -570,10 +588,25 @@ const keyForSalt = async (saltB64) => {
  * Encrypt a plain JS object into an `encrypted_data` string.
  * Throws if no session key is initialized — callers MUST handle this
  * (e.g. prompt the user to log in with password, or show an error).
+ *
+ * Also throws for a decoy session (`isDecoySession()`). setDecoySlot stamps
+ * the decoy slot with the SAME salt as the real slot
+ * (unlockEnvelopeStore.js), so a new item written here would be encrypted
+ * under the decoy DEK but carry the real slot's salt — `keyForSalt`'s
+ * matching-salt fast path would later hand the REAL session's DEK to
+ * decrypt it, an AES-GCM failure that permanently corrupts a row in the one
+ * shared, server-side item list. There is no salt this function could stamp
+ * instead that fixes this: OAuth/envelope sessions never set
+ * `sessionPassword` (see its own comment), so ANY foreign salt already falls
+ * through to `sessionKey` in `keyForSalt` -- the failure is structural, not
+ * a salt-choice bug, so refusing the write here is the actual fix.
  */
 export const encryptItem = async (obj) => {
   if (!sessionKey) {
     throw new Error('Vault is locked: session encryption key is not initialized.');
+  }
+  if (sessionIsDecoy) {
+    throw new Error('Vault is in a decoy session: new items cannot be saved.');
   }
   const iv = window.crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(obj));
@@ -668,6 +701,7 @@ export default {
   reserveSessionGeneration,
   installRawDek,
   hasSessionKey,
+  isDecoySession,
   clearSessionKey,
   encryptItem,
   decryptItem,

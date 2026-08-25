@@ -146,8 +146,19 @@ const parseSlotPayload = (payloadBytes) => {
   if (!obj || obj.v !== SLOT_PAYLOAD_VERSION || typeof obj.dek !== 'string' || typeof obj.salt !== 'string') {
     throw new MalformedSlotPayloadError('Slot payload has an unexpected shape.');
   }
+  // Length-checked here, not left for sessionVaultCrypto.installRawDek's own
+  // 32-byte guard to catch: that guard runs AFTER unlockEnvelopeStore.open()
+  // has already returned, outside the window VaultUnlockModal's
+  // runEnvelopeUnlock tags `envelopeUnusable` on -- a wrong-length-but-
+  // valid-base64 dek would otherwise skip the legacy wrapped-DEK fallback
+  // entirely and lock the user out, even though this is exactly the same
+  // "stored envelope is corrupt" case the fallback exists to handle.
+  const dekBytes = fromB64(obj.dek);
+  if (dekBytes.byteLength !== 32) {
+    throw new MalformedSlotPayloadError('Slot payload dek is not 32 bytes.');
+  }
   return {
-    dekBytes: fromB64(obj.dek),
+    dekBytes,
     saltB64: obj.salt,
     duressToken: typeof obj.__duress_signal === 'string' ? obj.__duress_signal : null,
   };
