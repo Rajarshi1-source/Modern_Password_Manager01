@@ -461,6 +461,16 @@ deserves its own PR rather than being bolted onto this one. §4.4 orphan audit
 was also out of scope for this PR — since delivered in the PR #488 follow-up,
 see §4.4 and §21.
 
+Both remaining carry-overs now have their own plans, one PR each (three, in the
+onion case):
+
+- `docs/onion-sync-transport-phases-2-4-plan.md` — §4.1 Phase 2 (desktop Tor
+  sidecar), Phase 3 (mobile Orbot), Phase 4 (anonymous credentials).
+- `docs/vault-unlock-envelope-integration-plan.md` — §4.2 `VaultUnlockModal`
+  envelope integration. Note that plan's §2: the migration this paragraph
+  worried about is device-local (the wrapped DEK lives in `localStorage`, not
+  on the server), so it is smaller than assumed here.
+
 ## 6. Acceptance criteria
 
 - [x] `require_onion` sync fails closed; `prefer_onion` reports honest degradation
