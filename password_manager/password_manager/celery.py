@@ -641,9 +641,11 @@ app.conf.update(
 #   * `check_expired_deaddrops` -- THE hazard. Its query
 #     (`status__in=['pending','distributed','active'], expires_at__lt=now,
 #     is_active=True`) has no lower bound, so EVERY dead drop that has silently
-#     sat past its expiry is marked expired at once AND fires
-#     `notify_owner_deaddrop_expired.delay()` -- one real email per drop, in a
-#     single batch. Directly analogous to `process_pending_rotations`.
+#     sat past its expiry matches on the first tick -- but the task itself caps
+#     processing at `EXPIRE_BATCH_SIZE` (deaddrop_tasks.py) per tick, marking
+#     that many expired and firing `notify_owner_deaddrop_expired.delay()` --
+#     one real email per drop -- with the remainder deferred to later ticks
+#     rather than all at once. Directly analogous to `process_pending_rotations`.
 #   * `cleanup_old_access_logs` -- deletes DeadDropAccess/FragmentTransfer rows
 #     older than 90 days. Not user-visible, but the first tick deletes the
 #     entire accumulated backlog in one transaction; on a large table that is a
