@@ -47,7 +47,7 @@ import VaultUnlockModal from '../VaultUnlockModal';
 import sessionVaultCrypto from '../../../services/sessionVaultCrypto';
 import * as unlockEnvelopeStore from '../../../services/hiddenVault/unlockEnvelopeStore';
 import { reportUnlock, reportUnlockForSlot } from '../../../services/duressSignalService';
-import { WrongPasswordError } from '../../../services/hiddenVault/hiddenVaultEnvelope';
+import { WrongPasswordError, MalformedBlobError } from '../../../services/hiddenVault/hiddenVaultEnvelope';
 
 const USER_ID = 'user-1';
 const TOKEN = 'jwt-token';
@@ -191,6 +191,77 @@ describe('unlock mode — envelope already provisioned', () => {
     runB.unmount();
 
     expect(htmlAfterDecoy).toBe(htmlAfterReal);
+  });
+});
+
+describe('unlock mode — stored envelope is unusable, falls back to the legacy path', () => {
+  // Regression coverage for a CodeRabbit finding on PR #489: hasEnvelope()
+  // only checks that localStorage HAS a value, not that it decodes. A
+  // corrupt/truncated value previously selected internalMode: 'envelope' and
+  // surfaced the raw decode error with no way back in, even though the
+  // legacy wrapped-DEK record was perfectly usable.
+  beforeEach(() => {
+    unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+    sessionVaultCrypto.hasWrappedKey.mockReturnValue(true);
+    sessionVaultCrypto.unlockWithVaultPassword.mockResolvedValue(undefined);
+    sessionVaultCrypto.exportWrappedDekRaw.mockResolvedValue({ dekBytes: DEK, saltB64: 'legacy-salt' });
+    unlockEnvelopeStore.provision.mockResolvedValue(undefined);
+  });
+
+  test('invalid base64 in the stored envelope falls back to the wrapped-DEK record', async () => {
+    // Mirrors what atob() actually throws for a non-base64 string -- a
+    // native DOMException, not a WrongPasswordError.
+    unlockEnvelopeStore.open.mockRejectedValue(new DOMException('bad base64', 'InvalidCharacterError'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'legacy-password');
+
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalled());
+    expect(sessionVaultCrypto.unlockWithVaultPassword).toHaveBeenCalledWith('legacy-password', USER_ID);
+  });
+
+  test('a structurally corrupt (MalformedBlobError) envelope falls back to the wrapped-DEK record', async () => {
+    unlockEnvelopeStore.open.mockRejectedValue(new MalformedBlobError('bad magic'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'legacy-password');
+
+    await waitFor(() => expect(onUnlocked).toHaveBeenCalled());
+    expect(sessionVaultCrypto.unlockWithVaultPassword).toHaveBeenCalledWith('legacy-password', USER_ID);
+    // The fallback also re-provisions a fresh envelope, self-healing the
+    // corruption rather than leaving the bad blob in place for next time.
+    expect(unlockEnvelopeStore.provision).toHaveBeenCalled();
+  });
+
+  test('a genuine wrong password does NOT fall back -- it is a normal retry', async () => {
+    unlockEnvelopeStore.open.mockRejectedValue(new WrongPasswordError('no slot matched'));
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole, findByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'wrong-password');
+
+    const alert = await findByRole('alert');
+    expect(alert).toHaveTextContent('Incorrect vault password.');
+    expect(onUnlocked).not.toHaveBeenCalled();
+    expect(sessionVaultCrypto.unlockWithVaultPassword).not.toHaveBeenCalled();
+  });
+
+  test('with no wrapped key to fall back to, the original envelope error surfaces', async () => {
+    sessionVaultCrypto.hasWrappedKey.mockReturnValue(false);
+    unlockEnvelopeStore.open.mockRejectedValue(new MalformedBlobError('bad magic'));
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole, findByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'whatever');
+
+    const alert = await findByRole('alert');
+    expect(alert).toHaveTextContent('bad magic');
+    expect(onUnlocked).not.toHaveBeenCalled();
+    expect(sessionVaultCrypto.unlockWithVaultPassword).not.toHaveBeenCalled();
   });
 });
 

@@ -1,5 +1,9 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
+**Implemented in PR #489, then hardened against two review-found bugs — see
+§9 for what changed and why before relying on §3's original design as the
+literal shipped behavior.**
+
 Deferred from PR #486 (`docs/privacy-features-gap-remediation-plan.md` §4.2,
 §5 "Not delivered"). PR #486 shipped the backend and the service layer; the
 main unlock modal was left on the single-password path because provisioning
@@ -331,10 +335,10 @@ security margin of the decoy.
 | Risk | Mitigation |
 |---|---|
 | Double Argon2id makes unlock feel broken on low-end devices | §3.7 — measure, Worker if needed, never weaken params |
-| Losing `vaultUnlockEnvelope:<userId>` locks the user out | It never becomes the only copy: `setupVaultPassword`'s wrapped record is still written and `unlockWithVaultPassword` still works. Envelope-missing falls back to the legacy path — that IS `upgrade` mode |
+| Losing OR corrupting `vaultUnlockEnvelope:<userId>` locks the user out | It never becomes the only copy: `setupVaultPassword`'s wrapped record is still written and `unlockWithVaultPassword` still works. A MISSING envelope always fell back to the legacy path (`upgrade` mode). A PRESENT-but-corrupt one (bad base64, truncated write, `MalformedBlobError`) did NOT originally — `hasEnvelope()` only checks for a value, not that it decodes. **Fixed in §9.1**: `runEnvelopeUnlockWithFallback()` now falls back to `upgrade` mode on any non-`WrongPasswordError` open failure, which also self-heals by re-provisioning a fresh envelope |
 | A future contributor short-circuits `decode()` for speed | Comment at the call site and above the attempts loop, plus the DOM-equality test |
 | Decoy DEK encrypts nothing, so the decoy vault looks empty and unconvincing | Out of scope here — populating a believable decoy is a product decision (§7). An empty decoy still beats no decoy, but UI copy must not claim it is convincing |
-| Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson |
+| Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson. That ordering only prevents an orphaned token from a FAILED save; it does not by itself recover from registration failing AFTER a successful save. **Fixed in §9.2**: the failed token is retained and retried directly, never re-minted |
 | `installRawDek` drifts from `unlockWithVaultPassword`'s tail | Keep them adjacent in the file with a cross-reference comment; the generation-check assertion is part of the unit tests |
 
 ---
@@ -361,3 +365,75 @@ security margin of the decoy.
 - `password_manager/hidden_vault/SPEC.md` — blob format and slot semantics
 - `docs/adaptive-password-zk-remediation-plan.md` §1-2 — the ZK invariant
 - `docs/onion-sync-transport-phases-2-4-plan.md` — the other #486 carry-over
+
+---
+
+## 9. Implementation status — PR #489 CodeRabbit review fixes (2026-08-25)
+
+§3 above describes the design as originally written. Two gaps CodeRabbit
+found in the actual PR #489 diff were real (verified against the code, not
+taken on the bot's word) and are now fixed. Recorded here so this plan stays
+the accurate description of what shipped, not just what was drafted.
+
+### 9.1 §3.4 `unlock` mode had no fallback for a corrupt (not just missing)
+### envelope
+
+`hasEnvelope(userId)` (`unlockEnvelopeStore.js`) only checks that
+`localStorage` HAS a value for the key — it never attempts to decode it. §6's
+risk table already covered a MISSING envelope (falls back to `upgrade` mode,
+by construction, since `internalMode` is only `'envelope'` when
+`hasEnvelope()` is true). It did not cover a PRESENT but corrupt one: a
+truncated `localStorage` write, or any other bit-level corruption, still
+makes `hasEnvelope()` return `true`, permanently selecting `internalMode:
+'envelope'` — and then `unlockEnvelopeStore.open()` throws something that is
+NOT `WrongPasswordError` (a raw `DOMException` from `atob()` on invalid
+base64, or `MalformedBlobError` from a bad magic/version/tier), which
+`VaultUnlockModal.jsx` had no branch for. The user was stuck seeing a
+confusing technical error message with no way back into a vault the legacy
+wrapped-DEK record could still open.
+
+**Fix:** `VaultUnlockModal.jsx` adds `runEnvelopeUnlockWithFallback()`. On any
+`open()` failure other than `WrongPasswordError`, if
+`sessionVaultCrypto.hasWrappedKey(userId)` is true, it runs `runUpgrade()`
+instead of surfacing the raw error — which also re-provisions a fresh
+envelope on success, self-healing the corruption rather than just routing
+around it once. A genuine `WrongPasswordError` (the envelope decoded fine;
+neither slot's password matched) is explicitly excluded from the fallback —
+that must stay a normal retry, not a route into the legacy path. 4 new tests
+in `VaultUnlockModal.test.jsx` cover invalid base64, `MalformedBlobError`,
+the no-fallback-on-wrong-password case, and the no-wrapped-key dead end.
+
+### 9.2 §3.6 decoy setup had no recovery when registration failed AFTER a
+### successful save
+
+§3.6 step 3's ordering (save the envelope, register the token only after)
+correctly prevents orphaning a token when the SAVE fails. It does not, by
+itself, handle the token being orphaned when the SAVE succeeds and the
+SUBSEQUENT `registerSignalToken()` call fails (a transient network error,
+the server being down). In that case the decoy password was already live —
+the envelope was saved — but the alarm behind it was never registered
+server-side, so a real decoy unlock under duress would silently fail to
+raise it. The user saw a generic setup-failed error with no indication that
+part of the operation had actually already taken effect. A naive "just try
+again" retry made it worse: resubmitting calls `setDecoySlot()` again, which
+mints an entirely new random token via `generateSignalToken()`, permanently
+orphaning the first one rather than recovering it.
+
+**Fix:** `VaultDuressSetup.jsx` extracts `finishRegistration(token)` and adds
+`pendingDuressToken` state. On a registration failure, the exact token
+`setDecoySlot()` returned is retained (not discarded), the error message
+says explicitly that the alarm is not yet active, and a "Finish registration"
+button appears that calls `registerSignalToken` again with that SAME
+token — never re-running `setDecoySlot`. New test file
+`VaultDuressSetup.test.jsx` (5 tests; none existed before this fix) covers
+the full success path, the registration-failure-retains-token path, retry
+success, a failed retry staying retriable, and the wrong-password path not
+touching any of this.
+
+### 9.3 Eight unrelated doc-accuracy fixes, same review round
+
+The same CodeRabbit run also found 8 issues in
+`docs/onion-sync-transport-phases-2-4-plan.md` (§4.1 Phases 2-4, still
+unimplemented). Those are corrected directly in that document, not
+duplicated here — see its own text for the SocksPort/control-port/exit-path/
+electron-builder-macro/TOR_PROXY-allowlist/getCapabilities-sequencing fixes.

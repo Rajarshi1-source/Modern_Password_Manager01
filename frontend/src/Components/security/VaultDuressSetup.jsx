@@ -104,6 +104,14 @@ const VaultDuressSetup = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  // Set only when setDecoySlot() has already saved a new decoy token but
+  // registerSignalToken() then failed. The envelope on disk is live at that
+  // point -- the decoy password already opens it -- but the alarm behind it
+  // is not registered server-side, so a real decoy unlock would silently
+  // fail to raise it. Held here so "Finish registration" can retry with the
+  // EXACT SAME token; re-running setDecoySlot would mint a different random
+  // token and orphan this one permanently instead of recovering it.
+  const [pendingDuressToken, setPendingDuressToken] = useState(null);
 
   if (!isAuthenticated) {
     return (
@@ -133,10 +141,34 @@ const VaultDuressSetup = () => {
     setDecoyConfirm('');
   };
 
+  // Isolated so both the initial attempt and the retry button call the exact
+  // same registration + success/failure handling -- the only difference
+  // between them is where `token` comes from (freshly minted vs. recovered
+  // from `pendingDuressToken`). Never throws: a registration failure here is
+  // recoverable, not fatal to the flow, so it is handled in place rather than
+  // propagated to a caller that would just show a dead-end error.
+  const finishRegistration = async (token) => {
+    try {
+      await registerSignalToken(getAccessToken(), token);
+      setPendingDuressToken(null);
+      resetForm();
+      setSuccess(true);
+      setError('');
+    } catch {
+      setPendingDuressToken(token);
+      setError(
+        'Decoy password saved, but the alarm could not be registered -- it will '
+        + 'not fire on a decoy unlock until registration succeeds. Click '
+        + '"Finish registration" to retry.'
+      );
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess(false);
+    setPendingDuressToken(null);
 
     if (!vaultPassword || !decoyPassword) {
       setError('Both your current vault password and a new decoy password are required.');
@@ -168,15 +200,23 @@ const VaultDuressSetup = () => {
         vaultPassword,
         decoyPassword,
       });
-      await registerSignalToken(getAccessToken(), duressToken);
-      resetForm();
-      setSuccess(true);
+      await finishRegistration(duressToken);
     } catch (err) {
       if (err instanceof WrongPasswordError) {
         setError('Incorrect vault password.');
       } else {
         setError(err?.message || 'Failed to set up the decoy password.');
       }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRetryRegistration = async () => {
+    if (!pendingDuressToken) return;
+    setBusy(true);
+    try {
+      await finishRegistration(pendingDuressToken);
     } finally {
       setBusy(false);
     }
@@ -254,9 +294,15 @@ const VaultDuressSetup = () => {
         )}
 
         <div style={{ marginTop: '1.25rem' }}>
-          <button type="submit" style={buttonPrimary} disabled={busy}>
-            {busy ? 'Saving…' : 'Save decoy password'}
-          </button>
+          {pendingDuressToken ? (
+            <button type="button" style={buttonPrimary} onClick={handleRetryRegistration} disabled={busy}>
+              {busy ? 'Retrying…' : 'Finish registration'}
+            </button>
+          ) : (
+            <button type="submit" style={buttonPrimary} disabled={busy}>
+              {busy ? 'Saving…' : 'Save decoy password'}
+            </button>
+          )}
         </div>
       </form>
     </div>
