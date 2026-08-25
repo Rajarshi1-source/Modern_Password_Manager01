@@ -227,9 +227,11 @@ const VaultDuressSetup = () => {
       <h2>Vault duress protection</h2>
       <p style={{ color: '#6b7280' }}>
         Set up a second password for your vault. Entering it instead of your
-        real password opens a separate, empty decoy vault and silently alerts
-        your configured contacts — the app behaves identically either way, so
-        there is nothing on screen to give it away.
+        real password unlocks the decoy slot and silently alerts your
+        configured contacts. The unlock request itself is indistinguishable
+        from a normal one — same endpoint, same shape, same timing — but read
+        the limitation below before relying on what appears on screen
+        afterward.
       </p>
 
       <div style={noticeStyle}>

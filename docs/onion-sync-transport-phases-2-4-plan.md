@@ -241,25 +241,62 @@ Two small, additive changes, both in `frontend/src/services/`:
    `desktopOnionTransport.js` implements `proxyVaultOperation`, delegating to
    `window.electronAPI.tor.proxyVaultOperation` (which the main-process
    allowlist above gates to `vault_sync`).
-2. **`getCapabilities` stays on the clearnet service, always.** This is the
-   one place the original "swap the whole `darkProtocolService` import for a
-   desktop shim" sketch breaks: `isOnionSyncAvailable()` calls
-   `getCapabilities()` to learn `vault_proxy.available` and the `.onion`
-   address in the first place (A.4 above: "fetched over clearnet on the first
-   call and cached for the session"). If `getCapabilities` were ALSO routed
-   through the not-yet-connected onion transport, the very first call would
-   need the onion address to reach the endpoint that hands out the onion
-   address — a circular dependency with no first move. So only
-   `proxyVaultOperation` is selected per-platform; `getCapabilities` keeps
-   calling the web `darkProtocolService` unconditionally, on both web and
-   desktop. Change `onionSyncService`'s module-scope
-   `darkProtocolService` import (line 46) to two things instead of one
-   accessor: keep the existing import for `getCapabilities`, and add a
-   `getVaultProxyTransport()` accessor used only inside the `syncVault` branch
-   that calls `proxyVaultOperation`, returning the desktop shim when
-   `window.electronAPI?.isElectron` and the same web service otherwise. Add a
-   test for the first-call case specifically: no cached address yet, and the
-   capability fetch must still succeed.
+2. **`getCapabilities` stays on the clearnet service, always — but
+   `isOnionSyncAvailable()` must stop reading `vault_proxy.available` on any
+   platform that owns a separate transport.** This is the one place the
+   original "swap the whole `darkProtocolService` import for a desktop shim"
+   sketch breaks, and fixing HALF of it (routing only `getCapabilities` to
+   clearnet) creates a second, worse bug that CodeRabbit caught in review:
+   `isOnionSyncAvailable()` returns `Boolean(capabilities?.vault_proxy?.available)`,
+   and the server computes `vault_proxy.available` as `anonymity_active AND
+   request_is_onion_ingress` (`tor_service.py`) — true only when *this
+   specific request* arrived over the onion listener. A `getCapabilities`
+   call that always goes out over clearnet can therefore never make
+   `request_is_onion_ingress` true, so `vault_proxy.available` is
+   structurally always `false` on desktop, `isOnionSyncAvailable()` always
+   returns `false`, and desktop would never attempt the onion path at all —
+   Phase 2 would ship a sidecar that is never used.
+
+   The reason `vault_proxy.available` is the right gate for Phase 1 (web) and
+   the wrong one here: for a Tor-Browser user reaching the site AT its
+   `.onion` address, the page itself — and therefore its own
+   `getCapabilities()` call — already travels the onion route, so checking
+   "did THIS request arrive over onion ingress" is checking the same
+   transport the eventual `vault_sync` call will use. Desktop (and mobile,
+   see B.3 point 1) has no such thing as "the page is served from `.onion`";
+   the whole app is a separate process making its own transport decision per
+   call, so `getCapabilities` and `proxyVaultOperation` are never guaranteed
+   to travel the same route, and gating on the FORMER's per-request ingress
+   status tells you nothing true about the LATTER.
+
+   Fix: `isOnionSyncAvailable()` branches on whether a non-web transport is
+   selected for this platform (see the `getVaultProxyTransport()` accessor
+   below). When one is: check `capabilities?.anonymity?.available &&
+   Boolean(capabilities?.anonymity?.onion_address)` instead — the
+   deployment-level "is Tor even up and does it have a published address"
+   signal, which does NOT require this particular clearnet request to have
+   arrived over onion. When none is (plain web): keep the existing
+   `vault_proxy.available` check unchanged — Phase 1's behaviour and tests
+   are untouched. The REAL per-request verification for desktop/mobile then
+   happens where it actually can: at the `proxyVaultOperation` call itself,
+   which genuinely goes out over the onion SOCKS5 circuit (A.4); a
+   `clearnet_ingress_refused` there would mean a genuine transport
+   misconfiguration, not an expected steady-state outcome the client should
+   route around silently.
+
+   Change `onionSyncService`'s module-scope `darkProtocolService` import
+   (line 46) to two things instead of one: keep the existing import for
+   `getCapabilities` (always clearnet), and add a `getVaultProxyTransport()`
+   accessor used both by the availability check above and inside the
+   `syncVault` branch that calls `proxyVaultOperation` — returning the
+   desktop shim when `window.electronAPI?.isElectron`, and the same web
+   service otherwise (mobile gets its own equivalent condition when B.3 is
+   built). Tests: the first-call case (no cached address yet, capability
+   fetch must still succeed); `isOnionSyncAvailable()` returns `true` on
+   desktop from `anonymity.available` alone with `vault_proxy.available:
+   false`; and an integration test asserting onion-routed `vault_sync`
+   succeeds while a clearnet-routed one still returns
+   `clearnet_ingress_refused` (403).
 
 Everything else — the three modes, the fail-closed `require_onion` branch, the
 `degraded` flag, `VaultContext`, `DarkProtocolSettings.jsx` — is untouched.
@@ -346,12 +383,19 @@ protection the platform cannot deliver.
 ## B.3 Work items
 
 1. **Port the Phase 1 service.** New `mobile/src/services/onionSyncService.js`,
-   a direct port of the web one: same three modes, same
-   `vault_proxy.available` gate, same fail-closed `require_onion`, same
-   `degraded` flag. Storage via `AsyncStorage` (or `expo-secure-store`,
-   consistent with the app's existing choice) instead of `localStorage`.
-   **Port it, do not reinvent it** — the failure modes in the web version's
-   comments were paid for in review.
+   a direct port of the web one: same three modes, same fail-closed
+   `require_onion`, same `degraded` flag. Storage via `AsyncStorage` (or
+   `expo-secure-store`, consistent with the app's existing choice) instead of
+   `localStorage`. **Port it, do not reinvent it** — the failure modes in the
+   web version's comments were paid for in review. **Except** the
+   availability check: mobile is a separate process with its own transport,
+   never a page served from `.onion`, so it has the exact same shape as
+   desktop — see A.5 point 2's fix (`isOnionSyncAvailable()` must check
+   `anonymity.available` + `onion_address`, not `vault_proxy.available`, for
+   any platform with its own shim). Porting the PRE-fix web gate here would
+   silently carry desktop's original bug over to mobile: `vault_proxy.available`
+   would be structurally always `false` and `prefer_onion`/`require_onion`
+   would never engage.
 2. **Normalise the signature.** Give mobile `DarkProtocolService` an
    `(operation, payload)` overload so the ported service is a straight copy.
    Keep the old three-argument form working, or update its callers in the same
@@ -362,11 +406,31 @@ protection the platform cannot deliver.
 4. **Orbot detection and consent.** If Orbot is absent, `prefer_onion` degrades
    with an honest message and a Play Store link; `require_onion` fails closed.
    Never bundle or auto-install.
-5. **SOCKS5 routing.** RN's `fetch` has no proxy option. Route through
-   NetCipher's `StrongOkHttpClientBuilder` behind a small native module, or
-   `react-native-tcp-socket`. Whichever is chosen, **the renderer contract does
-   not change** — `onionSyncService.syncVault` still returns
-   `{ data, transport, degraded }`.
+5. **SOCKS5 routing.** RN's `fetch` has no proxy option, and neither
+   candidate from the original draft of this plan actually provides
+   HTTP-over-SOCKS5 on its own — verified against each project's own docs
+   before writing this: NetCipher's `StrongOkHttpClientBuilder` hardcodes
+   `supportsSocksProxy()` to `false` (OkHttp3's own SOCKS support is not what
+   NetCipher's convenience wrapper exposes), and `react-native-tcp-socket` is
+   a raw TCP/TLS socket library with no HTTP client on top of it — using it
+   alone would mean hand-rolling HTTP/1.1 framing.
+
+   Use OkHttp's OWN native SOCKS support instead, bypassing NetCipher's
+   builder entirely: a small custom native module constructs a plain
+   `OkHttpClient` with `.proxy(new Proxy(Proxy.Type.SOCKS, new
+   InetSocketAddress("127.0.0.1", orbotSocksPort)))` — standard
+   `java.net.Proxy`, which OkHttp has always honored regardless of
+   NetCipher's wrapper — and exposes one bridge method
+   (`proxyVaultOperation`) that performs the POST through that client and
+   returns the response to JS. This is a real, complete stack: standard
+   OkHttp, standard `java.net.Proxy`, no unsupported convenience class in the
+   path. Whichever exact bridging shape is chosen, **the renderer contract
+   does not change** — `onionSyncService.syncVault` still returns
+   `{ data, transport, degraded }`. Add an Android integration test that
+   proves `vault_sync` genuinely reaches the onion ingress through this
+   stack (not just that the native module compiles), asserting the same
+   `vault_proxy.available === true`-then-succeeds / clearnet-403 pair A.5
+   and A.7 require for desktop.
 6. **Onion address** from `capabilities.anonymity.onion_address`, same as
    desktop. No hardcoding.
 
@@ -427,9 +491,19 @@ implementation. It must settle:
 4. **Double-spend prevention.** Redis set of spent nonces with a TTL matched to
    token expiry, and a durable fallback. This is the one component where a bug
    is a security bug, not a privacy one.
-5. **Server-side unlinkability argument.** Written out explicitly: what the
-   server can still correlate (issuance batch size, redemption timing, sync
-   payload size) and what it genuinely cannot.
+5. **Server-side unlinkability argument, bounded by a stated threat model.**
+   The primitive gives CRYPTOGRAPHIC unlinkability — the server cannot derive
+   which issuance a given redemption came from FROM THE TOKEN ITSELF, no
+   matter how it is inspected. It does not, and cannot, erase everything the
+   server observes as a byproduct of running the service: issuance batch
+   size, redemption timing, and sync payload size are all still visible
+   metadata, and a server willing to correlate traffic patterns across those
+   (e.g. "this account requested a batch of 8 tokens 20 minutes before this
+   redemption arrived") gets a probabilistic signal the cryptography does
+   not touch. Write the argument as "unlinkable under the stated threat
+   model, given the listed observable metadata" — never as an unqualified
+   "cannot be linked." An acceptance criterion or a UI claim that drops the
+   qualification contradicts this point and must be rejected in review.
 6. **Key rotation and the anonymity-set collapse it causes.** A rotation
    partitions users by which key signed their tokens. Say how often, and how
    large the set stays.
@@ -470,8 +544,11 @@ implementation. It must settle:
 
 - [ ] `docs/anonymous-credentials-design.md` merged and reviewed first.
 - [ ] Vault sync over onion carries no JWT and no user identifier.
-- [ ] The server cannot link a redemption to an issuance (argument written out,
-      and reviewed as an argument, not asserted).
+- [ ] Under the documented threat model, the server cannot cryptographically
+      link a redemption to an issuance beyond the listed observable metadata
+      (issuance batch size, redemption timing, sync payload size) — argument
+      written out and reviewed as an argument, not asserted, and matching
+      C.2 point 5's qualification exactly.
 - [ ] Double-spend is prevented under concurrent load.
 - [ ] Ownership scoping without `request.user` is solved, not worked around.
 - [ ] UI copy upgraded from "hides your IP address" to the stronger claim —

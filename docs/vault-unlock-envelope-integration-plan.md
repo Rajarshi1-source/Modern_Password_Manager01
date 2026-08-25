@@ -1,8 +1,8 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened against two review-found bugs — see
-§9 for what changed and why before relying on §3's original design as the
-literal shipped behavior.**
+**Implemented in PR #489, then hardened across two CodeRabbit review rounds
+(§9, §10) — read both before relying on §3's original design as the literal
+shipped behavior.**
 
 Deferred from PR #486 (`docs/privacy-features-gap-remediation-plan.md` §4.2,
 §5 "Not delivered"). PR #486 shipped the backend and the service layer; the
@@ -337,9 +337,10 @@ security margin of the decoy.
 | Double Argon2id makes unlock feel broken on low-end devices | §3.7 — measure, Worker if needed, never weaken params |
 | Losing OR corrupting `vaultUnlockEnvelope:<userId>` locks the user out | It never becomes the only copy: `setupVaultPassword`'s wrapped record is still written and `unlockWithVaultPassword` still works. A MISSING envelope always fell back to the legacy path (`upgrade` mode). A PRESENT-but-corrupt one (bad base64, truncated write, `MalformedBlobError`) did NOT originally — `hasEnvelope()` only checks for a value, not that it decodes. **Fixed in §9.1**: `runEnvelopeUnlockWithFallback()` now falls back to `upgrade` mode on any non-`WrongPasswordError` open failure, which also self-heals by re-provisioning a fresh envelope |
 | A future contributor short-circuits `decode()` for speed | Comment at the call site and above the attempts loop, plus the DOM-equality test |
-| Decoy DEK encrypts nothing, so the decoy vault looks empty and unconvincing | Out of scope here — populating a believable decoy is a product decision (§7). An empty decoy still beats no decoy, but UI copy must not claim it is convincing |
-| Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson. That ordering only prevents an orphaned token from a FAILED save; it does not by itself recover from registration failing AFTER a successful save. **Fixed in §9.2**: the failed token is retained and retried directly, never re-minted |
-| `installRawDek` drifts from `unlockWithVaultPassword`'s tail | Keep them adjacent in the file with a cross-reference comment; the generation-check assertion is part of the unit tests |
+| Decoy DEK encrypts nothing, so the decoy vault looks empty and unconvincing | Out of scope here — populating a believable decoy is a product decision (§7). An empty decoy still beats no decoy, but UI copy must not claim it is convincing. **Also fixed in §10.3**: the setup screen's own copy previously claimed the opposite (an empty, indistinguishable decoy) directly contradicting its own limitation notice two paragraphs below — corrected to describe only what is actually true |
+| Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson (of the ORIGIN plan, `privacy-features-gap-remediation-plan.md` — not this plan's own §10). That ordering only prevents an orphaned token from a FAILED save; it does not by itself recover from registration failing AFTER a successful save. **Fixed in §9.2**: the failed token is retained and retried directly, never re-minted |
+| `installRawDek` drifts from `unlockWithVaultPassword`'s tail | Keep them adjacent in the file with a cross-reference comment; the generation-check assertion is part of the unit tests. **Extended in §10.1**: the drift risk was not hypothetical — `installRawDek`'s OWN generation bump ran too late to catch a race that started before it was even called, since its slow sibling (`unlockEnvelopeStore.open()`) lives in a different module and has no way to participate in the in-module bump-before/check-after pattern by itself |
+| A user sets the decoy password equal to the real vault password | `VaultDuressSetup.jsx`'s form already rejected this client-side, but `unlockEnvelopeStore.setDecoySlot()` itself did not — any other caller could bypass it and silently create an inert decoy (both slots decrypt under the one shared password, and `decode()` always resolves ties to slot 0, so the "decoy" password would just open the real vault). **Fixed in §10.4**: rejected in the service layer too, before any decode/re-encode work |
 
 ---
 
@@ -437,3 +438,165 @@ The same CodeRabbit run also found 8 issues in
 unimplemented). Those are corrected directly in that document, not
 duplicated here — see its own text for the SocksPort/control-port/exit-path/
 electron-builder-macro/TOR_PROXY-allowlist/getCapabilities-sequencing fixes.
+
+---
+
+## 10. Implementation status — second CodeRabbit review round (2026-08-25)
+
+A second `@coderabbitai full review` on the same PR (after §9's fixes were
+pushed) found 4 more issues — one of them the most serious found on this PR
+so far. Verified against current code before fixing, same discipline as §9.
+
+### 10.1 A session change during `unlockEnvelopeStore.open()` could resurrect
+### a stale session
+
+`open()` runs two Argon2id derivations before resolving — §3.7 already notes
+this can take over a second combined. `runEnvelopeUnlock()` then called
+`sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId)` with no
+generation token. `installRawDek` bumped `sessionGeneration` **itself**,
+*after* `open()` had already fully resolved — which means it had no way to
+know whether a logout (`clearSessionKey()`) or a newer unlock had already
+moved the session on *during* the window `open()` was pending. Every other
+session-establishing function in `sessionVaultCrypto.js`
+(`initSessionKeyFromPassword`, `setupVaultPassword`, `unlockWithVaultPassword`)
+avoids exactly this by capturing `generation = ++sessionGeneration` BEFORE
+its OWN slow step — but that pattern only works when the slow step is
+inside the same function/module. `unlockEnvelopeStore.open()` is not; it
+lives in a different module entirely, so `installRawDek` bumping its own
+counter at the point it happens to be *called* — rather than at the point
+the caller's slow work *started* — left a real gap: a stale `open()` result
+could resolve after a genuine logout and still get installed as the live
+session, with `onUnlocked?.()` firing on top of it.
+
+**Fix:** `sessionVaultCrypto.js` adds `reserveSessionGeneration()`, an
+exported one-liner (`() => ++sessionGeneration`) callers use to capture a
+token BEFORE their own slow out-of-module step. `installRawDek` gains an
+optional 4th parameter, `expectedGeneration`; when supplied, it is checked
+against the live counter before any work happens, closing the gap the
+internal-only bump could not. `VaultUnlockModal.jsx`'s `runEnvelopeUnlock`
+now calls `reserveSessionGeneration()` immediately, before `await
+unlockEnvelopeStore.open(...)`, and passes the token through.
+
+This interacted with §9.1's fallback logic too: a stale-generation error
+from `installRawDek` is NOT an envelope-corruption error (the envelope
+decoded fine — the problem is purely session timing), so it must never
+trigger `runEnvelopeUnlockWithFallback`'s legacy-path fallback. Running
+`runUpgrade()` on top of an already-superseded session would just install a
+SECOND, equally-discarded session rather than correctly abandoning the
+attempt. The fallback logic changed from a fragile string comparison
+(`err.message === 'Incorrect vault password.'`) to an explicit
+`err.envelopeUnusable` tag set only on failures from `open()` itself, never
+on failures from `installRawDek` — so the two failure classes can never be
+confused regardless of what either error's message text happens to say.
+
+2 new tests in `VaultUnlockModal.test.jsx`: a superseded-session error
+propagates without triggering the fallback (asserting
+`unlockWithVaultPassword` and `reportUnlockForSlot` are both never called),
+and the generation token is reserved before `open()` is called, not after.
+
+### 10.2 A decoy password equal to the real vault password silently makes
+### the decoy inert
+
+`hiddenVaultEnvelope`'s `deriveSlotKey` bakes the slot index into the salt
+(a domain tag), so the same password string normally derives two DIFFERENT
+keys for slot 0 vs slot 1 — that domain separation is precisely what makes
+the real and decoy passwords independent. But if the two password STRINGS
+are also textually identical, `decode()` derives k0 and k1 from that ONE
+shared input, and BOTH slots decrypt successfully. `decode()`'s attempt loop
+resolves ties to the FIRST match — slot 0, the real vault (kept
+constant-time on purpose, see the loop's own comment) — so a user who
+configured "a decoy password" that happened to equal their real one would
+have it silently open the REAL vault, every time, with no alarm, and no
+indication anything was wrong. `VaultDuressSetup.jsx`'s form already
+rejected `decoyPassword === vaultPassword` client-side, but
+`unlockEnvelopeStore.setDecoySlot()` — the actual service function — did
+not, so any other caller (a future UI, a script, a test) could bypass the
+one place this was enforced.
+
+**Fix:** `setDecoySlot()` now rejects `decoyPassword === vaultPassword`
+itself, before any decode or re-encode work, mirroring the "enforce in the
+service layer, not just the form" discipline `duressSignalService.js`
+already follows elsewhere in this codebase. New regression test in
+`unlockEnvelopeStore.test.js` asserts both the rejection and that the
+stored envelope is byte-unchanged afterward.
+
+### 10.3 The decoy-setup screen's own intro copy contradicted its own
+### limitation notice two paragraphs later
+
+`VaultDuressSetup.jsx` claimed a decoy unlock "opens a separate, empty decoy
+vault" and that "the app behaves identically either way, so there is
+nothing on screen to give it away" — while the `noticeStyle` box directly
+below it correctly stated the actual, verified behavior: a decoy unlock
+shows the real vault's item list with each entry failing to decrypt, not an
+empty or curated one (see the known limitation already recorded in §7 of
+THIS plan and its own risk-table row above). The two paragraphs flatly
+disagreed with each other. Fixed by rewriting the intro to only claim what
+is actually true and tested — the unlock REQUEST is indistinguishable
+(same endpoint, shape, and timing; verified by the DOM-equality test in
+§9.1's own test suite) — while pointing the reader at the limitation notice
+for what appears on screen afterward, rather than asserting something the
+very next paragraph disproves. No test added — this was a copy-only fix and
+CodeRabbit's own finding did not ask for coverage here, unlike the other
+three.
+
+### 10.4 `docs/onion-sync-transport-phases-2-4-plan.md`: A.5's own fix from
+### §9.3 had introduced a NEW, worse bug
+
+The prior round's A.5 fix (§9.3, "getCapabilities stays on the clearnet
+service, always") solved the chicken-and-egg problem it targeted but broke
+something else in the process: `isOnionSyncAvailable()` gates on
+`vault_proxy.available`, which the server computes as `anonymity_active AND
+request_is_onion_ingress` — true only when THAT SPECIFIC request arrived
+over the onion listener. Once `getCapabilities` always goes out over
+clearnet (§9.3's own fix), `request_is_onion_ingress` for that call is
+structurally always false, so `vault_proxy.available` is always false, so
+desktop would never attempt the onion path at all — Phase 2 would ship a
+sidecar nothing ever uses. Root cause: `vault_proxy.available` is the right
+gate ONLY when the capabilities call and the eventual data call are
+guaranteed to travel the same transport, which is true for Phase 1 (a
+Tor-Browser user's own page load is what makes the capabilities call arrive
+over onion) and false for any client that is a separate process making its
+own per-call transport decision — desktop AND mobile alike.
+
+Fixed directly in that document (still doc-only, Phase 2-4 remains
+unimplemented): `isOnionSyncAvailable()` now branches on whether a
+non-web transport is selected for the current platform. When one is,
+it checks `anonymity.available && Boolean(anonymity.onion_address)` — a
+deployment-level signal that does not require this particular clearnet
+request to have arrived over onion — with the real per-request
+verification happening where it actually can, at the `proxyVaultOperation`
+call itself. When none is (plain web), the original `vault_proxy.available`
+check is unchanged. B.3 (mobile) point 1 updated with a cross-reference:
+porting the PRE-this-fix web gate to mobile would have carried the same bug
+forward, since mobile has the identical separate-process shape. See that
+document's own A.5 and B.3 for the full text.
+
+### 10.5 `docs/onion-sync-transport-phases-2-4-plan.md`: neither of B.3's
+### proposed SOCKS5 libraries actually provides HTTP-over-SOCKS5
+
+A separate, unrelated finding in the same document: B.3 point 5 offered
+NetCipher's `StrongOkHttpClientBuilder` or `react-native-tcp-socket` as
+alternatives for Android SOCKS5 routing. Neither works alone — verified
+against each project's own documentation, not assumed from the bot's
+restatement: NetCipher's builder hardcodes `supportsSocksProxy()` to
+`false` (a limitation of NetCipher's own convenience wrapper, not of OkHttp
+itself), and `react-native-tcp-socket` is a raw TCP/TLS socket library with
+no HTTP client on top of it. Fixed directly in that document: the
+corrected approach bypasses NetCipher's builder and uses OkHttp's native
+`java.net.Proxy` SOCKS support directly (`.proxy(new Proxy(Proxy.Type.SOCKS,
+...))`) behind a small custom native module — a real, complete stack, not
+two incomplete ones presented as alternatives.
+
+### 10.6 `docs/onion-sync-transport-phases-2-4-plan.md`: PR C's unlinkability
+### claim contradicted its own qualification two sections later
+
+§C.2 point 5 already said correctly that the server can still correlate
+issuance batch size, redemption timing, and sync payload size. §C.5's
+acceptance criterion then asserted, unqualified, "the server cannot link a
+redemption to an issuance" — the two statements do not agree. Fixed by
+bounding both to the same explicit claim: cryptographic unlinkability
+under the stated threat model, given the listed observable metadata — never
+an absolute "cannot be linked." Applies equally to any future UI copy for
+this feature: the Phase 1 discipline of never claiming more than the
+architecture backs (see `onionSyncService.js`'s own docstring) extends to
+this primitive too.

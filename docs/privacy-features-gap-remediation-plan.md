@@ -470,10 +470,15 @@ onion case):
   envelope integration. Note that plan's §2: the migration this paragraph
   worried about is device-local (the wrapped DEK lives in `localStorage`, not
   on the server), so it is smaller than assumed here. Implemented in PR #489;
-  that plan's own §9 records two review-found bugs (a corrupt-envelope
-  lockout, an orphaned duress token on registration failure) and their fixes
-  — read it before assuming §3's original text is the literal shipped
-  behavior.
+  that plan's own §9 and §10 (two CodeRabbit review rounds) record six
+  review-found bugs — a corrupt-envelope lockout, an orphaned duress token on
+  registration failure, a stale-session race across the envelope decode, a
+  decoy password silently equal to the real one, a self-contradicting UI
+  copy claim, and (in the OTHER carry-over plan, cross-referenced from §10.4
+  and §10.5) an onion-availability check that would never engage on desktop
+  or mobile plus two non-viable SOCKS5 library choices — and their fixes.
+  Read both sections before assuming §3's original text is the literal
+  shipped behavior.
 
 ## 6. Acceptance criteria
 
