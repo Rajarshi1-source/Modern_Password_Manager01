@@ -27,6 +27,7 @@ vi.mock('../../../services/sessionVaultCrypto', () => ({
     unlockWithVaultPassword: vi.fn(),
     exportSessionDekRaw: vi.fn(),
     exportWrappedDekRaw: vi.fn(),
+    reserveSessionGeneration: vi.fn(() => 1),
     installRawDek: vi.fn(),
     getOrCreateUserSalt: vi.fn(() => 'device-salt-b64'),
   },
@@ -142,7 +143,7 @@ describe('unlock mode — envelope already provisioned', () => {
     await submitPassword(getByLabelText, getByRole, 'real-password');
 
     await waitFor(() => expect(onUnlocked).toHaveBeenCalled());
-    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(DEK, 'salt-x', USER_ID);
+    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(DEK, 'salt-x', USER_ID, 1);
     expect(reportUnlockForSlot).toHaveBeenCalledWith(TOKEN, 0, { __duress_signal: null });
     expect(sessionVaultCrypto.unlockWithVaultPassword).not.toHaveBeenCalled();
   });
@@ -262,6 +263,66 @@ describe('unlock mode — stored envelope is unusable, falls back to the legacy 
     expect(alert).toHaveTextContent('bad magic');
     expect(onUnlocked).not.toHaveBeenCalled();
     expect(sessionVaultCrypto.unlockWithVaultPassword).not.toHaveBeenCalled();
+  });
+});
+
+describe('unlock mode — the session changes while open() is pending', () => {
+  // Regression coverage for a CodeRabbit finding on PR #489:
+  // unlockEnvelopeStore.open() runs two Argon2id derivations before
+  // resolving; if a logout or a newer unlock lands during that window,
+  // installRawDek must detect it (via the generation token
+  // reserveSessionGeneration() captured BEFORE open() started) and refuse
+  // to install a DEK for a session nobody is in anymore -- and that refusal
+  // must propagate as-is, never get misread as "the envelope is corrupt"
+  // and trigger the legacy fallback.
+  beforeEach(() => {
+    unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+    sessionVaultCrypto.hasWrappedKey.mockReturnValue(true);
+  });
+
+  test('a session superseded during open() propagates without falling back to the legacy path', async () => {
+    unlockEnvelopeStore.open.mockResolvedValue({ slotIndex: 0, dekBytes: DEK, saltB64: 'salt-x', duressToken: null });
+    // Simulates installRawDek's own stale-generation guard rejecting because
+    // something else (a logout, a newer unlock) already moved the session
+    // on by the time this call ran -- exactly the race reserveSessionGeneration
+    // exists to catch, verified at the wiring level here since the counter's
+    // own correctness is sessionVaultCrypto.salt.test.js's job.
+    sessionVaultCrypto.installRawDek.mockRejectedValue(
+      new Error('Vault session initialization was superseded by a newer request.')
+    );
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole, findByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'real-password');
+
+    const alert = await findByRole('alert');
+    expect(alert).toHaveTextContent('superseded by a newer request');
+    expect(onUnlocked).not.toHaveBeenCalled();
+    // The critical assertion: this must NOT be treated as a corrupt
+    // envelope. Falling back here would install a SECOND, equally stale
+    // session on top of the first instead of correctly abandoning the
+    // attempt.
+    expect(sessionVaultCrypto.unlockWithVaultPassword).not.toHaveBeenCalled();
+    expect(reportUnlockForSlot).not.toHaveBeenCalled();
+  });
+
+  test('reserves the generation token before calling open(), not after', async () => {
+    const callOrder = [];
+    sessionVaultCrypto.reserveSessionGeneration.mockImplementation(() => {
+      callOrder.push('reserve');
+      return 7;
+    });
+    unlockEnvelopeStore.open.mockImplementation(async () => {
+      callOrder.push('open');
+      return { slotIndex: 0, dekBytes: DEK, saltB64: 'salt-x', duressToken: null };
+    });
+
+    const { getByLabelText, getByRole } = renderModal({ onUnlocked: vi.fn() });
+    await submitPassword(getByLabelText, getByRole, 'real-password');
+
+    await waitFor(() => expect(sessionVaultCrypto.installRawDek).toHaveBeenCalled());
+    expect(callOrder).toEqual(['reserve', 'open']);
+    expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledWith(DEK, 'salt-x', USER_ID, 7);
   });
 });
 

@@ -131,6 +131,25 @@ describe('setDecoySlot', () => {
     })).rejects.toThrow(/no envelope/i);
   });
 
+  test('rejects a decoy password equal to the vault password before touching the envelope', async () => {
+    await provisionReal();
+    const before = loadEnvelope(USER_ID);
+
+    // Regression: deriveSlotKey's domain separation gives slot 0 and slot 1
+    // different keys from the SAME password string, so if vaultPassword and
+    // decoyPassword were textually equal, decode() would derive both slot
+    // keys from that one input and BOTH slots would decrypt -- landing on
+    // slot 0 (the real vault) every time, making the "decoy" silently inert.
+    await expect(setDecoySlot({
+      userId: USER_ID,
+      vaultPassword: REAL_PASSWORD,
+      decoyPassword: REAL_PASSWORD,
+    })).rejects.toThrow(/must differ/i);
+
+    // Rejected before any decode/re-encode -- the stored blob is untouched.
+    expect(loadEnvelope(USER_ID)).toEqual(before);
+  });
+
   test('the decoy password opens slot 1 with a fresh DEK and a duress token', async () => {
     await provisionReal();
 

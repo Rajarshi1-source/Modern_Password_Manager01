@@ -222,6 +222,19 @@ export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
   if (!userId) throw new Error('setDecoySlot: userId required');
   if (!vaultPassword) throw new Error('setDecoySlot: vaultPassword required');
   if (!decoyPassword) throw new Error('setDecoySlot: decoyPassword required');
+  if (decoyPassword === vaultPassword) {
+    // deriveSlotKey's domain separation means slot 0 and slot 1 normally get
+    // DIFFERENT keys from the same password string (the slot index is baked
+    // into the salt) -- but if the two passwords are also textually
+    // identical, decode() derives k0 and k1 from that ONE input and BOTH
+    // slots decrypt successfully. decode() returns the first match, slot 0
+    // (see its own comment on constant-time attempt order), so entering
+    // "the decoy password" would always open the REAL vault and never the
+    // decoy -- a duress setup that silently does nothing. UI callers should
+    // already block this (VaultDuressSetup.jsx's own form validation), but
+    // that must not be the only place it is enforced.
+    throw new Error('setDecoySlot: decoy password must differ from the vault password.');
+  }
 
   const existing = loadEnvelope(userId);
   if (!existing) {

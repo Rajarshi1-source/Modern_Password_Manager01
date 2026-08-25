@@ -428,6 +428,28 @@ export const exportSessionDekRaw = async () => {
 };
 
 /**
+ * Reserve a session-generation token before starting a slow OUT-OF-MODULE
+ * async operation that will eventually call `installRawDek` — e.g.
+ * `unlockEnvelopeStore.open()`'s two Argon2id derivations
+ * (docs/vault-unlock-envelope-integration-plan.md §3.7 notes these can run
+ * over a second combined).
+ *
+ * Every other session-establishing function in this module captures
+ * `generation = ++sessionGeneration` BEFORE its own slow step and checks it
+ * after, so a `clearSessionKey()` (logout) or a newer call that lands mid-
+ * flight is detected rather than silently overwritten -- see
+ * `initSessionKeyFromPassword`. That pattern only works when the slow step
+ * is INSIDE this module. `unlockEnvelopeStore.open()` is not, so
+ * `installRawDek` bumping its own generation internally would be blind to
+ * anything that happened during the caller's `open()` await -- a logout or a
+ * newer unlock landing in that window would go undetected, and the stale
+ * result would resurrect a session nobody is in anymore. Call this BEFORE
+ * the slow external step and pass the result to `installRawDek` as
+ * `expectedGeneration` to close that gap.
+ */
+export const reserveSessionGeneration = () => ++sessionGeneration;
+
+/**
  * Install a raw 32-byte DEK as the session key.
  *
  * Used by the hidden-vault envelope unlock path
@@ -437,14 +459,26 @@ export const exportSessionDekRaw = async () => {
  * exactly (generation check, salt, session state) — keep the two in sync;
  * see that function's comments for why each line here exists. The imported
  * key is non-extractable, matching `unlockWithVaultPassword`'s posture.
+ *
+ * @param {number|null} [expectedGeneration] - a token from
+ *   `reserveSessionGeneration()`, captured by the caller BEFORE its own slow
+ *   pre-processing (e.g. envelope decode). When supplied, validated against
+ *   the live counter before any work happens here, catching a race that
+ *   started before this function was even called. When omitted, falls back
+ *   to the original self-contained behaviour (generation captured and
+ *   checked entirely within this call) — used only by callers with no slow
+ *   step of their own to protect.
  */
-export const installRawDek = async (dekBytes, saltB64, userId) => {
+export const installRawDek = async (dekBytes, saltB64, userId, expectedGeneration = null) => {
   if (!userId) throw new Error('installRawDek: userId required');
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
     throw new Error('installRawDek: dekBytes must be a 32-byte Uint8Array');
   }
+  if (expectedGeneration !== null && expectedGeneration !== sessionGeneration) {
+    throw new Error('Vault session initialization was superseded by a newer request.');
+  }
 
-  const generation = ++sessionGeneration;
+  const generation = expectedGeneration ?? ++sessionGeneration;
   const dek = await window.crypto.subtle.importKey(
     'raw',
     dekBytes,
@@ -631,6 +665,7 @@ export default {
   clearWrappedKey,
   exportWrappedDekRaw,
   exportSessionDekRaw,
+  reserveSessionGeneration,
   installRawDek,
   hasSessionKey,
   clearSessionKey,

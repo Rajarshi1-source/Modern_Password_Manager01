@@ -107,6 +107,13 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
   };
 
   const runEnvelopeUnlock = async () => {
+    // Reserved BEFORE the slow step below (unlockEnvelopeStore.open() runs
+    // two Argon2id derivations, §3.7 -- can take over a second), not after.
+    // See sessionVaultCrypto.reserveSessionGeneration's docstring: capturing
+    // this only once open() has already resolved would be blind to a
+    // logout or a newer unlock that landed during that await, and could
+    // resurrect a session nobody is in anymore.
+    const generation = sessionVaultCrypto.reserveSessionGeneration();
     let opened;
     try {
       opened = await unlockEnvelopeStore.open({ userId, password });
@@ -117,10 +124,19 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
         // `sessionVaultCrypto.unlockWithVaultPassword`'s wrong-password path.
         throw new Error('Incorrect vault password.');
       }
+      // Envelope itself is unusable (bad base64, MalformedBlobError, any
+      // other decode-time failure) -- happened BEFORE installRawDek ever
+      // ran, so it is unrelated to session timing. Tag it so the wrapper
+      // below knows a legacy fallback is the right response to THIS
+      // failure specifically, and not to the different failure below.
+      err.envelopeUnusable = true;
       throw err;
     }
     const { slotIndex, dekBytes, saltB64, duressToken } = opened;
-    await sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId);
+    // No `envelopeUnusable` tag on a failure here: the envelope decoded
+    // fine, so a throw at this point (chiefly the stale-generation guard)
+    // must propagate as-is, never trigger the corrupt-envelope fallback.
+    await sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId, generation);
     // Fire-and-forget, per §3.5 — see reportNoise above for why. Deliberately
     // NOT branching on slotIndex here beyond passing it through unchanged:
     // reportUnlockForSlot itself decides real-token-vs-noise from
@@ -128,23 +144,25 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
     reportUnlockForSlot(getAccessToken?.(), slotIndex, { __duress_signal: duressToken });
   };
 
-  // A wrong password means the envelope decoded fine -- decode() parsed the
-  // header and derived both slot keys successfully; only the AES-GCM
-  // authentication failed -- and that must stay a normal retry, never a
-  // fallback (see runEnvelopeUnlock's comment on this exact message string).
-  // Anything else -- invalid base64 from a truncated localStorage write, a
-  // bad magic/version/tier, any other MalformedBlobError -- means the STORED
-  // envelope itself is unusable, not that the password was wrong. If the
-  // legacy wrapped-DEK record still exists, fall back to it rather than
-  // locking the user out of a vault it could still open: runUpgrade()'s own
-  // provisioning call overwrites the bad envelope with a fresh, valid one on
-  // success, so this also self-heals the corruption rather than just
-  // routing around it once.
+  // Only a failure explicitly tagged `envelopeUnusable` (see above — a
+  // decode-time failure from unlockEnvelopeStore.open() itself, not a
+  // wrong password and not a post-decode failure like the stale-generation
+  // guard) triggers the legacy fallback. Falling back on anything else --
+  // e.g. a session-superseded error from installRawDek — would be wrong:
+  // the envelope was fine, something else already changed the session
+  // state while this attempt was in flight, and running runUpgrade() on
+  // top of that would just install a second, equally-discarded session
+  // instead of correctly abandoning this stale attempt. If the legacy
+  // wrapped-DEK record still exists for a genuinely unusable envelope, fall
+  // back to it rather than locking the user out of a vault it could still
+  // open: runUpgrade()'s own provisioning call overwrites the bad envelope
+  // with a fresh, valid one on success, so this also self-heals the
+  // corruption rather than just routing around it once.
   const runEnvelopeUnlockWithFallback = async () => {
     try {
       await runEnvelopeUnlock();
     } catch (err) {
-      if (err.message === 'Incorrect vault password.' || !sessionVaultCrypto.hasWrappedKey(userId)) {
+      if (!err.envelopeUnusable || !sessionVaultCrypto.hasWrappedKey(userId)) {
         throw err;
       }
       console.warn('VaultUnlockModal: stored envelope is unusable, falling back to the legacy unlock path.', err);
