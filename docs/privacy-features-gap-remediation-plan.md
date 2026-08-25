@@ -2544,3 +2544,29 @@ dev DB exactly as designed (runs against Postgres in CI, same as its
 `RegisterSignalTokenConcurrencyTests` model). `python -m py_compile` clean
 on both touched Python files (`deaddrop_tasks.py`, `test_deaddrop_tasks.py`)
 and the comment-only `celery.py` change.
+
+### 21.9 CodeRabbit review-fix round 4 on PR #488
+
+One finding, confirmed: a third occurrence of §21.8.2's exact Ruff `S106`
+false positive, this time in `test_check_deaddrop_backlog_command.py`
+(round 3 fixed the two in `test_deaddrop_tasks.py` but missed this file's
+own copy of the identical `secret_hash='hash'` fixture pattern). Same
+non-CI-blocking status as before (this project's Lint & Code Quality job
+runs `flake8`, not `ruff`), same fix: `# noqa: S106 -- fixture data, not a
+credential`, matching the suppression already used twice in
+`test_deaddrop_tasks.py`. Comment-only change, no behavior affected.
+
+Checked whether more copies remain within this PR's own scope: grepped the
+whole `mesh_deaddrop/tests/` tree and found dozens more unsuppressed
+`secret_hash='hash'`-style occurrences (`test_fragment_distribution.py`,
+`test_functional.py`, `test_integration.py`, `test_mesh_extensions.py`,
+`test_models.py`) — but every one is in a file this PR has never touched,
+outside every round's own "files selected for processing" list, and
+CodeRabbit never flags files it doesn't review. Left them alone: fixing
+pre-existing files unrelated to this PR's actual diff on my own initiative
+would be scope creep past "keep changes minimal," not a fix this review
+asked for.
+
+Targeted: `mesh_deaddrop/tests/test_check_deaddrop_backlog_command.py`
+(`canny` venv, `DEBUG=True`) — **10 passed**, unchanged count, confirming
+the comment-only change broke no assertion. `python -m py_compile` clean.

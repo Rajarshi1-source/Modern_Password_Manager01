@@ -61,7 +61,7 @@ class CheckDeaddropBacklogCommandTests(TestCase):
             latitude='51.500000',
             longitude='-0.120000',
             encrypted_secret=b'x',
-            secret_hash='hash',
+            secret_hash='hash',  # noqa: S106 -- fixture data, not a credential
             status='active',
             is_active=True,
             expires_at=timezone.now() - timedelta(days=2),
