@@ -2162,8 +2162,10 @@ verified by reading each task body rather than inferred from its name:
 
 - **`check_expired_deaddrops` (hourly) — the hazard.** Query has no lower
   bound, and each matched drop fires `notify_owner_deaddrop_expired.delay()`:
-  **one real email per past-expiry drop**, entire backlog in one batch on the
-  first tick. Direct analogue of `process_pending_rotations` (§7.8).
+  **one real email per past-expiry drop**. As originally merged, the entire
+  backlog processed in one batch on the first tick; capped at
+  `EXPIRE_BATCH_SIZE` per tick as of §21.6.2, so a backlog now drains over
+  several ticks instead. Direct analogue of `process_pending_rotations` (§7.8).
 - **`cleanup_old_access_logs` (daily).** Hard-deletes `DeadDropAccess` and
   `FragmentTransfer` rows past 90 days. Not user-visible, but the first tick is
   one large DELETE worth scheduling deliberately.
@@ -2429,3 +2431,116 @@ task body in tests — `.run()` is the standard way to exercise a
 **10 passed**, unchanged from round 1's count, confirming the docstring-only
 text changes broke no assertion. `python -m py_compile` clean on all four
 touched files.
+
+### 21.8 CodeRabbit review-fix round 3 on PR #488
+
+Three findings, all confirmed.
+
+#### 21.8.1 A third and fourth copy of the same stale "single batch" claim (Minor, confirmed)
+
+Round 2 (§21.7.2) fixed two places that still claimed
+`check_expired_deaddrops` processes its whole backlog in one first-tick
+batch, after round 1 capped it. Missed two more copies of the identical
+claim: the `SAFETY NOTE FOR DEPLOYMENT` comment in `celery.py` itself (the
+block documenting this exact merge), and this plan doc's own original
+blast-radius write-up (§21.2). Fixed both — the `celery.py` comment
+directly, and the plan doc's historical diagnosis with a forward-pointing
+note to §21.6.2 rather than rewriting it, matching how §21.7.1 already
+resolved the analogous §4.4/§5 tension: preserve what was accurate at the
+time it was written, point to where it changed, rather than erase the
+record.
+
+#### 21.8.2 Ruff S106 on test fixture data (Minor, confirmed but not CI-blocking)
+
+`secret_hash='hash'` (two occurrences) triggers Ruff's `S106` (hardcoded-
+password-arg) check — a false positive on fixture data, not a credential.
+Verified this doesn't actually fail this project's own CI before fixing it
+reflexively: `Backend CI/CD / Lint & Code Quality` runs `flake8`, not
+`ruff` (`.github/workflows/backend-ci.yml`), and the separate `bandit -r
+password_manager/ -ll` security-scan step's `-ll` flag reports MEDIUM+
+severity only -- bandit's native `hardcoded_password_funcarg` (B106, the
+same check `S106` mirrors) is LOW by default, so it's filtered out there
+too. Fixed anyway despite not being CI-blocking: the cost is one `# noqa:
+S106` comment per site (zero behavioral risk), it matches an identical
+suppression already present two lines away in the same file
+(`password='test-password-not-a-secret',  # noqa: S106` in `setUp`), and
+leaving it means CodeRabbit re-flags the same two lines on every future
+review of this file.
+
+#### 21.8.3 `check_expired_deaddrops` could overwrite a concurrently-collected drop (Major, confirmed)
+
+CodeRabbit's claim: the task reads a batch snapshot, then processes rows
+one at a time; if a drop is legitimately collected (`DeadDrop.mark_collected`,
+`models.py`) in the window between the snapshot and that row's own turn in
+the loop, the task's unconditional `.save()` overwrites the real
+`status='collected'` back to `'expired'` -- data corruption, plus a
+plainly wrong "your secret expired unclaimed" notification for a
+collection that actually succeeded.
+
+**Confirmed the window is real and non-trivial, not fixed the finding on
+description alone.** Traced `DeadDropCollectView.post()`
+(`api/deaddrop_views.py`) end to end: it never checks `status` or
+`expires_at`/`is_expired` at any point before calling
+`FragmentDistributionService.collect_fragments()` (which calls
+`mark_collected()` on success) -- and the view does BLE/NFC/GPS location
+verification before that, real wall-clock work a request already in flight
+when a drop crosses `expires_at` can still be midway through. Combined with
+`EXPIRE_BATCH_SIZE=200` (§21.6.2) meaning a given row's own turn in the
+loop can be seconds after the batch snapshot, this is a genuinely reachable
+window, not a theoretical one -- and it is exactly the kind of last-minute
+collection a real user is likely attempting on a drop this close to
+expiring.
+
+**Fixed with `select_for_update()` + a per-row recheck**, inside a
+`transaction.atomic()` block around each row's publish-and-save (matching
+this codebase's own established locking pattern --
+`DuressCodeService.register_signal_token`, PR #486 round 2 -- rather than
+inventing a new one): re-fetch the row under lock, verify it still matches
+`is_active` / `status in (pending, distributed, active)` / past-expiry,
+and only then publish and save. A row that no longer matches (collected,
+cancelled, or otherwise changed since the snapshot) is left untouched --
+no notification, no overwrite. The lock is held across publish-and-save,
+not released in between, so nothing can change the row out from under the
+recheck before the write commits.
+
+**Scope note:** this closes the direction CodeRabbit named --
+the expiry task overwriting a real collection. It does NOT add an expiry
+check to `DeadDropCollectView` itself (the reverse-direction, pre-existing
+gap this investigation surfaced: a collection that starts before expiry
+and finishes after could still succeed and finalize even without this
+task's involvement at all) -- a separate concern in a different code path,
+not what this finding named, and a large enough change (touching the
+collect request/response flow) to warrant its own PR rather than folding
+it into a scheduling-bug fix. Noted here rather than left undiscovered for
+a future reader.
+
+**Tests added, matching this codebase's own convention for testing
+`select_for_update()`** (`RegisterSignalTokenConcurrencyTests`,
+`security/tests/test_duress_signal.py`, PR #486 round 2) rather than
+inventing a new one:
+- `test_concurrent_collection_is_not_overwritten_back_to_expired`
+  (`TestCase`): simulates the race deterministically on one connection --
+  the more-overdue of two drops has a `.delay()` side effect that directly
+  UPDATEs the other drop to `'collected'` before that drop's own turn in
+  the loop, then asserts the recheck catches it (no notify call, no
+  overwrite).
+- `CheckExpiredDeaddropsRealConcurrencyTests` (`TransactionTestCase` +
+  real threads, skips on SQLite -- runs against Postgres in CI, identical
+  reasoning to `RegisterSignalTokenConcurrencyTests`): a second thread
+  holds a real `select_for_update()` lock open on the row; the main
+  thread's `check_expired_deaddrops()` call must block behind it, then
+  correctly see the committed `'collected'` state once the lock releases.
+  This is the one test in the pair that actually exercises the LOCK, not
+  just the recheck logic -- the mocked version runs everything on one
+  transaction, which can't block against its own held lock.
+
+#### 21.8.4 Test results
+
+`mesh_deaddrop/tests/test_deaddrop_tasks.py` in full (`canny` venv,
+`DEBUG=True`): **12 passed, 1 skipped** — 11 pre-existing plus 2 new (the
+sequential recheck test), with
+`CheckExpiredDeaddropsRealConcurrencyTests` skipping on this local SQLite
+dev DB exactly as designed (runs against Postgres in CI, same as its
+`RegisterSignalTokenConcurrencyTests` model). `python -m py_compile` clean
+on both touched Python files (`deaddrop_tasks.py`, `test_deaddrop_tasks.py`)
+and the comment-only `celery.py` change.

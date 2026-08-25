@@ -22,7 +22,7 @@ from datetime import timedelta
 from unittest import mock
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from mesh_deaddrop.models import DeadDrop
@@ -48,7 +48,7 @@ class CheckExpiredDeaddropsTests(TestCase):
             latitude='51.500000',
             longitude='-0.120000',
             encrypted_secret=b'x',
-            secret_hash='hash',
+            secret_hash='hash',  # noqa: S106 -- fixture data, not a credential
             status='active',
             is_active=True,
             expires_at=timezone.now() - timedelta(days=1),
@@ -99,6 +99,48 @@ class CheckExpiredDeaddropsTests(TestCase):
         self.assertEqual(healthy.status, 'expired')
         self.assertFalse(healthy.is_active)
         self.assertEqual(mock_notify.call_count, 2)
+        self.assertEqual(result, {'expired_count': 1, 'deferred_count': 1})
+
+    def test_concurrent_collection_is_not_overwritten_back_to_expired(self):
+        """`batch` is read once, upfront -- a snapshot. If a drop is
+        successfully collected (DeadDropCollectView has no expiry check of
+        its own, so a collection already in flight can still complete after
+        the drop technically crosses expires_at) in the window between that
+        snapshot and this row's own turn in the loop, the task must notice
+        and back off, not blindly overwrite the real 'collected' status
+        back to 'expired' and send a wrong "expired unclaimed" email for a
+        secret the owner actually received.
+
+        Simulates the race deterministically rather than with real threads:
+        `processed_first` (the more-overdue of the two, so it sorts first
+        in the batch) has a .delay() side effect that marks the OTHER drop
+        collected via a direct DB update -- standing in for a concurrent
+        request finishing in the window before `collected`'s own turn comes
+        up. `collected`'s per-row select_for_update().get() re-fetch must
+        see that write (a fresh DB read, not the stale snapshot object) and
+        back off."""
+        processed_first = self._make_drop(expires_at=timezone.now() - timedelta(days=5))
+        collected = self._make_drop(expires_at=timezone.now() - timedelta(days=1))
+
+        def delay_side_effect(dead_drop_id):
+            if dead_drop_id == str(processed_first.id):
+                DeadDrop.objects.filter(pk=collected.pk).update(
+                    status='collected', collected_at=timezone.now(), is_active=False,
+                )
+
+        with mock.patch(
+            'mesh_deaddrop.tasks.deaddrop_tasks.notify_owner_deaddrop_expired.delay',
+            side_effect=delay_side_effect,
+        ) as mock_notify:
+            result = check_expired_deaddrops()
+
+        processed_first.refresh_from_db()
+        collected.refresh_from_db()
+        self.assertEqual(processed_first.status, 'expired')
+        self.assertEqual(collected.status, 'collected')
+        # Exactly one notify call -- collected's own recheck caught the
+        # race and skipped it entirely, not just skipped the final save.
+        mock_notify.assert_called_once_with(str(processed_first.id))
         self.assertEqual(result, {'expired_count': 1, 'deferred_count': 1})
 
     def test_caps_batch_size_and_defers_the_rest(self):
@@ -211,7 +253,7 @@ class NotifyOwnerDeaddropExpiredTests(TestCase):
             latitude='51.500000',
             longitude='-0.120000',
             encrypted_secret=b'x',
-            secret_hash='hash',
+            secret_hash='hash',  # noqa: S106 -- fixture data, not a credential
             status='expired',
             is_active=False,
             expires_at=timezone.now() - timedelta(days=1),
@@ -260,3 +302,108 @@ class NotifyOwnerDeaddropExpiredTests(TestCase):
             notify_owner_deaddrop_expired.run(str(self.drop.id))
 
         mock_send.assert_not_called()
+
+
+class CheckExpiredDeaddropsRealConcurrencyTests(TransactionTestCase):
+    """The mocked-side-effect race in `CheckExpiredDeaddropsTests` pins the
+    per-row recheck's LOGIC (a fresh fetch sees a change made in between),
+    but that test runs everything on one connection/transaction, so it
+    cannot demonstrate the select_for_update() LOCK doing anything -- a
+    connection never blocks against its own held lock. This class uses a
+    second real thread and a real, separate connection, mirroring
+    security/tests/test_duress_signal.py::RegisterSignalTokenConcurrencyTests
+    (same reasoning: TransactionTestCase + threads, not TestCase + mocks,
+    is what actually exercises row-level MVCC locking)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='deaddrop-owner-race',
+            email='owner@example.com',
+            password='test-password-not-a-secret',  # noqa: S106
+        )
+        self.drop = DeadDrop.objects.create(
+            owner=self.user,
+            title='drop',
+            latitude='51.500000',
+            longitude='-0.120000',
+            encrypted_secret=b'x',
+            secret_hash='hash',  # noqa: S106 -- fixture data, not a credential
+            status='active',
+            is_active=True,
+            expires_at=timezone.now() - timedelta(days=1),
+        )
+
+    def test_real_concurrent_collection_wins_the_lock_and_is_not_overwritten(self):
+        import threading
+
+        from django.db import connection, connections
+
+        if connection.vendor == 'sqlite':
+            # Same reasoning as RegisterSignalTokenConcurrencyTests
+            # (test_duress_signal.py): SQLite serializes writers at the file
+            # level rather than row-locking, so this can't distinguish a
+            # correct select_for_update() from a missing one. Runs against
+            # Postgres in CI.
+            self.skipTest(
+                "select_for_update() row-locking needs real MVCC. SQLite "
+                "serializes writers at the file level instead. Runs against "
+                "Postgres in CI."
+            )
+
+        collector_has_locked = threading.Event()
+        collector_may_commit = threading.Event()
+        errors = []
+        errors_lock = threading.Lock()
+
+        def collector():
+            """Holds its own row lock open (via an unsaved manual
+            transaction) until the expiry task has had a chance to try --
+            and block -- on the same row, then commits the collection."""
+            from django.db import transaction as txn
+
+            try:
+                with txn.atomic():
+                    row = DeadDrop.objects.select_for_update().get(pk=self.drop.pk)
+                    collector_has_locked.set()
+                    if not collector_may_commit.wait(timeout=5):
+                        raise RuntimeError('expiry task never blocked on the lock')
+                    row.status = 'collected'
+                    row.collected_at = timezone.now()
+                    row.is_active = False
+                    row.save()
+            except Exception as exc:  # noqa: BLE001 - surfaced on the main thread below
+                with errors_lock:
+                    errors.append(exc)
+            finally:
+                connections.close_all()
+
+        collector_thread = threading.Thread(target=collector)
+        collector_thread.start()
+        self.assertTrue(
+            collector_has_locked.wait(timeout=5),
+            'collector thread never acquired its lock',
+        )
+
+        # The expiry task's own select_for_update() on the same row must now
+        # block behind the collector's open transaction. Signal it to
+        # commit shortly after the main thread's call is issued, so the
+        # task's lock acquisition genuinely waits rather than racing a
+        # collector that finished before check_expired_deaddrops even
+        # started.
+        def release_soon():
+            collector_may_commit.set()
+
+        threading.Timer(0.3, release_soon).start()
+
+        with mock.patch(
+            'mesh_deaddrop.tasks.deaddrop_tasks.notify_owner_deaddrop_expired.delay'
+        ) as mock_notify:
+            result = check_expired_deaddrops()
+
+        collector_thread.join(timeout=5)
+        self.assertEqual(errors, [], f"collector thread failed: {errors}")
+
+        self.drop.refresh_from_db()
+        self.assertEqual(self.drop.status, 'collected')
+        mock_notify.assert_not_called()
+        self.assertEqual(result, {'expired_count': 0, 'deferred_count': 1})

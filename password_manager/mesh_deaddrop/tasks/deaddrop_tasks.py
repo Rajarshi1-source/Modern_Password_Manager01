@@ -55,8 +55,13 @@ def check_expired_deaddrops():
 
     Runs every hour (configured in CELERY_BEAT_SCHEDULE). Processes at most
     EXPIRE_BATCH_SIZE per tick, oldest-overdue first; anything past that cap
-    is left matching the same filter for the next tick, not skipped.
+    is left matching the same filter for the next tick, not skipped. Each
+    row is re-locked and re-checked immediately before being written, so a
+    drop collected concurrently (racing the same window this task sweeps)
+    is left alone rather than overwritten back to 'expired'.
     """
+    from django.db import transaction
+
     from ..models import DeadDrop
 
     now = timezone.now()
@@ -71,39 +76,65 @@ def check_expired_deaddrops():
 
     expired_count = 0
     for dead_drop in batch:
-        # Publish BEFORE marking expired, not after -- and catch a publish
-        # failure per row rather than let it abort the rest of the batch.
-        # 'expired' drops fall out of this task's own filter above, so a row
-        # marked expired with no notification ever queued for it (a save
-        # that lands, immediately followed by a broker hiccup on the
-        # .delay() call) would never be retried by any future tick -- a
-        # silent, permanent loss. Publishing first means the failure mode on
-        # a hiccup is the opposite and strictly safer: the row stays
-        # unmarked, so the SAME filter matches it again next tick and it
-        # gets a fresh .delay() -- at worst a duplicate notification if the
-        # earlier publish actually succeeded despite the row not yet being
-        # marked, never a silently dropped one. Harmless here specifically
-        # because this is a plain informational notice, not a signal this
-        # feature's own security guarantees depend on being sent exactly
-        # once (contrast security/tasks/duress_tasks.py, where a naive retry
-        # risks double-sending a genuine alert and idempotency has to come
-        # first -- that reasoning does not apply to this email).
-        try:
-            notify_owner_deaddrop_expired.delay(str(dead_drop.id))
-        except Exception:
-            logger.error(
-                "check_expired_deaddrops: failed to publish notification "
-                "for dead drop %s; leaving it unmarked for the next tick",
-                dead_drop.id,
-            )
-            continue
+        # `batch` is a snapshot read before this loop started, and can be
+        # stale by the time any individual row's turn comes up -- most
+        # plausibly a legitimate LAST-MINUTE collection racing the same
+        # window this task is sweeping (DeadDropCollectView has no expiry
+        # check of its own, so a collection already in flight when a drop
+        # crosses expires_at can still complete). Lock and re-check this
+        # exact row before touching it, rather than blindly writing over
+        # whatever `mark_collected()` (models.py) may have already
+        # committed: without this, a drop the user successfully collected
+        # moments earlier could get overwritten back to 'expired' -- data
+        # corruption, plus a plainly wrong "your secret expired
+        # unclaimed" email for a collection that actually succeeded.
+        with transaction.atomic():
+            try:
+                current = DeadDrop.objects.select_for_update().get(pk=dead_drop.pk)
+            except DeadDrop.DoesNotExist:
+                continue
+            if not (
+                current.is_active
+                and current.status in ('pending', 'distributed', 'active')
+                and current.expires_at < now
+            ):
+                # Collected, cancelled, reactivated, or otherwise changed
+                # underneath us since the batch was read -- leave it alone.
+                continue
 
-        dead_drop.status = 'expired'
-        dead_drop.is_active = False
-        dead_drop.save()
-        expired_count += 1
+            # Publish BEFORE marking expired, not after -- and catch a
+            # publish failure per row rather than let it abort the rest of
+            # the batch. 'expired' drops fall out of this task's own filter
+            # above, so a row marked expired with no notification ever
+            # queued for it (a save that lands, immediately followed by a
+            # broker hiccup on the .delay() call) would never be retried by
+            # any future tick -- a silent, permanent loss. Publishing first
+            # means the failure mode on a hiccup is the opposite and
+            # strictly safer: the row stays unmarked, so the SAME filter
+            # matches it again next tick and it gets a fresh .delay() -- at
+            # worst a duplicate notification if the earlier publish actually
+            # succeeded despite the row not yet being marked, never a
+            # silently dropped one. Harmless here specifically because this
+            # is a plain informational notice, not a signal this feature's
+            # own security guarantees depend on being sent exactly once
+            # (contrast security/tasks/duress_tasks.py, where a naive retry
+            # risks double-sending a genuine alert and idempotency has to
+            # come first -- that reasoning does not apply to this email).
+            try:
+                notify_owner_deaddrop_expired.delay(str(current.id))
+            except Exception:
+                logger.error(
+                    "check_expired_deaddrops: failed to publish notification "
+                    "for dead drop %s; leaving it unmarked for the next tick",
+                    current.id,
+                )
+                continue
 
-        logger.info(f"Marked dead drop {dead_drop.id} as expired")
+            current.status = 'expired'
+            current.is_active = False
+            current.save()
+            expired_count += 1
+            logger.info(f"Marked dead drop {current.id} as expired")
 
     remaining = total_count - expired_count
     if expired_count:
