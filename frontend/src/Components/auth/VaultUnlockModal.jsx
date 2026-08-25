@@ -1,26 +1,58 @@
 import React, { useState, useMemo } from 'react';
 import Modal from '../../Modal.jsx';
 import sessionVaultCrypto from '../../services/sessionVaultCrypto';
+import * as unlockEnvelopeStore from '../../services/hiddenVault/unlockEnvelopeStore';
+import { WrongPasswordError } from '../../services/hiddenVault/hiddenVaultEnvelope';
+import { reportUnlock, reportUnlockForSlot } from '../../services/duressSignalService';
 
 /**
  * VaultUnlockModal
  *
  * For OAuth (social) logins the user has no master password, so we can't
- * derive the vault encryption key directly. This modal runs the wrapped-DEK
- * flow from `sessionVaultCrypto`:
+ * derive the vault encryption key directly. This modal unlocks via the
+ * hidden-vault envelope (`../../services/hiddenVault/unlockEnvelopeStore.js`)
+ * -- see docs/vault-unlock-envelope-integration-plan.md for the full design.
  *
- *   - first time on an account    -> "setup" mode (confirm new vault password)
- *   - subsequent logins           -> "unlock" mode (enter vault password)
+ * User-visible modes (this is all `mode` below exposes to the UI):
+ *   - "setup"  -> no vault key of any kind yet. Creates the legacy
+ *                 wrapped-DEK record (unchanged) AND provisions the new
+ *                 envelope's real slot with that SAME DEK, so future
+ *                 unlocks go through the envelope while old items stay
+ *                 readable either way.
+ *   - "unlock" -> a vault key already exists. Internally this covers two
+ *                 different code paths that must look and feel identical to
+ *                 the user (see `internalMode` below): a user who already
+ *                 has an envelope decodes through it directly (and may be
+ *                 opening either the real vault or, indistinguishably, a
+ *                 configured decoy); a user who only has the legacy wrapped
+ *                 record is unlocked through it as always, then upgraded to
+ *                 an envelope transparently in the background so the NEXT
+ *                 unlock goes through the envelope too. A failed upgrade
+ *                 never fails the unlock itself.
  *
- * The component is dumb about auth state — parents decide when to show it.
+ * Indistinguishability (docs/vault-unlock-envelope-integration-plan.md §3.5):
+ * every successful path here -- setup, envelope-real, envelope-decoy, and
+ * upgrade -- ends by reporting to `duressSignalService`, fire-and-forget, so
+ * the presence/timing of that network call never reveals which one ran.
+ * Wrong-password errors from every path surface the IDENTICAL string for the
+ * same reason -- never leak which slot (or which code path) rejected it.
+ *
+ * The component is dumb about auth state — parents decide when to show it
+ * and supply `getAccessToken` for the duress report.
  */
-const VaultUnlockModal = ({ isOpen, userId, onUnlocked, onClose }) => {
-  const mode = useMemo(
-    () => (userId && sessionVaultCrypto.hasWrappedKey(userId) ? 'unlock' : 'setup'),
+const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose }) => {
+  const { mode, internalMode } = useMemo(() => {
+    if (!userId) return { mode: 'setup', internalMode: 'setup' };
+    if (unlockEnvelopeStore.hasEnvelope(userId)) {
+      return { mode: 'unlock', internalMode: 'envelope' };
+    }
+    if (sessionVaultCrypto.hasWrappedKey(userId)) {
+      return { mode: 'unlock', internalMode: 'upgrade' };
+    }
+    return { mode: 'setup', internalMode: 'setup' };
     // Re-evaluate every time the modal opens so a fresh login picks up the
     // current storage state rather than a stale mode from a previous render.
-    [userId, isOpen]
-  );
+  }, [userId, isOpen]);
 
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -32,6 +64,68 @@ const VaultUnlockModal = ({ isOpen, userId, onUnlocked, onClose }) => {
     setConfirm('');
     setError('');
     setBusy(false);
+  };
+
+  // Fire-and-forget by design (§3.5): awaiting this would make a duress
+  // unlock measurably slower than a normal one whenever the token and noise
+  // paths differ in server-side cost, which is exactly the timing tell this
+  // report exists to avoid creating. `reportUnlock` itself never throws (see
+  // its own docstring), so nothing here needs to catch.
+  const reportNoise = () => {
+    reportUnlock(getAccessToken?.(), null);
+  };
+
+  const runSetup = async () => {
+    await sessionVaultCrypto.setupVaultPassword(password, userId);
+    try {
+      const dekBytes = await sessionVaultCrypto.exportSessionDekRaw();
+      const saltB64 = sessionVaultCrypto.getOrCreateUserSalt(userId);
+      await unlockEnvelopeStore.provision({ userId, vaultPassword: password, dekBytes, saltB64 });
+    } catch (envelopeErr) {
+      // Non-fatal: the legacy wrapped-DEK record above is already live and
+      // fully usable. A user who hits this simply stays on the "upgrade"
+      // path (see runUpgrade) next time and gets the envelope then instead.
+      console.warn('VaultUnlockModal: envelope provisioning failed during setup, will retry on next unlock.', envelopeErr);
+    }
+    reportNoise();
+  };
+
+  const runUpgrade = async () => {
+    // The real unlock. If this throws, nothing below runs and the user sees
+    // the standard "Incorrect vault password." error.
+    await sessionVaultCrypto.unlockWithVaultPassword(password, userId);
+    try {
+      const { dekBytes, saltB64 } = await sessionVaultCrypto.exportWrappedDekRaw(password, userId);
+      await unlockEnvelopeStore.provision({ userId, vaultPassword: password, dekBytes, saltB64 });
+    } catch (envelopeErr) {
+      // See runSetup — the unlock above already succeeded; failing the
+      // user's login over an opportunistic upgrade would be a worse outcome
+      // than simply retrying the upgrade on their next unlock.
+      console.warn('VaultUnlockModal: envelope upgrade failed after unlock, will retry next time.', envelopeErr);
+    }
+    reportNoise();
+  };
+
+  const runEnvelopeUnlock = async () => {
+    let opened;
+    try {
+      opened = await unlockEnvelopeStore.open({ userId, password });
+    } catch (err) {
+      if (err instanceof WrongPasswordError) {
+        // Never surface hiddenVaultEnvelope's own message text here — see
+        // the module docstring's indistinguishability note. Same string as
+        // `sessionVaultCrypto.unlockWithVaultPassword`'s wrong-password path.
+        throw new Error('Incorrect vault password.');
+      }
+      throw err;
+    }
+    const { slotIndex, dekBytes, saltB64, duressToken } = opened;
+    await sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId);
+    // Fire-and-forget, per §3.5 — see reportNoise above for why. Deliberately
+    // NOT branching on slotIndex here beyond passing it through unchanged:
+    // reportUnlockForSlot itself decides real-token-vs-noise from
+    // `payloadJson.__duress_signal`, exactly as StegoVaultDashboard does.
+    reportUnlockForSlot(getAccessToken?.(), slotIndex, { __duress_signal: duressToken });
   };
 
   const handleSubmit = async (e) => {
@@ -56,10 +150,12 @@ const VaultUnlockModal = ({ isOpen, userId, onUnlocked, onClose }) => {
 
     setBusy(true);
     try {
-      if (mode === 'setup') {
-        await sessionVaultCrypto.setupVaultPassword(password, userId);
+      if (internalMode === 'setup') {
+        await runSetup();
+      } else if (internalMode === 'envelope') {
+        await runEnvelopeUnlock();
       } else {
-        await sessionVaultCrypto.unlockWithVaultPassword(password, userId);
+        await runUpgrade();
       }
       resetLocal();
       onUnlocked?.();

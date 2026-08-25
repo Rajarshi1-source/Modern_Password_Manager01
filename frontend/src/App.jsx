@@ -205,6 +205,13 @@ const DecoyVaultPreview = lazy(() => import('./Components/security/DecoyVaultPre
 const TrustedAuthorityManager = lazy(() => import('./Components/security/TrustedAuthorityManager'));
 const DuressEventLog = lazy(() => import('./Components/security/DuressEventLog'));
 
+// Vault duress (hidden-vault envelope decoy password) settings —
+// docs/vault-unlock-envelope-integration-plan.md §3.6. Distinct from the
+// Military-Grade Duress Code components above: those protect short duress
+// *codes* checked server-side; this configures the zero-knowledge decoy
+// slot VaultUnlockModal decodes client-side.
+const VaultDuressSetup = lazy(() => import('./Components/security/VaultDuressSetup'));
+
 // Honeypot Email Breach Detection — manages bait email addresses and alerts
 // when they receive traffic, indicating a credential/data leak upstream.
 const HoneypotDashboard = lazy(() => import('./Components/security/HoneypotDashboard'));
@@ -938,7 +945,7 @@ const isSafeBearerToken = (token) => {
 
 function App() {
   // JWT Authentication Hook
-  const { user, isAuthenticated, isLoading: authLoading, login, logout: authLogout } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading, login, logout: authLogout, getAccessToken } = useAuth();
 
   // The vault item list now lives in VaultContext (single source of truth);
   // the /vault list is rendered by <VaultItemsSection/>. This component keeps
@@ -2053,6 +2060,7 @@ function App() {
             <VaultUnlockModal
               isOpen={isAuthenticated && showVaultUnlock}
               userId={user?.id ?? user?.email ?? null}
+              getAccessToken={getAccessToken}
               onUnlocked={() => {
                 setShowVaultUnlock(false);
                 setError(null);
@@ -2261,6 +2269,10 @@ function App() {
                 } />
                 <Route path="/security/duress-codes/events" element={
                   !isAuthenticated ? <Navigate to="/" /> : <DuressEventLog />
+                } />
+                {/* Vault duress (hidden-vault envelope decoy password) settings */}
+                <Route path="/security/vault-duress" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <VaultDuressSetup />
                 } />
                 {/* Dark Protocol Network for Anonymous Vault Access */}
                 <Route path="/security/dark-protocol" element={
