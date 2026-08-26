@@ -798,6 +798,18 @@ export const VaultProvider = ({ children }) => {
   }, []);
 
   const deleteItem = useCallback(async (itemId) => {
+    // Decoy sessions must not mutate the REAL vault. `encryptItem`'s own
+    // refusal (sessionVaultCrypto.js) covers add/edit, but a delete carries no
+    // ciphertext, so it never reaches that gate -- it would issue a real
+    // DELETE against the one shared, server-side item list and destroy a
+    // genuine item irreversibly. Checked BEFORE the request and before any
+    // optimistic state change. Message stays generic for the same reason
+    // encryptItem's does: it must not reveal the duress feature.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to delete item. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -852,6 +864,16 @@ export const VaultProvider = ({ children }) => {
     // in flight for the same id, so out-of-order PATCH responses can't
     // persist stale state.
     if (favoriteInFlightRef.current.has(id)) return;
+
+    // Same decoy gate as deleteItem above: `favorite` is non-secret metadata
+    // and so never goes through `encryptItem`, but the PATCH still mutates a
+    // REAL item's persisted state from a session that is not the real user's.
+    // Checked before the optimistic flip, so no state change is applied either.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to update favorite. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
 
     const target = items.find(i => i.id === id);
     if (!target) return;

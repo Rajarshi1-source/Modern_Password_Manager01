@@ -131,7 +131,24 @@ describe('encryptItem refuses to write during a decoy session', () => {
   test('throws for a decoy session, before touching WebCrypto', async () => {
     await installRawDek(DECOY_DEK, SALT, USER_ID, null, true);
 
-    await expect(encryptItem({ title: 'anything' })).rejects.toThrow(/decoy session/i);
+    // Assert the GATE fired via isDecoySession(), not via the message text --
+    // the message is deliberately generic (it reaches the UI, where naming the
+    // duress feature would tell a coercer it exists), so matching on
+    // /decoy session/i here would pin exactly the wording that must not leak.
+    expect(isDecoySession()).toBe(true);
+    await expect(encryptItem({ title: 'anything' })).rejects.toThrow();
+  });
+
+  test('the refusal message never names the duress feature', async () => {
+    await installRawDek(DECOY_DEK, SALT, USER_ID, null, true);
+
+    // Indistinguishability (plan §3.5): this string is surfaced verbatim by
+    // VaultContext's `setError(error.message || ...)`, so it must read as an
+    // ordinary save failure. A regression that reintroduces "decoy"/"duress"
+    // wording is a real information leak, not a cosmetic change.
+    await expect(encryptItem({ title: 'anything' })).rejects.toThrow(
+      /^Failed to save item\. Please try again\.$/
+    );
   });
 
   test('a real session (isDecoy false) can still write and read back its own item', async () => {
