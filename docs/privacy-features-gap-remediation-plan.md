@@ -506,8 +506,18 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Read §9 through §12 of the carry-over plan before
-  assuming its own §3's original text is the literal shipped behavior.
+  corrected above. A fifth review round found 6 more issues in the OTHER
+  carry-over plan's still-unimplemented Phase 2/PR C design (payload-shape
+  validation on the desktop IPC trust boundary, local Tor-sidecar readiness
+  vs. deployment-level availability, test guidance that repeated the same
+  `vault_proxy.available` mistake §10.4 had already fixed elsewhere, a
+  redirect-hardening requirement that never made it from desktop's client to
+  mobile's, and two anonymous-credential findings genuinely valid but
+  initially misattributed by the bot to the wrong document's line numbers —
+  caught and redirected to their real location before acting on them,
+  recorded in §13 as a verification lesson in its own right). Read §9
+  through §13 of the carry-over plan before assuming its own §3's original
+  text is the literal shipped behavior.
 
 ## 6. Acceptance criteria
 

@@ -236,6 +236,23 @@ only ever send `'vault_sync'` is not a boundary; it is an assumption about a
 process this feature explicitly does not trust with network privileges (see
 "The renderer must not gain network privileges" above).
 
+**"Validate the payload shape" means specifically: the `payload` for
+`vault_sync` is sync data ONLY — the same shape `vaultService.syncVault`
+already accepts — and the handler must reject the call outright if it
+contains anything resembling a destination (`url`, `host`, `proxy`,
+`origin`, or similar keys), not merely ignore those fields. The allowlist on
+`operation` alone is not sufficient: `operation === 'vault_sync'` legitimately
+passes it, but the actual network destination must still come ONLY from
+`onionTransport.js`'s own resolution of `capabilities.anonymity.onion_address`
+(above), never from any field inside the renderer-supplied `payload`. Without
+this, a compromised renderer could ride the allowed `vault_sync` channel
+itself and smuggle a destination override through the payload rather than
+through `operation` — the allowlist would let the call through while the
+actual boundary (what the main process is permitted to POST, and where) was
+never checked. Add a test asserting a payload carrying a clearnet-looking
+`url`/`host` field is rejected before any request is made, not merely
+stripped.
+
 ## A.5 Renderer: reuse the Phase 1 contract verbatim
 
 §4.1 Phase 2 step 3 requires the renderer code to be identical across web and
@@ -284,17 +301,28 @@ Two small, additive changes, both in `frontend/src/services/`:
    Fix: `isOnionSyncAvailable()` branches on whether a non-web transport is
    selected for this platform (see the `getVaultProxyTransport()` accessor
    below). When one is: check `capabilities?.anonymity?.available &&
-   Boolean(capabilities?.anonymity?.onion_address)` instead — the
-   deployment-level "is Tor even up and does it have a published address"
-   signal, which does NOT require this particular clearnet request to have
-   arrived over onion. When none is (plain web): keep the existing
-   `vault_proxy.available` check unchanged — Phase 1's behaviour and tests
-   are untouched. The REAL per-request verification for desktop/mobile then
-   happens where it actually can: at the `proxyVaultOperation` call itself,
-   which genuinely goes out over the onion SOCKS5 circuit (A.4); a
-   `clearnet_ingress_refused` there would mean a genuine transport
-   misconfiguration, not an expected steady-state outcome the client should
-   route around silently.
+   Boolean(capabilities?.anonymity?.onion_address)` **AND** that platform's
+   own local transport readiness — for desktop, `torSidecar.getStatus()`
+   reporting a bootstrapped, running circuit (A.3's `getStatus(): { state,
+   bootstrapPercent, socksPort, lastError }`, not merely "spawned"); for
+   mobile, the analogous Orbot-running check (B.3). These are two genuinely
+   independent facts and both are required: `anonymity.available` describes
+   the SERVER's Tor daemon (always up in a correctly configured deployment,
+   and unaffected by anything happening on this device), while
+   `torSidecar.getStatus()` describes THIS device's OWN local sidecar, which
+   is stopped by default (A.3: "never auto-start") and takes real time to
+   bootstrap once started. Gating on the server-side fact alone would report
+   "available" while the local SOCKS5 listener is not yet listening — or has
+   crashed — and `proxyVaultOperation` would then fail with a raw connection
+   error instead of `isOnionSyncAvailable()` cleanly reporting unavailable
+   beforehand. When neither this bootstrap check nor a non-web transport
+   applies (plain web): keep the existing `vault_proxy.available` check
+   unchanged — Phase 1's behaviour and tests are untouched. The REAL
+   per-request verification for desktop/mobile then happens where it
+   actually can: at the `proxyVaultOperation` call itself, which genuinely
+   goes out over the onion SOCKS5 circuit (A.4); a `clearnet_ingress_refused`
+   there would mean a genuine transport misconfiguration, not an expected
+   steady-state outcome the client should route around silently.
 
    Change `onionSyncService`'s module-scope `darkProtocolService` import
    (line 46) to two things instead of one: keep the existing import for
@@ -305,10 +333,16 @@ Two small, additive changes, both in `frontend/src/services/`:
    service otherwise (mobile gets its own equivalent condition when B.3 is
    built). Tests: the first-call case (no cached address yet, capability
    fetch must still succeed); `isOnionSyncAvailable()` returns `true` on
-   desktop from `anonymity.available` alone with `vault_proxy.available:
-   false`; and an integration test asserting onion-routed `vault_sync`
-   succeeds while a clearnet-routed one still returns
-   `clearnet_ingress_refused` (403).
+   desktop only when BOTH `anonymity.available` is true AND
+   `torSidecar.getStatus()` reports ready, with `vault_proxy.available:
+   false` throughout (proving that field is never consulted on this
+   platform); `isOnionSyncAvailable()` returns `false` while the sidecar is
+   still bootstrapping (any percentage short of 100) even though
+   `anonymity.available` is already true; and the same for a stopped/crashed
+   sidecar (`lastError` set). The request-level integration assertion for
+   the onion-routed-succeeds / clearnet-routed-403 pair is A.7's job, not
+   this list's — see A.7 below for why `vault_proxy.available` must not be
+   the success signal there either.
 
 Everything else — the three modes, the fail-closed `require_onion` branch, the
 `degraded` flag, `VaultContext`, `DarkProtocolSettings.jsx` — is untouched.
@@ -331,10 +365,17 @@ state (§4.1 Phase 2 step 4). Feed it `tor:status`. Add no new component.
   `onionSyncService` calls the desktop shim; without it, the web service. Assert
   the three modes behave identically in both — this is the "contract verbatim"
   claim, and it is only true if tested.
-- **Integration (docker-compose `--profile tor`):** desktop-shaped SOCKS5
-  request to the `.onion` returns `vault_proxy.available === true`; the same
-  request over clearnet returns `clearnet_ingress_refused` (403) and the client
-  surfaces it rather than retrying over clearnet.
+- **Integration (docker-compose `--profile tor`):** request-level assertions,
+  not `vault_proxy.available` — per A.5's own fix, desktop's `getCapabilities`
+  call is always clearnet, so `vault_proxy.available` is structurally always
+  `false` for it and must never be treated as the success signal here.
+  Instead: a `vault_sync` operation sent through the desktop's real onion
+  SOCKS5 transport succeeds; the same operation sent over clearnet is refused
+  with `clearnet_ingress_refused` (403) and the client surfaces it rather
+  than retrying over clearnet; and `anonymity.onion_address` being present on
+  the (clearnet) capabilities response is asserted separately, as the
+  bootstrap signal it actually is, not conflated with the request-level
+  outcome above.
 - **e2e:** extend `e2e/dark_protocol.spec.js` with the sync-over-proxy case
   §4.1's own test list already asks for.
 
@@ -436,13 +477,32 @@ protection the platform cannot deliver.
    (`proxyVaultOperation`) that performs the POST through that client and
    returns the response to JS. This is a real, complete stack: standard
    OkHttp, standard `java.net.Proxy`, no unsupported convenience class in the
-   path. Whichever exact bridging shape is chosen, **the renderer contract
+   path.
+
+   **Apply the SAME redirect hardening A.4 requires for desktop's Axios
+   client — OkHttp's default redirect behaviour is not safe here either.**
+   Build the client with `.followRedirects(false).followSslRedirects(false)`,
+   or if a redirect must be honored, validate the target stays on the exact
+   `.onion` origin before following it — otherwise a malicious or
+   misconfigured response could redirect this client to a clearnet endpoint
+   it would then unknowingly call, exactly the risk A.4's `maxRedirects: 0`
+   closes for desktop. This does not follow automatically from switching to
+   OkHttp; it is a separate configuration step on the same `OkHttpClient`
+   the SOCKS proxy is attached to. Add an Android test asserting a redirect
+   to a clearnet target is rejected, not silently followed.
+
+   Whichever exact bridging shape is chosen, **the renderer contract
    does not change** — `onionSyncService.syncVault` still returns
    `{ data, transport, degraded }`. Add an Android integration test that
    proves `vault_sync` genuinely reaches the onion ingress through this
-   stack (not just that the native module compiles), asserting the same
-   `vault_proxy.available === true`-then-succeeds / clearnet-403 pair A.5
-   and A.7 require for desktop.
+   stack (not just that the native module compiles) — the same
+   request-level pair A.7 requires for desktop: the onion-routed operation
+   succeeds, the clearnet-routed one is refused with
+   `clearnet_ingress_refused` (403), and `anonymity.onion_address` is
+   asserted separately from either outcome. Not `vault_proxy.available`:
+   mobile's `getCapabilities` call is clearnet for the identical reason
+   desktop's is (A.5), so that field is structurally always `false` here
+   too and must never be read as a success signal.
 6. **Onion address** from `capabilities.anonymity.onion_address`, same as
    desktop. No hardcoding.
 
@@ -528,8 +588,21 @@ implementation. It must settle:
   (clearnet, `IsAuthenticated`), and a `HasAnonymousCredential` DRF permission
   class.
 - **`/vault-proxy/` permission change:** accept *either* `IsAuthenticated` **or**
-  a valid anonymous credential, and require onion ingress in the credential case.
-  Do not remove `IsAuthenticated` — clients that have not migrated must keep
+  a valid anonymous credential. **The onion-ingress check
+  (`request_is_onion_ingress` → `clearnet_ingress_refused`) already runs
+  endpoint-wide, unconditionally, before either permission class is even
+  evaluated — this PR does not add that check "for the credential case," it
+  is not new, and it must not become conditional on which branch
+  authorizes the request.** Stated explicitly because the obvious-looking
+  phrasing "require onion ingress for the credential path" invites exactly
+  the wrong implementation: moving or duplicating the check inside
+  `HasAnonymousCredential` alone, which would leave a JWT-authenticated
+  (`IsAuthenticated`) request's onion-ingress enforcement resting on
+  whichever code path happens to run first — a real risk on ANY future
+  refactor of this permission logic, not just this PR. The check belongs on
+  `DarkProtocolService.proxy_vault_operation` itself, ahead of or
+  independent of both permission classes, exactly where it already is. Do
+  not remove `IsAuthenticated` — clients that have not migrated must keep
   working, and a flag day here means a sync outage.
 - **Ownership scoping is the hard part.** `VAULT_OPERATION_ROUTES` dispatches to
   the genuine vault views, whose scoping is `request.user`-based
@@ -547,7 +620,23 @@ implementation. It must settle:
 
 - Issuance/redemption round-trip; a redeemed token is rejected on reuse.
 - A credential minted for user A cannot reach user B's vault.
-- Redemption over clearnet is refused (`clearnet_ingress_refused` still applies).
+- Redemption over clearnet is refused (`clearnet_ingress_refused` still applies)
+  — asserted for THREE separate authentication shapes, not just the credential
+  one: a JWT-only (`IsAuthenticated`) request over clearnet, a
+  credential-only request over clearnet, and a request presenting both. All
+  three must be refused identically, proving the clearnet check in C.3 truly
+  stays endpoint-wide rather than only firing on one branch.
+- **Negative route-scope, covering every entry in `VAULT_OPERATION_ROUTES`,
+  not just `vault_sync`.** C.2 point 3 requires a redeemed credential to
+  "authorise exactly one `vault_sync`, and authorise nothing else — it must
+  not be usable to read or enumerate the vault." That is a claim about every
+  OTHER route in the table, so test every other route explicitly: a valid,
+  unspent credential attempted against `vault_get`, `vault_list`,
+  `vault_create`, `vault_update`, `vault_delete`, and `vault_search` must
+  each be rejected before vault dispatch, not merely "not `vault_sync`."
+  Asserting only that `vault_sync` succeeds would leave this requirement
+  entirely unverified — a credential that happened to also authorize
+  `vault_list` would pass every test in this list except this one.
 - Expired credential refused; clock-skew tolerance asserted explicitly.
 - Load test on the double-spend store: no false accepts under concurrency. This
   is the security-critical case.
