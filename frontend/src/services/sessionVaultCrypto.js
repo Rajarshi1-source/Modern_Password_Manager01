@@ -60,7 +60,12 @@ let sessionSaltB64 = null;
 // reuses it, see unlockEnvelopeStore.js), and the real session would later
 // try to open it with the REAL DEK because `keyForSalt` fast-paths on a
 // matching salt -- an AES-GCM auth failure that permanently corrupts a row
-// in the one shared, server-side item list. Never set by any other path.
+// in the one shared, server-side item list. Every OTHER session-establishing
+// function (`initSessionKeyFromPassword`, `setupVaultPassword`,
+// `unlockWithVaultPassword`, `clearSessionKey`) explicitly resets this to
+// `false` next to its own `sessionKey` assignment, so a stale `true` from an
+// earlier decoy session can never survive into a later real one that
+// installs a session key WITHOUT going through `installRawDek` again.
 let sessionIsDecoy = false;
 // Retained ONLY for path (A) (direct derivation), so `decryptItem` can derive a
 // key for an envelope written under a DIFFERENT salt than this device's -- see
@@ -221,6 +226,11 @@ export const initSessionKeyFromPassword = async (password, userId) => {
   sessionSaltB64 = saltB64;
   sessionKey = key;
   sessionPassword = password;
+  // Path (A) never installs a decoy DEK -- clear a stale flag from a PRIOR
+  // decoy session that never went through clearSessionKey(), so a genuine
+  // real session installed after one doesn't inherit encryptItem's write
+  // refusal. See sessionIsDecoy's own comment.
+  sessionIsDecoy = false;
   // A re-init (different account, or the same one after a password change)
   // invalidates every memoized key -- they were derived from the OLD password.
   foreignSaltKeys.clear();
@@ -293,6 +303,10 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
   // derive foreign-salt keys FROM, so drop any path-(A) leftovers rather than
   // letting `keyForSalt` derive with a password that doesn't match this session.
   sessionPassword = null;
+  // See initSessionKeyFromPassword -- this is the freshly-generated REAL DEK,
+  // never a decoy one, so any stale flag from an earlier decoy session must
+  // not survive into it.
+  sessionIsDecoy = false;
   foreignSaltKeys.clear();
 };
 
@@ -344,6 +358,9 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
   sessionKey = dek;
   // See `setupVaultPassword` — path (B) has no password to memoize against.
   sessionPassword = null;
+  // See initSessionKeyFromPassword -- this is the legacy wrapped-DEK record's
+  // REAL key, never a decoy one.
+  sessionIsDecoy = false;
   foreignSaltKeys.clear();
 };
 

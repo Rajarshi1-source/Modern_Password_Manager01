@@ -26,6 +26,9 @@ import {
   clearSessionKey,
   encryptItem,
   decryptItem,
+  initSessionKeyFromPassword,
+  setupVaultPassword,
+  unlockWithVaultPassword,
 } from '../sessionVaultCrypto';
 
 const USER_ID = 'user-decoy-1';
@@ -77,6 +80,50 @@ describe('isDecoySession / installRawDek', () => {
     await installRawDek(REAL_DEK, SALT, USER_ID, null, false);
 
     expect(isDecoySession()).toBe(false);
+  });
+});
+
+describe('a stale decoy flag does not survive into a session established WITHOUT installRawDek', () => {
+  // CodeRabbit nitpick: only installRawDek and clearSessionKey wrote
+  // sessionIsDecoy. If a decoy session were replaced by
+  // initSessionKeyFromPassword / setupVaultPassword / unlockWithVaultPassword
+  // WITHOUT an intervening clearSessionKey(), the flag stayed true and
+  // encryptItem refused writes for what is now a genuine real session
+  // (fail-closed, but wrongly so). Each of these three now resets the flag
+  // itself, next to its own sessionKey assignment.
+  test('initSessionKeyFromPassword resets it', async () => {
+    await installRawDek(DECOY_DEK, SALT, USER_ID, null, true);
+    expect(isDecoySession()).toBe(true);
+
+    await initSessionKeyFromPassword('a real master password', USER_ID);
+
+    expect(isDecoySession()).toBe(false);
+    await expect(encryptItem({ title: 'now writable' })).resolves.toBeTruthy();
+  });
+
+  test('setupVaultPassword resets it', async () => {
+    await installRawDek(DECOY_DEK, SALT, USER_ID, null, true);
+    expect(isDecoySession()).toBe(true);
+
+    await setupVaultPassword('a fresh vault password', USER_ID);
+
+    expect(isDecoySession()).toBe(false);
+    await expect(encryptItem({ title: 'now writable' })).resolves.toBeTruthy();
+  });
+
+  test('unlockWithVaultPassword resets it', async () => {
+    // Establish a real wrapped-DEK record to unlock, independent of the
+    // decoy state under test below.
+    await setupVaultPassword('the-real-vault-password', USER_ID);
+    clearSessionKey();
+
+    await installRawDek(DECOY_DEK, SALT, USER_ID, null, true);
+    expect(isDecoySession()).toBe(true);
+
+    await unlockWithVaultPassword('the-real-vault-password', USER_ID);
+
+    expect(isDecoySession()).toBe(false);
+    await expect(encryptItem({ title: 'now writable' })).resolves.toBeTruthy();
   });
 });
 

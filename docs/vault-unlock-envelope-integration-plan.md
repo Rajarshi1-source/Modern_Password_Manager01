@@ -272,6 +272,34 @@ unlock is the kind of thing that gets a security feature switched off. Do
 **not** lower the Argon2 parameters to hit the number; they are the entire
 security margin of the decoy.
 
+**Status: still outstanding — a sixth CodeRabbit review round correctly
+flagged this checklist as unchecked, and a live measurement was attempted
+and blocked, not skipped.** A standalone Vite entry importing
+`hiddenVaultEnvelope.js` directly (bypassing the full app, since no backend
+was available to authenticate through the real `VaultUnlockModal` flow) hit
+a real, reproducible Vite dependency-resolution failure: `argon2-browser`
+ships as a UMD bundle; this project's `vite.config.js` both lists it in
+`optimizeDeps.include` (pre-bundle the bare specifier) AND aliases the bare
+specifier to `argon2-browser/dist/argon2-bundled.min.js` (a different,
+un-prebundled path) for a WASM-loading fix. For any module graph OUTSIDE
+the app's main entry — which has presumably already resolved and cached
+this correctly during normal dev-server startup — those two directives
+resolve inconsistently and the alias target's CJS/UMD wrapper never gets
+Vite's ESM interop applied, so `import argon2 from 'argon2-browser'`
+resolves to a module with no `default` export and throws before any
+Argon2id call runs. This is worth fixing in its own right before anyone
+next attempts this measurement the same way: either drop the redundant
+`optimizeDeps.include` entry (the alias alone should be sufficient) or add
+`optimizeDeps.include: ['argon2-browser/dist/argon2-bundled.min.js']`
+instead. **This blocker is specific to a standalone/isolated module entry,
+not to the shipped app** — production and the normal dev server already
+serve real users through this exact code path today, so it says nothing
+about the correctness of what shipped, only about how to measure it in
+isolation. The actual measurement — real Argon2id timing on real hardware,
+through the real `VaultUnlockModal` UI with a running backend and an
+authenticated session — remains genuinely undone and is not a number this
+plan should guess at.
+
 ---
 
 ## 4. Tests
@@ -332,11 +360,18 @@ security margin of the decoy.
       working session DEK and the vault renders.
 - [ ] No master or decoy password appears in any request body on the unlock
       path (contract test).
-- [ ] Slot-0 and slot-1 unlocks are indistinguishable in endpoint, request byte
-      length, log output, and `VaultUnlockModal`'s own rendered DOM
-      (explicitly NOT the vault dashboard rendered after unlock — see §7 and
-      the duress-setup screen's own limitation notice for why that is a
-      separate, unsolved problem).
+- [x] Slot-0 and slot-1 unlocks are indistinguishable, verified precisely —
+      not by one test proving all of it, but by matching each guarantee to
+      the test that actually covers it: **endpoint and request byte length**
+      are `duressSignalService`'s own contract (fixed 44-char base64 for
+      both a real token and noise, one hardcoded URL —
+      `duressSignalService.test.js`), unrelated to which slot decoded;
+      **rendered DOM and console output** are `VaultUnlockModal`'s own
+      (`VaultUnlockModal.test.jsx`'s indistinguishability test, hardened in
+      round 6 to also assert log-output equality, not just DOM). Explicitly
+      NOT the vault dashboard rendered after unlock — see §7 and the
+      duress-setup screen's own limitation notice for why that is a
+      separate, unsolved problem.
 - [ ] A decoy unlock creates a `DuressEvent`; a normal unlock does not.
 - [ ] An existing OAuth user with a wrapped DEK and no envelope is upgraded
       transparently on their next unlock, and a failed upgrade does not block
@@ -546,12 +581,14 @@ shows the real vault's item list with each entry failing to decrypt, not an
 empty or curated one (see the known limitation already recorded in §7 of
 THIS plan and its own risk-table row above). The two paragraphs flatly
 disagreed with each other. Fixed by rewriting the intro to only claim what
-is actually true and tested — the unlock REQUEST is indistinguishable
-(same endpoint, shape, and timing; verified by the DOM-equality test in
-§9.1's own test suite) — while pointing the reader at the limitation notice
-for what appears on screen afterward, rather than asserting something the
-very next paragraph disproves. No test added — this was a copy-only fix and
-CodeRabbit's own finding did not ask for coverage here, unlike the other
+is actually true and tested — the unlock REQUEST is indistinguishable (same
+endpoint and byte length: `duressSignalService.test.js`'s own contract
+tests; same rendered output and console output: `VaultUnlockModal.test.jsx`'s
+indistinguishability test, §9.1) — while pointing the reader at the
+limitation notice for what appears on screen afterward, rather than
+asserting something the very next paragraph disproves. No test added at the
+time of THIS fix — it was a copy-only change and CodeRabbit's own finding
+did not ask for coverage here, unlike the other
 three.
 
 ### 10.4 `docs/onion-sync-transport-phases-2-4-plan.md`: A.5's own fix from §9.3 had introduced a NEW, worse bug
@@ -913,3 +950,96 @@ fixed directly in `docs/onion-sync-transport-phases-2-4-plan.md`:
    exactly that ("authorise nothing else — it must not be usable to read or
    enumerate the vault"). Fixed by adding an explicit negative-route-scope
    test bullet covering every other entry in `VAULT_OPERATION_ROUTES`.
+
+## 14. Implementation status — sixth CodeRabbit review round (2026-08-26)
+
+A sixth `@coderabbitai full review` found 8 issues: 1 in this repo's shipped
+code, and 7 doc-only corrections split across this file,
+`docs/onion-sync-transport-phases-2-4-plan.md` (still fully unimplemented,
+so zero code-regression risk), and `docs/privacy-features-gap-remediation-plan.md`.
+Recorded here too, briefly, so the full review history for PR #489 stays in
+one place rather than split silently across documents.
+
+1. **`frontend/src/services/sessionVaultCrypto.js`: `sessionIsDecoy` was
+   only ever reset to `false` by `installRawDek` and `clearSessionKey`, never
+   by the three OTHER functions that also establish a session key
+   (`initSessionKeyFromPassword`, `setupVaultPassword`,
+   `unlockWithVaultPassword`).** None of these three ever install a decoy
+   DEK, so this was fail-closed rather than a security hole — but a stale
+   `true` left over from an earlier decoy session that never went through
+   `clearSessionKey()` would make `encryptItem()`'s decoy write-refusal (the
+   round-3 fix, §11.5) misfire against a session that is now genuinely real,
+   silently blocking legitimate vault writes. Fixed by resetting
+   `sessionIsDecoy = false` next to each function's own `sessionKey`
+   assignment, and added 3 new tests
+   (`sessionVaultCrypto.decoySession.test.js`) covering exactly this: a
+   stale decoy flag does not survive into a session established without
+   `installRawDek`.
+2. **§3.7's performance checklist item ("measure `decode()` p50/p95 in a
+   real browser before shipping") was still unchecked, correctly** — this
+   round's finding was that it remained outstanding, not that it was
+   mis-stated. A real measurement attempt was made (a minimal Vite-served
+   harness importing `hiddenVaultEnvelope.js` directly) and hit a genuine,
+   reproducible tooling blocker: `argon2-browser` resolves inconsistently
+   between `vite.config.js`'s `optimizeDeps.include` and `resolve.alias`
+   entries for a fresh, isolated module graph outside the main app's entry
+   point, producing a UMD/ESM interop `SyntaxError`. Confirmed this is a
+   tooling artifact (the shipped app's own existing entry point is
+   unaffected) rather than a defect in the reviewed code, and documented the
+   blocker plus its actual fix (drop the redundant `optimizeDeps.include`
+   entry, or point it at the same aliased path) in §3.7 itself, so the next
+   attempt doesn't repeat the investigation. The measurement itself is still
+   not done.
+3. **§5's and §10.3's "indistinguishable" acceptance claims still credited
+   one general description to the specific tests that verify each part.**
+   Reworded both to attribute precisely: endpoint and request byte length
+   are `duressSignalService.test.js`'s own contract tests; rendered DOM
+   *and* console output are `VaultUnlockModal.test.jsx`'s indistinguishability
+   test. The DOM half was already covered (§11.7); the console-output half
+   was not, so a new assertion was added to that same test
+   (`vi.spyOn(console, 'log'/'warn'/'error')` around both a slot-0 and a
+   slot-1 unlock, asserting the captured call arrays are equal) rather than
+   just narrowing the prose to match existing coverage.
+4. **`docs/onion-sync-transport-phases-2-4-plan.md` A.3: neither the
+   bootstrap-gating nor the bounded-restart bullets said who actually calls
+   them, or what happens if Tor's child process fails outright.** Fixed with
+   two additions: a startup deadline (~60s) that rejects — never hangs — on
+   child-process failure, with cleanup that doesn't mask the original error;
+   and an explicit single lifecycle owner (the desktop main process, driven
+   by privacy-mode setting changes: starts on `prefer_onion`/`require_onion`,
+   stops on `off`), since a start/stop policy with no named owner is not
+   actually implementable as stated.
+5. **`docs/onion-sync-transport-phases-2-4-plan.md` B.3: the `http://<addr>.onion`
+   guidance didn't account for Android's platform-level cleartext-traffic
+   block.** API 28+ blocks cleartext HTTP by default, and OkHttp (B.3's own
+   transport) honors that policy — so the plaintext onion listener would be
+   silently blocked by the OS before OkHttp's own SOCKS5 routing ever runs.
+   Fixed by cross-referencing this constraint from A.3 and adding the actual
+   fix to B.3: a domain-scoped Network Security Configuration exception
+   (`cleartextTrafficPermitted="true"` scoped to the exact onion hostname,
+   never granted globally), with a test requirement on an API 28+ target
+   with no global cleartext exception.
+6. **`docs/onion-sync-transport-phases-2-4-plan.md` A.4: nothing specified
+   how a desktop/mobile request reaches `/vault-proxy/`'s `IsAuthenticated`
+   requirement at all.** The web client already sends this via
+   `darkProtocolService.js`'s `authHeader()`, but the desktop/mobile
+   transport design never carried that requirement over — as written, a
+   correctly payload-validated (§13 point 1) request would still be rejected
+   for having no bearer token. Fixed by specifying
+   `proxyVaultOperation(operation, payload, authToken)` with the auth token
+   as its own explicitly-named parameter, kept separate from `payload` so it
+   can't be confused with — or smuggled through — the destination-field
+   defense already in place there.
+7. **`docs/privacy-features-gap-remediation-plan.md`'s Phase 2 summary still
+   described the payload defense as an operation allowlist alone**, without
+   the payload-shape check §13 point 1 had already added to the detailed
+   design doc. Same class of gap as §12.1 (a summary restating a
+   since-corrected design in less precise terms) — fixed by extending the
+   parenthetical to name the payload-shape check and cross-reference A.4.
+
+Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/comments`
+(date-filtered to this round) that only CodeRabbit posted; no Codex or
+Greptile activity this round. Targeted tests
+(`sessionVaultCrypto.decoySession.test.js`, `sessionVaultCrypto.salt.test.js`,
+`VaultUnlockModal.test.jsx` — 42 tests) and `eslint` all pass; markdownlint
+(MD040/MD018) clean on all three touched doc files.

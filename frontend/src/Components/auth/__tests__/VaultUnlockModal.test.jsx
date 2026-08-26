@@ -181,22 +181,46 @@ describe('unlock mode — envelope already provisioned', () => {
     expect(onUnlocked).not.toHaveBeenCalled();
   });
 
-  test('indistinguishability: rendered output after a slot-0 and a slot-1 unlock is identical', async () => {
+  test('indistinguishability: rendered output and console output after a slot-0 and a slot-1 unlock are both identical', async () => {
+    // Scope note (CodeRabbit, round 6): this test proves DOM equality and
+    // log-output equality for VaultUnlockModal itself -- it does NOT prove
+    // "same endpoint" or "same request byte length", since
+    // reportUnlockForSlot is mocked here rather than making a real network
+    // call. Those two guarantees are duressSignalService's own contract,
+    // verified in duressSignalService.test.js (the fixed-length token/noise
+    // assertions and the single hardcoded endpoint URL) -- see §5's
+    // acceptance criterion for the precise split.
+    const logSpyA = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpyA = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpyA = vi.spyOn(console, 'error').mockImplementation(() => {});
+
     unlockEnvelopeStore.open.mockResolvedValueOnce({ slotIndex: 0, dekBytes: DEK, saltB64: 's', duressToken: null });
     const runA = renderModal({ onUnlocked: vi.fn() });
     await submitPassword(runA.getByLabelText, runA.getByRole, 'whatever-1');
     await waitFor(() => expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledTimes(1));
     const htmlAfterReal = runA.container.innerHTML;
+    const consoleCallsAfterReal = [...logSpyA.mock.calls, ...warnSpyA.mock.calls, ...errorSpyA.mock.calls];
     runA.unmount();
+    vi.restoreAllMocks();
+
+    const logSpyB = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpyB = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpyB = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     unlockEnvelopeStore.open.mockResolvedValueOnce({ slotIndex: 1, dekBytes: DEK, saltB64: 's', duressToken: 'tok' });
     const runB = renderModal({ onUnlocked: vi.fn() });
     await submitPassword(runB.getByLabelText, runB.getByRole, 'whatever-2');
     await waitFor(() => expect(sessionVaultCrypto.installRawDek).toHaveBeenCalledTimes(2));
     const htmlAfterDecoy = runB.container.innerHTML;
+    const consoleCallsAfterDecoy = [...logSpyB.mock.calls, ...warnSpyB.mock.calls, ...errorSpyB.mock.calls];
     runB.unmount();
 
     expect(htmlAfterDecoy).toBe(htmlAfterReal);
+    // Neither slot logs anything at all on a successful unlock -- and
+    // critically, neither logs a DIFFERENT amount than the other, which is
+    // the actual indistinguishability property (a slot-conditional debug
+    // log would be exactly the kind of tell this asserts against).
+    expect(consoleCallsAfterDecoy).toEqual(consoleCallsAfterReal);
   });
 });
 

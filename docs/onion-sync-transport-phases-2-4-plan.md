@@ -153,6 +153,18 @@ Requirements:
 - **Bootstrap gating.** Parse `NOTICE: Bootstrapped NN%` from stdout, or use the
   control port. Do not report available before 100% AND the real-connection
   check above both pass.
+- **A startup deadline, and reject (never hang) on child-process failure.**
+  Nothing above bounds how long `start()` waits — if Tor never reaches 100%,
+  or the process is alive but stuck, `start()`'s promise would simply never
+  settle. Enforce a deadline (a fixed timeout, e.g. 60s, is enough — Tor
+  bootstrap either completes quickly or something is genuinely wrong) and
+  reject once it passes. Separately, `start()` must also reject immediately
+  if the Tor child process itself errors or exits before bootstrap finishes
+  — waiting on stdout from a process that already died is the same hang
+  under a different cause. Run cleanup (killing whatever did spawn) in a
+  `finally`-style path that cannot itself mask the original failure reason.
+  Add a test for a stalled-bootstrap (deadline) case, not just the
+  already-covered success path.
 - **Kill on every exit path this process can actually observe.** `app.on('will-quit')` /
   `app.on('before-quit')` with `event.preventDefault()`, awaiting one guarded
   `stop()`, then quitting — this is the only path that can run async cleanup
@@ -171,6 +183,21 @@ Requirements:
   by default is a surprising and, in some jurisdictions, unsafe default.
 - **Bounded restart.** At most 3 restarts in 10 minutes, then stay down and
   report `lastError`. Do not loop.
+- **A single, explicit lifecycle owner — this is not implied by the two
+  bullets above, it must be built.** Something has to actually call
+  `torSidecar.start()`/`stop()`; neither `onionSyncService.syncVault()` nor
+  anything else does this today, because none of Phase 2 exists yet. Put
+  this decision in the desktop main process, driven by the privacy-mode
+  setting, not in `syncVault()` itself (which must stay identical to the
+  Phase 1 contract per A.5): when the mode changes TO `prefer_onion` or
+  `require_onion`, start the sidecar and let the FIRST subsequent
+  `proxyVaultOperation` call await its readiness; when the mode changes TO
+  `off`, stop a running sidecar rather than leaving it live for no reason
+  (an idle Tor circuit is both a resource cost and a needless attack
+  surface once the user has said they don't want one). Test the first sync
+  from a fully-stopped state (sidecar starts, readiness is awaited, sync
+  proceeds) and the `prefer_onion` → `off` transition (sidecar actually
+  stops, not just "sync stops using it").
 
 ## A.4 Transport: routing the request through the circuit
 
@@ -197,7 +224,10 @@ New `desktop/src/main/onionTransport.js`:
   pattern for hidden services — layering HTTPS on top would be redundant
   encryption for no additional guarantee unless an explicit TLS terminator
   is deliberately added and tested (not assumed). Apply the same `http://`
-  scheme to the mobile client (B.3) once it exists.
+  scheme to the mobile client (B.3) once it exists — but see B.3's own note:
+  on Android, `http://` alone is not sufficient, because the platform
+  blocks cleartext traffic by default for any app targeting API 28+, and
+  OkHttp (B.3's own transport) honors that platform policy.
 - Do **not** set `Host` manually — requesting `http://<addr>.onion/...` sets it
   correctly, and that is condition 4 of `request_is_onion_ingress`. A
   hand-written `Host` is the single easiest way to get this subtly wrong.
@@ -252,6 +282,31 @@ actual boundary (what the main process is permitted to POST, and where) was
 never checked. Add a test asserting a payload carrying a clearnet-looking
 `url`/`host` field is rejected before any request is made, not merely
 stripped.
+
+**A separate, more basic gap: nothing above says how the request reaches
+`/vault-proxy/`'s `IsAuthenticated` requirement at all.** `/vault-proxy/` is
+`IsAuthenticated` today (§C.1), and the WEB client already satisfies this —
+every `darkProtocolService` call, including the existing
+`proxyVaultOperation`, sends `authHeader()`'s bearer token
+(`frontend/src/services/darkProtocolService.js`). Desktop's onion-routed
+request goes out from a completely different process (the Electron main
+process, over its own OkHttp/Axios client), which has no JWT of its own —
+without one, the onion-routed `vault_sync` gets a 401 before the proxy logic
+ever runs, and Phase 2 does not work AT ALL regardless of how correctly
+everything else here is built. Fix: `onionSyncService`'s desktop branch
+passes the CURRENT session's bearer token (the same one `darkProtocolService`
+already has, sourced identically) as an explicit, separately-named argument —
+`proxyVaultOperation(operation, payload, authToken)`, never folded into
+`payload` — and `onionTransport.js` attaches it as the request's
+`Authorization` header, exactly mirroring what the web client already does
+for every other dark-protocol call. Keeping it a separate parameter, not a
+payload field, is what keeps this compatible with the payload-shape
+validation immediately above: `authToken` is legitimate credential data the
+main process is meant to use, not a destination the renderer controls, so it
+must never be checked against — or confused with — the destination-field
+rejection rule. Mobile's `proxyVaultOperation` (B.3) needs the identical
+fix, sourced from wherever the RN app already holds its own bearer token
+today.
 
 ## A.5 Renderer: reuse the Phase 1 contract verbatim
 
@@ -490,6 +545,21 @@ protection the platform cannot deliver.
    OkHttp; it is a separate configuration step on the same `OkHttpClient`
    the SOCKS proxy is attached to. Add an Android test asserting a redirect
    to a clearnet target is rejected, not silently followed.
+
+   **A separate, platform-level blocker: Android rejects cleartext HTTP by
+   default for any app targeting API 28+, and OkHttp honors that policy —
+   this `http://<addr>.onion` request would be blocked before it ever
+   reaches Orbot, independent of anything above.** The fix is a
+   domain-scoped exception, not a global one: a Network Security
+   Configuration (`res/xml/network_security_config.xml`) with
+   `cleartextTrafficPermitted="true"` scoped to the exact `.onion` hostname,
+   referenced via `android:networkSecurityConfig` in the manifest. **Do
+   not** set `cleartextTrafficPermitted="true"` at the base/global level —
+   that would silently permit plaintext HTTP for every other request this
+   app makes, a real regression the domain-scoped form avoids entirely.
+   Test the onion request actually succeeds on an API 28+ target without
+   global cleartext enabled — this is a platform policy, not something a
+   unit test mocking OkHttp would catch.
 
    Whichever exact bridging shape is chosen, **the renderer contract
    does not change** — `onionSyncService.syncVault` still returns
