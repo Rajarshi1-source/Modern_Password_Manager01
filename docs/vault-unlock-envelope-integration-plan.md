@@ -1,10 +1,15 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across five CodeRabbit review rounds
-(§9–§13) — read all five before relying on §3's original design as the
+**Implemented in PR #489, then hardened across seven CodeRabbit review rounds
+(§9–§16) — read all seven before relying on §3's original design as the
 literal shipped behavior. §11.5 in particular is a real data-corruption fix,
-not a cosmetic one; §13 records a bot misattribution caught before acting on
-it.**
+not a cosmetic one; §16.1 extends it to the two mutation paths it originally
+missed; §13 records a bot misattribution caught before acting on it.**
+
+**§0 below is the PRE-IMPLEMENTATION baseline** — the verdict table records
+what was true when this plan was written, which is why it still lists
+`VaultUnlockModal` as "Not integrated". PR #489 is what changed that. Read
+§9–§16 for the shipped state; do not read §0 as current status.
 
 Deferred from PR #486 (`docs/privacy-features-gap-remediation-plan.md` §4.2,
 §5 "Not delivered"). PR #486 shipped the backend and the service layer; the
@@ -17,7 +22,7 @@ order.
 
 ---
 
-## 0. Verdict table — what exists today, verified by reading the code
+## 0. Verdict table — the PRE-IMPLEMENTATION baseline, verified by reading the code
 
 | Piece | State | Evidence |
 |---|---|---|
@@ -248,8 +253,9 @@ this is the canonical route; do not reuse or repoint the dead
 `/security/duress` link:
 
 1. User enters the current vault password plus a new decoy password.
-2. Client generates a fresh decoy DEK and calls
-   `unlockEnvelopeStore.setDecoySlot(...)`.
+2. `unlockEnvelopeStore.setDecoySlot(...)` generates the fresh decoy DEK
+   internally and re-encodes the envelope — the caller never supplies one
+   (see §15.6).
 3. `registerSignalToken(getAccessToken(), duressToken)` — **after** the
    re-encoded blob is persisted, never before. Round 4 of #486 (§10.3) fixed
    exactly this ordering bug in `StegoVaultDashboard.onEmbed`: registering a
@@ -1150,3 +1156,131 @@ Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/
 Doc-only changes; no code touched, so no test suite run beyond the
 markdownlint check already required by this repo's convention for
 doc-only PRs.
+
+## 16. Implementation status — eighth CodeRabbit review round (2026-08-26)
+
+An eighth `@coderabbitai full review` found 6 issues: **2 in shipped code**
+(the first code findings since round 6), 4 doc-only. One of the six was
+accepted in part and declined in part, for a reason recorded below rather
+than silently dropped.
+
+### 16.1 §11.5's decoy write-gate missed the two mutation paths that never encrypt — Major, and the same "built the guard, forgot a caller" pattern this PR family keeps hitting
+
+§11.5 (round 3) stopped a decoy session from corrupting the real vault by
+refusing inside `sessionVaultCrypto.encryptItem()`. That covers
+`VaultContext.addItem` and `updateItem`, since both call `encryptEnvelope`
+→ `encryptItem` before writing. It does **not** cover the two mutation
+paths that legitimately never encrypt anything, verified by reading each
+end to end:
+
+- **`VaultContext.deleteItem`** calls `vaultService.deleteVaultItem(itemId)`
+  directly and sends no ciphertext at all, so it never reaches the gate. In
+  a decoy session this would issue a real `DELETE` against the one shared,
+  server-side item list — **destroying a genuine item irreversibly**. That
+  is strictly worse than the corruption §11.5 was written to prevent: a
+  corrupt row at least still exists.
+- **`VaultContext.toggleFavorite`** deliberately bypasses the re-encrypt
+  path (its own comment explains why: `favorite` is non-secret metadata and
+  the item may be lazy-loaded with no decrypted payload available), issuing
+  a metadata-only `PATCH`. Lower severity, but still a real mutation of a
+  real item's persisted state from a session that is not the real user's,
+  and it applies an optimistic local flip before the request.
+
+**Fix:** both now check `sessionVaultCrypto.isDecoySession()` **before the
+request and before any optimistic state change**, mirroring the
+`hasVaultSessionKey()` guard pattern `addItem`/`updateItem` already use in
+the same file — no new mechanism, just the existing one applied where it was
+missing. New test file
+`frontend/src/contexts/__tests__/VaultContext.decoySession.test.jsx`
+(6 tests) asserts, for each path: no service call is made, no state change
+is applied, a real session is unaffected, and the surfaced message stays
+generic. **Negative-controlled before being trusted** (the discipline
+[[feedback-verify-bot-review-findings]] and PR #488's own round-4 lesson
+already established): disabling both guards makes 4 of the 6 fail, and the
+2 that still pass are exactly the two "a real session still works" cases
+that must not depend on the guard. Restoration verified byte-identical
+against a pre-edit copy, not by eye.
+
+Deliberately **not** extended to reads, backup/restore, or folder/tag
+operations: this fix's scope is the item-mutation paths §11.5 was already
+about. A believable decoy experience remains §7's deferred product work.
+
+### 16.2 The decoy write-refusal message named the duress feature to anyone watching the screen — accepted; the suggested console log was declined
+
+`encryptItem`'s refusal threw `'Vault is in a decoy session: new items
+cannot be saved.'`, and `VaultContext` surfaces `error.message` verbatim via
+`setError`. So a coercer standing over the user during a duress unlock could
+read the existence of the duress feature off a single failed save — which
+defeats the entire point of the decoy, and is a different failure from the
+one §11.5 explicitly deferred ("making the write-refusal message
+indistinguishable from an unrelated save failure" was deferred as UX
+polish; *actively naming the feature* is an information leak, and fixing it
+is a one-line change). **Fixed:** the message is now `'Failed to save item.
+Please try again.'` — wording an ordinary failure could equally produce, and
+consistent with `VaultContext`'s own existing fallback strings. The two new
+guards in §16.1 use the same generic style for the same reason.
+
+**Declined, deliberately: the other half of the suggestion, "log the
+decoy-specific reason to the console."** That directly contradicts this
+plan's own §3.5 rule 4 ("**No logging branch.** No `console.*` may mention
+slots or duress"), which is a reviewed, deliberate decision, and round 6
+(§14 point 3) went as far as adding a console-output-equality assertion to
+`VaultUnlockModal.test.jsx` to enforce it. Logging the reason would not
+remove the tell — it would move it from the UI to devtools, where a coercer
+sophisticated enough to look is exactly the coercer this feature is trying
+to survive. The refusal needs no log to be debuggable: `isDecoySession()` is
+already exported and is what the tests assert on.
+
+The existing test that pinned `/decoy session/i` was updated to assert the
+**gate** fired (via `isDecoySession()`) rather than the message text — pinning
+the old wording would have re-pinned exactly the string that must not leak —
+plus a new test asserting the message matches the generic form exactly and
+contains no `decoy`/`duress`/`slot` wording.
+
+### 16.3 The `vault_sync` payload allowlist omitted `expected_sync_version`, which the sync view really does accept
+
+Round 7 (§15.1) derived the allowlist from `SyncSerializer`'s declared
+fields. Verified this round that the sync view reads one more field straight
+off `request.data`, **outside** the serializer entirely
+(`password_manager/vault/views/crud_views.py:373`): `expected_sync_version`,
+an optional integer used for optimistic concurrency against the locked
+`UserSalt.sync_version` row, returning 409 on mismatch. No client sends it
+today, so nothing is broken right now — but the first concurrency-aware
+client to start sending it would be rejected at the IPC boundary, and the
+failure would look like a transport bug rather than a stale allowlist.
+Added to the allowlist in `docs/onion-sync-transport-phases-2-4-plan.md`
+with the reasoning inline. It is a plain integer with no destination
+semantics, so admitting it costs nothing the schema protects. **Lesson: a
+serializer's declared fields are not automatically the endpoint's full
+accepted input — check the view body for direct `request.data` reads
+before treating the serializer as the complete contract.**
+
+### 16.4 Three stale cross-references and one stale status claim
+
+- This file's opening summary still said "five review rounds (§9–§13)" after
+  §14 and §15 had been appended. Updated to §9–§16.
+- §0's verdict table still listed `VaultUnlockModal` as "Not integrated" —
+  true when written, false since this PR shipped. Rather than rewriting the
+  historical verdicts (which would destroy the baseline the rest of the plan
+  argues against), §0 is now explicitly **labelled** the pre-implementation
+  baseline, in its own heading and in a note at the top of the file.
+- §3.6 step 2 still said "Client generates a fresh decoy DEK", contradicting
+  §15.6's own correction one round earlier — the same one-place-fixed,
+  other-place-missed pattern as §12.1 and §15.5. Fixed to say the service
+  generates it internally.
+- `docs/privacy-features-gap-remediation-plan.md`'s summary paragraph
+  referred to "§13" and "§9 through §13" without naming which document those
+  sections live in — and the bare `§N` numbers refer to THIS file while the
+  surrounding sentence was describing findings in the onion-sync plan.
+  Clarified by naming the document explicitly, stating that every bare `§N`
+  in that paragraph refers to this file, and extending the range to §15.
+
+Targeted tests only, per the standing preference recorded in
+[[feedback_targeted_testing]]: the 7 files covering the changed paths
+(`VaultContext.decoySession.test.jsx`, `VaultContext.addItem/updateItem/lock`,
+`sessionVaultCrypto.decoySession.test.js`, `VaultUnlockModal.test.jsx`,
+`unlockEnvelopeStore.test.js`) — 59 tests, all passing, including the
+console-equality assertion from §14 that the message change could plausibly
+have broken. `eslint` clean on all four changed files (0 errors; the 8
+warnings are pre-existing and none fall on a changed line). The full
+frontend suite is CI's job, not this change's.

@@ -623,7 +623,14 @@ export const encryptItem = async (obj) => {
     throw new Error('Vault is locked: session encryption key is not initialized.');
   }
   if (sessionIsDecoy) {
-    throw new Error('Vault is in a decoy session: new items cannot be saved.');
+    // Deliberately generic, and deliberately NOT logged anywhere: this string
+    // reaches the UI (VaultContext's `setError(error.message || ...)`), so a
+    // coercer watching the screen during a duress unlock must not be able to
+    // read the duress feature's existence off a failed save. It must stay
+    // plausible as an ordinary save failure. Per the plan's §3.5 rule 4 ("no
+    // `console.*` may mention slots or duress") the reason is not logged
+    // either -- a console message would just move the same tell to devtools.
+    throw new Error('Failed to save item. Please try again.');
   }
   const iv = window.crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(obj));

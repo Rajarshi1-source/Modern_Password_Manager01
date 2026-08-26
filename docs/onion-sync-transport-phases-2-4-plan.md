@@ -307,11 +307,22 @@ contract that already defines "sync data" precisely:
 `VaultItemSerializer`.**
 
 - Top level: exactly `last_sync` (string, optional), `items` (array,
-  optional), `deleted_items` (array, optional) — nothing else.
-  `url`/`host`/`proxy`/`origin`, and any other key not in this list, are
-  refused as unknown, not merely absent from a blocklist; this is what
-  actually closes the gap above for a field name the denylist did not
-  anticipate.
+  optional), `deleted_items` (array, optional), and `expected_sync_version`
+  (integer, optional) — nothing else. `url`/`host`/`proxy`/`origin`, and any
+  other key not in this list, are refused as unknown, not merely absent from
+  a blocklist; this is what actually closes the gap above for a field name
+  the denylist did not anticipate.
+  **`expected_sync_version` is deliberately in this list even though
+  `SyncSerializer` does not declare it and no client sends it today.** The
+  sync view reads it straight off `request.data`, outside the serializer
+  (`password_manager/vault/views/crud_views.py:373`), and uses it for
+  optimistic concurrency — a mismatch against the locked `UserSalt.sync_version`
+  returns 409 so the client can re-fetch and merge. Omitting it here would
+  mean the IPC boundary silently rejects the first concurrency-aware client
+  that starts sending it, and the failure would look like a transport bug
+  rather than an allowlist that was never updated. It is a plain integer with
+  no destination semantics, so admitting it costs nothing the rest of this
+  schema is protecting.
 - Each entry of `items[]`: exactly `item_id` (string), `item_type`
   (string), `encrypted_data` (string), `favorite` (boolean, optional),
   `folder_id` (string or null, optional), `tags` (array of strings,
