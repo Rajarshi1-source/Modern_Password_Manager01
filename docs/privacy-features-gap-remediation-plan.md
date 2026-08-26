@@ -288,7 +288,12 @@ backend app — the backend already supports this operation.
    reachable from this machine's Tor circuit, not just `vault_sync`. Route
    the sync request — and only it, at first — through the `.onion` from
    `getCapabilities()`, via a narrow IPC channel the main process itself
-   validates against a fixed operation allowlist.)
+   validates against a fixed operation allowlist AND the payload's own
+   shape — sync data only, with destination-like fields such as `url`,
+   `host`, `proxy`, or `origin` rejected outright before dispatch, since the
+   allowlist alone does not stop a compromised renderer from smuggling a
+   destination override through an otherwise-legitimate `vault_sync`
+   payload. See A.4 for the full argument and the required test.)
 3. Reuse the Phase 1 service contract verbatim so the renderer code is identical
    across web and desktop; only the transport differs.
 4. Health/bootstrap UI: reuse `DarkProtocolDashboard.jsx`, which already renders
