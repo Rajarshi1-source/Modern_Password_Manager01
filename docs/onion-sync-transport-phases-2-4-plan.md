@@ -208,9 +208,25 @@ New `desktop/src/main/onionTransport.js`:
 - `socks-proxy-agent` as the `httpAgent`/`httpsAgent` for the bundled `axios`.
   **Add it to `desktop/package.json`'s dependencies in this PR** — it is not
   there today, only `axios` is.
-- Target the `.onion` origin from `capabilities.anonymity.onion_address`,
-  fetched over clearnet on the first call and cached for the session (see
-  A.5 below for exactly which service that clearnet call goes through).
+- Target the `.onion` origin from `capabilities.anonymity.onion_address`.
+  **This is resolved by `onionTransport.js` itself, independently of the
+  renderer's `getCapabilities()` call described in A.5 — the two are
+  separate fetches of the same clearnet endpoint, not one value handed
+  across the IPC boundary.** The `TOR_PROXY` channel carries `operation`,
+  sync-data-only `payload`, and `authToken` (below); it has no destination
+  field, by design, so the main process cannot learn the onion address from
+  anything the renderer sends it. Instead, on the first `TOR_PROXY` call in
+  a session, `onionTransport.js` makes its own clearnet GET to the same
+  capabilities endpoint `darkProtocolService.getCapabilities()` calls,
+  authenticated with the same forwarded `authToken` it uses for the
+  eventual `vault_sync` POST, and caches `anonymity.onion_address` in
+  memory for the rest of the session. Validate the resolved value is a
+  well-formed v3 `.onion` hostname before ever using it as a request
+  target; refuse and report unavailable on anything else, and do not retry
+  the resolution against a value that already failed validation. Add a
+  test for the empty-cache first call (no address cached yet, the
+  main-process fetch runs and succeeds) and one for a malformed resolved
+  value being refused rather than dialed.
 - **Only `vault_sync` at first**, as §4.1 Phase 2 step 2 says. Extending to the
   rest of `VAULT_OPERATION_ROUTES` is a follow-up.
 - **Use `http://<addr>.onion/...`, not `https://`.** `backend-onion` in
@@ -283,6 +299,36 @@ never checked. Add a test asserting a payload carrying a clearnet-looking
 `url`/`host` field is rejected before any request is made, not merely
 stripped.
 
+**The schema itself, made concrete rather than left as "reject a denylist
+of destination-looking names" — a renamed field would slip past a
+denylist, so this must be an allowlist, and it must mirror the one real
+contract that already defines "sync data" precisely:
+`password_manager/vault/serializer.py`'s own `SyncSerializer` and
+`VaultItemSerializer`.**
+
+- Top level: exactly `last_sync` (string, optional), `items` (array,
+  optional), `deleted_items` (array, optional) — nothing else.
+  `url`/`host`/`proxy`/`origin`, and any other key not in this list, are
+  refused as unknown, not merely absent from a blocklist; this is what
+  actually closes the gap above for a field name the denylist did not
+  anticipate.
+- Each entry of `items[]`: exactly `item_id` (string), `item_type`
+  (string), `encrypted_data` (string), `favorite` (boolean, optional),
+  `folder_id` (string or null, optional), `tags` (array of strings,
+  optional) — `VaultItemSerializer`'s own writable fields. `id`,
+  `created_at`, and `updated_at` are server-assigned there
+  (`read_only_fields`) and must not be accepted from the renderer either.
+  Any other key on an item is refused.
+- `deleted_items[]`: array of strings only.
+- The payload must be a plain JSON object matching exactly the shape
+  above — an array, a primitive, or an object with any extra top-level or
+  nested key is refused before `onionTransport.js` is ever called.
+
+Add a test asserting an unknown top-level key is refused even when it does
+not resemble a destination (proving this is a real allowlist, not the same
+denylist restated), alongside the existing clearnet-looking `url`/`host`
+test.
+
 **A separate, more basic gap: nothing above says how the request reaches
 `/vault-proxy/`'s `IsAuthenticated` requirement at all.** `/vault-proxy/` is
 `IsAuthenticated` today (§C.1), and the WEB client already satisfies this —
@@ -327,10 +373,15 @@ Two small, additive changes, both in `frontend/src/services/`:
    allowlist above gates to `vault_sync`).
 2. **`getCapabilities` stays on the clearnet service, always — but
    `isOnionSyncAvailable()` must stop reading `vault_proxy.available` on any
-   platform that owns a separate transport.** This is the one place the
-   original "swap the whole `darkProtocolService` import for a desktop shim"
-   sketch breaks, and fixing HALF of it (routing only `getCapabilities` to
-   clearnet) creates a second, worse bug that CodeRabbit caught in review:
+   platform that owns a separate transport.** (This renderer-side fetch is
+   separate from `onionTransport.js`'s own capability fetch in the main
+   process, A.4 above — this one gates UI/availability decisions in the
+   renderer; that one resolves the dial target the main process itself
+   uses. Both hit the same clearnet endpoint independently; neither hands
+   its result to the other.) This is the one place the original "swap the
+   whole `darkProtocolService` import for a desktop shim" sketch breaks,
+   and fixing HALF of it (routing only `getCapabilities` to clearnet)
+   creates a second, worse bug that CodeRabbit caught in review:
    `isOnionSyncAvailable()` returns `Boolean(capabilities?.vault_proxy?.available)`,
    and the server computes `vault_proxy.available` as `anonymity_active AND
    request_is_onion_ingress` (`tor_service.py`) — true only when *this
@@ -378,6 +429,29 @@ Two small, additive changes, both in `frontend/src/services/`:
    goes out over the onion SOCKS5 circuit (A.4); a `clearnet_ingress_refused`
    there would mean a genuine transport misconfiguration, not an expected
    steady-state outcome the client should route around silently.
+
+   **This check must be able to AWAIT an in-flight bootstrap, not just read
+   a snapshot of it.** A.3 promises "the first subsequent
+   `proxyVaultOperation` call awaits [the sidecar's] readiness" — but
+   `prefer_onion`/`require_onion` decide whether to call
+   `proxyVaultOperation` at all based on THIS check, so a snapshot taken
+   mid-bootstrap reads as "not ready," `prefer_onion` falls back to
+   clearnet, and `require_onion` fails closed — during perfectly normal
+   startup, before A.3's own await is ever reached. Concretely: the
+   mode-change handler that starts the sidecar (A.3) must expose the
+   in-flight `start()` promise it already holds, not just fire it and
+   forget it, and this availability check awaits that promise — bounded by
+   A.3's existing ~60s startup deadline — before evaluating
+   `torSidecar.getStatus()`, rather than only ever inspecting whatever the
+   status happens to be at the instant of the call. Concurrent callers
+   (two syncs firing before the first bootstrap completes) must share the
+   SAME in-flight promise rather than each calling `torSidecar.start()` —
+   a second concurrent `start()` is not covered by A.3's idempotency
+   guarantee for `stop()` and would either double-spawn the process or race
+   the first call's own bootstrap tracking. Test: two concurrent
+   first-syncs from a stopped state both await the same startup and both
+   proceed once it completes, rather than one succeeding while the other
+   reads a stale "not ready" snapshot.
 
    Change `onionSyncService`'s module-scope `darkProtocolService` import
    (line 46) to two things instead of one: keep the existing import for
@@ -560,6 +634,28 @@ protection the platform cannot deliver.
    Test the onion request actually succeeds on an API 28+ target without
    global cleartext enabled — this is a platform policy, not something a
    unit test mocking OkHttp would catch.
+
+   **This exact-hostname exception has a build-time/runtime mismatch that
+   must be resolved before implementation, not glossed over.** Android's
+   Network Security Configuration is packaged into the APK at build time
+   and cannot be changed once installed, but point 6 below sources the
+   onion address from `capabilities.anonymity.onion_address` at RUNTIME,
+   with an explicit no-hardcoding rule — a `<domain>` entry cannot name a
+   value the app does not learn until its first network call. Resolve this
+   by treating the packaged hostname as a BUILD-time deployment constant,
+   not a hardcoded secret: inject the exact `.onion` hostname for the
+   backend this APK is built to talk to via a Gradle-generated resource
+   value into `network_security_config.xml` at build time (the same kind
+   of per-build-flavor parameterization the app likely already does for its
+   clearnet backend URL), and at RUNTIME validate that
+   `capabilities.anonymity.onion_address` matches that compiled-in value
+   exactly before attempting the onion request. A mismatch — a different
+   deployment's address, a rotated onion key, a misconfigured build — must
+   be treated as `onion sync unavailable`, never as a reason to attempt the
+   request anyway (Android would silently block it regardless) and never as
+   a reason to widen the packaged exception. Test the mismatch path
+   explicitly, alongside the existing release-like-APK success test on an
+   API 28+ target.
 
    Whichever exact bridging shape is chosen, **the renderer contract
    does not change** — `onionSyncService.syncVault` still returns
@@ -747,9 +843,15 @@ implementation. It must settle:
    true and `vault_proxy.available` would be structurally always `false` —
    gating desktop/mobile on it, as an earlier draft of this rule did, would
    mean `prefer_onion`/`require_onion` never engage at all. Those platforms
-   bootstrap on `anonymity.available && onion_address` instead (the
-   deployment-level "is Tor up and does it have a published address" signal)
-   and let the real per-request check happen where it actually can: at the
+   bootstrap on `anonymity.available && onion_address` **and that
+   platform's own local transport readiness** — desktop:
+   `torSidecar.getStatus()` reporting a bootstrapped, running circuit;
+   mobile: the analogous Orbot-running check; both per A.5 — instead of
+   `vault_proxy.available` (the deployment-level "is Tor up and does it
+   have a published address" signal is necessary but not sufficient on its
+   own: it says nothing about whether THIS device's own local sidecar has
+   finished bootstrapping) and let the real per-request check happen where
+   it actually can: at the
    `proxyVaultOperation`/`vault_sync` call itself, which genuinely does
    travel the onion circuit and is still verified server-side by
    `request_is_onion_ingress` exactly as before — this does not weaken that
