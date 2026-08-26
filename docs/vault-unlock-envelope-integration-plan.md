@@ -1,9 +1,10 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across four CodeRabbit review rounds
-(§9, §10, §11, §12) — read all four before relying on §3's original design as
-the literal shipped behavior. §11.5 in particular is a real data-corruption
-fix, not a cosmetic one.**
+**Implemented in PR #489, then hardened across five CodeRabbit review rounds
+(§9–§13) — read all five before relying on §3's original design as the
+literal shipped behavior. §11.5 in particular is a real data-corruption fix,
+not a cosmetic one; §13 records a bot misattribution caught before acting on
+it.**
 
 Deferred from PR #486 (`docs/privacy-features-gap-remediation-plan.md` §4.2,
 §5 "Not delivered"). PR #486 shipped the backend and the service layer; the
@@ -830,3 +831,85 @@ unlock path, because this settings screen already presupposes the user
 knows about and is managing the duress feature; telling them which slot
 they opened is not a signal that helps a coercer on a screen a coercer
 would have no reason to be shown in the first place).
+
+---
+
+## 13. Implementation status — fifth CodeRabbit review round (2026-08-26)
+
+A fifth `@coderabbitai full review` found 6 issues, none in this file's own
+content — all 6 are corrections to `docs/onion-sync-transport-phases-2-4-plan.md`
+(still fully unimplemented, so zero code-regression risk). Recorded here
+too, briefly, so the full review history for PR #489 stays in one place
+rather than split silently across documents.
+
+**One of the six is itself a verification catch worth recording explicitly:**
+two of the bot's comments were anchored — by GitHub's own line numbers — on
+lines 530–533 and 546–553 of THIS file, but their body text discussed
+anonymous-credential design, `clearnet_ingress_refused`, and
+`VAULT_OPERATION_ROUTES` route-scoping — none of which appears anywhere in
+this document (`grep` for any of those terms in this file returns nothing).
+That content genuinely exists, but in the OTHER carry-over plan's §C.3/§C.4
+(PR C, anonymous credentials). CodeRabbit's own diagnostic scripts (visible
+in its review comments) had searched both files while investigating, and
+the two findings landed misattributed to this file's line numbers instead
+of their actual location. Applying the fix here — inserting anonymous-
+credential content into the middle of THIS file's unrelated §10.2/§10.3 —
+would have corrupted this document for no reason. Verified the substance of
+both findings was still real and valid, then applied them at their actual
+location instead. This is precisely the discipline
+[[feedback-verify-bot-review-findings]] already asks for, extended one step
+further: verify not just WHETHER a finding is correct, but WHERE it actually
+applies, before touching anything.
+
+The four genuinely-file-correct findings, and the two redirected ones, all
+fixed directly in `docs/onion-sync-transport-phases-2-4-plan.md`:
+
+1. **A.4's `TOR_PROXY` handler needed an explicit payload-shape constraint,
+   not just an operation allowlist.** `operation === 'vault_sync'`
+   legitimately passes the existing allowlist, but nothing previously said
+   the `payload` itself must be rejected if it carries a destination-like
+   field (`url`, `host`, `proxy`, `origin`). Without that, a compromised
+   renderer could ride the allowed channel and smuggle a destination
+   override through the payload instead of through `operation`. Fixed:
+   payload is sync data only, validated before dispatch, with a test for a
+   payload carrying a clearnet-looking `url` field.
+2. **A.5's fix only checked the DEPLOYMENT's Tor daemon, never THIS
+   device's own local sidecar.** `anonymity.available && onion_address`
+   tells you the server has Tor up; it says nothing about whether `torSidecar`
+   on this machine has actually finished bootstrapping (or has crashed).
+   Gating on the deployment fact alone would report "available" while the
+   local SOCKS5 listener isn't actually listening yet, and
+   `proxyVaultOperation` would fail with a raw connection error instead of a
+   clean "unavailable." Fixed: `isOnionSyncAvailable()` now requires BOTH
+   the deployment fact AND `torSidecar.getStatus()` reporting ready, with
+   tests for the bootstrapping and stopped/crashed states specifically.
+3. **A.7's (and B.3's mobile equivalent) integration-test guidance still
+   used `vault_proxy.available === true` as the desktop/mobile success
+   signal** — exactly the field A.5's own fix established can never be true
+   for either platform's clearnet-issued capabilities call. Fixed to assert
+   at the request level instead: onion-routed `vault_sync` succeeds,
+   clearnet-routed `vault_sync` is refused with `clearnet_ingress_refused`
+   (403), and `anonymity.onion_address` is asserted separately as the
+   bootstrap signal it actually is.
+4. **B.3's mobile OkHttp client never inherited A.4's redirect hardening.**
+   Desktop's Axios client got `maxRedirects: 0` (or origin-validated
+   redirects) specifically to stop a malicious response from redirecting the
+   client to a clearnet endpoint. When B.3 was rewritten in round 3 to use
+   OkHttp's native SOCKS support, this requirement was never carried over —
+   OkHttp's default redirect behavior is not safe here either. Fixed with
+   the OkHttp equivalent (`followRedirects(false)`/origin validation) and a
+   test asserting a clearnet redirect target is rejected.
+5. **(Redirected from this file) PR C's "require onion ingress in the
+   credential case" phrasing invited implementing the clearnet-refusal check
+   as conditional on the credential branch.** The check is already
+   endpoint-wide and unconditional in the real, shipped
+   `dark_protocol_service.py` — this PR does not add it, and it must not
+   become scoped to only one permission class on any future refactor. Fixed
+   the wording to say so explicitly, plus added tests for JWT-only,
+   credential-only, and mixed-authentication requests over clearnet, all
+   refused identically.
+6. **(Redirected from this file) PR C.4 had no test that a credential is
+   confined to `vault_sync` alone**, despite C.2 point 3 already requiring
+   exactly that ("authorise nothing else — it must not be usable to read or
+   enumerate the vault"). Fixed by adding an explicit negative-route-scope
+   test bullet covering every other entry in `VAULT_OPERATION_ROUTES`.
