@@ -104,14 +104,22 @@ const VaultDuressSetup = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
-  // Set only when setDecoySlot() has already saved a new decoy token but
-  // registerSignalToken() then failed. The envelope on disk is live at that
-  // point -- the decoy password already opens it -- but the alarm behind it
-  // is not registered server-side, so a real decoy unlock would silently
-  // fail to raise it. Held here so "Finish registration" can retry with the
-  // EXACT SAME token; re-running setDecoySlot would mint a different random
-  // token and orphan this one permanently instead of recovering it.
-  const [pendingDuressToken, setPendingDuressToken] = useState(null);
+
+  // Recovery form state: independent of the setup form above. Deliberately
+  // does NOT hold the duress token itself anywhere -- not in state, not in
+  // storage. If setDecoySlot() saves a new decoy token but
+  // registerSignalToken() then fails, the token is not lost: it already
+  // lives inside the saved envelope's decoy slot. Recovery re-derives it by
+  // asking the user to type the decoy password again and re-opening the
+  // envelope with it (unlockEnvelopeStore.open), the same way a real decoy
+  // unlock would. This also means recovery survives a reload or navigating
+  // away -- nothing about it depends on this component's session state --
+  // and needs no new persistent storage of a value that would otherwise be
+  // plaintext secret material at rest.
+  const [recoveryPassword, setRecoveryPassword] = useState('');
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
+  const [recoverySuccess, setRecoverySuccess] = useState(false);
 
   if (!isAuthenticated) {
     return (
@@ -141,25 +149,22 @@ const VaultDuressSetup = () => {
     setDecoyConfirm('');
   };
 
-  // Isolated so both the initial attempt and the retry button call the exact
-  // same registration + success/failure handling -- the only difference
-  // between them is where `token` comes from (freshly minted vs. recovered
-  // from `pendingDuressToken`). Never throws: a registration failure here is
-  // recoverable, not fatal to the flow, so it is handled in place rather than
-  // propagated to a caller that would just show a dead-end error.
+  // Never throws: a registration failure here is recoverable via the
+  // "Recover unregistered alarm" section below, not fatal to the setup flow,
+  // so it is handled in place rather than propagated to a caller that would
+  // just show a dead-end error.
   const finishRegistration = async (token) => {
     try {
       await registerSignalToken(getAccessToken(), token);
-      setPendingDuressToken(null);
       resetForm();
       setSuccess(true);
       setError('');
     } catch {
-      setPendingDuressToken(token);
       setError(
         'Decoy password saved, but the alarm could not be registered -- it will '
-        + 'not fire on a decoy unlock until registration succeeds. Click '
-        + '"Finish registration" to retry.'
+        + 'not fire on a decoy unlock until registration succeeds. Use '
+        + '"Recover unregistered alarm" below with this same decoy password to '
+        + 'retry -- that works even if you reload this page first.'
       );
     }
   };
@@ -168,7 +173,6 @@ const VaultDuressSetup = () => {
     e.preventDefault();
     setError('');
     setSuccess(false);
-    setPendingDuressToken(null);
 
     if (!vaultPassword || !decoyPassword) {
       setError('Both your current vault password and a new decoy password are required.');
@@ -212,13 +216,48 @@ const VaultDuressSetup = () => {
     }
   };
 
-  const handleRetryRegistration = async () => {
-    if (!pendingDuressToken) return;
-    setBusy(true);
+  // Re-derives the duress token from the decoy slot itself rather than from
+  // any state this component held earlier -- see recoveryPassword's own
+  // comment. Works identically whether it is used seconds after a failed
+  // registration or days later after this component has remounted many
+  // times over.
+  const handleRecoverRegistration = async (e) => {
+    e.preventDefault();
+    setRecoveryError('');
+    setRecoverySuccess(false);
+
+    if (!recoveryPassword) {
+      setRecoveryError('Enter your decoy password.');
+      return;
+    }
+
+    setRecoveryBusy(true);
     try {
-      await finishRegistration(pendingDuressToken);
+      const { slotIndex, duressToken } = await unlockEnvelopeStore.open({
+        userId,
+        password: recoveryPassword,
+      });
+      if (slotIndex !== 1 || !duressToken) {
+        // Deliberately specific here, unlike VaultUnlockModal's unlock path:
+        // this settings screen already presupposes the user knows about and
+        // is managing the duress feature, so telling them "that opened the
+        // real vault" is not a signal that helps a coercer -- it is the
+        // whole point of this recovery tool being distinct from the unlock
+        // modal in the first place.
+        setRecoveryError('That opened the real vault, not the decoy slot. Enter your decoy password.');
+        return;
+      }
+      await registerSignalToken(getAccessToken(), duressToken);
+      setRecoveryPassword('');
+      setRecoverySuccess(true);
+    } catch (err) {
+      if (err instanceof WrongPasswordError) {
+        setRecoveryError('Incorrect decoy password.');
+      } else {
+        setRecoveryError(err?.message || 'Failed to recover alarm registration.');
+      }
     } finally {
-      setBusy(false);
+      setRecoveryBusy(false);
     }
   };
 
@@ -296,15 +335,50 @@ const VaultDuressSetup = () => {
         )}
 
         <div style={{ marginTop: '1.25rem' }}>
-          {pendingDuressToken ? (
-            <button type="button" style={buttonPrimary} onClick={handleRetryRegistration} disabled={busy}>
-              {busy ? 'Retrying…' : 'Finish registration'}
-            </button>
-          ) : (
-            <button type="submit" style={buttonPrimary} disabled={busy}>
-              {busy ? 'Saving…' : 'Save decoy password'}
-            </button>
-          )}
+          <button type="submit" style={buttonPrimary} disabled={busy}>
+            {busy ? 'Saving…' : 'Save decoy password'}
+          </button>
+        </div>
+      </form>
+
+      <hr style={{ margin: '1.75rem 0', border: 'none', borderTop: '1px solid #e5e7eb' }} />
+
+      <h3 style={{ fontSize: '1rem', margin: '0 0 0.5rem' }}>Recover unregistered alarm</h3>
+      <p style={{ color: '#6b7280', fontSize: 13 }}>
+        If a decoy password was saved but its alarm failed to register — even
+        in an earlier session — enter that decoy password here to retry.
+        This re-reads the token already stored in the decoy slot; it never
+        needs to be typed or stored anywhere else.
+      </p>
+      <form onSubmit={handleRecoverRegistration}>
+        <div className="form-group">
+          <label htmlFor="duress-recovery-password">Decoy password</label>
+          <input
+            id="duress-recovery-password"
+            type="password"
+            autoComplete="off"
+            style={inputStyle}
+            value={recoveryPassword}
+            onChange={(e) => setRecoveryPassword(e.target.value)}
+            disabled={recoveryBusy}
+            required
+          />
+        </div>
+
+        {recoveryError && (
+          <div role="alert" style={errorStyle}>{recoveryError}</div>
+        )}
+        {recoverySuccess && (
+          <div role="status" style={successStyle}>
+            Alarm registered. It will fire the next time this decoy password
+            is used to unlock.
+          </div>
+        )}
+
+        <div style={{ marginTop: '0.75rem' }}>
+          <button type="submit" style={buttonPrimary} disabled={recoveryBusy}>
+            {recoveryBusy ? 'Recovering…' : 'Recover unregistered alarm'}
+          </button>
         </div>
       </form>
     </div>

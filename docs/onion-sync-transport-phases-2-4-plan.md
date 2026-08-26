@@ -577,9 +577,26 @@ implementation. It must settle:
 2. **Never add a trusted header.** `request_is_onion_ingress` refuses
    `X-Onion-Ingress` on purpose (`tor_service.py:657-660`). If a client cannot
    satisfy the four real conditions, the correct answer is "unavailable".
-3. **Gate on `vault_proxy.available`, never on `anonymity.available`.** The
-   first is "this request arrived over onion"; the second is only "the daemon is
-   up". Phase 1 chose the strong one deliberately.
+3. **Gate per platform, per A.5's fix — this rule is NOT one blanket
+   condition.** Web (Phase 1) gates on `vault_proxy.available`: the page
+   itself is served from `.onion` when this matters, so a `getCapabilities()`
+   call from that page naturally shares the transport of the eventual
+   `vault_sync` call, and `vault_proxy.available` — "this request arrived
+   over onion" — is the strong, correct signal. Desktop and mobile (Phases
+   2–3) are separate processes whose `getCapabilities()` call is necessarily
+   clearnet (A.4), so `request_is_onion_ingress` for THAT call can never be
+   true and `vault_proxy.available` would be structurally always `false` —
+   gating desktop/mobile on it, as an earlier draft of this rule did, would
+   mean `prefer_onion`/`require_onion` never engage at all. Those platforms
+   bootstrap on `anonymity.available && onion_address` instead (the
+   deployment-level "is Tor up and does it have a published address" signal)
+   and let the real per-request check happen where it actually can: at the
+   `proxyVaultOperation`/`vault_sync` call itself, which genuinely does
+   travel the onion circuit and is still verified server-side by
+   `request_is_onion_ingress` exactly as before — this does not weaken that
+   boundary, it only changes which signal the CLIENT uses to decide whether
+   to attempt the call. See A.5 for the full argument and B.3 point 1 for
+   why mobile inherits the same fix.
 4. **UI copy stays at IP-privacy-only until PR C.** Applies to desktop and
    mobile as much as to web.
 5. **The Phase 1 contract is the contract.** `{ data, transport, degraded }`,

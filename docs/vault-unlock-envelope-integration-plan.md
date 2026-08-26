@@ -1,9 +1,9 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across three CodeRabbit review rounds
-(§9, §10, §11) — read all three before relying on §3's original design as the
-literal shipped behavior. §11.5 in particular is a real data-corruption fix,
-not a cosmetic one.**
+**Implemented in PR #489, then hardened across four CodeRabbit review rounds
+(§9, §10, §11, §12) — read all four before relying on §3's original design as
+the literal shipped behavior. §11.5 in particular is a real data-corruption
+fix, not a cosmetic one.**
 
 Deferred from PR #486 (`docs/privacy-features-gap-remediation-plan.md` §4.2,
 §5 "Not delivered"). PR #486 shipped the backend and the service layer; the
@@ -355,7 +355,7 @@ security margin of the decoy.
 | Losing OR corrupting `vaultUnlockEnvelope:<userId>` locks the user out | It never becomes the only copy: `setupVaultPassword`'s wrapped record is still written and `unlockWithVaultPassword` still works. A MISSING envelope always fell back to the legacy path (`upgrade` mode). A PRESENT-but-corrupt one (bad base64, truncated write, `MalformedBlobError`) did NOT originally — `hasEnvelope()` only checks for a value, not that it decodes. **Fixed in §9.1**: `runEnvelopeUnlockWithFallback()` now falls back to `upgrade` mode on any non-`WrongPasswordError` open failure, which also self-heals by re-provisioning a fresh envelope |
 | A future contributor short-circuits `decode()` for speed | Comment at the call site and above the attempts loop, plus the DOM-equality test |
 | Decoy DEK encrypts nothing, so the decoy vault looks empty and unconvincing | Out of scope here — populating a believable decoy is a product decision (§7). An empty decoy still beats no decoy, but UI copy must not claim it is convincing. **Also fixed in §10.3**: the setup screen's own copy previously claimed the opposite (an empty, indistinguishable decoy) directly contradicting its own limitation notice two paragraphs below — corrected to describe only what is actually true |
-| Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson (of the ORIGIN plan, `privacy-features-gap-remediation-plan.md` — not this plan's own §10). That ordering only prevents an orphaned token from a FAILED save; it does not by itself recover from registration failing AFTER a successful save. **Fixed in §9.2**: the failed token is retained and retried directly, never re-minted |
+| Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson (of the ORIGIN plan, `privacy-features-gap-remediation-plan.md` — not this plan's own §10). That ordering only prevents an orphaned token from a FAILED save; it does not by itself recover from registration failing AFTER a successful save. **Fixed in §9.2, then hardened in §12.2**: §9.2's in-memory retry did not survive a remount (reload, navigation) — recovery now re-derives the token on demand by re-opening the envelope with the decoy password, never holding it in state or storage, so it works regardless of how long ago the failure was |
 | `installRawDek` drifts from `unlockWithVaultPassword`'s tail | Keep them adjacent in the file with a cross-reference comment; the generation-check assertion is part of the unit tests. **Extended in §10.1**: the drift risk was not hypothetical — `installRawDek`'s OWN generation bump ran too late to catch a race that started before it was even called, since its slow sibling (`unlockEnvelopeStore.open()`) lives in a different module and has no way to participate in the in-module bump-before/check-after pattern by itself |
 | A user sets the decoy password equal to the real vault password | `VaultDuressSetup.jsx`'s form already rejected this client-side, but `unlockEnvelopeStore.setDecoySlot()` itself did not — any other caller could bypass it and silently create an inert decoy (both slots decrypt under the one shared password, and `decode()` always resolves ties to slot 0, so the "decoy" password would just open the real vault). **Fixed in §10.4**: rejected in the service layer too, before any decode/re-encode work |
 | A decoy session's writes permanently corrupt a row in the real vault | The most serious risk found across all three review rounds. The decoy slot reuses the real slot's device salt (§3.2), so a v2 item written while a decoy DEK is installed is encrypted under that DEK but stamped with the real salt — `keyForSalt`'s matching-salt fast path later hands the REAL session's DEK to decrypt it, an unrecoverable AES-GCM failure. **Fixed in §11.5**: `sessionVaultCrypto.encryptItem` refuses to write for the lifetime of any session `installRawDek` marked as decoy (`isDecoySession()`); this is a write-time gate, not a salt change, because OAuth/envelope sessions have no password to re-derive a foreign-salt key from in the first place |
@@ -759,3 +759,74 @@ acceptance criterion to explicitly scope the claim to `VaultUnlockModal`
 itself and cross-reference the limitation for everything downstream of it,
 so a future reader cannot mistake "the modal looks the same" for "the app
 looks the same."
+
+---
+
+## 12. Implementation status — fourth CodeRabbit review round (2026-08-25/26)
+
+A fourth `@coderabbitai full review` found 2 more issues. Both verified
+against current code before fixing.
+
+### 12.1 `docs/onion-sync-transport-phases-2-4-plan.md` §9 "Cross-cutting rules" still stated the blanket rule §10.4 had already corrected
+
+§10.4 (round 2) fixed A.5's design to gate desktop/mobile availability on
+`anonymity.available && onion_address` rather than `vault_proxy.available`
+— but the summary in §9 ("Cross-cutting rules for all three PRs"), a
+separate section restating the same fact for quick reference, was never
+updated to match. It still said, unqualified, "Gate on
+`vault_proxy.available`, never on `anonymity.available`" — exactly the
+blanket rule that would make desktop/mobile's onion transport never engage,
+which §10.4 already established and fixed IN A.5 itself. A reader who only
+skimmed §9 rather than the detailed sections would rebuild the broken
+version. Fixed by making §9 point 3 platform-specific, matching A.5's
+actual design, with a cross-reference rather than a second copy of the
+full argument.
+
+**Lesson applied from memory ([[feedback-verify-bot-review-findings]]):**
+this is the SAME class of miss as §10.4 itself, one level up — fixing a
+design section but not the summary restating it. When a fact is stated in
+more than one place in the same document, fixing it in one place requires
+searching the whole document for every other restatement, not just the
+place review flagged.
+
+### 12.2 `frontend/src/Components/security/VaultDuressSetup.jsx`: the pending-registration retry did not survive a remount
+
+Round 2 (§9.2) fixed the immediate case — a registration failure right
+after `setDecoySlot()` succeeds — by holding the failed token in
+`pendingDuressToken` React state so a "Finish registration" button could
+retry with the exact same token. CodeRabbit correctly identified what that
+fix did not cover: if the user reloaded the page, navigated away, or the
+tab was closed before retrying, `pendingDuressToken` was gone. The decoy
+slot on disk still held the unregistered token — nothing was lost at the
+data layer — but the UI had no way back to it short of reconfiguring the
+decoy slot from scratch (which mints a brand-new token via
+`generateSignalToken()` and orphans the first one, the exact failure mode
+§9.2 exists to prevent). The bot's own suggested remedy explicitly ruled
+out storing the token as plaintext device state, which rules out simply
+persisting `pendingDuressToken` to `localStorage`.
+
+**Fix:** replaced the state-held retry with a standing "Recover
+unregistered alarm" form, always present on the page (not conditionally
+rendered on failed-attempt state), that re-derives the token on demand:
+the user re-enters their decoy password, `unlockEnvelopeStore.open()`
+re-opens the existing envelope with it — the same call a real decoy unlock
+makes — and the returned `duressToken` is registered immediately. Nothing
+about this depends on component state surviving anything; it re-reads the
+token from the one place it durably lives, the envelope itself, every
+time it runs. `pendingDuressToken` state, `handleRetryRegistration`, and
+the conditionally-rendered "Finish registration" button are all removed —
+this is a strictly simpler mechanism than what it replaces, not an
+additive one, and it never holds the raw token in memory for longer than
+the single `await` before registering it.
+
+Rewrote `VaultDuressSetup.test.jsx` (8 tests) to match: the recovery form
+is present unconditionally (not gated on a prior failure), recovery
+re-opens the envelope rather than reusing retained state, a fresh
+component instance with zero prior render history can still recover
+(the direct test of "survives a remount"), and two new distinct error
+paths — a wrong decoy password, and a password that happens to open the
+real slot instead (deliberately explicit here, unlike `VaultUnlockModal`'s
+unlock path, because this settings screen already presupposes the user
+knows about and is managing the duress feature; telling them which slot
+they opened is not a signal that helps a coercer on a screen a coercer
+would have no reason to be shown in the first place).

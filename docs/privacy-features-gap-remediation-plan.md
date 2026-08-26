@@ -485,23 +485,28 @@ onion case):
   envelope integration. Note that plan's §2: the migration this paragraph
   worried about is device-local (the wrapped DEK lives in `localStorage`, not
   on the server), so it is smaller than assumed here. Implemented in PR #489;
-  that plan's own §9, §10, and §11 (three CodeRabbit review rounds) record
-  thirteen review-found bugs, the most serious of which (§11.5) is real data
+  that plan's own §9–§12 (four CodeRabbit review rounds) record fifteen
+  review-found bugs, the most serious of which (§11.5) is real data
   corruption: a decoy session's writes were encrypted under the decoy DEK but
   stamped with the real slot's salt, so the real session would later try —
   and permanently fail — to decrypt them, injecting an unrecoverable garbage
   row into the one shared, server-side item list. The others span a
-  corrupt-envelope lockout, an orphaned duress token on registration failure,
-  a stale-session race across the envelope decode, a decoy password silently
+  corrupt-envelope lockout, an orphaned duress token on registration failure
+  that did not originally survive a page reload either (§9.2, hardened in
+  §12.2 to re-derive the token on demand instead of holding it in state), a
+  stale-session race across the envelope decode, a decoy password silently
   equal to the real one, a self-contradicting UI copy claim, a stale route
   reference, an over-broad indistinguishability claim, and (in the OTHER
-  carry-over plan, cross-referenced from §10.4, §10.5, and §11.1) an
-  onion-availability check that would never engage on desktop or mobile, two
+  carry-over plan, cross-referenced from §10.4, §10.5, §11.1, and §12.1) an
+  onion-availability check that would never engage on desktop or mobile —
+  restated as a blanket rule in that plan's own §9 summary even after the
+  detailed sections were fixed, which is itself the lesson of §12.1: fixing a
+  fact in one place does not fix it everywhere it is restated — two
   non-viable SOCKS5 library choices, a `https://` onion-origin scheme that
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Read §9, §10, and §11 of the carry-over plan before
+  corrected above. Read §9 through §12 of the carry-over plan before
   assuming its own §3's original text is the literal shipped behavior.
 
 ## 6. Acceptance criteria
