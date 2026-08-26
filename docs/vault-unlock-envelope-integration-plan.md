@@ -136,7 +136,7 @@ export async function provision({ userId, vaultPassword, dekBytes, saltB64 }): P
 // Add or replace the decoy slot. Re-encodes the whole blob because the outer
 // salt and both nonces must be fresh; requires BOTH passwords, since the real
 // slot must be re-sealed and only the real password can open it first.
-export async function setDecoySlot({ userId, vaultPassword, decoyPassword, decoyDek }): Promise<{ duressToken: string }>
+export async function setDecoySlot({ userId, vaultPassword, decoyPassword }): Promise<{ duressToken: string }>
 
 // Try a password against both slots. Thin wrapper over decode() returning the
 // parsed payload plus slotIndex.
@@ -1043,3 +1043,110 @@ Greptile activity this round. Targeted tests
 (`sessionVaultCrypto.decoySession.test.js`, `sessionVaultCrypto.salt.test.js`,
 `VaultUnlockModal.test.jsx` — 42 tests) and `eslint` all pass; markdownlint
 (MD040/MD018) clean on all three touched doc files.
+
+## 15. Implementation status — seventh CodeRabbit review round (2026-08-26)
+
+A `@coderabbitai full review` requested after §14's fixes found 6 more
+issues, all in `docs/onion-sync-transport-phases-2-4-plan.md` (still fully
+unimplemented — Phases 2-4 have no code yet, so this remains doc-only, zero
+regression risk) except one nitpick in this file. Verified each against
+current code before fixing, same discipline as §9-14.
+
+### 15.1 A.4/B.3: the `vault_sync` payload defense was a denylist of destination-looking names, not an enforceable schema
+
+§13 point 1 (round 5) added "reject a payload containing `url`/`host`/
+`proxy`/`origin`," but that is a denylist — it says nothing about allowed
+fields, types, or nested structure, so a field the denylist did not name
+(or a nested object carrying one) would pass straight through. Verified
+what "sync data" actually means by reading the real contract end to end:
+`frontend/src/contexts/VaultContext.jsx`'s `syncData` object (`last_sync`,
+`items[]`, `deleted_items[]`) is posted to `/vault/sync/`, validated
+server-side by `password_manager/vault/serializer.py`'s `SyncSerializer`
+(exactly those three top-level fields) and `VaultItemSerializer` (`item_id`,
+`encrypted_data`, `item_type`, `favorite`, `folder_id`, `tags`, plus
+server-assigned `id`/`created_at`/`updated_at`). Fixed by replacing the
+denylist with an allowlist mirroring those two serializers exactly — any
+top-level or nested key outside that list is refused outright, closing the
+gap for a field name no one has thought to denylist yet, not just the four
+named so far. Same fix mirrored in `docs/privacy-features-gap-remediation-plan.md`'s
+Phase 2 summary, which had described the same defense in the same
+under-specified terms.
+
+### 15.2 A.4: nothing said how `onionTransport.js`, in the main process, ever learns the onion address at all
+
+A.4 said the `.onion` origin comes from `capabilities.anonymity.onion_address`
+"fetched over clearnet on the first call," cross-referencing A.5 for which
+service makes that call — but A.5's `getCapabilities()` call lives in the
+**renderer's** clearnet service, and the `TOR_PROXY` IPC channel (by the
+payload-shape defense in §13/§15.1) carries sync data and `authToken` only,
+never a destination. There was no path left for the main process to receive
+this value at all. Fixed by having `onionTransport.js` make its own,
+independent clearnet fetch to the same capabilities endpoint, authenticated
+with the same forwarded `authToken` it uses for the `vault_sync` POST, and
+cache the resolved address for the session — explicitly documented as a
+separate fetch from A.5's renderer-side one, not a shared value, so the two
+are never conflated again. Validation of the resolved value as a well-formed
+`.onion` hostname before dial, and the empty-cache-first-call test, are both
+specified alongside it.
+
+### 15.3 A.5: the availability check could read a bootstrap snapshot instead of awaiting it, making A.3's own promise unreachable
+
+A.3 says the sidecar's first subsequent `proxyVaultOperation` call awaits
+its readiness — but `prefer_onion`/`require_onion` decide whether to call
+`proxyVaultOperation` at all based on `isOnionSyncAvailable()`, which A.5
+specifies as a synchronous read of `torSidecar.getStatus()`. A snapshot
+taken mid-bootstrap (which is exactly when a first sync after a mode change
+is most likely to run) reads as "not ready," so `prefer_onion` silently
+falls back to clearnet and `require_onion` fails closed during perfectly
+normal startup — A.3's await is never reached, because the availability
+gate upstream already returned false. Fixed by specifying that the
+mode-change handler exposes its in-flight `start()` promise, and the
+availability check awaits that promise (bounded by A.3's own ~60s deadline)
+before reading `getStatus()`, with concurrent callers sharing the same
+in-flight promise rather than each starting a second sidecar.
+
+### 15.4 B.3: the Android cleartext exception named a runtime value a packaged config file cannot hold
+
+B.3's Network Security Configuration fix (round 6, §14 point 5) scoped the
+cleartext exception to "the exact `.onion` hostname" — but that hostname
+comes from `capabilities.anonymity.onion_address` at runtime, per B.3's own
+no-hardcoding rule, while Android's Network Security Configuration is
+packaged into the APK at build time and cannot be altered after install
+(confirmed against Android's own documentation: domain-config entries are
+static and cannot change at runtime). An exact-hostname `<domain>` entry
+therefore cannot name a value the app does not learn until its first
+network call. Fixed by reframing the packaged hostname as a build-time
+deployment constant (injected via a Gradle-generated resource value when
+the APK is built for a given backend, the same way a backend URL is
+typically parameterized per build flavor) rather than a runtime-discovered
+one, with a runtime check that `capabilities.anonymity.onion_address`
+matches the compiled-in value exactly before attempting the request — a
+mismatch is treated as unavailable, never as grounds to widen the exception
+or attempt a request Android will block anyway.
+
+### 15.5 §9 "Cross-cutting rules" point 3 still omitted device-local transport readiness that A.5 itself requires
+
+The same class of miss as §12.1: A.5 gates desktop/mobile availability on
+`anonymity.available && onion_address` **and** that platform's own local
+sidecar/Orbot readiness (added in round 5, §13 point 2) — but §9 point 3's
+summary of the same rule, last touched in §12.1, only ever named the first
+two conditions. A reader relying on the summary alone would rebuild the
+version A.5 already found and fixed to be incomplete. Fixed by adding the
+local-readiness clause to §9 point 3 itself, cross-referencing A.5 rather
+than restating its full argument a second time.
+
+### 15.6 `unlockEnvelopeStore.js` (this file, §3.2): the documented `setDecoySlot` signature carried a parameter the shipped function never had
+
+§3.2 documented `setDecoySlot({ userId, vaultPassword, decoyPassword,
+decoyDek })` — but the actual implementation (`unlockEnvelopeStore.js:232`)
+generates the decoy DEK internally
+(`window.crypto.getRandomValues(new Uint8Array(32))`) and never accepts one
+from the caller; a caller passing `decoyDek` would have it silently
+ignored. Fixed by removing the parameter from the documented signature so
+it matches what shipped.
+
+Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/comments`
+(date-filtered to this round) that only CodeRabbit posted this round.
+Doc-only changes; no code touched, so no test suite run beyond the
+markdownlint check already required by this repo's convention for
+doc-only PRs.
