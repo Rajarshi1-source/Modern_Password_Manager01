@@ -117,6 +117,27 @@ describe('provision', () => {
       saltB64: SALT,
     })).rejects.toThrow(/32-byte/);
   });
+
+  test.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['a number', 12345],
+    ['an empty string', ''],
+  ])('rejects %s as saltB64 and writes nothing', async (_label, badSalt) => {
+    // JSON.stringify drops an `undefined` value's key entirely, so a missing
+    // salt would produce a payload with no `salt` key -- which parseSlotPayload
+    // rejects on EVERY later open(), making the envelope permanently dead
+    // while the real cause sits far away at provision time. Guarding at entry
+    // means a bad envelope is never written in the first place.
+    await expect(provision({
+      userId: USER_ID,
+      vaultPassword: REAL_PASSWORD,
+      dekBytes: DEK,
+      saltB64: badSalt,
+    })).rejects.toThrow(/saltB64/);
+
+    expect(hasEnvelope(USER_ID)).toBe(false);
+  });
 });
 
 describe('setDecoySlot', () => {

@@ -212,6 +212,17 @@ export async function provision({ userId, vaultPassword, dekBytes, saltB64 }) {
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
     throw new Error('provision: dekBytes must be a 32-byte Uint8Array');
   }
+  // Rejected at entry rather than left to fail later: `buildSlotPayload` puts
+  // `salt: saltB64` straight into an object it JSON-serializes, and
+  // JSON.stringify DROPS a key whose value is `undefined` entirely. A missing
+  // salt would therefore write a structurally valid blob whose payload has no
+  // `salt` key at all -- which `parseSlotPayload` then rejects as
+  // MalformedSlotPayloadError on EVERY subsequent open(), permanently. The
+  // envelope would be dead on arrival, and the failure would surface far from
+  // the call that caused it.
+  if (typeof saltB64 !== 'string' || saltB64.length === 0) {
+    throw new Error('provision: saltB64 must be a non-empty string');
+  }
 
   const realPayload = buildSlotPayload({ dekBytes, saltB64 });
   const blob = await encode({

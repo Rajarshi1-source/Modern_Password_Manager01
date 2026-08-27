@@ -544,10 +544,27 @@ Two small, additive changes, both in `frontend/src/services/`:
    desktop only when BOTH `anonymity.available` is true AND
    `torSidecar.getStatus()` reports ready, with `vault_proxy.available:
    false` throughout (proving that field is never consulted on this
-   platform); `isOnionSyncAvailable()` returns `false` while the sidecar is
-   still bootstrapping (any percentage short of 100) even though
-   `anonymity.available` is already true; and the same for a stopped/crashed
-   sidecar (`lastError` set). The request-level integration assertion for
+   platform).
+
+   **The bootstrapping case splits in two, and conflating them is what an
+   earlier draft of this very list got wrong.** "Still bootstrapping" is not
+   one state, and `isOnionSyncAvailable()` must not answer it the same way
+   both times — an unqualified "returns `false` while bootstrapping" (which
+   this list previously said) directly contradicts the await requirement
+   above, and would reintroduce the fall-back-to-clearnet-during-startup bug
+   that requirement exists to prevent:
+   - **A bootstrap is IN FLIGHT** (a tracked `start()` promise exists):
+     AWAIT it, bounded by A.3's ~60s deadline, then answer from the settled
+     outcome — `true` if it reached ready, `false` if it failed. Do NOT
+     return `false` merely because the percentage is currently short of 100.
+     Test: a call made mid-bootstrap resolves `true` once the bootstrap
+     completes, and two concurrent callers share the one promise.
+   - **No bootstrap is in flight** (never started, deliberately stopped, or
+     the last attempt already FAILED — `lastError` set, or the restart
+     budget spent): return `false` immediately, without awaiting anything
+     and without starting one as a side effect. Test each of those three
+     shapes separately; a crashed sidecar must not hang a caller for 60s
+     waiting on a promise that will never exist. The request-level integration assertion for
    the onion-routed-succeeds / clearnet-routed-403 pair is A.7's job, not
    this list's — see A.7 below for why `vault_proxy.available` must not be
    the success signal there either.
@@ -772,8 +789,24 @@ protection the platform cannot deliver.
    mobile's `getCapabilities` call is clearnet for the identical reason
    desktop's is (A.5), so that field is structurally always `false` here
    too and must never be read as a success signal.
-6. **Onion address** from `capabilities.anonymity.onion_address`, same as
-   desktop. No hardcoding.
+6. **Onion address** — two DIFFERENT values, and collapsing them into one
+   blanket "no hardcoding" rule (as an earlier draft of this point did)
+   contradicts point 5's Network Security Configuration requirement above:
+   - **The request target, at RUNTIME:** always from
+     `capabilities.anonymity.onion_address`, same as desktop. **Never
+     hardcoded** — this is the rule that matters for routing, and it is
+     unchanged.
+   - **The hostname baked into `network_security_config.xml`, at BUILD
+     time:** necessarily a compile-time deployment constant, because
+     Android's Network Security Configuration is packaged into the APK and
+     cannot be changed after install (point 5). This is not a violation of
+     the rule above — it is a per-build-flavor deployment parameter, the
+     same kind of thing the clearnet backend URL already is — and point 5
+     requires the runtime value to be validated against it before any onion
+     request is attempted, with a mismatch treated as `onion sync
+     unavailable`. A build that ships without this exception has no working
+     onion sync at all on API 28+; a build that "avoids hardcoding" by
+     widening cleartext globally is strictly worse than either.
 
 ## B.4 Tests (PR B)
 
@@ -859,38 +892,58 @@ implementation. It must settle:
 - **`/vault-proxy/` permission change:** accept *either* `IsAuthenticated` **or**
   a valid anonymous credential. **The onion-ingress check
   (`request_is_onion_ingress` → `clearnet_ingress_refused`) already runs
-  endpoint-wide, unconditionally, before either permission class is even
-  evaluated — this PR does not add that check "for the credential case," it
-  is not new, and it must not become conditional on which branch
-  authorises the request.** Stated explicitly because the obvious-looking
-  phrasing "require onion ingress for the credential path" invites exactly
-  the wrong implementation: moving or duplicating the check inside
-  `HasAnonymousCredential` alone, which would leave a JWT-authenticated
-  (`IsAuthenticated`) request's onion-ingress enforcement resting on
-  whichever code path happens to run first — a real risk on ANY future
-  refactor of this permission logic, not just this PR. The check belongs on
-  `DarkProtocolService.proxy_vault_operation` itself, ahead of or
-  independent of both permission classes, exactly where it already is. Do
+  endpoint-wide and unconditionally today, and must not become conditional
+  on which branch authorises the request** — this PR does not add that check
+  "for the credential case," it is not new.
+
+  **Correcting an ordering claim an earlier draft of this section got
+  wrong, because PR C's design depends on getting it right:** that draft
+  said the ingress check runs "before either permission class is even
+  evaluated." It does not, and cannot where it currently lives. Verified
+  against the installed DRF source rather than assumed:
+  `APIView.dispatch()` calls `self.initial(...)`, which calls
+  `check_permissions()` (`rest_framework/views.py:421`), and only then
+  invokes the handler (`:512`). `DarkProtocolVaultProxyView.post()` calls
+  `DarkProtocolService.proxy_vault_operation(...)`, so the ingress check
+  inside that service method runs strictly **after** permission evaluation.
+  That is harmless today — the endpoint is `IsAuthenticated`-only, so the
+  two checks are independent and neither can mask the other — but the
+  justification was false, and PR C is exactly where a false ordering
+  assumption becomes a real bug.
+
+  What remains true and is the actual requirement: the ingress check must
+  stay on `proxy_vault_operation` itself, ahead of and independent of the
+  vault dispatch, and must never be moved or duplicated inside
+  `HasAnonymousCredential` alone — that would leave a JWT-authenticated
+  request's onion-ingress enforcement resting on whichever permission class
+  happens to short-circuit first, a real risk on ANY future refactor. Do
   not remove `IsAuthenticated` — clients that have not migrated must keep
   working, and a flag day here means a sync outage.
 
   **A request presenting BOTH a valid JWT and a valid anonymous credential
-  must be rejected, not accepted.** `IsAuthenticated OR HasAnonymousCredential`
-  as stated grants access as soon as EITHER passes — it does not notice or
-  care whether the other also passed. Dispatch is `request.user`-scoped
-  (C.3's own "Ownership scoping" point below), so a request carrying a
-  valid `Authorization` header alongside a credential lets the server bind
-  that specific redemption to the JWT's user identity, which defeats C.5's
-  own acceptance criterion ("vault sync over onion carries no JWT and no
-  user identifier") for exactly the requests it matters most for. Fix:
-  before dispatch — same place as the onion-ingress check immediately
-  above, and for the identical reason (a boundary that must not depend on
-  which permission class happens to run first) — require EXACTLY ONE
-  authentication mode present on the request; a request carrying both is
-  refused outright, before either permission class is evaluated and before
-  any vault dispatch. This is an additional check alongside the OR, not a
-  replacement for it: `IsAuthenticated` alone and the credential alone must
-  both keep working exactly as today.
+  must be rejected, and — unlike the ingress check — this one genuinely
+  must run before permission evaluation.** `IsAuthenticated OR
+  HasAnonymousCredential` grants access as soon as EITHER passes; it does
+  not notice that the other also passed. Dispatch is `request.user`-scoped
+  (C.3's "Ownership scoping" point below), so a request carrying an
+  `Authorization` header alongside a credential passes on the JWT, reaches
+  dispatch with `request.user` populated, and lets the server bind that
+  redemption to a real identity — defeating C.5's own acceptance criterion
+  ("vault sync over onion carries no JWT and no user identifier") for
+  precisely the requests where it matters most.
+
+  **Where to put it, concretely** (the previous draft said "same place as
+  the ingress check," which per the correction above is too late):
+  override `initial()` on `DarkProtocolVaultProxyView` and run the
+  exactly-one-auth-mode check **before** calling `super().initial(...)` —
+  that is the documented DRF hook that precedes `check_permissions()`.
+  Running it at the top of `post()` would also prevent the vault dispatch
+  and would close the security hole, but it leaves the guarantee resting on
+  every future handler on this view remembering to call it; `initial()` is
+  structural. This is an additional check alongside the OR, not a
+  replacement: `IsAuthenticated` alone and a credential alone must both keep
+  working exactly as today. Test all four shapes — JWT only, credential
+  only, both, neither.
 - **Ownership scoping is the hard part.** `VAULT_OPERATION_ROUTES` dispatches to
   the genuine vault views, whose scoping is `request.user`-based
   (`dark_protocol_service.py:150-158`). An anonymous credential deliberately has
@@ -902,6 +955,31 @@ implementation. It must settle:
 - **Frontend:** token store, automatic refill, and redemption in
   `darkProtocolService.proxyVaultOperation`. `onionSyncService` should not need
   to change at all; if it does, the layering is wrong.
+
+  **An anonymous redemption must strip `session_id`, not just the JWT.**
+  Today's `proxyVaultOperation(operation, payload, sessionId)` sends
+  `session_id` in the body alongside `authHeader()`'s bearer token
+  (`frontend/src/services/darkProtocolService.js`), and the server hands it
+  to `_record_operation_traffic`, which resolves it as
+  `GarlicSession.objects.filter(session_id=session_id, user=user, ...)` —
+  **a user-scoped row**. Sending it on a credential-backed request would
+  re-link the redemption to an account identity through the accounting
+  path, defeating the same C.5 criterion the mixed-credential rule above
+  protects, just by a different route. Removing the `Authorization` header
+  alone is therefore not sufficient.
+
+  Define the anonymous redemption request explicitly as: the credential,
+  the `operation`, and the sync-data-only `payload` — and NOTHING else. No
+  `Authorization` header, no `session_id`, and no other account-scoped
+  handle (existing or later added). Traffic accounting simply does not
+  happen for these requests; `_record_operation_traffic` already returns
+  early when `session_id` is falsy, so this needs no server change, and
+  inventing an anonymous accounting handle would just recreate the
+  correlation under a new name. **Add a wire-level test** asserting the
+  redemption request's headers and body contain no bearer token, no
+  `session_id`, and no user identifier — asserting on the actual serialized
+  request, not on the function's arguments, since the point is what leaves
+  the machine.
 
 ## C.4 Tests (PR C)
 
@@ -938,7 +1016,13 @@ implementation. It must settle:
 ## C.5 Acceptance criteria (PR C)
 
 - [ ] `docs/anonymous-credentials-design.md` merged and reviewed first.
-- [ ] Vault sync over onion carries no JWT and no user identifier.
+- [ ] Vault sync over onion carries no JWT and no user identifier — verified
+      at the wire level, and explicitly including `session_id`, which
+      resolves to a user-scoped `GarlicSession` row and would re-link the
+      redemption through the accounting path even with the bearer token
+      stripped (see C.3's frontend bullet). "No user identifier" means the
+      serialized request, headers and body, not just the absence of an
+      `Authorization` header.
 - [ ] Under the documented threat model, the server cannot cryptographically
       link a redemption to an issuance beyond the listed observable metadata
       (issuance batch size, redemption timing, sync payload size) — argument
