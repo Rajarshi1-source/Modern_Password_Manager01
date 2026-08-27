@@ -920,6 +920,16 @@ export const VaultProvider = ({ children }) => {
 
   // Add these new methods for backup/restore
   const createBackup = async () => {
+    // Same decoy gate as deleteItem/toggleFavorite above. create_backup
+    // snapshots the REAL user's items into a new server-side VaultBackup row
+    // (backup_views.py filters on request.user), so it is a real write made
+    // from a session that is not the real user's -- non-destructive, unlike
+    // restoreBackup below, but still not something a decoy session may do.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to create backup. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -954,6 +964,19 @@ export const VaultProvider = ({ children }) => {
   };
 
   const restoreBackup = async (backupId) => {
+    // The most destructive path guarded by this flag, and the reason the
+    // §16.1 scoping note that excluded "backup/restore" was wrong: the server
+    // side (backup_views.py `_restore_from_items`) can
+    // `EncryptedVaultItem.objects.filter(user=request.user).delete()` and then
+    // batch `update_or_create` -- i.e. wipe and overwrite the REAL vault, from
+    // a decoy session, irreversibly. Same class as deleteItem, larger blast
+    // radius. Checked before the request AND before the refreshItems() that
+    // would otherwise reload the overwritten list.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to restore backup. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
     try {
       setLoading(true);
       setError(null);

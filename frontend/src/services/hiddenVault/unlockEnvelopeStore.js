@@ -51,7 +51,7 @@ import {
   DEFAULT_KDF_PARALLELISM,
   HiddenVaultError,
 } from './hiddenVaultEnvelope';
-import { generateSignalToken } from '../duressSignalService';
+import { generateSignalToken, SIGNAL_TOKEN_LENGTH } from '../duressSignalService';
 
 const ENVELOPE_TIER = TIERS.TIER0_32K;
 const SLOT_PAYLOAD_VERSION = 'hv-slot-1';
@@ -157,10 +157,29 @@ const parseSlotPayload = (payloadBytes) => {
   if (dekBytes.byteLength !== 32) {
     throw new MalformedSlotPayloadError('Slot payload dek is not 32 bytes.');
   }
+  // A decoy slot's duress token goes out on the wire verbatim
+  // (`duressSignalService.reportUnlock` sends `JSON.stringify({ signal })`),
+  // and the whole indistinguishability contract rests on that body being the
+  // SAME SIZE for a real token as for noise. A present-but-wrong-length token
+  // would change the request's byte length and hand a network observer
+  // exactly the oracle this feature exists to deny -- so reject it HERE,
+  // inside open()'s call stack, where VaultUnlockModal's `envelopeUnusable`
+  // fallback already catches it (same placement reasoning as the dek length
+  // check above).
+  //
+  // A MISSING token deliberately stays `null` rather than throwing: noise is
+  // then generated at its correct length, so there is no wire tell, and the
+  // decoy still opens. Throwing would make a decoy password unusable under
+  // duress over a payload that leaks nothing.
+  const rawDuress = obj.__duress_signal;
+  const duressPresent = rawDuress !== undefined && rawDuress !== null;
+  if (duressPresent && (typeof rawDuress !== 'string' || rawDuress.length !== SIGNAL_TOKEN_LENGTH)) {
+    throw new MalformedSlotPayloadError('Slot payload duress signal is malformed.');
+  }
   return {
     dekBytes,
     saltB64: obj.salt,
-    duressToken: typeof obj.__duress_signal === 'string' ? obj.__duress_signal : null,
+    duressToken: duressPresent ? rawDuress : null,
   };
 };
 
