@@ -1,10 +1,12 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across nine CodeRabbit review rounds
-(§9–§17) — read all nine before relying on §3's original design as the
+**Implemented in PR #489, then hardened across ten CodeRabbit review rounds
+(§9–§18) — read all ten before relying on §3's original design as the
 literal shipped behavior. §11.5 in particular is a real data-corruption fix,
-not a cosmetic one; §16.1 extends it to the two mutation paths it originally
-missed; §13 records a bot misattribution caught before acting on it.**
+not a cosmetic one; §16.1 and then §18.1 extend it to the mutation paths it
+originally missed (§18.1 is the one that reaches `restoreBackup`, which can
+wipe the whole vault); §13 records a bot misattribution caught before acting
+on it.**
 
 **§0 below is the PRE-IMPLEMENTATION baseline** — the verdict table records
 what was true when this plan was written, which is why it still lists
@@ -1237,9 +1239,18 @@ already established): disabling both guards makes 4 of the 6 fail, and the
 that must not depend on the guard. Restoration verified byte-identical
 against a pre-edit copy, not by eye.
 
-Deliberately **not** extended to reads, backup/restore, or folder/tag
-operations: this fix's scope is the item-mutation paths §11.5 was already
-about. A believable decoy experience remains §7's deferred product work.
+Deliberately **not** extended to reads: this fix's scope is the mutation
+paths §11.5 was already about. A believable decoy experience remains §7's
+deferred product work.
+
+> **Superseded in part by §18.1 (round 10).** This paragraph originally also
+> excluded "backup/restore, or folder/tag operations" from the gate. That was
+> wrong for backup/restore, and wrong in a way worth recording rather than
+> quietly editing away: it excluded them by CATEGORY NAME rather than by what
+> they actually do. `restoreBackup` is an item-mutation path — the server's
+> `_restore_from_items` can `filter(user=request.user).delete()` and then
+> batch `update_or_create` — so it belonged inside this fix's own stated
+> scope all along. See §18.1.
 
 ### 16.2 The decoy write-refusal message named the duress feature to anyone watching the screen — accepted; the suggested console log was declined
 
@@ -1519,3 +1530,200 @@ warnings unrelated to any changed line). `markdownlint` (MD018/MD022/MD040
 — the rules this repo's history actually enforces; MD013/MD025/MD031/MD060
 are pre-existing, unenforced style choices, not this PR's concern) clean on
 all three touched doc files.
+
+## 18. Implementation status — tenth CodeRabbit review round (2026-08-27)
+
+A tenth `@coderabbitai full review` found 9 issues: **2 in shipped code**, 6
+in `docs/onion-sync-transport-phases-2-4-plan.md` and
+`docs/privacy-features-gap-remediation-plan.md`, and 1 repeat of a prior
+round's finding that had been fixed at the wrong level. Verified each against
+current code before fixing, same discipline as every prior round. Notably,
+**both code findings are cases where an EARLIER round of this same PR drew a
+scope boundary in the wrong place** — recorded as such rather than presented
+as new discoveries.
+
+### 18.1 The decoy write-gate still missed `restoreBackup`, which can wipe the real vault — §16.1's own scoping note was the cause
+
+§16.1 (round 8) extended §11.5's decoy gate to `deleteItem` and
+`toggleFavorite`, then explicitly excluded "reads, backup/restore, or
+folder/tag operations" as out of scope. Traced what `restoreBackup` actually
+does before accepting or rejecting this finding, rather than re-reading the
+scoping sentence: `VaultContext.restoreBackup` POSTs to
+`/vault/restore_backup/<id>/`, which reaches `backup_views.py`'s
+`_restore_from_items` — and that function, when `clear_existing` is set, runs
+`EncryptedVaultItem.objects.filter(user=request.user).delete()` and then
+`update_or_create` for every item in the payload. **On `request.user`: the
+REAL user.** So a decoy session could wipe and overwrite the real vault
+irreversibly — the same class as the `deleteItem` gap §16.1 itself was
+written to close, with a strictly larger blast radius (the whole vault, not
+one row).
+
+The root cause is worth stating plainly because it is a reasoning error, not
+an oversight: §16.1 excluded these paths **by category name** ("backup/
+restore") rather than by what they do. `restoreBackup` IS an item-mutation
+path; it simply does not go through `addItem`/`updateItem`. The rule already
+recorded in memory from that very round — "if it does not encrypt (a delete,
+a metadata-only PATCH, **a bulk operation**), it needs its own explicit
+guard" — names bulk operations explicitly, and then §16.1's own prose
+excluded the one bulk operation in the codebase.
+
+**Fix:** both `createBackup` and `restoreBackup` now check
+`sessionVaultCrypto.isDecoySession()` before their request, with the same
+generic non-revealing message the other guards use (§16.2). `restoreBackup`'s
+guard also runs before the `refreshItems()` that would otherwise reload an
+overwritten list. `createBackup` is guarded too, at lower severity and for
+consistency rather than destructiveness: `create_backup` snapshots the real
+user's items into a new server-side `VaultBackup` row, so it is still a real
+write from a session that is not the real user's. `getBackups` is deliberately
+**left unguarded** — it is a read, and reads remain out of scope by the same
+§11.5 boundary that has held since round 3.
+
+3 new tests in `VaultContext.decoySession.test.jsx`: restore makes no request
+and triggers no refresh (asserted by pinning the GET count, not by "never
+called", since mount already performs one), create makes no request, and a
+real session still does both. Negative-controlled together with §18.2:
+disabling all four guards fails 11 of the file's 34 tests.
+
+### 18.2 `parseSlotPayload` validated the DEK's length but not the duress token's, leaving a wire-length tell
+
+§11.6 (round 3) added a `dekBytes.byteLength === 32` check to
+`parseSlotPayload` for exactly the right reason — so a corrupt-envelope
+failure lands inside `open()`'s call stack where `VaultUnlockModal`'s
+`envelopeUnusable` fallback catches it. The `__duress_signal` field sitting
+two lines below got no equivalent check: `typeof x === 'string' ? x : null`
+accepted **any** string, of any length.
+
+Traced the consequence rather than assuming one: `open()` returns that token
+→ `VaultUnlockModal` passes it to `reportUnlockForSlot` → `reportUnlock`
+sends `JSON.stringify({ signal })`. A present-but-wrong-length token
+therefore changes the **request body's byte length**, which is precisely the
+invariant §3.5 rule 1 exists to protect ("same endpoint, same body size,
+every unlock") and which `duressSignalService.test.js` already asserts for
+the real-vs-noise case. That is a genuine indistinguishability break.
+
+**Severity, stated honestly rather than inherited from the review's framing:**
+this is defense-in-depth, not a live exploitable bug. The slot payload lives
+inside AES-GCM-authenticated ciphertext, so an attacker cannot tamper with it
+without the password, and the only writer (`setDecoySlot`) always uses
+`generateSignalToken()`, which is always 44 chars. The realistic trigger is a
+future code change, which is exactly what a regression guard is for.
+
+**Fix:** `parseSlotPayload` now rejects a PRESENT `__duress_signal` that is
+not a string of exactly `SIGNAL_TOKEN_LENGTH` characters, throwing
+`MalformedSlotPayloadError` — same error, same placement, same fallback
+behaviour as the DEK check above it. `duressSignalService` gained an exported
+`SIGNAL_TOKEN_LENGTH` (derived from its own `SIGNAL_BYTES`, not a literal
+`44`) so the check cannot drift if the token size ever changes — the same
+reasoning that already made `REPORT_TIMEOUT_MS` an export.
+
+**Declined, deliberately: rejecting a MISSING token.** The review asked for
+"missing, non-string, or non-44-character" to all be rejected. A missing
+token is the one case that leaks nothing: `reportUnlock` then generates noise
+at its correct full length, so the wire is unchanged. Throwing would instead
+make a decoy password *fail to open the decoy vault* — under duress, in front
+of a coercer — over a payload with no tell in it. That trade is strictly
+worse for the threat model this feature serves, so a missing token still
+yields `null`. 7 new tests in `unlockEnvelopeStore.test.js` cover both
+halves: five malformed shapes rejected, and missing/well-formed accepted.
+
+### 18.3 `docs/onion-sync-transport-phases-2-4-plan.md` A.3: the control-port test asserted the wrong thing, and "mode 0700" is POSIX-only
+
+Two separate defects in adjacent bullets, both real:
+
+- **The auth test.** A.3 asked for "a test asserting an unauthenticated
+  control connection is rejected". `CookieAuthentication 1` does not refuse
+  the TCP connection — Tor accepts it and then rejects control *commands*
+  until a valid `AUTHENTICATE`, closing the connection on failure. The test
+  as specified would fail against a correctly-configured Tor while never
+  exercising the authorization check. Rewritten to: connect, issue a command
+  (`GETINFO version`) with no prior `AUTHENTICATE`, assert an auth error or
+  closure; then repeat with a deliberately wrong cookie.
+- **The permissions.** "mode 0700" is a POSIX instruction, and this app
+  ships a Windows target (`desktop/package.json` `build.win`) where
+  `fs.chmod` is effectively a no-op and the directory inherits the parent's
+  ACL — which on a shared machine can include other local users. Since the
+  control-port **cookie file is the credential**, that is a real gap, not a
+  cosmetic one. Now specifies an owner-only DACL with inheritance disabled on
+  Windows alongside 0700 elsewhere, and requires the test to attempt access
+  as a second local user on every shipped platform — a test that only checks
+  POSIX mode bits passes on Windows while proving nothing.
+
+### 18.4 A.3's `start()` idempotency wording contradicted A.5's await-readiness requirement — both written in round 9
+
+§17.2 (round 9) specified `start()` as "a no-op returning current status"
+when already bootstrapping. §17.3, in the same round, established that the
+availability check must be able to **await** an in-flight bootstrap, because
+a mid-bootstrap snapshot makes `prefer_onion` fall back to clearnet and
+`require_onion` fail closed during normal startup. A status snapshot is
+exactly what §17.3 rules out, so the two sections shipped contradicting each
+other. Fixed: `start()` returns the SAME in-flight readiness promise while
+bootstrapping, and is a genuine no-op only once it has settled. Test guidance
+added for two concurrent first syncs from a stopped state sharing one promise.
+
+**Lesson, and the second instance of this exact shape in two rounds:** round
+9 fixed a stale count in one document that had already propagated into
+another; this round found two sections of the SAME round contradicting each
+other. When one round changes a design fact in more than one place, the
+places must be diffed against each other before the round is called done —
+not just each one checked against the finding that prompted it.
+
+### 18.5 A.8's no-survivor acceptance criterion promised what A.3 already said was impossible
+
+A.8 read "No `tor` process survives app quit, crash, or force-quit" —
+unconditional. A.3's own exit-path bullet already states, correctly and at
+length, that `process.on('exit')` cannot await anything, `app.exit()` skips
+the quit handlers entirely, and SIGKILL runs no JS at all. A criterion that
+contradicts its own design section is one nobody can honestly tick. Split
+into two: a normal-quit criterion verifiable by observation, and a separate
+criterion requiring a **named OS-level parent-lifetime mechanism per
+platform** (Windows Job Object with `KILL_ON_JOB_CLOSE`; process-group kill /
+`PR_SET_PDEATHSIG` / `kqueue NOTE_EXIT` on the Unix targets) verified by a
+real parent-kill test rather than by calling `stop()`.
+
+### 18.6 B.2 treated Orbot's SOCKS port as fixed at 9050
+
+B.2 described "a stable SOCKS5 endpoint on `127.0.0.1:9050`". Verified
+against Orbot's own documented behaviour: 9050 is the **default**, the port
+is user-configurable, Orbot writes the configured value into the torrc it
+generates, and `0` is the documented value for **disabling** the SOCKS
+listener. A hardcoded 9050 would work on a default install and fail silently
+for anyone who changed it — and would connect to *something else* entirely if
+another process held that port. Fixed: discover the configured port from
+Orbot's own status/binding surface, treat `0`/absent/unparseable as "onion
+sync unavailable" rather than falling back to 9050, and verify the resolved
+listener accepts a connection before reporting availability — the same
+"confirm one real SOCKS5 connection" discipline A.3 already requires of the
+desktop sidecar's ephemeral port. Tests required for a non-default port and
+for port 0.
+
+### 18.7 `docs/privacy-features-gap-remediation-plan.md`: a historical scope statement read as current status, and the Phase 2 summary could rebuild a fixed bug
+
+- The "**Not delivered — deliberately out of scope for this PR**" paragraph
+  describes PR #486's scope at merge time, but reads as present-tense status
+  and lists §4.2 as undelivered — which PR #489 delivered. The same paragraph
+  already had the right pattern for §4.4 ("since delivered in the PR #488
+  follow-up"), so applied it to §4.2 as well and marked §4.1 as still open,
+  rather than rewriting the historical statement and destroying the record of
+  what #486 actually scoped.
+- The Phase 2 summary said to route the sync request "through the `.onion`
+  from `getCapabilities()`", which is the pre-§15.2 design: `onionTransport.js`
+  resolves the address itself, in the main process, precisely so the IPC
+  channel can carry no destination field. The summary also said nothing about
+  availability gating, leaving an implementer who read only it free to gate on
+  `vault_proxy.available` — structurally always `false` on desktop, the exact
+  bug §10.4/§15.5 already fixed twice. Corrected both, with the gating rule
+  stated inline rather than only cross-referenced.
+
+Targeted tests only, per the standing preference recorded in
+[[feedback_targeted_testing]]: the files covering the changed paths —
+`unlockEnvelopeStore.test.js` and `VaultContext.decoySession.test.jsx`
+(34 tests, 10 of them new this round), plus `VaultUnlockModal.test.jsx`,
+`duressSignalService.test.js`, `sessionVaultCrypto.decoySession.test.js`,
+`sessionVaultCrypto.exportWrappedDekRaw.test.js`,
+`sessionVaultCrypto.salt.test.js`, `VaultDuressSetup.test.jsx`, and the three
+sibling `VaultContext.*` suites that share the mocked module surface. Both
+code fixes negative-controlled before being trusted (disabling all four decoy
+guards plus the duress-length check fails 11 of 34 tests; restoration
+verified byte-identical against pre-edit backups). `eslint` clean on the
+changed files. `markdownlint` (MD018/MD022/MD040) clean on all three touched
+doc files. The full frontend suite is CI's job, not this change's.

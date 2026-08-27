@@ -143,13 +143,37 @@ Requirements:
   9050 would collide with a system Tor or Tor Browser the user already runs,
   and the failure mode (silently using someone else's circuit) is worse than
   the collision.
-- **Own `DataDirectory`** under `PathUtils.getUserDataPath()/tor`, mode 0700.
+- **Own `DataDirectory`** under `PathUtils.getUserDataPath()/tor`, owner-only.
+  **"Mode 0700" is a POSIX-only instruction and this app ships a Windows
+  target** (`desktop/package.json` `build.win`), where `fs.chmod` is
+  effectively a no-op and the directory inherits whatever the parent's ACL
+  grants — which on a shared machine can include other local users. Set mode
+  0700 on macOS/Linux AND, on Windows, an explicit owner-only DACL with
+  inheritance disabled (e.g. `icacls <dir> /inheritance:r /grant:r
+  "%USERNAME%":(OI)(CI)F`, or the equivalent through a native binding).
+  Apply the same to the control-port cookie file below — it is the actual
+  credential. Test by attempting a read as a second local user and asserting
+  it is denied, on every platform this ships to; a test that only checks the
+  POSIX mode bits will pass on Windows while proving nothing.
 - **Authenticated control port.** Tor allows any local process to drive an
   unauthenticated control port — no credential is required by default, which
   means another process on the machine could reconfigure or query this
-  sidecar's Tor instance. Require `CookieAuthentication 1`, restrict the
-  generated cookie file to the owning user, and add a test asserting an
-  unauthenticated control connection is rejected.
+  sidecar's Tor instance. Require `CookieAuthentication 1` and restrict the
+  generated cookie file to the owning user (see the ACL note above — the
+  cookie is the credential, so its permissions matter more than the
+  directory's).
+
+  **Test the AUTHORIZATION, not the TCP connect.** `CookieAuthentication 1`
+  does not refuse the connection itself: Tor accepts the TCP connection and
+  then rejects every control command until a valid `AUTHENTICATE` succeeds,
+  closing the connection on a failed attempt. A test asserting "an
+  unauthenticated control connection is rejected" at the socket level would
+  therefore fail against a correctly-configured Tor while never exercising
+  the check that actually matters. Instead: connect, issue a control command
+  (e.g. `GETINFO version`) with no prior `AUTHENTICATE`, and assert Tor
+  answers with an authentication error or closes the connection; then repeat
+  with a deliberately WRONG cookie value and assert the same. Those two are
+  the real assertions.
 - **Bootstrap gating.** Parse `NOTICE: Bootstrapped NN%` from stdout, or use the
   control port. Do not report available before 100% AND the real-connection
   check above both pass.
@@ -215,10 +239,20 @@ Requirements:
      `off`) — reusing the `TOR_START`/`TOR_STOP` channels already defined
      below, not a new one. A `prefer_onion → require_onion` change (already
      running, staying non-off) also calls `start()` again; both
-     `start()`/`stop()` must therefore be idempotent (calling `start()`
-     while already bootstrapped/bootstrapping is a no-op returning current
-     status; calling `stop()` while already stopped is a no-op) so a
-     redundant call from this is always safe.
+     `start()`/`stop()` must therefore be idempotent so a redundant call
+     from this is always safe. **Specifically: `start()` returns the SAME
+     in-flight readiness promise while a bootstrap is under way, never a
+     status snapshot.** Returning a snapshot here would contradict A.5's
+     own requirement that the availability check be able to AWAIT an
+     in-flight bootstrap: a second caller arriving mid-bootstrap would read
+     "not ready" and `prefer_onion` would fall back to clearnet (or
+     `require_onion` fail closed) while a perfectly good circuit was
+     seconds from being ready. Once bootstrap has settled, `start()` is a
+     genuine no-op returning the ready status; `stop()` while already
+     stopped is likewise a no-op. Test two concurrent first syncs from a
+     fully-stopped state: both must await the one shared promise and both
+     proceed when it resolves — not one succeeding while the other reads a
+     stale snapshot.
   2. **The persisted state at launch.** A user who quit the app with
      `require_onion` set and relaunches it must not silently revert to
      clearnet until they happen to touch the settings UI again. Whatever
@@ -560,7 +594,19 @@ state (§4.1 Phase 2 step 4). Feed it `tor:status`. Add no new component.
 - [ ] `require_onion` fails closed on desktop when bootstrap has not completed.
 - [ ] `prefer_onion` reports `degraded: true` and the UI shows it.
 - [ ] `off` spawns no Tor process at all.
-- [ ] No `tor` process survives app quit, crash, or force-quit.
+- [ ] No `tor` process survives a NORMAL app quit (`before-quit`/`will-quit`
+      runs the guarded `stop()`), verified by observing the process is gone.
+- [ ] For crash / `app.exit()` / SIGKILL — where A.3 already establishes that
+      no JavaScript cleanup can run at all — a named OS-level
+      parent-lifetime mechanism is in place per platform and verified by a
+      real parent-kill test, not by calling `stop()`: a Windows Job Object
+      with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and a process-group kill
+      (or `prctl(PR_SET_PDEATHSIG)` on Linux / `kqueue` `NOTE_EXIT` watch on
+      macOS) on the Unix targets. **Stated as two separate criteria on
+      purpose:** the single unconditional "survives app quit, crash, or
+      force-quit" line this replaces promised something JS cannot deliver
+      and A.3's own exit-path bullet already says so — a criterion that
+      contradicts its own design section is one nobody can honestly tick.
 - [ ] Renderer code paths are identical to web except for the transport shim.
 - [ ] Bundled binary hash is pinned and verified at spawn.
 - [ ] The A.1.2 IPC channel-name bug is fixed and regression-tested.
@@ -597,7 +643,19 @@ most of the work; the Tor part is smaller than it looks.
 Ship Android. Defer iOS explicitly rather than half-building it:
 
 - Android has Orbot, a maintained app with a documented `TorService` binding and
-  a stable SOCKS5 endpoint on `127.0.0.1:9050`.
+  a SOCKS5 endpoint on `127.0.0.1`. **`9050` is Orbot's DEFAULT SOCKS port,
+  not a fixed one** — it is user-configurable, Orbot writes the configured
+  value into the torrc it generates, and `0` is the documented way to
+  DISABLE the SOCKS listener entirely. So B.3 must discover the port rather
+  than hardcode it: read the configured value from Orbot's own status/
+  binding surface, treat `0` (or an absent/unparseable value) as "onion sync
+  unavailable" rather than falling back to 9050, and verify the resolved
+  listener actually accepts a connection before reporting availability —
+  the same "confirm one real SOCKS5 connection, don't just trust the
+  number" discipline A.3 already applies to the desktop sidecar's own
+  ephemeral port. Test a non-default configured port and the port-0
+  disabled case explicitly; a test that only covers 9050 would pass on a
+  default install and fail silently for every user who changed it.
 - iOS has no Orbot equivalent; the options are embedding Tor.framework (App
   Store review risk, sizeable binary, ongoing maintenance) or shipping nothing.
   Neither is a line item — it is its own investigation.

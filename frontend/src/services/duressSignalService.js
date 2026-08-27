@@ -44,6 +44,16 @@ const BASE_URL = '/api/security';
 /** Raw byte length of a signal token. 256 bits of CSPRNG output. */
 const SIGNAL_BYTES = 32;
 
+/**
+ * Character length of a signal token once base64-encoded (44 for 32 bytes).
+ *
+ * Exported so a caller validating a STORED token -- `unlockEnvelopeStore`'s
+ * `parseSlotPayload` -- checks against the real value rather than a literal
+ * that would silently drift if `SIGNAL_BYTES` ever changed. Same reasoning
+ * as `REPORT_TIMEOUT_MS` being exported below.
+ */
+export const SIGNAL_TOKEN_LENGTH = Math.ceil(SIGNAL_BYTES / 3) * 4;
+
 /** Slot index that holds the decoy vault, per hiddenVault/SPEC.md. */
 export const DECOY_SLOT_INDEX = 1;
 

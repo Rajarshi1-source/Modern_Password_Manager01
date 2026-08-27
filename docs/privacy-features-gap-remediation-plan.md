@@ -286,8 +286,13 @@ backend app — the backend already supports this operation.
    rejected that as an unnecessary widening of the renderer's privileges — a
    compromised or buggy renderer with raw SOCKS5 access could reach anything
    reachable from this machine's Tor circuit, not just `vault_sync`. Route
-   the sync request — and only it, at first — through the `.onion` from
-   `getCapabilities()`, via a narrow IPC channel the main process itself
+   the sync request — and only it, at first — through the `.onion` address,
+   which **`onionTransport.js` resolves in the MAIN process via its own
+   clearnet capability fetch**, not from the renderer's `getCapabilities()`
+   call and not over the IPC channel: that channel deliberately carries no
+   destination field at all, so there is nothing for a compromised renderer
+   to override. The renderer's own `getCapabilities()` stays clearnet and is
+   used only for availability gating. The IPC channel the main process
    validates against a fixed operation allowlist AND the payload's own
    shape — sync data only, as a field ALLOWLIST matching
    `SyncSerializer`/`VaultItemSerializer`'s own fields exactly (not merely a
@@ -295,6 +300,14 @@ backend app — the backend already supports this operation.
    since a renamed field would slip past a blocklist), with any unknown key
    at any level rejected outright before dispatch. See A.4 for the full
    schema and the required tests.)
+   **Gate desktop availability on `anonymity.available && onion_address`
+   AND the local `torSidecar` reporting a bootstrapped circuit — never on
+   `vault_proxy.available`**, which the server computes as "did THIS request
+   arrive over onion ingress" and is therefore structurally always `false`
+   for desktop's necessarily-clearnet capabilities call. Gating on it here
+   would mean the sidecar ships and is never used. See A.5 for the full
+   argument; this line exists so an implementer reading only this summary
+   cannot rebuild the bug A.5 already fixed.
 3. Reuse the Phase 1 service contract verbatim so the renderer code is identical
    across web and desktop; only the transport differs.
 4. Health/bootstrap UI: reuse `DarkProtocolDashboard.jsx`, which already renders
@@ -474,13 +487,19 @@ failing closed on `require_onion`, and flagging degradation on
 `DarkProtocolSettings.jsx` with IP-privacy-only copy. Backend contract test
 guards the `vault_sync` route wiring.
 
-**Not delivered — deliberately out of scope for this PR:** §4.1 Phases 2–4
-(desktop Tor sidecar, mobile Orbot, anonymous credentials), and the §4.2
-`VaultUnlockModal` envelope integration, which needs the two-slot blob to be
-provisioned at vault setup — a migration path for existing vaults that
-deserves its own PR rather than being bolted onto this one. §4.4 orphan audit
-was also out of scope for this PR — since delivered in the PR #488 follow-up,
-see §4.4 and §21.
+**Not delivered — deliberately out of scope for this PR** (this paragraph
+describes PR #486's OWN scope at the time it merged; two of the three items
+have since shipped in follow-up PRs, noted inline below rather than by
+rewriting the historical scope statement)**:** §4.1 Phases 2–4
+(desktop Tor sidecar, mobile Orbot, anonymous credentials) — **still open,
+planned in `docs/onion-sync-transport-phases-2-4-plan.md`, no code yet** —
+and the §4.2 `VaultUnlockModal` envelope integration, which needs the two-slot
+blob to be provisioned at vault setup — a migration path for existing vaults
+that deserves its own PR rather than being bolted onto this one; **since
+delivered in the PR #489 follow-up, and the migration turned out to be
+device-local rather than server-side, see the carry-over plan's §2 and §9–§17.**
+§4.4 orphan audit was also out of scope for this PR — since delivered in the
+PR #488 follow-up, see §4.4 and §21.
 
 Both remaining carry-overs now have their own plans, one PR each (three, in the
 onion case):

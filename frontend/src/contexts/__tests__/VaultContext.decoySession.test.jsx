@@ -74,6 +74,7 @@ vi.mock('../../services/vaultService', () => ({
 }));
 
 import axios from 'axios';
+import api from '../../services/api';
 import { VaultProvider, useVault } from '../VaultContext';
 
 const wrapper = ({ children }) => <VaultProvider>{children}</VaultProvider>;
@@ -103,6 +104,7 @@ beforeEach(() => {
   axios.get.mockResolvedValue({ data: { items: [EXISTING_ITEM] } });
   mockDeleteVaultItem.mockResolvedValue({ data: {} });
   mockToggleFavorite.mockResolvedValue({ data: {} });
+  api.post.mockResolvedValue({ data: { backup_id: 'b-1' } });
 });
 
 describe('VaultContext.deleteItem during a decoy session', () => {
@@ -185,5 +187,63 @@ describe('VaultContext.toggleFavorite during a decoy session', () => {
 
     expect(mockToggleFavorite).toHaveBeenCalledWith(42, true);
     expect(result.current.items[0].favorite).toBe(true);
+  });
+});
+
+describe('VaultContext backup paths during a decoy session', () => {
+  test('restoreBackup makes no request and does not refresh the item list', async () => {
+    mockIsDecoySession.mockReturnValue(true);
+    const result = await mountVault();
+    // Baseline: mountVault already did the initial GET. A refreshItems()
+    // triggered by an unguarded restore would add another one, so pin the
+    // count rather than asserting "never called".
+    const getCallsBefore = axios.get.mock.calls.length;
+
+    let caught;
+    await act(async () => {
+      caught = await result.current.restoreBackup('backup-1').catch((e) => e);
+    });
+
+    expect(caught).toBeInstanceOf(Error);
+    // The server side of this call can wipe and overwrite the REAL vault
+    // (backup_views.py `_restore_from_items`), so the request must not go out
+    // at all -- this is the highest-blast-radius path the decoy flag guards.
+    expect(api.post).not.toHaveBeenCalled();
+    expect(axios.get.mock.calls.length).toBe(getCallsBefore);
+    expect(caught.message).toBe('Failed to restore backup. Please try again.');
+    expect(caught.message).not.toMatch(/decoy|duress|slot/i);
+  });
+
+  test('createBackup makes no request', async () => {
+    mockIsDecoySession.mockReturnValue(true);
+    const result = await mountVault();
+
+    let caught;
+    await act(async () => {
+      caught = await result.current.createBackup().catch((e) => e);
+    });
+
+    expect(caught).toBeInstanceOf(Error);
+    expect(api.post).not.toHaveBeenCalled();
+    expect(caught.message).toBe('Failed to create backup. Please try again.');
+    expect(caught.message).not.toMatch(/decoy|duress|slot/i);
+  });
+
+  test('a real session still creates and restores normally', async () => {
+    const result = await mountVault();
+
+    await act(async () => {
+      await result.current.createBackup();
+    });
+    expect(api.post).toHaveBeenCalledWith(
+      '/vault/create_backup/',
+      expect.objectContaining({ name: expect.any(String) })
+    );
+
+    api.post.mockClear();
+    await act(async () => {
+      await result.current.restoreBackup('backup-1');
+    });
+    expect(api.post).toHaveBeenCalledWith('/vault/restore_backup/backup-1/');
   });
 });

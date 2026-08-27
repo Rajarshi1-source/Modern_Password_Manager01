@@ -240,6 +240,61 @@ describe('open', () => {
     await expect(open({ userId: USER_ID, password: REAL_PASSWORD }))
       .rejects.toBeInstanceOf(MalformedSlotPayloadError);
   });
+
+  describe('__duress_signal validation', () => {
+    // A decoy slot's token is sent VERBATIM as the request body
+    // (duressSignalService.reportUnlock -> JSON.stringify({ signal })), and
+    // the indistinguishability contract requires that body to be the same
+    // size for a real token as for noise. A present-but-wrong-length token
+    // would change the byte length on the wire -- the exact oracle the
+    // feature denies -- so it must be rejected inside open()'s call stack,
+    // where VaultUnlockModal's `envelopeUnusable` fallback catches it.
+    const sealPayloadWithDuress = async (duressValue) => {
+      const dekB64 = btoa(String.fromCharCode(...DEK));
+      const payloadObj = { v: 'hv-slot-1', dek: dekB64, salt: SALT };
+      if (duressValue !== undefined) payloadObj.__duress_signal = duressValue;
+      const blob = await encode({
+        realPassword: REAL_PASSWORD,
+        realPayload: jsonToBytes(payloadObj),
+        decoyPassword: null,
+        decoyPayload: new Uint8Array(0),
+        tier: TIERS.TIER0_32K,
+      });
+      saveEnvelope(USER_ID, blob);
+    };
+
+    test.each([
+      ['too short', 'abc'],
+      ['too long', 'a'.repeat(45)],
+      ['a number', 12345],
+      ['an object', { token: 'x' }],
+      ['an empty string', ''],
+    ])('rejects a %s duress signal as MalformedSlotPayloadError', async (_label, value) => {
+      await sealPayloadWithDuress(value);
+
+      await expect(open({ userId: USER_ID, password: REAL_PASSWORD }))
+        .rejects.toBeInstanceOf(MalformedSlotPayloadError);
+    });
+
+    test('a MISSING duress signal is not an error -- it yields null so noise is sent at the correct length', async () => {
+      // Deliberately NOT rejected: absent means "no alarm configured for this
+      // slot", reportUnlock then generates full-length noise, so there is no
+      // wire tell. Throwing here would make a decoy password unusable under
+      // duress over a payload that leaks nothing.
+      await sealPayloadWithDuress(undefined);
+
+      const result = await open({ userId: USER_ID, password: REAL_PASSWORD });
+      expect(result.duressToken).toBeNull();
+    });
+
+    test('a well-formed 44-char duress signal passes through unchanged', async () => {
+      const token = 'a'.repeat(44);
+      await sealPayloadWithDuress(token);
+
+      const result = await open({ userId: USER_ID, password: REAL_PASSWORD });
+      expect(result.duressToken).toBe(token);
+    });
+  });
 });
 
 describe('MalformedSlotPayloadError', () => {
