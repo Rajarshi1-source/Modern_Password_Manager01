@@ -311,6 +311,35 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
 };
 
 /**
+ * Derive the KEK from `vaultPassword` and unwrap `record`'s wrapped DEK.
+ * Shared by `unlockWithVaultPassword` (needs a non-extractable key, since it
+ * becomes the live session key) and `exportWrappedDekRaw` (needs the same
+ * DEK as extractable raw bytes) below -- `extractable` is the only thing
+ * that differs between the two callers, so the unwrap parameters
+ * (algorithm, key length, the canonical wrong-password error) can no longer
+ * drift out of sync between them the way a hand-maintained "keep these two
+ * in sync" comment could not actually guarantee.
+ */
+const unwrapDek = async (vaultPassword, record, extractable) => {
+  const kek = await deriveKEK(vaultPassword, record.salt);
+  try {
+    return await window.crypto.subtle.unwrapKey(
+      'raw',
+      fromB64(record.wrapped),
+      kek,
+      { name: 'AES-GCM', iv: fromB64(record.iv) },
+      { name: 'AES-GCM', length: 256 },
+      extractable,
+      ['encrypt', 'decrypt']
+    );
+  } catch {
+    // AES-GCM unwrap failure is the canonical "wrong password" signal, for
+    // both callers.
+    throw new Error('Incorrect vault password.');
+  }
+};
+
+/**
  * Unlock an existing wrapped DEK using the user's vault password. Installs
  * the unwrapped DEK as the current session key. Throws if the password is
  * wrong or the stored record is missing/corrupt.
@@ -330,26 +359,11 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
     throw new Error('Unsupported vault key record version.');
   }
 
+  // Reserved AFTER the synchronous validation above (so a record that fails
+  // to even parse never bumps this) and BEFORE the slow unwrap step below --
+  // see initSessionKeyFromPassword for why the position matters.
   const generation = ++sessionGeneration;
-  const kek = await deriveKEK(vaultPassword, record.salt);
-
-  let dek;
-  try {
-    dek = await window.crypto.subtle.unwrapKey(
-      'raw',
-      fromB64(record.wrapped),
-      kek,
-      { name: 'AES-GCM', iv: fromB64(record.iv) },
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-  } catch {
-    // AES-GCM unwrap failure is the canonical "wrong password" signal. Kept
-    // in its own try/catch so a stale-generation throw below (unrelated to
-    // whether the password was right) can never be relabeled as this.
-    throw new Error('Incorrect vault password.');
-  }
+  const dek = await unwrapDek(vaultPassword, record, false);
   if (generation !== sessionGeneration) {
     // See `initSessionKeyFromPassword`.
     throw new Error('Vault session initialization was superseded by a newer request.');
@@ -385,9 +399,9 @@ export const clearWrappedKey = (userId) => {
  * the opposite for one instant: the raw bytes, so the SAME DEK this record
  * already protects can also be sealed into envelope slot 0. Rather than
  * weaken `unlockWithVaultPassword`'s key for every caller, this does a
- * second, independent unwrap with `extractable: true`. Keep this in sync
- * with `unlockWithVaultPassword`'s record-parsing logic above if that ever
- * changes.
+ * second, independent unwrap via the shared `unwrapDek` helper above with
+ * `extractable: true` -- the unwrap parameters themselves can no longer
+ * drift between the two callers, since there is only one copy of them.
  *
  * Does NOT touch module session state (`sessionKey` etc.) -- call
  * `unlockWithVaultPassword` separately to actually unlock the session; this
@@ -408,22 +422,7 @@ export const exportWrappedDekRaw = async (vaultPassword, userId) => {
     throw new Error('Unsupported vault key record version.');
   }
 
-  const kek = await deriveKEK(vaultPassword, record.salt);
-  let dek;
-  try {
-    dek = await window.crypto.subtle.unwrapKey(
-      'raw',
-      fromB64(record.wrapped),
-      kek,
-      { name: 'AES-GCM', iv: fromB64(record.iv) },
-      { name: 'AES-GCM', length: 256 },
-      true,
-      ['encrypt', 'decrypt']
-    );
-  } catch {
-    // See `unlockWithVaultPassword` — same canonical "wrong password" signal.
-    throw new Error('Incorrect vault password.');
-  }
+  const dek = await unwrapDek(vaultPassword, record, true);
   const rawDek = await window.crypto.subtle.exportKey('raw', dek);
   return { dekBytes: new Uint8Array(rawDek), saltB64: record.salt };
 };

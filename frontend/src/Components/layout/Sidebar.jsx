@@ -228,7 +228,7 @@ const Sidebar = () => {
             <FaUserSecret />
             <NavItemText collapsed={collapsed}>Dark Protocol</NavItemText>
           </NavItem>
-          <NavItem to="/security/vault-duress" collapsed={collapsed}>
+          <NavItem to="/security/vault-duress" collapsed={collapsed} aria-label="Vault Duress">
             <FaMask />
             <NavItemText collapsed={collapsed}>Vault Duress</NavItemText>
           </NavItem>

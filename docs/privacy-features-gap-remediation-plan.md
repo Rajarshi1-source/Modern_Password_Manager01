@@ -512,7 +512,7 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Rounds five through seven found 20 more issues, almost all
+  corrected above. Rounds five through nine found 35 more issues, almost all
   in `docs/onion-sync-transport-phases-2-4-plan.md`'s still-unimplemented
   Phase 2/PR C design (payload-shape validation on the desktop IPC trust
   boundary — later tightened again from a destination-field denylist into a
@@ -525,9 +525,14 @@ onion case):
   config cannot hold; a main-process capability bootstrap with no defined
   source; and two anonymous-credential findings genuinely valid but
   initially misattributed by the bot to the wrong document's line numbers —
-  caught and redirected to their real location before acting on them).
+  caught and redirected to their real location before acting on them); a
+  renderer-to-main privacy-mode handoff the desktop design never defined;
+  and a requirement that a request presenting both a JWT and an anonymous
+  credential be rejected outright, since dispatch is `request.user`-scoped
+  and a mixed request would otherwise let the server link a credential
+  redemption to a real identity.
   **All review rounds for both carry-overs are recorded in one place:
-  `docs/vault-unlock-envelope-integration-plan.md` §9 through §15** (every
+  `docs/vault-unlock-envelope-integration-plan.md` §9 through §17** (every
   bare `§N` in this paragraph refers to that document, including the
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over
