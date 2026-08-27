@@ -199,6 +199,40 @@ Requirements:
   proceeds) and the `prefer_onion` → `off` transition (sidecar actually
   stops, not just "sync stops using it").
 
+  **This requires a renderer-to-main mode handoff that nothing above
+  defines, and it must be built, not assumed.** `getSyncPrivacyMode()` /
+  `setSyncPrivacyMode()` (`onionSyncService.js`) are renderer-local —
+  plain `localStorage` reads/writes, with no Electron main-process access
+  of their own (the main process cannot reach the renderer's
+  `localStorage` without an explicit bridge). But this bullet makes the
+  main process the sole owner of `torSidecar.start()`/`stop()`, so it needs
+  to learn the mode from somewhere. Two moments need a defined path:
+  1. **A live change.** `setSyncPrivacyMode(mode)` gains one additive step:
+     when running under Electron (`window.electronAPI?.isElectron`), after
+     writing to `localStorage` it also calls
+     `window.electronAPI.tor.start()` (mode is now `prefer_onion` or
+     `require_onion`) or `window.electronAPI.tor.stop()` (mode is now
+     `off`) — reusing the `TOR_START`/`TOR_STOP` channels already defined
+     below, not a new one. A `prefer_onion → require_onion` change (already
+     running, staying non-off) also calls `start()` again; both
+     `start()`/`stop()` must therefore be idempotent (calling `start()`
+     while already bootstrapped/bootstrapping is a no-op returning current
+     status; calling `stop()` while already stopped is a no-op) so a
+     redundant call from this is always safe.
+  2. **The persisted state at launch.** A user who quit the app with
+     `require_onion` set and relaunches it must not silently revert to
+     clearnet until they happen to touch the settings UI again. Whatever
+     renderer code reads `getSyncPrivacyMode()` on startup (the settings
+     screen mounting, or an app-level init effect — either is fine, but it
+     must be unconditional, not only-if-the-user-opens-settings) calls the
+     same `start()`/`stop()` step above once, immediately, using the
+     freshly-read persisted value.
+  Test: app launch with a persisted non-`off` mode actually starts the
+  sidecar (not just "would start it if settings were opened"), and the
+  `prefer_onion` → `off` transition through this same handoff actually
+  stops it — the identical assertion the bullet above already asks for,
+  now anchored to a concrete call path instead of an implied one.
+
 ## A.4 Transport: routing the request through the circuit
 
 The renderer must not gain network privileges. Keep the fetch in the main
@@ -770,7 +804,7 @@ implementation. It must settle:
   endpoint-wide, unconditionally, before either permission class is even
   evaluated — this PR does not add that check "for the credential case," it
   is not new, and it must not become conditional on which branch
-  authorizes the request.** Stated explicitly because the obvious-looking
+  authorises the request.** Stated explicitly because the obvious-looking
   phrasing "require onion ingress for the credential path" invites exactly
   the wrong implementation: moving or duplicating the check inside
   `HasAnonymousCredential` alone, which would leave a JWT-authenticated
@@ -781,6 +815,24 @@ implementation. It must settle:
   independent of both permission classes, exactly where it already is. Do
   not remove `IsAuthenticated` — clients that have not migrated must keep
   working, and a flag day here means a sync outage.
+
+  **A request presenting BOTH a valid JWT and a valid anonymous credential
+  must be rejected, not accepted.** `IsAuthenticated OR HasAnonymousCredential`
+  as stated grants access as soon as EITHER passes — it does not notice or
+  care whether the other also passed. Dispatch is `request.user`-scoped
+  (C.3's own "Ownership scoping" point below), so a request carrying a
+  valid `Authorization` header alongside a credential lets the server bind
+  that specific redemption to the JWT's user identity, which defeats C.5's
+  own acceptance criterion ("vault sync over onion carries no JWT and no
+  user identifier") for exactly the requests it matters most for. Fix:
+  before dispatch — same place as the onion-ingress check immediately
+  above, and for the identical reason (a boundary that must not depend on
+  which permission class happens to run first) — require EXACTLY ONE
+  authentication mode present on the request; a request carrying both is
+  refused outright, before either permission class is evaluated and before
+  any vault dispatch. This is an additional check alongside the OR, not a
+  replacement for it: `IsAuthenticated` alone and the credential alone must
+  both keep working exactly as today.
 - **Ownership scoping is the hard part.** `VAULT_OPERATION_ROUTES` dispatches to
   the genuine vault views, whose scoping is `request.user`-based
   (`dark_protocol_service.py:150-158`). An anonymous credential deliberately has
@@ -797,6 +849,13 @@ implementation. It must settle:
 
 - Issuance/redemption round-trip; a redeemed token is rejected on reuse.
 - A credential minted for user A cannot reach user B's vault.
+- **A request presenting both a valid JWT and a valid anonymous credential,
+  over onion, is refused before dispatch** — the mixed-credential case C.3's
+  "exactly one authentication mode" rule exists to close. This is a
+  different assertion from the clearnet-refusal bullet below: this one is
+  about an otherwise-legitimate ONION request being rejected specifically
+  because it carries two credentials, proving the vault is never reached
+  with a redemption linkable to a JWT identity.
 - Redemption over clearnet is refused (`clearnet_ingress_refused` still applies)
   — asserted for THREE separate authentication shapes, not just the credential
   one: a JWT-only (`IsAuthenticated`) request over clearnet, a
@@ -812,7 +871,7 @@ implementation. It must settle:
   `vault_create`, `vault_update`, `vault_delete`, and `vault_search` must
   each be rejected before vault dispatch, not merely "not `vault_sync`."
   Asserting only that `vault_sync` succeeds would leave this requirement
-  entirely unverified — a credential that happened to also authorize
+  entirely unverified — a credential that happened to also authorise
   `vault_list` would pass every test in this list except this one.
 - Expired credential refused; clock-skew tolerance asserted explicitly.
 - Load test on the double-spend store: no false accepts under concurrency. This
