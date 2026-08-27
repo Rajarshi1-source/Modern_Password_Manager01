@@ -1,12 +1,14 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across ten CodeRabbit review rounds
-(§9–§18) — read all ten before relying on §3's original design as the
-literal shipped behavior. §11.5 in particular is a real data-corruption fix,
-not a cosmetic one; §16.1 and then §18.1 extend it to the mutation paths it
-originally missed (§18.1 is the one that reaches `restoreBackup`, which can
-wipe the whole vault); §13 records a bot misattribution caught before acting
-on it.**
+**Implemented in PR #489, then hardened across eleven CodeRabbit review
+rounds (§9–§19) — read all eleven before relying on §3's original design as
+the literal shipped behavior. §11.5 in particular is a real data-corruption
+fix, not a cosmetic one; §16.1 and then §18.1 extend it to the mutation paths
+it originally missed (§18.1 is the one that reaches `restoreBackup`, which
+can wipe the whole vault); §13 records a bot misattribution caught before
+acting on it; §19.6 names the failure mode that has produced most findings
+since round 9 — internal contradictions between two places stating the same
+fact — and the rule for avoiding it.**
 
 **§0 below is the PRE-IMPLEMENTATION baseline** — the verdict table records
 what was true when this plan was written, which is why it still lists
@@ -1727,3 +1729,177 @@ guards plus the duress-length check fails 11 of 34 tests; restoration
 verified byte-identical against pre-edit backups). `eslint` clean on the
 changed files. `markdownlint` (MD018/MD022/MD040) clean on all three touched
 doc files. The full frontend suite is CI's job, not this change's.
+
+## 19. Implementation status — eleventh CodeRabbit review round (2026-08-27)
+
+An eleventh `@coderabbitai full review` found 5 issues: 1 hardening gap in
+shipped code and 4 in `docs/onion-sync-transport-phases-2-4-plan.md` (still
+fully unimplemented). **Three of the four doc findings are internal
+contradictions introduced by MY OWN earlier rounds of this same PR** — the
+pattern §18.4 already flagged, now at its third and fourth instance. That is
+no longer a coincidence and is recorded as such in §19.6.
+
+### 19.1 `provision()` validated every argument except `saltB64`, and a missing one writes a permanently dead envelope
+
+`provision()` guards `userId`, `vaultPassword`, and `dekBytes` (the last with
+an explicit 32-byte length check, added in §11.6) but never checked
+`saltB64`. Traced what a bad value actually does rather than filing it as a
+generic missing-guard: `buildSlotPayload` places `salt: saltB64` into an
+object it hands to `jsonToBytes`, and **`JSON.stringify` drops a key whose
+value is `undefined` entirely**. So `provision({..., saltB64: undefined})`
+writes a structurally valid, correctly-sized, successfully-encrypting blob
+whose payload simply has no `salt` key — and `parseSlotPayload` requires
+`typeof obj.salt === 'string'`, so **every subsequent `open()` fails with
+`MalformedSlotPayloadError`, permanently**. The envelope is dead on arrival
+and the failure surfaces far from the call that caused it.
+
+**Severity, stated honestly:** a hardening gap, not a live bug. The only
+production caller (`VaultUnlockModal.jsx`) always passes a real string from
+`sessionVaultCrypto`. But this is the same shape as §11.6's own finding —
+validate the field where a bad value is CREATED, not where it is later
+discovered — and the guard is one line.
+
+**Fix:** reject a non-string or empty `saltB64` at entry, so a bad envelope
+is never written. 4 new parameterised tests in `unlockEnvelopeStore.test.js`
+cover `undefined`/`null`/number/empty-string and additionally assert
+`hasEnvelope()` is still `false` afterwards — proving nothing was persisted,
+not merely that the call threw. Negative-controlled: disabling the guard
+fails all 4.
+
+### 19.2 C.3 asserted an ordering about the SHIPPED code that is factually false — and PR C's own design depended on it
+
+An earlier draft of C.3 (mine, round 9) justified the onion-ingress check's
+placement by claiming it "already runs endpoint-wide, unconditionally,
+**before either permission class is even evaluated**." Verified against the
+installed DRF source rather than reasoning about it: `APIView.dispatch()`
+calls `self.initial(...)`, which calls `check_permissions()` at
+`rest_framework/views.py:421`, and only afterwards invokes the handler at
+`:512`. `DarkProtocolVaultProxyView.post()` is that handler, and it is what
+calls `DarkProtocolService.proxy_vault_operation(...)` — so the ingress
+check runs **strictly after** permission evaluation, not before.
+
+This is harmless in the code as it exists today: the endpoint is
+`IsAuthenticated`-only, the two checks are independent, and neither can mask
+the other. But PR C is precisely where a false ordering assumption turns
+into a real bug, because it adds a second permission class whose
+interaction with the first is the whole point. Corrected the claim, kept the
+requirement it was (badly) justifying: the ingress check stays on
+`proxy_vault_operation`, ahead of and independent of vault dispatch, and
+must never be moved or duplicated inside `HasAnonymousCredential` alone.
+
+**Consequence for the mixed-credential rule (§17.3):** that rule said to put
+the exactly-one-auth-mode check "before dispatch — same place as the
+onion-ingress check," which inherits the same wrong premise and is too late
+to be what it claims. A mixed request passes `IsAuthenticated` on its JWT
+during `check_permissions()` and arrives at the handler with `request.user`
+populated. Corrected to name a hook that genuinely precedes permission
+evaluation: override `initial()` and run the check **before**
+`super().initial(...)`. Noted that doing it at the top of `post()` would
+also close the hole, but leaves the guarantee resting on every future
+handler remembering to call it, where `initial()` is structural. Test all
+four shapes: JWT only, credential only, both, neither.
+
+### 19.3 An anonymous redemption would still carry `session_id`, a user-scoped handle
+
+C.3's frontend bullet said the redemption happens in
+`darkProtocolService.proxyVaultOperation` and left it there. But that
+function's existing signature is `(operation, payload, sessionId)` and it
+sends `session_id` in the body alongside `authHeader()`'s bearer token —
+and the server resolves that value as `GarlicSession.objects.filter(
+session_id=session_id, user=user, ...)` in `_record_operation_traffic`.
+**It is user-scoped.** Stripping the `Authorization` header alone would
+therefore not make the request anonymous: the accounting path re-links it to
+an account identity by a different route, defeating the same C.5 criterion
+the mixed-credential rule protects.
+
+Fixed by defining the anonymous redemption request explicitly — credential,
+`operation`, sync-data-only `payload`, and nothing else: no bearer token, no
+`session_id`, no other account-scoped handle. Traffic accounting simply does
+not occur for these requests, which needs no server change
+(`_record_operation_traffic` already returns early on a falsy `session_id`)
+and is the correct outcome anyway: inventing an "anonymous" accounting
+handle would recreate the correlation under a new name. Requires a
+**wire-level** test asserting on the serialized request rather than the
+function's arguments, since what matters is what leaves the machine.
+
+### 19.4 A.5's own test list contradicted A.5's own prose, three sections apart
+
+§17.3 (round 9) established that `isOnionSyncAvailable()` must be able to
+AWAIT an in-flight bootstrap, because a mid-bootstrap snapshot makes
+`prefer_onion` fall back to clearnet and `require_onion` fail closed during
+normal startup. A.5's test list, a few dozen lines below and untouched since
+round 5, still required that the same function "returns `false` while the
+sidecar is still bootstrapping (any percentage short of 100)." Those cannot
+both hold.
+
+Root cause: "still bootstrapping" was being treated as ONE state when it is
+two, and the resolution is to distinguish them rather than pick a side:
+- **A bootstrap is in flight** (a tracked `start()` promise exists): await
+  it, bounded by A.3's ~60s deadline, and answer from the settled outcome.
+- **No bootstrap is in flight** (never started, deliberately stopped, or the
+  last attempt already failed — `lastError` set, restart budget spent):
+  return `false` immediately, without awaiting and without starting one as a
+  side effect. A crashed sidecar must not hang a caller for 60s waiting on a
+  promise that will never exist.
+
+Both branches now have their own test requirements.
+
+### 19.5 B.3 point 6's blanket "No hardcoding" contradicted point 5's packaged-hostname requirement
+
+§15.4 (round 7) established that Android's Network Security Configuration is
+packaged at build time and cannot name a runtime-discovered hostname, so the
+cleartext exception must use a build-time deployment constant. Point 6, four
+lines below, still said "**Onion address** from
+`capabilities.anonymity.onion_address`, same as desktop. No hardcoding." —
+which reads as forbidding exactly what point 5 requires.
+
+Fixed by splitting point 6 into the two genuinely different values it was
+conflating: the **runtime request target** (always from capabilities, never
+hardcoded — rule unchanged) and the **hostname baked into
+`network_security_config.xml`** (necessarily a compile-time per-flavour
+deployment parameter, the same kind of thing the clearnet backend URL
+already is, with point 5's runtime match-check as the safeguard). Also noted
+the failure modes at both extremes: a build shipping without the exception
+has no working onion sync at all on API 28+, and a build that "avoids
+hardcoding" by widening cleartext globally is strictly worse than either.
+
+### 19.6 The recurring failure mode on this PR, now named
+
+Four rounds running, the most substantive findings have not been new bugs in
+new code — they have been **contradictions between two places that describe
+the same fact**, introduced when an earlier round fixed one place and not
+the other:
+
+| Round | What contradicted what |
+|---|---|
+| 9 (§17.4) | A stale round-count in one document, already propagated into a second |
+| 10 (§18.4) | `start()`'s "returns current status" vs. the await-readiness rule — both written in round 9 |
+| 10 (§18.1) | A scope note excluding "backup/restore" vs. its own rule naming bulk operations |
+| 11 (§19.2) | A claimed DRF ordering vs. the actual shipped code |
+| 11 (§19.4) | A.5's prose vs. A.5's own test list |
+| 11 (§19.5) | B.3 point 5 vs. B.3 point 6 |
+
+The lesson recorded in round 10 — "when a round changes a design fact in
+more than one place, diff those places against each other before calling the
+round done" — was correct but under-applied: it was read as being about the
+places a round EDITS, when the real requirement is to search for every place
+that RESTATES the changed fact, including ones the round never touched.
+§19.4 and §19.5 are both cases where the contradicting text had not been
+edited in rounds, and was found only because a reviewer read the section
+end-to-end. Practical rule going forward: after changing a design fact in
+these plans, grep for its distinctive terms across all three documents and
+read every hit, rather than trusting that the sections touched this round
+are the only ones that state it.
+
+Targeted tests only, per the standing preference recorded in
+[[feedback_targeted_testing]]: `unlockEnvelopeStore.test.js` (29 tests, 4 new
+this round) plus the suites sharing its module surface —
+`VaultContext.decoySession.test.jsx`, `VaultUnlockModal.test.jsx`,
+`duressSignalService.test.js`, `sessionVaultCrypto.decoySession.test.js`,
+`sessionVaultCrypto.exportWrappedDekRaw.test.js`,
+`sessionVaultCrypto.salt.test.js`, `VaultDuressSetup.test.jsx`, and the three
+sibling `VaultContext.*` suites. The one code fix was negative-controlled
+before being trusted (disabling the guard fails all 4 new tests; restoration
+verified byte-identical against a pre-edit backup). `eslint` clean on the
+changed files. `markdownlint` (MD018/MD022/MD040) clean on all touched doc
+files. The full frontend suite is CI's job, not this change's.
