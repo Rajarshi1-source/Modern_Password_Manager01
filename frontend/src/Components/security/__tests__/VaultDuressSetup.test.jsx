@@ -118,7 +118,7 @@ test('recovery re-opens the envelope with the decoy password and registers the t
   submitRecovery(getByLabelText, getByRole, 'my-decoy-password');
 
   const status = await findByRole('status');
-  expect(status).toHaveTextContent(/alarm registered/i);
+  expect(status).toHaveTextContent(/alarm is now registered/i);
   expect(unlockEnvelopeStore.open).toHaveBeenCalledWith({ userId: USER_ID, password: 'my-decoy-password' });
   expect(registerSignalToken).toHaveBeenCalledWith(TOKEN, DURESS_TOKEN);
   // Recovery must never re-run setDecoySlot -- that would mint a brand-new
@@ -138,29 +138,68 @@ test('recovery survives a full remount (simulated by rendering a fresh instance 
   submitRecovery(getByLabelText, getByRole, 'my-decoy-password');
 
   await waitFor(() => expect(registerSignalToken).toHaveBeenCalledWith(TOKEN, DURESS_TOKEN));
-  expect(await findByRole('status')).toHaveTextContent(/alarm registered/i);
+  expect(await findByRole('status')).toHaveTextContent(/alarm is now registered/i);
 });
 
-test('recovery with the wrong decoy password shows a clear error and does not call registerSignalToken', async () => {
+test('recovery with the wrong decoy password reports the same outcome as success, and registers nothing', async () => {
   unlockEnvelopeStore.open.mockRejectedValue(new WrongPasswordError('no slot matched'));
 
   const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
   submitRecovery(getByLabelText, getByRole, 'wrong-password');
 
-  const alert = await findByRole('alert');
-  expect(alert).toHaveTextContent('Incorrect decoy password.');
+  // No error surface at all -- a wrong password is one of the deliberately
+  // indistinguishable outcomes, not a fault.
+  await findByRole('status');
+  expect(getByRole('status')).toBeInTheDocument();
   expect(registerSignalToken).not.toHaveBeenCalled();
 });
 
-test('recovery with the REAL vault password (slot 0) is called out distinctly, not treated as success', async () => {
+test('recovery with the REAL vault password (slot 0) reports the same outcome, and registers nothing', async () => {
   unlockEnvelopeStore.open.mockResolvedValue({ slotIndex: 0, duressToken: null, dekBytes: new Uint8Array(32), saltB64: 's' });
 
   const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
   submitRecovery(getByLabelText, getByRole, 'real-password');
 
-  const alert = await findByRole('alert');
-  expect(alert).toHaveTextContent(/real vault, not the decoy slot/i);
+  await findByRole('status');
   expect(registerSignalToken).not.toHaveBeenCalled();
+});
+
+test('the recovery form is not a password oracle: decoy, real, and wrong passwords all render byte-identical output', async () => {
+  // The security property Greptile's P1 finding was about. Reaching this
+  // screen needs only an authenticated session, which a coerced unlock
+  // produces -- so a coercer must not be able to type a password here and
+  // learn which slot (if any) it opens. Asserted on the serialized container
+  // rather than hand-picked strings, so a future contributor reintroducing a
+  // branch anywhere in this form's output fails this test.
+  const renderOutcome = async (openImpl, password) => {
+    openImpl();
+    const { getByLabelText, getByRole, findByRole, container, unmount } =
+      render(<VaultDuressSetup />);
+    submitRecovery(getByLabelText, getByRole, password);
+    await findByRole('status');
+    const html = container.innerHTML;
+    unmount();
+    return html;
+  };
+
+  const decoyHtml = await renderOutcome(() => {
+    unlockEnvelopeStore.open.mockResolvedValue({
+      slotIndex: 1, duressToken: 'a'.repeat(44), dekBytes: new Uint8Array(32), saltB64: 's',
+    });
+  }, 'my-decoy-password');
+
+  const realHtml = await renderOutcome(() => {
+    unlockEnvelopeStore.open.mockResolvedValue({
+      slotIndex: 0, duressToken: null, dekBytes: new Uint8Array(32), saltB64: 's',
+    });
+  }, 'real-password');
+
+  const wrongHtml = await renderOutcome(() => {
+    unlockEnvelopeStore.open.mockRejectedValue(new WrongPasswordError('no slot matched'));
+  }, 'wrong-password');
+
+  expect(realHtml).toBe(decoyHtml);
+  expect(wrongHtml).toBe(decoyHtml);
 });
 
 test('a wrong vault password on the setup form does not touch recovery or registration', async () => {

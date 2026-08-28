@@ -17,13 +17,16 @@
  * LIMITATION, stated plainly rather than implied: the unlock MECHANISM is
  * genuinely indistinguishable (same endpoint, same request size, same
  * constant-time slot check — see `unlockEnvelopeStore.open`). What is NOT
- * solved here is the vault CONTENTS: `/api/vault/` returns one shared item
+ * solved here is the vault CONTENTS. `/api/vault/` returns one shared item
  * list for the account regardless of which slot's key unlocked the session,
- * so a decoy unlock currently shows the same items as the real vault, each
- * failing to decrypt under the decoy key. That is a materially different,
- * larger problem (populating or filtering a believable decoy vault) and is
- * intentionally not attempted here — see the integration plan §7. Do not
- * remove or soften this notice without solving that problem first.
+ * so every DISPLAY surface now gates on `isDecoySession()` and renders an
+ * EMPTY vault during a decoy session (`useDisplaySafeItems` in App.jsx) —
+ * chosen because the alternative, rendering the real list with every row
+ * failing to decrypt, outs the decoy instantly. An empty vault is still not
+ * a BELIEVABLE one: anyone who knows the account is not empty may find it
+ * suspicious. Populating a plausible decoy is a materially larger problem
+ * and is intentionally not attempted here — see the integration plan §7.
+ * Do not remove or soften this notice without solving that problem first.
  */
 
 import React, { useMemo, useState } from 'react';
@@ -233,29 +236,50 @@ const VaultDuressSetup = () => {
 
     setRecoveryBusy(true);
     try {
-      const { slotIndex, duressToken } = await unlockEnvelopeStore.open({
-        userId,
-        password: recoveryPassword,
-      });
-      if (slotIndex !== 1 || !duressToken) {
-        // Deliberately specific here, unlike VaultUnlockModal's unlock path:
-        // this settings screen already presupposes the user knows about and
-        // is managing the duress feature, so telling them "that opened the
-        // real vault" is not a signal that helps a coercer -- it is the
-        // whole point of this recovery tool being distinct from the unlock
-        // modal in the first place.
-        setRecoveryError('That opened the real vault, not the decoy slot. Enter your decoy password.');
-        return;
+      let duressToken = null;
+      try {
+        const opened = await unlockEnvelopeStore.open({
+          userId,
+          password: recoveryPassword,
+        });
+        // Only a decoy slot carries a token. A real-slot open and a wrong
+        // password both simply leave this null -- see the outcome note below
+        // for why neither is reported as its own distinct result.
+        if (opened.slotIndex === 1 && opened.duressToken) {
+          duressToken = opened.duressToken;
+        }
+      } catch (err) {
+        // A wrong password is NOT an error on this form: it is one of the
+        // indistinguishable outcomes. Anything else (a corrupt envelope, a
+        // storage failure) is a genuine operational fault and propagates.
+        if (!(err instanceof WrongPasswordError)) throw err;
       }
-      await registerSignalToken(getAccessToken(), duressToken);
+
+      if (duressToken) {
+        await registerSignalToken(getAccessToken(), duressToken);
+      }
+
+      // ONE outcome for all three password classes -- decoy (registered),
+      // real, and wrong. An earlier version reported each distinctly, on the
+      // reasoning that this settings screen presupposes a user who already
+      // knows about the feature. That reasoning was wrong, and the resulting
+      // oracle is why this now reads the way it does: reaching this screen
+      // needs only an AUTHENTICATED session, and a coerced unlock produces
+      // exactly that. A coercer handed a password under duress could type it
+      // here and be told "that opened the real vault, not the decoy slot" --
+      // confirming, from the app itself, that they had been given a decoy.
+      // That is precisely the disclosure the whole feature exists to
+      // prevent, so this form must never classify a password. The legitimate
+      // user loses nothing: they know which password they typed, and the
+      // message is truthful for every case.
       setRecoveryPassword('');
       setRecoverySuccess(true);
     } catch (err) {
-      if (err instanceof WrongPasswordError) {
-        setRecoveryError('Incorrect decoy password.');
-      } else {
-        setRecoveryError(err?.message || 'Failed to recover alarm registration.');
-      }
+      // Operational faults only (registration request failed, envelope
+      // unreadable). Deliberately NOT a classification signal: this branch is
+      // unreachable for a merely wrong or real password, and its message says
+      // nothing about which slot anything opened.
+      setRecoveryError(err?.message || 'Could not complete that request. Please try again.');
     } finally {
       setRecoveryBusy(false);
     }
@@ -276,9 +300,11 @@ const VaultDuressSetup = () => {
       <div style={noticeStyle}>
         <strong>Know the limits:</strong> the unlock itself is indistinguishable,
         but this does not yet build out believable decoy contents — a decoy
-        unlock currently shows your real vault&apos;s item list with each entry
-        failing to open, not a plausible empty or curated vault. Do not rely on
-        this alone if that visual difference matters for your situation.
+        unlock currently shows an <em>empty</em> vault, not a plausible,
+        populated one. That is deliberate (an empty vault beats one that
+        visibly fails to decrypt), but someone who knows your vault is not
+        empty may still find it suspicious. Do not rely on this alone if that
+        matters for your situation.
       </div>
 
       <form onSubmit={handleSubmit}>
@@ -370,8 +396,9 @@ const VaultDuressSetup = () => {
         )}
         {recoverySuccess && (
           <div role="status" style={successStyle}>
-            Alarm registered. It will fire the next time this decoy password
-            is used to unlock.
+            If that was your decoy password, its alarm is now registered and
+            will fire the next time it is used to unlock. This message is the
+            same whichever password you entered.
           </div>
         )}
 

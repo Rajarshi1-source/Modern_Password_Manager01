@@ -153,7 +153,22 @@ const parseSlotPayload = (payloadBytes) => {
   // valid-base64 dek would otherwise skip the legacy wrapped-DEK fallback
   // entirely and lock the user out, even though this is exactly the same
   // "stored envelope is corrupt" case the fallback exists to handle.
-  const dekBytes = fromB64(obj.dek);
+  // `fromB64` calls `atob`, which throws a DOMException (InvalidCharacterError)
+  // -- NOT a MalformedSlotPayloadError -- for a `dek` that is not valid
+  // base64. Normalized here so every "the stored payload is corrupt" outcome
+  // leaves this function as the same error type: callers that branch on it
+  // (VaultDuressSetup's recovery form surfaces `err.message` directly, and
+  // would otherwise show a raw "Failed to execute 'atob'..." string) get one
+  // contract, not two. VaultUnlockModal's fallback happens to tag ANY
+  // non-WrongPasswordError as `envelopeUnusable`, so its recovery path was
+  // never broken by this -- which is exactly why the inconsistency could sit
+  // here unnoticed.
+  let dekBytes;
+  try {
+    dekBytes = fromB64(obj.dek);
+  } catch {
+    throw new MalformedSlotPayloadError('Slot payload dek is not valid base64.');
+  }
   if (dekBytes.byteLength !== 32) {
     throw new MalformedSlotPayloadError('Slot payload dek is not 32 bytes.');
   }

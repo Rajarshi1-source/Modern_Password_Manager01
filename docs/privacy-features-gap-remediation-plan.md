@@ -531,7 +531,7 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Rounds five through eleven found 49 more issues, almost all
+  corrected above. Rounds five through thirteen found 58 more issues, almost all
   in `docs/onion-sync-transport-phases-2-4-plan.md`'s still-unimplemented
   Phase 2/PR C design (payload-shape validation on the desktop IPC trust
   boundary — later tightened again from a destination-field denylist into a
@@ -550,8 +550,19 @@ onion case):
   credential be rejected outright, since dispatch is `request.user`-scoped
   and a mixed request would otherwise let the server link a credential
   redemption to a real identity.
+  **"Almost all" stops being true at the last round**, which found two P1
+  security defects in SHIPPED §4.2 code, both concerning the decoy-session
+  boundary this remediation introduced: the duress-settings screen's own
+  recovery form classified a submitted password as real / decoy / wrong
+  (an oracle any authenticated session — including a coerced one — could
+  use to confirm it had been handed a decoy), and `/vault/dashboard`
+  rendered the real vault's items during a decoy session because the
+  display gate had been applied to the `/vault` list only. Both are fixed;
+  see that plan's §20.1 and §20.2. Recorded here rather than only there
+  because they bear directly on whether §2's "Plausible Deniability Vault"
+  claim holds, which is this document's own subject.
   **All review rounds for both carry-overs are recorded in one place:
-  `docs/vault-unlock-envelope-integration-plan.md` §9 through §19** (every
+  `docs/vault-unlock-envelope-integration-plan.md` §9 through §20** (every
   bare `§N` in this paragraph refers to that document, including the
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over

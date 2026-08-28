@@ -262,6 +262,33 @@ describe('open', () => {
       .rejects.toBeInstanceOf(MalformedSlotPayloadError);
   });
 
+  test('rejects a dek that is not valid base64 as MalformedSlotPayloadError, not a raw atob DOMException', async () => {
+    // `fromB64` calls atob(), which throws InvalidCharacterError (a
+    // DOMException) rather than this module's own error type. That left two
+    // different error contracts for the same "stored payload is corrupt"
+    // outcome -- and VaultDuressSetup's recovery form surfaces `err.message`
+    // directly, so the user would have seen a raw "Failed to execute 'atob'"
+    // string. Normalized in parseSlotPayload so open() has ONE contract.
+    const malformedPayload = jsonToBytes({
+      v: 'hv-slot-1',
+      dek: 'not!valid!base64!!',
+      salt: SALT,
+    });
+    const blob = await encode({
+      realPassword: REAL_PASSWORD,
+      realPayload: malformedPayload,
+      decoyPassword: null,
+      decoyPayload: new Uint8Array(0),
+      tier: TIERS.TIER0_32K,
+    });
+    saveEnvelope(USER_ID, blob);
+
+    const err = await open({ userId: USER_ID, password: REAL_PASSWORD }).catch((e) => e);
+    expect(err).toBeInstanceOf(MalformedSlotPayloadError);
+    // The raw browser message must not reach a caller that surfaces it.
+    expect(err.message).not.toMatch(/atob/i);
+  });
+
   describe('__duress_signal validation', () => {
     // A decoy slot's token is sent VERBATIM as the request body
     // (duressSignalService.reportUnlock -> JSON.stringify({ signal })), and
