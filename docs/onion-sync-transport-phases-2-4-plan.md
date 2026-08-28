@@ -128,9 +128,12 @@ parity.
 Single owner of the process. Exports:
 
 ```text
-start(): Promise<{ socksPort: number }>   // spawn, wait for bootstrap 100%
+start(): Promise<{ socksPort: number, controlPort: number }>  // spawn, wait for bootstrap 100%
 stop(): Promise<void>                     // SIGTERM, then SIGKILL after a grace period
-getStatus(): { state, bootstrapPercent, socksPort, lastError }
+getStatus(): { state, bootstrapPercent, socksPort, controlPort, lastError }
+// socksPort/controlPort are null whenever no process is running (before the
+// first start(), and after stop() resolves) -- never a stale value from a
+// previous run, which a caller could otherwise dial into nothing.
 ```
 
 Requirements:
@@ -143,8 +146,22 @@ Requirements:
   9050 would collide with a system Tor or Tor Browser the user already runs,
   and the failure mode (silently using someone else's circuit) is worse than
   the collision.
-- **Own `DataDirectory`** under `PathUtils.getUserDataPath()/tor`, owner-only.
-  **"Mode 0700" is a POSIX-only instruction and this app ships a Windows
+- **Own `DataDirectory`, one PER SIDECAR INSTANCE**, under
+  `PathUtils.getUserDataPath()/tor/<instanceId>` — not the shared
+  `.../tor` directory an earlier draft of this bullet specified. Tor takes
+  an exclusive lock on a `lock` file inside its `DataDirectory` and a
+  second process pointed at the same directory refuses to start, so a
+  single shared path makes the concurrent-instance case this section
+  elsewhere requires a test for (two app windows, or two test runs in one
+  CI job) impossible by construction. Distinct `ControlPort`/`SocksPort`
+  values do NOT isolate this: the lock is on the directory, not the ports.
+  Generate `<instanceId>` per `start()`, keep that instance's control
+  cookie inside its own directory, and remove the directory on a clean
+  `stop()` so repeated runs do not accumulate state. Test two sidecars
+  starting concurrently against the real bundled Tor binary and assert both
+  reach ready — a mocked test cannot exercise a lock the real binary takes.
+  **Permissions, on every platform:** owner-only, and note that
+  **"mode 0700" is a POSIX-only instruction while this app ships a Windows
   target** (`desktop/package.json` `build.win`), where `fs.chmod` is
   effectively a no-op and the directory inherits whatever the parent's ACL
   grants — which on a shared machine can include other local users. Set mode
@@ -427,10 +444,24 @@ contract that already defines "sync data" precisely:
 - Each entry of `items[]`: exactly `item_id` (string), `item_type`
   (string), `encrypted_data` (string), `favorite` (boolean, optional),
   `folder_id` (string or null, optional), `tags` (array of strings,
+  optional), `last_used_at` (ISO-8601 datetime string **or null**,
   optional) — `VaultItemSerializer`'s own writable fields. `id`,
   `created_at`, and `updated_at` are server-assigned there
   (`read_only_fields`) and must not be accepted from the renderer either.
   Any other key on an item is refused.
+  **`last_used_at` is easy to miss and must not be:** it appears in
+  `VaultItemSerializer.fields` but NOT in its `read_only_fields`, so it is
+  genuinely writable, and the model declares it `null=True, blank=True`
+  (`vault/models/vault_models.py:133`) — hence "or null". Today's web
+  producer (`VaultContext`'s `syncData`) does not send it, so omitting it
+  breaks nothing right now; but any producer forwarding a
+  serializer-shaped item would be rejected at the IPC boundary for a field
+  the server would have accepted, and the failure would look like a
+  transport bug rather than a stale allowlist. This is the identical trap
+  `expected_sync_version` fell into one round earlier — the allowlist has
+  now been wrong twice by being derived from a reading of the serializer
+  rather than from its `fields` minus `read_only_fields` mechanically.
+  Derive it that way.
 - `deleted_items[]`: array of strings only.
 - The payload must be a plain JSON object matching exactly the shape
   above — an array, a primitive, or an object with any extra top-level or
@@ -641,7 +672,13 @@ state (§4.1 Phase 2 step 4). Feed it `tor:status`. Add no new component.
 
 - [ ] Desktop routes vault sync over a real Tor circuit end-to-end (the #486 §6
       criterion this PR exists to satisfy).
-- [ ] `require_onion` fails closed on desktop when bootstrap has not completed.
+- [ ] `require_onion` fails closed on desktop when no ready transport can be
+      obtained — bootstrap FAILED, hit A.3's startup deadline, or was never
+      started. **Not** merely "bootstrap has not completed", which an earlier
+      draft of this line said and which contradicts A.5: an in-flight
+      bootstrap is AWAITED (bounded by that same deadline), not treated as
+      failure, or the first sync after every launch would fail during normal
+      startup — the exact bug A.5's await requirement exists to prevent.
 - [ ] `prefer_onion` reports `degraded: true` and the UI shows it.
 - [ ] `off` spawns no Tor process at all.
 - [ ] No `tor` process survives a NORMAL app quit (`before-quit`/`will-quit`

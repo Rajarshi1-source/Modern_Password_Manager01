@@ -75,16 +75,47 @@ const BehavioralRecoveryStatus = lazy(() => import('./Components/dashboard/Behav
 // metadata-only (never re-encrypt); edit re-encrypts via updateItem and so
 // requires an unlocked vault (canEdit); delete is confirmed in the dashboard.
 // Adding new items still routes to the canonical /vault page.
-const VaultDashboardRoute = () => {
+// Display-safe item list for ANY surface that renders the vault's contents.
+//
+// A decoy DEK cannot decrypt anything in the one shared, server-side item
+// list, so rendering the real list during a decoy session both leaks the
+// real inventory's metadata AND instantly outs the decoy (every row renders
+// as "Decryption failed"). Gating is therefore a property of every DISPLAY
+// path, not of one component -- which is why this lives in one shared hook
+// rather than being repeated: an earlier version gated only
+// `VaultItemsSection` and left `VaultDashboardRoute` rendering the real
+// list, exactly the "guard one path, miss its sibling" pattern recorded in
+// docs/vault-unlock-envelope-integration-plan.md §19.6. Any NEW surface that
+// renders `useVault().items` must go through this hook too.
+//
+// `items` itself is deliberately left untouched -- non-display vault logic
+// (e.g. VaultContext's own write gates) still needs the real list. This is
+// the documented floor of that plan's §4 compat table ("an empty decoy still
+// beats no decoy"); a believable, populated decoy is the separate §7 product
+// decision this does not attempt.
+const useDisplaySafeItems = (items) => {
+  // Read on every render rather than inside the memo: it is a module-level
+  // boolean, so this is free, and including it in the dep array is what
+  // makes the memo actually recompute when a session flips decoy state
+  // without `items` changing identity.
+  const isDecoy = sessionVaultCrypto.isDecoySession();
+  return useMemo(() => (isDecoy ? [] : items || []), [isDecoy, items]);
+};
+
+// Exported for the same reason VaultItemsSection below is: both are display
+// surfaces subject to the decoy-session gate, and that gate needs a direct
+// regression test rather than one routed through the whole app shell.
+export const VaultDashboardRoute = () => {
   // PR F: `canEdit` is the reactive session-key gate (sessionVaultCrypto), not
   // the legacy `isUnlocked` (which tracked the never-initialised vaultService
   // key and so was permanently false in the live flow).
   const { items, toggleFavorite, updateItem, deleteItem, decryptItem, canEdit } = useVault();
+  const visibleItems = useDisplaySafeItems(items);
   const navigate = useNavigate();
   const goToVault = () => navigate('/vault');
   return (
     <VaultDashboard
-      items={items || []}
+      items={visibleItems}
       onToggleFavorite={toggleFavorite}
       onUpdateItem={updateItem}
       onDeleteItem={deleteItem}
@@ -102,20 +133,9 @@ const VaultDashboardRoute = () => {
 export const VaultItemsSection = () => {
   const { items, loading, error } = useVault();
   const [decryptedItems, setDecryptedItems] = useState({});
-  // A decoy DEK cannot decrypt anything in the one shared, server-side item
-  // list -- attempting to would render every real entry as "Decryption
-  // failed" (and log a decrypt error for each), instantly outing the decoy
-  // the moment this section renders. `items` itself is left untouched (other
-  // vault logic, e.g. the write-gates in VaultContext, still needs the real
-  // list) -- only what THIS section attempts to decrypt and display is
-  // gated, down to the documented floor of docs/vault-unlock-envelope-
-  // integration-plan.md §4's compat table ("an empty decoy still beats no
-  // decoy"). A believable, populated decoy is the separate §7 product
-  // decision this does not attempt.
-  const visibleItems = useMemo(
-    () => (sessionVaultCrypto.isDecoySession() ? [] : items),
-    [items]
-  );
+  // Shared with VaultDashboardRoute -- see useDisplaySafeItems above for why
+  // this is one hook and not a per-component check.
+  const visibleItems = useDisplaySafeItems(items);
 
   useEffect(() => {
     let cancelled = false;

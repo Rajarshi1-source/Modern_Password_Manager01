@@ -1,14 +1,17 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across eleven CodeRabbit review
-rounds (§9–§19) — read all eleven before relying on §3's original design as
-the literal shipped behavior. §11.5 in particular is a real data-corruption
-fix, not a cosmetic one; §16.1 and then §18.1 extend it to the mutation paths
-it originally missed (§18.1 is the one that reaches `restoreBackup`, which
-can wipe the whole vault); §13 records a bot misattribution caught before
-acting on it; §19.6 names the failure mode that has produced most findings
-since round 9 — internal contradictions between two places stating the same
-fact — and the rule for avoiding it.**
+**Implemented in PR #489, then hardened across twelve review rounds
+(§9–§20) — read all twelve before relying on §3's original design as the
+literal shipped behavior. §11.5 in particular is a real data-corruption fix,
+not a cosmetic one; §16.1, §18.1, and §20.2 extend it to the mutation and
+display paths it originally missed (§18.1 is the one that reaches
+`restoreBackup`, which can wipe the whole vault); §20.1 is a security
+justification written in §12.2 that turned out to be wrong, and is worth
+reading as a caution about scoping a threat model to "who is supposed to be
+on this screen"; §13 records a bot misattribution caught before acting on
+it; §19.6 names the failure mode that has produced most findings since round
+9 — internal contradictions between two places stating the same fact — and
+the rule for avoiding it.**
 
 **§0 below is the PRE-IMPLEMENTATION baseline** — the verdict table records
 what was true when this plan was written, which is why it still lists
@@ -340,12 +343,15 @@ plan should guess at.
   markup, no duress-conditional class name or attribute. Assert on the
   serialized container, not on hand-picked strings — a hand-picked assertion
   will not catch the next person who adds one. This claim stops at the
-  modal's own DOM: it does NOT extend to the vault dashboard the app renders
-  next, which — per §7 and the known limitation already recorded on the
-  duress-setup screen — shows the real item list with each entry failing to
-  decrypt under the decoy DEK. That is a materially different, larger
-  problem (believable decoy contents) and is out of scope here; do not
-  read this bullet as claiming it is solved.
+  modal's own DOM: it does NOT extend to what the app renders next. Since
+  §20, every display surface (`VaultItemsSection` and `VaultDashboardRoute`,
+  both via `useDisplaySafeItems`) renders an EMPTY vault during a decoy
+  session rather than the real list — which removes the "every row fails to
+  decrypt" tell that earlier rounds recorded here, but does NOT make the
+  post-unlock view believable: an empty vault is still wrong for an account
+  the coercer knows is not empty. That remaining gap is §7's product work
+  and is out of scope here; do not read this bullet as claiming it is
+  solved.
 - **Upgrade path:** a user with `vaultWrappedDEK` and no envelope unlocks
   successfully *and* has an envelope afterwards.
 - **Upgrade failure is non-fatal:** stub `provision` to throw; the unlock still
@@ -2056,3 +2062,187 @@ touched doc file. No change was needed in
 findings are implementation detail nested under sections that document's own
 Phase 2/3 summary already defers to ("See A.4 for the full schema and the
 required tests"), not changes to a design fact the summary itself states.
+
+## 20. Implementation status — thirteenth review round: Greptile + CodeRabbit (2026-08-28)
+
+The first round on this PR with findings from TWO reviewers: Greptile raised
+2 P1 security findings (and failed its own merge gate at confidence 1/5),
+CodeRabbit raised 7. Both of Greptile's, and one of CodeRabbit's, are the
+SAME class of defect this PR keeps producing — a guard applied to one path
+and not its sibling (§19.6) — and one of them invalidates a security
+justification I wrote myself two rounds earlier.
+
+### 20.1 The duress recovery form was a password-classification oracle — Greptile P1, and my own round-10 reasoning was wrong
+
+`VaultDuressSetup`'s "Recover unregistered alarm" form produced three
+visibly distinct outcomes for a submitted password: the real vault password
+got *"That opened the real vault, not the decoy slot"*, a valid decoy
+password got a success message, and anything else got *"Incorrect decoy
+password."* Anyone who can operate an authenticated session can therefore
+type a password into this form and learn which of the three it is.
+
+**Why this is severe, and why my earlier justification was wrong.** §12.2
+introduced that specific wording with an explicit rationale, quoted from the
+code comment: *"this settings screen already presupposes the user knows
+about and is managing the duress feature, so telling them 'that opened the
+real vault' is not a signal that helps a coercer."* That reasoning assumed
+only the legitimate user ever reaches this screen. **It does not hold.**
+Reaching `/security/vault-duress` requires only an AUTHENTICATED session —
+and a coerced unlock produces exactly that, decoy or not. So a coercer who
+has just forced an unlock can navigate here, type the password they were
+handed, and be told by the application itself that it was a decoy. That is
+precisely the disclosure the entire feature exists to prevent, delivered by
+the one screen built to support it.
+
+**Fix:** one outcome for all three password classes. `open()` is still
+called (recovery genuinely needs the token from slot 1), but a
+`WrongPasswordError` is no longer treated as an error at all — it is one of
+the indistinguishable outcomes — and a real-slot open no longer gets its
+own branch. The single message is worded to stay truthful in every case:
+*"If that was your decoy password, its alarm is now registered..."*, plus an
+explicit note that the message is the same whichever password was entered,
+so the legitimate user is not misled into thinking it confirms anything.
+The `catch` that remains handles only genuine operational faults
+(registration request failed, envelope unreadable), which are unreachable
+for a merely wrong or real password and say nothing about slots.
+
+New test asserts the security property directly: decoy, real, and wrong
+passwords all produce **byte-identical** rendered output, compared on the
+serialized container rather than hand-picked strings, so a future
+contributor reintroducing any branch fails it. Negative-controlled —
+restoring the classifying branch fails 3 tests.
+
+### 20.2 `/vault/dashboard` rendered the real vault during a decoy session — Greptile P1 and CodeRabbit, same finding
+
+§19-era work added the decoy display gate to `VaultItemsSection`, the
+`/vault` list. It did not add it to `VaultDashboardRoute`, which passes
+`useVault().items` straight into `VaultDashboard`. A decoy session
+navigating to `/vault/dashboard` therefore rendered the real inventory —
+leaking real item metadata AND outing the decoy, since none of it decrypts
+under the decoy DEK.
+
+This is the third occurrence of the identical pattern (§16.1: gated
+`encryptItem`, missed `deleteItem`/`toggleFavorite`; §18.1: missed
+`restoreBackup`; now: gated one display surface, missed the other).
+
+**Fix, deliberately structural rather than a second copy of the check:** a
+shared `useDisplaySafeItems(items)` hook in `App.jsx`, used by BOTH
+surfaces, carrying the rationale in one place and stating that any new
+surface rendering `useVault().items` must go through it. Adding the gate
+inline in `VaultDashboardRoute` would have fixed this instance while
+leaving the next one exactly as likely.
+
+CodeRabbit additionally caught a real defect in the ORIGINAL gate that the
+copy would have propagated: `useMemo(..., [items])` omitted the decoy flag
+from its dependency array, so a session flipping decoy state without
+`items` changing identity would keep serving the memoized real list. The
+shared hook reads the flag on every render (it is a module boolean — free)
+and includes it in the deps.
+
+`VaultDashboardRoute` is now exported for the same reason `VaultItemsSection`
+already was: this gate needs a direct regression test. 3 new tests assert
+the decoy case receives `[]` (and that no real identifier appears anywhere
+in the props), the real case still receives the full list, and `undefined`
+is still normalised to `[]`. Negative-controlled — and notably, breaking the
+shared hook fails the tests for BOTH surfaces, which is the point of it
+being shared.
+
+### 20.3 `parseSlotPayload` let a raw `atob` DOMException escape as a second error contract
+
+`fromB64` calls `atob`, which throws `InvalidCharacterError` (a
+`DOMException`) for input that is not valid base64 — not this module's
+`MalformedSlotPayloadError`. So "the stored payload is corrupt" left
+`open()` as two different error types depending on HOW it was corrupt.
+
+Impact is narrow but real. `VaultUnlockModal`'s fallback tags ANY
+non-`WrongPasswordError` as `envelopeUnusable`, so its recovery path was
+never broken — which is exactly why this could sit unnoticed. But
+`VaultDuressSetup`'s recovery form surfaces `err.message` directly, so a
+user would have seen a raw *"Failed to execute 'atob' on 'Window'..."*
+string. Reachability is limited to a hand-crafted or externally corrupted
+envelope, since `provision()`/`setDecoySlot()` only ever write `toB64`
+output — this is hardening, in the same category as §19.1's `saltB64`
+guard, not a live bug. Normalized to `MalformedSlotPayloadError`; the new
+test asserts both the type AND that the message does not mention `atob`.
+
+### 20.4 A.3's lifecycle contract omitted `controlPort` that A.3's own body requires
+
+The `start()`/`getStatus()` signature block at the top of A.3 still read
+`Promise<{ socksPort }>` / `{ state, bootstrapPercent, socksPort,
+lastError }`, while the requirements below it — written one round earlier —
+explicitly say to "add it to `start()`'s return value and `getStatus()` as
+`controlPort`". Same self-contradiction pattern as §19.4/§19.5, in the same
+section, one round later. Added `controlPort` to both, and specified what
+the port fields hold when nothing is running (`null`, never a stale value
+from a previous run that a caller could dial into nothing).
+
+### 20.5 A single shared `DataDirectory` makes A.3's own concurrent-instance test impossible
+
+A.3 says each sidecar gets its `DataDirectory` at
+`PathUtils.getUserDataPath()/tor` — one fixed path — while also (again,
+added one round earlier) requiring a test that starts **two sidecars
+concurrently**. Tor takes an exclusive lock on a `lock` file inside its
+`DataDirectory`, and a second process pointed at the same directory refuses
+to start; distinct `ControlPort`/`SocksPort` values do not isolate it,
+because the lock is on the directory. The two requirements cannot both be
+satisfied.
+
+Fixed to allocate a per-instance child directory
+(`.../tor/<instanceId>`), keep that instance's control cookie inside it,
+and clean it up on a successful `stop()`. Kept the owner-only permission
+requirements (POSIX mode plus the Windows DACL) and noted that the
+concurrency test has to run against the real bundled binary, since a mocked
+test cannot exercise a lock the real Tor process takes.
+
+### 20.6 The `vault_sync` item allowlist was wrong for the second consecutive round
+
+§16.3 added `expected_sync_version` after finding the allowlist omitted a
+field the endpoint really accepts. This round: it also omits `last_used_at`,
+which appears in `VaultItemSerializer.fields` and NOT in its
+`read_only_fields`, so it is genuinely writable (model:
+`null=True, blank=True`, hence "or null"). No current producer sends it, so
+nothing is broken today — but a serializer-shaped item would be rejected at
+the IPC boundary for a field the server accepts, and the failure would look
+like a transport bug.
+
+Added, along with the observation that matters more than the field itself:
+**the allowlist has now been wrong twice because it was derived by reading
+the serializer rather than mechanically from `fields` minus
+`read_only_fields`.** The plan now says to derive it that way.
+
+### 20.7 The `require_onion` acceptance criterion contradicted A.5's await rule
+
+A.8 said `require_onion` "fails closed on desktop when bootstrap has not
+completed" — which covers the normal in-flight state that §19.4 established
+must be AWAITED, not failed. As written it would make the first sync after
+every launch fail during ordinary startup: the precise bug A.5's await
+requirement exists to prevent. Narrowed to failure only when bootstrap
+failed, hit the startup deadline, or was never started.
+
+### 20.8 Two stale decoy-display claims found by applying §19.6's own rule
+
+CodeRabbit flagged that `VaultDuressSetup`'s "Know the limits" notice still
+described the pre-§20.2 behaviour ("shows your real vault's item list with
+each entry failing to open"). Correct — and grepping for that claim per
+§19.6's rule found a SECOND copy CodeRabbit did not flag, in the component's
+own module docstring, plus a third in §4's live test guidance in this plan.
+All three now describe the actual behaviour: a decoy session shows an EMPTY
+vault. All three also keep the warning that empty is not the same as
+believable — someone who knows the account is not empty may still find it
+suspicious, and populating a plausible decoy remains §7's product work.
+
+Historical changelog text in §10.3, §11.5, and §11.7 still describes the old
+behaviour and is deliberately LEFT AS-IS: those sections are records of what
+was true in those rounds, and rewriting them would destroy the audit trail
+this document exists to keep. Only live guidance was corrected — the same
+distinction applied in earlier rounds.
+
+Targeted tests only, per [[feedback_targeted_testing]]: the 4 files covering
+the changed paths (`VaultDuressSetup.test.jsx`,
+`VaultDashboardRoute.decoySession.test.jsx` (new),
+`VaultItemsSection.decoySession.test.jsx`, `unlockEnvelopeStore.test.js`) —
+44 tests, plus the wider decoy/envelope suite as a regression sweep. All
+three code fixes were negative-controlled before being trusted, and every
+restoration verified byte-identical against a pre-edit backup. `eslint`
+clean on the changed files; `markdownlint` (MD018/MD022/MD040) clean on all
+touched docs.
