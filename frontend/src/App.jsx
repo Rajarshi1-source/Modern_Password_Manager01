@@ -99,9 +99,23 @@ const VaultDashboardRoute = () => {
 // VaultProvider, so it reads the single source of truth (useVault().items) —
 // the same list the dashboard uses. Decryption stays client-side via
 // sessionVaultCrypto (v2) with a v3 fallback for migrated/freshly-written rows.
-const VaultItemsSection = () => {
+export const VaultItemsSection = () => {
   const { items, loading, error } = useVault();
   const [decryptedItems, setDecryptedItems] = useState({});
+  // A decoy DEK cannot decrypt anything in the one shared, server-side item
+  // list -- attempting to would render every real entry as "Decryption
+  // failed" (and log a decrypt error for each), instantly outing the decoy
+  // the moment this section renders. `items` itself is left untouched (other
+  // vault logic, e.g. the write-gates in VaultContext, still needs the real
+  // list) -- only what THIS section attempts to decrypt and display is
+  // gated, down to the documented floor of docs/vault-unlock-envelope-
+  // integration-plan.md §4's compat table ("an empty decoy still beats no
+  // decoy"). A believable, populated decoy is the separate §7 product
+  // decision this does not attempt.
+  const visibleItems = useMemo(
+    () => (sessionVaultCrypto.isDecoySession() ? [] : items),
+    [items]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -118,11 +132,11 @@ const VaultItemsSection = () => {
       }
     };
     (async () => {
-      const entries = (await Promise.all(items.map(decryptOne))).filter(Boolean);
+      const entries = (await Promise.all(visibleItems.map(decryptOne))).filter(Boolean);
       if (!cancelled) setDecryptedItems(Object.fromEntries(entries));
     })();
     return () => { cancelled = true; };
-  }, [items]);
+  }, [visibleItems]);
 
   return (
     <section className="password-list" data-testid="vault-section">
@@ -136,14 +150,14 @@ const VaultItemsSection = () => {
         <p data-testid="vault-error" style={{ color: 'var(--danger)' }}>{error}</p>
       ) : (
         <div className="password-grid">
-          {items.length === 0 ? (
+          {visibleItems.length === 0 ? (
             <p data-testid="empty-vault">No passwords saved yet. Add one above!</p>
           ) : (
             <>
               <span className="sr-only" data-testid="decryption-status">
                 Vault item decrypted successfully
               </span>
-              {items.map(item => {
+              {visibleItems.map(item => {
                 const itemData = decryptedItems[item.item_id] || {};
                 const isDecrypting = !(item.item_id in decryptedItems);
                 const decryptError = itemData._decryptError;

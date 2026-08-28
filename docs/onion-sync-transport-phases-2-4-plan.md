@@ -174,6 +174,24 @@ Requirements:
   answers with an authentication error or closes the connection; then repeat
   with a deliberately WRONG cookie value and assert the same. Those two are
   the real assertions.
+
+  **Specify the endpoint itself, not just its authentication.** Everything
+  above assumes a control endpoint already exists, but nothing says what it
+  actually is. Use `ControlPort auto` — identical treatment to `SocksPort
+  auto` above, and for the identical reason: a fixed port collides across
+  concurrent sidecar instances (two app windows, or two test runs in the
+  same CI job), and `auto` is Tor's own documented way to get a loopback-
+  bound, OS-assigned port instead. Do not use `ControlSocket` (a Unix domain
+  socket) as the primary path — it does not exist on Windows, which this app
+  ships to (`desktop/package.json` `build.win`, the same platform constraint
+  the `DataDirectory`/cookie-ACL note above already had to account for).
+  Read the bound control port back the same way `start()` already reads back
+  `socksPort`, verify it bound to `127.0.0.1` and not a wildcard address,
+  and add it to `start()`'s return value and `getStatus()` as `controlPort`
+  so a caller never has to guess or hardcode it. Test with two sidecar
+  instances started concurrently: assert each is assigned a distinct control
+  port with no collision, and assert `start()` never configures or reports a
+  non-loopback control endpoint.
 - **Bootstrap gating.** Parse `NOTICE: Bootstrapped NN%` from stdout, or use the
   control port. Do not report available before 100% AND the real-connection
   check above both pass.
@@ -295,6 +313,21 @@ New `desktop/src/main/onionTransport.js`:
   test for the empty-cache first call (no address cached yet, the
   main-process fetch runs and succeeds) and one for a malformed resolved
   value being refused rather than dialed.
+
+  **This clearnet fetch must be HTTPS-only, with certificate validation, and
+  must never be silently downgraded.** It carries the same bearer `authToken`
+  as the eventual onion `vault_sync` POST, over the open Internet — this is
+  exactly the case the `http://` exception two bullets below must NOT apply
+  to. That exception exists because the `.onion` listener has no TLS
+  certificate to present; it is not license to weaken transport for this
+  unrelated clearnet call. Configure this fetch's HTTP client to refuse a
+  non-HTTPS URL outright and to refuse (not follow) any redirect that
+  downgrades to `http://`, using the same redirect-hardening approach
+  (`maxRedirects: 0` / origin-validated redirects) this section already
+  requires for the onion-routed `vault_sync` request itself. Add a test for
+  an initial `http://` capabilities URL being refused before any request is
+  attempted, and one for an `https://` request that receives a redirect to
+  `http://` being refused rather than followed.
 - **Only `vault_sync` at first**, as §4.1 Phase 2 step 2 says. Extending to the
   rest of `VAULT_OPERATION_ROUTES` is a follow-up.
 - **Use `http://<addr>.onion/...`, not `https://`.** `backend-onion` in
@@ -705,6 +738,23 @@ protection the platform cannot deliver.
 3. **Config plugin** `mobile/plugins/withOrbot.js`: queries package visibility
    for `org.torproject.android` (Android 11+ requires `<queries>`), plus the
    NetCipher dependency.
+
+   **Package-visibility querying is not service authentication.** It only
+   lets this app SEE that a package declaring Orbot's action is installed —
+   it does not confirm that package is actually Orbot. An implicit,
+   action-only intent can be satisfied by any installed app that declares
+   the same intent-filter action, which would then hand back an attacker-
+   controlled "SOCKS port" this app trusts as Orbot's — a spoofed proxy in
+   the exact position to see and tamper with `vault_sync` traffic the whole
+   feature exists to protect. Bind with an explicit, package-targeted intent
+   (`setPackage("org.torproject.android")`, not an implicit action-only
+   one), and after binding, verify the returned `ComponentName`'s package is
+   actually `org.torproject.android` before trusting anything it reports —
+   including the discovered port from point 5 below. Test that a second,
+   locally-installed app declaring the same action is never treated as
+   Orbot, and that an already-occupied local port is handled as "onion sync
+   unavailable" rather than silently connected to, while a genuine Orbot
+   connection keeps working.
 4. **Orbot detection and consent.** If Orbot is absent, `prefer_onion` degrades
    with an honest message and a Play Store link; `require_onion` fails closed.
    Never bundle or auto-install.

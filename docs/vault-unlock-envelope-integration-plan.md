@@ -1903,3 +1903,156 @@ before being trusted (disabling the guard fails all 4 new tests; restoration
 verified byte-identical against a pre-edit backup). `eslint` clean on the
 changed files. `markdownlint` (MD018/MD022/MD040) clean on all touched doc
 files. The full frontend suite is CI's job, not this change's.
+
+## 20. Implementation status — twelfth CodeRabbit review round (2026-08-28)
+
+A twelfth `@coderabbitai full review` found 4 issues: 1 in shipped code, and
+3 in `docs/onion-sync-transport-phases-2-4-plan.md` (still fully
+unimplemented). Confirmed via the GraphQL review-threads API, not just the
+pasted transcript, that all 4 were genuinely unresolved (`isResolved: false`)
+and distinct from three OTHER CodeRabbit batches posted the same day that
+rounds 9–11 had already closed — this PR now gets multiple review batches
+per day, so date/thread-id verification matters more than it did earlier.
+
+### 20.1 A decoy session's own vault UI outed the decoy the moment it rendered
+
+`VaultUnlockModal.jsx`'s `runEnvelopeUnlock` installs the decoy DEK and
+completes the unlock normally; `onUnlocked` then lets the dashboard render.
+`VaultItemsSection` (`App.jsx`) reads the one shared, server-side item list
+from `useVault()` and calls `decryptEnvelope` on every row — with no
+decoy-session gate of any kind. A decoy DEK cannot decrypt anything sealed
+under the real DEK, so every row rendered `"Decryption failed"` (and logged
+a decrypt error per item) within moments of a decoy unlock succeeding — the
+single most visible possible tell that a duress unlock is fake, defeating
+the indistinguishability §11.5's write-refusal and §19's request/DOM/console
+work were all built to protect.
+
+This is the same read-side limitation §11.5 already named and deliberately
+deferred ("giving reads a friendlier indicator... belongs with the
+'believable decoy contents' work §7 already defers"). What changed: §11.5's
+own compat table (§4) already sets an achievable floor below full believable
+content — **"an empty decoy still beats no decoy"** — and the shipped code
+did not clear even that floor; it rendered visibly broken, not empty.
+Closing that specific gap does not require the deferred product decision
+(what a believable decoy contains), only that a decoy session stop
+attempting real decryption at all.
+
+**First attempt, rejected before being applied:** gating `VaultContext.jsx`'s
+exposed `items` (the single value every consumer reads) to `[]` during a
+decoy session. Rejected upon checking it against the EXISTING test suite
+first, not just against the new requirement: `VaultContext.decoySession.test.jsx`
+(§16, §18.1) asserts `result.current.items` still reflects the real,
+untouched row after a blocked `deleteItem`/`toggleFavorite`/`restoreBackup`
+call precisely to prove no optimistic mutation slipped through the write
+gate — six passing tests that a shared-`items` gate would have broken to fix
+an unrelated read-side issue. Generalizes
+[[feedback_verify_bot_review_findings]] point 5 (trace a fix forward to
+every caller) one step further: an existing, already-passing TEST SUITE is a
+caller too, and is cheaper to check against than to discover has broken
+after the fact.
+
+**Fix actually applied**, scoped to the one component CodeRabbit's own
+trace showed is unconditionally rendered right after unlock
+(`App.jsx`'s dashboard route): `VaultItemsSection` now derives a local
+`visibleItems = isDecoySession() ? [] : items` (memoized on `items`, so the
+array reference used for both the decrypt effect and the render stays
+stable across renders — an unmemoized version was caught by
+`react-hooks/exhaustive-deps` during verification, since a fresh `[]`
+literal every render would otherwise re-trigger the decrypt effect on every
+render) and decrypts/renders that instead of the raw `items` from context.
+`VaultContext`'s own exported `items` — and every OTHER consumer of it — is
+untouched. A decoy session now renders the existing, already-styled
+`"No passwords saved yet"` empty state instead of a wall of decrypt
+failures, with no decrypt attempt and no error logged.
+
+**Deliberately not attempted, same as §11.5:** populating the decoy with
+believable fake entries. That is still the separate §7 product decision;
+this fix's scope is "empty, not broken," matching the plan's own documented
+floor, nothing more.
+
+**Not yet extended to:** `AdaptivePasswordDashboard.jsx` and
+`SecurityDashboard.jsx`, which also read `items`/`decryptItem` from the same
+context and are reachable via in-app navigation, not just the initial
+dashboard render. CodeRabbit's finding traced only the automatic
+post-unlock path (`VaultItemsSection`); these two were not cited and are
+noted here as a known follow-up rather than folded into this fix silently.
+`VaultItem.jsx`/`VaultItemCard.jsx`/`VaultItemDetail.jsx` were checked and
+are not currently reachable from any route or parent component, so are out
+of scope, not merely unaddressed.
+
+New test file `VaultItemsSection.decoySession.test.jsx` (2 tests): a decoy
+session renders the empty-vault state and never calls `decryptEnvelope`; a
+real session decrypts and renders normally. Required exporting
+`VaultItemsSection` as a named export (it was previously module-private) —
+the only way to test it without instantiating all of `App.jsx`'s routing and
+auth machinery, which has no existing test harness at all. This is additive
+only; `App`'s existing default export and all current behavior are
+unchanged.
+
+### 20.2 The Tor control endpoint was never actually specified
+
+A.3's "Authenticated control port" bullet requires `CookieAuthentication 1`
+but never says what the control endpoint itself IS: `ControlPort` or
+`ControlSocket`, bound where, allocated how, or discoverable from where. A
+plan that fully specifies authenticating a connection to an endpoint it
+never defines cannot actually be implemented as written — and the gap is
+exactly the kind that matters here, since `ControlSocket` (a Unix domain
+socket) silently does not exist on Windows, which `desktop/package.json`'s
+`build.win` target ships to. Fixed: `ControlPort auto` (loopback-bound,
+ephemeral — the same treatment, and the same collision reasoning, `SocksPort
+auto` already gets two paragraphs above), read back and validated
+loopback-only the same way `socksPort` already is, and added to `start()`'s
+return value and `getStatus()` as `controlPort`. New test requirement:
+concurrent sidecar instances get distinct control ports, and a non-loopback
+control endpoint is never configured or reported.
+
+### 20.3 The main process's own clearnet capability fetch had no transport requirement at all
+
+A.4 documents `onionTransport.js` making its own clearnet GET to the
+capabilities endpoint, carrying the same bearer `authToken` used for the
+eventual `vault_sync` POST — but the very next bullet after it is "use
+`http://`, not `https://`" for the ONION request, and nothing distinguished
+the two. An implementer skimming both bullets together could reasonably
+conclude the same weak-transport posture applies to the clearnet fetch,
+which would send a live bearer token in the clear. Fixed by stating
+explicitly that this fetch must be HTTPS-only, must validate certificates,
+and must refuse (not follow) a downgrade redirect to `http://`, using the
+same redirect-hardening approach A.4 already requires for the `vault_sync`
+request itself, with a cross-reference forward to the specific bullet the
+`http://` exception belongs to and does not extend from.
+
+### 20.4 Orbot's config plugin queried package visibility, never service identity
+
+B.3 point 3 required Android 11+ `<queries>` visibility for
+`org.torproject.android`, which only lets this app confirm SOME installed
+package declares Orbot's action — not that the package IS Orbot. An
+implicit, action-only bind can be satisfied by any locally installed app
+declaring the same action, which could then hand back an attacker-controlled
+port this app would trust as Orbot's own SOCKS proxy, sitting directly in
+the path of `vault_sync` traffic. Fixed: bind with an explicit
+`setPackage("org.torproject.android")` target rather than an implicit
+action-only intent, and verify the bound `ComponentName`'s package before
+trusting anything it returns (including the discovered port point 5
+already reads). New test requirement: a second, locally-installed app
+declaring the same action must never be treated as Orbot, and an
+already-occupied local port must be handled as "unavailable," not silently
+connected to.
+
+Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/comments`
+(date-filtered) and the GraphQL `reviewThreads` API (resolution-filtered)
+that only CodeRabbit posted this round and that all 4 threads were
+genuinely open; no Codex or Greptile activity — Codex's last comment on this
+PR is still the 2026-08-25 usage-limit notice, and Greptile remains absent
+from every commenter list checked across all twelve rounds. Targeted tests:
+new `VaultItemsSection.decoySession.test.jsx` (2 tests) plus the suites
+sharing `sessionVaultCrypto`'s decoy-session surface —
+`VaultContext.decoySession.test.jsx`, `VaultUnlockModal.test.jsx`,
+`sessionVaultCrypto.decoySession.test.js` — 38 tests total, all passing.
+`eslint` clean on `App.jsx` and the new test file (an initial version
+tripped `react-hooks/exhaustive-deps`, fixed with `useMemo` before being
+counted as clean — see §20.1). `markdownlint` (MD040/MD018) clean on the one
+touched doc file. No change was needed in
+`docs/privacy-features-gap-remediation-plan.md` this round: all 3 doc
+findings are implementation detail nested under sections that document's own
+Phase 2/3 summary already defers to ("See A.4 for the full schema and the
+required tests"), not changes to a design fact the summary itself states.
