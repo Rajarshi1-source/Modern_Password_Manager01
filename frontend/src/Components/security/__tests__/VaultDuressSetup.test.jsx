@@ -42,6 +42,13 @@ vi.mock('../../../services/duressSignalService', () => ({
   registerSignalToken: vi.fn(),
 }));
 
+const { mockIsDecoySession } = vi.hoisted(() => ({
+  mockIsDecoySession: vi.fn(() => false),
+}));
+vi.mock('../../../services/sessionVaultCrypto', () => ({
+  default: { isDecoySession: mockIsDecoySession },
+}));
+
 import VaultDuressSetup from '../VaultDuressSetup';
 import { useAuth } from '../../../hooks/useAuth';
 import * as unlockEnvelopeStore from '../../../services/hiddenVault/unlockEnvelopeStore';
@@ -104,6 +111,7 @@ beforeEach(() => {
     getAccessToken: () => TOKEN,
   });
   unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockIsDecoySession.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -334,4 +342,44 @@ test('a wrong vault password on the setup form does not touch recovery or regist
   expect(alert).toHaveTextContent('Incorrect vault password.');
   expect(registerSignalToken).not.toHaveBeenCalled();
   expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();
+});
+
+describe('during a DECOY session', () => {
+  // The coercer has just watched password D unlock this vault. If this screen
+  // then tells them D is "Incorrect vault password.", that contradicts what
+  // they saw with their own eyes and outs the decoy -- a sharper tell than
+  // the empty item list, and one no innocent explanation covers. Neither form
+  // may render, so there is nothing to submit, nothing to contradict, and no
+  // request to observe.
+  test('renders no password fields and no forms at all', () => {
+    mockIsDecoySession.mockReturnValue(true);
+
+    const { queryByLabelText, queryByRole, container } = render(<VaultDuressSetup />);
+
+    expect(queryByLabelText(/current vault password/i)).toBeNull();
+    expect(queryByLabelText(/decoy password/i)).toBeNull();
+    expect(queryByRole('button', { name: /save decoy password/i })).toBeNull();
+    expect(queryByRole('button', { name: /recover unregistered alarm/i })).toBeNull();
+    expect(container.querySelector('form')).toBeNull();
+    expect(container.querySelector('input')).toBeNull();
+  });
+
+  test('never says a password is incorrect, and never registers anything', () => {
+    mockIsDecoySession.mockReturnValue(true);
+
+    const { container } = render(<VaultDuressSetup />);
+
+    // The specific contradiction this gate exists to prevent.
+    expect(container.textContent).not.toMatch(/incorrect/i);
+    expect(registerSignalToken).not.toHaveBeenCalled();
+    expect(unlockEnvelopeStore.setDecoySlot).not.toHaveBeenCalled();
+    expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();
+  });
+
+  test('a real session still renders both forms', () => {
+    const { getByLabelText, getByRole } = render(<VaultDuressSetup />);
+
+    expect(getByLabelText(/current vault password/i)).toBeInTheDocument();
+    expect(getByRole('button', { name: /recover unregistered alarm/i })).toBeInTheDocument();
+  });
 });

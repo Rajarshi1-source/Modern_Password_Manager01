@@ -32,6 +32,7 @@ import {
   saveEnvelope,
   clearEnvelope,
   provision,
+  readRawEnvelope,
   setDecoySlot,
   open,
   MalformedSlotPayloadError,
@@ -147,17 +148,39 @@ describe('provision', () => {
     expect(decoy.duressToken).toEqual(expect.any(String));
   });
 
-  test('replaceExisting: true overwrites deliberately -- the corrupt-envelope self-heal', async () => {
+  test('replaceExisting matching the stored blob overwrites -- the corrupt-envelope self-heal', async () => {
     await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    const snapshot = readRawEnvelope(USER_ID);
 
     const freshDek = new Uint8Array(32).fill(7);
     await expect(provision({
       userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: freshDek, saltB64: SALT,
-      replaceExisting: true,
+      replaceExisting: snapshot,
     })).resolves.toBeUndefined();
 
     const reopened = await open({ userId: USER_ID, password: REAL_PASSWORD });
     expect(reopened.dekBytes).toEqual(freshDek);
+  });
+
+  test('replaceExisting is compare-and-swap: a blob that changed since the snapshot is NOT replaced', async () => {
+    // The self-heal snapshots the failed blob, then awaits two slow key
+    // derivations before provisioning. Another tab configuring a decoy inside
+    // that window must not be destroyed by the overwrite.
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    const staleSnapshot = readRawEnvelope(USER_ID);
+
+    // "Another tab" configures a decoy after the snapshot was taken.
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+
+    await expect(provision({
+      userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: new Uint8Array(32).fill(7), saltB64: SALT,
+      replaceExisting: staleSnapshot,
+    })).rejects.toThrow(/changed/i);
+
+    // The decoy that arrived in the window is intact.
+    const decoy = await open({ userId: USER_ID, password: DECOY_PASSWORD });
+    expect(decoy.slotIndex).toBe(1);
+    expect(decoy.duressToken).toEqual(expect.any(String));
   });
 
   test('rejects a dekBytes that is not a 32-byte Uint8Array', async () => {

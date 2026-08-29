@@ -120,6 +120,22 @@ export const loadEnvelope = (userId) => {
   }
 };
 
+/**
+ * The stored blob EXACTLY as persisted (base64), or null. Never decodes, so
+ * it never throws for a corrupt value -- unlike `loadEnvelope`. Exists so a
+ * caller can take a compare-and-swap snapshot across a slow await and prove
+ * nothing replaced the envelope in between; see `provision`'s
+ * `replaceExisting`.
+ */
+export const readRawEnvelope = (userId) => {
+  if (!userId) return null;
+  try {
+    return localStorage.getItem(storageKey(userId));
+  } catch {
+    return null;
+  }
+};
+
 export const saveEnvelope = (userId, blob) => {
   if (!userId) throw new Error('saveEnvelope: userId required');
   if (!(blob instanceof Uint8Array)) {
@@ -233,14 +249,17 @@ const parseSlotPayload = (payloadBytes) => {
  *   `sessionVaultCrypto.exportSessionDekRaw()` or `exportWrappedDekRaw()`)
  * @param {string} args.saltB64 - the device salt to stamp into the payload,
  *   matching what `sessionVaultCrypto` would set as `sessionSaltB64`
- * @param {boolean} [args.replaceExisting=false] - overwrite an envelope that
- *   already exists. Defaults to refusing, because this function always writes
- *   a decoy-less blob and would otherwise silently destroy a configured
- *   decoy slot; see the guard below. Set true ONLY for the corrupt-envelope
- *   self-heal, where the existing blob cannot be decoded anyway.
+ * @param {string} [args.replaceExisting] - the EXACT raw blob the caller
+ *   expects to still be stored (from `readRawEnvelope`), authorising an
+ *   overwrite of that specific blob and no other. Deliberately not a boolean:
+ *   the only legitimate overwrite is the corrupt-envelope self-heal, which
+ *   runs after two slow key derivations, and in that window another tab can
+ *   configure a decoy. A boolean "yes, replace" would destroy it; a
+ *   compare-and-swap token cannot, because the stored value no longer
+ *   matches. Omit to refuse any overwrite.
  */
 export async function provision({
-  userId, vaultPassword, dekBytes, saltB64, replaceExisting = false,
+  userId, vaultPassword, dekBytes, saltB64, replaceExisting,
 }) {
   if (!userId) throw new Error('provision: userId required');
   if (!vaultPassword) throw new Error('provision: vaultPassword required');
@@ -276,8 +295,17 @@ export async function provision({
   // `replaceExisting` is the deliberate opt-in for the ONE caller that must
   // overwrite: the corrupt-envelope self-heal (§9.1), where the stored blob
   // exists but cannot be decoded, so there is no decoy left to protect.
-  if (!replaceExisting && hasEnvelope(userId)) {
-    throw new Error('provision: an envelope already exists for this account.');
+  if (hasEnvelope(userId)) {
+    if (replaceExisting === undefined) {
+      throw new Error('provision: an envelope already exists for this account.');
+    }
+    // Compare-and-swap: authorise replacing the blob the caller SAW, never
+    // whatever happens to be there now. If another tab configured a decoy
+    // during the caller's await, the stored value has moved on and this
+    // refuses rather than destroying that decoy's DEK and duress token.
+    if (readRawEnvelope(userId) !== replaceExisting) {
+      throw new Error('provision: the stored envelope changed; refusing to replace it.');
+    }
   }
 
   const realPayload = buildSlotPayload({ dekBytes, saltB64 });

@@ -78,9 +78,12 @@ describe('exportWrappedDekRaw shares its unwrap step with unlockWithVaultPasswor
 
     await exportWrappedDekRaw(REAL_PASSWORD, USER_ID);
 
-    // No session was installed by the export call -- confirmed by the fact
-    // that exportSessionDekRaw (which reads the live session key) throws
-    // rather than returning the exported bytes.
+    // Assert the absence directly: `exportSessionDekRaw()` rejects in TWO
+    // states -- no session key at all, and a session key that exists but is
+    // non-extractable -- and both `unlockWithVaultPassword` and
+    // `installRawDek` install non-extractable keys. So the rejection alone
+    // would still pass if this call HAD installed a session.
+    expect(hasSessionKey()).toBe(false);
     await expect(exportSessionDekRaw()).rejects.toThrow();
   });
 });

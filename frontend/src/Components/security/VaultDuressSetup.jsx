@@ -34,6 +34,7 @@ import { useAuth } from '../../hooks/useAuth';
 import * as unlockEnvelopeStore from '../../services/hiddenVault/unlockEnvelopeStore';
 import { WrongPasswordError } from '../../services/hiddenVault/hiddenVaultEnvelope';
 import { registerSignalToken } from '../../services/duressSignalService';
+import sessionVaultCrypto from '../../services/sessionVaultCrypto';
 
 const panelStyle = {
   maxWidth: 640,
@@ -132,6 +133,39 @@ const VaultDuressSetup = () => {
     return (
       <div style={panelStyle}>
         <p>Sign in to configure duress protection for your vault.</p>
+      </div>
+    );
+  }
+
+  // A DECOY session must never reach the forms below, and the reason is not
+  // the one an earlier round rejected this for.
+  //
+  // In a REAL session, "Incorrect vault password." for a decoy password is
+  // fine: it is identical to what a garbage password produces (§21.1), so it
+  // identifies nothing, and revealing that some OTHER string IS the real
+  // password is inherent to any credential.
+  //
+  // In a DECOY session it is fatal. The coercer has just watched password D
+  // unlock this vault. If they open this screen and type D, the app answers
+  // "Incorrect vault password." -- a direct contradiction of what they just
+  // saw with their own eyes, and one no innocent explanation covers. That
+  // outs the decoy far more decisively than the empty item list does.
+  //
+  // Rendering a neutral panel with NO password fields is what actually closes
+  // it: there is nothing to submit, so there is no outcome to contradict and
+  // no request to observe. (That also answers the network-shape concern the
+  // finding was originally filed under, in the only way that is coherent --
+  // a decoy session makes no registration request because it makes no
+  // submission at all.) Deliberately NOT reusing the "you haven't created a
+  // vault password yet" copy below: that would be its own contradiction for
+  // someone who just unlocked with one.
+  if (sessionVaultCrypto.isDecoySession()) {
+    return (
+      <div style={panelStyle}>
+        <h2>Vault duress protection</h2>
+        <p style={{ color: '#6b7280' }}>
+          This isn&apos;t available right now. Please try again later.
+        </p>
       </div>
     );
   }

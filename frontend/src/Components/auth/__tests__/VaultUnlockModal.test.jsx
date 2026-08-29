@@ -37,6 +37,7 @@ vi.mock('../../../services/hiddenVault/unlockEnvelopeStore', () => ({
   hasEnvelope: vi.fn(),
   open: vi.fn(),
   provision: vi.fn(),
+  readRawEnvelope: vi.fn(),
 }));
 
 vi.mock('../../../services/duressSignalService', () => ({
@@ -81,6 +82,8 @@ const submitPassword = async (getByLabelText, getByRole, password, confirm = nul
 beforeEach(() => {
   vi.clearAllMocks();
   sessionVaultCrypto.getOrCreateUserSalt.mockReturnValue('device-salt-b64');
+  // The blob the self-heal snapshots before replacing it (compare-and-swap).
+  unlockEnvelopeStore.readRawEnvelope.mockReturnValue('STALE_RAW_BLOB');
 });
 
 afterEach(() => {
@@ -253,8 +256,11 @@ describe('unlock mode — stored envelope is unusable, falls back to the legacy 
     // The self-heal is the ONE path allowed to overwrite a stored envelope:
     // the blob exists but cannot be decoded, so there is no decoy left to
     // protect, and provision's default refusal would strand the user instead.
+    // Compare-and-swap: the self-heal authorises replacing the EXACT blob it
+    // saw fail, not "whatever is there now" -- so a decoy configured by
+    // another tab during the upgrade's key derivations survives.
     expect(unlockEnvelopeStore.provision).toHaveBeenCalledWith(
-      expect.objectContaining({ replaceExisting: true })
+      expect.objectContaining({ replaceExisting: 'STALE_RAW_BLOB' })
     );
   });
 
@@ -387,8 +393,8 @@ describe('unlock mode — upgrade (wrapped key exists, no envelope yet)', () => 
       // The ORDINARY upgrade must never overwrite: if another tab configured
       // a decoy since this modal computed its mode, provision's refusal is
       // what stops that decoy (and its duress token) being silently wiped.
-      // Only the corrupt-envelope self-heal passes true -- asserted below.
-      replaceExisting: false,
+      // Only the corrupt-envelope self-heal passes a token -- asserted below.
+      replaceExisting: undefined,
     });
     expect(reportUnlock).toHaveBeenCalledWith(TOKEN, null);
     // The upgrade path installs the session key via unlockWithVaultPassword
