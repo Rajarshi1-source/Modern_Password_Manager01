@@ -210,9 +210,17 @@ const VaultDuressSetup = () => {
       await finishRegistration(duressToken);
     } catch (err) {
       if (err instanceof WrongPasswordError) {
+        // Covers BOTH "that password opens nothing" and "that password opens
+        // the decoy slot" -- unlockEnvelopeStore.setDecoySlot raises the same
+        // type for each, deliberately, so this screen cannot tell a coercer
+        // which of the two they just typed. See that function's own comment.
         setError('Incorrect vault password.');
       } else {
-        setError(err?.message || 'Failed to set up the decoy password.');
+        // Never echo `err.message`: it is where the slot-specific wording
+        // used to reach the screen from, and any future service-layer error
+        // string would land here unreviewed. Operational faults get one
+        // fixed message that says nothing about which password was entered.
+        setError('Could not save the decoy password. Please try again.');
       }
     } finally {
       setBusy(false);

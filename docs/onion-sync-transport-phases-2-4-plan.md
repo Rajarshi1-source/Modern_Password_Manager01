@@ -949,9 +949,36 @@ implementation. It must settle:
 3. **Redemption.** Over onion only. A redeemed token authorises exactly one
    `vault_sync`, and authorises **nothing else** — it must not be usable to
    read or enumerate the vault.
+   **This needs an explicit route-scope GATE, not just the C.4 tests that
+   assert it.** C.3 as drafted only changes *authentication*; nothing in it
+   stops a credential-authenticated request from naming `vault_list` or
+   `vault_delete` and being dispatched normally, because
+   `VAULT_OPERATION_ROUTES` lookup does not know how the request was
+   authorised. Add the check before dispatch: if the request was authorised
+   by an anonymous credential (rather than `IsAuthenticated`), reject unless
+   `operation == 'vault_sync'`. Requests authorised by JWT keep their full
+   route range, unchanged. The C.4 negative tests then assert something real
+   — and must assert that a rejected request **never reaches a vault view**
+   (patch the view and assert not-called), not merely that the response was
+   an error, since a 4xx produced *after* dispatch would still have touched
+   the vault.
 4. **Double-spend prevention.** Redis set of spent nonces with a TTL matched to
    token expiry, and a durable fallback. This is the one component where a bug
    is a security bug, not a privacy one.
+   **Consumption must be ATOMIC — a check-then-mark pair is the bug this
+   bullet exists to prevent.** Two concurrent redemptions of one valid token
+   can both read "unspent" before either writes, and both dispatch. Use a
+   single atomic operation that both tests and claims the nonce (`SET
+   key value NX EX <ttl>` / `SETNX`, whose reply *is* the claim result —
+   never `EXISTS` followed by `SET`), and treat "I did not win the claim" as
+   already-spent. The durable fallback needs the same property, not merely
+   the same data: a unique constraint on the nonce column, with the
+   `IntegrityError` on a losing insert being what marks it spent. If Redis
+   and the durable store can disagree, define which one is authoritative for
+   the claim — one of them must be, or the pair reintroduces the race it
+   replaced. Test: two concurrent redemptions of one valid token produce
+   **exactly one** successful `vault_sync` dispatch, asserted by counting
+   dispatches, not by checking that one response was an error.
 5. **Server-side unlinkability argument, bounded by a stated threat model.**
    The primitive gives CRYPTOGRAPHIC unlinkability — the server cannot derive
    which issuance a given redemption came from FROM THE TOKEN ITSELF, no
@@ -965,7 +992,34 @@ implementation. It must settle:
    model, given the listed observable metadata" — never as an unqualified
    "cannot be linked." An acceptance criterion or a UI claim that drops the
    qualification contradicts this point and must be rejected in review.
-6. **Key rotation and the anonymity-set collapse it causes.** A rotation
+6. **Payload-level correlation — the sync body itself carries account-linkable
+   identifiers, and stripping the JWT does nothing about them.** §C.3 already
+   requires dropping the `Authorization` header and `session_id`, but the
+   `vault_sync` payload defined in A.4 still contains:
+   - **`item_id`** on every item: a stable, client-generated, globally unique
+     key. The same `item_id` values were already sent under JWT-authenticated
+     syncs, so the server can trivially match an "anonymous" redemption to the
+     account that previously synced those ids. This is not a side channel —
+     it is the primary key of the correlation.
+   - **`expected_sync_version`**: read from the per-user `UserSalt.sync_version`
+     row, so its value is itself account-scoped state. Do not treat it as an
+     opaque integer; either exclude it from anonymous redemptions or define
+     precisely what an observer learns from it.
+   Resolve this in the design doc alongside C.3's "Ownership scoping is the
+   hard part" bullet, because it is the same problem seen from the payload
+   side: a credential
+   that carries a blinded, server-opaque vault handle still leaks the account
+   if the body it authorises names items by their long-lived global ids.
+   Credible directions to argue between: per-credential item references
+   resolved only within the credential's own vault scope, or an
+   item-id-blinding scheme keyed to the issuance. **The same "if this cannot
+   be solved cleanly, Phase 4 does not ship" test in point 5 applies here** —
+   an anonymous sync whose payload identifies the account has not removed the
+   correlation it exists to remove, however good the credential is. Tests must
+   assert on the SERIALIZED request body, not on the credential alone.
+   (C.3's "Ownership scoping" bullet states the same test for the scoping
+   half; both must pass, and neither substitutes for the other.)
+7. **Key rotation and the anonymity-set collapse it causes.** A rotation
    partitions users by which key signed their tokens. Say how often, and how
    large the set stays.
 
@@ -977,7 +1031,18 @@ implementation. It must settle:
   (clearnet, `IsAuthenticated`), and a `HasAnonymousCredential` DRF permission
   class.
 - **`/vault-proxy/` permission change:** accept *either* `IsAuthenticated` **or**
-  a valid anonymous credential. **The onion-ingress check
+  a valid anonymous credential. **Declare this as
+  `permission_classes = [IsAuthenticated | HasAnonymousCredential]` — one
+  composed permission, using DRF's bitwise operator — and NOT as
+  `[IsAuthenticated, HasAnonymousCredential]`.** A list is an implicit AND:
+  DRF requires every listed class to pass, so the two-element form would
+  demand a JWT *and* a credential on every request and break the entire
+  feature (and, ironically, make the mixed-credential case below the only
+  one that works). Verified against the installed DRF 3.16.1:
+  `rest_framework/permissions.py` defines `OperationHolderMixin.__or__` and
+  an `OR` class, so `|` composes at class level as intended. A custom
+  `IsAuthenticatedOrAnonymousCredential(BasePermission)` is an acceptable
+  equivalent if the composed form proves awkward to reference from settings. **The onion-ingress check
   (`request_is_onion_ingress` → `clearnet_ingress_refused`) already runs
   endpoint-wide and unconditionally today, and must not become conditional
   on which branch authorises the request** — this PR does not add that check

@@ -531,7 +531,7 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Rounds five through thirteen found 58 more issues, almost all
+  corrected above. Rounds five through fourteen found 66 more issues, almost all
   in `docs/onion-sync-transport-phases-2-4-plan.md`'s still-unimplemented
   Phase 2/PR C design (payload-shape validation on the desktop IPC trust
   boundary — later tightened again from a destination-field denylist into a
@@ -561,8 +561,20 @@ onion case):
   see that plan's §20.1 and §20.2. Recorded here rather than only there
   because they bear directly on whether §2's "Plausible Deniability Vault"
   claim holds, which is this document's own subject.
+  **One related defect remains OPEN and is disclosed here for the same
+  reason** (that plan's §21.3): the duress-settings recovery form still
+  reveals, through *which network request it issues*, whether a submitted
+  password is the decoy — the rendered output was equalised, the request
+  pattern was not. It is unfixed because every frontend-only remedy is worse
+  than the leak: always sending the registration request would permanently
+  disarm the user's real alarm, since registration deactivates all active
+  signals. Closing it needs either a backend registration mode that is a
+  no-op for a non-matching token, or gating recovery behind the real vault
+  password. **Until then, §2's deniability claim should be read as holding
+  against an observer of the SCREEN, not against one who can also read the
+  browser's network panel on an unlocked session.**
   **All review rounds for both carry-overs are recorded in one place:
-  `docs/vault-unlock-envelope-integration-plan.md` §9 through §20** (every
+  `docs/vault-unlock-envelope-integration-plan.md` §9 through §21** (every
   bare `§N` in this paragraph refers to that document, including the
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over

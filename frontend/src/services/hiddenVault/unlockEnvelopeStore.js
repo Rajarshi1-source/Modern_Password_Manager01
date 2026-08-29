@@ -50,6 +50,7 @@ import {
   DEFAULT_KDF_MEMORY_KIB,
   DEFAULT_KDF_PARALLELISM,
   HiddenVaultError,
+  WrongPasswordError,
 } from './hiddenVaultEnvelope';
 import { generateSignalToken, SIGNAL_TOKEN_LENGTH } from '../duressSignalService';
 
@@ -104,7 +105,19 @@ export const loadEnvelope = (userId) => {
     return null;
   }
   if (raw === null) return null;
-  return fromB64(raw);
+  // Same normalization, and for the same reason, as `parseSlotPayload`'s dek
+  // decode below: `fromB64` calls `atob`, which throws a DOMException for a
+  // stored value that is not valid base64. Left raw, that DOMException
+  // escapes `loadEnvelope` while `hasEnvelope` still returns true -- so
+  // VaultDuressSetup renders its forms and then surfaces a literal "Failed
+  // to execute 'atob' on 'Window'" string to the user. A corrupt stored blob
+  // is the same outcome whichever layer notices it, so it gets the same
+  // error type. `null` stays reserved for "there is nothing stored".
+  try {
+    return fromB64(raw);
+  } catch {
+    throw new MalformedSlotPayloadError('Stored envelope is not valid base64.');
+  }
 };
 
 export const saveEnvelope = (userId, blob) => {
@@ -304,11 +317,33 @@ export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
   // slotIndex 0 in practice (see the module docstring's payload shape note).
   const { slotIndex, payload: realPayloadBytes } = await decode(existing, vaultPassword);
   if (slotIndex !== 0) {
-    // Cryptographically not expected to happen (would require vaultPassword
-    // to also successfully decrypt slot 1's independently-keyed ciphertext),
-    // but fail loudly rather than silently re-sealing the wrong slot as
-    // "real" if it somehow did.
-    throw new Error('setDecoySlot: vaultPassword did not resolve to the real slot.');
+    // Reached when the value supplied as the REAL vault password actually
+    // opened the DECOY slot -- i.e. the user (or someone at their keyboard)
+    // typed the decoy password into the vault-password field.
+    //
+    // Deliberately a `WrongPasswordError`, the SAME type `decode()` raises
+    // when neither slot matches, and NOT a distinct error: from this
+    // function's contract the two are one outcome ("what you gave me is not
+    // the real vault password"), and callers surface error types. A
+    // slot-specific error here let VaultDuressSetup render a slot-specific
+    // message, so submitting a candidate password to the setup form told the
+    // submitter whether it was the decoy -- the same oracle §20.1 removed
+    // from the recovery form on that same screen, still open on this one.
+    // Collapsing the type is what makes a decoy password and a garbage
+    // password indistinguishable to every caller by construction, rather
+    // than depending on each caller remembering not to echo the message.
+    //
+    // The MESSAGE is byte-identical to the one `decode()` raises when no slot
+    // matches at all, not merely non-specific: matching only the error TYPE
+    // would still leave a caller that echoes `err.message` able to tell the
+    // two apart, which is precisely how this leaked in the first place. Both
+    // outcomes must be indistinguishable on every channel a caller can read.
+    //
+    // Still re-sealing nothing: the throw happens before any re-encode, so a
+    // mistyped password cannot rewrite the envelope.
+    throw new WrongPasswordError(
+      'No slot decrypted successfully with the supplied password.',
+    );
   }
 
   // Reuse the SAME device salt the real slot's payload already carries,
