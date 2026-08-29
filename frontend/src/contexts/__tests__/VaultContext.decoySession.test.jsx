@@ -44,8 +44,11 @@ vi.mock('../../services/vaultEnvelope', () => ({
   decryptEnvelope: vi.fn(() => Promise.resolve({ name: 'x' })),
   hasVaultSessionKey: vi.fn(() => mockV2HasSessionKey() || mockV3HasSessionKey()),
 }));
+const { mockUseAuthUser } = vi.hoisted(() => ({
+  mockUseAuthUser: vi.fn(() => ({ id: 1, email: 'u@e.com' })),
+}));
 vi.mock('../../hooks/useAuth', () => ({
-  useAuth: () => ({ isAuthenticated: true, user: { id: 1, email: 'u@e.com' } }),
+  useAuth: () => ({ isAuthenticated: true, user: mockUseAuthUser() }),
 }));
 vi.mock('../../services/firebaseService', () => ({
   default: {
@@ -98,10 +101,10 @@ const EXISTING_ITEM = {
 };
 
 const mountVault = async () => {
-  const { result } = renderHook(() => useVault(), { wrapper });
+  const { result, rerender } = renderHook(() => useVault(), { wrapper });
   await waitFor(() => expect(axios.get).toHaveBeenCalled());
   await waitFor(() => expect(result.current.items).toHaveLength(1));
-  return result;
+  return { result, rerender };
 };
 
 beforeEach(() => {
@@ -109,6 +112,7 @@ beforeEach(() => {
   mockV2HasSessionKey.mockReturnValue(true);
   mockV3HasSessionKey.mockReturnValue(false);
   mockIsDecoySession.mockReturnValue(false);
+  mockUseAuthUser.mockReturnValue({ id: 1, email: 'u@e.com' });
   axios.get.mockResolvedValue({ data: { items: [EXISTING_ITEM] } });
   mockDeleteVaultItem.mockResolvedValue({ data: {} });
   mockToggleFavorite.mockResolvedValue({ data: {} });
@@ -118,7 +122,7 @@ beforeEach(() => {
 describe('VaultContext.deleteItem during a decoy session', () => {
   test('makes no request and leaves the item list untouched', async () => {
     mockIsDecoySession.mockReturnValue(true);
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     let caught;
     await act(async () => {
@@ -134,7 +138,7 @@ describe('VaultContext.deleteItem during a decoy session', () => {
 
   test('the surfaced message never names the duress feature', async () => {
     mockIsDecoySession.mockReturnValue(true);
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     let caught;
     await act(async () => {
@@ -146,7 +150,7 @@ describe('VaultContext.deleteItem during a decoy session', () => {
   });
 
   test('a real session still deletes normally', async () => {
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     await act(async () => {
       await result.current.deleteItem(42);
@@ -160,7 +164,7 @@ describe('VaultContext.deleteItem during a decoy session', () => {
 describe('VaultContext.toggleFavorite during a decoy session', () => {
   test('makes no request and applies no optimistic flip', async () => {
     mockIsDecoySession.mockReturnValue(true);
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     let caught;
     await act(async () => {
@@ -175,7 +179,7 @@ describe('VaultContext.toggleFavorite during a decoy session', () => {
 
   test('the surfaced message never names the duress feature', async () => {
     mockIsDecoySession.mockReturnValue(true);
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     let caught;
     await act(async () => {
@@ -187,7 +191,7 @@ describe('VaultContext.toggleFavorite during a decoy session', () => {
   });
 
   test('a real session still toggles normally', async () => {
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     await act(async () => {
       await result.current.toggleFavorite(42);
@@ -201,7 +205,7 @@ describe('VaultContext.toggleFavorite during a decoy session', () => {
 describe('VaultContext backup paths during a decoy session', () => {
   test('restoreBackup makes no request and does not refresh the item list', async () => {
     mockIsDecoySession.mockReturnValue(true);
-    const result = await mountVault();
+    const { result } = await mountVault();
     // Baseline: mountVault already did the initial GET. A refreshItems()
     // triggered by an unguarded restore would add another one, so pin the
     // count rather than asserting "never called".
@@ -224,7 +228,7 @@ describe('VaultContext backup paths during a decoy session', () => {
 
   test('createBackup makes no request', async () => {
     mockIsDecoySession.mockReturnValue(true);
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     let caught;
     await act(async () => {
@@ -238,7 +242,7 @@ describe('VaultContext backup paths during a decoy session', () => {
   });
 
   test('a real session still creates and restores normally', async () => {
-    const result = await mountVault();
+    const { result } = await mountVault();
 
     await act(async () => {
       await result.current.createBackup();
@@ -271,7 +275,7 @@ describe('VaultContext.syncVault during a decoy session', () => {
   };
 
   test('does not flush changes queued by an earlier real session', async () => {
-    const result = await mountVault();
+    const { result } = await mountVault();
     // Queue a deletion as the REAL session would...
     await queueOneChange(result);
 
@@ -288,7 +292,7 @@ describe('VaultContext.syncVault during a decoy session', () => {
   });
 
   test('a real session still flushes the same queued changes', async () => {
-    const result = await mountVault();
+    const { result } = await mountVault();
     await queueOneChange(result);
 
     mockOnionSyncVault.mockClear();
@@ -298,5 +302,33 @@ describe('VaultContext.syncVault during a decoy session', () => {
 
     // Proves the gate is what stopped the sync above, not an empty queue.
     expect(mockOnionSyncVault).toHaveBeenCalled();
+  });
+});
+
+describe('pendingChanges is scoped to the authenticated identity', () => {
+  test('a queue built by user A is not flushed by user B', async () => {
+    // The decoy gate deliberately PRESERVES the queue so the real session can
+    // flush it later. That is only safe if the queue cannot outlive the
+    // identity that built it: otherwise A's ciphertext would be POSTed into
+    // B's vault and A's item_ids deleted from it. `items`/`decryptedItems`
+    // were already cleared on an identity change; `pendingChanges` was not.
+    const { result, rerender } = await mountVault();
+    await act(async () => {
+      await result.current.deleteItem(42);
+    });
+    expect(mockDeleteVaultItem).toHaveBeenCalled();
+
+    // Switch identity: the provider's auth effect re-runs for a new user.id.
+    mockUseAuthUser.mockReturnValue({ id: 2, email: 'b@e.com' });
+    mockOnionSyncVault.mockClear();
+    await act(async () => {
+      rerender();
+    });
+
+    await act(async () => {
+      await result.current.syncVault();
+    });
+
+    expect(mockOnionSyncVault).not.toHaveBeenCalled();
   });
 });

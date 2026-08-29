@@ -184,6 +184,17 @@ export const VaultProvider = ({ children }) => {
     // plaintext.
     setItems([]);
     setDecryptedItems(new Map());
+    // Queued mutations are per-account and must not outlive the identity that
+    // created them. `items`/`decryptedItems` were already cleared here;
+    // `pendingChanges` was not, so account A's queued writes AND deletions
+    // survived a switch to account B and would be flushed by B's next
+    // `syncVault` -- POSTing A's ciphertext into B's vault and deleting B's
+    // rows by A's item_ids. Clearing here (rather than scoping the queue by
+    // id) matches how every other per-account cache in this effect is
+    // handled, and the decoy case is unaffected: a decoy unlock is the SAME
+    // identity, so this effect does not re-run and the queue is preserved for
+    // the real session exactly as `syncVault`'s decoy gate intends.
+    setPendingChanges([]);
     setSessionUnlocked(hasVaultSessionKey());
     refreshItems();
     // 'vault:updated' fires from the add/edit write paths AND from the login

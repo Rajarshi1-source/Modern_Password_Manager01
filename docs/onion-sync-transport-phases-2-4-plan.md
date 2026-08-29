@@ -128,9 +128,13 @@ parity.
 Single owner of the process. Exports:
 
 ```text
-start(): Promise<{ socksPort: number, controlPort: number }>  // spawn, wait for bootstrap 100%
-stop(): Promise<void>                     // SIGTERM, then SIGKILL after a grace period
-getStatus(): { state, bootstrapPercent, socksPort, controlPort, lastError }
+// ONE status shape, returned by both, so an idempotent start() and a first
+// start() are indistinguishable to a caller (an earlier draft had start()
+// return only the two ports while its idempotent path returned full status):
+//   Status = { state, bootstrapPercent, socksPort, controlPort, lastError }
+start(): Promise<Status>   // spawn, wait for bootstrap 100%; idempotent
+stop(): Promise<void>      // SIGTERM, then SIGKILL after a grace period
+getStatus(): Status        // never throws; the synchronous snapshot
 // socksPort/controlPort are null whenever no process is running (before the
 // first start(), and after stop() resolves) -- never a stale value from a
 // previous run, which a caller could otherwise dial into nothing.
@@ -222,6 +226,18 @@ Requirements:
   — waiting on stdout from a process that already died is the same hang
   under a different cause. Run cleanup (killing whatever did spawn) in a
   `finally`-style path that cannot itself mask the original failure reason.
+
+  **A Tor process that dies AFTER reaching ready must invalidate readiness
+  too — this rule covers only death BEFORE bootstrap finishes.** Tor can
+  crash, be OOM-killed, or be killed by hand at any point in a long session.
+  Without a persistent `exit`/`close` handler that clears `socksPort` and
+  `controlPort`, sets `lastError`, and moves `state` out of ready, the cached
+  status keeps reporting ready forever: `isOnionSyncAvailable()` answers
+  true and `proxyVaultOperation` dials a listener that is gone, turning a
+  clean "unavailable" into a raw connection error on the user's sync. The
+  bounded-restart budget above governs whether it comes back; it does not by
+  itself correct the status. Test a crash AFTER ready, asserting
+  `isOnionSyncAvailable()` flips to false.
   Add a test for a stalled-bootstrap (deadline) case, not just the
   already-covered success path.
 - **Kill on every exit path this process can actually observe.** `app.on('will-quit')` /
@@ -347,7 +363,16 @@ New `desktop/src/main/onionTransport.js`:
   capabilities endpoint `darkProtocolService.getCapabilities()` calls,
   authenticated with the same forwarded `authToken` it uses for the
   eventual `vault_sync` POST, and caches `anonymity.onion_address` in
-  memory for the rest of the session. Validate the resolved value is a
+  memory for the rest of the session. **Bound that fetch with its own
+  finite timeout.** A.3's startup deadline covers the SIDECAR, not this
+  clearnet request, so a capabilities endpoint that accepts the connection
+  and never answers would leave the first `vault_sync` pending forever --
+  with no sidecar failure to trip any existing deadline. Give it an explicit
+  timeout, map both timeout and fetch failure onto the same "transport
+  unavailable" outcome the rest of A.4 already defines (so `prefer_onion`
+  degrades honestly and `require_onion` fails closed, rather than hanging),
+  and do not cache a failed resolution as if it were an answer. Validate the
+  resolved value is a
   well-formed v3 `.onion` hostname before ever using it as a request
   target; refuse and report unavailable on anything else, and do not retry
   the resolution against a value that already failed validation. Add a

@@ -1,11 +1,14 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across fifteen review rounds
-(§9–§23) — read all fifteen before relying on §3's original design as the
-literal shipped behavior. **§22 closes the last open finding** (the recovery
-form's network-side password oracle) by gating recovery behind the real
-vault password — read §21.3 for why the seemingly-obvious fixes are unsafe
-or, in the backend case, forbidden by this project's own ZK invariant. §11.5 in particular is a real data-corruption fix,
+**Implemented in PR #489, then hardened across sixteen review rounds
+(§9–§24) — read all sixteen before relying on §3's original design as the
+literal shipped behavior. **§22 closes the recovery form's network-side
+password oracle** by gating recovery behind the real vault password — read
+§21.3 for why the seemingly-obvious fixes are unsafe or, in the backend
+case, forbidden by this project's own ZK invariant. **§24.1 corrects §23.3,
+where a Greptile P1 was declined on reasoning that held only for a REAL
+session** — read it before judging any future duress finding, since it is
+the one that names the test the decline got wrong. §11.5 in particular is a real data-corruption fix,
 not a cosmetic one; §16.1, §18.1, and §20.2 extend it to the mutation and
 display paths it originally missed (§18.1 is the one that reaches
 `restoreBackup`, which can wipe the whole vault); §20.1 is a security
@@ -2699,3 +2702,133 @@ the changed paths — 150 tests, all passing. Both code fixes negative-
 controlled (disabling each fails exactly the test written for it), with
 restorations verified byte-identical. `eslint` clean; `markdownlint`
 (MD018/MD022/MD040) clean on all touched docs.
+
+## 24. Sixteenth review round: Greptile + CodeRabbit (2026-08-29)
+
+Four code fixes and four doc corrections. **The headline is that §23.3's
+decline was wrong** — not in its reasoning about the real session, but
+because it answered the wrong question about the decoy one.
+
+### 24.1 §23.3 CORRECTED: the duress settings screen contradicts itself in a decoy session
+
+Greptile re-raised "setup outcomes reveal the real vault password" after
+§23.3 declined it. Re-examined from a different angle, and the decline was
+wrong.
+
+§23.3 asked *"can the form distinguish the decoy password from garbage?"* —
+no, and that remains true (§21.1 made them byte-identical). It then
+concluded the residual real-vs-not-real signal is inherent to any credential,
+which is also true **in a real session**.
+
+The question it never asked is *"does the app contradict what the coercer has
+already observed?"* In a **decoy session** it does, flatly:
+
+1. Coercer watches password D unlock the vault.
+2. Coercer opens `/security/vault-duress` — reachable, since the route gates
+   on `isAuthenticated` and a decoy unlock is authenticated, and
+   `envelopeReady` is true because an envelope exists.
+3. Coercer types D. The app answers **"Incorrect vault password."**
+
+A password that demonstrably *just worked* being rejected is a direct
+contradiction with no innocent explanation. It outs the decoy far more
+decisively than the empty item list, which at least has one. This is a
+strictly sharper leak than the network-shape concern the finding was filed
+under, and §23.3 missed it by scoping the analysis to one session type.
+
+**Fix:** the screen renders a neutral panel with **no forms and no password
+fields** whenever `isDecoySession()` is true. With nothing to submit there is
+no outcome to contradict — and, as a side effect, no registration request
+either, which answers the original network-shape complaint in the only
+coherent way available (a decoy session makes no request because it makes no
+submission). Deliberately does **not** reuse the existing "you haven't
+created a vault password yet" copy: that is its own contradiction for someone
+who just unlocked with one.
+
+The real-session behaviour is unchanged and still correct: real saves, decoy
+and garbage produce one identical error.
+
+**Lesson, and it generalises past this feature:** when judging a duress
+finding, "can they distinguish X from Y?" is only half the test. The other
+half is "does any surface contradict what this session has already shown
+them?" A decoy session is a *claim* the whole app has to keep consistent, and
+every screen reachable from it is part of that claim.
+
+### 24.2 `pendingChanges` outlived the identity that created it
+
+§23.1 gated `syncVault` during decoy sessions and deliberately preserved the
+queue so the real session could flush it. That is only safe if the queue
+cannot outlive the *account* that built it — and it could. The auth effect
+clears `items` and `decryptedItems` on an identity change but never touched
+`pendingChanges`, so account A's queued writes and deletions survived a
+switch to account B and would be flushed by B's next sync: A's ciphertext
+POSTed into B's vault, A's `item_id`s deleted from it.
+
+Fixed by clearing the queue in that same effect, alongside the caches it
+already clears. The decoy case is unaffected because a decoy unlock is the
+*same* identity, so the effect does not re-run and §23.1's preservation still
+holds.
+
+### 24.3 The self-heal's `replaceExisting` was a boolean, and the window is two key derivations wide
+
+§23.2's `replaceExisting: true` authorised replacing *whatever is stored now*.
+But `runUpgrade` awaits `unlockWithVaultPassword` **and**
+`exportWrappedDekRaw` — two PBKDF2-310k derivations — between the failed
+`open()` and the `provision()`. Another tab configuring a decoy inside that
+window would have been destroyed by the overwrite: exactly the failure
+§23.2 was written to prevent, reintroduced through its own escape hatch.
+
+Fixed by making the parameter a **compare-and-swap token** rather than a
+boolean: `replaceExisting` is now the exact raw blob the caller saw (from a
+new `readRawEnvelope()`, which reads storage without decoding and so never
+throws on the corrupt value that put us here). `provision` replaces only if
+the stored value still matches. On mismatch it refuses, `runUpgrade` swallows
+that as a non-fatal upgrade failure, and the user still unlocks via the
+legacy record — the correct outcome, since the envelope is now someone
+else's newer, valid one. The unsafe form is not merely discouraged; it no
+longer exists.
+
+### 24.4 §2's deniability claim covered a mechanism this PR never touched
+
+§22.3 wrote that deniability "holds against any observer who does not already
+possess the real vault password." True for the `VaultUnlockModal` envelope
+path built here — and the origin plan's §2 heading also covers
+`StegoVaultDashboard`, the separate stego-image decoy mechanism, which
+**openly renders the slot it opened** (`StegoVaultDashboard.jsx:618`:
+"Unlocked slot index:" plus the decrypted payload). Anyone with only the
+decoy password distinguishes the session there immediately.
+
+Narrowed the claim in the origin plan to the envelope path, and recorded the
+stego behaviour explicitly rather than leaving a reader to carry the
+guarantee across. Deliberately **not** changed: it predates this PR, sits
+outside its diff, and is arguably defensible for a screen whose stated
+purpose is managing one's own decoy images. Flagged, not fixed.
+
+### 24.5 Four doc corrections
+
+- **`start()`'s return shape was inconsistent with its own idempotent path.**
+  Declared as `{ socksPort, controlPort }` while the idempotent call was
+  documented as returning full status. Unified on one `Status` shape for
+  every path, so an idempotent start and a first start are indistinguishable
+  to a caller.
+- **A Tor process dying AFTER ready never invalidated readiness.** The
+  failure rule covered only death before bootstrap completes. A later crash
+  or OOM-kill left the cached status reporting ready forever, so
+  `isOnionSyncAvailable()` answered true and `proxyVaultOperation` dialled a
+  dead listener. Now requires a persistent exit handler that clears the
+  ports, sets `lastError`, and leaves the ready state, plus a
+  crash-after-ready test.
+- **The first capability fetch was unbounded.** A.3's startup deadline covers
+  the sidecar, not `onionTransport.js`'s own clearnet capabilities GET, so an
+  endpoint that accepts and never answers would hang the first `vault_sync`
+  with no sidecar failure to trip anything. Now requires its own timeout
+  mapped onto the existing transport-unavailable outcome.
+- **A test asserted absence via the wrong signal.**
+  `exportSessionDekRaw()` rejects both when no session exists *and* when a
+  session key exists but is non-extractable — and every install path creates
+  non-extractable keys — so the rejection alone would have passed even if
+  `exportWrappedDekRaw` had installed a session. Added the direct
+  `hasSessionKey()` assertion.
+
+Targeted tests only, per [[feedback_targeted_testing]]: 332 tests across 32
+files, all passing. All four code fixes negative-controlled, restorations
+verified byte-identical. `eslint` 0 errors; `markdownlint` clean.

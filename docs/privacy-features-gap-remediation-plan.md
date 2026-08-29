@@ -531,7 +531,7 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Rounds five through sixteen found 74 more issues, almost all
+  corrected above. Rounds five through seventeen found 82 more issues, almost all
   in `docs/onion-sync-transport-phases-2-4-plan.md`'s still-unimplemented
   Phase 2/PR C design (payload-shape validation on the desktop IPC trust
   boundary — later tightened again from a destination-field denylist into a
@@ -577,11 +577,30 @@ onion case):
   requires the real vault password as well as the decoy one, so a coercer
   holding only a password surrendered under duress cannot operate it, while
   one holding the real password has already obtained the vault the decoy
-  exists to protect. **§2's deniability claim now holds against any
-  observer who does not already possess the real vault password** — the
-  strongest statement the architecture permits without weakening ZK.
+  exists to protect.
+  **Scope of the resulting claim, stated narrowly on purpose.** What now
+  holds against any observer who does not already possess the real vault
+  password is the **`VaultUnlockModal` envelope path** this PR built: the
+  unlock request, the rendered unlock outcome, the duress-settings screen's
+  outcomes, and the write/display gates on a decoy session. It is **not** a
+  claim about §2's "Plausible Deniability Vault" as a whole, for two
+  reasons that must not be blurred:
+  - **Decoy CONTENTS remain out of scope** (that plan's §7). A decoy
+    session renders an empty vault, which is honest but not believable to
+    anyone who knows the account is not empty.
+  - **`StegoVaultDashboard` — the separate, pre-existing stego-image decoy
+    mechanism — is untouched by this PR and openly displays the slot it
+    opened** (`StegoVaultDashboard.jsx:618` renders "Unlocked slot index:"
+    followed by the index, plus the decrypted payload). Anyone with only
+    the decoy password can therefore distinguish the session there. That is
+    arguably defensible for a screen whose stated purpose is *managing*
+    one's own decoy images, and it predates this work — but it is recorded
+    here rather than left implied, because the two mechanisms share §2's
+    heading and a reader could otherwise carry the envelope path's
+    guarantee across to it. Deliberately not changed here: it is a
+    different feature with its own threat model, out of this PR's diff.
   **All review rounds for both carry-overs are recorded in one place:
-  `docs/vault-unlock-envelope-integration-plan.md` §9 through §23** (every
+  `docs/vault-unlock-envelope-integration-plan.md` §9 through §24** (every
   bare `§N` in this paragraph refers to that document, including the
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over
