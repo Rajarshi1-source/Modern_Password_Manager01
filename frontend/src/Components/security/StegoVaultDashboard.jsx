@@ -352,7 +352,26 @@ const StegoVaultDashboard = () => {
       if (isPlainObject(displayJson)) {
         delete displayJson.__duress_signal;
       }
-      setExtractResult({ slotIndex, json: displayJson });
+      // `slotIndex` is deliberately NOT carried into render state. Stripping
+      // `__duress_signal` above (PR #486 round 3) hid the alarm token from a
+      // coercer watching this screen -- but the UI then printed "Unlocked
+      // slot index: 1" right above the payload, which states the same fact
+      // in plainer words: this was the decoy. That made the strip pointless
+      // against the very observer it was written for, per this handler's own
+      // comment above.
+      //
+      // Nothing needs it for display: the user knows which password they
+      // typed, and the payload itself is the real vault or the decoy they
+      // authored. Its one FUNCTIONAL use -- `reportUnlockForSlot` below,
+      // which decides real-token-vs-noise -- reads the local `slotIndex`
+      // from `extractVault`, not this state, so the alarm is untouched.
+      // Keeping it out of state entirely (rather than merely unrendered)
+      // means no future render can reintroduce the leak.
+      //
+      // A decoy extract is now indistinguishable from a real one here: both
+      // show a success panel with that slot's payload, which is exactly what
+      // a believable decoy looks like.
+      setExtractResult({ json: displayJson });
 
       // Report the outcome to the server on EVERY successful extract, not
       // just decoy ones -- reportUnlockForSlot itself decides whether to
@@ -615,7 +634,10 @@ const StegoVaultDashboard = () => {
       </div>
       {extractResult && (
         <div style={{ marginTop: '0.75rem', background: '#f9fafb', padding: 12, borderRadius: 6 }}>
-          <div style={mutedText}>Unlocked slot index: {extractResult.slotIndex}</div>
+          {/* No slot indicator here, deliberately -- see onExtract. Naming
+              the slot tells a coercer watching this screen that they were
+              given the decoy, which is the disclosure the whole mechanism
+              exists to prevent. */}
           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 13 }}>
             {JSON.stringify(extractResult.json, null, 2)}
           </pre>
