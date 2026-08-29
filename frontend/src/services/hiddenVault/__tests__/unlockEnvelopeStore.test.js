@@ -66,6 +66,25 @@ describe('storage helpers', () => {
     expect(loadEnvelope(USER_ID)).toEqual(blob);
   });
 
+  test('normalizes an invalid stored base64 blob to MalformedSlotPayloadError, not a raw atob DOMException', () => {
+    // hasEnvelope() only checks that a value EXISTS, so a corrupt stored blob
+    // still renders VaultDuressSetup's forms -- which then surfaced a literal
+    // "Failed to execute 'atob' on 'Window'" string to the user. Same
+    // "stored data is corrupt" outcome as parseSlotPayload's dek decode, so
+    // it gets the same error type.
+    localStorage.setItem(`vaultUnlockEnvelope:${USER_ID}`, 'not!valid!base64!!');
+
+    expect(hasEnvelope(USER_ID)).toBe(true);
+    let err;
+    try {
+      loadEnvelope(USER_ID);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(MalformedSlotPayloadError);
+    expect(err.message).not.toMatch(/atob/i);
+  });
+
   test('clearEnvelope removes the stored blob', () => {
     saveEnvelope(USER_ID, new Uint8Array([9, 9, 9]));
     clearEnvelope(USER_ID);
@@ -220,6 +239,39 @@ describe('setDecoySlot', () => {
     // The blob on disk must be untouched by the rejected attempt.
     const real = await open({ userId: USER_ID, password: REAL_PASSWORD });
     expect(real.dekBytes).toEqual(DEK);
+  });
+
+  test('rejects the DECOY password in the vaultPassword slot with the SAME error type as a garbage password', async () => {
+    // Greptile P1 (§21.1): this used to throw a distinct Error whose message
+    // named the slot, which VaultDuressSetup echoed -- so submitting a
+    // candidate password to the setup form revealed whether it was the decoy.
+    // Both outcomes are now WrongPasswordError, so no caller can tell them
+    // apart by type, and the two must stay indistinguishable here.
+    await provisionReal();
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+
+    const decoyErr = await setDecoySlot({
+      userId: USER_ID, vaultPassword: DECOY_PASSWORD, decoyPassword: 'another decoy 12345',
+    }).catch((e) => e);
+    const garbageErr = await setDecoySlot({
+      userId: USER_ID, vaultPassword: 'not any password at all', decoyPassword: 'another decoy 12345',
+    }).catch((e) => e);
+
+    expect(decoyErr).toBeInstanceOf(WrongPasswordError);
+    expect(garbageErr).toBeInstanceOf(WrongPasswordError);
+    expect(decoyErr.constructor).toBe(garbageErr.constructor);
+    // Type parity alone is not enough: a caller that echoes `err.message`
+    // would still distinguish them, which is how this leaked originally. The
+    // messages must be byte-identical too.
+    expect(decoyErr.message).toBe(garbageErr.message);
+    // The shared message may say "slot" generically ("No slot decrypted...");
+    // what it must never do is identify WHICH slot, or name the decoy.
+    expect(decoyErr.message).not.toMatch(/decoy|real slot|slot 0|slot 1/i);
+
+    // And the rejected attempt must not have re-sealed anything.
+    const stillReal = await open({ userId: USER_ID, password: REAL_PASSWORD });
+    expect(stillReal.slotIndex).toBe(0);
+    expect(stillReal.dekBytes).toEqual(DEK);
   });
 
   test('produces a blob of the same fixed tier size as provision()', async () => {

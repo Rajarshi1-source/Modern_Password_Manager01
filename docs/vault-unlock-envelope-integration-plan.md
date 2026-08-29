@@ -1,8 +1,12 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across twelve review rounds
-(§9–§20) — read all twelve before relying on §3's original design as the
-literal shipped behavior. §11.5 in particular is a real data-corruption fix,
+**Implemented in PR #489, then hardened across thirteen review rounds
+(§9–§21) — read all thirteen before relying on §3's original design as the
+literal shipped behavior. **§21.3 records the one finding still OPEN**: the
+duress recovery form classifies the decoy password through its network
+request pattern, and every frontend-only remedy is worse than the leak (the
+obvious one permanently disarms the alarm) — read it before attempting a
+fix. §11.5 in particular is a real data-corruption fix,
 not a cosmetic one; §16.1, §18.1, and §20.2 extend it to the mutation and
 display paths it originally missed (§18.1 is the one that reaches
 `restoreBackup`, which can wipe the whole vault); §20.1 is a security
@@ -2246,3 +2250,170 @@ three code fixes were negative-controlled before being trusted, and every
 restoration verified byte-identical against a pre-edit backup. `eslint`
 clean on the changed files; `markdownlint` (MD018/MD022/MD040) clean on all
 touched docs.
+
+## 21. Implementation status — fourteenth review round: Greptile + CodeRabbit (2026-08-28)
+
+Greptile raised 2 more P1s (both on `VaultDuressSetup`, both about password
+classification) and CodeRabbit 6. Three code fixes landed; **one P1 is
+recorded here as an OPEN, verified-unfixable-frontend-only issue** rather
+than papered over, because every remedy available on this side of the wire
+is worse than the leak — see §21.3, which is the most important part of this
+section.
+
+### 21.1 The SETUP form was still a password oracle after §20.1 fixed the recovery form — Greptile P1
+
+§20.1 removed password classification from the "Recover unregistered alarm"
+form. The setup form directly above it, on the same screen, kept it:
+
+| Password typed into "Current vault password" | Result |
+|---|---|
+| the real vault password | success |
+| a garbage password | "Incorrect vault password." |
+| **the DECOY password** | **"setDecoySlot: vaultPassword did not resolve to the real slot."** |
+
+That third row is the whole leak: `unlockEnvelopeStore.setDecoySlot` threw a
+plain `Error` naming the slot when the supplied "vault password" opened slot
+1, and `handleSubmit`'s `else` branch surfaced `err?.message` verbatim. So
+the same coercer-with-an-authenticated-session from §20.1 could confirm a
+password was the decoy — via the sibling form of the one that had just been
+fixed. **Fourth occurrence of "guard one path, miss its sibling"** (§16.1,
+§18.1, §20.2, now this), and the second time on this one screen.
+
+**Fix, at the service layer rather than the component**, so it holds for
+every caller instead of depending on each one remembering not to echo:
+`setDecoySlot` now raises `WrongPasswordError` — the SAME type `decode()`
+raises when no slot matches — **with a byte-identical message**. Type parity
+alone was not enough and the first attempt at this fix proved it: the
+regression test caught that the two messages still differed, which would
+have left any message-echoing caller (exactly what caused this bug) able to
+distinguish them. Both outcomes are now indistinguishable on every channel a
+caller can read. `VaultDuressSetup` additionally stops echoing `err.message`
+at all for non-`WrongPasswordError` faults, so no future service-layer
+string can reach the screen unreviewed.
+
+Semantically this is also the more correct contract: "the value you gave me
+as the real vault password is not the real vault password" is one outcome,
+whether it opens the decoy slot or nothing at all.
+
+### 21.2 `loadEnvelope` let a raw `atob` DOMException escape
+
+Exactly the §20.3 defect one layer up, and it survived that round because
+§20.3 fixed `parseSlotPayload`'s `dek` decode without checking whether the
+same `fromB64` call appeared anywhere else. It does: `loadEnvelope` decodes
+the whole stored blob outside its own try. `hasEnvelope` only checks that a
+value *exists*, so a corrupt stored blob still renders `VaultDuressSetup`'s
+forms, which then surfaced a literal *"Failed to execute 'atob' on
+'Window'"* to the user. Normalized to `MalformedSlotPayloadError`; `null`
+stays reserved for "nothing is stored". Regression test asserts both the
+type and that `atob` does not appear in the message.
+
+### 21.3 OPEN: the recovery form still classifies the decoy password over the NETWORK, and no frontend-only fix is safe
+
+Greptile's second P1, which CodeRabbit independently raised. It is correct,
+and it is **not fixed in this round.** The reasoning is recorded in full
+because the obvious remedy is actively dangerous.
+
+**The finding.** §20.1 made the recovery form's rendered output identical
+for real / decoy / wrong passwords. The *request* pattern is not: a
+`POST /duress/signal/register/` is issued only when the password opens the
+decoy slot. Anyone who can watch the browser's network activity therefore
+still learns the classification — the same coercer, one panel over.
+
+**Why "just always send the request" must NOT be done.** Verified against
+`duress_code_service.register_signal_token`: it deactivates **every** active
+`DuressSignal` for the user and creates a new one from the submitted token.
+So registering noise on the non-decoy path would **permanently disarm the
+user's real duress alarm** — replacing the working token with one no decoy
+password can ever produce. That converts an information leak into total
+loss of the alarm, under exactly the coercion conditions the feature exists
+for. Strictly worse.
+
+**Why the other frontend options also fail.**
+- `reportUnlock` is safe for noise (unmatched → 204 no-op) but *triggers the
+  alarm* if sent the real decoy token, so it cannot carry the decoy path.
+- Sending register on one path and report on the other equalises request
+  *count* but not URL, and an observer reading the network panel reads URLs.
+- A `probe: true`-style no-op flag on the register endpoint does not help
+  either: the same observer reads the request body, so the flag is itself
+  the tell.
+
+**What would actually close it** (either, not both, and both are real design
+work rather than a patch):
+1. **Backend:** an endpoint that accepts a fixed-shape token submission and
+   registers it ONLY if it matches the caller's decoy slot — impossible as
+   stated, since the server never sees the envelope — or, more practically,
+   a registration mode that is a no-op for a token that does not match the
+   pending registration, leaving any existing active signal untouched. The
+   client then always sends one byte-identical request.
+2. **Frontend redesign:** gate recovery behind the REAL vault password in
+   addition to the decoy one. A coercer holding only the decoy password then
+   cannot operate the oracle at all; one holding the real password does not
+   need it, having already got the vault. This is cheap but changes the
+   recovery UX and does not make the request pattern uniform — it removes
+   the attacker's *access* to the oracle rather than the oracle itself.
+
+**Interim status:** the leak is bounded to an observer who can read the
+browser's own network traffic on an unlocked, authenticated session, and it
+reveals classification only for a password that observer already possesses
+and submitted. It does not expose vault contents, the real password, or the
+duress token. That is a real weakening of plausible deniability and is NOT
+being claimed as acceptable — it is being recorded as open, with the fix
+deferred to a decision between the two designs above rather than resolved by
+the one change that would have broken the alarm.
+
+### 21.4 C.3's permission change was specified in a form DRF evaluates as AND
+
+"accept *either* `IsAuthenticated` **or** a valid anonymous credential"
+would naturally be written `permission_classes = [IsAuthenticated,
+HasAnonymousCredential]`, which DRF evaluates as an implicit **AND** — every
+listed class must pass. That would demand a JWT *and* a credential on every
+request: the feature would not work at all, and the only requests satisfying
+it would be exactly the mixed-credential ones §19.2 requires be rejected.
+Verified against the installed DRF 3.16.1 (`permissions.py` defines
+`OperationHolderMixin.__or__` and an `OR` class), the plan now specifies
+`[IsAuthenticated | HasAnonymousCredential]`, with a custom composed
+permission class named as an acceptable equivalent.
+
+### 21.5 C.2 point 3's "authorises nothing else" had tests but no gate
+
+C.4 required negative tests proving a credential cannot reach `vault_list`,
+`vault_delete`, and the rest — but C.3 only changed *authentication*, and
+nothing anywhere rejected a credential-authorised request that named another
+operation. The tests would have been asserting a property no code
+implemented. Added the missing route-scope gate (reject unless
+`operation == 'vault_sync'` when the request was authorised by credential
+rather than JWT, JWT range unchanged), and tightened the test requirement to
+assert the vault view is **never reached**, since a 4xx produced after
+dispatch would still have touched the vault.
+
+### 21.6 C.2 point 4's double-spend store was specified as check-then-mark
+
+"Redis set of spent nonces" describes the storage, not the operation, and
+the natural implementation (`EXISTS` then `SET`) is precisely the race the
+bullet exists to prevent — two concurrent redemptions both read "unspent"
+and both dispatch. Now requires a single atomic claim (`SET … NX EX`, whose
+reply *is* the result), the same property for the durable fallback (unique
+constraint, losing insert's `IntegrityError` as the claim failure), and an
+explicit statement of which store is authoritative when the two disagree.
+Test tightened to count **dispatches** rather than check that one response
+was an error.
+
+### 21.7 Anonymous sync's payload still identifies the account
+
+C.3 requires dropping the JWT and `session_id`, but the `vault_sync` body
+itself carries `item_id` — a stable, client-generated, globally unique key
+already sent under JWT-authenticated syncs, so the server can match an
+"anonymous" redemption to the account that previously synced those ids —
+and `expected_sync_version`, whose value comes from the per-user
+`UserSalt.sync_version` row. Stripping the header does nothing about either.
+Added as C.2 point 6, tied to the same "if this cannot be solved cleanly,
+Phase 4 does not ship" test the ownership-scoping problem already carries,
+since it is that problem seen from the payload side. Tests must assert on
+the serialized body.
+
+Targeted tests only, per [[feedback_targeted_testing]]:
+`unlockEnvelopeStore.test.js` and `VaultDuressSetup.test.jsx` (43 tests, 4
+new this round) plus the wider decoy/envelope suites as a regression sweep.
+All three code fixes negative-controlled; restorations verified
+byte-identical. `eslint` clean on changed files; `markdownlint`
+(MD018/MD022/MD040) clean on all touched docs.

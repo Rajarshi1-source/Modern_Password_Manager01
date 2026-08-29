@@ -164,6 +164,56 @@ test('recovery with the REAL vault password (slot 0) reports the same outcome, a
   expect(registerSignalToken).not.toHaveBeenCalled();
 });
 
+test('the SETUP form is not a password oracle either: a decoy password and a garbage password in the vault-password field render byte-identical output', async () => {
+  // Greptile P1 (§21.1). §20.1 removed this oracle from the recovery form and
+  // left it on the setup form directly above it: setDecoySlot used to throw a
+  // slot-naming Error for "you typed the decoy password here", which the
+  // catch echoed via err.message, while a garbage password produced
+  // "Incorrect vault password." Both now raise WrongPasswordError with an
+  // identical message, so the screen cannot tell them apart.
+  const renderOutcome = async (rejection) => {
+    unlockEnvelopeStore.setDecoySlot.mockRejectedValue(rejection);
+    const { getByLabelText, getByRole, findByRole, container, unmount } =
+      render(<VaultDuressSetup />);
+    fillAndSubmit(getByLabelText, getByRole);
+    const alertText = (await findByRole('alert')).textContent;
+    const html = container.innerHTML;
+    unmount();
+    return { html, alertText };
+  };
+
+  // What the service raises when the typed password opens the DECOY slot...
+  const decoy = await renderOutcome(
+    new WrongPasswordError('No slot decrypted successfully with the supplied password.')
+  );
+  // ...and when it opens nothing at all. Identical type, identical message.
+  const garbage = await renderOutcome(
+    new WrongPasswordError('No slot decrypted successfully with the supplied password.')
+  );
+
+  expect(decoy.html).toBe(garbage.html);
+  // Scoped to the ERROR text: the page's own static copy legitimately
+  // explains the decoy slot to the user configuring it, so asserting on the
+  // whole container would fail on that unrelated (and correct) prose.
+  expect(decoy.alertText).not.toMatch(/decoy|real slot|did not resolve/i);
+});
+
+test('the setup form never echoes a raw service error message', async () => {
+  // The `else` branch used to surface err.message verbatim, which is how the
+  // slot-specific string reached the screen. Any future service error string
+  // must not reach the user either.
+  unlockEnvelopeStore.setDecoySlot.mockRejectedValue(
+    new Error('setDecoySlot: some internal detail that must not be shown')
+  );
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  fillAndSubmit(getByLabelText, getByRole);
+
+  const alert = await findByRole('alert');
+  expect(alert).toHaveTextContent('Could not save the decoy password. Please try again.');
+  expect(alert.textContent).not.toMatch(/internal detail|setDecoySlot/i);
+});
+
 test('the recovery form is not a password oracle: decoy, real, and wrong passwords all render byte-identical output', async () => {
   // The security property Greptile's P1 finding was about. Reaching this
   // screen needs only an authenticated session, which a coerced unlock
