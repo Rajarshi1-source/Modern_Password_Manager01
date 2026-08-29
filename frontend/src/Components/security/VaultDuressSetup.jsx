@@ -120,6 +120,10 @@ const VaultDuressSetup = () => {
   // and needs no new persistent storage of a value that would otherwise be
   // plaintext secret material at rest.
   const [recoveryPassword, setRecoveryPassword] = useState('');
+  // The real vault password, required to operate the recovery form at all --
+  // see handleRecoverRegistration's gate for why. Held in state only for the
+  // duration of the form, exactly like the setup form's own field.
+  const [recoveryVaultPassword, setRecoveryVaultPassword] = useState('');
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryError, setRecoveryError] = useState('');
   const [recoverySuccess, setRecoverySuccess] = useState(false);
@@ -237,13 +241,55 @@ const VaultDuressSetup = () => {
     setRecoveryError('');
     setRecoverySuccess(false);
 
-    if (!recoveryPassword) {
-      setRecoveryError('Enter your decoy password.');
+    if (!recoveryVaultPassword || !recoveryPassword) {
+      setRecoveryError('Both your vault password and your decoy password are required.');
       return;
     }
 
     setRecoveryBusy(true);
     try {
+      // GATE: prove knowledge of the REAL vault password before this form
+      // does anything observable at all.
+      //
+      // Why this field exists, since it is not needed to recover the token:
+      // equalising the rendered output (below) did not equalise the NETWORK
+      // request. A registration POST fires only when the decoy password is
+      // correct, so anyone able to watch the network panel could still
+      // classify a submitted password -- the same coercer-with-an-
+      // authenticated-session the visible-output fix was about, one panel
+      // over. Making the request pattern itself uniform is impossible here:
+      // registering noise would deactivate the user's real alarm
+      // (`register_signal_token` deactivates every active signal), and the
+      // server cannot be taught to tell a recovered token from noise without
+      // learning which slot a token belongs to -- exactly what DuressSignal's
+      // zero-knowledge design forbids it from knowing.
+      //
+      // So instead of hiding the oracle, this removes ACCESS to it: operating
+      // it now requires the real vault password, which the duress threat model
+      // assumes the coercer does NOT have (if they did, they would already
+      // have the real vault and the decoy would be moot). A coercer holding
+      // only a password handed over under duress cannot submit this form at
+      // all. See the plan's §22 for the full argument.
+      let realPasswordOk = false;
+      try {
+        const openedReal = await unlockEnvelopeStore.open({
+          userId,
+          password: recoveryVaultPassword,
+        });
+        realPasswordOk = openedReal.slotIndex === 0;
+      } catch (err) {
+        if (!(err instanceof WrongPasswordError)) throw err;
+      }
+      if (!realPasswordOk) {
+        // Identical for a wrong password AND for the decoy password typed
+        // into this field -- the same non-classifying rule the setup form
+        // follows. Revealing "that IS the real vault password" is
+        // unavoidable (it is the credential that grants access); revealing
+        // "that is the DECOY" is what must never happen.
+        setRecoveryError('Incorrect vault password.');
+        return;
+      }
+
       let duressToken = null;
       try {
         const opened = await unlockEnvelopeStore.open({
@@ -280,6 +326,7 @@ const VaultDuressSetup = () => {
       // prevent, so this form must never classify a password. The legitimate
       // user loses nothing: they know which password they typed, and the
       // message is truthful for every case.
+      setRecoveryVaultPassword('');
       setRecoveryPassword('');
       setRecoverySuccess(true);
     } catch (err) {
@@ -380,11 +427,26 @@ const VaultDuressSetup = () => {
       <h3 style={{ fontSize: '1rem', margin: '0 0 0.5rem' }}>Recover unregistered alarm</h3>
       <p style={{ color: '#6b7280', fontSize: 13 }}>
         If a decoy password was saved but its alarm failed to register — even
-        in an earlier session — enter that decoy password here to retry.
-        This re-reads the token already stored in the decoy slot; it never
-        needs to be typed or stored anywhere else.
+        in an earlier session — enter both passwords here to retry. This
+        re-reads the token already stored in the decoy slot; it never needs to
+        be typed or stored anywhere else. Your vault password is required
+        as well, so that this form cannot be used by someone who only knows
+        the decoy password to check whether a password is the decoy.
       </p>
       <form onSubmit={handleRecoverRegistration}>
+        <div className="form-group">
+          <label htmlFor="duress-recovery-vault-password">Vault password</label>
+          <input
+            id="duress-recovery-vault-password"
+            type="password"
+            autoComplete="off"
+            style={inputStyle}
+            value={recoveryVaultPassword}
+            onChange={(e) => setRecoveryVaultPassword(e.target.value)}
+            disabled={recoveryBusy}
+            required
+          />
+        </div>
         <div className="form-group">
           <label htmlFor="duress-recovery-password">Decoy password</label>
           <input
