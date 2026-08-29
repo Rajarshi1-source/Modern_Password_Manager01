@@ -90,13 +90,19 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
     reportNoise();
   };
 
-  const runUpgrade = async () => {
+  // `replaceExisting` is passed ONLY by the corrupt-envelope fallback below.
+  // In the ordinary upgrade path no envelope exists (that is what selected
+  // this mode), so provision's default refusal is correct and protects a
+  // decoy another tab may have configured since `internalMode` was computed.
+  const runUpgrade = async ({ replaceExisting = false } = {}) => {
     // The real unlock. If this throws, nothing below runs and the user sees
     // the standard "Incorrect vault password." error.
     await sessionVaultCrypto.unlockWithVaultPassword(password, userId);
     try {
       const { dekBytes, saltB64 } = await sessionVaultCrypto.exportWrappedDekRaw(password, userId);
-      await unlockEnvelopeStore.provision({ userId, vaultPassword: password, dekBytes, saltB64 });
+      await unlockEnvelopeStore.provision({
+        userId, vaultPassword: password, dekBytes, saltB64, replaceExisting,
+      });
     } catch (envelopeErr) {
       // See runSetup — the unlock above already succeeded; failing the
       // user's login over an opportunistic upgrade would be a worse outcome
@@ -170,7 +176,10 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
         throw err;
       }
       console.warn('VaultUnlockModal: stored envelope is unusable, falling back to the legacy unlock path.', err);
-      await runUpgrade();
+      // The stored blob exists but cannot be decoded, so there is no decoy
+      // left for provision's default refusal to protect -- replacing it is
+      // the self-heal (§9.1), and refusing here would strand the user.
+      await runUpgrade({ replaceExisting: true });
     }
   };
 

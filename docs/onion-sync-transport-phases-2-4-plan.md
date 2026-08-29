@@ -226,7 +226,15 @@ Requirements:
   already-covered success path.
 - **Kill on every exit path this process can actually observe.** `app.on('will-quit')` /
   `app.on('before-quit')` with `event.preventDefault()`, awaiting one guarded
-  `stop()`, then quitting — this is the only path that can run async cleanup
+  `stop()`, then quitting — **and the guard must be a one-shot flag, or the
+  app never quits.** Calling `app.quit()` after `preventDefault()` re-emits
+  `before-quit`, so a handler that unconditionally prevents will loop
+  forever. Standard shape: `let quitting = false;` → on the first event,
+  `preventDefault()`, set `quitting = true`, `await stop()`, then
+  `app.quit()`; on the re-emitted event `quitting` is already true so the
+  handler returns without preventing and termination proceeds. Test the full
+  sequence: first event prevented, `stop()` called exactly ONCE, second
+  event not prevented, app actually quits — this is the only path that can run async cleanup
   at all. It is not the only exit path: `process.on('exit')` cannot await
   anything (Node drops pending async work there), `app.exit()` skips
   `before-quit`/`will-quit` entirely, and `SIGKILL` runs no JS. State this
@@ -284,7 +292,23 @@ Requirements:
      `require_onion` fail closed) while a perfectly good circuit was
      seconds from being ready. Once bootstrap has settled, `start()` is a
      genuine no-op returning the ready status; `stop()` while already
-     stopped is likewise a no-op. Test two concurrent first syncs from a
+     stopped is likewise a no-op.
+
+     **`start()` and `stop()` must also be serialized against EACH OTHER,
+     not merely idempotent individually.** Idempotency answers "two starts"
+     and "two stops"; it says nothing about a `stop()` that lands while a
+     `start()` is still bootstrapping, which a `prefer_onion → off` toggle
+     produces directly. Without ordering, the in-flight bootstrap can
+     resolve AFTER the stop and publish a ready status for a sidecar that is
+     gone — `isOnionSyncAvailable()` then reports available and
+     `proxyVaultOperation` dials a dead SOCKS port. The reverse
+     (`off → prefer_onion` while a stop is still draining) can leave a new
+     start racing a dying process for the same `DataDirectory` lock. Hold a
+     single transition lock, or stamp each transition with a generation and
+     have a settling `start()` discard its result if the generation moved.
+     Test rapid `non-off → off → non-off`, asserting the final state matches
+     the final mode and that no ready status is published for a stopped
+     sidecar. Test two concurrent first syncs from a
      fully-stopped state: both must await the one shared promise and both
      proceed when it resolves — not one succeeding while the other reads a
      stale snapshot.
@@ -443,7 +467,13 @@ contract that already defines "sync data" precisely:
   schema is protecting.
 - Each entry of `items[]`: exactly `item_id` (string), `item_type`
   (string), `encrypted_data` (string), `favorite` (boolean, optional),
-  `folder_id` (string or null, optional), `tags` (array of strings,
+  `folder_id` (**integer** or null, optional — `VaultFolder` declares no
+  explicit primary key, so Django gives it an implicit integer `AutoField`,
+  and `_UserScopedFolderPrimaryKeyRelatedField` is a
+  `PrimaryKeyRelatedField`, which serializes that pk directly. Typing this
+  as a string would reject every folder-bearing item at the IPC boundary;
+  add a round-trip test for an item that HAS a folder, since one without is
+  the case that passes either way), `tags` (array of strings,
   optional), `last_used_at` (ISO-8601 datetime string **or null**,
   optional) — `VaultItemSerializer`'s own writable fields. `id`,
   `created_at`, and `updated_at` are server-assigned there
@@ -979,6 +1009,22 @@ implementation. It must settle:
    replaced. Test: two concurrent redemptions of one valid token produce
    **exactly one** successful `vault_sync` dispatch, asserted by counting
    dispatches, not by checking that one response was an error.
+
+   **Define what happens AFTER the claim but BEFORE a successful dispatch —
+   the atomicity requirement above does not answer this, and the two
+   obvious readings are both wrong.** Claim-then-dispatch burns a valid
+   token whenever the vault call times out or 5xxs, so a user loses a sync
+   they never got. Dispatch-then-claim reopens the exact race the atomic
+   claim closed. Pick one explicitly and write it down:
+   (a) a two-phase RESERVE → FINALIZE, where a reservation that is never
+   finalized expires after a bounded window and the token becomes spendable
+   again — safe for the user, but the window is now a replay window and must
+   be short and stated; or (b) consume-on-attempt, where a claimed token is
+   spent even on downstream failure, and the CLIENT is specified to obtain a
+   fresh token and retry (which is cheap, since issuance is batched). Either
+   is defensible; leaving it undefined means the implementer picks
+   accidentally. Test downstream failure (timeout and 5xx) as its own case,
+   not just concurrent redemption.
 5. **Server-side unlinkability argument, bounded by a stated threat model.**
    The primitive gives CRYPTOGRAPHIC unlinkability — the server cannot derive
    which issuance a given redemption came from FROM THE TOKEN ITSELF, no
@@ -1096,6 +1142,26 @@ implementation. It must settle:
   replacement: `IsAuthenticated` alone and a credential alone must both keep
   working exactly as today. Test all four shapes — JWT only, credential
   only, both, neither.
+
+  **Precedence, which the two checks together otherwise get wrong.** C.4
+  requires that a mixed-credential request over CLEARNET be refused
+  *identically* to the JWT-only and credential-only clearnet cases, with
+  `clearnet_ingress_refused` — that is what proves the ingress check is
+  genuinely endpoint-wide. But the mixed-credential check as placed above
+  runs in `initial()`, while the ingress check runs inside
+  `proxy_vault_operation` (§19.2), i.e. later. A mixed clearnet request
+  would therefore return a mixed-credential error and never reach the
+  ingress refusal, contradicting C.4's own assertion and telling the caller
+  the server noticed two credentials — information a clearnet caller should
+  not get.
+  Fix the order rather than the test: run the **onion-ingress check first**,
+  also in `initial()` and ahead of the exactly-one-auth-mode check, so every
+  clearnet request of every authentication shape gets the identical refusal
+  before anything else is evaluated. Keep `proxy_vault_operation`'s own
+  existing ingress check where it is — it is already shipped and working,
+  and defense in depth on this specific boundary is worth the duplicated
+  condition. Test the clearnet mixed-credential case explicitly for the
+  `clearnet_ingress_refused` response, not merely for "an error".
 - **Ownership scoping is the hard part.** `VAULT_OPERATION_ROUTES` dispatches to
   the genuine vault views, whose scoping is `request.user`-based
   (`dark_protocol_service.py:150-158`). An anonymous credential deliberately has
@@ -1107,6 +1173,35 @@ implementation. It must settle:
 - **Frontend:** token store, automatic refill, and redemption in
   `darkProtocolService.proxyVaultOperation`. `onionSyncService` should not need
   to change at all; if it does, the layering is wrong.
+
+  **That layering claim holds for WEB only, and the plan must say so.**
+  Desktop and mobile deliberately do NOT go through
+  `darkProtocolService.proxyVaultOperation` — A.5's `getVaultProxyTransport()`
+  swaps in the desktop shim (`window.electronAPI.tor.proxyVaultOperation`)
+  or mobile's native bridge. Putting credential selection inside the web
+  service therefore leaves both native transports with no way to obtain or
+  send a credential: PR C would ship working on web and silently
+  JWT-authenticated (i.e. NOT anonymous) everywhere else, which is worse
+  than not shipping it, because the UI would claim anonymity the transport
+  does not provide.
+
+  Define ONE transport-neutral credential envelope that every transport
+  carries, rather than a web-shaped one plus two ad-hoc ports. The desktop
+  `TOR_PROXY` channel already carries `{ operation, payload, authToken }`
+  (A.4); extend that shape to `{ operation, payload, credential }` where
+  exactly one of `authToken` / `credential` is present, never both — which
+  is the same "exactly one authentication mode" rule the server enforces,
+  applied at the client boundary so a mixed request is never even
+  constructed. Mobile's bridge takes the identical shape. `onionSyncService`
+  selects which one to supply (it already selects the transport); the
+  transports stay dumb carriers.
+
+  **Anonymous redemption over a native transport must send neither an
+  `Authorization` header nor `session_id`** — the same stripping C.3's
+  frontend bullet requires for web, restated here because the native
+  transports build their own requests and will not inherit it. Wire-level
+  tests for BOTH native paths, asserting on the serialized request, since
+  that is the only place the difference is observable.
 
   **An anonymous redemption must strip `session_id`, not just the JWT.**
   Today's `proxyVaultOperation(operation, payload, sessionId)` sends

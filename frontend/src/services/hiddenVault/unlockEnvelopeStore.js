@@ -233,8 +233,15 @@ const parseSlotPayload = (payloadBytes) => {
  *   `sessionVaultCrypto.exportSessionDekRaw()` or `exportWrappedDekRaw()`)
  * @param {string} args.saltB64 - the device salt to stamp into the payload,
  *   matching what `sessionVaultCrypto` would set as `sessionSaltB64`
+ * @param {boolean} [args.replaceExisting=false] - overwrite an envelope that
+ *   already exists. Defaults to refusing, because this function always writes
+ *   a decoy-less blob and would otherwise silently destroy a configured
+ *   decoy slot; see the guard below. Set true ONLY for the corrupt-envelope
+ *   self-heal, where the existing blob cannot be decoded anyway.
  */
-export async function provision({ userId, vaultPassword, dekBytes, saltB64 }) {
+export async function provision({
+  userId, vaultPassword, dekBytes, saltB64, replaceExisting = false,
+}) {
   if (!userId) throw new Error('provision: userId required');
   if (!vaultPassword) throw new Error('provision: vaultPassword required');
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
@@ -250,6 +257,27 @@ export async function provision({ userId, vaultPassword, dekBytes, saltB64 }) {
   // the call that caused it.
   if (typeof saltB64 !== 'string' || saltB64.length === 0) {
     throw new Error('provision: saltB64 must be a non-empty string');
+  }
+  // Refuse to silently replace an existing envelope. `provision()` always
+  // encodes with `decoyPassword: null`, so overwriting one that has a decoy
+  // configured DESTROYS that decoy's DEK and its `__duress_signal` -- the
+  // alarm stops working with no error anywhere, which is the worst possible
+  // failure mode for this feature.
+  //
+  // This is reachable: VaultUnlockModal picks `internalMode` from a
+  // `useMemo` snapshot of `hasEnvelope()`, and neither `runSetup` nor
+  // `runUpgrade` re-checks before calling here. A second tab (or another
+  // device syncing into localStorage) that configures a decoy after that
+  // snapshot leaves the first modal ready to wipe it. Both callers already
+  // treat a provisioning failure as non-fatal, so rejecting here degrades to
+  // "the envelope upgrade is retried next unlock" rather than breaking any
+  // unlock.
+  //
+  // `replaceExisting` is the deliberate opt-in for the ONE caller that must
+  // overwrite: the corrupt-envelope self-heal (§9.1), where the stored blob
+  // exists but cannot be decoded, so there is no decoy left to protect.
+  if (!replaceExisting && hasEnvelope(userId)) {
+    throw new Error('provision: an envelope already exists for this account.');
   }
 
   const realPayload = buildSlotPayload({ dekBytes, saltB64 });

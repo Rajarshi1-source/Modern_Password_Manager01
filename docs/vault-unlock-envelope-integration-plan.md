@@ -1,7 +1,7 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across fourteen review rounds
-(§9–§22) — read all fourteen before relying on §3's original design as the
+**Implemented in PR #489, then hardened across fifteen review rounds
+(§9–§23) — read all fifteen before relying on §3's original design as the
 literal shipped behavior. **§22 closes the last open finding** (the recovery
 form's network-side password oracle) by gating recovery behind the real
 vault password — read §21.3 for why the seemingly-obvious fixes are unsafe
@@ -2531,3 +2531,171 @@ controlled: disabling the gate fails exactly the two tests written for it.
 
 Targeted run: 323 tests across 32 files. `eslint` clean (0 errors, 0
 warnings on the changed files). `markdownlint` (MD018/MD022/MD040) clean.
+
+## 23. Fifteenth review round: Greptile + CodeRabbit (2026-08-29)
+
+Two code fixes, five doc corrections, and **one Greptile P1 assessed as not a
+valid finding** — recorded with the reasoning rather than silently skipped,
+since declining a P1 needs more justification than accepting one.
+
+### 23.1 A decoy session could still flush the REAL session's queued sync — the fifth missed sibling
+
+`VaultContext.syncVault` had no decoy gate. That looked safe because every
+path that CREATES a pending change is already gated (§16.1 add/update/delete/
+favorite, §18.1 backups) — but `handleLockVault` does **not** clear
+`pendingChanges`. So:
+
+1. Real session: user edits and deletes items → `pendingChanges` fills up
+2. Auto-lock (or manual lock) — queue survives untouched
+3. Decoy unlock
+4. `syncVault` fires from either `setTimeout(() => syncVault(), 0)` call site
+   → POSTs the real session's queued `items` **and `deleted_items`**, which
+   the sync endpoint applies as real deletions
+
+Fifth occurrence of "guard one path, miss its sibling" (§16.1, §18.1, §20.2,
+§21.1, now this) — and the first where the gap was not a *sibling function*
+but a *different lifecycle*: the write was created legitimately in one
+session and flushed in another. Gating the creators was not sufficient
+because the queue outlives the session that filled it.
+
+**Fix:** a decoy check at the top of `syncVault`, next to the existing
+empty-queue early return. It **returns rather than throws** — both call sites
+are `setTimeout(() => syncVault(), 0)`, where a rejection would surface as an
+unhandled promise rejection and reach no caller — and it leaves
+`pendingChanges` intact on purpose, so the real session flushes the queue on
+its next sync rather than losing the user's work.
+
+### 23.2 `provision()` could silently destroy a configured decoy
+
+`VaultUnlockModal` picks `internalMode` from a `useMemo` snapshot of
+`hasEnvelope()`, and neither `runSetup` nor `runUpgrade` re-checks before
+calling `provision()`. Since `provision()` always encodes with
+`decoyPassword: null`, a second tab (or another device syncing into
+localStorage) that configures a decoy *after* that snapshot leaves the first
+modal ready to overwrite it — **destroying the decoy DEK and its
+`__duress_signal` with no error anywhere.** The alarm simply stops working.
+That is the worst failure mode this feature has, precisely because it is
+silent.
+
+**Fix:** `provision()` now refuses when an envelope already exists, with an
+explicit `replaceExisting` opt-in for the one caller that must overwrite —
+§9.1's corrupt-envelope self-heal, where the stored blob cannot be decoded
+and so has no decoy left to protect. Both existing callers already treat a
+provisioning failure as non-fatal, so the refusal degrades to "the envelope
+upgrade retries next unlock" and breaks no unlock. `runUpgrade` takes the
+flag and only the fallback passes `true`, asserted in both directions.
+
+### 23.3 DECLINED: "Setup registration traffic classifies vault credentials" (Greptile P1)
+
+Greptile's second P1 this round: after `setDecoySlot` succeeds the setup form
+calls `finishRegistration`, which POSTs to `/duress/signal/register/`; a real
+vault password reaches that call while a decoy or invalid password throws
+before it — so network activity distinguishes the real password.
+
+**The observation is factually correct and the conclusion does not follow.**
+The claimed harm is "distinguish the real password from the decoy password,
+defeating the duress feature's plausible-deniability boundary." What is
+actually distinguishable here is *real vs. not-real*, and after §21.1 a decoy
+password and a garbage password produce byte-identical outcomes on this form
+— so the decoy is **not** identifiable, which is the property the boundary
+is made of.
+
+Revealing "that IS the real vault password" is not a leak this feature can or
+should prevent:
+
+- The form's own **visible** outcome already reveals it. Supplying the real
+  password saves a new decoy and renders "Decoy password saved."; anything
+  else renders an error. The network request carries no information the
+  screen has not already given, so equalising it closes nothing.
+- Making the visible outcome uniform is not an option either — a settings
+  form that cannot tell you whether it saved is broken.
+- More fundamentally, *every* authenticated action reveals whether the
+  supplied credential was the real one; that is what a credential is. The
+  unlock modal is the canonical example and must behave this way.
+
+The asymmetry §21.1 established is the governing rule and it is deliberate:
+**revealing "this is the real password" is unavoidable (it grants access);
+revealing "this is the decoy" must never happen.** This finding asks for the
+first, which cannot be delivered and would not help.
+
+Declined as not-a-defect. If it is re-raised, the question to ask is
+"does this let an attacker identify the DECOY?" — here, no.
+
+### 23.4 `folder_id` was typed as a string in the sync allowlist; it is an integer
+
+Verified rather than assumed: `VaultFolder` (`vault/models/folder_models.py`)
+declares no explicit primary key, so Django gives it an implicit integer
+`AutoField`, and `_UserScopedFolderPrimaryKeyRelatedField` is a
+`PrimaryKeyRelatedField`, which serializes that pk directly. The allowlist's
+"string or null" would therefore reject every folder-bearing item at the IPC
+boundary. Corrected to integer-or-null, with a round-trip test required for
+an item that HAS a folder — an item without one passes under either typing,
+which is exactly why this would have survived a casual test.
+
+**Third consecutive round with a wrong item-schema entry** (§16.3
+`expected_sync_version`, §21.7 `last_used_at`, now this). §21.7 already
+prescribed deriving the allowlist mechanically from `fields` minus
+`read_only_fields`; this adds that the *types* must come from the field
+classes too, not from what the JSON happens to look like in a sample.
+
+### 23.5 A.3's `before-quit` handler would have looped forever
+
+`app.quit()` called after `event.preventDefault()` **re-emits** `before-quit`.
+A handler that unconditionally prevents therefore never terminates: it
+prevents, cleans up, calls `app.quit()`, gets re-entered, prevents again.
+Specified the one-shot flag (`quitting`) that breaks the cycle, plus the test
+that actually catches a regression here — first event prevented, `stop()`
+called exactly once, second event not prevented, app quits.
+
+### 23.6 A.3's start/stop idempotency did not cover start-versus-stop
+
+The plan required `start()` and `stop()` to be individually idempotent, which
+answers "two starts" and "two stops" but says nothing about a `stop()`
+arriving while a `start()` is still bootstrapping — which a
+`prefer_onion → off` toggle produces directly. The in-flight bootstrap can
+then settle *after* the stop and publish a ready status for a sidecar that no
+longer exists, so `isOnionSyncAvailable()` reports available and
+`proxyVaultOperation` dials a dead port. The reverse ordering races a new
+start against a dying process for the same `DataDirectory` lock. Now requires
+a transition lock or generation stamp, with a rapid `non-off → off → non-off`
+test.
+
+### 23.7 Double-spend: atomicity was specified, post-claim failure was not
+
+§21.6 required an atomic claim, which closes the concurrency race but leaves
+the question it exposes: what happens between the claim and a *successful*
+dispatch? Claim-then-dispatch burns a valid token on any timeout or 5xx;
+dispatch-then-claim reopens the race. The plan now requires picking one
+explicitly — a bounded RESERVE → FINALIZE (with the un-finalized window
+stated, since it is a replay window) or consume-on-attempt with a specified
+client retry — and testing downstream failure as its own case.
+
+### 23.8 PR C's credential plumbing was specified for the web transport only
+
+C.3 puts credential selection in `darkProtocolService.proxyVaultOperation`
+and says `onionSyncService` "should not need to change at all." True for web
+— and wrong for the platforms PR C exists to serve, because A.5's
+`getVaultProxyTransport()` deliberately routes desktop and mobile *around*
+that service to their own native shims. As written, PR C would ship anonymous
+on web and silently JWT-authenticated on desktop and mobile: worse than not
+shipping, since the UI would claim anonymity the transport does not provide.
+Now specifies one transport-neutral envelope (`{ operation, payload,
+credential }`, exactly one of `authToken`/`credential`, never both — the
+client-side mirror of the server's exactly-one rule), with wire-level tests
+on both native paths.
+
+Also fixed a precedence contradiction between the two boundary checks: C.4
+requires a mixed-credential request over clearnet to be refused *identically*
+to the other clearnet shapes, but the mixed-credential check sits in
+`initial()` while the ingress check runs later inside
+`proxy_vault_operation`, so the mixed case would have returned a different
+error and told a clearnet caller the server had noticed two credentials.
+Resolved by ordering: ingress check first, also in `initial()`, ahead of the
+exactly-one-auth-mode check — keeping `proxy_vault_operation`'s existing
+check as defense in depth.
+
+Targeted tests only, per [[feedback_targeted_testing]]: the 12 files covering
+the changed paths — 150 tests, all passing. Both code fixes negative-
+controlled (disabling each fails exactly the test written for it), with
+restorations verified byte-identical. `eslint` clean; `markdownlint`
+(MD018/MD022/MD040) clean on all touched docs.

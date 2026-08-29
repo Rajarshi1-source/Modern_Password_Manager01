@@ -531,7 +531,7 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Rounds five through fifteen found 67 more issues, almost all
+  corrected above. Rounds five through sixteen found 74 more issues, almost all
   in `docs/onion-sync-transport-phases-2-4-plan.md`'s still-unimplemented
   Phase 2/PR C design (payload-shape validation on the desktop IPC trust
   boundary — later tightened again from a destination-field denylist into a
@@ -581,7 +581,7 @@ onion case):
   observer who does not already possess the real vault password** — the
   strongest statement the architecture permits without weakening ZK.
   **All review rounds for both carry-overs are recorded in one place:
-  `docs/vault-unlock-envelope-integration-plan.md` §9 through §22** (every
+  `docs/vault-unlock-envelope-integration-plan.md` §9 through §23** (every
   bare `§N` in this paragraph refers to that document, including the
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over
