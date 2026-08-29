@@ -1,7 +1,7 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across sixteen review rounds
-(§9–§24) — read all sixteen before relying on §3's original design as the
+**Implemented in PR #489, then hardened across seventeen review rounds
+(§9–§25) — read all seventeen before relying on §3's original design as the
 literal shipped behavior. **§22 closes the recovery form's network-side
 password oracle** by gating recovery behind the real vault password — read
 §21.3 for why the seemingly-obvious fixes are unsafe or, in the backend
@@ -2832,3 +2832,81 @@ purpose is managing one's own decoy images. Flagged, not fixed.
 Targeted tests only, per [[feedback_targeted_testing]]: 332 tests across 32
 files, all passing. All four code fixes negative-controlled, restorations
 verified byte-identical. `eslint` 0 errors; `markdownlint` clean.
+
+## 25. Closing §24.4 — the stego dashboard's slot disclosure (2026-08-30)
+
+§24.4 narrowed the deniability claim to exclude `StegoVaultDashboard` and
+flagged its slot disclosure as out-of-diff. Fixed now on request. The
+verification is worth recording, because the disclosure sat directly against
+a comment already explaining why it must not exist.
+
+### 25.1 What was actually wrong
+
+`onExtract` strips `__duress_signal` from the payload before rendering it,
+and says why in its own comment:
+
+> Never render the raw duress token ... a coercer watching that screen during
+> a "successful" decoy unlock must not see anything that reveals an alarm
+> fired.
+
+The very next statement was `setExtractResult({ slotIndex, json: displayJson })`,
+and the panel rendered **"Unlocked slot index: 1"** immediately above the
+payload. So the strip hid the alarm *token* while the line above it announced
+the alarm *fact* in plain words. Against the observer that comment was
+written for, the protection was self-defeating — the same
+"guard one surface, miss the one beside it" pattern §19.6 names, this time
+with the two surfaces four lines apart.
+
+### 25.2 Verification before changing anything
+
+Three things were checked, because the fix is only surgical if they hold:
+
+1. **`extractResult.slotIndex` had exactly one consumer** — the display line.
+   Nothing else read it.
+2. **The alarm does not depend on that state.**
+   `reportUnlockForSlot(getAccessToken(), slotIndex, json)` reads the LOCAL
+   `slotIndex` destructured from `extractVault()`, not `extractResult`. So
+   removing it from render state cannot weaken duress reporting — the thing
+   that would have made this a bad trade.
+3. **ZK is unaffected.** `slotIndex` never crosses the wire. The only
+   outbound call is `reportUnlock`'s fixed-length 44-char token-or-noise, and
+   the server is designed never to learn which slot exists (`DuressSignal`'s
+   own docstring). This is a client-side display change with no server
+   counterpart, so no ZK surface moves.
+
+### 25.3 The fix
+
+`slotIndex` is no longer carried into `extractResult` at all — kept out of
+state rather than merely unrendered, so no future render can reintroduce it —
+and the display line is replaced by a comment recording why nothing goes
+there.
+
+Nothing legitimate is lost: the user knows which password they typed, and the
+payload shown is either their real vault or the decoy they authored
+themselves. A decoy extraction and a real one now produce the same panel
+containing that slot's own contents, which is exactly what a believable decoy
+should look like. **Unlike the envelope path (§20.2), the decoy here has
+genuine user-authored contents, so this screen reaches real
+indistinguishability rather than the empty-vault floor.**
+
+### 25.4 The test caught a false positive in itself, which is worth noting
+
+The first assertion was page-wide: `expect(container.textContent).not.toMatch(/Unlocked slot/i)`.
+It failed against the FIXED code, because the section's own intro copy reads
+"password-**unlocked slot**s with plausible deniability" — innocent
+descriptive text, matched case-insensitively. The source was already correct.
+
+Rescoped to the result panel (`container.querySelector('pre').parentElement`),
+which is where a disclosure would actually appear, and additionally asserts
+the panel contains no bare `0`/`1`. Recorded because the failure looked at
+first like a second undiscovered leak, and treating it as one would have
+produced a pointless change to correct code — the inverse of the §13
+misattribution lesson: verify not just whether a finding is real, but whether
+a failing assertion is testing what it claims to.
+
+Three tests: a decoy extraction names no slot; the alarm still receives the
+true `slotIndex` (proving this is display-only); and real vs. decoy panels
+are byte-identical once each slot's own payload is normalised away.
+Negative-controlled — restoring the disclosure fails two of the three.
+
+335 tests across 33 files; `eslint` clean.

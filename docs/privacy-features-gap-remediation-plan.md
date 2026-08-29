@@ -531,7 +531,7 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Rounds five through seventeen found 82 more issues, almost all
+  corrected above. Rounds five through eighteen found 83 more issues, almost all
   in `docs/onion-sync-transport-phases-2-4-plan.md`'s still-unimplemented
   Phase 2/PR C design (payload-shape validation on the desktop IPC trust
   boundary — later tightened again from a destination-field denylist into a
@@ -588,19 +588,22 @@ onion case):
   - **Decoy CONTENTS remain out of scope** (that plan's §7). A decoy
     session renders an empty vault, which is honest but not believable to
     anyone who knows the account is not empty.
-  - **`StegoVaultDashboard` — the separate, pre-existing stego-image decoy
-    mechanism — is untouched by this PR and openly displays the slot it
-    opened** (`StegoVaultDashboard.jsx:618` renders "Unlocked slot index:"
-    followed by the index, plus the decrypted payload). Anyone with only
-    the decoy password can therefore distinguish the session there. That is
-    arguably defensible for a screen whose stated purpose is *managing*
-    one's own decoy images, and it predates this work — but it is recorded
-    here rather than left implied, because the two mechanisms share §2's
-    heading and a reader could otherwise carry the envelope path's
-    guarantee across to it. Deliberately not changed here: it is a
-    different feature with its own threat model, out of this PR's diff.
+  - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
+    used to display the slot it opened**, rendering "Unlocked slot index:"
+    above the payload, so anyone with only the decoy password could
+    distinguish the session there. First recorded here as flagged-but-
+    unfixed (out of this PR's original diff), then **fixed on request** —
+    see that plan's §25. The slot index is no longer carried into render
+    state at all; the duress alarm still receives the true slot, since it
+    reads the value returned by `extractVault()` rather than the render
+    state, so this was display-only and touched no ZK surface. A decoy
+    extraction and a real one now render the same panel containing that
+    slot's own contents. **This screen therefore reaches genuine
+    indistinguishability, which the envelope path does not**: the stego
+    decoy holds real user-authored contents, whereas a decoy session in the
+    main app still shows an empty vault (§7's deferred product work).
   **All review rounds for both carry-overs are recorded in one place:
-  `docs/vault-unlock-envelope-integration-plan.md` §9 through §24** (every
+  `docs/vault-unlock-envelope-integration-plan.md` §9 through §25** (every
   bare `§N` in this paragraph refers to that document, including the
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over
