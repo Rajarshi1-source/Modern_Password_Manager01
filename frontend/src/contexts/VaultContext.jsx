@@ -489,6 +489,21 @@ export const VaultProvider = ({ children }) => {
     const currentPendingChanges = pendingChangesRef.current;
     if (currentPendingChanges.length === 0) return;
 
+    // Decoy sessions must not push the REAL session's queued work. This is a
+    // distinct hole from the add/update/delete/favorite/backup gates: those
+    // stop a decoy session from CREATING changes, but `handleLockVault` does
+    // not clear `pendingChanges`, so work queued in an earlier REAL session
+    // survives lock → decoy unlock and would be flushed from here — including
+    // `deleted_items`, which the sync endpoint applies as real deletions.
+    //
+    // Returns rather than throws: both call sites are `setTimeout(() =>
+    // syncVault(), 0)`, where a rejection would surface as an unhandled
+    // promise rejection rather than reaching any caller. The queue is left
+    // intact on purpose, so the real session flushes it on its next sync.
+    if (sessionVaultCrypto.isDecoySession()) {
+      return;
+    }
+
     try {
       // Update sync status
       setSyncStatus('syncing');

@@ -250,6 +250,12 @@ describe('unlock mode — stored envelope is unusable, falls back to the legacy 
 
     await waitFor(() => expect(onUnlocked).toHaveBeenCalled());
     expect(sessionVaultCrypto.unlockWithVaultPassword).toHaveBeenCalledWith('legacy-password', USER_ID);
+    // The self-heal is the ONE path allowed to overwrite a stored envelope:
+    // the blob exists but cannot be decoded, so there is no decoy left to
+    // protect, and provision's default refusal would strand the user instead.
+    expect(unlockEnvelopeStore.provision).toHaveBeenCalledWith(
+      expect.objectContaining({ replaceExisting: true })
+    );
   });
 
   test('a structurally corrupt (MalformedBlobError) envelope falls back to the wrapped-DEK record', async () => {
@@ -378,6 +384,11 @@ describe('unlock mode — upgrade (wrapped key exists, no envelope yet)', () => 
       vaultPassword: 'legacy-password',
       dekBytes: DEK,
       saltB64: 'legacy-salt',
+      // The ORDINARY upgrade must never overwrite: if another tab configured
+      // a decoy since this modal computed its mode, provision's refusal is
+      // what stops that decoy (and its duress token) being silently wiped.
+      // Only the corrupt-envelope self-heal passes true -- asserted below.
+      replaceExisting: false,
     });
     expect(reportUnlock).toHaveBeenCalledWith(TOKEN, null);
     // The upgrade path installs the session key via unlockWithVaultPassword

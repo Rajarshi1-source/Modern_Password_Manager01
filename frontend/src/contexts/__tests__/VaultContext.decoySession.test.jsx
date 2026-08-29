@@ -53,6 +53,14 @@ vi.mock('../../services/firebaseService', () => ({
     listenForChanges: vi.fn(), syncItem: vi.fn(),
   },
 }));
+const { mockOnionSyncVault } = vi.hoisted(() => ({
+  mockOnionSyncVault: vi.fn(async () => ({ data: {}, transport: 'clearnet', degraded: false })),
+}));
+vi.mock('../../services/onionSyncService', () => ({
+  default: { syncVault: mockOnionSyncVault },
+  syncVault: mockOnionSyncVault,
+}));
+
 vi.mock('../../services/api', () => ({
   default: {
     get: vi.fn(() => Promise.resolve({ data: {} })),
@@ -245,5 +253,50 @@ describe('VaultContext backup paths during a decoy session', () => {
       await result.current.restoreBackup('backup-1');
     });
     expect(api.post).toHaveBeenCalledWith('/vault/restore_backup/backup-1/');
+  });
+});
+
+describe('VaultContext.syncVault during a decoy session', () => {
+  // A distinct hole from the add/update/delete/favorite/backup gates. Those
+  // stop a decoy session CREATING changes -- but handleLockVault does not
+  // clear pendingChanges, so work queued in an earlier REAL session survives
+  // lock -> decoy unlock and would be flushed from here, including
+  // deleted_items, which the sync endpoint applies as real deletions.
+  const queueOneChange = async (result) => {
+    mockIsDecoySession.mockReturnValue(false);
+    await act(async () => {
+      await result.current.deleteItem(42);
+    });
+    expect(mockDeleteVaultItem).toHaveBeenCalled();
+  };
+
+  test('does not flush changes queued by an earlier real session', async () => {
+    const result = await mountVault();
+    // Queue a deletion as the REAL session would...
+    await queueOneChange(result);
+
+    // ...then the session becomes a decoy one (lock + decoy unlock), which
+    // leaves pendingChanges untouched.
+    mockIsDecoySession.mockReturnValue(true);
+    mockOnionSyncVault.mockClear();
+
+    await act(async () => {
+      await result.current.syncVault();
+    });
+
+    expect(mockOnionSyncVault).not.toHaveBeenCalled();
+  });
+
+  test('a real session still flushes the same queued changes', async () => {
+    const result = await mountVault();
+    await queueOneChange(result);
+
+    mockOnionSyncVault.mockClear();
+    await act(async () => {
+      await result.current.syncVault();
+    });
+
+    // Proves the gate is what stopped the sync above, not an empty queue.
+    expect(mockOnionSyncVault).toHaveBeenCalled();
   });
 });

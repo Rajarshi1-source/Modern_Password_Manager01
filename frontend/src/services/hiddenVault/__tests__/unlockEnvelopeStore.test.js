@@ -128,6 +128,38 @@ describe('provision', () => {
       .rejects.toBeInstanceOf(WrongPasswordError);
   });
 
+  test('refuses to overwrite an existing envelope by default, preserving a configured decoy', async () => {
+    // provision() always encodes with `decoyPassword: null`, so an implicit
+    // overwrite silently destroys the decoy DEK and its __duress_signal --
+    // the alarm stops working with no error anywhere. Reachable because
+    // VaultUnlockModal picks its mode from a hasEnvelope() snapshot and does
+    // not re-check before provisioning.
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+
+    await expect(provision({
+      userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT,
+    })).rejects.toThrow(/already exists/i);
+
+    // The decoy must still open, with its token intact -- the whole point.
+    const decoy = await open({ userId: USER_ID, password: DECOY_PASSWORD });
+    expect(decoy.slotIndex).toBe(1);
+    expect(decoy.duressToken).toEqual(expect.any(String));
+  });
+
+  test('replaceExisting: true overwrites deliberately -- the corrupt-envelope self-heal', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+
+    const freshDek = new Uint8Array(32).fill(7);
+    await expect(provision({
+      userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: freshDek, saltB64: SALT,
+      replaceExisting: true,
+    })).resolves.toBeUndefined();
+
+    const reopened = await open({ userId: USER_ID, password: REAL_PASSWORD });
+    expect(reopened.dekBytes).toEqual(freshDek);
+  });
+
   test('rejects a dekBytes that is not a 32-byte Uint8Array', async () => {
     await expect(provision({
       userId: USER_ID,
