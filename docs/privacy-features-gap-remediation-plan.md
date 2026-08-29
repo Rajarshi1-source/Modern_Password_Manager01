@@ -531,7 +531,7 @@ onion case):
   cannot work against this project's own plaintext listener, and a stale
   Phase 2/3 summary in THIS document's own §4.1 that still described the
   pre-hardening (renderer-exposed-SOCKS5, embedded-iOS-Tor) design — now
-  corrected above. Rounds five through fourteen found 66 more issues, almost all
+  corrected above. Rounds five through fifteen found 67 more issues, almost all
   in `docs/onion-sync-transport-phases-2-4-plan.md`'s still-unimplemented
   Phase 2/PR C design (payload-shape validation on the desktop IPC trust
   boundary — later tightened again from a destination-field denylist into a
@@ -561,20 +561,27 @@ onion case):
   see that plan's §20.1 and §20.2. Recorded here rather than only there
   because they bear directly on whether §2's "Plausible Deniability Vault"
   claim holds, which is this document's own subject.
-  **One related defect remains OPEN and is disclosed here for the same
-  reason** (that plan's §21.3): the duress-settings recovery form still
-  reveals, through *which network request it issues*, whether a submitted
-  password is the decoy — the rendered output was equalised, the request
-  pattern was not. It is unfixed because every frontend-only remedy is worse
-  than the leak: always sending the registration request would permanently
-  disarm the user's real alarm, since registration deactivates all active
-  signals. Closing it needs either a backend registration mode that is a
-  no-op for a non-matching token, or gating recovery behind the real vault
-  password. **Until then, §2's deniability claim should be read as holding
-  against an observer of the SCREEN, not against one who can also read the
-  browser's network panel on an unlocked session.**
+  **A third, related defect was found and is now also closed** (that plan's
+  §21.3, resolved in §22): the duress-settings recovery form revealed,
+  through *which network request it issued*, whether a submitted password
+  was the decoy — the rendered output had been equalised, the request
+  pattern had not. Making the request pattern uniform turned out to be
+  impossible without either permanently disarming the alarm (registration
+  deactivates all active signals, so registering noise destroys the real
+  token) or **breaking this project's own ZK invariant** — a server able to
+  no-op on a "non-matching" token would have to know which slot a token
+  belongs to, which `DuressSignal` is explicitly designed never to learn
+  (see its model docstring: "without ever learning the password, or which
+  slot exists, or even that a decoy vault was configured until it actually
+  fires"). Closed instead by removing *access* to the oracle: recovery now
+  requires the real vault password as well as the decoy one, so a coercer
+  holding only a password surrendered under duress cannot operate it, while
+  one holding the real password has already obtained the vault the decoy
+  exists to protect. **§2's deniability claim now holds against any
+  observer who does not already possess the real vault password** — the
+  strongest statement the architecture permits without weakening ZK.
   **All review rounds for both carry-overs are recorded in one place:
-  `docs/vault-unlock-envelope-integration-plan.md` §9 through §21** (every
+  `docs/vault-unlock-envelope-integration-plan.md` §9 through §22** (every
   bare `§N` in this paragraph refers to that document, including the
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over

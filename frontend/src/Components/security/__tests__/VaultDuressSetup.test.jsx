@@ -59,11 +59,41 @@ const fillAndSubmit = (getByLabelText, getByRole, { vaultPassword = 'real-passwo
   fireEvent.click(getByRole('button', { name: /save decoy password/i }));
 };
 
-const submitRecovery = (getByLabelText, getByRole, password) => {
+const REAL_PASSWORD = 'real-password';
+
+// Recovery is gated behind the REAL vault password as well as the decoy one,
+// so that someone holding only a password handed over under duress cannot use
+// this form to check whether it is the decoy (see the component's own gate
+// comment and the plan's §22). Tests default to supplying the correct vault
+// password so they exercise the path past the gate.
+const submitRecovery = (
+  getByLabelText, getByRole, password, { vaultPassword = REAL_PASSWORD } = {}
+) => {
+  fireEvent.change(getByLabelText(/vault password/i, { selector: '#duress-recovery-vault-password' }), {
+    target: { value: vaultPassword },
+  });
   fireEvent.change(getByLabelText(/decoy password/i, { selector: '#duress-recovery-password' }), {
     target: { value: password },
   });
   fireEvent.click(getByRole('button', { name: /recover unregistered alarm/i }));
+};
+
+// `open()` is now called twice per recovery attempt: once for the vault-password
+// gate, once for the decoy password. Route by the password actually supplied so
+// each test can describe both slots independently.
+const mockOpenBySlot = ({ decoyPassword, decoyToken = DURESS_TOKEN }) => {
+  unlockEnvelopeStore.open.mockImplementation(async ({ password }) => {
+    // A test double routing to a canned slot result, not a credential check --
+    // the real comparison is Argon2id inside hiddenVaultEnvelope.
+    // eslint-disable-next-line security/detect-possible-timing-attacks
+    if (password === REAL_PASSWORD) {
+      return { slotIndex: 0, duressToken: null, dekBytes: new Uint8Array(32), saltB64: 's' };
+    }
+    if (decoyPassword !== undefined && password === decoyPassword) {
+      return { slotIndex: 1, duressToken: decoyToken, dekBytes: new Uint8Array(32), saltB64: 's' };
+    }
+    throw new WrongPasswordError('No slot decrypted successfully with the supplied password.');
+  });
 };
 
 beforeEach(() => {
@@ -111,7 +141,7 @@ test('the recovery form is present even before any failure, and survives indepen
 });
 
 test('recovery re-opens the envelope with the decoy password and registers the token it finds, without touching setDecoySlot', async () => {
-  unlockEnvelopeStore.open.mockResolvedValue({ slotIndex: 1, duressToken: DURESS_TOKEN, dekBytes: new Uint8Array(32), saltB64: 's' });
+  mockOpenBySlot({ decoyPassword: 'my-decoy-password' });
   registerSignalToken.mockResolvedValue({ success: true });
 
   const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
@@ -128,7 +158,7 @@ test('recovery re-opens the envelope with the decoy password and registers the t
 });
 
 test('recovery survives a full remount (simulated by rendering a fresh instance with no prior state)', async () => {
-  unlockEnvelopeStore.open.mockResolvedValue({ slotIndex: 1, duressToken: DURESS_TOKEN, dekBytes: new Uint8Array(32), saltB64: 's' });
+  mockOpenBySlot({ decoyPassword: 'my-decoy-password' });
   registerSignalToken.mockResolvedValue({ success: true });
 
   // A fresh render with zero component history -- nothing was carried over
@@ -142,7 +172,8 @@ test('recovery survives a full remount (simulated by rendering a fresh instance 
 });
 
 test('recovery with the wrong decoy password reports the same outcome as success, and registers nothing', async () => {
-  unlockEnvelopeStore.open.mockRejectedValue(new WrongPasswordError('no slot matched'));
+  // Correct vault password (passes the gate), but nothing matches the decoy.
+  mockOpenBySlot({ decoyPassword: undefined });
 
   const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
   submitRecovery(getByLabelText, getByRole, 'wrong-password');
@@ -154,11 +185,11 @@ test('recovery with the wrong decoy password reports the same outcome as success
   expect(registerSignalToken).not.toHaveBeenCalled();
 });
 
-test('recovery with the REAL vault password (slot 0) reports the same outcome, and registers nothing', async () => {
-  unlockEnvelopeStore.open.mockResolvedValue({ slotIndex: 0, duressToken: null, dekBytes: new Uint8Array(32), saltB64: 's' });
+test('recovery with the REAL vault password in the decoy field reports the same outcome, and registers nothing', async () => {
+  mockOpenBySlot({ decoyPassword: undefined });
 
   const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
-  submitRecovery(getByLabelText, getByRole, 'real-password');
+  submitRecovery(getByLabelText, getByRole, REAL_PASSWORD);
 
   await findByRole('status');
   expect(registerSignalToken).not.toHaveBeenCalled();
@@ -221,8 +252,11 @@ test('the recovery form is not a password oracle: decoy, real, and wrong passwor
   // learn which slot (if any) it opens. Asserted on the serialized container
   // rather than hand-picked strings, so a future contributor reintroducing a
   // branch anywhere in this form's output fails this test.
-  const renderOutcome = async (openImpl, password) => {
-    openImpl();
+  // All three attempts supply the CORRECT vault password, so each gets past
+  // the gate -- the property under test is that what happens after the gate
+  // still cannot classify the decoy-field value.
+  const renderOutcome = async (password) => {
+    mockOpenBySlot({ decoyPassword: 'my-decoy-password', decoyToken: 'a'.repeat(44) });
     const { getByLabelText, getByRole, findByRole, container, unmount } =
       render(<VaultDuressSetup />);
     submitRecovery(getByLabelText, getByRole, password);
@@ -232,24 +266,62 @@ test('the recovery form is not a password oracle: decoy, real, and wrong passwor
     return html;
   };
 
-  const decoyHtml = await renderOutcome(() => {
-    unlockEnvelopeStore.open.mockResolvedValue({
-      slotIndex: 1, duressToken: 'a'.repeat(44), dekBytes: new Uint8Array(32), saltB64: 's',
-    });
-  }, 'my-decoy-password');
-
-  const realHtml = await renderOutcome(() => {
-    unlockEnvelopeStore.open.mockResolvedValue({
-      slotIndex: 0, duressToken: null, dekBytes: new Uint8Array(32), saltB64: 's',
-    });
-  }, 'real-password');
-
-  const wrongHtml = await renderOutcome(() => {
-    unlockEnvelopeStore.open.mockRejectedValue(new WrongPasswordError('no slot matched'));
-  }, 'wrong-password');
+  const decoyHtml = await renderOutcome('my-decoy-password');
+  const realHtml = await renderOutcome(REAL_PASSWORD);
+  const wrongHtml = await renderOutcome('wrong-password');
 
   expect(realHtml).toBe(decoyHtml);
   expect(wrongHtml).toBe(decoyHtml);
+});
+
+test('recovery does nothing observable at all without the real vault password -- the gate that closes the network-side oracle', async () => {
+  // Greptile P1 (§22): equalising the rendered output did not equalise the
+  // NETWORK request -- a registration POST fires only for the correct decoy
+  // password, so an observer of the network panel could still classify. That
+  // cannot be equalised (registering noise would deactivate the user's real
+  // alarm, and the server cannot be taught to tell a recovered token from
+  // noise without learning which slot it came from -- which ZK forbids). So
+  // the oracle is closed by ACCESS instead: operating it requires the real
+  // vault password, which the duress threat model assumes the coercer lacks.
+  mockOpenBySlot({ decoyPassword: 'my-decoy-password' });
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  submitRecovery(getByLabelText, getByRole, 'my-decoy-password', {
+    vaultPassword: 'not-the-real-vault-password',
+  });
+
+  const alert = await findByRole('alert');
+  expect(alert).toHaveTextContent('Incorrect vault password.');
+  // The whole point: NO registration request, even though the decoy password
+  // supplied was correct. Without this, the request itself is the oracle.
+  expect(registerSignalToken).not.toHaveBeenCalled();
+});
+
+test('the vault-password gate does not itself classify: the decoy password typed into it is rejected exactly like garbage', async () => {
+  mockOpenBySlot({ decoyPassword: 'my-decoy-password' });
+
+  const attempt = async (vaultPassword) => {
+    const { getByLabelText, getByRole, findByRole, container, unmount } =
+      render(<VaultDuressSetup />);
+    submitRecovery(getByLabelText, getByRole, 'my-decoy-password', { vaultPassword });
+    await findByRole('alert');
+    // Strip the inputs' own `value` attributes: those echo what the TEST
+    // typed, not anything the app decided, and would make any two attempts
+    // with different passwords differ trivially. Everything the component
+    // actually produces is still compared.
+    const html = container.innerHTML.replace(/value="[^"]*"/g, 'value="[typed]"');
+    unmount();
+    return html;
+  };
+
+  // Typing the DECOY password into the vault-password field must look
+  // identical to typing nonsense -- otherwise the gate becomes the oracle it
+  // was added to close.
+  const decoyInGate = await attempt('my-decoy-password');
+  const garbageInGate = await attempt('nonsense-password');
+
+  expect(decoyInGate).toBe(garbageInGate);
+  expect(registerSignalToken).not.toHaveBeenCalled();
 });
 
 test('a wrong vault password on the setup form does not touch recovery or registration', async () => {

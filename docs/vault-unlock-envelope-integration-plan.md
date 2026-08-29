@@ -1,12 +1,11 @@
 # Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
 
-**Implemented in PR #489, then hardened across thirteen review rounds
-(§9–§21) — read all thirteen before relying on §3's original design as the
-literal shipped behavior. **§21.3 records the one finding still OPEN**: the
-duress recovery form classifies the decoy password through its network
-request pattern, and every frontend-only remedy is worse than the leak (the
-obvious one permanently disarms the alarm) — read it before attempting a
-fix. §11.5 in particular is a real data-corruption fix,
+**Implemented in PR #489, then hardened across fourteen review rounds
+(§9–§22) — read all fourteen before relying on §3's original design as the
+literal shipped behavior. **§22 closes the last open finding** (the recovery
+form's network-side password oracle) by gating recovery behind the real
+vault password — read §21.3 for why the seemingly-obvious fixes are unsafe
+or, in the backend case, forbidden by this project's own ZK invariant. §11.5 in particular is a real data-corruption fix,
 not a cosmetic one; §16.1, §18.1, and §20.2 extend it to the mutation and
 display paths it originally missed (§18.1 is the one that reaches
 `restoreBackup`, which can wipe the whole vault); §20.1 is a security
@@ -2307,7 +2306,7 @@ forms, which then surfaced a literal *"Failed to execute 'atob' on
 stays reserved for "nothing is stored". Regression test asserts both the
 type and that `atob` does not appear in the message.
 
-### 21.3 OPEN: the recovery form still classifies the decoy password over the NETWORK, and no frontend-only fix is safe
+### 21.3 The recovery form classified the decoy password over the NETWORK — RESOLVED in §22, which supersedes the "open" status recorded below
 
 Greptile's second P1, which CodeRabbit independently raised. It is correct,
 and it is **not fixed in this round.** The reasoning is recorded in full
@@ -2417,3 +2416,118 @@ new this round) plus the wider decoy/envelope suites as a regression sweep.
 All three code fixes negative-controlled; restorations verified
 byte-identical. `eslint` clean on changed files; `markdownlint`
 (MD018/MD022/MD040) clean on all touched docs.
+
+## 22. Closing §21.3 — the recovery form's network-side password oracle (2026-08-29)
+
+§21.3 left one finding open: the "Recover unregistered alarm" form issues a
+`POST /duress/signal/register/` **only** when the submitted password opens
+the decoy slot, so an observer of the browser's network panel could still
+classify a password even after §20.1 equalised the rendered output. This
+section closes it, and records why the option that looked most natural is
+not merely expensive but **architecturally forbidden by this project's own
+zero-knowledge invariant**.
+
+### 22.1 The backend option is impossible, not just costly — correcting §21.3's own framing
+
+§21.3 listed as its first remedy "a backend registration mode that is a
+no-op for a token that does not match the pending registration." Re-examined
+against the code rather than restated: **the server cannot implement that,
+by design.** `DuressSignal`'s own model docstring states the ZK split
+explicitly —
+
+> the server matches the hash and fires the existing silent-alarm machinery
+> without ever learning the password, **or which slot exists, or even that a
+> decoy vault was configured until it actually fires.**
+
+The envelope is client-side only; the server holds nothing but SHA-256 of
+whatever token was last registered. "Does this token belong to your decoy
+slot?" is therefore a question the server has no basis to answer, and any
+backend design that *could* answer it would have to be given knowledge of
+the envelope — which is precisely what the invariant in
+`docs/adaptive-password-zk-remediation-plan.md` §1 forbids and what
+`DuressSignal` was built to avoid.
+
+So the choice was never "backend vs. frontend, pick the cheaper." Option 1
+would have required weakening the ZK property this whole feature exists to
+demonstrate, in order to fix a leak that is strictly smaller than that
+property. It is rejected on architectural grounds and should not be
+revisited without a fundamentally different primitive (e.g. a client-side
+proof, which is disproportionate here).
+
+For completeness, the two other frontend equalisations remain rejected for
+the reasons §21.3 records: always registering noise **permanently disarms
+the real alarm** (`register_signal_token` deactivates every active signal),
+and `reportUnlock` cannot carry the decoy path because a matching token
+*fires* the alarm.
+
+### 22.2 What shipped: close ACCESS to the oracle rather than the oracle itself
+
+Recovery now requires the **real vault password** in addition to the decoy
+one. The handler verifies it first — `open()` with that password must
+resolve to `slotIndex === 0` — and returns before issuing any request at all
+if it does not.
+
+The reasoning is a threat-model argument, not an obfuscation:
+
+- A coercer holding **only** a password handed over under duress cannot
+  submit the form at all, so the oracle is unreachable for exactly the
+  adversary the duress feature exists to defend against.
+- A coercer holding the **real** vault password can still observe the
+  request pattern — but they already have the real vault. The decoy is moot
+  at that point; there is no deniability left for the oracle to breach.
+
+This keeps the fix entirely client-side, adds nothing to what the server
+learns, and so preserves the ZK invariant intact.
+
+**The gate is itself non-classifying**, which matters as much as the gate:
+typing the DECOY password into the vault-password field yields the same
+"Incorrect vault password." as typing nonsense. That follows the asymmetry
+§21.1 established for the setup form — revealing "that IS the real vault
+password" is unavoidable (it is the credential that grants access), while
+revealing "that is the DECOY" must never happen. Without this, the gate
+added to close one oracle would have opened another.
+
+### 22.3 What is now true, precisely
+
+| Observer | Can they classify a candidate password as the decoy? |
+|---|---|
+| Watching the SCREEN only | No — one identical outcome for decoy / real / wrong (§20.1) |
+| Watching the NETWORK, without the real vault password | No — cannot get past the gate; no request is issued |
+| Watching the NETWORK, with the real vault password | Yes — but they already hold the real vault |
+
+The `/vault-proxy/`-style claim this supports: **the duress feature's
+deniability now holds against any observer who does not already possess the
+real vault password.** That is the strongest statement the architecture
+permits without either weakening ZK or disarming the alarm, and it is
+materially stronger than §21.3's "holds against an observer of the screen,
+not the network panel."
+
+### 22.4 Cost accepted, and what was deliberately NOT done
+
+Recovery now runs `open()` twice — once for the gate, once for the decoy
+password — so two Argon2id derivations instead of one (§3.7: ~0.2–0.5 s each
+on a mid-range laptop). Accepted: this is a rare settings-screen recovery
+action, not the unlock path, and the gate short-circuits before the second
+derivation whenever the vault password is wrong, which is the attacker case.
+
+**Considered and rejected:** storing a copy of the duress token in the REAL
+slot under a separate key (e.g. `__duress_recovery`), which would let
+recovery need only the real vault password and always issue exactly one
+request — fully uniform. Rejected because it changes the stored payload
+format (existing envelopes would need re-provisioning before recovery
+worked), puts duress material in the slot a coercer opens after extracting
+the real password, and buys uniformity only against an adversary who, per
+§22.2, has already won. Recorded here so the option is not rediscovered as
+novel; it is a real design with real costs, not an oversight.
+
+5 tests in `VaultDuressSetup.test.jsx` cover the change: the gate blocks a
+correct decoy password when the vault password is wrong **and issues no
+registration request** (the property the whole change exists for); the gate
+does not itself classify (decoy-in-gate renders byte-identically to
+garbage-in-gate, with input `value` attributes normalised so the comparison
+tests the component's output rather than what the test typed); and the three
+existing post-gate indistinguishability assertions still hold. Negative-
+controlled: disabling the gate fails exactly the two tests written for it.
+
+Targeted run: 323 tests across 32 files. `eslint` clean (0 errors, 0
+warnings on the changed files). `markdownlint` (MD018/MD022/MD040) clean.
