@@ -117,7 +117,7 @@ geoip2==4.7.0
 google-api-core==2.26.0
 google-api-python-client==2.184.0
 google-auth==2.41.1
-google-auth-httplib2==0.2.0
+google-auth-httplib2==0.4.0
 google-cloud-core==2.4.3
 google-cloud-firestore==2.21.0
 google-cloud-storage==2.5.0
