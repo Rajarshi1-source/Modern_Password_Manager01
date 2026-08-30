@@ -282,7 +282,7 @@ typer-slim==0.23.2
 types-requests==2.33.0.20250913
 typing-inspection==0.4.2
 typing_extensions==4.15.0
-tzdata==2025.2
+tzdata==2026.2
 ua-parser==1.0.1
 ua-parser-builtins==0.18.0.post1
 ujson==5.13.0
