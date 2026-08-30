@@ -90,7 +90,7 @@ pyfcm==1.5.4
 # Django Channels & WebSockets
 channels>=4.0.0
 channels-redis>=4.3.0
-daphne>=4.0.0
+daphne>=4.2.2
 
 # GeoIP & Device Detection
 geoip2==4.7.0
