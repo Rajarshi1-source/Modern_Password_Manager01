@@ -2910,3 +2910,63 @@ are byte-identical once each slot's own payload is normalised away.
 Negative-controlled — restoring the disclosure fails two of the three.
 
 335 tests across 33 files; `eslint` clean.
+
+## 26. Sixteenth review round (CodeRabbit) — the CAS check ran on the wrong side of the await
+
+### 26.1 The compare-and-swap was correct and still lost the decoy
+
+§24.3 replaced `replaceExisting: true` with a compare-and-swap token, closing
+the window between `runUpgrade`'s snapshot and its `provision()` call. The
+comparison itself, though, sat *before* `await encode(...)` — and `encode`
+performs two Argon2 derivations of its own. So the guard covered the caller's
+window and left `provision`'s own, seconds wide, wide open: a tab completing
+`setDecoySlot()` inside it is overwritten by a blob the pre-encode check had
+already judged safe, since `provision` always encodes with
+`decoyPassword: null`. That destroys the decoy DEK and its `__duress_signal`
+with no error anywhere — the same failure §23.2 and §24.3 each exist to
+prevent, surviving both fixes because both looked only at the caller's side of
+the await.
+
+Verified before changing anything: `readRawEnvelope` reads storage without
+decoding (so it cannot throw on the corrupt blob that reaches this path), and
+both callers already treat a provisioning failure as non-fatal, so an extra
+refusal degrades to "the upgrade is retried next unlock" rather than blocking
+an unlock.
+
+### 26.2 The fix
+
+Repeat the identical comparison immediately before `saveEnvelope`. It is
+written as `hasEnvelope(userId) && readRawEnvelope(userId) !== replaceExisting`,
+so it also covers the `replaceExisting === undefined` case the pre-encode
+branch cannot: an envelope that *appeared* during the await now fails the
+comparison instead of being silently replaced.
+
+Tested by suspending inside the mocked KDF — the fast SHA-256 stand-in leaves
+no real timing window, so the decoy write is injected from a one-shot
+`argon2.hash` implementation that restores itself before `setDecoySlot` derives
+its own keys. Negative-controlled: removing the re-check fails the new test
+while the existing pre-encode test still passes, which is precisely the gap.
+
+### 26.3 Three smaller items from the same round
+
+- **A regex of literal backspaces.** §25.4's added assertion was written as
+  `/<U+0008>[01]<U+0008>/` — real backspace characters, not `\b` word
+  boundaries — so it matched backspace-delimited digits and never the standalone
+  slot indicator it claimed to check. The assertion had been passing for the
+  wrong reason. Replaced with `/\b[01]\b/`; it still passes against the fixed
+  source and still fails when the disclosure is restored.
+- **Hardcoded token lengths.** `duressSignalService` exports
+  `SIGNAL_TOKEN_LENGTH` specifically so callers do not write `44`; three
+  assertions in `unlockEnvelopeStore.test.js` did anyway, and would have failed
+  for the wrong reason had `SIGNAL_BYTES` changed. Derived from the constant.
+- **A duplicated record load.** `unlockWithVaultPassword` and
+  `exportWrappedDekRaw` (§3.4) carried byte-identical copies of the storage
+  read, `JSON.parse`, and `WRAPPED_VERSION` check. Extracted as
+  `loadWrappedRecord(userId, fnName)`, the same de-duplication `unwrapDek`
+  already applied to the unwrap step. Error messages and their order are
+  unchanged, and `unlockWithVaultPassword` still reserves its session
+  generation *after* the validation and *before* the first await, which is the
+  ordering its own comment documents.
+
+725 tests across 59 files, targeted to the services, security, auth, context
+and route suites this round touches.

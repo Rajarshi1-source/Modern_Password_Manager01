@@ -238,6 +238,21 @@ Requirements:
   bounded-restart budget above governs whether it comes back; it does not by
   itself correct the status. Test a crash AFTER ready, asserting
   `isOnionSyncAvailable()` flips to false.
+
+  **That handler must distinguish an INTENTIONAL stop from an unexpected
+  exit, or every normal shutdown records a false failure.** `stop()` kills a
+  ready child, which fires the very `exit`/`close` handler just described —
+  so as written, turning the sidecar off (the `prefer_onion` → `off`
+  transition covered in A.3's settings handoff) or quitting the app would
+  set `lastError` and spend the restart budget on a death the app itself
+  caused. Mark the intentional path: set a `stopping` flag (or capture the
+  child's generation) before killing, and have the handler take the failure
+  branch only when the exit was NOT expected. An intentional stop ends in
+  `stopped` with `lastError` cleared and no restart attempted; an unexpected
+  post-ready exit clears `socksPort` and `controlPort`, sets `lastError`,
+  and leaves ready so `isOnionSyncAvailable()` answers false. Test both
+  paths separately — a clean `stop()` asserting `lastError` stays null and
+  no respawn is attempted, and the crash case above asserting the opposite.
   Add a test for a stalled-bootstrap (deadline) case, not just the
   already-covered success path.
 - **Kill on every exit path this process can actually observe.** `app.on('will-quit')` /
@@ -394,6 +409,30 @@ New `desktop/src/main/onionTransport.js`:
   an initial `http://` capabilities URL being refused before any request is
   attempted, and one for an `https://` request that receives a redirect to
   `http://` being refused rather than followed.
+
+  **PR C removes the `authToken` this bootstrap depends on — resolve the
+  address at ISSUANCE time once C lands.** The capabilities endpoint is
+  `IsAuthenticated` (`DarkProtocolCapabilitiesView`), and this fetch is
+  described above as carrying "the same forwarded `authToken` it uses for
+  the eventual `vault_sync` POST". C.3 makes that POST anonymous: its
+  serialized body carries only the credential, `operation`, and sync
+  `payload`, with no account token anywhere in the `TOR_PROXY` call. So a
+  session whose first sync is an anonymous redemption would have no
+  credential left to authenticate the address lookup, and no way to obtain
+  one without reintroducing exactly the account identifier C exists to
+  remove. The resolution is not to keep a token on the redemption path: it
+  is to move the lookup off it. C.2's issuance step is already a clearnet,
+  JWT-authenticated exchange, so the main process resolves and caches
+  `anonymity.onion_address` **during issuance**, and redemption reads the
+  cached value only — never fetching. A cache miss at redemption time is
+  "transport unavailable" (degrade under `prefer_onion`, fail closed under
+  `require_onion`), never a fallback clearnet fetch, since such a fetch
+  would be the deanonymizing request in a different place. Until C lands,
+  the first-`TOR_PROXY` bootstrap above stands unchanged. Test the
+  serialized forms of BOTH requests: the issuance-time capability request
+  carries the JWT and no credential, and the redemption request carries
+  credential, `operation`, and sync data and NO account token — asserted on
+  the actual serialized request, not on the caller's arguments.
 - **Only `vault_sync` at first**, as §4.1 Phase 2 step 2 says. Extending to the
   rest of `VAULT_OPERATION_ROUTES` is a follow-up.
 - **Use `http://<addr>.onion/...`, not `https://`.** `backend-onion` in
@@ -1017,6 +1056,18 @@ implementation. It must settle:
    (patch the view and assert not-called), not merely that the response was
    an error, since a 4xx produced *after* dispatch would still have touched
    the vault.
+   **And the gate must run BEFORE the credential is claimed, or a forbidden
+   route still burns the token.** DRF evaluates permission classes before the
+   view handler runs, so if the anonymous-credential permission class marks
+   the nonce spent (item 4 below) during that evaluation, a request naming
+   `vault_delete` is rejected by this gate only after its single-use token is
+   already gone — a one-request denial of service against a user's sync,
+   triggerable by anyone who can replay a captured redemption body onto a
+   forbidden operation. Validate `operation == 'vault_sync'` BEFORE the
+   atomic claim (a scope check reads only the request, so it can run first),
+   or make the claim releasable and release it when scope validation rejects.
+   Test: for each forbidden route, assert the vault view is never called AND
+   that the same credential then redeems successfully with `vault_sync`.
 4. **Double-spend prevention.** Redis set of spent nonces with a TTL matched to
    token expiry, and a durable fallback. This is the one component where a bug
    is a security bug, not a privacy one.
@@ -1252,6 +1303,16 @@ implementation. It must settle:
   `session_id`, and no user identifier — asserting on the actual serialized
   request, not on the function's arguments, since the point is what leaves
   the machine.
+
+  **Consequence for A.4's onion-address bootstrap, recorded here so the two
+  sections cannot drift:** "nothing else" removes the `authToken` that
+  A.4's first-`TOR_PROXY` capabilities fetch uses, and the capabilities
+  endpoint is `IsAuthenticated`. Under PR C the desktop main process
+  resolves and caches `anonymity.onion_address` during the clearnet,
+  JWT-authenticated ISSUANCE exchange instead; redemption reads that cache
+  and never fetches, and a cache miss is "transport unavailable" rather
+  than a fallback clearnet call. See A.4's bullet of the same name for the
+  full rule and its tests.
 
 ## C.4 Tests (PR C)
 

@@ -37,7 +37,9 @@ import {
   open,
   MalformedSlotPayloadError,
 } from '../unlockEnvelopeStore';
+import argon2 from 'argon2-browser';
 import { WrongPasswordError, TIERS, tierBytes, encode, jsonToBytes } from '../hiddenVaultEnvelope';
+import { SIGNAL_TOKEN_LENGTH } from '../../duressSignalService';
 
 const USER_ID = 'user-42';
 const REAL_PASSWORD = 'correct horse battery staple';
@@ -183,6 +185,43 @@ describe('provision', () => {
     expect(decoy.duressToken).toEqual(expect.any(String));
   });
 
+  test('the compare-and-swap is re-checked AFTER encode, not only before it', async () => {
+    // The pre-encode check cannot see a decoy that arrives DURING the two
+    // Argon2 derivations -- a seconds-wide window in production. The test
+    // above configures the decoy BEFORE provision() is called, so it only
+    // exercises the pre-encode check; this one lands the write mid-encode by
+    // suspending inside the KDF, which is the only deterministic way to hit
+    // that window under the fast mock KDF.
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    const staleSnapshot = readRawEnvelope(USER_ID);
+
+    const realHash = argon2.hash.getMockImplementation();
+    argon2.hash.mockImplementation(async (opts) => {
+      // Restore FIRST: setDecoySlot below derives keys of its own and must
+      // not re-enter this injection.
+      argon2.hash.mockImplementation(realHash);
+      const result = await realHash(opts);
+      // "Another tab" configures a decoy while provision() is suspended
+      // inside encode(), after its pre-encode comparison already passed.
+      await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+      return result;
+    });
+
+    try {
+      await expect(provision({
+        userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: new Uint8Array(32).fill(7), saltB64: SALT,
+        replaceExisting: staleSnapshot,
+      })).rejects.toThrow(/changed/i);
+    } finally {
+      argon2.hash.mockImplementation(realHash);
+    }
+
+    // The decoy that arrived in the window is intact.
+    const decoy = await open({ userId: USER_ID, password: DECOY_PASSWORD });
+    expect(decoy.slotIndex).toBe(1);
+    expect(decoy.duressToken).toEqual(expect.any(String));
+  });
+
   test('rejects a dekBytes that is not a 32-byte Uint8Array', async () => {
     await expect(provision({
       userId: USER_ID,
@@ -255,7 +294,7 @@ describe('setDecoySlot', () => {
     });
 
     expect(typeof duressToken).toBe('string');
-    expect(duressToken).toHaveLength(44); // base64 of 32 CSPRNG bytes, same shape duressSignalService expects
+    expect(duressToken).toHaveLength(SIGNAL_TOKEN_LENGTH); // base64 of 32 CSPRNG bytes, the shape duressSignalService defines
 
     const result = await open({ userId: USER_ID, password: DECOY_PASSWORD });
     expect(result.slotIndex).toBe(1);
@@ -420,7 +459,7 @@ describe('open', () => {
 
     test.each([
       ['too short', 'abc'],
-      ['too long', 'a'.repeat(45)],
+      ['too long', 'a'.repeat(SIGNAL_TOKEN_LENGTH + 1)],
       ['a number', 12345],
       ['an object', { token: 'x' }],
       ['an empty string', ''],
@@ -442,8 +481,8 @@ describe('open', () => {
       expect(result.duressToken).toBeNull();
     });
 
-    test('a well-formed 44-char duress signal passes through unchanged', async () => {
-      const token = 'a'.repeat(44);
+    test('a well-formed full-length duress signal passes through unchanged', async () => {
+      const token = 'a'.repeat(SIGNAL_TOKEN_LENGTH);
       await sealPayloadWithDuress(token);
 
       const result = await open({ userId: USER_ID, password: REAL_PASSWORD });
