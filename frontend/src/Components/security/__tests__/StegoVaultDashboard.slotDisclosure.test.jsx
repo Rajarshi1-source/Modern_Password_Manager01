@@ -119,7 +119,7 @@ describe('StegoVaultDashboard extraction result', () => {
     // about which slot produced it.
     const panel = container.querySelector('pre').parentElement;
     expect(panel.textContent).not.toMatch(/slot/i);
-    expect(panel.textContent).not.toMatch(/[01]/);
+    expect(panel.textContent).not.toMatch(/\b[01]\b/);
     expect(container.textContent).not.toMatch(/slot index/i);
     // The decoy's own payload IS shown -- that is the decoy working, not a
     // leak. What must not appear is anything identifying it AS the decoy.

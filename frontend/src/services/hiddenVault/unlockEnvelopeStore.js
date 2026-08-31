@@ -319,6 +319,16 @@ export async function provision({
     kdfMemKib: DEFAULT_KDF_MEMORY_KIB,
     kdfPar: DEFAULT_KDF_PARALLELISM,
   });
+  // Re-run the same comparison after the await. `encode()` performs two Argon2
+  // derivations, so the window between the check above and this write is
+  // seconds wide -- long enough for another tab to complete `setDecoySlot()`
+  // inside it. Without this, that decoy's DEK and `__duress_signal` are
+  // destroyed by a write the pre-encode guard already judged safe. The
+  // `undefined` case is covered too: an envelope that APPEARED during the
+  // await also fails this comparison, rather than being silently replaced.
+  if (hasEnvelope(userId) && readRawEnvelope(userId) !== replaceExisting) {
+    throw new Error('provision: the stored envelope changed; refusing to replace it.');
+  }
   saveEnvelope(userId, blob);
 }
 

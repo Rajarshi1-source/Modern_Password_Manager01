@@ -308,6 +308,15 @@ backend app — the backend already supports this operation.
    would mean the sidecar ships and is never used. See A.5 for the full
    argument; this line exists so an implementer reading only this summary
    cannot rebuild the bug A.5 already fixed.
+   **That main-process capability fetch is authenticated by the forwarded
+   `authToken`, which Phase 4 removes** — the capabilities endpoint is
+   `IsAuthenticated`, and an anonymous redemption carries no account token at
+   all. So when Phase 4 lands, the address resolution moves to the clearnet,
+   JWT-authenticated credential ISSUANCE exchange and is cached there;
+   redemption reads the cache and never fetches, and a cache miss is
+   "transport unavailable", never a fallback clearnet call. Recorded here so
+   the two phases cannot be implemented in an order that leaves the
+   bootstrap with no credential; A.4 carries the full rule.
 3. Reuse the Phase 1 service contract verbatim so the renderer code is identical
    across web and desktop; only the transport differs.
 4. Health/bootstrap UI: reuse `DarkProtocolDashboard.jsx`, which already renders
@@ -333,6 +342,13 @@ aspirational, replace the JWT on the vault-proxy path with an anonymous
 credential (blind-signed token / OPRF), issued over clearnet and redeemed over
 onion, so the redemption is unlinkable to issuance. Until then, Phase 1's UI
 copy is the honest fix. Treat as its own design doc.
+**Two ordering rules the design doc must carry** (C.2/C.3 state them in full):
+a redeemed credential authorises `vault_sync` and nothing else, so the
+route-scope check must run **before** the single-use nonce is claimed — DRF
+evaluates permissions ahead of the view, so a claim made during permission
+evaluation would let a forbidden operation burn a user's token; and the
+onion-address resolution above must already have happened at issuance, since
+the redemption path has no credential to authenticate a capability fetch.
 
 #### Tests (per phase)
 

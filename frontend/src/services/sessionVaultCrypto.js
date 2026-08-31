@@ -340,12 +340,17 @@ const unwrapDek = async (vaultPassword, record, extractable) => {
 };
 
 /**
- * Unlock an existing wrapped DEK using the user's vault password. Installs
- * the unwrapped DEK as the current session key. Throws if the password is
- * wrong or the stored record is missing/corrupt.
+ * Load and validate the path (B) wrapped-DEK record for `userId`.
+ *
+ * Shared by `unlockWithVaultPassword` and `exportWrappedDekRaw`, which read
+ * the SAME record: one copy of the storage key, the parse, and the version
+ * check, so a later record-format change cannot be applied to one caller and
+ * forgotten in the other. Purely synchronous — callers that reserve a session
+ * generation must still do so AFTER this returns and BEFORE any await, which
+ * is the ordering `unlockWithVaultPassword` documents below.
  */
-export const unlockWithVaultPassword = async (vaultPassword, userId) => {
-  if (!userId) throw new Error('unlockWithVaultPassword: userId required');
+const loadWrappedRecord = (userId, fnName) => {
+  if (!userId) throw new Error(`${fnName}: userId required`);
   const raw = localStorage.getItem(wrappedStorageKey(userId));
   if (!raw) throw new Error('No vault key has been set up for this account.');
 
@@ -358,6 +363,16 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
   if (!record || record.v !== WRAPPED_VERSION) {
     throw new Error('Unsupported vault key record version.');
   }
+  return record;
+};
+
+/**
+ * Unlock an existing wrapped DEK using the user's vault password. Installs
+ * the unwrapped DEK as the current session key. Throws if the password is
+ * wrong or the stored record is missing/corrupt.
+ */
+export const unlockWithVaultPassword = async (vaultPassword, userId) => {
+  const record = loadWrappedRecord(userId, 'unlockWithVaultPassword');
 
   // Reserved AFTER the synchronous validation above (so a record that fails
   // to even parse never bumps this) and BEFORE the slow unwrap step below --
@@ -408,19 +423,7 @@ export const clearWrappedKey = (userId) => {
  * is a side channel for provisioning only.
  */
 export const exportWrappedDekRaw = async (vaultPassword, userId) => {
-  if (!userId) throw new Error('exportWrappedDekRaw: userId required');
-  const raw = localStorage.getItem(wrappedStorageKey(userId));
-  if (!raw) throw new Error('No vault key has been set up for this account.');
-
-  let record;
-  try {
-    record = JSON.parse(raw);
-  } catch {
-    throw new Error('Vault key record is corrupt. Please reset the vault.');
-  }
-  if (!record || record.v !== WRAPPED_VERSION) {
-    throw new Error('Unsupported vault key record version.');
-  }
+  const record = loadWrappedRecord(userId, 'exportWrappedDekRaw');
 
   const dek = await unwrapDek(vaultPassword, record, true);
   const rawDek = await window.crypto.subtle.exportKey('raw', dek);
