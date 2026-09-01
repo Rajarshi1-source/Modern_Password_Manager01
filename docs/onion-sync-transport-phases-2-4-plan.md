@@ -554,6 +554,27 @@ contract that already defines "sync data" precisely:
   `created_at`, and `updated_at` are server-assigned there
   (`read_only_fields`) and must not be accepted from the renderer either.
   Any other key on an item is refused.
+  **Today's producer sends all three, so the allowlist as written rejects
+  every queued `add` on the native path — normalise at the producer, in the
+  same PR.** `VaultContext.addItem` builds its pending-change item from the
+  POST response and keeps `id`, `created_at` and `updated_at` on it
+  (`VaultContext.jsx:712-721`); `syncVault` then spreads that item into
+  `syncData.items[]` and deletes only `type` and `data` (`:534-547`). Those
+  three server-assigned keys therefore reach the IPC boundary on every add,
+  where "any other key on an item is refused" refuses the whole call — a
+  transport that fails for exactly the operation it exists to carry, and
+  fails only on desktop/mobile, which is the hardest shape of bug to
+  attribute. The fix belongs at the producer, not in a softened allowlist:
+  strip the server-assigned trio in `syncVault`'s item build (they are
+  `read_only_fields` server-side, so the clearnet path already ignores them
+  today and loses nothing), leaving exactly the writable set above. Do NOT
+  relax the allowlist to admit them instead — the whole point of deriving it
+  from `VaultItemSerializer`'s writable fields is that the boundary refuses
+  what the server would not honour anyway. Round-trip test: queue an add
+  through `addItem`, run `syncVault` over the native transport, and assert
+  the serialized payload passes the allowlist unchanged — the case a test
+  built from a hand-written item literal would miss entirely, since it is
+  the PRODUCER's shape, not the schema's, that is wrong here.
   **`last_used_at` is easy to miss and must not be:** it appears in
   `VaultItemSerializer.fields` but NOT in its `read_only_fields`, so it is
   genuinely writable, and the model declares it `null=True, blank=True`
@@ -824,9 +845,25 @@ state (§4.1 Phase 2 step 4). Feed it `tor:status`. Add no new component.
       no JavaScript cleanup can run at all — a named OS-level
       parent-lifetime mechanism is in place per platform and verified by a
       real parent-kill test, not by calling `stop()`: a Windows Job Object
-      with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and a process-group kill
-      (or `prctl(PR_SET_PDEATHSIG)` on Linux / `kqueue` `NOTE_EXIT` watch on
-      macOS) on the Unix targets. **Stated as two separate criteria on
+      with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`; on Linux, a CHILD-side
+      `prctl(PR_SET_PDEATHSIG, SIGKILL)` set in the spawned process before it
+      execs `tor`; on macOS, an independent supervisor process or a
+      child-side `kqueue` `EVFILT_PROC`/`NOTE_EXIT` watch on the PARENT's
+      pid that exits the child when it fires.
+      **A process-group kill does not satisfy this and must not be listed as
+      an alternative** (an earlier draft of this line offered it as one, with
+      `prctl`/`kqueue` as a parenthetical): `killpg()` only signals a group
+      when some LIVE process calls it, and a SIGKILLed parent calls nothing —
+      that is the definition of the scenario. Nor does a `kqueue` watch owned
+      by the parent, for the same reason: the watcher must be the child or an
+      independent process, never the process whose death is the event. A
+      process-group kill remains a useful complement on the paths where JS
+      *does* run (A.3's guarded `stop()`), but it cannot be what this
+      criterion is ticked with. The test must kill the parent with SIGKILL
+      and observe the OS mechanism act — never call `stop()`, which
+      exercises the path this criterion explicitly excludes — and must assert
+      `tor` no longer holds the `DataDirectory` lock, since a surviving lock
+      is what blocks the next launch. **Stated as two separate criteria on
       purpose:** the single unconditional "survives app quit, crash, or
       force-quit" line this replaces promised something JS cannot deliver
       and A.3's own exit-path bullet already says so — a criterion that
@@ -1377,6 +1414,40 @@ implementation. It must settle:
   that may not make that call. Test that a full `syncVault()` in anonymous
   mode issues NO request to the capabilities endpoint, and that the
   redemption carries neither an `Authorization` header nor `session_id`.
+
+  **"Answer from the cache" needs a defined HANDOFF, which the rule above
+  does not yet have.** The cached address A.4 describes lives in the desktop
+  MAIN process; `isOnionSyncAvailable()` runs in the RENDERER. Saying both
+  read "the same cache" is not implementable as stated — there is no path
+  between them, and the obvious one (ship the address across IPC) is the very
+  thing A.4 forbids, since `TOR_PROXY` deliberately has no destination field
+  so a compromised renderer cannot choose where the main process POSTs.
+  Define it as a BOOLEAN readiness answer, never the address:
+
+  - **Population.** The process that performs credential issuance caches
+    `anonymity.onion_address` from that same clearnet, JWT-authenticated
+    exchange, after the A.4 v3-hostname validation. On desktop that is the
+    main process, alongside the credential store; the address never crosses
+    IPC in either direction.
+  - **Read.** A status-shaped channel (`TOR_STATUS`'s existing shape is the
+    model) answers a single question — "is a validated address cached AND is
+    this device's transport ready?" — with a boolean.
+    `isOnionSyncAvailable()` on the anonymous path returns that boolean and
+    makes no network request of its own. A renderer that lies about the
+    answer gains nothing: it can only make the app decline to sync, or
+    attempt one the main process will refuse anyway.
+  - **Miss.** No cached address means unavailable, full stop — `prefer_onion`
+    degrades and reports it, `require_onion` throws. Never a fallback
+    capability fetch, which would be the deanonymizing request reappearing at
+    the one moment the design exists to prevent it.
+  - **Web.** There is no second process, so there is no handoff: the browser
+    caches the address in the same page session that performed issuance, in
+    memory only. A reload with no cached address is a miss, handled as above,
+    rather than a re-fetch.
+
+  Test the handoff itself, not only the outcome: a renderer availability call
+  with a populated cache resolves `true` and issues no HTTP request at all,
+  and the IPC reply is asserted to contain no `.onion` string.
 
 ## C.4 Tests (PR C)
 

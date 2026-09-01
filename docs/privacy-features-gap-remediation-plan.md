@@ -354,7 +354,22 @@ consults `isOnionSyncAvailable()` first, and that check makes its own
 JWT-authenticated `getCapabilities()` call, so an anonymous redemption would
 still be preceded every time by an authenticated clearnet request naming the
 account. Under Phase 4 that check answers from the issuance-time cache for
-every transport; Phases 1-3 keep today's behaviour unchanged.
+every transport; Phases 1-3 keep today's behaviour unchanged. **That cache is
+read across a process boundary, so it is a boolean handoff, not a shared
+value**: the issuing process caches the validated onion address and never
+sends it anywhere, and the renderer asks only "is one cached and is the
+transport ready?" — shipping the address itself over IPC would hand a
+compromised renderer the destination control Phase 2 step 2 above
+deliberately withholds. See the onion plan's C.3 for the full shape.
+
+**One Phase 2 implementation note that belongs here because it touches SHIPPED
+code, not just the plan:** the strict IPC item allowlist is derived from
+`VaultItemSerializer`'s writable fields, but `VaultContext.addItem` keeps the
+server-assigned `id`/`created_at`/`updated_at` on its pending-change item and
+`syncVault` forwards them. Phase 2 must strip those at the producer before the
+payload reaches IPC — they are `read_only_fields` server-side, so the clearnet
+path already ignores them — or every queued add fails on the native transport
+only.
 
 #### Tests (per phase)
 
