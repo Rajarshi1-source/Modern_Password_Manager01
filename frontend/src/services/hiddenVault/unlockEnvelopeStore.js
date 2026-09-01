@@ -375,6 +375,21 @@ export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
   if (!existing) {
     throw new Error('setDecoySlot: no envelope has been provisioned for this account yet.');
   }
+  // Compare-and-swap snapshot, taken from the SAME read as `existing` and for
+  // the same reason `provision` takes one (§26): `decode()` plus `encode()`
+  // below run three Argon2 derivations, so this function has its own
+  // seconds-wide window between reading the envelope and writing the
+  // replacement. Two outcomes are reachable inside it, both silent:
+  //   - Another `setDecoySlot` wins the race. Its slot 1 is overwritten by
+  //     this one, but its caller has ALREADY registered the token it was
+  //     handed with `duressSignalService` -- a token that can now never fire.
+  //     A dead alarm with no error anywhere is the exact failure the
+  //     `provision` guard was added to prevent.
+  //   - §9.1's self-heal `provision` completes inside the window with a NEW
+  //     real DEK. `realPayloadBytes` below was decoded from the stale blob,
+  //     so the write would carry the superseded real DEK forward and strand
+  //     everything encrypted under the new one.
+  const snapshot = readRawEnvelope(userId);
 
   // Throws WrongPasswordError if vaultPassword is wrong -- propagated as-is,
   // the caller (the duress-setup form) surfaces it as "incorrect current
@@ -438,6 +453,13 @@ export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
     kdfMemKib: DEFAULT_KDF_MEMORY_KIB,
     kdfPar: DEFAULT_KDF_PARALLELISM,
   });
+  if (readRawEnvelope(userId) !== snapshot) {
+    // Refusing is the safe direction: the caller has not registered anything
+    // yet (`duressToken` is returned only on success), so this degrades to
+    // "the decoy setup failed, try again" rather than a silently dead alarm
+    // or a rolled-back real DEK.
+    throw new Error('setDecoySlot: the stored envelope changed; refusing to replace it.');
+  }
   saveEnvelope(userId, blob);
 
   return { duressToken };

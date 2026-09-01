@@ -349,6 +349,12 @@ evaluates permissions ahead of the view, so a claim made during permission
 evaluation would let a forbidden operation burn a user's token; and the
 onion-address resolution above must already have happened at issuance, since
 the redemption path has no credential to authenticate a capability fetch.
+**The second rule reaches further than the transport layer**: `syncVault()`
+consults `isOnionSyncAvailable()` first, and that check makes its own
+JWT-authenticated `getCapabilities()` call, so an anonymous redemption would
+still be preceded every time by an authenticated clearnet request naming the
+account. Under Phase 4 that check answers from the issuance-time cache for
+every transport; Phases 1-3 keep today's behaviour unchanged.
 
 #### Tests (per phase)
 
