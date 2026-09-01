@@ -203,6 +203,24 @@ test('recovery with the REAL vault password in the decoy field reports the same 
   expect(registerSignalToken).not.toHaveBeenCalled();
 });
 
+test('a registerSignalToken failure on the RECOVERY form never echoes its message', async () => {
+  // registerSignalToken runs on exactly one recovery path -- the one where the
+  // submitted password opened slot 1 -- so echoing err.message made the error
+  // text itself the classification the form was rewritten to remove: only a
+  // DECOY submission could ever produce "Failed to register duress signal
+  // token", while a real or wrong password takes the success path.
+  mockOpenBySlot({ decoyPassword: 'my-decoy-password' });
+  registerSignalToken.mockRejectedValueOnce(new Error('Failed to register duress signal token'));
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  submitRecovery(getByLabelText, getByRole, 'my-decoy-password');
+
+  const alert = await findByRole('alert');
+  expect(alert).toHaveTextContent('Could not complete that request. Please try again.');
+  expect(alert.textContent).not.toMatch(/duress|decoy|signal|token|slot/i);
+});
+
 test('the SETUP form is not a password oracle either: a decoy password and a garbage password in the vault-password field render byte-identical output', async () => {
   // Greptile P1 (§21.1). §20.1 removed this oracle from the recovery form and
   // left it on the setup form directly above it: setDecoySlot used to throw a

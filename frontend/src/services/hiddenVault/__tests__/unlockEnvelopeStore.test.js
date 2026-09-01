@@ -368,6 +368,46 @@ describe('setDecoySlot', () => {
     expect(stillReal.dekBytes).toEqual(DEK);
   });
 
+  test('refuses to write when the stored envelope changed during its own derivations', async () => {
+    // setDecoySlot runs THREE Argon2 derivations (decode + encode) between
+    // reading the envelope and writing the replacement -- the same window
+    // provision guards in §26, previously unguarded here. Two losses are
+    // reachable inside it: a racing setDecoySlot whose token the caller has
+    // already registered (a permanently dead alarm), and §9.1's self-heal
+    // provision, whose new real DEK this write would roll back.
+    await provisionReal();
+
+    const realHash = argon2.hash.getMockImplementation();
+    argon2.hash.mockImplementation(async (opts) => {
+      // Restore FIRST -- the injected write derives keys of its own.
+      argon2.hash.mockImplementation(realHash);
+      const result = await realHash(opts);
+      // "Another tab" replaces the envelope mid-flight.
+      await provision({
+        userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: new Uint8Array(32).fill(9),
+        saltB64: SALT, replaceExisting: readRawEnvelope(USER_ID),
+      });
+      return result;
+    });
+
+    try {
+      await expect(setDecoySlot({
+        userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD,
+      })).rejects.toThrow(/changed/i);
+    } finally {
+      argon2.hash.mockImplementation(realHash);
+    }
+
+    // The newer envelope is intact: its real DEK was not rolled back to the
+    // one decoded from the stale snapshot.
+    const stillNew = await open({ userId: USER_ID, password: REAL_PASSWORD });
+    expect(stillNew.dekBytes).toEqual(new Uint8Array(32).fill(9));
+    // And no decoy was written, so nothing was returned for a caller to
+    // register with duressSignalService.
+    await expect(open({ userId: USER_ID, password: DECOY_PASSWORD }))
+      .rejects.toBeInstanceOf(WrongPasswordError);
+  });
+
   test('produces a blob of the same fixed tier size as provision()', async () => {
     await provisionReal();
     await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });

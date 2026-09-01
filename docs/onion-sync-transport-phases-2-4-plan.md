@@ -249,9 +249,17 @@ Requirements:
   child's generation) before killing, and have the handler take the failure
   branch only when the exit was NOT expected. An intentional stop ends in
   `stopped` with `lastError` cleared and no restart attempted; an unexpected
-  post-ready exit clears `socksPort` and `controlPort`, sets `lastError`,
-  and leaves ready so `isOnionSyncAvailable()` answers false. Test both
-  paths separately — a clean `stop()` asserting `lastError` stays null and
+  post-ready exit moves `state` OUT of ready FIRST -- to `stopped` (or
+  `failed`), which is what `isOnionSyncAvailable()` actually reads -- and
+  only then clears `socksPort`/`controlPort` and sets `lastError`. Ordering
+  it that way, rather than clearing the ports first, is deliberate: a status
+  still reporting ready while its ports are already null is a shape the
+  availability gate can accept, and the next sync would dial a dead SOCKS
+  listener. (An earlier draft of this bullet said the exit "leaves ready",
+  meaning DEPARTS from ready; read as "REMAINS ready" it says the opposite
+  of the rule 20 lines above, so it is spelled out here.) Assert both the
+  state transition and `isOnionSyncAvailable() === false` after the exit,
+  and test both paths separately — a clean `stop()` asserting `lastError` stays null and
   no respawn is attempted, and the crash case above asserting the opposite.
   Add a test for a stalled-bootstrap (deadline) case, not just the
   already-covered success path.
@@ -432,7 +440,10 @@ New `desktop/src/main/onionTransport.js`:
   serialized forms of BOTH requests: the issuance-time capability request
   carries the JWT and no credential, and the redemption request carries
   credential, `operation`, and sync data and NO account token — asserted on
-  the actual serialized request, not on the caller's arguments.
+  the actual serialized request, not on the caller's arguments. The same
+  cache-only rule governs the RENDERER's `isOnionSyncAvailable()` check,
+  which makes its own authenticated capability fetch one layer above this
+  one; see A.5 and C.3 for that half.
 - **Only `vault_sync` at first**, as §4.1 Phase 2 step 2 says. Extending to the
   rest of `VAULT_OPERATION_ROUTES` is a follow-up.
 - **Use `http://<addr>.onion/...`, not `https://`.** `backend-onion` in
@@ -587,7 +598,30 @@ payload field, is what keeps this compatible with the payload-shape
 validation immediately above: `authToken` is legitimate credential data the
 main process is meant to use, not a destination the renderer controls, so it
 must never be checked against — or confused with — the destination-field
-rejection rule. Mobile's `proxyVaultOperation` (B.3) needs the identical
+rejection rule.
+
+  **But it cannot be the THIRD POSITIONAL argument, because that position is
+  already taken and means something else.** The shipped web function is
+  `proxyVaultOperation(operation, payload, sessionId = null)`
+  (`darkProtocolService.js:253`), which serializes argument three as
+  `session_id` and gets its bearer token from `authHeaders()` instead. A.5's
+  `getVaultProxyTransport()` returns EITHER that function or the desktop
+  shim behind one call site, so `transport(operation, payload, x)` would mean
+  `session_id` on web and `Authorization` on desktop — and a mobile/desktop
+  call would land its bearer token in the `session_id` field, which the
+  server resolves as a user-scoped `GarlicSession` row. Define the third
+  argument as ONE options object for every transport instead:
+  `proxyVaultOperation(operation, payload, { authToken, credential, sessionId })`,
+  with at most one of `authToken`/`credential` present (the same "exactly one
+  authentication mode" rule C.3 enforces server-side, applied at the client
+  boundary). Web keeps sourcing its bearer from `authHeaders()` and keeps
+  serializing `sessionId` as `session_id` exactly as today, so Phase 1
+  behaviour and tests do not move; the native transports read `authToken` and
+  set the header themselves. `sessionId` must be absent on any request
+  carrying a `credential` — per C.3, an anonymous redemption sends no
+  account-scoped handle at all — and the transport should reject the
+  combination rather than silently dropping it. Wire tests for both modes on
+  both native paths, asserting on the serialized request. Mobile's `proxyVaultOperation` (B.3) needs the identical
 fix, sourced from wherever the RN app already holds its own bearer token
 today.
 
@@ -703,6 +737,15 @@ Two small, additive changes, both in `frontend/src/services/`:
    `torSidecar.getStatus()` reports ready, with `vault_proxy.available:
    false` throughout (proving that field is never consulted on this
    platform).
+
+   **PR C changes what this check may CALL, not what it decides.** The
+   `getCapabilities()` fetch here is JWT-authenticated clearnet, so leaving
+   it in front of an anonymous redemption would re-link that redemption to
+   an account by timing (C.3's bullet of the same name). Once C lands, the
+   anonymous path answers this check from the issuance-time cached
+   `anonymity.onion_address` instead of fetching, with the local
+   transport-readiness half unchanged. Phases 1-3 — everything before
+   anonymous credentials exist — keep this check exactly as specified above.
 
    **The bootstrapping case splits in two, and conflating them is what an
    earlier draft of this very list got wrong.** "Still bootstrapping" is not
@@ -1313,6 +1356,27 @@ implementation. It must settle:
   and never fetches, and a cache miss is "transport unavailable" rather
   than a fallback clearnet call. See A.4's bullet of the same name for the
   full rule and its tests.
+
+  **This must extend to the RENDERER's availability check, which is the same
+  authenticated fetch one layer up.** `syncVault()` calls
+  `isOnionSyncAvailable()` before it ever reaches a transport, and that
+  function calls `darkProtocolService.getCapabilities()`
+  (`onionSyncService.js:101-108`), which sends the JWT over clearnet. So an
+  anonymous redemption would still be immediately preceded, every time, by an
+  authenticated clearnet request from the same IP naming the same account —
+  handing the server the correlation by timing that the credential removed
+  from the request body. Removing the JWT from the redemption is not
+  sufficient if the request before it carries one on the user's behalf.
+  Under PR C the availability check must answer from the SAME issuance-time
+  cache, for every transport, not just desktop's main-process lookup: a cache
+  hit answers `true` (subject to the local transport-readiness check A.5
+  already requires) without any capability fetch, and a cache miss is
+  "transport unavailable" — `prefer_onion` degrades, `require_onion` fails
+  closed — never a fallback fetch. Phases 1-3 keep today's
+  `getCapabilities()`-backed check unchanged; it is only the anonymous path
+  that may not make that call. Test that a full `syncVault()` in anonymous
+  mode issues NO request to the capabilities endpoint, and that the
+  redemption carries neither an `Authorization` header nor `session_id`.
 
 ## C.4 Tests (PR C)
 

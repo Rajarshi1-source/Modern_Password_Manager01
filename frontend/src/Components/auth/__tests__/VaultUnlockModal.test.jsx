@@ -264,6 +264,34 @@ describe('unlock mode — stored envelope is unusable, falls back to the legacy 
     );
   });
 
+  test('the CAS token names the blob the attempt SAW, not one that replaced it mid-decode', async () => {
+    // open() awaits a decode -- two Argon2 derivations. A tab that replaces
+    // the envelope inside that window must not have its NEW, valid blob
+    // authorised for replacement by this self-heal. Reading the token in the
+    // catch block would capture exactly that replacement.
+    unlockEnvelopeStore.readRawEnvelope.mockReturnValueOnce('BLOB_THIS_ATTEMPT_SAW');
+    unlockEnvelopeStore.open.mockImplementation(async () => {
+      // "Another tab" writes during the decode; any later read sees this one.
+      unlockEnvelopeStore.readRawEnvelope.mockReturnValue('NEWER_BLOB_FROM_ANOTHER_TAB');
+      throw new MalformedBlobError('bad magic');
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'legacy-password');
+
+    await waitFor(() => expect(unlockEnvelopeStore.provision).toHaveBeenCalled());
+    expect(unlockEnvelopeStore.provision).toHaveBeenCalledWith(
+      expect.objectContaining({ replaceExisting: 'BLOB_THIS_ATTEMPT_SAW' })
+    );
+    // provision's own compare-and-swap then refuses, because what is stored
+    // is the newer blob -- which is the point: the decoy in it survives.
+    expect(unlockEnvelopeStore.provision).not.toHaveBeenCalledWith(
+      expect.objectContaining({ replaceExisting: 'NEWER_BLOB_FROM_ANOTHER_TAB' })
+    );
+  });
+
   test('a structurally corrupt (MalformedBlobError) envelope falls back to the wrapped-DEK record', async () => {
     unlockEnvelopeStore.open.mockRejectedValue(new MalformedBlobError('bad magic'));
     vi.spyOn(console, 'warn').mockImplementation(() => {});

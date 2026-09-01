@@ -365,10 +365,19 @@ const VaultDuressSetup = () => {
       setRecoverySuccess(true);
     } catch (err) {
       // Operational faults only (registration request failed, envelope
-      // unreadable). Deliberately NOT a classification signal: this branch is
-      // unreachable for a merely wrong or real password, and its message says
-      // nothing about which slot anything opened.
-      setRecoveryError(err?.message || 'Could not complete that request. Please try again.');
+      // unreadable) -- and the message is FIXED, never `err.message`.
+      //
+      // `registerSignalToken` runs on exactly one path: the one where the
+      // submitted password opened slot 1. So its failure text ("Failed to
+      // register duress signal token") is reachable ONLY for the decoy
+      // password, while a real or wrong password takes the success path --
+      // which makes the error string itself the classification this form was
+      // rewritten to remove. Echoing `err.message` reintroduced the §22
+      // oracle through the error channel, the same way §20.1's leak came back
+      // through the network channel: the outcome must be indistinguishable on
+      // EVERY surface, not only the ones already checked.
+      console.warn('VaultDuressSetup: recovery submission failed.', err);
+      setRecoveryError('Could not complete that request. Please try again.');
     } finally {
       setRecoveryBusy(false);
     }

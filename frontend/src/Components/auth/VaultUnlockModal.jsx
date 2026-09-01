@@ -169,6 +169,15 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
   // with a fresh, valid one on success, so this also self-heals the
   // corruption rather than just routing around it once.
   const runEnvelopeUnlockWithFallback = async () => {
+    // Snapshot BEFORE the attempt, not in the catch below. `open()` awaits a
+    // decode -- two Argon2 derivations -- and a tab that replaces the
+    // envelope inside that window would otherwise be the blob a catch-side
+    // read captures, so the self-heal would authorise replacing a NEWER,
+    // VALID envelope (destroying its decoy DEK and duress token) instead of
+    // the broken one this attempt actually failed on. Reading first makes the
+    // token name the blob we set out to open; if it changed since, provision
+    // refuses, which is the correct outcome.
+    const attemptedBlob = unlockEnvelopeStore.readRawEnvelope(userId);
     try {
       await runEnvelopeUnlock();
     } catch (err) {
@@ -180,15 +189,15 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
       // left for provision's default refusal to protect -- replacing it is
       // the self-heal (§9.1), and refusing here would strand the user.
       //
-      // Snapshot the exact blob that just failed and authorise replacing THAT
-      // one only. runUpgrade awaits two slow key derivations before it
-      // provisions, and another tab can configure a decoy inside that window;
-      // an unconditional "replace" would destroy it. On mismatch provision
-      // refuses, runUpgrade swallows it as a non-fatal upgrade failure, and
-      // the user still unlocks via the legacy record -- the correct outcome,
-      // since the envelope is now someone else's newer, valid one.
-      const staleBlob = unlockEnvelopeStore.readRawEnvelope(userId);
-      await runUpgrade({ replaceExisting: staleBlob });
+      // Authorise replacing the blob this attempt SAW (captured above) and
+      // nothing else. runUpgrade awaits two more slow key derivations before
+      // it provisions, and another tab can configure a decoy inside that
+      // window too; an unconditional "replace" would destroy it. On mismatch
+      // provision refuses, runUpgrade swallows it as a non-fatal upgrade
+      // failure, and the user still unlocks via the legacy record -- the
+      // correct outcome, since the envelope is now someone else's newer,
+      // valid one.
+      await runUpgrade({ replaceExisting: attemptedBlob });
     }
   };
 

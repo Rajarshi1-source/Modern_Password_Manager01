@@ -2970,3 +2970,95 @@ while the existing pre-encode test still passes, which is precisely the gap.
 
 725 tests across 59 files, targeted to the services, security, auth, context
 and route suites this round touches.
+
+## 27. Seventeenth review round (CodeRabbit) — the same await window, in the two places §26 did not look
+
+### 27.1 `setDecoySlot` had the identical unguarded window
+
+§26 closed `provision`'s check-then-write-across-an-await gap and stopped
+there. `setDecoySlot` sits beside it, reads the envelope at its top, then runs
+`decode()` **and** `encode()` — three Argon2 derivations — before writing
+unconditionally. Two losses are reachable inside that window, both silent:
+
+- **Two `setDecoySlot` calls race.** The loser's slot 1 is overwritten, but its
+  caller has already handed the returned `duressToken` to
+  `duressSignalService`. That token can never fire again: the alarm is dead,
+  with no error anywhere. This is precisely the failure the `provision` guard
+  was written for, reachable through the function the guard did not cover.
+- **§9.1's self-heal `provision` completes inside the window** with a new real
+  DEK. `realPayloadBytes` was decoded from the stale blob, so the write carries
+  the superseded real DEK forward and strands everything encrypted under the
+  new one.
+
+Fixed with the same compare-and-swap `provision` uses: a `readRawEnvelope()`
+snapshot taken from the same read as `existing`, re-compared immediately before
+`saveEnvelope`. Refusing is the safe direction here — `duressToken` is returned
+only on success, so nothing has been registered yet, and the caller sees "the
+decoy setup failed, try again" rather than a dead alarm.
+
+This does not create a duress oracle: the refusal is reachable only *after*
+`decode()` succeeded on slot 0, i.e. only for the correct real vault password.
+A decoy or wrong password still throws `WrongPasswordError` earlier, with the
+message §21.1 equalised.
+
+### 27.2 The self-heal's CAS token named the wrong blob
+
+§24.3 established that `replaceExisting` must be the blob the caller *saw*.
+`VaultUnlockModal` read it in the `catch`, i.e. **after** `open()` had already
+awaited a decode. A tab replacing the envelope during that decode wins the
+read, so the self-heal would authorise replacing a NEWER, VALID envelope —
+destroying exactly the decoy DEK and duress token the compare-and-swap exists
+to protect — instead of the broken blob the attempt actually failed on.
+
+Moved the read to before `runEnvelopeUnlock()` is invoked. The token now names
+the blob this attempt set out to open; if the stored value moved on since,
+`provision` refuses, `runUpgrade` swallows that as a non-fatal upgrade failure,
+and the user still unlocks via the legacy record. A snapshot taken fractionally
+before `open()`'s own load can at worst be one revision stale, which fails
+safe in the same direction.
+
+### 27.3 The recovery form's error text was still a classifier
+
+§22 removed the recovery form's *network-side* oracle and §20.1 its rendered
+one, and the catch block's own comment claimed its message "says nothing about
+which slot anything opened." It echoed `err?.message`. `registerSignalToken` is
+called on exactly one path — the one where the submitted password opened slot 1
+— so its failure text ("Failed to register duress signal token") was reachable
+**only** for the decoy password, while a real or wrong password took the
+success path. The error channel was doing the classification the display and
+network channels had each been fixed not to do.
+
+Now a fixed string for every fault, with the real error going to
+`console.warn` for diagnosis. This is the third channel of the same finding
+(display § 20.1, network § 22, error text § 27.3) — the recurring lesson is
+that equalising an outcome means equalising it on *every* surface a caller can
+read, and that a comment asserting a property is not evidence the code has it.
+
+### 27.4 Three plan-doc corrections from the same round
+
+- **"Leaves ready" read two ways.** §26's Tor-lifecycle wording meant "departs
+  from ready"; read as "remains ready" it contradicted the rule 20 lines above
+  and would license an availability gate accepting cleared ports. Rewritten to
+  order the transition explicitly: leave ready FIRST, then clear
+  `socksPort`/`controlPort` and set `lastError`.
+- **The transport's third argument was already taken.** The plan proposed
+  `proxyVaultOperation(operation, payload, authToken)` for the native
+  transports, but the shipped web function is
+  `proxyVaultOperation(operation, payload, sessionId)`, which serializes
+  argument three as `session_id` — and A.5's `getVaultProxyTransport()` puts
+  both behind one call site. A native call would have landed its bearer token
+  in a user-scoped `GarlicSession` handle. Replaced with one options object,
+  `{ authToken, credential, sessionId }`, carrying the same "exactly one
+  authentication mode" rule at the client boundary.
+- **The availability check leaked what the redemption no longer carries.**
+  `syncVault()` calls `isOnionSyncAvailable()`, which calls the
+  JWT-authenticated `getCapabilities()`. Under PR C every anonymous redemption
+  would be immediately preceded by an authenticated clearnet request from the
+  same IP naming the same account — the correlation by timing that removing the
+  JWT from the body was supposed to prevent. The cache-only rule §26 gave
+  desktop's main-process lookup now extends to the renderer check for every
+  transport; Phases 1-3 are unchanged.
+
+728 tests across 59 files, targeted to the services, security, auth, context
+and route suites; all three code fixes negative-controlled (reverting any one
+fails its own new test and nothing else). `eslint` clean on the changed files.
