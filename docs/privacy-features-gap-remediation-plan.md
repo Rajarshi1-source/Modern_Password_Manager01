@@ -645,6 +645,7 @@ onion case):
   misattribution lesson in its §13, not to the onion-sync plan the findings
   themselves were about). Read those before assuming either carry-over
   plan's original design text is the literal shipped behavior.
+  **A later round found the same class once more, in the queue scoping this remediation itself added:** clearing `pendingChanges` STATE on an identity change does not clear `pendingChangesRef`, which is what `syncVault` actually reads, so account A's queued writes and deletions could still be flushed into account B's vault by a timer firing between the two. `syncVault` now refuses any queue whose owner is not the identity currently authenticated. **The recurring shape: a guard is only as good as the copy of the state it clears.**
 
 ## 6. Acceptance criteria
 

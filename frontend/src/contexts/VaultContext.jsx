@@ -38,9 +38,22 @@ export const VaultProvider = ({ children }) => {
   const [pendingChanges, setPendingChanges] = useState([]);
   // Fix stale closure in syncVault when called via setTimeout
   const pendingChangesRef = useRef(pendingChanges);
+  // The identity that queued whatever `pendingChangesRef` currently holds.
+  // `syncVault` refuses to flush a queue whose owner is not the identity now
+  // authenticated -- see its guard, and the identity effect that resets both.
+  const pendingChangesOwnerRef = useRef(null);
+  // Mirrors the authenticated identity for the same reason the queue does:
+  // `syncVault` runs from a `setTimeout` whose closure can predate an account
+  // switch, so it cannot read identity from its own scope.
+  const activeIdentityRef = useRef(null);
 
   useEffect(() => {
     pendingChangesRef.current = pendingChanges;
+    // Tag the queue with whoever is authenticated as it is committed. The
+    // identity effect below updates `activeIdentityRef` before clearing the
+    // queue, so a queue committed under A keeps owner A even after the
+    // switch, and the guard in `syncVault` sees the mismatch.
+    pendingChangesOwnerRef.current = activeIdentityRef.current;
   }, [pendingChanges]);
 
   const [lastSyncTime, setLastSyncTime] = useState(localStorage.getItem('lastSyncTime') || new Date().toISOString());
@@ -54,6 +67,14 @@ export const VaultProvider = ({ children }) => {
   // dispatches once the session key is established).
   const [sessionUnlocked, setSessionUnlocked] = useState(() => hasVaultSessionKey());
   const { isAuthenticated, user } = useAuth(); // Get auth status + identity
+  // Written during RENDER, not in an effect. An effect's write lands one
+  // commit late, and the gap between an account switch and that commit is
+  // exactly where a queued `setTimeout(() => syncVault(), 0)` fires. Assigning
+  // a ref from a value derived purely from context is idempotent and safe to
+  // do here; it is what lets `syncVault` compare "who owns this queue"
+  // against "who is authenticated now" without either value coming from its
+  // own (possibly pre-switch) closure.
+  activeIdentityRef.current = isAuthenticated ? (user?.id ?? user?.email ?? null) : null;
 
   // Fix #8: Use useMemo for vaultService
   const vaultService = useMemo(() => new VaultService(), []);
@@ -195,6 +216,17 @@ export const VaultProvider = ({ children }) => {
     // identity, so this effect does not re-run and the queue is preserved for
     // the real session exactly as `syncVault`'s decoy gate intends.
     setPendingChanges([]);
+    // ...and drop the REF synchronously, which the state update alone does
+    // not do. `setPendingChanges` only schedules a re-render;
+    // `pendingChangesRef` is refreshed by the effect above on a LATER commit,
+    // and `syncVault` reads the ref, not the state. A
+    // `setTimeout(() => syncVault(), 0)` queued by the previous identity can
+    // fire inside that gap and flush account A's ciphertext and deletion ids
+    // using account B's credentials -- the exact outcome clearing the queue
+    // here was added to prevent, surviving through the ref the queue is
+    // actually read from.
+    pendingChangesRef.current = [];
+    pendingChangesOwnerRef.current = activeIdentityRef.current;
     setSessionUnlocked(hasVaultSessionKey());
     refreshItems();
     // 'vault:updated' fires from the add/edit write paths AND from the login
@@ -512,6 +544,20 @@ export const VaultProvider = ({ children }) => {
     // promise rejection rather than reaching any caller. The queue is left
     // intact on purpose, so the real session flushes it on its next sync.
     if (sessionVaultCrypto.isDecoySession()) {
+      return;
+    }
+
+    // Queued work belongs to the identity that created it. This callback runs
+    // from `setTimeout(..., 0)`, so it can fire after an account switch while
+    // still holding the previous account's queue; flushing then would POST A's
+    // ciphertext into B's vault and delete B's rows by A's item_ids, using B's
+    // credentials. Both sides are read from refs on purpose -- the closure
+    // itself predates the switch, so nothing in scope here is trustworthy for
+    // this comparison. Dropping the queue rather than keeping it is right:
+    // it can never be flushed correctly from a session that does not own it.
+    if (pendingChangesOwnerRef.current !== activeIdentityRef.current) {
+      pendingChangesRef.current = [];
+      pendingChangesOwnerRef.current = activeIdentityRef.current;
       return;
     }
 
