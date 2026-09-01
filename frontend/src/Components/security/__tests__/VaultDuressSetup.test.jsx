@@ -260,6 +260,76 @@ test('the SETUP form is not a password oracle either: a decoy password and a gar
   expect(decoy.alertText).not.toMatch(/decoy|real slot|did not resolve/i);
 });
 
+test('a lock that happens AFTER the form is filled still blocks the submission', async () => {
+  // The lock paths -- manual, inactivity, cross-tab -- all go through
+  // handleLockVault, which calls clearSessionKey() and dispatches NO DOM
+  // event, so nothing forces this screen to re-render. Filling first and
+  // locking second reproduces that exactly: the click lands on a form that was
+  // rendered while the vault was still unlocked, so only the submit-time
+  // re-check can stop it.
+  mockHasSessionKey.mockReturnValue(true);
+  const { getByLabelText, getByRole, container } = render(<VaultDuressSetup />);
+
+  fireEvent.change(getByLabelText(/current vault password/i), { target: { value: REAL_PASSWORD } });
+  fireEvent.change(getByLabelText(/new decoy password/i), { target: { value: 'a decoy password 12+' } });
+  fireEvent.change(getByLabelText(/confirm decoy password/i), { target: { value: 'a decoy password 12+' } });
+
+  // Vault locks while this screen sits mounted. No event, no re-render.
+  mockHasSessionKey.mockReturnValue(false);
+  fireEvent.click(getByRole('button', { name: /save decoy password/i }));
+
+  await waitFor(() => expect(container.textContent).toMatch(/unlock your vault first/i));
+  // Nothing password-dependent ran: no decode, no request, and above all no
+  // "Incorrect vault password." for a password that opens this very vault.
+  expect(unlockEnvelopeStore.setDecoySlot).not.toHaveBeenCalled();
+  expect(registerSignalToken).not.toHaveBeenCalled();
+  expect(container.textContent).not.toMatch(/incorrect/i);
+});
+
+test('a post-lock submission renders identically for a real, decoy and garbage password', async () => {
+  // The refusal must not become the classifier it was added to remove.
+  const outcomeFor = async (password) => {
+    mockHasSessionKey.mockReturnValue(true);
+    const { getByLabelText, getByRole, container, unmount } = render(<VaultDuressSetup />);
+    fireEvent.change(getByLabelText(/current vault password/i), { target: { value: password } });
+    fireEvent.change(getByLabelText(/new decoy password/i), { target: { value: 'a decoy password 12+' } });
+    fireEvent.change(getByLabelText(/confirm decoy password/i), { target: { value: 'a decoy password 12+' } });
+    mockHasSessionKey.mockReturnValue(false);
+    fireEvent.click(getByRole('button', { name: /save decoy password/i }));
+    await waitFor(() => expect(container.textContent).toMatch(/unlock your vault first/i));
+    const html = container.innerHTML;
+    unmount();
+    return html;
+  };
+
+  const real = await outcomeFor(REAL_PASSWORD);
+  const decoy = await outcomeFor('my-decoy-password');
+  const garbage = await outcomeFor('not any password at all');
+
+  expect(real).toBe(decoy);
+  expect(decoy).toBe(garbage);
+});
+
+test('a post-lock RECOVERY submission is blocked before it opens the envelope', async () => {
+  mockOpenBySlot({ decoyPassword: 'my-decoy-password' });
+  mockHasSessionKey.mockReturnValue(true);
+  const { getByLabelText, getByRole, container } = render(<VaultDuressSetup />);
+
+  fireEvent.change(getByLabelText(/vault password/i, { selector: '#duress-recovery-vault-password' }), {
+    target: { value: REAL_PASSWORD },
+  });
+  fireEvent.change(getByLabelText(/decoy password/i, { selector: '#duress-recovery-password' }), {
+    target: { value: 'my-decoy-password' },
+  });
+
+  mockHasSessionKey.mockReturnValue(false);
+  fireEvent.click(getByRole('button', { name: /recover unregistered alarm/i }));
+
+  await waitFor(() => expect(container.textContent).toMatch(/unlock your vault first/i));
+  expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();
+  expect(registerSignalToken).not.toHaveBeenCalled();
+});
+
 test('the setup form never echoes a raw service error message', async () => {
   // The `else` branch used to surface err.message verbatim, which is how the
   // slot-specific string reached the screen. Any future service error string
