@@ -3146,3 +3146,99 @@ component satisfies it reads as complete and cannot be implemented.
 
 729 tests across 59 files; `eslint` clean on the changed files. The export fix
 is negative-controlled: removing the entry fails its test alone.
+
+## 29. Nineteenth review round — a real queue race, and a P1 that the decoy gate already answers
+
+### 29.1 The sync queue survived an identity change through the REF, not the state
+
+§23.1 added `setPendingChanges([])` to the identity effect so account A's queued
+writes and deletions could not be flushed by account B. That clears the STATE.
+`syncVault` reads `pendingChangesRef.current` — deliberately, because it runs
+from `setTimeout(() => syncVault(), 0)` where a state read would be stale — and
+that ref is refreshed by a separate effect on a LATER commit. So the fix cleared
+the copy nothing reads and left the copy everything reads:
+
+```
+identity switches A → B
+  ├─ setPendingChanges([])        state cleared, re-render scheduled
+  ├─ [timer fires here]           pendingChangesRef.current is STILL A's queue
+  └─ effect: pendingChangesRef.current = []
+```
+
+A timer landing in that gap POSTs A's ciphertext, and A's `deleted_items` ids
+(which the sync endpoint applies as real deletions), into B's vault under B's
+credentials — precisely the outcome §23.1 was written to prevent, surviving
+through the reference the guard never touched. This is the §26/§27 lesson in a
+third form: **a guard is only as good as the copy of the state it clears**, the
+same way a check is only as good as the side of the `await` it sits on.
+
+Two changes close it:
+
+- `syncVault` refuses any queue whose owner is not the identity now
+  authenticated. Both sides are read from REFS, never from the callback's own
+  scope: the closure predates the switch, so nothing lexically in it can be
+  trusted for this comparison. `activeIdentityRef` is written during RENDER
+  rather than in an effect, because an effect's write lands one commit late —
+  which is the very gap being closed. The stale queue is dropped rather than
+  kept: it can never be flushed correctly by a session that does not own it.
+- The identity effect drops the ref alongside the state, matching how every
+  other per-account cache on those lines is handled.
+
+**Reported honestly: the owner guard is the load-bearing fix and the ref drop
+is not independently covered.** The new logout test fails when the guard is
+removed and passes when only the ref drop is removed — because through the
+public API React's effects always flush before a test can call `syncVault`, so
+the gap the ref drop closes is not reachable from a test, and the guard closes
+it anyway. The ref drop stays as the same clearing discipline its neighbours
+follow, not as a second load-bearing mechanism.
+
+The logout case is what makes the guard testable, and it is a real gap in its
+own right: the identity effect's `!isAuthenticated` branch returns early and
+clears neither the queue state nor its ref, so between logout and the next
+login the queue sits armed. Only the owner comparison stops it.
+
+### 29.2 Greptile P1 "setup registration classifies the real password" — declined, with the work shown
+
+The claim: only the real vault password reaches `finishRegistration`, which
+produces both a success message and an authenticated `registerSignalToken`
+request, while decoy and invalid passwords produce an identical failure and no
+request — so an observer can distinguish the real password, defeating
+deniability.
+
+Every factual part is accurate. The conclusion does not follow, by the two
+tests §24.1 established after a P1 was wrongly declined on the first alone:
+
+- **(a) Does it identify the DECOY?** No. Decoy and invalid are byte-identical
+  in output AND in traffic (§21.1, and Greptile's own probe reports "setup
+  decoy and invalid output/calls match"). What is distinguishable is the REAL
+  password — which §22 already recorded as unavoidable and harmless: it is the
+  credential that grants access, and anyone who can demonstrate it already
+  holds the vault.
+- **(b) Does any surface CONTRADICT what this session already showed the
+  coercer?** No, because the premise "someone who can operate this
+  authenticated screen" is not satisfiable by a coercer. §23.1 blocks the
+  ENTIRE screen — setup form included — in a decoy session, rendering a
+  neutral panel with no inputs. There is no submission to make and no
+  registration request to observe. That gate is enforced by tests asserting
+  no form, no input, no "incorrect", and no `registerSignalToken` /
+  `setDecoySlot` / `open` call.
+
+That leaves exactly one operator: someone in a REAL session, who therefore
+supplied the real password already, or who found an unattended unlocked vault
+and can read every stored secret directly. In neither case does the duress
+feature have anything left to protect.
+
+**No code change.** The mitigation the finding asks for already exists one
+layer up, and making setup "independent of the password class" would mean a
+setup form that cannot report a wrong current password — breaking the feature
+for the legitimate user to defend against an operator who cannot reach it.
+
+### 29.3 The cache-handoff comment was already addressed
+
+CodeRabbit's re-posted cache-handoff finding predates commit `10711eb`; §28.4
+defines the handoff (boolean readiness answer, address never crossing IPC,
+miss fails closed). No change.
+
+732 tests across 60 files. The queue-identity fix is negative-controlled on
+its owner guard; `eslint` on `VaultContext.jsx` reports the same six
+pre-existing warnings as before the change, none new.
