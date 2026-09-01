@@ -3332,3 +3332,69 @@ added the owner guard and the synchronous ref drop (§29.1). No change.
 
 794 tests across 70 files. The new gate is negative-controlled: removing it
 fails both new tests and nothing else; `eslint` is clean on both changed files.
+
+## 31. Twenty-first review round — §30's own gate went stale on every lock path
+
+### 31.1 The fix from one round ago cached the decision it was gating on
+
+§30 required a live vault session to render either duress form. It read that
+through `useState` seeded from `hasSessionKey()` and refreshed only on
+`vault:updated`. `handleLockVault` — the single path taken by the manual lock,
+the inactivity auto-lock, and the cross-tab lock (`vaultLockState` storage
+event → `handleLockVault(false)`) — calls `sessionVaultCrypto.clearSessionKey()`
+and **dispatches no DOM event at all**; it sets React state inside
+`VaultContext` instead. So none of the three lock paths refreshed the cached
+copy, and a duress-settings page already mounted kept rendering its forms after
+the vault had locked. The oracle §30 closed was open again for anyone who left
+the screen open.
+
+This is the third consecutive round of one shape, now stated as plainly as it
+can be:
+
+| round | predicate written | property needed |
+|---|---|---|
+| §29.1 | "`pendingChanges` state is cleared" | "the queue the consumer READS is cleared" |
+| §30.1 | "not a decoy session" | "has proven the real vault password" |
+| §31.1 | "no `vault:updated` since mount" | "there is a session key RIGHT NOW" |
+
+Each was a near-miss on the same axis: a cached or adjacent signal standing in
+for the live fact. **Enumerating the events that should invalidate a cache is
+the trap** — §30 got the state enumeration wrong, and fixing it by listing
+events would have been the identical mistake one level down.
+
+### 31.2 The fix: stop caching, and put the boundary where a render is not required
+
+Two changes, and the second is the load-bearing one:
+
+- **The render gate reads `sessionVaultCrypto.hasSessionKey()` live**, on every
+  render, instead of consulting cached state. There is no event list to keep
+  complete, and any re-render from any cause shows the correct panel.
+- **Both submit handlers re-check `hasSessionKey()` before touching the
+  envelope.** This is what actually closes the oracle, because the leak requires
+  a SUBMISSION and a submission always runs this code — no render needs to have
+  happened, so the guarantee no longer depends on React's scheduling at all.
+  Placed before any `setDecoySlot`/`open` call, so no decode, no request, and no
+  password-dependent message can precede it.
+
+The retained listeners (`vault:updated`, plus `storage` for the cross-tab case)
+are now explicitly a re-render nudge for the panel, not the mechanism that makes
+the gate correct — and the comment says so, since the previous round's bug was
+exactly a listener being mistaken for a guarantee.
+
+The refusal message is fixed text, identical for every password class, and is
+asserted to be so: a post-lock submission renders byte-identical output for the
+real, decoy and garbage passwords. That check exists because a refusal added to
+remove a classifier is the most natural place to introduce a new one.
+
+### 31.3 What the tests had to be rewritten to express
+
+The first draft filled and submitted in one helper and failed against the FIXED
+code: the live render gate flips the panel on the first `fireEvent.change`, so
+the decoy-password field no longer existed by the time the helper clicked. That
+failure was the fix working. The real sequence a lock produces is *fill while
+unlocked, lock, then click* — the click landing on a form rendered while the
+vault was still open, which is the only path where the submit-time re-check is
+what stops it. Rewritten that way, and negative-controlled: removing just the
+two submit guards fails exactly those two tests and nothing else.
+
+797 tests across 70 files; `eslint` clean on both changed files.

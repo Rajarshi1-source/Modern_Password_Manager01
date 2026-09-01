@@ -125,16 +125,26 @@ const VaultDuressSetup = () => {
   // see handleRecoverRegistration's gate for why. Held in state only for the
   // duration of the form, exactly like the setup form's own field.
   const [recoveryVaultPassword, setRecoveryVaultPassword] = useState('');
-  // Whether a vault session key is currently installed. Read into state, not
-  // straight off the module on every render, so the gate below re-evaluates
-  // when the vault is unlocked while this screen is already mounted --
-  // `vault:updated` is the event VaultContext already dispatches for exactly
-  // that transition.
-  const [sessionLive, setSessionLive] = useState(() => sessionVaultCrypto.hasSessionKey());
+  // A re-render nudge ONLY. The session state itself is deliberately NOT
+  // cached here: `handleLockVault` clears the session key without dispatching
+  // any DOM event (it sets React state inside VaultContext instead), so the
+  // manual, inactivity and cross-tab lock paths would all leave a cached copy
+  // stale and this screen showing its forms after the vault had locked.
+  // Enumerating lock events and hoping the list stays complete is the same
+  // mistake in a new place; the gate below reads the live value instead, and
+  // `sessionVaultCrypto.hasSessionKey()` is called again inside both submit
+  // handlers so the security boundary never depends on a render happening.
+  const [, setSessionTick] = useState(0);
   useEffect(() => {
-    const sync = () => setSessionLive(sessionVaultCrypto.hasSessionKey());
-    window.addEventListener('vault:updated', sync);
-    return () => window.removeEventListener('vault:updated', sync);
+    const nudge = () => setSessionTick((n) => n + 1);
+    window.addEventListener('vault:updated', nudge);
+    // Cross-tab lock writes `vaultLockState`; this only repaints the panel,
+    // it is not what makes the gate correct.
+    window.addEventListener('storage', nudge);
+    return () => {
+      window.removeEventListener('vault:updated', nudge);
+      window.removeEventListener('storage', nudge);
+    };
   }, []);
 
   const [recoveryBusy, setRecoveryBusy] = useState(false);
@@ -218,7 +228,7 @@ const VaultDuressSetup = () => {
   // produces a non-decoy session key, so an operator who passes this gate has
   // already demonstrated the real credential and learns nothing from the
   // verification below. Fails closed -- no session, no forms, no request.
-  if (!sessionLive) {
+  if (!sessionVaultCrypto.hasSessionKey()) {
     return (
       <div style={panelStyle}>
         <h2>Vault duress protection</h2>
@@ -273,6 +283,21 @@ const VaultDuressSetup = () => {
       setError('Decoy passwords do not match.');
       return;
     }
+
+    // Re-check at SUBMIT, not only at render. The render gate above is
+    // correct whenever a render happens, but nothing forces one when the
+    // vault locks: `handleLockVault` clears the session key and dispatches no
+    // DOM event, so an already-mounted copy of this screen can still be
+    // showing its forms. This is the check that actually closes the oracle,
+    // because reaching it requires a SUBMISSION, and a submission always runs
+    // this code. Placed before any envelope call, so nothing observable --
+    // no decode, no request, no password-dependent message -- happens first.
+    // The message is identical for every password class.
+    if (!sessionVaultCrypto.hasSessionKey()) {
+      setError('Unlock your vault first, then set up a decoy password.');
+      return;
+    }
+
     if (decoyPassword === vaultPassword) {
       setError('Decoy password must be different from your real vault password.');
       return;
@@ -325,6 +350,21 @@ const VaultDuressSetup = () => {
       setRecoveryError('Both your vault password and your decoy password are required.');
       return;
     }
+
+    // Re-check at SUBMIT, not only at render. The render gate above is
+    // correct whenever a render happens, but nothing forces one when the
+    // vault locks: `handleLockVault` clears the session key and dispatches no
+    // DOM event, so an already-mounted copy of this screen can still be
+    // showing its forms. This is the check that actually closes the oracle,
+    // because reaching it requires a SUBMISSION, and a submission always runs
+    // this code. Placed before any envelope call, so nothing observable --
+    // no decode, no request, no password-dependent message -- happens first.
+    // The message is identical for every password class.
+    if (!sessionVaultCrypto.hasSessionKey()) {
+      setRecoveryError('Unlock your vault first, then try the recovery step again.');
+      return;
+    }
+
 
     setRecoveryBusy(true);
     try {
