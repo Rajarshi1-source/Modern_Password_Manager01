@@ -29,7 +29,7 @@
  * Do not remove or soften this notice without solving that problem first.
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import * as unlockEnvelopeStore from '../../services/hiddenVault/unlockEnvelopeStore';
 import { WrongPasswordError } from '../../services/hiddenVault/hiddenVaultEnvelope';
@@ -125,6 +125,18 @@ const VaultDuressSetup = () => {
   // see handleRecoverRegistration's gate for why. Held in state only for the
   // duration of the form, exactly like the setup form's own field.
   const [recoveryVaultPassword, setRecoveryVaultPassword] = useState('');
+  // Whether a vault session key is currently installed. Read into state, not
+  // straight off the module on every render, so the gate below re-evaluates
+  // when the vault is unlocked while this screen is already mounted --
+  // `vault:updated` is the event VaultContext already dispatches for exactly
+  // that transition.
+  const [sessionLive, setSessionLive] = useState(() => sessionVaultCrypto.hasSessionKey());
+  useEffect(() => {
+    const sync = () => setSessionLive(sessionVaultCrypto.hasSessionKey());
+    window.addEventListener('vault:updated', sync);
+    return () => window.removeEventListener('vault:updated', sync);
+  }, []);
+
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryError, setRecoveryError] = useState('');
   const [recoverySuccess, setRecoverySuccess] = useState(false);
@@ -179,6 +191,40 @@ const VaultDuressSetup = () => {
           sign-in accounts). You haven&apos;t created one yet — open the vault
           from the main app first, which will prompt you to set it up, then
           come back here.
+        </p>
+      </div>
+    );
+  }
+
+  // A LOCKED vault must not reach the forms either, and this is a distinct
+  // hole from the decoy gate above rather than a stricter version of it.
+  //
+  // `isDecoySession()` answers "is the CURRENT session a decoy". While the
+  // vault is locked there IS no session, so it answers false -- and
+  // `handleLockVault` calls `clearSessionKey()`, which sets `sessionIsDecoy`
+  // back to false, so locking a decoy session turns the gate above OFF. Either
+  // way the forms rendered to an operator who has proven nothing.
+  //
+  // That is a sharper oracle than the one the decoy gate closes. A coercer
+  // holding password D, with the vault locked, opens this screen and types D
+  // into the current-vault-password field: `setDecoySlot` decodes it to slot 1
+  // and raises WrongPasswordError, so the app answers "Incorrect vault
+  // password." for a password that visibly unlocks this very vault. The
+  // contradiction §23.1 exists to prevent, reachable by visiting this screen
+  // BEFORE unlocking instead of after -- or after locking a decoy session.
+  //
+  // Requiring a live session is what closes it, and it closes it on the same
+  // principle §22 used for the recovery form: only the real vault password
+  // produces a non-decoy session key, so an operator who passes this gate has
+  // already demonstrated the real credential and learns nothing from the
+  // verification below. Fails closed -- no session, no forms, no request.
+  if (!sessionLive) {
+    return (
+      <div style={panelStyle}>
+        <h2>Vault duress protection</h2>
+        <p style={{ color: '#6b7280' }}>
+          Unlock your vault first, then come back here to configure duress
+          protection.
         </p>
       </div>
     );
