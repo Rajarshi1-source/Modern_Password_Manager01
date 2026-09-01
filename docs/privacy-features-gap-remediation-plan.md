@@ -646,6 +646,7 @@ onion case):
   themselves were about). Read those before assuming either carry-over
   plan's original design text is the literal shipped behavior.
   **A later round found the same class once more, in the queue scoping this remediation itself added:** clearing `pendingChanges` STATE on an identity change does not clear `pendingChangesRef`, which is what `syncVault` actually reads, so account A's queued writes and deletions could still be flushed into account B's vault by a timer firing between the two. `syncVault` now refuses any queue whose owner is not the identity currently authenticated. **The recurring shape: a guard is only as good as the copy of the state it clears.**
+  **The round after that found the same shape in the decoy-session DISPLAY gate:** `isDecoySession()` answers "is the CURRENT session a decoy", so it is false while the vault is LOCKED, and `clearSessionKey()` resets it — meaning locking a decoy session turned the gate off. The duress-settings screen, which had no unlocked-session gate of its own, therefore rendered a password-verifying form to a coercer holding only the password they had been handed, and answered "Incorrect vault password." for a password that visibly unlocks that vault. It now requires a live vault session, on the principle that only the real vault password installs one. **A gate written as "not a decoy session" is not the same predicate as "has proven the real password", and the gap between them is where both bugs lived.**
 
 ## 6. Acceptance criteria
 

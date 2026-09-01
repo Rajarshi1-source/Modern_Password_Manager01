@@ -42,11 +42,15 @@ vi.mock('../../../services/duressSignalService', () => ({
   registerSignalToken: vi.fn(),
 }));
 
-const { mockIsDecoySession } = vi.hoisted(() => ({
+const { mockIsDecoySession, mockHasSessionKey } = vi.hoisted(() => ({
   mockIsDecoySession: vi.fn(() => false),
+  // Default: a live REAL session, which is what every pre-existing test here
+  // assumes -- the forms only render for an operator who has already proven
+  // the real vault password by unlocking with it.
+  mockHasSessionKey: vi.fn(() => true),
 }));
 vi.mock('../../../services/sessionVaultCrypto', () => ({
-  default: { isDecoySession: mockIsDecoySession },
+  default: { isDecoySession: mockIsDecoySession, hasSessionKey: mockHasSessionKey },
 }));
 
 import VaultDuressSetup from '../VaultDuressSetup';
@@ -112,6 +116,7 @@ beforeEach(() => {
   });
   unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
   mockIsDecoySession.mockReturnValue(false);
+  mockHasSessionKey.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -389,6 +394,41 @@ describe('during a DECOY session', () => {
 
     // The specific contradiction this gate exists to prevent.
     expect(container.textContent).not.toMatch(/incorrect/i);
+    expect(registerSignalToken).not.toHaveBeenCalled();
+    expect(unlockEnvelopeStore.setDecoySlot).not.toHaveBeenCalled();
+    expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();
+  });
+
+  test('a LOCKED vault renders no forms either -- the decoy gate does not cover it', () => {
+    // `isDecoySession()` answers "is the CURRENT session a decoy", and while
+    // the vault is locked there is no session, so it answers false. The decoy
+    // gate therefore does NOT fire here, and without its own gate this screen
+    // rendered a password-verifying form to an operator who had proven
+    // nothing -- who could type the password handed to them under duress and
+    // be told "Incorrect vault password." for a password that visibly unlocks
+    // this vault.
+    mockHasSessionKey.mockReturnValue(false);
+    mockIsDecoySession.mockReturnValue(false);
+
+    const { queryByLabelText, queryByRole, container } = render(<VaultDuressSetup />);
+
+    expect(queryByLabelText(/current vault password/i)).toBeNull();
+    expect(queryByRole('button', { name: /save decoy password/i })).toBeNull();
+    expect(queryByRole('button', { name: /recover unregistered alarm/i })).toBeNull();
+    expect(container.querySelector('input')).toBeNull();
+    expect(container.textContent).not.toMatch(/incorrect/i);
+  });
+
+  test('locking a DECOY session does not reopen the screen', () => {
+    // handleLockVault calls clearSessionKey(), which sets sessionIsDecoy back
+    // to false -- so after a coercer locks the decoy session they had, the
+    // decoy gate stops firing. Only the session gate still holds.
+    mockIsDecoySession.mockReturnValue(false);
+    mockHasSessionKey.mockReturnValue(false);
+
+    const { container } = render(<VaultDuressSetup />);
+
+    expect(container.querySelector('form')).toBeNull();
     expect(registerSignalToken).not.toHaveBeenCalled();
     expect(unlockEnvelopeStore.setDecoySlot).not.toHaveBeenCalled();
     expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();

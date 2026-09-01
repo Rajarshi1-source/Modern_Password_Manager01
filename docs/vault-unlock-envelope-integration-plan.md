@@ -3242,3 +3242,93 @@ miss fails closed). No change.
 732 tests across 60 files. The queue-identity fix is negative-controlled on
 its owner guard; `eslint` on `VaultContext.jsx` reports the same six
 pre-existing warnings as before the change, none new.
+
+## 30. Twentieth review round — reversing §29.2, because the gate had a third state
+
+### 30.1 Greptile re-filed the setup-form oracle, and this time it is valid
+
+§29.2 declined "setup registration classifies the real vault password" on two
+grounds: decoy and invalid are indistinguishable from each other (§21.1), and
+the premise "someone who can operate this authenticated screen" is unsatisfiable
+by a coercer because §23.1 blocks the screen in a decoy session.
+
+The first ground still holds. **The second was wrong, and the error was in how
+I enumerated the states.** I checked two — decoy session (blocked) and real
+session (operator already holds the password) — and never asked what happens
+when there is NO session:
+
+- `isDecoySession()` returns `sessionIsDecoy`, which answers "is the CURRENT
+  session a decoy". While the vault is **locked** there is no session, so it
+  answers `false` and the gate does not fire.
+- `handleLockVault` calls `clearSessionKey()`, which sets `sessionIsDecoy = false`
+  (`sessionVaultCrypto.js:548`). So **locking a decoy session turns the §23.1
+  gate off**, and the screen reopens to the coercer who was just holding it.
+- `VaultDuressSetup` had no unlocked-session gate at all. Its render conditions
+  were `isAuthenticated` → `isDecoySession()` → `envelopeReady`, and
+  `envelopeReady` is a localStorage read. None of them require the operator to
+  have proven anything.
+
+So the attack needs no decoy session and no real one. With the vault locked and
+the account still signed in, a coercer holding the password D they were handed
+opens this screen, types D into the current-vault-password field, and
+`setDecoySlot` decodes it to slot 1 and raises `WrongPasswordError` — the app
+answers **"Incorrect vault password."** for a password that visibly unlocks this
+very vault. That is precisely the contradiction §23.1 was written to prevent,
+reached by visiting the screen BEFORE unlocking rather than after.
+
+§29.2's own conclusion ("that leaves exactly one operator: someone in a REAL
+session") was therefore false. The reasoning method was right and the state
+enumeration was incomplete, which is the more dangerous of the two failures
+because the conclusion still reads as rigorous.
+
+### 30.2 The fix
+
+Require a live vault session to render either form:
+
+```js
+if (!sessionLive) { /* neutral "unlock your vault first" panel */ }
+```
+
+placed after the decoy gate and after `envelopeReady`, so a user who has no
+vault password yet still gets the guidance that tells them how to make one.
+
+This closes the oracle on exactly the principle §22 used for the recovery form:
+only the real vault password installs a non-decoy session key, so an operator
+who passes this gate has **already demonstrated the real credential** and learns
+nothing from the verification the form performs. Everyone else — locked vault,
+decoy session, decoy session that was then locked — gets no form, no submission,
+and no request. Fails closed.
+
+`sessionLive` is state synced from the `vault:updated` event VaultContext
+already dispatches, rather than a bare read on every render, so unlocking while
+this screen is mounted reveals the forms instead of leaving a stale panel.
+
+What is deliberately NOT done, because both alternatives are worse: equalising
+the setup form's OUTCOME (a wrong current password reported as "saved") would
+leave a user who typoed believing they have duress protection they do not have
+— a false sense of safety in the one situation that matters. And equalising its
+TRAFFIC by registering on failure is the §22 finding in reverse:
+`register_signal_token` deactivates every active `DuressSignal`, so a noise
+registration permanently disarms the user's real alarm.
+
+### 30.3 The lesson, which is a sharpening of §24.1's
+
+§24.1 established two tests for a duress finding: does it identify the decoy,
+and does any surface contradict what the session already showed. Both are
+tests about a STATE, and §29.2 applied them to an incomplete list of states.
+
+**Before declining a duress finding on "the operator cannot reach this screen",
+enumerate every state in which the screen RENDERS — including the states with
+no session at all, and the states reachable by LOCKING out of another one.**
+A gate written as "not a decoy session" is not the same predicate as "has
+proven the real password", and the gap between them is exactly where this bug
+lived. Two of the last eight rounds' P1s have been the same shape: a guard
+whose predicate was close to, but not the same as, the property it needed.
+
+### 30.4 CodeRabbit's queue race was already fixed
+
+Its re-posted `VaultContext.jsx:197` comment predates commit `287520f9`, which
+added the owner guard and the synchronous ref drop (§29.1). No change.
+
+794 tests across 70 files. The new gate is negative-controlled: removing it
+fails both new tests and nothing else; `eslint` is clean on both changed files.
