@@ -498,6 +498,11 @@ export async function open({ userId, password }) {
 export default {
   hasEnvelope,
   loadEnvelope,
+  // Part of the compare-and-swap contract, not an incidental helper:
+  // `provision({ replaceExisting })` and `setDecoySlot` both require a
+  // snapshot taken with this, so a consumer holding only the default export
+  // could not use the guarded replace path at all.
+  readRawEnvelope,
   saveEnvelope,
   clearEnvelope,
   provision,

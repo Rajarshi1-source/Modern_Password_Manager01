@@ -37,6 +37,7 @@ import {
   open,
   MalformedSlotPayloadError,
 } from '../unlockEnvelopeStore';
+import unlockEnvelopeStore from '../unlockEnvelopeStore';
 import argon2 from 'argon2-browser';
 import { WrongPasswordError, TIERS, tierBytes, encode, jsonToBytes } from '../hiddenVaultEnvelope';
 import { SIGNAL_TOKEN_LENGTH } from '../../duressSignalService';
@@ -53,6 +54,19 @@ beforeEach(() => {
 
 afterEach(() => {
   localStorage.clear();
+});
+
+describe('module surface', () => {
+  test('the default export carries every named operation, including readRawEnvelope', () => {
+    // readRawEnvelope is not an incidental helper: it is half of the
+    // compare-and-swap contract `provision({ replaceExisting })` and
+    // setDecoySlot enforce, so a consumer holding only the default export
+    // could not take the snapshot the guarded replace path requires.
+    expect(unlockEnvelopeStore).toMatchObject({
+      hasEnvelope, loadEnvelope, readRawEnvelope, saveEnvelope,
+      clearEnvelope, provision, setDecoySlot, open,
+    });
+  });
 });
 
 describe('storage helpers', () => {

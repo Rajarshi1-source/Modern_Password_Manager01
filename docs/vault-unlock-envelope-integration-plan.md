@@ -3062,3 +3062,87 @@ read, and that a comment asserting a property is not evidence the code has it.
 728 tests across 59 files, targeted to the services, security, auth, context
 and route suites; all three code fixes negative-controlled (reverting any one
 fails its own new test and nothing else). `eslint` clean on the changed files.
+
+## 28. Eighteenth review round (CodeRabbit) — one export, and three places the plan contradicted reality
+
+### 28.1 `readRawEnvelope` was missing from the default export
+
+The default export aggregate listed every operation except `readRawEnvelope`.
+Nothing was broken — all three consumers use `import * as` — but the omission
+is not cosmetic given what that function now is: after §24.3, §26 and §27.1 it
+is half of the compare-and-swap contract, since `provision({ replaceExisting })`
+and `setDecoySlot` both require a snapshot taken with it. A consumer holding
+only the default export could call the guarded replace path but never obtain
+the token it demands. Added, with a test asserting the aggregate matches the
+named exports so the next operation added cannot silently miss it.
+
+### 28.2 The IPC allowlist would reject every queued `add`
+
+A.4's item allowlist is derived from `VaultItemSerializer`'s writable fields
+and refuses any other key, correctly excluding the server-assigned `id`,
+`created_at` and `updated_at`. But `VaultContext.addItem` builds its
+pending-change item from the POST response and keeps all three
+(`VaultContext.jsx:712-721`), and `syncVault` spreads that item into
+`syncData.items[]` deleting only `type` and `data` (`:534-547`). So the shipped
+producer sends exactly the three keys the boundary refuses — the native
+transport would fail for the one operation it exists to carry, and only on
+desktop/mobile.
+
+Recorded as a producer-side normalisation requirement, not a softened
+allowlist: those fields are `read_only_fields` server-side, so the clearnet
+path already ignores them and stripping them loses nothing, whereas admitting
+them at the boundary would defeat the point of deriving the schema from the
+writable set. The required test is a round trip from `addItem` through
+`syncVault`, because a test built from a hand-written item literal would pass
+while the real producer's shape fails — it is the producer that is wrong here,
+not the schema.
+
+No code change in this PR: Phase 2 is unimplemented, and rewriting the shipped
+clearnet sync path for a transport that does not exist yet is churn this PR
+should not carry. The requirement is written where the implementer will be
+standing.
+
+### 28.3 A process-group kill cannot satisfy a parent-SIGKILL criterion
+
+A.8's crash/SIGKILL criterion offered "a process-group kill (or
+`prctl(PR_SET_PDEATHSIG)` on Linux / `kqueue` `NOTE_EXIT` watch on macOS)".
+The `or` makes the first option sufficient on its own, and it is not:
+`killpg()` only signals a group when some LIVE process calls it, and a
+SIGKILLed parent calls nothing — which is the entire scenario. The same
+objection sinks a `kqueue` watch owned by the parent: the watcher must be the
+child or an independent process, never the process whose death is the event.
+
+Rewritten to name the mechanism per platform (Windows Job Object with
+`KILL_ON_JOB_CLOSE`; child-side `prctl(PR_SET_PDEATHSIG, SIGKILL)` on Linux;
+an independent supervisor or a child-side `kqueue` watch on the parent's pid
+on macOS), to demote process-group kill to a complement for the paths where JS
+does run, and to require the test to SIGKILL the parent and assert `tor` no
+longer holds the `DataDirectory` lock — a surviving lock being what blocks the
+next launch.
+
+### 28.4 "Answer from the same cache" named no path between the two processes
+
+§27.4's fix said the renderer's `isOnionSyncAvailable()` must answer from the
+issuance-time cached onion address rather than fetching capabilities. That
+cache lives in the desktop MAIN process; the availability check runs in the
+RENDERER. The rule was therefore not implementable as written, and the obvious
+implementation — ship the address across IPC — is precisely what A.4 forbids,
+since `TOR_PROXY` has no destination field so a compromised renderer cannot
+choose where the main process POSTs.
+
+Defined as a boolean readiness answer instead: the issuing process caches the
+validated address and never sends it anywhere; a status-shaped channel answers
+"is a validated address cached AND is the transport ready?"; a miss is
+unavailable with no fallback fetch; web has no second process and caches in
+page memory. The test asserts the IPC reply contains no `.onion` string, not
+merely that the outcome was right — the leak this design avoids is in the
+reply's contents, so that is what has to be checked.
+
+**The pattern across 28.2 and 28.4 is worth naming:** both are places where a
+rule was correct in isolation and impossible against the thing it had to meet
+— a schema versus its actual producer, a cache versus the process boundary
+between its writer and its reader. A requirement that never states which
+component satisfies it reads as complete and cannot be implemented.
+
+729 tests across 59 files; `eslint` clean on the changed files. The export fix
+is negative-controlled: removing the entry fails its test alone.
