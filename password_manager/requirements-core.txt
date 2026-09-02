@@ -197,7 +197,7 @@ secretsharing>=0.2.6
 sympy>=1.12
 
 # Web Scraping
-scrapy>=2.14.2
+scrapy>=2.17.0
 
 # AI-Powered Security Assistant (Claude API)
 anthropic>=0.40.0
