@@ -301,9 +301,25 @@ Requirements:
   `off`, stop a running sidecar rather than leaving it live for no reason
   (an idle Tor circuit is both a resource cost and a needless attack
   surface once the user has said they don't want one). Test the first sync
-  from a fully-stopped state (sidecar starts, readiness is awaited, sync
+  after the mode is enabled (sidecar starts, readiness is awaited, sync
   proceeds) and the `prefer_onion` → `off` transition (sidecar actually
   stops, not just "sync stops using it").
+
+  **Read that test as "after the mode is enabled", never "the sync starts
+  the sidecar" — an earlier draft said "the first sync from a fully-stopped
+  state", which contradicts A.5.** A.5 requires
+  `isOnionSyncAvailable()` to answer `false` immediately when no bootstrap is
+  in flight and explicitly "without starting one as a side effect", so if the
+  sync were the thing that had to start a stopped sidecar, the two rules could
+  not both hold. They do not conflict once the ownership above is taken
+  literally: **this main-process handoff is the ONLY thing that ever calls
+  `start()`, and `isOnionSyncAvailable()` is a pure observer.** Both moments
+  are covered — a live mode change (1 below) and the persisted mode at launch
+  (2 below) — so by the time any sync runs under `prefer_onion`/`require_onion`
+  the sidecar is either bootstrapping (A.5 awaits it) or has already failed
+  (A.5 answers `false`). "Fully stopped with a non-`off` mode" is therefore
+  not a state a sync can observe; if it ever is, moment 2 is broken and that
+  is the bug to fix, not a start bolted onto the availability check.
 
   **This requires a renderer-to-main mode handoff that nothing above
   defines, and it must be built, not assumed.** `getSyncPrivacyMode()` /
@@ -960,7 +976,21 @@ protection the platform cannot deliver.
    feature exists to protect. Bind with an explicit, package-targeted intent
    (`setPackage("org.torproject.android")`, not an implicit action-only
    one), and after binding, verify the returned `ComponentName`'s package is
-   actually `org.torproject.android` before trusting anything it reports —
+   actually `org.torproject.android` **and that the installed package is
+   signed by Orbot's own signing certificate** before trusting anything it
+   reports —
+   **the package NAME is not an identity.** If the genuine Orbot is not
+   installed, any app may declare that package name, satisfy both
+   `setPackage()` and the `ComponentName` check, and hand back a port it
+   controls — which then receives the bearer token, the anonymous credential,
+   and the sync body. Pin the signer with
+   `PackageManager.hasSigningCertificate(packageName, sha256, CERT_INPUT_SHA256)`
+   (API 28+, and it walks the signing history so certificate rotation does not
+   break the check); fall back to `GET_SIGNING_CERTIFICATES` + `SigningInfo`
+   only if a lower minSdk is ever required. Accept the port only after that
+   passes. Add a counterfeit-package test: a package claiming
+   `org.torproject.android` with a different signer is refused and the
+   transport reports unavailable rather than dialling it —
    including the discovered port from point 5 below. Test that a second,
    locally-installed app declaring the same action is never treated as
    Orbot, and that an already-occupied local port is handled as "onion sync
@@ -985,7 +1015,22 @@ protection the platform cannot deliver.
    `java.net.Proxy`, which OkHttp has always honored regardless of
    NetCipher's wrapper — and exposes one bridge method
    (`proxyVaultOperation`) that performs the POST through that client and
-   returns the response to JS. This is a real, complete stack: standard
+   returns the response to JS.
+   **Bind that `orbotSocksPort` to a LIVE Orbot connection, and revalidate it
+   before every request.** Discovering the port once and reusing it for the
+   session is a time-of-check/time-of-use gap: if Orbot stops, the port is
+   released, and any other local process may bind it — after which this client
+   keeps POSTing the `Authorization` header (or, under PR C, the anonymous
+   credential) and the sync body straight into whatever is listening on
+   `127.0.0.1`. Hold the service binding rather than binding-and-releasing,
+   clear the cached port in `onServiceDisconnected` and on any Orbot
+   status-change broadcast that reports it stopped, and re-confirm both the
+   binding and the port immediately before each `proxyVaultOperation` rather
+   than trusting the cached value. A revalidation failure is "transport
+   unavailable" — `prefer_onion` degrades, `require_onion` fails closed —
+   never a clearnet retry. Test Orbot stopping and a different local listener
+   taking the same port while a sync is in flight: the request must not be
+   sent to it. This is a real, complete stack: standard
    OkHttp, standard `java.net.Proxy`, no unsupported convenience class in the
    path.
 
@@ -1181,6 +1226,21 @@ implementation. It must settle:
    is defensible; leaving it undefined means the implementer picks
    accidentally. Test downstream failure (timeout and 5xx) as its own case,
    not just concurrent redemption.
+   **If (a) is chosen, the expiry needs FENCING, or it reintroduces the
+   double-spend it was meant to bound.** A reservation that expires makes the
+   token spendable again while the first attempt may still be in flight: the
+   original request can then complete AFTER expiry, and a second redemption of
+   the same token can be reserved and complete too — two successful
+   `vault_sync` dispatches from one single-use token, which is exactly what
+   §C.2's atomic-claim rule exists to prevent, now reached through the timeout
+   path instead of the concurrency one. Give each reservation a fencing token
+   (a monotonically increasing reservation id, or an idempotency key derived
+   from it) that is carried through dispatch and checked at FINALIZE: a
+   completion whose fence is no longer the current reservation for that nonce
+   is rejected and its dispatch treated as void. Test the delayed case
+   explicitly — reserve, let the reservation expire, re-reserve and complete
+   the SECOND attempt, then let the FIRST attempt arrive late and assert it is
+   refused and that exactly one dispatch was counted.
 5. **Server-side unlinkability argument, bounded by a stated threat model.**
    The primitive gives CRYPTOGRAPHIC unlinkability — the server cannot derive
    which issuance a given redemption came from FROM THE TOKEN ITSELF, no

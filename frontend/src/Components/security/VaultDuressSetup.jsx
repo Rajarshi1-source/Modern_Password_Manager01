@@ -29,7 +29,7 @@
  * Do not remove or soften this notice without solving that problem first.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import * as unlockEnvelopeStore from '../../services/hiddenVault/unlockEnvelopeStore';
 import { WrongPasswordError } from '../../services/hiddenVault/hiddenVaultEnvelope';
@@ -97,10 +97,13 @@ const VaultDuressSetup = () => {
   const { isAuthenticated, user, getAccessToken } = useAuth();
   const userId = user?.id ?? user?.email ?? null;
 
-  const envelopeReady = useMemo(
-    () => Boolean(userId) && unlockEnvelopeStore.hasEnvelope(userId),
-    [userId]
-  );
+  // Read live, not memoized, for the same reason the session gate below is:
+  // `hasEnvelope` reads localStorage, which another tab -- or this tab's own
+  // unlock modal, which provisions the envelope -- can populate while this
+  // screen stays mounted. A memo keyed on `userId` alone keeps answering
+  // "you haven't created one yet" until a remount, so the re-render nudge
+  // below would repaint a stale answer.
+  const envelopeReady = Boolean(userId) && unlockEnvelopeStore.hasEnvelope(userId);
 
   const [vaultPassword, setVaultPassword] = useState('');
   const [decoyPassword, setDecoyPassword] = useState('');
@@ -311,11 +314,32 @@ const VaultDuressSetup = () => {
       // new token orphaned server-side with no envelope anywhere that
       // actually releases it. Same ordering bug, same fix, as
       // StegoVaultDashboard.onEmbed (docs/privacy-features-gap-remediation-plan.md §10.3).
+      const generation = sessionVaultCrypto.currentSessionGeneration();
       const { duressToken } = await unlockEnvelopeStore.setDecoySlot({
         userId,
         vaultPassword,
         decoyPassword,
       });
+      // The session that authorised this operation must still be the one in
+      // place when it finishes. `setDecoySlot` runs THREE Argon2 derivations,
+      // so the vault can lock inside that window (inactivity, manual, or
+      // cross-tab -- all `clearSessionKey()`, which bumps the generation),
+      // and registering the alarm afterwards would fire an authenticated
+      // request for a session that no longer exists.
+      //
+      // Compared by GENERATION, not by `hasSessionKey()`: a lock followed by
+      // any unlock -- including a DECOY unlock -- leaves `hasSessionKey()`
+      // true again, so that check would let the continuation run inside a
+      // decoy session. The counter moves on every one of those transitions.
+      //
+      // The blob is already saved by this point and is deliberately left in
+      // place: the decoy IS configured, only its token is unregistered, which
+      // is exactly the state the recovery form below exists to finish. The
+      // message is password-independent, so it classifies nothing.
+      if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
+        setError('Unlock your vault first, then set up a decoy password.');
+        return;
+      }
       await finishRegistration(duressToken);
     } catch (err) {
       if (err instanceof WrongPasswordError) {
@@ -368,6 +392,11 @@ const VaultDuressSetup = () => {
 
     setRecoveryBusy(true);
     try {
+      // Same session-generation binding as the setup form above: this handler
+      // awaits two `open()` calls before it registers anything, and a lock (or
+      // a decoy unlock) landing in that window must not be followed by an
+      // authenticated registration request.
+      const generation = sessionVaultCrypto.currentSessionGeneration();
       // GATE: prove knowledge of the REAL vault password before this form
       // does anything observable at all.
       //
@@ -427,6 +456,11 @@ const VaultDuressSetup = () => {
         // indistinguishable outcomes. Anything else (a corrupt envelope, a
         // storage failure) is a genuine operational fault and propagates.
         if (!(err instanceof WrongPasswordError)) throw err;
+      }
+
+      if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
+        setRecoveryError('Unlock your vault first, then try the recovery step again.');
+        return;
       }
 
       if (duressToken) {

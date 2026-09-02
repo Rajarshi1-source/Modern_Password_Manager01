@@ -3398,3 +3398,90 @@ what stops it. Rewritten that way, and negative-controlled: removing just the
 two submit guards fails exactly those two tests and nothing else.
 
 797 tests across 70 files; `eslint` clean on both changed files.
+
+## 32. Twenty-second review round — the await window, one level further out
+
+### 32.1 §31's submit-time check did not cover the submit's own await
+
+§31 moved the duress screen's security boundary into the submit handlers,
+because a submission always runs that code and a render may never happen. The
+check ran, correctly, *before* `setDecoySlot`. It then awaited three Argon2
+derivations and called `finishRegistration(duressToken)` unconditionally.
+
+So a vault that locks inside that window — inactivity, manual, or cross-tab,
+all `clearSessionKey()` — is followed by an authenticated `registerSignalToken`
+request and a success message, for a session that no longer exists. This is
+§26's finding ("a guard before an `await` does not cover the await's own
+window") reappearing in the code written to fix §31, which was itself a fix to
+§30. The recurring axis, stated once more: **the check must sit on the same
+side of the await as the thing it protects.**
+
+### 32.2 Why the check compares GENERATIONS, not `hasSessionKey()`
+
+The obvious repair — re-read `hasSessionKey()` after the await — is wrong in a
+way worth recording, because it looks right. A lock followed by ANY unlock
+leaves `hasSessionKey()` true again, including an unlock with the **decoy**
+password. That continuation would then register the real alarm from inside a
+decoy session, which is a worse outcome than the bug being fixed.
+
+`clearSessionKey()` already does `sessionGeneration += 1`
+(`sessionVaultCrypto.js:544`), so the counter moves on every lock, every
+install, and every decoy unlock. Capturing it before the slow step and
+comparing after detects all three. This is the pattern the module's own
+`reserveSessionGeneration` docstring describes for `installRawDek`; what was
+missing was a way to OBSERVE the generation without reserving one, since
+`reserveSessionGeneration()` increments and would invalidate an unrelated
+in-flight unlock. Added as `currentSessionGeneration()`, two lines, documented
+against exactly that misuse.
+
+Applied to BOTH handlers in the same round, per §27's rule: the recovery form
+awaits two `open()` calls before it registers, and had the identical window.
+Grepping the sibling was not optional — it is the third time in this PR that a
+class fixed in one function was still live in its neighbour.
+
+The blob `setDecoySlot` already saved is deliberately left in place: the decoy
+IS configured, only its token is unregistered, which is precisely the state the
+recovery form exists to finish. Rolling it back would need the vault password
+that is no longer usable.
+
+### 32.3 `envelopeReady` was the same stale-cache mistake, one line up
+
+`useMemo(() => hasEnvelope(userId), [userId])` reads localStorage, which the
+unlock modal (same tab) or another tab can populate while this screen stays
+mounted. §31's re-render nudge would then repaint a memo that never
+recomputed, leaving "You haven't created one yet" until a remount. Read live,
+same as the session gate immediately below it. The `useMemo` import went with
+it.
+
+### 32.4 Four plan corrections
+
+- **The stopped-state startup contract.** A.3's test read "the first sync from
+  a fully-stopped state (sidecar starts...)" while A.5 requires
+  `isOnionSyncAvailable()` to answer `false` when nothing is in flight and
+  explicitly not to start one. Both cannot hold if the sync is what starts the
+  sidecar. Reconciled by stating the ownership literally — the main-process
+  handoff is the ONLY caller of `start()`, and both its moments (live mode
+  change, persisted mode at launch) are already specified — so a sync under a
+  non-`off` mode always finds a bootstrap in flight or a failure, never a
+  stopped sidecar it must start. Test reworded to "after the mode is enabled".
+- **Orbot's package name is not its identity.** `setPackage()` plus the
+  returned `ComponentName` check both verify only a string. With genuine Orbot
+  absent, a counterfeit package claiming `org.torproject.android` satisfies
+  both and receives the bearer token, the credential, and the sync body. Pin
+  the signer with `hasSigningCertificate(..., CERT_INPUT_SHA256)` (API 28+,
+  rotation-aware), with a counterfeit-package test.
+- **The cached SOCKS port is a TOCTOU gap.** Discovering `orbotSocksPort` once
+  and reusing it means that if Orbot stops and releases the port, any other
+  local process can bind it and receive the credentialed request. Hold the
+  binding, clear the port on disconnect, revalidate before every request, and
+  treat a revalidation failure as transport-unavailable rather than a clearnet
+  retry.
+- **RESERVE → FINALIZE needs fencing.** An expiring reservation makes the token
+  spendable again while the first attempt may still be in flight, so a late
+  completion plus a second redemption can both dispatch — the double-spend the
+  atomic claim exists to prevent, reached through the timeout path. Carry a
+  fencing token through dispatch and reject a completion whose fence is stale.
+
+800 tests across 70 files. Both generation checks are negative-controlled:
+removing them fails exactly the three new lock-race tests. `eslint` reports
+only the two pre-existing warnings in `sessionVaultCrypto.js`.
