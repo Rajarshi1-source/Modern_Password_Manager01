@@ -478,6 +478,23 @@ export const exportSessionDekRaw = async () => {
 export const reserveSessionGeneration = () => ++sessionGeneration;
 
 /**
+ * Read the current session generation WITHOUT reserving one.
+ *
+ * For callers that need to detect whether the session changed under them but
+ * are NOT installing a session of their own -- e.g. `VaultDuressSetup`, whose
+ * `setDecoySlot()` call runs three Argon2 derivations during which the vault
+ * can lock (`clearSessionKey()` bumps this counter) or be re-unlocked with the
+ * DECOY password. Capture before the slow step, compare after.
+ *
+ * Deliberately separate from `reserveSessionGeneration()`: that one
+ * INCREMENTS, which is correct for a caller about to install a key but would
+ * invalidate an unrelated in-flight unlock if used merely to observe. A bare
+ * `hasSessionKey()` re-check is not equivalent either -- it answers true again
+ * after a lock followed by any unlock, including a decoy one.
+ */
+export const currentSessionGeneration = () => sessionGeneration;
+
+/**
  * Install a raw 32-byte DEK as the session key.
  *
  * Used by the hidden-vault envelope unlock path
@@ -725,6 +742,7 @@ export default {
   exportWrappedDekRaw,
   exportSessionDekRaw,
   reserveSessionGeneration,
+  currentSessionGeneration,
   installRawDek,
   hasSessionKey,
   isDecoySession,

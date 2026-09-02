@@ -15,7 +15,7 @@
  * time or how many remounts have passed.
  */
 import React from 'react';
-import { render, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
@@ -42,15 +42,22 @@ vi.mock('../../../services/duressSignalService', () => ({
   registerSignalToken: vi.fn(),
 }));
 
-const { mockIsDecoySession, mockHasSessionKey } = vi.hoisted(() => ({
+const { mockIsDecoySession, mockHasSessionKey, mockGeneration } = vi.hoisted(() => ({
   mockIsDecoySession: vi.fn(() => false),
   // Default: a live REAL session, which is what every pre-existing test here
   // assumes -- the forms only render for an operator who has already proven
   // the real vault password by unlocking with it.
   mockHasSessionKey: vi.fn(() => true),
+  // Stable by default: the session does not change under any pre-existing
+  // test. The lock-race tests move it, which is what `clearSessionKey()` does.
+  mockGeneration: vi.fn(() => 7),
 }));
 vi.mock('../../../services/sessionVaultCrypto', () => ({
-  default: { isDecoySession: mockIsDecoySession, hasSessionKey: mockHasSessionKey },
+  default: {
+    isDecoySession: mockIsDecoySession,
+    hasSessionKey: mockHasSessionKey,
+    currentSessionGeneration: mockGeneration,
+  },
 }));
 
 import VaultDuressSetup from '../VaultDuressSetup';
@@ -117,6 +124,7 @@ beforeEach(() => {
   unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
   mockIsDecoySession.mockReturnValue(false);
   mockHasSessionKey.mockReturnValue(true);
+  mockGeneration.mockReturnValue(7);
 });
 
 afterEach(() => {
@@ -327,6 +335,81 @@ test('a post-lock RECOVERY submission is blocked before it opens the envelope', 
 
   await waitFor(() => expect(container.textContent).toMatch(/unlock your vault first/i));
   expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();
+  expect(registerSignalToken).not.toHaveBeenCalled();
+});
+
+test('a lock DURING the decoy save stops the registration that follows it', async () => {
+  // setDecoySlot runs three Argon2 derivations. The pre-submit gate cannot see
+  // a lock that lands inside that window, and the continuation would then fire
+  // an authenticated registration request for a session that no longer exists.
+  let resolveSave;
+  unlockEnvelopeStore.setDecoySlot.mockReturnValue(
+    new Promise((resolve) => { resolveSave = resolve; })
+  );
+
+  const { getByLabelText, getByRole, container } = render(<VaultDuressSetup />);
+  fillAndSubmit(getByLabelText, getByRole);
+
+  await waitFor(() => expect(unlockEnvelopeStore.setDecoySlot).toHaveBeenCalled());
+  expect(registerSignalToken).not.toHaveBeenCalled();
+
+  // The vault locks mid-save: clearSessionKey() nulls the key AND bumps the
+  // generation. Then the save resolves.
+  mockHasSessionKey.mockReturnValue(false);
+  mockGeneration.mockReturnValue(8);
+  await act(async () => { resolveSave({ duressToken: DURESS_TOKEN }); });
+
+  // With the key gone the live render gate also replaces the form, so the
+  // observable outcome is the neutral panel rather than an inline alert --
+  // what matters is that no registration request followed the save.
+  expect(container.textContent).toMatch(/unlock your vault first/i);
+  expect(registerSignalToken).not.toHaveBeenCalled();
+});
+
+test('a lock-then-DECOY-unlock during the save is caught too, which hasSessionKey alone would miss', async () => {
+  // The reason the check compares generations rather than re-reading
+  // hasSessionKey(): a lock followed by ANY unlock leaves hasSessionKey() true
+  // again, so that check would let the continuation register an alarm from
+  // inside a decoy session.
+  let resolveSave;
+  unlockEnvelopeStore.setDecoySlot.mockReturnValue(
+    new Promise((resolve) => { resolveSave = resolve; })
+  );
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  fillAndSubmit(getByLabelText, getByRole);
+  await waitFor(() => expect(unlockEnvelopeStore.setDecoySlot).toHaveBeenCalled());
+
+  // Locked and re-unlocked with the decoy password: key present again...
+  mockHasSessionKey.mockReturnValue(true);
+  // ...but two clearSessionKey/install transitions have moved the counter.
+  mockGeneration.mockReturnValue(9);
+  await act(async () => { resolveSave({ duressToken: DURESS_TOKEN }); });
+
+  const alert = await findByRole('alert');
+  expect(alert).toHaveTextContent(/unlock your vault first/i);
+  expect(registerSignalToken).not.toHaveBeenCalled();
+});
+
+test('a lock DURING the recovery opens stops its registration as well', async () => {
+  // Same window in the sibling handler: two open() calls before the register.
+  mockOpenBySlot({ decoyPassword: 'my-decoy-password' });
+  let resolveOpen;
+  const realOpen = unlockEnvelopeStore.open.getMockImplementation();
+  unlockEnvelopeStore.open.mockImplementationOnce(realOpen)
+    .mockImplementationOnce(() => new Promise((resolve) => { resolveOpen = resolve; }));
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  submitRecovery(getByLabelText, getByRole, 'my-decoy-password');
+
+  await waitFor(() => expect(unlockEnvelopeStore.open).toHaveBeenCalledTimes(2));
+  mockGeneration.mockReturnValue(8);
+  await act(async () => {
+    resolveOpen({ slotIndex: 1, duressToken: DURESS_TOKEN, dekBytes: new Uint8Array(32), saltB64: 's' });
+  });
+
+  const alert = await findByRole('alert');
+  expect(alert).toHaveTextContent(/unlock your vault first/i);
   expect(registerSignalToken).not.toHaveBeenCalled();
 });
 
