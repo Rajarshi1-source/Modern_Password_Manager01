@@ -234,38 +234,34 @@ test('a registerSignalToken failure on the RECOVERY form never echoes its messag
   expect(alert.textContent).not.toMatch(/duress|decoy|signal|token|slot/i);
 });
 
-test('the SETUP form is not a password oracle either: a decoy password and a garbage password in the vault-password field render byte-identical output', async () => {
-  // Greptile P1 (§21.1). §20.1 removed this oracle from the recovery form and
-  // left it on the setup form directly above it: setDecoySlot used to throw a
-  // slot-naming Error for "you typed the decoy password here", which the
-  // catch echoed via err.message, while a garbage password produced
-  // "Incorrect vault password." Both now raise WrongPasswordError with an
-  // identical message, so the screen cannot tell them apart.
-  const renderOutcome = async (rejection) => {
-    unlockEnvelopeStore.setDecoySlot.mockRejectedValue(rejection);
-    const { getByLabelText, getByRole, findByRole, container, unmount } =
-      render(<VaultDuressSetup />);
-    fillAndSubmit(getByLabelText, getByRole);
-    const alertText = (await findByRole('alert')).textContent;
-    const html = container.innerHTML;
-    unmount();
-    return { html, alertText };
-  };
-
-  // What the service raises when the typed password opens the DECOY slot...
-  const decoy = await renderOutcome(
-    new WrongPasswordError('No slot decrypted successfully with the supplied password.')
-  );
-  // ...and when it opens nothing at all. Identical type, identical message.
-  const garbage = await renderOutcome(
+test('the SETUP form renders one fixed outcome for ANY WrongPasswordError', async () => {
+  // §21.1's oracle was setDecoySlot throwing a slot-naming Error for "you
+  // typed the decoy password here", which the catch echoed via err.message,
+  // while a garbage password produced "Incorrect vault password."
+  //
+  // The half of that fix which lives HERE is the only half this file can
+  // test: whatever WrongPasswordError arrives, the screen renders the same
+  // fixed text and names no slot. The other half -- that setDecoySlot raises
+  // the SAME type and a byte-identical message for a decoy password as for
+  // garbage -- is a property of the store, and is asserted against the real
+  // implementation in unlockEnvelopeStore.test.js ("the decoy password in the
+  // vault-password field is rejected exactly like garbage"). An earlier
+  // version of this test fed two identical mock errors in here and compared
+  // the rendered HTML; that comparison was true by construction and could not
+  // fail, which made it read as coverage it never provided.
+  unlockEnvelopeStore.setDecoySlot.mockRejectedValue(
     new WrongPasswordError('No slot decrypted successfully with the supplied password.')
   );
 
-  expect(decoy.html).toBe(garbage.html);
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  fillAndSubmit(getByLabelText, getByRole);
+
+  const alertText = (await findByRole('alert')).textContent;
+  expect(alertText).toBe('Incorrect vault password.');
   // Scoped to the ERROR text: the page's own static copy legitimately
   // explains the decoy slot to the user configuring it, so asserting on the
   // whole container would fail on that unrelated (and correct) prose.
-  expect(decoy.alertText).not.toMatch(/decoy|real slot|did not resolve/i);
+  expect(alertText).not.toMatch(/decoy|real slot|did not resolve/i);
 });
 
 test('a lock that happens AFTER the form is filled still blocks the submission', async () => {

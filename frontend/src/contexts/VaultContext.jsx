@@ -733,6 +733,8 @@ export const VaultProvider = ({ children }) => {
   // on a live session key on EITHER crypto layer (`hasVaultSessionKey`); only
   // ciphertext (never the plaintext `data`) is sent.
   const addItem = useCallback(async (item) => {
+    // Captured before any await -- see the post-await guard below.
+    const identityAtStart = activeIdentityRef.current;
     if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to add items.');
       if (isMountedRef.current) setError(lockedErr.message);
@@ -752,6 +754,15 @@ export const VaultProvider = ({ children }) => {
       });
 
       if (!isMountedRef.current) return;
+      // The identity that STARTED this mutation must still be the one
+      // authenticated now. `isMountedRef` above catches an unmount, not an
+      // account switch: a request begun by A that resolves after B signs in
+      // would otherwise write A's item into B's list and, below, append A's
+      // work to a queue the identity effect had already cleared -- which the
+      // commit-time owner tag would then label B's, so `syncVault`'s owner
+      // check would pass it. Captured at the START of the call, because that
+      // is the only moment the initiating identity is knowable.
+      if (activeIdentityRef.current !== identityAtStart) return;
 
       // Add new item to state
       const created = response?.data || {};
@@ -819,6 +830,8 @@ export const VaultProvider = ({ children }) => {
   // touches `favorite` (owned by the metadata-only toggleFavorite PATCH) or
   // `item_type`, so an edit can't clobber a concurrent favorite change.
   const updateItem = useCallback(async (item) => {
+    // Captured before any await -- see the post-await guard below.
+    const identityAtStart = activeIdentityRef.current;
     if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to edit items.');
       if (isMountedRef.current) setError(lockedErr.message);
@@ -832,6 +845,15 @@ export const VaultProvider = ({ children }) => {
       const response = await axios.patch(`/api/vault/${item.id}/`, { encrypted_data });
 
       if (!isMountedRef.current) return;
+      // The identity that STARTED this mutation must still be the one
+      // authenticated now. `isMountedRef` above catches an unmount, not an
+      // account switch: a request begun by A that resolves after B signs in
+      // would otherwise write A's item into B's list and, below, append A's
+      // work to a queue the identity effect had already cleared -- which the
+      // commit-time owner tag would then label B's, so `syncVault`'s owner
+      // check would pass it. Captured at the START of the call, because that
+      // is the only moment the initiating identity is knowable.
+      if (activeIdentityRef.current !== identityAtStart) return;
 
       const updatedAt = response?.data?.updated_at || new Date().toISOString();
       // Replace the row with the freshly-encrypted ciphertext, keeping the
@@ -870,6 +892,8 @@ export const VaultProvider = ({ children }) => {
   }, []);
 
   const deleteItem = useCallback(async (itemId) => {
+    // Captured before any await -- see the post-await guard below.
+    const identityAtStart = activeIdentityRef.current;
     // Decoy sessions must not mutate the REAL vault. `encryptItem`'s own
     // refusal (sessionVaultCrypto.js) covers add/edit, but a delete carries no
     // ciphertext, so it never reaches that gate -- it would issue a real
@@ -889,6 +913,15 @@ export const VaultProvider = ({ children }) => {
       await vaultService.deleteVaultItem(itemId);
 
       if (!isMountedRef.current) return;
+      // The identity that STARTED this mutation must still be the one
+      // authenticated now. `isMountedRef` above catches an unmount, not an
+      // account switch: a request begun by A that resolves after B signs in
+      // would otherwise write A's item into B's list and, below, append A's
+      // work to a queue the identity effect had already cleared -- which the
+      // commit-time owner tag would then label B's, so `syncVault`'s owner
+      // check would pass it. Captured at the START of the call, because that
+      // is the only moment the initiating identity is knowable.
+      if (activeIdentityRef.current !== identityAtStart) return;
 
       // Remove item from state
       setItems(prevItems => prevItems.filter(i => i.id !== itemId));
