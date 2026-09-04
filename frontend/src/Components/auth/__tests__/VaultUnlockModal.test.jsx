@@ -329,7 +329,11 @@ describe('unlock mode — stored envelope is unusable, falls back to the legacy 
     await submitPassword(getByLabelText, getByRole, 'whatever');
 
     const alert = await findByRole('alert');
-    expect(alert).toHaveTextContent('bad magic');
+    // Not the decoder's own 'bad magic': with no legacy record there is
+    // nothing a password retry can fix, so the user gets an actionable
+    // instruction instead of internal text.
+    expect(alert).toHaveTextContent(/vault data is damaged/i);
+    expect(alert).not.toHaveTextContent(/bad magic/i);
     expect(onUnlocked).not.toHaveBeenCalled();
     expect(sessionVaultCrypto.unlockWithVaultPassword).not.toHaveBeenCalled();
   });

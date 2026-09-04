@@ -182,6 +182,17 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
       await runEnvelopeUnlock();
     } catch (err) {
       if (!err.envelopeUnusable || !sessionVaultCrypto.hasWrappedKey(userId)) {
+        if (err.envelopeUnusable) {
+          // Unusable envelope AND no legacy record to fall back to: the stored
+          // blob is the only copy and it cannot be decoded, so retrying the
+          // password can never succeed. `handleSubmit` renders `err.message`,
+          // which here would be the decoder's own internal text ("bad magic",
+          // a DOMException from atob, ...) -- a dead end the user cannot act
+          // on, and the same class of raw service string §27.3 stopped this
+          // feature surfacing elsewhere. Fixed, actionable, and
+          // password-independent, so it classifies nothing.
+          throw new Error("This device's vault data is damaged. Reset the vault to continue.");
+        }
         throw err;
       }
       console.warn('VaultUnlockModal: stored envelope is unusable, falling back to the legacy unlock path.', err);

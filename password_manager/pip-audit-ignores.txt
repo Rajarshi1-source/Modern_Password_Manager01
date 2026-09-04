@@ -212,18 +212,39 @@ PYSEC-2025-194 exp:2026-10-10
 # output. Removed rather than renewed for a fourth time on an unverified
 # basis.
 
-# transformers — all require user-loaded malicious HuggingFace
-# checkpoints. ml_dark_web/ml_services.py only invokes from_pretrained
-# with config.BERT_MODEL_NAME (hard-coded at deploy time), so an
-# attacker cannot supply a crafted model name. Eight IDs total.
-PYSEC-2025-211 exp:2026-09-01
-PYSEC-2025-212 exp:2026-09-01
-PYSEC-2025-213 exp:2026-09-01
-PYSEC-2025-214 exp:2026-09-05
-PYSEC-2025-215 exp:2026-09-05
-PYSEC-2025-216 exp:2026-09-05
-PYSEC-2025-217 exp:2026-09-10
-PYSEC-2025-218 exp:2026-09-10
+# transformers PYSEC-2025-211 through -218 — ALL EIGHT REMOVED 2026-09-04,
+# not renewed. 211/212/213 had expired (exp:2026-09-01) and were failing the
+# expiry pre-check; 214/215/216 would have expired the next day. Rather than
+# renew any of them, re-checked the way the torch block below says to: against
+# what CI's pip-audit step ACTUALLY scans, which is
+# `pip-audit -r requirements.txt` where transformers is declared
+# `transformers>=4.35.1` (open floor, no ceiling, and nothing else in
+# requirements.txt constrains it) — NOT requirements-lock.txt's
+# `transformers==5.0.0rc3`, which pip would not select for that specifier
+# anyway since it is a pre-release.
+#
+# Resolved version, verified against PyPI rather than assumed: the latest
+# STABLE transformers is 5.16.1, which is what `>=4.35.1` installs.
+#
+# Every one of the eight caps well below it, verified against OSV directly
+# (api.osv.dev), per-ID rather than as a batch:
+#   PYSEC-2025-211 (CVE-2025-14920) last_affected 4.54.1
+#   PYSEC-2025-212 (CVE-2025-14921) last_affected 4.54.1
+#   PYSEC-2025-213 (CVE-2025-14924) last_affected 4.55.0
+#   PYSEC-2025-214 (CVE-2025-14926) last_affected 4.57.0
+#   PYSEC-2025-215 (CVE-2025-14927) last_affected 4.57.0
+#   PYSEC-2025-216 (CVE-2025-14928) last_affected 4.57.0
+#   PYSEC-2025-217 (CVE-2025-14929) last_affected 5.0.0-rc0
+#   PYSEC-2025-218 (CVE-2025-14930) last_affected 4.57.1
+#
+# So pip-audit's own version-range match no longer raises any of them against
+# the version CI installs — the same "our pin is outside it, nothing to
+# suppress" resolution used for PYSEC-2025-183, PYSEC-2024-277,
+# PYSEC-2025-189/190/191, 192/193, 195/196/197 and 210/PYSEC-2026-139. The
+# old reachability argument (from_pretrained is only ever called with the
+# hard-coded config.BERT_MODEL_NAME, so no attacker-supplied checkpoint) is
+# still true and still worth knowing, but it is no longer what carries these:
+# the finding is fixed by version, not accepted by reachability.
 
 # keras.utils.get_file tar extraction — we don't call get_file with
 # user-controlled URLs (grep -r returns no matches).

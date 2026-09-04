@@ -63,6 +63,31 @@ export async function decryptEnvelope(encrypted_data) {
  * @throws If the vault is locked on both layers.
  */
 export async function encryptEnvelope(data) {
+  // The decoy gate has to sit HERE, ahead of the v2/v3 choice, not only inside
+  // `sessionVaultCrypto.encryptItem`.
+  //
+  // A decoy unlock installs its DEK through `installRawDek` on v2 ONLY --
+  // `VaultUnlockModal` never touches `sessionVaultCryptoV3`, and
+  // `installRawDek` does not clear it -- while `sessionIsDecoy` lives in v2.
+  // v3 has no concept of a decoy session at all. So whenever a v3 key is still
+  // live, the branch below picks v3 and the v2 gate is never consulted: a
+  // decoy session could encrypt an add or edit for the REAL vault, which is
+  // the row-corrupting write that gate exists to stop (see `sessionIsDecoy`'s
+  // own comment in sessionVaultCrypto.js for why such a row is unrecoverable).
+  //
+  // Gating at the choke point rather than in each implementation is the point:
+  // this function is the single place add/edit reaches either layer, so a
+  // future third layer cannot reintroduce the bypass by simply not knowing
+  // about decoys.
+  //
+  // The message is BYTE-IDENTICAL to the one `sessionVaultCrypto.encryptItem`
+  // raises, and must stay so: `VaultContext` surfaces `error.message` to the
+  // screen, so two different refusal strings would tell a coercer which layer
+  // declined -- a new tell in the very guard added to remove one. Not logged,
+  // for the same §3.5 reason that gate gives.
+  if (sessionVaultCrypto.isDecoySession()) {
+    throw new Error('Failed to save item. Please try again.');
+  }
   if (sessionVaultCryptoV3.hasSessionKey()) {
     return sessionVaultCryptoV3.encryptItem(data);
   }

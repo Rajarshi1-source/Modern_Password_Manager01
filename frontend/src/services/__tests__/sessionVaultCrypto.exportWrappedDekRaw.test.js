@@ -72,6 +72,24 @@ describe('exportWrappedDekRaw shares its unwrap step with unlockWithVaultPasswor
     );
   });
 
+  test('exportWrappedDekRaw leaves a LIVE session in place -- the production ordering', async () => {
+    // The case that actually happens: VaultUnlockModal.runUpgrade calls
+    // exportWrappedDekRaw right AFTER unlockWithVaultPassword has installed a
+    // session. Starting from a cleared session (the case below) cannot detect
+    // an export that swaps the session key, because hasSessionKey() is already
+    // false before the call.
+    await setupVaultPassword(REAL_PASSWORD, USER_ID);
+    clearSessionKey();
+    await unlockWithVaultPassword(REAL_PASSWORD, USER_ID);
+
+    await exportWrappedDekRaw(REAL_PASSWORD, USER_ID);
+
+    // Still unlocked, and still the NON-extractable key the unlock installed:
+    // the export derives its own extractable copy and must not install it.
+    expect(hasSessionKey()).toBe(true);
+    await expect(exportSessionDekRaw()).rejects.toThrow();
+  });
+
   test('exportWrappedDekRaw does not touch session state', async () => {
     await setupVaultPassword(REAL_PASSWORD, USER_ID);
     clearSessionKey();

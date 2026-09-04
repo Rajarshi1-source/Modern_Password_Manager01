@@ -12,6 +12,9 @@ vi.mock('../sessionVaultCrypto', () => ({
     decryptItem: vi.fn(),
     encryptItem: vi.fn(),
     hasSessionKey: vi.fn(),
+    // Default false: a normal (non-decoy) session, which is what every
+    // pre-existing case in this file assumes.
+    isDecoySession: vi.fn(() => false),
   },
 }));
 vi.mock('../sessionVaultCryptoV3', () => ({
@@ -28,6 +31,9 @@ import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from '../vaultEn
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks resets calls but NOT implementations, so a case that sets a
+  // decoy session would otherwise leak into every later case in this file.
+  sessionVaultCrypto.isDecoySession.mockReturnValue(false);
 });
 
 describe('decryptEnvelope', () => {
@@ -86,6 +92,33 @@ describe('decryptEnvelope', () => {
 });
 
 describe('encryptEnvelope', () => {
+  test('refuses a DECOY session even when a v3 key would be chosen', async () => {
+    // The decoy flag lives in v2 (`installRawDek` sets it), and v3 has no
+    // concept of a decoy session -- so with a v3 key still live, the v3 branch
+    // would bypass v2's gate entirely and let a decoy session encrypt a write
+    // for the REAL vault. The gate therefore has to run before the branch.
+    sessionVaultCrypto.isDecoySession.mockReturnValue(true);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+
+    await expect(encryptEnvelope({ name: 'New', password: 'secret' }))
+      .rejects.toThrow('Failed to save item. Please try again.');
+
+    expect(sessionVaultCryptoV3.encryptItem).not.toHaveBeenCalled();
+    expect(sessionVaultCrypto.encryptItem).not.toHaveBeenCalled();
+  });
+
+  test('the decoy refusal is byte-identical to the v2 layer own message', async () => {
+    // Two different strings would tell a coercer which layer declined --
+    // VaultContext surfaces error.message straight to the screen.
+    sessionVaultCrypto.isDecoySession.mockReturnValue(true);
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+    const viaChokePoint = await encryptEnvelope({ a: 1 }).catch((e) => e.message);
+
+    // What sessionVaultCrypto.encryptItem itself raises for a decoy session,
+    // asserted in sessionVaultCrypto.decoySession.test.js.
+    expect(viaChokePoint).toBe('Failed to save item. Please try again.');
+  });
+
   test('prefers v3 when a v3 session key is present', async () => {
     sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
     sessionVaultCryptoV3.encryptItem.mockResolvedValue('v3-sealed-envelope');

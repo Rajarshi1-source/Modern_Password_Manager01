@@ -144,6 +144,36 @@ describe('VaultContext sync queue across an identity change', () => {
     expect(mockOnionSyncVault).not.toHaveBeenCalled();
   });
 
+  test('a request STARTED by A and resolving after B signs in queues nothing', async () => {
+    // The commit-time owner tag cannot save this case on its own: the late
+    // append happens after the identity effect cleared the queue, so the tag
+    // would label A's work as B-owned and syncVault's owner check would pass
+    // it. The initiating identity has to be captured when the call starts.
+    const { result, rerender } = renderHook(() => useVault(), { wrapper });
+    await waitFor(() => expect(axios.get).toHaveBeenCalled());
+
+    let resolvePost;
+    axios.post.mockReturnValueOnce(new Promise((resolve) => { resolvePost = resolve; }));
+
+    let addPromise;
+    await act(async () => {
+      addPromise = result.current.addItem({ type: 'password', data: { name: 'A secret' } });
+    });
+
+    // B signs in while A's POST is still in flight.
+    mockAuthState.mockReturnValue(USER_B);
+    await act(async () => { rerender(); });
+
+    await act(async () => {
+      resolvePost({ data: { id: 7, item_id: 'a-item-1', favorite: false } });
+      await addPromise;
+    });
+
+    await act(async () => { await result.current.syncVault(); });
+
+    expect(mockOnionSyncVault).not.toHaveBeenCalled();
+  });
+
   test('the same queue IS flushed while the owning identity is unchanged', async () => {
     // The negative half: the guards must not have made syncVault a no-op.
     const { result } = await mountAndQueueForA();

@@ -3485,3 +3485,99 @@ it.
 800 tests across 70 files. Both generation checks are negative-controlled:
 removing them fails exactly the three new lock-race tests. `eslint` reports
 only the two pre-existing warnings in `sessionVaultCrypto.js`.
+
+## 33. Twenty-third review round — a decoy write path around the gate, and a red CI check
+
+### 33.1 `encryptEnvelope` let a decoy session write through the v3 branch
+
+The decoy write gate lives in `sessionVaultCrypto.encryptItem` (v2). But
+`vaultEnvelope.encryptEnvelope` — the single point where add/edit reaches
+either crypto layer — picks v3 whenever `sessionVaultCryptoV3.hasSessionKey()`,
+and **v3 has no concept of a decoy session at all** (`grep isDecoySession
+sessionVaultCryptoV3.js` returns nothing). Verified in the source rather than
+assumed: `VaultUnlockModal` never touches `sessionVaultCryptoV3`, and
+`installRawDek` — which is what sets `sessionIsDecoy` — does not clear it. So
+a decoy unlock installs the decoy DEK on v2 while leaving any live v3 key in
+place, and the very next add or edit takes the v3 branch and never consults
+the gate. That is the row-corrupting write `sessionIsDecoy`'s own comment
+describes: encrypted under one key, stamped with the real slot's salt,
+unopenable by the real session afterwards.
+
+Gated at the choke point, ahead of the v2/v3 choice, rather than inside each
+implementation — so a future third layer cannot reintroduce the bypass simply
+by not knowing about decoys.
+
+**The message is byte-identical to the v2 gate's** (`'Failed to save item.
+Please try again.'`), and that is not cosmetic: `VaultContext` surfaces
+`error.message` to the screen, so two different refusal strings would tell a
+coercer which layer declined — a fresh tell inside the guard added to remove
+one. That is the §27.3 lesson applied before the bug rather than after it.
+
+### 33.2 Queue ownership was tagged at commit time, not at mutation start
+
+§29.1 tagged the pending-changes queue with the identity active when the queue
+was *committed*. §29's own write-up named the residual hole and deferred it;
+this round it was filed, so it is closed. A request begun by A that resolves
+after B signs in appends to a queue the identity effect has already cleared,
+and the commit-time tag then labels A's work **B-owned** — so `syncVault`'s
+owner check passes it.
+
+All three mutations now capture `activeIdentityRef.current` before their first
+await and bail on mismatch afterwards, beside the existing `isMountedRef`
+guard, which catches an unmount and not an account switch. `updateItem` is
+included even though it does not queue: it writes `setItems` after its awaits,
+which is the same late-write shape and the §27 rule says fix the siblings in
+the same round.
+
+### 33.3 A dead-end error message
+
+With an unusable envelope and no legacy wrapped-DEK record, the fallback
+rethrew the decoder's own text and `handleSubmit` rendered it — the user saw
+`bad magic` and retried a password that could never work. Replaced with one
+fixed, actionable, password-independent string. The wrong-password path is
+untouched, since it is normalised earlier and must stay identical.
+
+### 33.4 A test that could not fail
+
+The setup-form oracle test fed **two identical mock errors** into the same
+render helper and compared the resulting HTML. Equal by construction: it could
+not detect a decoy-vs-garbage branch in the component, and read as coverage it
+never provided. The real invariant — that `setDecoySlot` raises the same type
+AND a byte-identical message for both — belongs to the store and is already
+asserted there against the real implementation. What is left here is the claim
+this file can actually test: any `WrongPasswordError` renders one fixed string
+and names no slot.
+
+Also: `exportWrappedDekRaw`'s "does not touch session state" test cleared the
+session first, so `hasSessionKey()` was already false and the assertion passed
+whatever the export did. Added the production ordering — `runUpgrade` exports
+right after `unlockWithVaultPassword` installs a session — and asserted the
+session survives and stays non-extractable.
+
+### 33.5 The failing CI check: three expired suppressions, resolved by removal
+
+`Multi-Scanner Security Scan / Dependency Vulnerability Scan` failed in 16s —
+the "Validate pip-audit ignore expiries" pre-check, which fails on any entry
+whose date is `< today`. PYSEC-2025-211/212/213 expired 2026-09-01.
+
+Renewing them would have been wrong twice over: 214/215/216 were dated
+2026-09-05 and would have failed the same check the next day, and — re-checked
+the way the manifest's own torch block says to, against what CI actually scans
+rather than the lock file — all eight are inert. CI runs
+`pip-audit -r requirements.txt`, where transformers is `>=4.35.1` with no
+ceiling and nothing else constraining it; that resolves to the latest **stable**
+release, 5.16.1 (verified against PyPI, and note pip would not pick the lock
+file's `5.0.0rc3` for that specifier anyway). Every advisory caps far below it,
+verified per-ID against OSV: 4.54.1, 4.54.1, 4.55.0, 4.57.0, 4.57.0, 4.57.0,
+5.0.0-rc0, 4.57.1.
+
+So all eight were **removed, not renewed** — the same "our pin is outside it,
+nothing to suppress" resolution the manifest already used for
+PYSEC-2025-183/189-197/210 and PYSEC-2024-277. The old reachability argument
+(`from_pretrained` only ever called with the hard-coded
+`config.BERT_MODEL_NAME`) remains true but is no longer what carries them: the
+findings are fixed by version, not accepted by reachability.
+
+835 tests across 75 files. The decoy-bypass fix, the identity guard, and the
+message change are each negative-controlled; `eslint` reports the same eight
+pre-existing warnings as before the change, none new.
