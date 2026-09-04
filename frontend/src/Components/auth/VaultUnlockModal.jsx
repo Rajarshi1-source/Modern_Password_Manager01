@@ -77,6 +77,8 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
 
   const runSetup = async () => {
     await sessionVaultCrypto.setupVaultPassword(password, userId);
+    // Captured immediately after the install -- see the guard below.
+    const generation = sessionVaultCrypto.currentSessionGeneration();
     try {
       const dekBytes = await sessionVaultCrypto.exportSessionDekRaw();
       const saltB64 = sessionVaultCrypto.getOrCreateUserSalt(userId);
@@ -88,6 +90,24 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
       console.warn('VaultUnlockModal: envelope provisioning failed during setup, will retry on next unlock.', envelopeErr);
     }
     reportNoise();
+    // The session this attempt just installed must still be the live one when
+    // we report success. `setupVaultPassword`/`unlockWithVaultPassword` bump
+    // the generation and validate it internally, but everything AFTER them
+    // here is unguarded: `provision()` alone runs two Argon2 derivations, and
+    // a logout (`clearSessionKey()`, which bumps the counter) or a newer
+    // unlock landing in that window leaves this path still resolving. That
+    // would let `handleSubmit` call `onUnlocked()` for a session that is gone
+    // or has been replaced -- the app would show an unlocked vault with no
+    // session key.
+    //
+    // Checked AFTER `reportNoise()` on purpose: the noise report is what keeps
+    // this path's wire shape constant (§3.5), so a superseded attempt must
+    // still emit it. Only the SUCCESS SIGNAL is withheld. Same error string
+    // `installRawDek` raises for the same condition, so all three unlock paths
+    // fail identically.
+    if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
+      throw new Error('Vault session initialization was superseded by a newer request.');
+    }
   };
 
   // `replaceExisting` is passed ONLY by the corrupt-envelope fallback below.
@@ -98,6 +118,8 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
     // The real unlock. If this throws, nothing below runs and the user sees
     // the standard "Incorrect vault password." error.
     await sessionVaultCrypto.unlockWithVaultPassword(password, userId);
+    // Captured immediately after the install -- see the guard below.
+    const generation = sessionVaultCrypto.currentSessionGeneration();
     try {
       const { dekBytes, saltB64 } = await sessionVaultCrypto.exportWrappedDekRaw(password, userId);
       await unlockEnvelopeStore.provision({
@@ -110,6 +132,24 @@ const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose 
       console.warn('VaultUnlockModal: envelope upgrade failed after unlock, will retry next time.', envelopeErr);
     }
     reportNoise();
+    // The session this attempt just installed must still be the live one when
+    // we report success. `setupVaultPassword`/`unlockWithVaultPassword` bump
+    // the generation and validate it internally, but everything AFTER them
+    // here is unguarded: `provision()` alone runs two Argon2 derivations, and
+    // a logout (`clearSessionKey()`, which bumps the counter) or a newer
+    // unlock landing in that window leaves this path still resolving. That
+    // would let `handleSubmit` call `onUnlocked()` for a session that is gone
+    // or has been replaced -- the app would show an unlocked vault with no
+    // session key.
+    //
+    // Checked AFTER `reportNoise()` on purpose: the noise report is what keeps
+    // this path's wire shape constant (§3.5), so a superseded attempt must
+    // still emit it. Only the SUCCESS SIGNAL is withheld. Same error string
+    // `installRawDek` raises for the same condition, so all three unlock paths
+    // fail identically.
+    if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
+      throw new Error('Vault session initialization was superseded by a newer request.');
+    }
   };
 
   const runEnvelopeUnlock = async () => {

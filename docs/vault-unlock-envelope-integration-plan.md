@@ -3741,3 +3741,79 @@ test suites, which were the DRF bump's only real verification.
 842 tests across 76 files. The `vault:locked` repaint is negative-controlled
 (removing the listener fails its test alone); `eslint` reports the same six
 pre-existing warnings, none new.
+
+## 36. Twenty-sixth review round — the success SIGNAL crossed an unguarded await
+
+### 36.1 `runSetup` and `runUpgrade` reported success for a session that could be gone
+
+`runEnvelopeUnlock` has carried the generation pattern since §3.7: reserve
+before the slow step, hand it to `installRawDek`, which validates. Its two
+siblings did not. Both install a session (`setupVaultPassword` /
+`unlockWithVaultPassword`, each of which bumps and validates the generation
+internally) and then run **unguarded** awaits — `exportSessionDekRaw` /
+`exportWrappedDekRaw`, then `provision()`, which is two Argon2 derivations on
+its own. A `clearSessionKey()` (logout, lock) or a newer unlock landing in that
+window leaves both helpers resolving normally, so `handleSubmit` calls
+`onUnlocked()` and the app shows an unlocked vault with no session key — or
+attributes a newer session's success to this stale attempt.
+
+This is §32 again, one level out: **the check must sit on the same side of the
+await as the thing it protects, and here the thing being protected is the
+SUCCESS SIGNAL, not a write.** The provisioning itself is deliberately
+non-fatal and stays that way; only the report changes.
+
+Both paths now capture `currentSessionGeneration()` immediately after the
+install and compare after the provisioning block, throwing the same
+`'Vault session initialization was superseded by a newer request.'`
+`installRawDek` raises for the identical condition — so all three unlock paths
+now fail identically rather than each inventing its own wording.
+
+**Placed after `reportNoise()` on purpose.** That fixed-shape report is what
+keeps this path's wire profile constant (§3.5); withholding it on a superseded
+attempt would make the stale case observably different on the network. Only the
+success signal is withheld. Not a password oracle either: the guard is reachable
+only *after* the password already verified, and identically in both paths.
+
+**A test-hygiene note worth keeping:** the first draft of these tests passed in
+isolation and failed in the file, because `vi.clearAllMocks()` resets calls but
+NOT implementations — the setup test's `currentSessionGeneration.mockReturnValue(2)`
+leaked into every later case. Reset in the shared `beforeEach`. This is the
+second file in this PR to need that (§32 did the same for the duress mocks); a
+mock that encodes a *state* rather than a return shape must always be reset
+there.
+
+### 36.2 The queue test asserted one half of a two-part claim
+
+§34.3's test says A's late sync response must neither apply its items nor clear
+the queue, and asserted only the first. A regression that kept filtering A's
+items while still running `setPendingChanges([])` would have passed.
+
+Adding the missing half surfaced that the obvious framing is wrong: after an
+A→B switch, **A's** queue is dropped legitimately by the identity effect
+(§29.1), so asserting "A's queue survives" tests the opposite of the design.
+The work actually at risk is **B's** — queued after the switch and wiped by A's
+stale continuation. The new test queues an item as B while A's sync is still
+open, resolves A's response, and asserts B's item is still there to flush. Both
+tests fail when the post-await identity check is removed.
+
+### 36.3 The desktop availability predicate read as a contradiction
+
+Phase 2 step 2 forbids gating desktop on `vault_proxy.available`; step 3 says
+the renderer contract is reused "verbatim … identical across web and desktop".
+Phase 1's `isOnionSyncAvailable()` is defined in terms of exactly that field,
+so read literally the two cannot both hold: keep the predicate and desktop is
+never available; change it and the contract is not identical.
+
+They hold under the reading A.5 already specifies, which the summary never
+stated: **"identical" is the API surface — same function, signature and call
+sites — not the same internal predicate.** Spelled out in the privacy plan with
+the per-platform branch (web keeps `vault_proxy.available` unchanged;
+desktop/mobile use `anonymity.available && onion_address` plus local transport
+readiness), the handoff named (`getVaultProxyTransport()` plus the sidecar
+status call the service already makes — not a new parameter threaded from a
+caller, which is what would genuinely break the contract), and coverage
+required for both `prefer_onion` and `require_onion` on the non-web branch.
+
+845 tests across 76 files. Both modal guards and the sync guard are
+negative-controlled; `eslint` reports the same eight pre-existing warnings,
+none new. All CI checks were already green entering this round.
