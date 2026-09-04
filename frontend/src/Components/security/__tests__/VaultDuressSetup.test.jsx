@@ -264,6 +264,23 @@ test('the SETUP form renders one fixed outcome for ANY WrongPasswordError', asyn
   expect(alertText).not.toMatch(/decoy|real slot|did not resolve/i);
 });
 
+test('a vault:locked event repaints the panel, so the forms do not linger after a lock', async () => {
+  // Display freshness, not the boundary. Every lock path runs handleLockVault,
+  // which now dispatches this; before it, nothing inside the locking tab told
+  // this screen to re-render, so its password forms stayed visible until some
+  // unrelated render happened. The submit-time checks already refused those
+  // submissions -- this is what stops it LOOKING like the gate failed.
+  mockHasSessionKey.mockReturnValue(true);
+  const { getByLabelText, container } = render(<VaultDuressSetup />);
+  expect(getByLabelText(/current vault password/i)).toBeInTheDocument();
+
+  mockHasSessionKey.mockReturnValue(false);
+  await act(async () => { window.dispatchEvent(new Event('vault:locked')); });
+
+  expect(container.querySelector('input')).toBeNull();
+  expect(container.textContent).toMatch(/unlock your vault first/i);
+});
+
 test('a lock that happens AFTER the form is filled still blocks the submission', async () => {
   // The lock paths -- manual, inactivity, cross-tab -- all go through
   // handleLockVault, which calls clearSessionKey() and dispatches NO DOM

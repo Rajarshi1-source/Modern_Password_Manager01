@@ -3672,3 +3672,72 @@ zero advisories. Three genuinely new findings:
 reports the same six pre-existing warnings, none new. The DRF bump is a backend
 dependency change with no frontend test coverage — CI's backend suites are its
 verification.
+
+## 35. Twenty-fifth review round — the last lock path that told nobody, and four stale re-posts
+
+### 35.1 What was actually left
+
+Greptile's own body text this round records the duress findings as disproved —
+"stale locked-session forms reject submission", "locks during setup or recovery
+prevent later registration" — while its score blurb still claims the oracle
+"remains". Verified against the source rather than either sentence: the render
+gate at `VaultDuressSetup.jsx:234` reads
+`sessionVaultCrypto.hasSessionKey()` live, both submit handlers re-check it
+(`:299`, `:387`), and both are generation-bound across their awaits (`:330`).
+A submission after a lock is refused, byte-identically for every password class
+(§31's own test asserts that). So there is no oracle left.
+
+What *was* still true is the narrower claim in the same paragraph: **no lock
+path notified anything inside its own tab.** `handleLockVault` sets React state
+and calls `broadcastVaultLock()`, which talks to OTHER tabs; `VaultDuressSetup`
+is not a context consumer, so nothing forced it to re-render. Its forms stayed
+on screen after a manual, inactivity, or cross-tab lock until some unrelated
+render happened. Harmless — every submission through them was already refused —
+but it looks exactly like the gate failing, which is why it kept being re-filed.
+
+Closed with one dispatch and one listener: `handleLockVault` now emits
+`vault:locked`, and the screen's existing re-render nudge listens for it.
+
+**Deliberately its own event, not `vault:updated`:** this context's own
+`vault:updated` listener calls `refreshItems()`, so reusing it would refetch
+the item list microseconds after the lock cleared it and leave a locked vault
+showing rows again. And the comment on the dispatch says plainly that this is
+display freshness and not the boundary — §31 was precisely the bug of a
+listener being mistaken for a guarantee, and this file should not read as if
+that lesson were forgotten.
+
+### 35.2 Two decrypt tests were filed under the wrong describe block
+
+The §34.2 read-side tests call `decryptEnvelope` but sat inside
+`describe('encryptEnvelope')`, so the read-side gate's coverage was reported
+under the write-side group. Moved. No assertion changed.
+
+### 35.3 Four findings re-posted that the plan already answers
+
+Verified each against the current document rather than the review text, and
+skipped with reason:
+
+- **RESERVE → FINALIZE fencing** — added in §32.4; the plan already requires a
+  fencing token carried through dispatch and rejected at FINALIZE when stale,
+  with the delayed-first/second-redemption test spelled out.
+- **Mixed JWT + anonymous credential** — already required in C.3, including
+  *where* the check goes (`initial()`, before `check_permissions()`) and the
+  precedence rule that the onion-ingress refusal must come first.
+- **`item_id` linkability under anonymous sync** — already C.2 point 6, which
+  names it "the primary key of the correlation", flags
+  `expected_sync_version` as account-scoped state, proposes per-credential
+  item references or issuance-keyed blinding, and applies the same "if this
+  cannot be solved cleanly, Phase 4 does not ship" test.
+- **`socks-proxy-agent` / `proxy: false` / `maxRedirects: 0`** — A.4 already
+  requires the dependency addition, `socks5h://` for proxy-side DNS, and
+  redirect rejection off the `.onion` origin.
+
+### 35.4 The dependency scan is green again
+
+`Multi-Scanner Security Scan / Dependency Vulnerability Scan` passes after
+§34.4's DRF bump to 3.17.2 and the nltk suppression — including the backend
+test suites, which were the DRF bump's only real verification.
+
+842 tests across 76 files. The `vault:locked` repaint is negative-controlled
+(removing the listener fails its test alone); `eslint` reports the same six
+pre-existing warnings, none new.

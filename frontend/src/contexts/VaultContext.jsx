@@ -355,6 +355,28 @@ export const VaultProvider = ({ children }) => {
       console.warn('Failed to clear v3 vault session key on lock:', clearErr);
     }
 
+    // Tell this tab's own screens the vault just locked.
+    //
+    // Every lock path -- the manual button, the inactivity timer, and the
+    // cross-tab handler -- funnels through here, and until now none of them
+    // notified anything inside this tab: `broadcastVaultLock()` below talks to
+    // OTHER tabs, and the React state set above only reaches consumers of this
+    // context. `VaultDuressSetup` is not one: it reads
+    // `sessionVaultCrypto.hasSessionKey()` live at render, but nothing was
+    // forcing it to render, so its password forms stayed on screen after a
+    // lock until some unrelated re-render happened.
+    //
+    // Deliberately its OWN event rather than reusing `vault:updated`: this
+    // context's own `vault:updated` listener calls `refreshItems()`, which
+    // would refetch the item list microseconds after the lock cleared it and
+    // leave a locked vault showing rows again.
+    //
+    // This is a display-freshness fix, NOT the security boundary. Submissions
+    // are already refused by the live re-check inside both duress handlers and
+    // by their session-generation binding (§31, §32); a listener is never
+    // allowed to be what makes a gate correct -- that mistake is §31 itself.
+    window.dispatchEvent(new Event('vault:locked'));
+
     // Reset last activity timestamp
     lastActivityRef.current = Date.now();
 
