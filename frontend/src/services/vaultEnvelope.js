@@ -23,7 +23,21 @@ import sessionVaultCryptoV3 from './sessionVaultCryptoV3';
  */
 export async function decryptEnvelope(encrypted_data) {
   const v2Result = await sessionVaultCrypto.decryptItem(encrypted_data);
-  if (v2Result && v2Result._legacyPlaintext && sessionVaultCryptoV3.hasSessionKey()) {
+  // The v3 fallback is the READ-side mirror of the write-side hole fixed in
+  // `encryptEnvelope` below: a decoy unlock installs its DEK on v2 only and
+  // does not clear a live v3 key, and v3 has no concept of a decoy session.
+  // A REAL item cannot be opened by the decoy DEK, so v2 returns the
+  // `_legacyPlaintext` marker -- which is exactly the condition that triggers
+  // this fallback, handing back the real plaintext v2 correctly refused.
+  //
+  // Skipping the fallback (rather than refusing outright) is deliberate: v2
+  // still decrypts the DECOY slot's own items normally, which is what makes
+  // the decoy vault believable. Only the escape hatch to the real key closes.
+  if (
+    v2Result && v2Result._legacyPlaintext
+    && !sessionVaultCrypto.isDecoySession()
+    && sessionVaultCryptoV3.hasSessionKey()
+  ) {
     try {
       return await sessionVaultCryptoV3.decryptItem(encrypted_data);
     } catch (v3Err) {

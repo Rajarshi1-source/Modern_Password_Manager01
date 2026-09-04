@@ -174,6 +174,37 @@ describe('VaultContext sync queue across an identity change', () => {
     expect(mockOnionSyncVault).not.toHaveBeenCalled();
   });
 
+  test('a sync STARTED by A does not apply its response or clear the queue after B signs in', async () => {
+    // The owner check runs BEFORE the request. If B signs in while A's sync is
+    // in flight, applying A's response writes A's server state into B's list,
+    // and the setPendingChanges([]) that follows discards work B queued since.
+    const { result, rerender } = await mountAndQueueForA();
+
+    let resolveSync;
+    mockOnionSyncVault.mockReturnValueOnce(new Promise((r) => { resolveSync = r; }));
+
+    let syncPromise;
+    await act(async () => { syncPromise = result.current.syncVault(); });
+    await waitFor(() => expect(mockOnionSyncVault).toHaveBeenCalled());
+
+    mockAuthState.mockReturnValue(USER_B);
+    await act(async () => { rerender(); });
+
+    await act(async () => {
+      resolveSync({
+        data: { success: true, items: [{
+          id: 99, item_id: 'a-server-item', item_type: 'password',
+          encrypted_data: 'A-CIPHERTEXT', favorite: false,
+        }], deleted_items: [] },
+        transport: 'clearnet', degraded: false,
+      });
+      await syncPromise;
+    });
+
+    // A's server items must not land in B's list.
+    expect(result.current.items.some((i) => i.item_id === 'a-server-item')).toBe(false);
+  });
+
   test('the same queue IS flushed while the owning identity is unchanged', async () => {
     // The negative half: the guards must not have made syncVault a no-op.
     const { result } = await mountAndQueueForA();
