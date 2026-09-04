@@ -28,6 +28,10 @@ vi.mock('../../../services/sessionVaultCrypto', () => ({
     exportSessionDekRaw: vi.fn(),
     exportWrappedDekRaw: vi.fn(),
     reserveSessionGeneration: vi.fn(() => 1),
+    // Stable by default: the session does not change under any pre-existing
+    // test here. The deferred-provision tests move it, which is what a logout
+    // (clearSessionKey) or a newer unlock does.
+    currentSessionGeneration: vi.fn(() => 1),
     installRawDek: vi.fn(),
     getOrCreateUserSalt: vi.fn(() => 'device-salt-b64'),
   },
@@ -82,6 +86,9 @@ const submitPassword = async (getByLabelText, getByRole, password, confirm = nul
 beforeEach(() => {
   vi.clearAllMocks();
   sessionVaultCrypto.getOrCreateUserSalt.mockReturnValue('device-salt-b64');
+  // `clearAllMocks` resets calls but NOT implementations, so a case that moves
+  // the generation would otherwise leak into every later case in this file.
+  sessionVaultCrypto.currentSessionGeneration.mockReturnValue(1);
   // The blob the self-heal snapshots before replacing it (compare-and-swap).
   unlockEnvelopeStore.readRawEnvelope.mockReturnValue('STALE_RAW_BLOB');
 });
@@ -114,6 +121,32 @@ describe('setup mode (no wrapped key, no envelope)', () => {
       dekBytes: DEK,
       saltB64: 'device-salt-b64',
     });
+    expect(reportUnlock).toHaveBeenCalledWith(TOKEN, null);
+  });
+
+  test('a logout DURING provisioning withholds onUnlocked, but still reports noise', async () => {
+    // setupVaultPassword installs the session and validates its own
+    // generation, but provision() then runs two Argon2 derivations. A logout
+    // (clearSessionKey bumps the counter) landing in that window used to leave
+    // this path resolving anyway, so the app announced an unlocked vault with
+    // no session key.
+    sessionVaultCrypto.setupVaultPassword.mockResolvedValue(undefined);
+    sessionVaultCrypto.exportSessionDekRaw.mockResolvedValue(DEK);
+    sessionVaultCrypto.provisionGenerationMoved = false;
+    unlockEnvelopeStore.provision.mockImplementation(async () => {
+      // The logout happens while provision is awaiting.
+      sessionVaultCrypto.currentSessionGeneration.mockReturnValue(2);
+    });
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole, findByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'a very long vault password', 'a very long vault password');
+
+    const alert = await findByRole('alert');
+    expect(alert).toHaveTextContent(/superseded/i);
+    expect(onUnlocked).not.toHaveBeenCalled();
+    // The noise report still went out: it is what keeps this path's wire shape
+    // constant, so only the success signal is withheld.
     expect(reportUnlock).toHaveBeenCalledWith(TOKEN, null);
   });
 
@@ -404,6 +437,26 @@ describe('unlock mode — upgrade (wrapped key exists, no envelope yet)', () => 
     unlockEnvelopeStore.hasEnvelope.mockReturnValue(false);
     sessionVaultCrypto.hasWrappedKey.mockReturnValue(true);
   });
+
+  test('a newer unlock DURING the upgrade provisioning withholds onUnlocked', async () => {
+    // Upgrade half of the same guard: unlockWithVaultPassword installs the
+    // session, then exportWrappedDekRaw + provision await. A newer unlock (or
+    // a logout) inside that window must not be reported as this attempt's
+    // success.
+    sessionVaultCrypto.exportWrappedDekRaw.mockResolvedValue({ dekBytes: DEK, saltB64: 'legacy-salt' });
+    unlockEnvelopeStore.provision.mockImplementation(async () => {
+      sessionVaultCrypto.currentSessionGeneration.mockReturnValue(2);
+    });
+    const onUnlocked = vi.fn();
+
+    const { getByLabelText, getByRole, findByRole } = renderModal({ onUnlocked });
+    await submitPassword(getByLabelText, getByRole, 'legacy-password');
+
+    const alert = await findByRole('alert');
+    expect(alert).toHaveTextContent(/superseded/i);
+    expect(onUnlocked).not.toHaveBeenCalled();
+  });
+
 
   test('unlocks via the legacy path and transparently provisions an envelope with the same DEK', async () => {
     sessionVaultCrypto.unlockWithVaultPassword.mockResolvedValue(undefined);

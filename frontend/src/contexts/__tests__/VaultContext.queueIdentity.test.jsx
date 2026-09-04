@@ -203,6 +203,50 @@ describe('VaultContext sync queue across an identity change', () => {
 
     // A's server items must not land in B's list.
     expect(result.current.items.some((i) => i.item_id === 'a-server-item')).toBe(false);
+
+  });
+
+  test("A's late sync response does not wipe work B queued after the switch", async () => {
+    // The SECOND half of the same guard. Asserting only that A's items are not
+    // applied leaves a regression that still runs `setPendingChanges([])` in
+    // the stale continuation -- which would silently discard whatever B has
+    // queued since. A's OWN queue is not the thing at risk here: the identity
+    // effect drops that legitimately (§29.1). B's is.
+    const { result, rerender } = await mountAndQueueForA();
+
+    let resolveSync;
+    mockOnionSyncVault.mockReturnValueOnce(new Promise((r) => { resolveSync = r; }));
+    let syncPromise;
+    await act(async () => { syncPromise = result.current.syncVault(); });
+    await waitFor(() => expect(mockOnionSyncVault).toHaveBeenCalled());
+
+    // B signs in and queues work of their own while A's sync is still open.
+    mockAuthState.mockReturnValue(USER_B);
+    await act(async () => { rerender(); });
+    axios.post.mockResolvedValue({
+      data: { id: 8, item_id: 'b-item-1', favorite: false, created_at: 'T', updated_at: 'T' },
+    });
+    await act(async () => {
+      await result.current.addItem({ type: 'password', data: { name: 'B secret' } });
+    });
+
+    // Now A's sync finally comes back.
+    await act(async () => {
+      resolveSync({
+        data: { success: true, items: [], deleted_items: [] },
+        transport: 'clearnet', degraded: false,
+      });
+      await syncPromise;
+    });
+
+    // B's queued item survived and is still flushable.
+    mockOnionSyncVault.mockClear();
+    await act(async () => { await result.current.syncVault(); });
+
+    expect(mockOnionSyncVault).toHaveBeenCalledTimes(1);
+    const [syncData] = mockOnionSyncVault.mock.calls[0];
+    expect(syncData.items).toHaveLength(1);
+    expect(syncData.items[0].item_id).toBe('b-item-1');
   });
 
   test('the same queue IS flushed while the owning identity is unchanged', async () => {
