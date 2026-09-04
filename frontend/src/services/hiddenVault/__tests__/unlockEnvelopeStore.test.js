@@ -48,6 +48,29 @@ const DECOY_PASSWORD = 'a totally different decoy phrase';
 const DEK = new Uint8Array(32).map((_, i) => i + 1);
 const SALT = 'ZGV2aWNlLXNhbHQtMTIzNDU2'; // arbitrary base64-looking device salt
 
+/**
+ * Run `write` once from INSIDE the first Argon2 derivation, then restore the
+ * KDF mock.
+ *
+ * The mocked SHA-256 KDF resolves too fast to land a competing write in the
+ * real await window, so the write is injected into the derivation itself.
+ * Restoring the real implementation FIRST is the subtle part and the reason
+ * this is a helper rather than copy-paste: `write` derives keys of its own and
+ * must not re-enter the injection.
+ *
+ * Returns a restore function for the caller's `finally`.
+ */
+const injectWriteDuringFirstDerivation = (write) => {
+  const realHash = argon2.hash.getMockImplementation();
+  argon2.hash.mockImplementation(async (opts) => {
+    argon2.hash.mockImplementation(realHash);
+    const result = await realHash(opts);
+    await write();
+    return result;
+  });
+  return () => argon2.hash.mockImplementation(realHash);
+};
+
 beforeEach(() => {
   localStorage.clear();
 });
@@ -209,17 +232,10 @@ describe('provision', () => {
     await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
     const staleSnapshot = readRawEnvelope(USER_ID);
 
-    const realHash = argon2.hash.getMockImplementation();
-    argon2.hash.mockImplementation(async (opts) => {
-      // Restore FIRST: setDecoySlot below derives keys of its own and must
-      // not re-enter this injection.
-      argon2.hash.mockImplementation(realHash);
-      const result = await realHash(opts);
-      // "Another tab" configures a decoy while provision() is suspended
-      // inside encode(), after its pre-encode comparison already passed.
-      await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
-      return result;
-    });
+    // "Another tab" configures a decoy while provision() is suspended inside
+    // encode(), after its pre-encode comparison already passed.
+    const restoreHash = injectWriteDuringFirstDerivation(() =>
+      setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD }));
 
     try {
       await expect(provision({
@@ -227,7 +243,7 @@ describe('provision', () => {
         replaceExisting: staleSnapshot,
       })).rejects.toThrow(/changed/i);
     } finally {
-      argon2.hash.mockImplementation(realHash);
+      restoreHash();
     }
 
     // The decoy that arrived in the window is intact.
@@ -391,25 +407,18 @@ describe('setDecoySlot', () => {
     // provision, whose new real DEK this write would roll back.
     await provisionReal();
 
-    const realHash = argon2.hash.getMockImplementation();
-    argon2.hash.mockImplementation(async (opts) => {
-      // Restore FIRST -- the injected write derives keys of its own.
-      argon2.hash.mockImplementation(realHash);
-      const result = await realHash(opts);
-      // "Another tab" replaces the envelope mid-flight.
-      await provision({
-        userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: new Uint8Array(32).fill(9),
-        saltB64: SALT, replaceExisting: readRawEnvelope(USER_ID),
-      });
-      return result;
-    });
+    // "Another tab" replaces the envelope mid-flight.
+    const restoreHash = injectWriteDuringFirstDerivation(() => provision({
+      userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: new Uint8Array(32).fill(9),
+      saltB64: SALT, replaceExisting: readRawEnvelope(USER_ID),
+    }));
 
     try {
       await expect(setDecoySlot({
         userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD,
       })).rejects.toThrow(/changed/i);
     } finally {
-      argon2.hash.mockImplementation(realHash);
+      restoreHash();
     }
 
     // The newer envelope is intact: its real DEK was not rolled back to the

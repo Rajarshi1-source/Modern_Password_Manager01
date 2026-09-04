@@ -241,6 +241,40 @@ describe('VaultContext backup paths during a decoy session', () => {
     expect(caught.message).not.toMatch(/decoy|duress|slot/i);
   });
 
+  test('getBackups returns an empty list and makes no request', async () => {
+    // The DISPLAY half of the backup surface. getBackups is a read, so it was
+    // left outside the write gate -- but BackupManager renders each row's
+    // name, timestamp and item_count on mount, and a decoy session showing a
+    // near-empty vault beside "247 items backed up" contradicts itself in
+    // front of the coercer.
+    mockIsDecoySession.mockReturnValue(true);
+    api.get.mockResolvedValue({ data: [
+      { id: 'b-1', name: 'Full vault', created_at: '2026-01-01', item_count: 247 },
+    ] });
+    const { result } = await mountVault();
+
+    let backups;
+    await act(async () => { backups = await result.current.getBackups(); });
+
+    // Empty, not an error: a failure only on this screen would be its own
+    // tell, whereas "no backups yet" is entirely ordinary.
+    expect(backups).toEqual([]);
+    expect(api.get).not.toHaveBeenCalledWith('/vault/backups/');
+    // And nothing about the real vault reached the caller.
+    expect(JSON.stringify(backups)).not.toMatch(/247|Full vault/);
+  });
+
+  test('a real session still lists backups', async () => {
+    api.get.mockResolvedValue({ data: [{ id: 'b-1', name: 'Full vault', item_count: 247 }] });
+    const { result } = await mountVault();
+
+    let backups;
+    await act(async () => { backups = await result.current.getBackups(); });
+
+    expect(api.get).toHaveBeenCalledWith('/vault/backups/');
+    expect(backups).toHaveLength(1);
+  });
+
   test('a real session still creates and restores normally', async () => {
     const { result } = await mountVault();
 
