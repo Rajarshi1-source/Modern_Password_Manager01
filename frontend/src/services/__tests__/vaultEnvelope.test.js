@@ -92,6 +92,33 @@ describe('decryptEnvelope', () => {
 });
 
 describe('encryptEnvelope', () => {
+  test('a DECOY session never falls back to v3 to read a REAL item', async () => {
+    // Read-side mirror of the write-side hole: the decoy DEK cannot open a
+    // real item, so v2 returns the _legacyPlaintext marker -- which is exactly
+    // the condition that used to trigger the v3 fallback and hand back the
+    // real plaintext v2 had correctly refused.
+    sessionVaultCrypto.isDecoySession.mockReturnValue(true);
+    sessionVaultCrypto.decryptItem.mockResolvedValue({ _legacyPlaintext: true });
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+    sessionVaultCryptoV3.decryptItem.mockResolvedValue({ name: 'REAL SECRET' });
+
+    const out = await decryptEnvelope('real-item-envelope');
+
+    expect(out).toEqual({ _legacyPlaintext: true });
+    expect(sessionVaultCryptoV3.decryptItem).not.toHaveBeenCalled();
+  });
+
+  test('a NON-decoy session still uses the v3 fallback', async () => {
+    // The negative half: the guard must not disable the fallback generally.
+    sessionVaultCrypto.isDecoySession.mockReturnValue(false);
+    sessionVaultCrypto.decryptItem.mockResolvedValue({ _legacyPlaintext: true });
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+    sessionVaultCryptoV3.decryptItem.mockResolvedValue({ name: 'v3 item' });
+
+    await expect(decryptEnvelope('env')).resolves.toEqual({ name: 'v3 item' });
+    expect(sessionVaultCryptoV3.decryptItem).toHaveBeenCalled();
+  });
+
   test('refuses a DECOY session even when a v3 key would be chosen', async () => {
     // The decoy flag lives in v2 (`installRawDek` sets it), and v3 has no
     // concept of a decoy session -- so with a v3 key still live, the v3 branch

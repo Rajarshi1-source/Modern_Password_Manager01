@@ -3581,3 +3581,94 @@ findings are fixed by version, not accepted by reachability.
 835 tests across 75 files. The decoy-bypass fix, the identity guard, and the
 message change are each negative-controlled; `eslint` reports the same eight
 pre-existing warnings as before the change, none new.
+
+## 34. Twenty-fourth review round — the read side of §33, and a genuinely new CVE
+
+### 34.1 A decrypt in flight outlived the lock that was supposed to stop it
+
+`VaultContext.decryptItem` awaits `decryptEnvelope`, then unconditionally
+caches the plaintext into `decryptedItems` and returns it. `lockVault()` —
+manual, inactivity, or cross-tab — can land inside that await: it clears the
+session key and the item list, but nothing stopped the pending continuation
+from writing the secret it already held into the cache. And `decryptItem` reads
+that cache as its **first** action, before it looks the item up or checks
+anything else, so a later call kept serving the secret out of a locked vault.
+
+Two guards, because they fail independently:
+
+- The continuation compares `sessionVaultCrypto.currentSessionGeneration()`
+  captured before the await, and returns the same non-cached
+  `_decryptionFailed` placeholder an undecryptable payload already produces.
+  Generation, not `hasSessionKey()`, for §32's reason: a lock followed by ANY
+  unlock — including a **decoy** one — answers true again, which would cache
+  real plaintext into a decoy session.
+- `handleLockVault` clears `decryptedItems` alongside `items`.
+
+**Both are negative-controlled, and getting there corrected a bad assertion.**
+The cache-clear test first asserted "`decryptEnvelope` was not called again",
+which passes whether or not the cache is cleared — an uncleared cache returns
+the secret *without* calling it. Rewritten to assert on the returned value, it
+fails when the clear is removed. The cache lookup being first is exactly what
+made the weak assertion look right.
+
+### 34.2 `decryptEnvelope`'s v3 fallback was the read-side twin of §33.1
+
+§33.1 closed the write side: `encryptEnvelope` picked v3 whenever a v3 key was
+live, and v3 knows nothing about decoy sessions. The read side had the same
+shape and was missed in that round — the sibling sweep §27 mandates should have
+caught it, since both functions live in the same file.
+
+`decryptEnvelope` calls v2 first; a REAL item cannot be opened by the decoy
+DEK, so v2 returns the `_legacyPlaintext` marker — **which is precisely the
+condition that triggers the v3 fallback**, handing back the real plaintext v2
+had just correctly refused. Now skipped while `isDecoySession()`.
+
+Skipping the fallback rather than refusing outright is deliberate: v2 still
+decrypts the decoy slot's own items normally, which is what makes the decoy
+vault believable. Only the escape hatch to the real key closes. Tested both
+ways — a decoy session never reaches v3, a normal session still does.
+
+### 34.3 `syncVault` validated ownership before the request, not after
+
+The §29.1 owner check runs before `await onionSyncService.syncVault(...)`. If B
+signs in while A's sync is in flight, the continuation applied A's server
+response to B's list and then called `setPendingChanges([])`, discarding work B
+had queued since. Same await-window rule as everywhere else in this file; the
+identity is now captured before the request and re-checked after it.
+
+### 34.4 The failing CI check was a new advisory, not the last round's edit
+
+`Dependency Vulnerability Scan` failed after ~1m this time rather than 16s —
+past the expiry pre-check, inside `pip-audit` itself. Read from the actual run
+log rather than inferred, and it was **not** a regression from §33.5's
+suppression removal: `transformers` resolves to 5.16.1, which OSV reports with
+zero advisories. Three genuinely new findings:
+
+- **djangorestframework 3.16.1 — CVE-2026-73228 and CVE-2026-73229**, both
+  fixed in 3.17.2. The first is `request.data` bypassing Django's
+  `DATA_UPLOAD_MAX_MEMORY_SIZE`; that is core DRF request parsing on every API
+  view here, so a non-reachability suppression would have been dishonest. (The
+  second, an `AdminRenderer` disclosure, *is* unreachable — `AdminRenderer`
+  appears nowhere — but it is fixed by the same bump.) **Pinned to 3.17.2** in
+  both `requirements.txt` and `requirements-lock.txt`; verified compatible
+  before bumping: 3.17.2 declares `requires_python >=3.10` (CI runs 3.11) and
+  `django>=4.2` with an explicit Django 5.1 classifier, matching the 5.1.15
+  pin. This is a much smaller move than the deferred Django 5.2/6.0 upgrade the
+  manifest suppresses, so the "too large for this PR" reasoning does not apply.
+- **nltk 3.10.3 — CVE-2026-81726 (PYSEC-2026-3740 / GHSA-8mgp-746c-j5xp)**,
+  model-artifact APIs escaping their allowed roots. **No fix exists**: the GHSA
+  range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every release
+  including the one CI resolves, and pip-audit reports `fix_versions: []`.
+  Suppressed with the assessment re-verified by grep on the day: `import nltk`
+  / `from nltk` / `nltk.` return zero matches across `password_manager/`.
+
+  Worth recording because it would mislead the next renewal: the **PYSEC**
+  record for this same CVE says `fixed: 3.10.3`, which would make our resolved
+  version clean. The **GHSA** alias does not, and pip-audit follows the wider
+  range. Reading only the PYSEC half would "resolve" this by deleting an entry
+  CI still needs.
+
+841 tests across 76 files. Each code fix is negative-controlled; `eslint`
+reports the same six pre-existing warnings, none new. The DRF bump is a backend
+dependency change with no frontend test coverage — CI's backend suites are its
+verification.

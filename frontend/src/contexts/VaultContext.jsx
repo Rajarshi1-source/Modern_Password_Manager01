@@ -274,6 +274,9 @@ export const VaultProvider = ({ children }) => {
       throw new Error('Item not found');
     }
 
+    // Captured before the await below -- see the guard after it.
+    const decryptGeneration = sessionVaultCrypto.currentSessionGeneration();
+
     try {
       console.time(`on-demand-decrypt-${itemId}`);
       // PR F: decrypt via the shared sessionVaultCrypto (v2→v3) envelope helper
@@ -281,6 +284,25 @@ export const VaultProvider = ({ children }) => {
       // never-initialised vaultService.cryptoService.
       const data = await decryptEnvelope(item.encrypted_data);
       console.timeEnd(`on-demand-decrypt-${itemId}`);
+
+      // The session that authorised this decrypt must still be the one in
+      // place when it resolves. `decryptEnvelope` awaits a real AES-GCM
+      // decrypt, and `lockVault()` (manual, inactivity, or cross-tab) can land
+      // inside that window: it clears the session key and the item list, but
+      // nothing stops this continuation from caching the plaintext it already
+      // holds into `decryptedItems` and returning it. The cache is read at the
+      // TOP of this function, so a later call would keep serving that secret
+      // from a locked vault.
+      //
+      // Compared by generation for the same reason §32 gives: `hasSessionKey()`
+      // answers true again after a lock followed by ANY unlock, including a
+      // DECOY one, which would cache real plaintext into a decoy session.
+      // Returning the same non-cached failure placeholder an undecryptable
+      // payload produces, rather than throwing, keeps every caller's existing
+      // handling intact and lets a later attempt retry after a real unlock.
+      if (sessionVaultCrypto.currentSessionGeneration() !== decryptGeneration) {
+        return { ...item, _decryptionFailed: true };
+      }
 
       // A `_legacyPlaintext` marker (or any payload with no usable object)
       // is NOT editable: re-encrypting an empty form over it would corrupt the
@@ -312,6 +334,12 @@ export const VaultProvider = ({ children }) => {
     // Lock the dashboard edit gate (canEdit) — the session key is about to go.
     setSessionUnlocked(false);
     setItems([]);
+    // The plaintext cache has to go with them: `decryptItem` returns straight
+    // from `decryptedItems` before it checks anything else, so leaving it
+    // populated keeps every already-opened secret readable from a locked
+    // vault. Defense in depth alongside the generation guard above, which
+    // stops a decrypt in flight from repopulating it.
+    setDecryptedItems(new Map());
 
     // Drop the in-memory vault session keys (v2 + v3) so they cannot be reused
     // after a manual or cross-tab lock — matching the logout path in App.jsx.
@@ -555,6 +583,9 @@ export const VaultProvider = ({ children }) => {
     // itself predates the switch, so nothing in scope here is trustworthy for
     // this comparison. Dropping the queue rather than keeping it is right:
     // it can never be flushed correctly from a session that does not own it.
+    // Captured for the post-request re-check below, before anything awaits.
+    const syncIdentity = activeIdentityRef.current;
+
     if (pendingChangesOwnerRef.current !== activeIdentityRef.current) {
       pendingChangesRef.current = [];
       pendingChangesOwnerRef.current = activeIdentityRef.current;
@@ -615,6 +646,15 @@ export const VaultProvider = ({ children }) => {
         // onion routing and did not get it. Reporting 'success' here would be
         // a false privacy promise, which is the one outcome this feature has
         // to avoid. ('require_onion' never reaches this line -- it throws.)
+        // The owner check above ran BEFORE this request; re-check after it.
+        // If B signed in while A's sync was in flight, applying A's response
+        // would write A's server state into B's list -- and the
+        // `setPendingChanges([])` further down would discard work B has queued
+        // since. Same await-window rule as everywhere else in this file.
+        if (activeIdentityRef.current !== syncIdentity) {
+          return;
+        }
+
         setSyncTransport(syncResult.transport);
         setSyncDegraded(syncResult.degraded);
 
