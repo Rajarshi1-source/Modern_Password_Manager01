@@ -89,9 +89,6 @@ describe('decryptEnvelope', () => {
 
     await expect(decryptEnvelope('x')).rejects.toThrow('tampered');
   });
-});
-
-describe('encryptEnvelope', () => {
   test('a DECOY session never falls back to v3 to read a REAL item', async () => {
     // Read-side mirror of the write-side hole: the decoy DEK cannot open a
     // real item, so v2 returns the _legacyPlaintext marker -- which is exactly
@@ -118,7 +115,9 @@ describe('encryptEnvelope', () => {
     await expect(decryptEnvelope('env')).resolves.toEqual({ name: 'v3 item' });
     expect(sessionVaultCryptoV3.decryptItem).toHaveBeenCalled();
   });
+});
 
+describe('encryptEnvelope', () => {
   test('refuses a DECOY session even when a v3 key would be chosen', async () => {
     // The decoy flag lives in v2 (`installRawDek` sets it), and v3 has no
     // concept of a decoy session -- so with a v3 key still live, the v3 branch

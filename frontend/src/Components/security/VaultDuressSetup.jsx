@@ -141,11 +141,17 @@ const VaultDuressSetup = () => {
   useEffect(() => {
     const nudge = () => setSessionTick((n) => n + 1);
     window.addEventListener('vault:updated', nudge);
+    // Every lock path (manual, inactivity, cross-tab) runs handleLockVault,
+    // which dispatches this. Without it the forms stayed on screen after a
+    // lock until some unrelated re-render happened -- harmless, because the
+    // submit-time checks refuse anyway, but it looked like the gate had failed.
+    window.addEventListener('vault:locked', nudge);
     // Cross-tab lock writes `vaultLockState`; this only repaints the panel,
     // it is not what makes the gate correct.
     window.addEventListener('storage', nudge);
     return () => {
       window.removeEventListener('vault:updated', nudge);
+      window.removeEventListener('vault:locked', nudge);
       window.removeEventListener('storage', nudge);
     };
   }, []);
