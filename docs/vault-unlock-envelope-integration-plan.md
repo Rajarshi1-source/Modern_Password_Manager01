@@ -3817,3 +3817,68 @@ required for both `prefer_onion` and `require_onion` on the non-web branch.
 845 tests across 76 files. Both modal guards and the sync guard are
 negative-controlled; `eslint` reports the same eight pre-existing warnings,
 none new. All CI checks were already green entering this round.
+
+## 37. Twenty-seventh review round — the read/write split answered the wrong question
+
+### 37.1 `getBackups` leaked the real vault's shape into a decoy session
+
+§18.1 settled which backup paths the decoy flag guards by tracing what each one
+WRITES server-side: `createBackup` snapshots the real user's items,
+`restoreBackup` can wipe and overwrite the real vault, so both are gated;
+`getBackups` writes nothing, so it was deliberately left open. That test was
+right about corruption and blind to disclosure.
+
+`BackupManager` calls `getBackups()` on mount and renders each row's `name`,
+`created_at`, **`item_count`** and size. The endpoint is `request.user`-scoped,
+so those are the REAL vault's backups. A decoy session shows a near-empty
+vault; the backup list beside it says "247 items", backed up last Tuesday.
+That is the §24.1 test (b) failing outright — a surface contradicting what the
+session already showed the coercer — and it is the §20.2 failure exactly, just
+reached through backup metadata instead of the item list.
+
+**The rule this corrects, and it is the one the guarded-set note in §18.1 got
+half right:** membership is decided by what a path writes *and* by what it
+DISPLAYS. Those are two questions, and "it is only a read" answers just the
+first.
+
+Returns an empty list rather than throwing, and returns it BEFORE the request
+so the metadata never reaches the renderer or the network log. An error on this
+one screen would be its own tell; a user with no backups is entirely ordinary.
+
+### 37.2 The generation contract every await-guard rests on was never asserted
+
+`VaultUnlockModal` (§36), `VaultDuressSetup` (§32) and `VaultContext`'s decrypt
+guard (§34) all decide "is this still the session that authorised me?" by
+comparing `currentSessionGeneration()` across an await — and every one of those
+tests mocks the accessor. Nothing proved the counter actually MOVES when the
+session changes; a regression making `clearSessionKey()` stop bumping it would
+have left all three guards silently inert with every test still green.
+
+Asserted once, against the real module: `clearSessionKey()` advances it,
+installing a new session advances it (tested with a DECOY install, the case
+where `hasSessionKey()` answers true again and only the counter distinguishes),
+and reading it does not advance it — the `reserveSessionGeneration()` confusion
+§32 warned about, now pinned by a test.
+
+### 37.3 Two smaller items
+
+- **The mid-KDF write injection is now one helper.** Both compare-and-swap
+  tests hand-rolled the same self-restoring `argon2.hash` wrapper, whose subtle
+  part — restore BEFORE running the injected write, or it re-enters — was
+  duplicated in a comment rather than in code. Extracted as
+  `injectWriteDuringFirstDerivation`. Re-verified after the refactor by
+  removing `setDecoySlot`'s CAS again: the refactored test still fails, so the
+  extraction did not blunt it.
+- **The nltk suppression described its dependency wrongly.** It called nltk
+  "only present as a transitive ML dependency"; `requirements.txt` declares
+  `nltk>=3.9.4` directly and the lock file pins it. Corrected — and the
+  correction matters in the opposite direction to the obvious one: the
+  declaration sits under "Security overrides for transitive dependencies"
+  beside cbor2/keras/tornado/Twisted/ujson, so it exists purely to RAISE THE
+  FLOOR on a version something else pulls in. Deleting it as an "unused
+  dependency" would let an older, vulnerable nltk back in transitively. Nothing
+  imports it; the suppression still stands on non-reachability.
+
+850 tests across 76 files. The backup gate is negative-controlled; `eslint`
+reports the same six pre-existing warnings, none new. No CI check was failing
+entering this round.

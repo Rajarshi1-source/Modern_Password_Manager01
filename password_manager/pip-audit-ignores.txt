@@ -268,9 +268,20 @@ PYSEC-2026-97 exp:2026-09-15
 #
 # Unreachable here for the same reason as the two nltk entries below, verified
 # by grep on this date rather than carried over: `import nltk` / `from nltk` /
-# `nltk.` return zero matches across password_manager/. The package is only
-# present as a transitive ML dependency; none of its model-artifact loaders is
-# ever called, with or without an attacker-controlled path.
+# `nltk.` return zero matches across password_manager/, so none of its
+# model-artifact loaders is ever called, with or without an attacker-controlled
+# path.
+#
+# Correcting how this entry described the dependency: `nltk` IS declared
+# directly (`nltk>=3.9.4` in requirements.txt, pinned `nltk==3.9.4` in
+# requirements-lock.txt), not merely pulled in transitively. It sits under
+# requirements.txt's "Security overrides for transitive dependencies" heading
+# alongside cbor2/keras/tornado/Twisted/ujson: the declaration exists ONLY to
+# raise the floor on a version something else pulls in (its own comment names
+# GHSA-gfwx-w7gr-fvh7 and GHSA-jm6w-m3j8-898g). So it must not be deleted to
+# "remove an unused dependency" -- dropping the line would let a transitively
+# resolved, older, vulnerable nltk back in. Nothing imports it; the pin is a
+# floor, and the suppression stands on non-reachability either way.
 PYSEC-2026-3740 exp:2026-10-25
 
 # nltk.data.load()/find() percent-encoded path traversal (CVE-2026-12243,

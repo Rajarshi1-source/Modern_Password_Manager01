@@ -24,6 +24,7 @@ import {
   isDecoySession,
   hasSessionKey,
   clearSessionKey,
+  currentSessionGeneration,
   encryptItem,
   decryptItem,
   initSessionKeyFromPassword,
@@ -172,5 +173,43 @@ describe('encryptItem refuses to write during a decoy session', () => {
     // write gate, a decoy-session write would be silently unreadable by the
     // real session in exactly the same way.
     await expect(decryptItem(envelope)).rejects.toThrow();
+  });
+});
+
+describe('currentSessionGeneration -- the contract every await-window guard depends on', () => {
+  // VaultUnlockModal (§36), VaultDuressSetup (§32) and VaultContext's decrypt
+  // guard (§34) all decide "is this still the session that authorised me?" by
+  // comparing this counter across an await. Each of those tests mocks the
+  // accessor, so none of them proves the counter actually MOVES when the
+  // session changes. Asserted here against the real module, once.
+
+  test('clearSessionKey advances it -- so a lock invalidates an in-flight operation', async () => {
+    await setupVaultPassword('a real vault password', USER_ID);
+    const before = currentSessionGeneration();
+
+    clearSessionKey();
+
+    expect(currentSessionGeneration()).toBeGreaterThan(before);
+  });
+
+  test('installing a new session advances it -- so a NEWER unlock invalidates an older one', async () => {
+    await setupVaultPassword('a real vault password', USER_ID);
+    const before = currentSessionGeneration();
+
+    // A decoy unlock is the case that matters most: `hasSessionKey()` answers
+    // true again afterwards, so only the counter distinguishes it.
+    await installRawDek(new Uint8Array(32).fill(3), SALT, USER_ID, null, true);
+
+    expect(currentSessionGeneration()).toBeGreaterThan(before);
+    expect(hasSessionKey()).toBe(true);
+  });
+
+  test('reading it does NOT advance it -- it observes, it does not reserve', async () => {
+    await setupVaultPassword('a real vault password', USER_ID);
+
+    const first = currentSessionGeneration();
+    const second = currentSessionGeneration();
+
+    expect(second).toBe(first);
   });
 });

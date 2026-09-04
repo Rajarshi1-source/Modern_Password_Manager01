@@ -1119,6 +1119,23 @@ export const VaultProvider = ({ children }) => {
   };
 
   const getBackups = async () => {
+    // A READ, and gated anyway -- the write-vs-read split that put
+    // createBackup/restoreBackup behind this flag and left getBackups outside
+    // it was the right test for the WRONG axis. Reads cannot corrupt the real
+    // vault, but they can DISPLAY it, and `BackupManager` renders each row's
+    // name, timestamp and `item_count` on mount. A decoy session showing a
+    // near-empty vault next to "247 items" backed up last Tuesday contradicts
+    // itself in front of the coercer -- the §20.2 failure exactly, reached
+    // through backup metadata instead of the item list.
+    //
+    // Returns an EMPTY LIST rather than throwing: an error here would be its
+    // own tell ("why does only this screen fail?"), whereas a user with no
+    // backups is entirely ordinary. Returned BEFORE the request, so the
+    // real metadata never reaches the renderer or the network log.
+    if (sessionVaultCrypto.isDecoySession()) {
+      return [];
+    }
+
     try {
       const response = await api.get('/vault/backups/');
       return response.data;
