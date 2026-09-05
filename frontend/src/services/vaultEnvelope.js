@@ -38,8 +38,35 @@ export async function decryptEnvelope(encrypted_data) {
     && !sessionVaultCrypto.isDecoySession()
     && sessionVaultCryptoV3.hasSessionKey()
   ) {
+    // The decoy check above runs BEFORE this await, and v3's decrypt is a real
+    // AES-GCM operation -- so a decoy unlock landing inside the window passes
+    // the check and still returns the REAL plaintext v2 refused. §34.2 closed
+    // the branch and left its own await open, which is the §26/§32/§36 shape
+    // one more time.
+    //
+    // Guarded HERE rather than at the callers because there are six of them
+    // (App.jsx, ExportVault.jsx, and four in VaultContext) and exactly one --
+    // VaultContext's on-demand `decryptItem` -- carries the §34.1 caller-side
+    // generation guard. The other five, including the vault EXPORT path, have
+    // none. This is the choke point every one of them crosses.
+    //
+    // Generation AND decoy are both re-read: the counter moves on any
+    // lock/install (so it catches a decoy unlock, a logout, or a newer real
+    // unlock), while `isDecoySession()` also covers the case where the counter
+    // happened to be captured after the transition.
+    const generation = sessionVaultCrypto.currentSessionGeneration();
     try {
-      return await sessionVaultCryptoV3.decryptItem(encrypted_data);
+      const v3Result = await sessionVaultCryptoV3.decryptItem(encrypted_data);
+      if (
+        sessionVaultCrypto.currentSessionGeneration() !== generation
+        || sessionVaultCrypto.isDecoySession()
+      ) {
+        // Return the v2 marker, not a throw: it is exactly what this function
+        // yields for a decoy session that never entered the fallback, so the
+        // two are indistinguishable to every caller.
+        return v2Result;
+      }
+      return v3Result;
     } catch (v3Err) {
       console.warn('v3 fallback failed; falling back to v2 legacy-plaintext result', v3Err);
       return v2Result;

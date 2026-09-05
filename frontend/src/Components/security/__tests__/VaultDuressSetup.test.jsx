@@ -281,6 +281,35 @@ test('a vault:locked event repaints the panel, so the forms do not linger after 
   expect(container.textContent).toMatch(/unlock your vault first/i);
 });
 
+test('a DECOY unlock between render and submit blocks the submission', async () => {
+  // hasSessionKey() alone is not "a real session": a decoy unlock installs a
+  // session DEK too. So a decoy unlock landing after this screen rendered
+  // leaves the key present and the form live, and the generation check inside
+  // the try block cannot help -- it captures AFTER this point, so it already
+  // reflects the decoy install. The submit gate must check both predicates,
+  // exactly as the render gate does.
+  mockHasSessionKey.mockReturnValue(true);
+  mockIsDecoySession.mockReturnValue(false);
+  const { getByLabelText, getByRole, container } = render(<VaultDuressSetup />);
+
+  fireEvent.change(getByLabelText(/current vault password/i), { target: { value: REAL_PASSWORD } });
+  fireEvent.change(getByLabelText(/new decoy password/i), { target: { value: 'a decoy password 12+' } });
+  fireEvent.change(getByLabelText(/confirm decoy password/i), { target: { value: 'a decoy password 12+' } });
+
+  // Another tab unlocks with the DECOY password: key still present, flag set.
+  mockIsDecoySession.mockReturnValue(true);
+  fireEvent.click(getByRole('button', { name: /save decoy password/i }));
+
+  // The submit gate refuses, and the re-render its setError triggers then hits
+  // the §23.1 decoy render gate, so the neutral panel replaces the form
+  // entirely. Asserted on the CALLS rather than the message, because that is
+  // the property at stake: no envelope work and no registration happened.
+  await waitFor(() => expect(container.querySelector('input')).toBeNull());
+  expect(unlockEnvelopeStore.setDecoySlot).not.toHaveBeenCalled();
+  expect(registerSignalToken).not.toHaveBeenCalled();
+  expect(container.textContent).not.toMatch(/incorrect/i);
+});
+
 test('a lock that happens AFTER the form is filled still blocks the submission', async () => {
   // The lock paths -- manual, inactivity, cross-tab -- all go through
   // handleLockVault, which calls clearSessionKey() and dispatches NO DOM
