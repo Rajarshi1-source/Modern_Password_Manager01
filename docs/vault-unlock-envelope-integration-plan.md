@@ -4042,3 +4042,89 @@ safe.
 854 tests across 76 files. The status reset and the constant are both
 negative-controlled; `eslint` reports the same eight pre-existing warnings,
 none new.
+
+## 40. Thirtieth review round — the constant that proved itself, and a policy nobody had read
+
+### 40.1 §39.3's constant was pinned against a copy of itself
+
+§39.3 introduced `DECOY_WRITE_REFUSAL` so the byte-identical refusal rule stopped
+depending on four copied literals — and then the test mock **mirrored the literal
+back**, so `expect(viaChokePoint).toBe(sessionVaultCrypto.DECOY_WRITE_REFUSAL)`
+compared the mocked value against the mocked value. The comment above it claimed
+"the assertions below compare against whatever the module exports", which the
+code did not do. A comment asserting a property is not evidence the code has it
+(§27.3), and this is the second time that exact failure has appeared in my own
+work in this PR.
+
+What it did and did not catch is worth being precise about, because the earlier
+negative control gave false confidence: diverging the **choke point** failed the
+test (the thrown string no longer matched the mock), so the guard looked pinned.
+Diverging the **real constant** would not have — the mock kept the stale literal
+and every assertion stayed green while source and test silently disagreed.
+
+Fixed with `importOriginal()`, verified safe rather than assumed:
+`sessionVaultCrypto.js` has **zero imports** and no module-scope side effects, so
+loading it for real in a test that otherwise mocks it costs nothing.
+
+**Re-verified the fix does what §39.3 claimed**, by editing the constant in the
+source module. The result is the correct split and worth recording:
+
+- the **identity** assertions stayed green — both paths still emit the same
+  string, which is exactly the property they test;
+- the **wording** assertion (`not.toMatch(/decoy|duress|slot/i)`) failed,
+  catching the unsafe string.
+
+That is why §39.3 kept the wording assertion separate. One constant proves the
+paths agree; only the wording check proves they agree on something safe. Neither
+alone is sufficient, and the round that added them could not demonstrate it until
+the mock stopped shadowing the source.
+
+### 40.2 A required disclosure nobody had checked for
+
+`DEPENDENCY_POLICY.md` line 59 states plainly: *"Accepted risks must be
+documented in `SECURITY.md`."* §34.4 accepted a new risk (the unfixable nltk
+`PYSEC-2026-3740`) and recorded it only in the pip-audit manifest. `SECURITY.md`
+already had an established **"Accepted & Tracked Risks"** section with four
+entries in a consistent format — so the requirement was live, the format existed,
+and the entry was simply missing.
+
+Added as entry 5️⃣ in that format, and the manifest now cross-references it. The
+manifest is the enforcement layer, `SECURITY.md` the disclosure layer; the note
+says to keep them in sync on renewal, since a suppression whose disclosure has
+drifted is worse than one with none.
+
+The entry carries the PYSEC-vs-GHSA discrepancy explicitly, because that is the
+trap a future renewal will hit: PYSEC lists `fixed: 3.10.3` while the GHSA alias
+does not, pip-audit follows the wider GHSA range, and reading only the PYSEC half
+would suggest removing a suppression CI still needs.
+
+### 40.3 A Phase 4 rule that existed only in the changelog
+
+The privacy plan's Phase 4 section carried "**Two** ordering rules the design doc
+must carry" — route-scope-before-nonce-claim, and issuance-time address
+resolution. The **mixed-credential mutual-exclusion rule** appeared nowhere in
+the contract; it existed only inside this document's review-history narrative,
+where an implementer working from the Phase 4 spec would never look.
+
+The rule matters on its own terms: `IsAuthenticated OR HasAnonymousCredential`
+grants access the moment either passes and never notices the other did too, so a
+request carrying both reaches a `request.user`-scoped dispatch with the account
+populated — defeating Phase 4's own acceptance criterion for exactly the requests
+where it matters most. Now stated as the third normative rule, pointing at C.3
+for placement (`initial()`, ahead of `check_permissions()` and ahead of the
+ingress check) and its four-shape test matrix.
+
+**A rule an implementer has to find in a changelog is a rule that gets missed** —
+the same summary-versus-detail gap as §36.3 and §38.3, in its third form.
+
+### 40.4 Noted, not acted on
+
+Two suppressions expire on 2026-09-15 (`PYSEC-2025-121` keras,
+`PYSEC-2026-97` nltk) — nine days out. Nothing is expired, the dependency scan
+is green, and renewing them now would mean re-running their threat assessments
+without a triggering failure. Flagged here so the next round sweeps them
+deliberately rather than discovering them as a red check.
+
+854 tests across 76 files. `eslint` clean on the changed test file; the
+`importOriginal` fix is verified by source-side divergence rather than by the
+choke-point divergence that previously passed for a control.

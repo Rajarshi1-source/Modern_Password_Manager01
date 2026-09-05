@@ -57,6 +57,14 @@ Scans are required:
 - **Mitigation:** We do not perform P-256 signing operations directly; dependency usage is limited to non-signing contexts or verified safe paths.
 - **Status:** Accepted risk (Upstream considers side-channel out of scope)
 
+### 5️⃣ `nltk` – Model-Artifact Path Traversal (CVE-2026-81726)
+- **Source:** Declared in `requirements.txt` under "Security overrides for transitive dependencies" (`nltk>=3.9.4`), pinned `nltk==3.9.4` in `requirements-lock.txt`. The declaration exists only to raise the floor on a version a transitive dependency pulls in — it is not an imported dependency of this codebase.
+- **Severity:** Medium (Arbitrary file read/write outside allowed roots)
+- **Issue:** NLTK's model-artifact APIs bypass `pathsec` and can touch files outside their allowed roots. Tracked as PYSEC-2026-3740 / GHSA-8mgp-746c-j5xp.
+- **Mitigation:** Unreachable in this codebase — `import nltk`, `from nltk` and `nltk.` return zero matches across `password_manager/`, so none of the affected loaders is ever called, with or without an attacker-controlled path.
+- **Status:** Accepted risk (no upstream fix exists — the GHSA range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every published release including the one CI resolves, and pip-audit reports `fix_versions: []`; pinning cannot help). Suppressed in `password_manager/pip-audit-ignores.txt` with a dated expiry, re-evaluated on each renewal.
+- **Note:** The PYSEC record for this CVE lists `fixed: 3.10.3` while the GHSA alias does not; pip-audit follows the wider GHSA range. Reading only the PYSEC half would suggest the finding is already resolved and lead to removing a suppression CI still needs.
+
 ---
 
 ## 🚨 Reporting a Vulnerability

@@ -7,7 +7,15 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
  * App.jsx's VaultItemsSection.decryptOne, plus the encrypt delegation. Both
  * crypto layers are mocked so no real WebCrypto/session key is exercised.
  */
-vi.mock('../sessionVaultCrypto', () => ({
+// `importOriginal` so the refusal constant comes from the REAL module. Mirroring
+// the literal here made the assertions compare the mock against itself -- the
+// tautology §39.3's constant was introduced to remove, reintroduced one layer
+// out in the very test that was supposed to pin it. `sessionVaultCrypto.js` has
+// no imports and no module-scope side effects (verified, not assumed), so
+// loading it for real here is safe.
+vi.mock('../sessionVaultCrypto', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
   default: {
     decryptItem: vi.fn(),
     encryptItem: vi.fn(),
@@ -18,12 +26,13 @@ vi.mock('../sessionVaultCrypto', () => ({
     // Stable by default so the v3 fallback's post-await generation check
     // passes; the mid-decrypt cases move it deliberately.
     currentSessionGeneration: vi.fn(() => 4),
-    // The real module owns this string; mirroring the literal here would
-    // recreate exactly the copied-literal problem the constant removes, so the
-    // assertions below compare against whatever the module exports.
-    DECOY_WRITE_REFUSAL: 'Failed to save item. Please try again.',
+    // Sourced from the real module: an edit to the constant there now moves
+    // this test's expectation with it, which is what makes the assertion a
+    // check on cross-module identity rather than on itself.
+    DECOY_WRITE_REFUSAL: actual.DECOY_WRITE_REFUSAL,
   },
-}));
+  };
+});
 vi.mock('../sessionVaultCryptoV3', () => ({
   default: {
     decryptItem: vi.fn(),
