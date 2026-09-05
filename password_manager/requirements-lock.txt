@@ -82,7 +82,7 @@ django-silk==5.4.3
 django-storages==1.13.2
 django-timezone-field==7.1
 django_celery_results==2.6.0
-djangorestframework==3.16.1
+djangorestframework==3.17.2
 djangorestframework_simplejwt==5.5.1
 dlib==20.0.0
 dnspython==2.7.0

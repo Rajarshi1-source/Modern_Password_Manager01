@@ -75,16 +75,47 @@ const BehavioralRecoveryStatus = lazy(() => import('./Components/dashboard/Behav
 // metadata-only (never re-encrypt); edit re-encrypts via updateItem and so
 // requires an unlocked vault (canEdit); delete is confirmed in the dashboard.
 // Adding new items still routes to the canonical /vault page.
-const VaultDashboardRoute = () => {
+// Display-safe item list for ANY surface that renders the vault's contents.
+//
+// A decoy DEK cannot decrypt anything in the one shared, server-side item
+// list, so rendering the real list during a decoy session both leaks the
+// real inventory's metadata AND instantly outs the decoy (every row renders
+// as "Decryption failed"). Gating is therefore a property of every DISPLAY
+// path, not of one component -- which is why this lives in one shared hook
+// rather than being repeated: an earlier version gated only
+// `VaultItemsSection` and left `VaultDashboardRoute` rendering the real
+// list, exactly the "guard one path, miss its sibling" pattern recorded in
+// docs/vault-unlock-envelope-integration-plan.md §19.6. Any NEW surface that
+// renders `useVault().items` must go through this hook too.
+//
+// `items` itself is deliberately left untouched -- non-display vault logic
+// (e.g. VaultContext's own write gates) still needs the real list. This is
+// the documented floor of that plan's §4 compat table ("an empty decoy still
+// beats no decoy"); a believable, populated decoy is the separate §7 product
+// decision this does not attempt.
+const useDisplaySafeItems = (items) => {
+  // Read on every render rather than inside the memo: it is a module-level
+  // boolean, so this is free, and including it in the dep array is what
+  // makes the memo actually recompute when a session flips decoy state
+  // without `items` changing identity.
+  const isDecoy = sessionVaultCrypto.isDecoySession();
+  return useMemo(() => (isDecoy ? [] : items || []), [isDecoy, items]);
+};
+
+// Exported for the same reason VaultItemsSection below is: both are display
+// surfaces subject to the decoy-session gate, and that gate needs a direct
+// regression test rather than one routed through the whole app shell.
+export const VaultDashboardRoute = () => {
   // PR F: `canEdit` is the reactive session-key gate (sessionVaultCrypto), not
   // the legacy `isUnlocked` (which tracked the never-initialised vaultService
   // key and so was permanently false in the live flow).
   const { items, toggleFavorite, updateItem, deleteItem, decryptItem, canEdit } = useVault();
+  const visibleItems = useDisplaySafeItems(items);
   const navigate = useNavigate();
   const goToVault = () => navigate('/vault');
   return (
     <VaultDashboard
-      items={items || []}
+      items={visibleItems}
       onToggleFavorite={toggleFavorite}
       onUpdateItem={updateItem}
       onDeleteItem={deleteItem}
@@ -99,9 +130,12 @@ const VaultDashboardRoute = () => {
 // VaultProvider, so it reads the single source of truth (useVault().items) —
 // the same list the dashboard uses. Decryption stays client-side via
 // sessionVaultCrypto (v2) with a v3 fallback for migrated/freshly-written rows.
-const VaultItemsSection = () => {
+export const VaultItemsSection = () => {
   const { items, loading, error } = useVault();
   const [decryptedItems, setDecryptedItems] = useState({});
+  // Shared with VaultDashboardRoute -- see useDisplaySafeItems above for why
+  // this is one hook and not a per-component check.
+  const visibleItems = useDisplaySafeItems(items);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,11 +152,11 @@ const VaultItemsSection = () => {
       }
     };
     (async () => {
-      const entries = (await Promise.all(items.map(decryptOne))).filter(Boolean);
+      const entries = (await Promise.all(visibleItems.map(decryptOne))).filter(Boolean);
       if (!cancelled) setDecryptedItems(Object.fromEntries(entries));
     })();
     return () => { cancelled = true; };
-  }, [items]);
+  }, [visibleItems]);
 
   return (
     <section className="password-list" data-testid="vault-section">
@@ -136,14 +170,14 @@ const VaultItemsSection = () => {
         <p data-testid="vault-error" style={{ color: 'var(--danger)' }}>{error}</p>
       ) : (
         <div className="password-grid">
-          {items.length === 0 ? (
+          {visibleItems.length === 0 ? (
             <p data-testid="empty-vault">No passwords saved yet. Add one above!</p>
           ) : (
             <>
               <span className="sr-only" data-testid="decryption-status">
                 Vault item decrypted successfully
               </span>
-              {items.map(item => {
+              {visibleItems.map(item => {
                 const itemData = decryptedItems[item.item_id] || {};
                 const isDecrypting = !(item.item_id in decryptedItems);
                 const decryptError = itemData._decryptError;
@@ -204,6 +238,13 @@ const DuressCodeManager = lazy(() => import('./Components/security/DuressCodeMan
 const DecoyVaultPreview = lazy(() => import('./Components/security/DecoyVaultPreview'));
 const TrustedAuthorityManager = lazy(() => import('./Components/security/TrustedAuthorityManager'));
 const DuressEventLog = lazy(() => import('./Components/security/DuressEventLog'));
+
+// Vault duress (hidden-vault envelope decoy password) settings —
+// docs/vault-unlock-envelope-integration-plan.md §3.6. Distinct from the
+// Military-Grade Duress Code components above: those protect short duress
+// *codes* checked server-side; this configures the zero-knowledge decoy
+// slot VaultUnlockModal decodes client-side.
+const VaultDuressSetup = lazy(() => import('./Components/security/VaultDuressSetup'));
 
 // Honeypot Email Breach Detection — manages bait email addresses and alerts
 // when they receive traffic, indicating a credential/data leak upstream.
@@ -938,7 +979,7 @@ const isSafeBearerToken = (token) => {
 
 function App() {
   // JWT Authentication Hook
-  const { user, isAuthenticated, isLoading: authLoading, login, logout: authLogout } = useAuth();
+  const { user, isAuthenticated, isLoading: authLoading, login, logout: authLogout, getAccessToken } = useAuth();
 
   // The vault item list now lives in VaultContext (single source of truth);
   // the /vault list is rendered by <VaultItemsSection/>. This component keeps
@@ -2053,6 +2094,7 @@ function App() {
             <VaultUnlockModal
               isOpen={isAuthenticated && showVaultUnlock}
               userId={user?.id ?? user?.email ?? null}
+              getAccessToken={getAccessToken}
               onUnlocked={() => {
                 setShowVaultUnlock(false);
                 setError(null);
@@ -2261,6 +2303,10 @@ function App() {
                 } />
                 <Route path="/security/duress-codes/events" element={
                   !isAuthenticated ? <Navigate to="/" /> : <DuressEventLog />
+                } />
+                {/* Vault duress (hidden-vault envelope decoy password) settings */}
+                <Route path="/security/vault-duress" element={
+                  !isAuthenticated ? <Navigate to="/" /> : <VaultDuressSetup />
                 } />
                 {/* Dark Protocol Network for Anonymous Vault Access */}
                 <Route path="/security/dark-protocol" element={

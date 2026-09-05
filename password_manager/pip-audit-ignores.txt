@@ -212,18 +212,39 @@ PYSEC-2025-194 exp:2026-10-10
 # output. Removed rather than renewed for a fourth time on an unverified
 # basis.
 
-# transformers — all require user-loaded malicious HuggingFace
-# checkpoints. ml_dark_web/ml_services.py only invokes from_pretrained
-# with config.BERT_MODEL_NAME (hard-coded at deploy time), so an
-# attacker cannot supply a crafted model name. Eight IDs total.
-PYSEC-2025-211 exp:2026-09-01
-PYSEC-2025-212 exp:2026-09-01
-PYSEC-2025-213 exp:2026-09-01
-PYSEC-2025-214 exp:2026-09-05
-PYSEC-2025-215 exp:2026-09-05
-PYSEC-2025-216 exp:2026-09-05
-PYSEC-2025-217 exp:2026-09-10
-PYSEC-2025-218 exp:2026-09-10
+# transformers PYSEC-2025-211 through -218 — ALL EIGHT REMOVED 2026-09-04,
+# not renewed. 211/212/213 had expired (exp:2026-09-01) and were failing the
+# expiry pre-check; 214/215/216 would have expired the next day. Rather than
+# renew any of them, re-checked the way the torch block below says to: against
+# what CI's pip-audit step ACTUALLY scans, which is
+# `pip-audit -r requirements.txt` where transformers is declared
+# `transformers>=4.35.1` (open floor, no ceiling, and nothing else in
+# requirements.txt constrains it) — NOT requirements-lock.txt's
+# `transformers==5.0.0rc3`, which pip would not select for that specifier
+# anyway since it is a pre-release.
+#
+# Resolved version, verified against PyPI rather than assumed: the latest
+# STABLE transformers is 5.16.1, which is what `>=4.35.1` installs.
+#
+# Every one of the eight caps well below it, verified against OSV directly
+# (api.osv.dev), per-ID rather than as a batch:
+#   PYSEC-2025-211 (CVE-2025-14920) last_affected 4.54.1
+#   PYSEC-2025-212 (CVE-2025-14921) last_affected 4.54.1
+#   PYSEC-2025-213 (CVE-2025-14924) last_affected 4.55.0
+#   PYSEC-2025-214 (CVE-2025-14926) last_affected 4.57.0
+#   PYSEC-2025-215 (CVE-2025-14927) last_affected 4.57.0
+#   PYSEC-2025-216 (CVE-2025-14928) last_affected 4.57.0
+#   PYSEC-2025-217 (CVE-2025-14929) last_affected 5.0.0-rc0
+#   PYSEC-2025-218 (CVE-2025-14930) last_affected 4.57.1
+#
+# So pip-audit's own version-range match no longer raises any of them against
+# the version CI installs — the same "our pin is outside it, nothing to
+# suppress" resolution used for PYSEC-2025-183, PYSEC-2024-277,
+# PYSEC-2025-189/190/191, 192/193, 195/196/197 and 210/PYSEC-2026-139. The
+# old reachability argument (from_pretrained is only ever called with the
+# hard-coded config.BERT_MODEL_NAME, so no attacker-supplied checkpoint) is
+# still true and still worth knowing, but it is no longer what carries these:
+# the finding is fixed by version, not accepted by reachability.
 
 # keras.utils.get_file tar extraction — we don't call get_file with
 # user-controlled URLs (grep -r returns no matches).
@@ -232,6 +253,36 @@ PYSEC-2025-121 exp:2026-09-15
 # nltk.util.filestring path traversal — we don't call filestring
 # (grep -r returns no matches).
 PYSEC-2026-97 exp:2026-09-15
+
+# nltk model-artifact APIs bypass pathsec and touch files outside allowed
+# roots (CVE-2026-81726 / GHSA-8mgp-746c-j5xp, reported by pip-audit as
+# PYSEC-2026-3740 on 2026-09-04). NO upstream fix exists: the GHSA record's
+# range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every release up to
+# and including the one CI resolves, with no `fixed` event and pip-audit
+# reporting `fix_versions: []`. Pinning cannot help.
+#
+# (The PYSEC record for the same CVE lists `fixed: 3.10.3`, which would make
+# our resolved version clean; the GHSA alias does not, and pip-audit follows
+# the wider range. Recorded here so the next renewal does not "resolve" this
+# by reading only the PYSEC half and removing the entry while CI still fails.)
+#
+# Unreachable here for the same reason as the two nltk entries below, verified
+# by grep on this date rather than carried over: `import nltk` / `from nltk` /
+# `nltk.` return zero matches across password_manager/, so none of its
+# model-artifact loaders is ever called, with or without an attacker-controlled
+# path.
+#
+# Correcting how this entry described the dependency: `nltk` IS declared
+# directly (`nltk>=3.9.4` in requirements.txt, pinned `nltk==3.9.4` in
+# requirements-lock.txt), not merely pulled in transitively. It sits under
+# requirements.txt's "Security overrides for transitive dependencies" heading
+# alongside cbor2/keras/tornado/Twisted/ujson: the declaration exists ONLY to
+# raise the floor on a version something else pulls in (its own comment names
+# GHSA-gfwx-w7gr-fvh7 and GHSA-jm6w-m3j8-898g). So it must not be deleted to
+# "remove an unused dependency" -- dropping the line would let a transitively
+# resolved, older, vulnerable nltk back in. Nothing imports it; the pin is a
+# floor, and the suppression stands on non-reachability either way.
+PYSEC-2026-3740 exp:2026-10-25
 
 # nltk.data.load()/find() percent-encoded path traversal (CVE-2026-12243,
 # incomplete fix for issue #3504). NO upstream fix exists — the advisory's

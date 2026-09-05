@@ -14,7 +14,8 @@ import {
   FaChevronRight,
   FaStar,
   FaUserShield,
-  FaUserSecret
+  FaUserSecret,
+  FaMask
 } from 'react-icons/fa';
 
 const SidebarContainer = styled.aside`
@@ -226,6 +227,10 @@ const Sidebar = () => {
           <NavItem to="/security/dark-protocol" collapsed={collapsed}>
             <FaUserSecret />
             <NavItemText collapsed={collapsed}>Dark Protocol</NavItemText>
+          </NavItem>
+          <NavItem to="/security/vault-duress" collapsed={collapsed} aria-label="Vault Duress">
+            <FaMask />
+            <NavItemText collapsed={collapsed}>Vault Duress</NavItemText>
           </NavItem>
         </NavSection>
 

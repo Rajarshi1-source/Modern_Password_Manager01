@@ -1,0 +1,4044 @@
+# Plan — Wire the two-slot envelope into `VaultUnlockModal` (§4.2 carry-over)
+
+**Implemented in PR #489, then hardened across seventeen review rounds
+(§9–§25) — read all seventeen before relying on §3's original design as the
+literal shipped behavior. **§22 closes the recovery form's network-side
+password oracle** by gating recovery behind the real vault password — read
+§21.3 for why the seemingly-obvious fixes are unsafe or, in the backend
+case, forbidden by this project's own ZK invariant. **§24.1 corrects §23.3,
+where a Greptile P1 was declined on reasoning that held only for a REAL
+session** — read it before judging any future duress finding, since it is
+the one that names the test the decline got wrong. §11.5 in particular is a real data-corruption fix,
+not a cosmetic one; §16.1, §18.1, and §20.2 extend it to the mutation and
+display paths it originally missed (§18.1 is the one that reaches
+`restoreBackup`, which can wipe the whole vault); §20.1 is a security
+justification written in §12.2 that turned out to be wrong, and is worth
+reading as a caution about scoping a threat model to "who is supposed to be
+on this screen"; §13 records a bot misattribution caught before acting on
+it; §19.6 names the failure mode that has produced most findings since round
+9 — internal contradictions between two places stating the same fact — and
+the rule for avoiding it.**
+
+**§0 below is the PRE-IMPLEMENTATION baseline** — the verdict table records
+what was true when this plan was written, which is why it still lists
+`VaultUnlockModal` as "Not integrated". PR #489 is what changed that. Read
+§9–§16 for the shipped state; do not read §0 as current status.
+
+Deferred from PR #486 (`docs/privacy-features-gap-remediation-plan.md` §4.2,
+§5 "Not delivered"). PR #486 shipped the backend and the service layer; the
+main unlock modal was left on the single-password path because provisioning
+the two-slot blob "deserves its own PR". This is that PR.
+
+**Scope: one PR.** No dependency on the onion-transport work
+(`docs/onion-sync-transport-phases-2-4-plan.md`); the two can land in either
+order.
+
+---
+
+## 0. Verdict table — the PRE-IMPLEMENTATION baseline, verified by reading the code
+
+| Piece | State | Evidence |
+|---|---|---|
+| Two-slot envelope format | **Complete and correct** | `frontend/src/services/hiddenVault/hiddenVaultEnvelope.js` — `encode`/`decode`, Argon2id per slot, fixed-size framing |
+| `DuressSignal` model + endpoints | **Complete** | `password_manager/security/models/duress_models.py:741`; `duress/signal/register/`, `duress/signal/` |
+| Client duress service | **Complete** | `frontend/src/services/duressSignalService.js` — `generateSignalToken`, `registerSignalToken`, `reportUnlock`, `reportUnlockForSlot` |
+| A production caller for all of the above | **Exists, but only for stego images** | `frontend/src/Components/security/StegoVaultDashboard.jsx:228-269` (provision), `:371` (report) |
+| `VaultUnlockModal` | **Not integrated** — single password, no slots, no duress | `frontend/src/Components/auth/VaultUnlockModal.jsx` (168 lines) |
+| Legacy server-side compare scoped away from master passwords | **Done in #486** | `verify_password_or_duress` / `check_for_duress_code` docstrings |
+
+So the gap is exactly one thing: **the envelope has no caller on the primary
+unlock path.** Same shape as the gap #486 closed for `proxyVaultOperation` —
+rails built, nothing riding them.
+
+---
+
+## 1. What `VaultUnlockModal` actually is (correcting a mis-scoping in §4.2)
+
+§4.2 calls this "the main unlock modal". Read the file: it is **not** the
+master-password login path. It is the **OAuth wrapped-DEK** modal.
+
+```text
+frontend/src/Components/auth/VaultUnlockModal.jsx:17-22
+  mode = userId && sessionVaultCrypto.hasWrappedKey(userId) ? 'unlock' : 'setup'
+```
+
+It is rendered from `frontend/src/App.jsx:2053`, gated on
+`isAuthenticated && showVaultUnlock` — an authenticated user with no in-memory
+session key, typical of a social login that carries no master password.
+Password-login users go through `sessionVaultCrypto.initSessionKeyFromPassword`
+and never see this modal.
+
+**Consequence for scope, stated up front:** integrating the envelope here gives
+duress unlock to *OAuth / vault-password* users. Password-login users are a
+second, larger surface (it touches `useAuth` and the login form) and are
+explicitly **out of scope** — see §7. The #486 §6 acceptance criterion
+("Duress password opens the decoy vault from the main unlock modal") is
+satisfied for this modal; §7 records what remains so the checkbox is not read
+as more than it is.
+
+---
+
+## 2. The constraint §5 worried about is smaller than it looked
+
+PR `#486` §5 deferred this because it "needs the two-slot blob to be
+provisioned at vault setup — a migration path for existing vaults". Verified
+against the code, that migration is **device-local, not server-side**:
+
+```text
+frontend/src/services/sessionVaultCrypto.js:43-44
+  const USER_SALT_STORAGE_KEY   = 'vaultKeySalt';
+  const WRAPPED_DEK_STORAGE_KEY = 'vaultWrappedDEK';
+```
+
+`setupVaultPassword` writes `vaultWrappedDEK:<userId>` to **localStorage**;
+`unlockWithVaultPassword` reads it back from there. Nothing about this record
+lives on the server. So:
+
+- There is **no server-side blob to migrate** — no model, no Django migration,
+  no cross-device backfill.
+- A user on a device with no wrapped key already lands in `setup` mode. That
+  path provisions the envelope from scratch — free.
+- A user on a device that *has* a wrapped key needs an **upgrade-on-unlock**
+  step (§3.4). That is the entire migration.
+
+This is a real reduction in scope versus what PR `#486` §5 assumed, and it is
+why this fits in one PR.
+
+---
+
+## 3. Implementation
+
+Modular-monolith placement: one new frontend service beside its peers
+(`frontend/src/services/hiddenVault/`), a small additive API on
+`sessionVaultCrypto`, and edits to two components. **No backend changes** —
+`duress/signal/register/` and `duress/signal/` already do everything needed.
+
+### 3.1 Slot payload format
+
+Both slots carry the same shape so the JSON never betrays which slot is which
+(and the envelope pads both to `slotPayloadLen(tier)` anyway, so lengths are
+equal by construction):
+
+```json
+{ "v": "hv-slot-1", "dek": "<base64 32-byte raw DEK>", "salt": "<base64 16-byte>" }
+```
+
+The **decoy** slot additionally carries `"__duress_signal": "<44-char token>"`.
+The real slot never does — the rule `StegoVaultDashboard.jsx` already follows,
+and the one `reportUnlockForSlot` already depends on
+(`duressSignalService.js:165-171`).
+
+Carrying the raw DEK rather than a second wrapped-DEK record avoids stacking a
+PBKDF2-310k KEK derivation on top of Argon2id for no security gain: the
+envelope slot is already Argon2id + AES-GCM-256 with a per-slot domain tag
+(`deriveSlotKey`, `hiddenVaultEnvelope.js:148`).
+
+### 3.2 New service: `frontend/src/services/hiddenVault/unlockEnvelopeStore.js`
+
+Owns storage and lifecycle of the per-user envelope. Storage key
+`vaultUnlockEnvelope:<userId>` in localStorage, base64-encoded blob —
+deliberately alongside `vaultWrappedDEK:<userId>`, because it is the same class
+of device-local secret material and inherits the same threat model.
+
+```text
+export const hasEnvelope(userId): boolean
+export const loadEnvelope(userId): Uint8Array | null
+export const saveEnvelope(userId, blob: Uint8Array): void
+export const clearEnvelope(userId): void
+
+// Provision at setup: real slot only. The decoy slot gets a throwaway random
+// key (encode() already does this — see below), so the blob is byte-wise
+// indistinguishable from one that has a decoy configured.
+export async function provision({ userId, vaultPassword, dekBytes, saltB64 }): Promise<void>
+
+// Add or replace the decoy slot. Re-encodes the whole blob because the outer
+// salt and both nonces must be fresh; requires BOTH passwords, since the real
+// slot must be re-sealed and only the real password can open it first.
+export async function setDecoySlot({ userId, vaultPassword, decoyPassword }): Promise<{ duressToken: string }>
+
+// Try a password against both slots. Wraps decode() and unpacks the winning
+// slot's JSON payload (parseSlotPayload) into its individual fields, rather
+// than returning the raw payload object.
+export async function open({ userId, password }): Promise<{ slotIndex, dekBytes, saltB64, duressToken }>
+```
+
+**Verified property this design leans on:** `encode()` gives an unpopulated slot
+a *throwaway random key* rather than leaving it empty —
+
+```text
+hiddenVaultEnvelope.js:281-283
+  async function keyFor(password, slotIndex) {
+    if (password == null) return randomBytes(KEY_LEN); // throwaway
+```
+
+— and then encrypts a full-length framed plaintext under it. So slot 1 of a
+no-decoy blob is real AES-GCM ciphertext of the correct length. An adversary
+holding the blob cannot distinguish "no decoy configured" from "decoy
+configured, I do not have the password". That is what makes §3.4's default
+(envelope always provisioned, decoy optional) safe rather than a tell.
+
+### 3.3 Additive API on `sessionVaultCrypto`
+
+Today `unlockWithVaultPassword(vaultPassword, userId)` couples three things:
+read localStorage → derive KEK → install DEK. The envelope path needs only the
+third. Add one export; change nothing existing:
+
+```js
+/**
+ * Install a raw 32-byte DEK as the session key. Used by the envelope unlock
+ * path, where the DEK arrives already decrypted from a slot payload rather
+ * than from a wrapped record.
+ */
+export const installRawDek = async (dekBytes, saltB64, userId) => { ... }
+```
+
+It must replicate the tail of `unlockWithVaultPassword` exactly — including the
+`sessionGeneration` staleness check (`sessionVaultCrypto.js:326-329`), setting
+`sessionSaltB64`, clearing `sessionPassword`, and `foreignSaltKeys.clear()`.
+Skipping the generation check would reintroduce the write-race that round 2 of
+PR `#486` fixed in `setupVaultPassword`.
+
+### 3.4 `VaultUnlockModal` changes
+
+Three modes instead of two; the third is invisible to the user.
+
+**`setup`** (no wrapped key, no envelope):
+1. Existing validation unchanged (≥12 chars, confirm match).
+2. `sessionVaultCrypto.setupVaultPassword(password, userId)` — unchanged, so
+   the legacy record still exists and `hasWrappedKey` stays truthful.
+3. Export the freshly created DEK and call `unlockEnvelopeStore.provision(...)`.
+   The DEK is `extractable: true` (`sessionVaultCrypto.js:246`), so this needs
+   no change to key generation.
+4. `duressSignalService.reportUnlock(getAccessToken(), null)` — noise, because
+   §3.5 requires the report to fire on **every** unlock, including the first.
+
+**`unlock` with an envelope present** (the new primary path):
+1. `unlockEnvelopeStore.open({ userId, password })`.
+2. On `WrongPasswordError` → the existing "Incorrect vault password." error.
+   **The string must be identical for a wrong password and for every other
+   failure from which a slot could be inferred.**
+3. On success → `sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId)`.
+4. `duressSignalService.reportUnlockForSlot(getAccessToken(), slotIndex, { __duress_signal: duressToken })`
+   — **fire-and-forget, not awaited**, exactly as `StegoVaultDashboard.jsx:371`
+   does. Awaiting it would make a duress unlock measurably slower than a normal
+   one wherever the token path and the noise path differ in server-side cost —
+   the timing tell §3.5 exists to prevent.
+5. `onUnlocked?.()` — unchanged, so `App.jsx`'s `vault:updated` dispatch still
+   fires.
+
+**`upgrade`** (wrapped key present, no envelope — the migration):
+Runs inside the normal `unlock` submit, invisibly.
+1. `sessionVaultCrypto.unlockWithVaultPassword(password, userId)` as today.
+2. On success, export the now-live DEK and call
+   `unlockEnvelopeStore.provision(...)`, then continue as `unlock` would.
+3. If provisioning throws, **swallow it and proceed** — the user has
+   successfully unlocked, and failing their login over an opportunistic upgrade
+   is a worse outcome than retrying next time. Log once.
+
+### 3.5 Indistinguishability rules (non-negotiable)
+
+Mirrors `HeartbeatVerify.jsx`, which already refuses to branch its message on
+the duress flag, and the discipline recorded in `duressSignalService.js`'s
+module docstring.
+
+1. **Same endpoint, same body size, every unlock.** `reportUnlock` already
+   posts a 44-char base64 value in both cases, and the endpoint answers 204 for
+   match, no-match, malformed and error alike (#486 §5).
+2. **No UI branch.** Success text, spinner text, and modal-close timing are
+   byte-identical for slot 0 and slot 1.
+3. **No timing branch.** `decode()` already derives *both* slot keys and
+   attempts *both* decryptions unconditionally
+   (`hiddenVaultEnvelope.js:391-408`), so KDF cost does not depend on which slot
+   wins. Do not "optimise" that by short-circuiting on first success — it would
+   leak the slot through wall-clock time. Add a comment at the call site saying
+   so, and one above the attempts loop in `hiddenVaultEnvelope.js` itself.
+4. **No logging branch.** No `console.*` may mention slots or duress.
+
+### 3.6 Where the decoy password is set
+
+Not in `VaultUnlockModal`. Adding a "decoy password" field to the unlock modal
+would advertise the feature to anyone who coerces the user into opening the
+app. `StegoVaultDashboard.jsx:447` links to `/security/duress`, but that route
+does not exist — a dead link, pre-dating this PR, for an unrelated (stego
+image) decoy mechanism. Build a new, dedicated route instead:
+**`/security/vault-duress`**, wired into `App.jsx`'s route table and the
+sidebar (`Sidebar.jsx`, "Advanced Security" section, next to Dark Protocol) —
+this is the canonical route; do not reuse or repoint the dead
+`/security/duress` link:
+
+1. User enters the current vault password plus a new decoy password.
+2. `unlockEnvelopeStore.setDecoySlot(...)` generates the fresh decoy DEK
+   internally and re-encodes the envelope — the caller never supplies one
+   (see §15.6).
+3. `registerSignalToken(getAccessToken(), duressToken)` — **after** the
+   re-encoded blob is persisted, never before. Round 4 of #486 (§10.3) fixed
+   exactly this ordering bug in `StegoVaultDashboard.onEmbed`: registering a
+   token for a vault that then fails to save leaves a live alarm with nothing
+   able to fire it.
+4. Registration deactivates any previous signal server-side (#486 §8.3), so
+   re-running this is idempotent from the user's point of view.
+
+### 3.7 Performance — measure before shipping
+
+`decode()` runs Argon2id **twice** at `time=3, mem=65536 KiB, par=1`
+(`hiddenVaultEnvelope.js:32-34`). On a mid-range laptop that is roughly
+0.2–0.5 s per slot; on a low-end phone browser it can exceed 1 s per slot. That
+is a visible regression on a modal OAuth users hit every session.
+
+Required in this PR: record measured p50/p95 on one desktop and one mobile
+browser in the PR description. If p95 exceeds ~1.5 s total, move `decode()`
+into a Web Worker **in this PR** rather than deferring it — a three-second
+unlock is the kind of thing that gets a security feature switched off. Do
+**not** lower the Argon2 parameters to hit the number; they are the entire
+security margin of the decoy.
+
+**Status: still outstanding — a sixth CodeRabbit review round correctly
+flagged this checklist as unchecked, and a live measurement was attempted
+and blocked, not skipped.** A standalone Vite entry importing
+`hiddenVaultEnvelope.js` directly (bypassing the full app, since no backend
+was available to authenticate through the real `VaultUnlockModal` flow) hit
+a real, reproducible Vite dependency-resolution failure: `argon2-browser`
+ships as a UMD bundle; this project's `vite.config.js` both lists it in
+`optimizeDeps.include` (pre-bundle the bare specifier) AND aliases the bare
+specifier to `argon2-browser/dist/argon2-bundled.min.js` (a different,
+un-prebundled path) for a WASM-loading fix. For any module graph OUTSIDE
+the app's main entry — which has presumably already resolved and cached
+this correctly during normal dev-server startup — those two directives
+resolve inconsistently and the alias target's CJS/UMD wrapper never gets
+Vite's ESM interop applied, so `import argon2 from 'argon2-browser'`
+resolves to a module with no `default` export and throws before any
+Argon2id call runs. This is worth fixing in its own right before anyone
+next attempts this measurement the same way: either drop the redundant
+`optimizeDeps.include` entry (the alias alone should be sufficient) or add
+`optimizeDeps.include: ['argon2-browser/dist/argon2-bundled.min.js']`
+instead. **This blocker is specific to a standalone/isolated module entry,
+not to the shipped app** — production and the normal dev server already
+serve real users through this exact code path today, so it says nothing
+about the correctness of what shipped, only about how to measure it in
+isolation. The actual measurement — real Argon2id timing on real hardware,
+through the real `VaultUnlockModal` UI with a running backend and an
+authenticated session — remains genuinely undone and is not a number this
+plan should guess at.
+
+---
+
+## 4. Tests
+
+**Unit — `frontend/src/services/hiddenVault/__tests__/unlockEnvelopeStore.test.js` (new, vitest)**
+- Real password → `slotIndex === 0` and the real DEK.
+- Decoy password → `slotIndex === 1` and the decoy DEK plus `__duress_signal`.
+- Wrong password → `WrongPasswordError`.
+- `provision()` with no decoy: the blob is exactly `tierBytes(tier)` long, and
+  `open()` never returns slot 1 for the real password or for an arbitrary
+  test password — every attempt against the unconfigured slot rejects with
+  `WrongPasswordError`, the identical error a wrong password against a
+  *configured* decoy produces, never a different error class or a crash —
+  the no-tell property from §3.2.
+- `setDecoySlot()` preserves the real slot: after adding a decoy, the original
+  vault password still returns slot 0 with an unchanged DEK.
+- localStorage round-trip (base64 encode/decode) is lossless.
+
+**Component — `frontend/src/Components/auth/__tests__/VaultUnlockModal.test.jsx` (new)**
+- `setup` provisions an envelope and calls `reportUnlock` with `null`.
+- `unlock` on slot 0 installs the DEK and calls `reportUnlockForSlot(_, 0, _)`.
+- `unlock` on slot 1 installs the decoy DEK and calls
+  `reportUnlockForSlot(_, 1, _)`.
+- **Indistinguishability, scoped to `VaultUnlockModal` itself:** the
+  component's OWN rendered output after a slot-0 unlock and after a slot-1
+  unlock is identical — same success/error copy, same timing-relevant
+  markup, no duress-conditional class name or attribute. Assert on the
+  serialized container, not on hand-picked strings — a hand-picked assertion
+  will not catch the next person who adds one. This claim stops at the
+  modal's own DOM: it does NOT extend to what the app renders next. Since
+  §20, every display surface (`VaultItemsSection` and `VaultDashboardRoute`,
+  both via `useDisplaySafeItems`) renders an EMPTY vault during a decoy
+  session rather than the real list — which removes the "every row fails to
+  decrypt" tell that earlier rounds recorded here, but does NOT make the
+  post-unlock view believable: an empty vault is still wrong for an account
+  the coercer knows is not empty. That remaining gap is §7's product work
+  and is out of scope here; do not read this bullet as claiming it is
+  solved.
+- **Upgrade path:** a user with `vaultWrappedDEK` and no envelope unlocks
+  successfully *and* has an envelope afterwards.
+- **Upgrade failure is non-fatal:** stub `provision` to throw; the unlock still
+  succeeds and `onUnlocked` still fires.
+
+**Contract — extend the existing "no plaintext on the wire" test**
+- No request body on the unlock path contains the master or decoy password. The
+  only outbound request is `POST /api/security/duress/signal/` carrying a single
+  44-char base64 `signal` field.
+
+**Backend — `password_manager/security/tests/`**
+- Endpoint behaviour is already covered by #486's `DuressSignalAPITests`. Add
+  one regression guard at the seam this PR creates: a report carrying a
+  registered token creates a `DuressEvent` and triggers alarms; a report
+  carrying noise creates neither. #486 tested the endpoint; this asserts the
+  *client's* chosen token reaches it.
+
+**e2e**
+- Out of scope: there is one spec file (`e2e/dark_protocol.spec.js`) and no
+  OAuth fixture. Recorded here rather than silently skipped.
+
+---
+
+## 5. Acceptance criteria
+
+- [x] Vault password opens slot 0; decoy password opens slot 1; both install a
+      working session DEK and the vault renders — `unlockEnvelopeStore.test.js`
+      ("the real password opens slot 0 with the exact DEK it was given",
+      "the decoy password opens slot 1 with a fresh DEK and a duress token")
+      plus `VaultUnlockModal.test.jsx` ("slot 0 (real) installs the DEK...",
+      "slot 1 (decoy) installs the decoy DEK...", both asserting
+      `installRawDek` was called with the right DEK/salt AND that `onUnlocked`
+      fired — the documented trigger (§3.4 step 5) for `App.jsx`'s
+      `vault:updated` dispatch, i.e. the vault rendering.
+- [x] No master or decoy password appears in any request body on the unlock
+      path (contract test) — `duressSignalService.test.js`'s
+      `reportUnlock` test asserts `Object.keys(body)` is exactly `['signal']`
+      (no `password`/`master_password` key), and this is the ONLY network
+      request the unlock path makes: `unlockEnvelopeStore.open()` and
+      `sessionVaultCrypto.installRawDek()`/`unlockWithVaultPassword()` are
+      pure local crypto/localStorage, no network calls of their own.
+- [x] Slot-0 and slot-1 unlocks are indistinguishable, verified precisely —
+      not by one test proving all of it, but by matching each guarantee to
+      the test that actually covers it: **endpoint and request byte length**
+      are `duressSignalService`'s own contract (fixed 44-char base64 for
+      both a real token and noise, one hardcoded URL —
+      `duressSignalService.test.js`), unrelated to which slot decoded;
+      **rendered DOM and console output** are `VaultUnlockModal`'s own
+      (`VaultUnlockModal.test.jsx`'s indistinguishability test, hardened in
+      round 6 to also assert log-output equality, not just DOM). Explicitly
+      NOT the vault dashboard rendered after unlock — see §7 and the
+      duress-setup screen's own limitation notice for why that is a
+      separate, unsolved problem.
+- [x] A decoy unlock creates a `DuressEvent`; a normal unlock does not —
+      combined coverage: `VaultUnlockModal.test.jsx` proves the client sends
+      the real duress token for slot 1 and `null` for slot 0
+      (`reportUnlockForSlot` assertions in both slot tests); #486's
+      `test_duress_signal.py` (32 tests, still passing) proves the endpoint
+      creates a `DuressEvent` for a matching signal and none for noise.
+- [x] An existing OAuth user with a wrapped DEK and no envelope is upgraded
+      transparently on their next unlock, and a failed upgrade does not block
+      the unlock — `VaultUnlockModal.test.jsx` ("unlocks via the legacy path
+      and transparently provisions an envelope with the same DEK", "a failed
+      upgrade does not fail the unlock").
+- [x] Slot 1 of a no-decoy blob is indistinguishable from a configured one —
+      `unlockEnvelopeStore.test.js` ("produces a blob of exactly the fixed
+      tier size", "a no-decoy blob rejects an arbitrary password with
+      `WrongPasswordError`, not a crash" — see §4's no-tell test above).
+- [ ] Measured unlock p50/p95 recorded in the PR description; a Web Worker
+      landed in this PR if p95 > ~1.5 s. **Still genuinely outstanding** —
+      see §3.7's own status note; kept unchecked deliberately, not an
+      oversight.
+- [x] Argon2 parameters unchanged from the `hiddenVaultEnvelope.js` defaults —
+      verified directly: `DEFAULT_KDF_TIME = 3`, `DEFAULT_KDF_MEMORY_KIB =
+      65536`, `DEFAULT_KDF_PARALLELISM = 1` in `hiddenVaultEnvelope.js` match
+      §3.7's stated values exactly, and both `provision()` and
+      `setDecoySlot()` use them as their unmodified defaults.
+
+---
+
+## 6. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Double Argon2id makes unlock feel broken on low-end devices | §3.7 — measure, Worker if needed, never weaken params |
+| Losing OR corrupting `vaultUnlockEnvelope:<userId>` locks the user out | It never becomes the only copy: `setupVaultPassword`'s wrapped record is still written and `unlockWithVaultPassword` still works. For a user who ALREADY has that legacy wrapped record, a MISSING envelope always fell back to the legacy path (`upgrade` mode) — a user with neither record goes to `setup` instead, which provisions an envelope from scratch (§0's verdict table / §3.4). A PRESENT-but-corrupt envelope (bad base64, truncated write, `MalformedBlobError`) did NOT originally fall back — `hasEnvelope()` only checks for a value, not that it decodes. **Fixed in §9.1**: `runEnvelopeUnlockWithFallback()` now falls back to `upgrade` mode on any non-`WrongPasswordError` open failure, which also self-heals by re-provisioning a fresh envelope |
+| A future contributor short-circuits `decode()` for speed | Comment at the call site and above the attempts loop, plus the DOM-equality test |
+| Decoy DEK encrypts nothing, so the decoy vault looks empty and unconvincing | Out of scope here — populating a believable decoy is a product decision (§7). An empty decoy still beats no decoy, but UI copy must not claim it is convincing. **Also fixed in §10.3**: the setup screen's own copy previously claimed the opposite (an empty, indistinguishable decoy) directly contradicting its own limitation notice two paragraphs below — corrected to describe only what is actually true |
+| Registering the signal token before the blob is saved | §3.6 step 3 ordering — the #486 §10.3 lesson (of the ORIGIN plan, `privacy-features-gap-remediation-plan.md` — not this plan's own §10). That ordering only prevents an orphaned token from a FAILED save; it does not by itself recover from registration failing AFTER a successful save. **Fixed in §9.2, then hardened in §12.2**: §9.2's in-memory retry did not survive a remount (reload, navigation) — recovery now re-derives the token on demand by re-opening the envelope with the decoy password, never holding it in state or storage, so it works regardless of how long ago the failure was |
+| `installRawDek` drifts from `unlockWithVaultPassword`'s tail | Keep them adjacent in the file with a cross-reference comment; the generation-check assertion is part of the unit tests. **Extended in §10.1**: the drift risk was not hypothetical — `installRawDek`'s OWN generation bump ran too late to catch a race that started before it was even called, since its slow sibling (`unlockEnvelopeStore.open()`) lives in a different module and has no way to participate in the in-module bump-before/check-after pattern by itself |
+| A user sets the decoy password equal to the real vault password | `VaultDuressSetup.jsx`'s form already rejected this client-side, but `unlockEnvelopeStore.setDecoySlot()` itself did not — any other caller could bypass it and silently create an inert decoy (both slots decrypt under the one shared password, and `decode()` always resolves ties to slot 0, so the "decoy" password would just open the real vault). **Fixed in §10.4**: rejected in the service layer too, before any decode/re-encode work |
+| A decoy session's writes permanently corrupt a row in the real vault | The most serious risk found across all three review rounds. The decoy slot reuses the real slot's device salt (§3.2), so a v2 item written while a decoy DEK is installed is encrypted under that DEK but stamped with the real salt — `keyForSalt`'s matching-salt fast path later hands the REAL session's DEK to decrypt it, an unrecoverable AES-GCM failure. **Fixed in §11.5**: `sessionVaultCrypto.encryptItem` refuses to write for the lifetime of any session `installRawDek` marked as decoy (`isDecoySession()`); this is a write-time gate, not a salt change, because OAuth/envelope sessions have no password to re-derive a foreign-salt key from in the first place |
+| A malformed-but-valid-base64 slot payload skips the corrupt-envelope fallback | `parseSlotPayload` used to accept any base64 `dek`; a wrong-length one only failed later, in `installRawDek`, outside the window §9.1's fallback tags as `envelopeUnusable`. **Fixed in §11.6**: length-checked inside `parseSlotPayload` itself, so the failure happens where the existing fallback already catches it |
+
+---
+
+## 7. Explicitly out of scope (and why)
+
+1. **Password-login users.** They never see `VaultUnlockModal`; duress for them
+   means changing `initSessionKeyFromPassword` and the login form. Larger
+   surface, different failure modes, its own PR.
+2. **Cross-device decoy.** The envelope is device-local because the wrapped DEK
+   it sits beside already is. Making the decoy follow the user needs a
+   server-side opaque blob — plausible via the `sessionVaultCryptoV3`
+   server-wrapped-DEK machinery, but that is a storage design with its own
+   migration, not a bolt-on.
+3. **Populating a believable decoy vault.** Product work.
+4. **Removing `verify_password_or_duress`.** #486 scoped it to short duress
+   codes and documented the constraint; deleting it is separate.
+
+---
+
+## 8. Related
+
+- `docs/privacy-features-gap-remediation-plan.md` §2, §4.2, §5 — origin
+- `password_manager/hidden_vault/SPEC.md` — blob format and slot semantics
+- `docs/adaptive-password-zk-remediation-plan.md` §1-2 — the ZK invariant
+- `docs/onion-sync-transport-phases-2-4-plan.md` — the other #486 carry-over
+
+---
+
+## 9. Implementation status — PR #489 CodeRabbit review fixes (2026-08-25)
+
+§3 above describes the design as originally written. Two gaps CodeRabbit
+found in the actual PR #489 diff were real (verified against the code, not
+taken on the bot's word) and are now fixed. Recorded here so this plan stays
+the accurate description of what shipped, not just what was drafted.
+
+### 9.1 §3.4 `unlock` mode had no fallback for a corrupt (not just missing) envelope
+
+`hasEnvelope(userId)` (`unlockEnvelopeStore.js`) only checks that
+`localStorage` HAS a value for the key — it never attempts to decode it. §6's
+risk table already covered a MISSING envelope (falls back to `upgrade` mode,
+by construction, since `internalMode` is only `'envelope'` when
+`hasEnvelope()` is true). It did not cover a PRESENT but corrupt one: a
+truncated `localStorage` write, or any other bit-level corruption, still
+makes `hasEnvelope()` return `true`, permanently selecting `internalMode:
+'envelope'` — and then `unlockEnvelopeStore.open()` throws something that is
+NOT `WrongPasswordError` (a raw `DOMException` from `atob()` on invalid
+base64, or `MalformedBlobError` from a bad magic/version/tier), which
+`VaultUnlockModal.jsx` had no branch for. The user was stuck seeing a
+confusing technical error message with no way back into a vault the legacy
+wrapped-DEK record could still open.
+
+**Fix:** `VaultUnlockModal.jsx` adds `runEnvelopeUnlockWithFallback()`. On any
+`open()` failure other than `WrongPasswordError`, if
+`sessionVaultCrypto.hasWrappedKey(userId)` is true, it runs `runUpgrade()`
+instead of surfacing the raw error — which also re-provisions a fresh
+envelope on success, self-healing the corruption rather than just routing
+around it once. A genuine `WrongPasswordError` (the envelope decoded fine;
+neither slot's password matched) is explicitly excluded from the fallback —
+that must stay a normal retry, not a route into the legacy path. 4 new tests
+in `VaultUnlockModal.test.jsx` cover invalid base64, `MalformedBlobError`,
+the no-fallback-on-wrong-password case, and the no-wrapped-key dead end.
+
+### 9.2 §3.6 decoy setup had no recovery when registration failed AFTER a successful save
+
+§3.6 step 3's ordering (save the envelope, register the token only after)
+correctly prevents orphaning a token when the SAVE fails. It does not, by
+itself, handle the token being orphaned when the SAVE succeeds and the
+SUBSEQUENT `registerSignalToken()` call fails (a transient network error,
+the server being down). In that case the decoy password was already live —
+the envelope was saved — but the alarm behind it was never registered
+server-side, so a real decoy unlock under duress would silently fail to
+raise it. The user saw a generic setup-failed error with no indication that
+part of the operation had actually already taken effect. A naive "just try
+again" retry made it worse: resubmitting calls `setDecoySlot()` again, which
+mints an entirely new random token via `generateSignalToken()`, permanently
+orphaning the first one rather than recovering it.
+
+**Fix:** `VaultDuressSetup.jsx` extracts `finishRegistration(token)` and adds
+`pendingDuressToken` state. On a registration failure, the exact token
+`setDecoySlot()` returned is retained (not discarded), the error message
+says explicitly that the alarm is not yet active, and a "Finish registration"
+button appears that calls `registerSignalToken` again with that SAME
+token — never re-running `setDecoySlot`. New test file
+`VaultDuressSetup.test.jsx` (5 tests; none existed before this fix) covers
+the full success path, the registration-failure-retains-token path, retry
+success, a failed retry staying retriable, and the wrong-password path not
+touching any of this.
+
+### 9.3 Eight unrelated doc-accuracy fixes, same review round
+
+The same CodeRabbit run also found 8 issues in
+`docs/onion-sync-transport-phases-2-4-plan.md` (§4.1 Phases 2-4, still
+unimplemented). Those are corrected directly in that document, not
+duplicated here — see its own text for the SocksPort/control-port/exit-path/
+electron-builder-macro/TOR_PROXY-allowlist/getCapabilities-sequencing fixes.
+
+---
+
+## 10. Implementation status — second CodeRabbit review round (2026-08-25)
+
+A second `@coderabbitai full review` on the same PR (after §9's fixes were
+pushed) found 4 more issues — one of them the most serious found on this PR
+so far. Verified against current code before fixing, same discipline as §9.
+
+### 10.1 A session change during `unlockEnvelopeStore.open()` could resurrect a stale session
+
+`open()` runs two Argon2id derivations before resolving — §3.7 already notes
+this can take over a second combined. `runEnvelopeUnlock()` then called
+`sessionVaultCrypto.installRawDek(dekBytes, saltB64, userId)` with no
+generation token. `installRawDek` bumped `sessionGeneration` **itself**,
+*after* `open()` had already fully resolved — which means it had no way to
+know whether a logout (`clearSessionKey()`) or a newer unlock had already
+moved the session on *during* the window `open()` was pending. Every other
+session-establishing function in `sessionVaultCrypto.js`
+(`initSessionKeyFromPassword`, `setupVaultPassword`, `unlockWithVaultPassword`)
+avoids exactly this by capturing `generation = ++sessionGeneration` BEFORE
+its OWN slow step — but that pattern only works when the slow step is
+inside the same function/module. `unlockEnvelopeStore.open()` is not; it
+lives in a different module entirely, so `installRawDek` bumping its own
+counter at the point it happens to be *called* — rather than at the point
+the caller's slow work *started* — left a real gap: a stale `open()` result
+could resolve after a genuine logout and still get installed as the live
+session, with `onUnlocked?.()` firing on top of it.
+
+**Fix:** `sessionVaultCrypto.js` adds `reserveSessionGeneration()`, an
+exported one-liner (`() => ++sessionGeneration`) callers use to capture a
+token BEFORE their own slow out-of-module step. `installRawDek` gains an
+optional 4th parameter, `expectedGeneration`; when supplied, it is checked
+against the live counter before any work happens, closing the gap the
+internal-only bump could not. `VaultUnlockModal.jsx`'s `runEnvelopeUnlock`
+now calls `reserveSessionGeneration()` immediately, before `await
+unlockEnvelopeStore.open(...)`, and passes the token through.
+
+This interacted with §9.1's fallback logic too: a stale-generation error
+from `installRawDek` is NOT an envelope-corruption error (the envelope
+decoded fine — the problem is purely session timing), so it must never
+trigger `runEnvelopeUnlockWithFallback`'s legacy-path fallback. Running
+`runUpgrade()` on top of an already-superseded session would just install a
+SECOND, equally-discarded session rather than correctly abandoning the
+attempt. The fallback logic changed from a fragile string comparison
+(`err.message === 'Incorrect vault password.'`) to an explicit
+`err.envelopeUnusable` tag set only on failures from `open()` itself, never
+on failures from `installRawDek` — so the two failure classes can never be
+confused regardless of what either error's message text happens to say.
+
+2 new tests in `VaultUnlockModal.test.jsx`: a superseded-session error
+propagates without triggering the fallback (asserting
+`unlockWithVaultPassword` and `reportUnlockForSlot` are both never called),
+and the generation token is reserved before `open()` is called, not after.
+
+### 10.2 A decoy password equal to the real vault password silently makes the decoy inert
+
+`hiddenVaultEnvelope`'s `deriveSlotKey` bakes the slot index into the salt
+(a domain tag), so the same password string normally derives two DIFFERENT
+keys for slot 0 vs slot 1 — that domain separation is precisely what makes
+the real and decoy passwords independent. But if the two password STRINGS
+are also textually identical, `decode()` derives k0 and k1 from that ONE
+shared input, and BOTH slots decrypt successfully. `decode()`'s attempt loop
+resolves ties to the FIRST match — slot 0, the real vault (kept
+constant-time on purpose, see the loop's own comment) — so a user who
+configured "a decoy password" that happened to equal their real one would
+have it silently open the REAL vault, every time, with no alarm, and no
+indication anything was wrong. `VaultDuressSetup.jsx`'s form already
+rejected `decoyPassword === vaultPassword` client-side, but
+`unlockEnvelopeStore.setDecoySlot()` — the actual service function — did
+not, so any other caller (a future UI, a script, a test) could bypass the
+one place this was enforced.
+
+**Fix:** `setDecoySlot()` now rejects `decoyPassword === vaultPassword`
+itself, before any decode or re-encode work, mirroring the "enforce in the
+service layer, not just the form" discipline `duressSignalService.js`
+already follows elsewhere in this codebase. New regression test in
+`unlockEnvelopeStore.test.js` asserts both the rejection and that the
+stored envelope is byte-unchanged afterward.
+
+### 10.3 The decoy-setup screen's own intro copy contradicted its own limitation notice two paragraphs later
+
+`VaultDuressSetup.jsx` claimed a decoy unlock "opens a separate, empty decoy
+vault" and that "the app behaves identically either way, so there is
+nothing on screen to give it away" — while the `noticeStyle` box directly
+below it correctly stated the actual, verified behavior: a decoy unlock
+shows the real vault's item list with each entry failing to decrypt, not an
+empty or curated one (see the known limitation already recorded in §7 of
+THIS plan and its own risk-table row above). The two paragraphs flatly
+disagreed with each other. Fixed by rewriting the intro to only claim what
+is actually true and tested — the unlock REQUEST is indistinguishable (same
+endpoint and byte length: `duressSignalService.test.js`'s own contract
+tests; same rendered output and console output: `VaultUnlockModal.test.jsx`'s
+indistinguishability test, §9.1) — while pointing the reader at the
+limitation notice for what appears on screen afterward, rather than
+asserting something the very next paragraph disproves. No test added at the
+time of THIS fix — it was a copy-only change and CodeRabbit's own finding
+did not ask for coverage here, unlike the other
+three.
+
+### 10.4 `docs/onion-sync-transport-phases-2-4-plan.md`: A.5's own fix from §9.3 had introduced a NEW, worse bug
+
+The prior round's A.5 fix (§9.3, "getCapabilities stays on the clearnet
+service, always") solved the chicken-and-egg problem it targeted but broke
+something else in the process: `isOnionSyncAvailable()` gates on
+`vault_proxy.available`, which the server computes as `anonymity_active AND
+request_is_onion_ingress` — true only when THAT SPECIFIC request arrived
+over the onion listener. Once `getCapabilities` always goes out over
+clearnet (§9.3's own fix), `request_is_onion_ingress` for that call is
+structurally always false, so `vault_proxy.available` is always false, so
+desktop would never attempt the onion path at all — Phase 2 would ship a
+sidecar nothing ever uses. Root cause: `vault_proxy.available` is the right
+gate ONLY when the capabilities call and the eventual data call are
+guaranteed to travel the same transport, which is true for Phase 1 (a
+Tor-Browser user's own page load is what makes the capabilities call arrive
+over onion) and false for any client that is a separate process making its
+own per-call transport decision — desktop AND mobile alike.
+
+Fixed directly in that document (still doc-only, Phase 2-4 remains
+unimplemented): `isOnionSyncAvailable()` now branches on whether a
+non-web transport is selected for the current platform. When one is,
+it checks `anonymity.available && Boolean(anonymity.onion_address)` — a
+deployment-level signal that does not require this particular clearnet
+request to have arrived over onion — with the real per-request
+verification happening where it actually can, at the `proxyVaultOperation`
+call itself. When none is (plain web), the original `vault_proxy.available`
+check is unchanged. B.3 (mobile) point 1 updated with a cross-reference:
+porting the PRE-this-fix web gate to mobile would have carried the same bug
+forward, since mobile has the identical separate-process shape. See that
+document's own A.5 and B.3 for the full text.
+
+### 10.5 `docs/onion-sync-transport-phases-2-4-plan.md`: neither of B.3's proposed SOCKS5 libraries actually provides HTTP-over-SOCKS5
+
+A separate, unrelated finding in the same document: B.3 point 5 offered
+NetCipher's `StrongOkHttpClientBuilder` or `react-native-tcp-socket` as
+alternatives for Android SOCKS5 routing. Neither works alone — verified
+against each project's own documentation, not assumed from the bot's
+restatement: NetCipher's builder hardcodes `supportsSocksProxy()` to
+`false` (a limitation of NetCipher's own convenience wrapper, not of OkHttp
+itself), and `react-native-tcp-socket` is a raw TCP/TLS socket library with
+no HTTP client on top of it. Fixed directly in that document: the
+corrected approach bypasses NetCipher's builder and uses OkHttp's native
+`java.net.Proxy` SOCKS support directly (`.proxy(new Proxy(Proxy.Type.SOCKS,
+...))`) behind a small custom native module — a real, complete stack, not
+two incomplete ones presented as alternatives.
+
+### 10.6 `docs/onion-sync-transport-phases-2-4-plan.md`: PR C's unlinkability claim contradicted its own qualification two sections later
+
+§C.2 point 5 already said correctly that the server can still correlate
+issuance batch size, redemption timing, and sync payload size. §C.5's
+acceptance criterion then asserted, unqualified, "the server cannot link a
+redemption to an issuance" — the two statements do not agree. Fixed by
+bounding both to the same explicit claim: cryptographic unlinkability
+under the stated threat model, given the listed observable metadata — never
+an absolute "cannot be linked." Applies equally to any future UI copy for
+this feature: the Phase 1 discipline of never claiming more than the
+architecture backs (see `onionSyncService.js`'s own docstring) extends to
+this primitive too.
+
+---
+
+## 11. Implementation status — third CodeRabbit review round (2026-08-25)
+
+A third `@coderabbitai full review` found 7 more issues. Verified against
+current code before fixing. One of these (11.5) is a genuine security-severity
+fix — permanent data corruption of the real vault, not merely a UX gap.
+
+### 11.1 `docs/onion-sync-transport-phases-2-4-plan.md`: the onion origin was specified as `https://`, but the onion listener is plaintext
+
+`backend-onion` in `docker-compose.yml` runs plain `daphne -b 0.0.0.0 -p 8443
+...` — no `-e ssl:...`, no certificate. An `https://<addr>.onion` request
+would fail its TLS handshake before reaching the app. Fixed to `http://`,
+with an explanation of why this is correct rather than a workaround: Tor's
+own onion-service circuit already provides end-to-end encryption and the
+`.onion` address is itself self-authenticating, so plaintext HTTP over a
+genuine onion circuit is the normal pattern for hidden services — layering
+HTTPS on top would need an explicit, separately-tested TLS terminator to
+mean anything, not just a changed URL scheme.
+
+### 11.2 `docs/privacy-features-gap-remediation-plan.md`: the ORIGIN plan's own Phase 2/3 summary still described the pre-hardening design
+
+Two sentences in the origin plan (written before the detailed carry-over
+plans existed) directly contradicted the later, reviewed design:
+Phase 2 said "expose a SOCKS5 proxy to the renderer" — the detailed plan's
+A.4 explicitly rejects this ("The renderer must not gain network
+privileges. Keep the fetch in the main process.") for the same reason a
+compromised renderer with raw SOCKS5 access could reach anything on the
+circuit, not just `vault_sync`. Phase 3 said "iOS via an embedded Tor
+library" — the detailed plan's B.2 defers iOS entirely (no Orbot
+equivalent, App Store review risk). Both fixed with a superseded-by note
+pointing at the detailed plan, rather than silently rewriting history.
+
+### 11.3 `docs/vault-unlock-envelope-integration-plan.md` (this file): markdownlint MD040/MD018, plus a self-inflicted MD022 defect found while fixing them
+
+The specific findings (missing fence languages at 4 blocks; bare `#486` at
+the start of two wrapped lines, read by MD018 as a malformed heading) were
+fixed as asked. While verifying with `markdownlint-cli2` directly rather
+than trusting the fix by inspection alone, a separate, unflagged defect
+turned up: seven section headings from §9 and this file's own §10 had been
+authored as two adjacent `###` lines instead of one heading line-wrapped as
+plain text (e.g. `### 9.1 ... (not just missing)` immediately followed by
+`### envelope` as a SEPARATE heading) — a real authoring mistake from
+writing those sections in the two previous rounds, not something CodeRabbit
+flagged this time. Left in place, every markdown heading-extraction tool
+(including this repository's own table-of-contents tooling, if it has any)
+would show these as broken, truncated entries. Joined all seven into single
+heading lines.
+
+### 11.4 `docs/vault-unlock-envelope-integration-plan.md` §3.6: the plan described a route that was never the one actually built
+
+§3.6 said the decoy-password settings screen belongs at "the existing
+duress settings area (route `/security/duress`, which
+`StegoVaultDashboard.jsx:447` already links to)". Verified against
+`App.jsx` and `Sidebar.jsx`: the ACTUAL implementation is
+`/security/vault-duress`, a new route built from scratch — because, as
+recorded already in this repo's own implementation history,
+`/security/duress` is a dead link (pre-dating this PR, for an unrelated
+stego-image decoy mechanism) with no page behind it. The plan text had
+simply never been updated to match what was actually built. Fixed to
+describe the real route and state plainly that `/security/duress` is a
+dead link, not something to repoint.
+
+### 11.5 `frontend/src/services/hiddenVault/unlockEnvelopeStore.js`: a decoy-session write permanently corrupts a row in the REAL vault — the most serious finding across all three rounds
+
+`setDecoySlot()` stamps the decoy slot with the SAME device salt as the
+real slot (`realSaltB64` — reused deliberately, per that code's own
+comment, since there was no reason at the time to think it needed to
+differ). Traced forward, not just at the point CodeRabbit flagged: when a
+decoy session is active (`installRawDek` installed the decoy DEK), the
+existing v2 write path (`VaultContext`'s `addItem`/`updateItem`, both
+routed through `encryptEnvelope` → `sessionVaultCrypto.encryptItem` for any
+OAuth/envelope session, since those never carry a v3 key) has no gate
+beyond "is there a session key" — so a new item added during a decoy
+session gets encrypted under the DECOY DEK while `encryptItem` stamps it
+with `sessionSaltB64`, which is the REAL slot's salt. When the REAL session
+later encounters that item, `keyForSalt`'s matching-salt fast path hands it
+the REAL DEK — an AES-GCM authentication failure, because the item was
+never encrypted with that key. The item becomes **permanently unreadable**,
+a garbage row injected into the ONE shared, server-side item list, with no
+way to recover it (the decoy DEK that could decrypt it is never persisted
+anywhere outside that already-superseded decoy envelope).
+
+This is materially worse than the already-disclosed, accepted limitation
+(§7, and the duress-setup screen's own notice) that a decoy unlock shows
+the real item list with existing entries failing to decrypt — that
+limitation is about *visibility*, this bug is about *silent, irreversible
+data loss* triggered by ordinary use of the app while in a decoy session,
+whether by the coerced user or a coercer probing what the app can do.
+Changing the decoy slot's salt alone would NOT have fixed it: OAuth/envelope
+sessions never set `sessionPassword` (see that field's own comment), so
+`keyForSalt` already falls through to `sessionKey` for ANY foreign salt in
+this session shape — the failure is structural, not a salt-choice bug, and
+the actual fix has to stop the write, not relabel it.
+
+**Fix:** `sessionVaultCrypto.js` adds a `sessionIsDecoy` flag, set by a new
+optional 5th parameter on `installRawDek(dekBytes, saltB64, userId,
+expectedGeneration, isDecoy)`, exported as `isDecoySession()`, and reset by
+`clearSessionKey()`. `encryptItem()` refuses to write — throwing before any
+crypto runs — whenever `sessionIsDecoy` is true. `VaultUnlockModal.jsx`'s
+`runEnvelopeUnlock` passes `slotIndex !== 0` as `isDecoy` when installing
+the DEK, so this engages automatically the moment a decoy unlock succeeds,
+with no separate wiring needed elsewhere. New test file
+`sessionVaultCrypto.decoySession.test.js` (8 tests, real WebCrypto/
+localStorage, no mocks) covers the flag's lifecycle, the write refusal, that
+a real session is unaffected, and — using real encrypt/decrypt round trips
+rather than just asserting the throw — that the salt collision this fix
+prevents is a genuine, reproducible corruption, not a hypothetical one.
+
+**Deliberately not attempted:** giving reads a friendlier "you're in a
+decoy session" indicator, or making the write-refusal message
+indistinguishable from an unrelated save failure. Both are product/UX
+decisions belonging with the "believable decoy contents" work §7 already
+defers; this fix's scope is stopping the corruption, not polishing what a
+decoy session feels like to use.
+
+### 11.6 `frontend/src/services/hiddenVault/unlockEnvelopeStore.js`: `parseSlotPayload` didn't validate the decoded DEK's length
+
+A payload whose `dek` field was valid base64 but decoded to something other
+than 32 bytes passed `parseSlotPayload` unchanged, and only failed later, in
+`sessionVaultCrypto.installRawDek`'s own length guard — which runs AFTER
+`unlockEnvelopeStore.open()` has already returned successfully.
+`VaultUnlockModal.jsx`'s `runEnvelopeUnlock` only tags failures thrown
+*from* `open()` itself as `envelopeUnusable` (§10.1's fix), so this failure
+silently skipped the legacy wrapped-DEK fallback and left the user stuck,
+despite this being exactly the "stored envelope is corrupt" case that
+fallback exists to handle. Fixed: `parseSlotPayload` now checks
+`dekBytes.byteLength === 32` itself and throws `MalformedSlotPayloadError`
+for anything else, so the failure happens inside `open()`'s call stack
+where the existing fallback logic already catches it — no change needed to
+`VaultUnlockModal.jsx` at all. New regression test hand-crafts a payload
+with a 16-byte `dek` via `encode()`/`jsonToBytes()` directly (bypassing
+`provision()`'s own input guard on purpose) and asserts `open()` rejects
+with `MalformedSlotPayloadError`.
+
+### 11.7 The DOM-indistinguishability claim (§3.5, §5) was broader than what is actually true or tested
+
+"Rendered DOM after a slot-0 unlock and after a slot-1 unlock is identical"
+reads as an app-wide claim, but it is only true — and only tested — for
+`VaultUnlockModal`'s OWN rendered output. The vault dashboard the app
+renders next is NOT identical between the two cases (§7's own disclosed
+limitation: a decoy session shows the real item list with each entry
+failing to decrypt). Narrowed both the test-guidance bullet and the
+acceptance criterion to explicitly scope the claim to `VaultUnlockModal`
+itself and cross-reference the limitation for everything downstream of it,
+so a future reader cannot mistake "the modal looks the same" for "the app
+looks the same."
+
+---
+
+## 12. Implementation status — fourth CodeRabbit review round (2026-08-25/26)
+
+A fourth `@coderabbitai full review` found 2 more issues. Both verified
+against current code before fixing.
+
+### 12.1 `docs/onion-sync-transport-phases-2-4-plan.md` §9 "Cross-cutting rules" still stated the blanket rule §10.4 had already corrected
+
+§10.4 (round 2) fixed A.5's design to gate desktop/mobile availability on
+`anonymity.available && onion_address` rather than `vault_proxy.available`
+— but the summary in §9 ("Cross-cutting rules for all three PRs"), a
+separate section restating the same fact for quick reference, was never
+updated to match. It still said, unqualified, "Gate on
+`vault_proxy.available`, never on `anonymity.available`" — exactly the
+blanket rule that would make desktop/mobile's onion transport never engage,
+which §10.4 already established and fixed IN A.5 itself. A reader who only
+skimmed §9 rather than the detailed sections would rebuild the broken
+version. Fixed by making §9 point 3 platform-specific, matching A.5's
+actual design, with a cross-reference rather than a second copy of the
+full argument.
+
+**Lesson applied from memory ([[feedback-verify-bot-review-findings]]):**
+this is the SAME class of miss as §10.4 itself, one level up — fixing a
+design section but not the summary restating it. When a fact is stated in
+more than one place in the same document, fixing it in one place requires
+searching the whole document for every other restatement, not just the
+place review flagged.
+
+### 12.2 `frontend/src/Components/security/VaultDuressSetup.jsx`: the pending-registration retry did not survive a remount
+
+Round 2 (§9.2) fixed the immediate case — a registration failure right
+after `setDecoySlot()` succeeds — by holding the failed token in
+`pendingDuressToken` React state so a "Finish registration" button could
+retry with the exact same token. CodeRabbit correctly identified what that
+fix did not cover: if the user reloaded the page, navigated away, or the
+tab was closed before retrying, `pendingDuressToken` was gone. The decoy
+slot on disk still held the unregistered token — nothing was lost at the
+data layer — but the UI had no way back to it short of reconfiguring the
+decoy slot from scratch (which mints a brand-new token via
+`generateSignalToken()` and orphans the first one, the exact failure mode
+§9.2 exists to prevent). The bot's own suggested remedy explicitly ruled
+out storing the token as plaintext device state, which rules out simply
+persisting `pendingDuressToken` to `localStorage`.
+
+**Fix:** replaced the state-held retry with a standing "Recover
+unregistered alarm" form, always present on the page (not conditionally
+rendered on failed-attempt state), that re-derives the token on demand:
+the user re-enters their decoy password, `unlockEnvelopeStore.open()`
+re-opens the existing envelope with it — the same call a real decoy unlock
+makes — and the returned `duressToken` is registered immediately. Nothing
+about this depends on component state surviving anything; it re-reads the
+token from the one place it durably lives, the envelope itself, every
+time it runs. `pendingDuressToken` state, `handleRetryRegistration`, and
+the conditionally-rendered "Finish registration" button are all removed —
+this is a strictly simpler mechanism than what it replaces, not an
+additive one, and it never holds the raw token in memory for longer than
+the single `await` before registering it.
+
+Rewrote `VaultDuressSetup.test.jsx` (8 tests) to match: the recovery form
+is present unconditionally (not gated on a prior failure), recovery
+re-opens the envelope rather than reusing retained state, a fresh
+component instance with zero prior render history can still recover
+(the direct test of "survives a remount"), and two new distinct error
+paths — a wrong decoy password, and a password that happens to open the
+real slot instead (deliberately explicit here, unlike `VaultUnlockModal`'s
+unlock path, because this settings screen already presupposes the user
+knows about and is managing the duress feature; telling them which slot
+they opened is not a signal that helps a coercer on a screen a coercer
+would have no reason to be shown in the first place).
+
+---
+
+## 13. Implementation status — fifth CodeRabbit review round (2026-08-26)
+
+A fifth `@coderabbitai full review` found 6 issues, none in this file's own
+content — all 6 are corrections to `docs/onion-sync-transport-phases-2-4-plan.md`
+(still fully unimplemented, so zero code-regression risk). Recorded here
+too, briefly, so the full review history for PR #489 stays in one place
+rather than split silently across documents.
+
+**One of the six is itself a verification catch worth recording explicitly:**
+two of the bot's comments were anchored — by GitHub's own line numbers — on
+lines 530–533 and 546–553 of THIS file, but their body text discussed
+anonymous-credential design, `clearnet_ingress_refused`, and
+`VAULT_OPERATION_ROUTES` route-scoping — none of which appears anywhere in
+this document (`grep` for any of those terms in this file returns nothing).
+That content genuinely exists, but in the OTHER carry-over plan's §C.3/§C.4
+(PR C, anonymous credentials). CodeRabbit's own diagnostic scripts (visible
+in its review comments) had searched both files while investigating, and
+the two findings landed misattributed to this file's line numbers instead
+of their actual location. Applying the fix here — inserting anonymous-
+credential content into the middle of THIS file's unrelated §10.2/§10.3 —
+would have corrupted this document for no reason. Verified the substance of
+both findings was still real and valid, then applied them at their actual
+location instead. This is precisely the discipline
+[[feedback-verify-bot-review-findings]] already asks for, extended one step
+further: verify not just WHETHER a finding is correct, but WHERE it actually
+applies, before touching anything.
+
+The four genuinely-file-correct findings, and the two redirected ones, all
+fixed directly in `docs/onion-sync-transport-phases-2-4-plan.md`:
+
+1. **A.4's `TOR_PROXY` handler needed an explicit payload-shape constraint,
+   not just an operation allowlist.** `operation === 'vault_sync'`
+   legitimately passes the existing allowlist, but nothing previously said
+   the `payload` itself must be rejected if it carries a destination-like
+   field (`url`, `host`, `proxy`, `origin`). Without that, a compromised
+   renderer could ride the allowed channel and smuggle a destination
+   override through the payload instead of through `operation`. Fixed:
+   payload is sync data only, validated before dispatch, with a test for a
+   payload carrying a clearnet-looking `url` field.
+2. **A.5's fix only checked the DEPLOYMENT's Tor daemon, never THIS
+   device's own local sidecar.** `anonymity.available && onion_address`
+   tells you the server has Tor up; it says nothing about whether `torSidecar`
+   on this machine has actually finished bootstrapping (or has crashed).
+   Gating on the deployment fact alone would report "available" while the
+   local SOCKS5 listener isn't actually listening yet, and
+   `proxyVaultOperation` would fail with a raw connection error instead of a
+   clean "unavailable." Fixed: `isOnionSyncAvailable()` now requires BOTH
+   the deployment fact AND `torSidecar.getStatus()` reporting ready, with
+   tests for the bootstrapping and stopped/crashed states specifically.
+3. **A.7's (and B.3's mobile equivalent) integration-test guidance still
+   used `vault_proxy.available === true` as the desktop/mobile success
+   signal** — exactly the field A.5's own fix established can never be true
+   for either platform's clearnet-issued capabilities call. Fixed to assert
+   at the request level instead: onion-routed `vault_sync` succeeds,
+   clearnet-routed `vault_sync` is refused with `clearnet_ingress_refused`
+   (403), and `anonymity.onion_address` is asserted separately as the
+   bootstrap signal it actually is.
+4. **B.3's mobile OkHttp client never inherited A.4's redirect hardening.**
+   Desktop's Axios client got `maxRedirects: 0` (or origin-validated
+   redirects) specifically to stop a malicious response from redirecting the
+   client to a clearnet endpoint. When B.3 was rewritten in round 3 to use
+   OkHttp's native SOCKS support, this requirement was never carried over —
+   OkHttp's default redirect behavior is not safe here either. Fixed with
+   the OkHttp equivalent (`followRedirects(false)`/origin validation) and a
+   test asserting a clearnet redirect target is rejected.
+5. **(Redirected from this file) PR C's "require onion ingress in the
+   credential case" phrasing invited implementing the clearnet-refusal check
+   as conditional on the credential branch.** The check is already
+   endpoint-wide and unconditional in the real, shipped
+   `dark_protocol_service.py` — this PR does not add it, and it must not
+   become scoped to only one permission class on any future refactor. Fixed
+   the wording to say so explicitly, plus added tests for JWT-only,
+   credential-only, and mixed-authentication requests over clearnet, all
+   refused identically.
+6. **(Redirected from this file) PR C.4 had no test that a credential is
+   confined to `vault_sync` alone**, despite C.2 point 3 already requiring
+   exactly that ("authorise nothing else — it must not be usable to read or
+   enumerate the vault"). Fixed by adding an explicit negative-route-scope
+   test bullet covering every other entry in `VAULT_OPERATION_ROUTES`.
+
+## 14. Implementation status — sixth CodeRabbit review round (2026-08-26)
+
+A sixth `@coderabbitai full review` found 7 issues: 1 in this repo's shipped
+code, and 6 doc-only corrections split across this file,
+`docs/onion-sync-transport-phases-2-4-plan.md` (still fully unimplemented,
+so zero code-regression risk), and `docs/privacy-features-gap-remediation-plan.md`.
+Recorded here too, briefly, so the full review history for PR #489 stays in
+one place rather than split silently across documents.
+
+1. **`frontend/src/services/sessionVaultCrypto.js`: `sessionIsDecoy` was
+   only ever reset to `false` by `installRawDek` and `clearSessionKey`, never
+   by the three OTHER functions that also establish a session key
+   (`initSessionKeyFromPassword`, `setupVaultPassword`,
+   `unlockWithVaultPassword`).** None of these three ever install a decoy
+   DEK, so this was fail-closed rather than a security hole — but a stale
+   `true` left over from an earlier decoy session that never went through
+   `clearSessionKey()` would make `encryptItem()`'s decoy write-refusal (the
+   round-3 fix, §11.5) misfire against a session that is now genuinely real,
+   silently blocking legitimate vault writes. Fixed by resetting
+   `sessionIsDecoy = false` next to each function's own `sessionKey`
+   assignment, and added 3 new tests
+   (`sessionVaultCrypto.decoySession.test.js`) covering exactly this: a
+   stale decoy flag does not survive into a session established without
+   `installRawDek`.
+2. **§3.7's performance checklist item ("measure `decode()` p50/p95 in a
+   real browser before shipping") was still unchecked, correctly** — this
+   round's finding was that it remained outstanding, not that it was
+   mis-stated. A real measurement attempt was made (a minimal Vite-served
+   harness importing `hiddenVaultEnvelope.js` directly) and hit a genuine,
+   reproducible tooling blocker: `argon2-browser` resolves inconsistently
+   between `vite.config.js`'s `optimizeDeps.include` and `resolve.alias`
+   entries for a fresh, isolated module graph outside the main app's entry
+   point, producing a UMD/ESM interop `SyntaxError`. Confirmed this is a
+   tooling artifact (the shipped app's own existing entry point is
+   unaffected) rather than a defect in the reviewed code, and documented the
+   blocker plus its actual fix (drop the redundant `optimizeDeps.include`
+   entry, or point it at the same aliased path) in §3.7 itself, so the next
+   attempt doesn't repeat the investigation. The measurement itself is still
+   not done.
+3. **§5's and §10.3's "indistinguishable" acceptance claims still credited
+   one general description to the specific tests that verify each part.**
+   Reworded both to attribute precisely: endpoint and request byte length
+   are `duressSignalService.test.js`'s own contract tests; rendered DOM
+   *and* console output are `VaultUnlockModal.test.jsx`'s indistinguishability
+   test. The DOM half was already covered (§11.7); the console-output half
+   was not, so a new assertion was added to that same test
+   (`vi.spyOn(console, 'log'/'warn'/'error')` around both a slot-0 and a
+   slot-1 unlock, asserting the captured call arrays are equal) rather than
+   just narrowing the prose to match existing coverage.
+4. **`docs/onion-sync-transport-phases-2-4-plan.md` A.3: neither the
+   bootstrap-gating nor the bounded-restart bullets said who actually calls
+   them, or what happens if Tor's child process fails outright.** Fixed with
+   two additions: a startup deadline (~60s) that rejects — never hangs — on
+   child-process failure, with cleanup that doesn't mask the original error;
+   and an explicit single lifecycle owner (the desktop main process, driven
+   by privacy-mode setting changes: starts on `prefer_onion`/`require_onion`,
+   stops on `off`), since a start/stop policy with no named owner is not
+   actually implementable as stated.
+5. **`docs/onion-sync-transport-phases-2-4-plan.md` B.3: the `http://<addr>.onion`
+   guidance didn't account for Android's platform-level cleartext-traffic
+   block.** API 28+ blocks cleartext HTTP by default, and OkHttp (B.3's own
+   transport) honors that policy — so the plaintext onion listener would be
+   silently blocked by the OS before OkHttp's own SOCKS5 routing ever runs.
+   Fixed by cross-referencing this constraint from A.3 and adding the actual
+   fix to B.3: a domain-scoped Network Security Configuration exception
+   (`cleartextTrafficPermitted="true"` scoped to the exact onion hostname,
+   never granted globally), with a test requirement on an API 28+ target
+   with no global cleartext exception.
+6. **`docs/onion-sync-transport-phases-2-4-plan.md` A.4: nothing specified
+   how a desktop/mobile request reaches `/vault-proxy/`'s `IsAuthenticated`
+   requirement at all.** The web client already sends this via
+   `darkProtocolService.js`'s `authHeader()`, but the desktop/mobile
+   transport design never carried that requirement over — as written, a
+   correctly payload-validated (§13 point 1) request would still be rejected
+   for having no bearer token. Fixed by specifying
+   `proxyVaultOperation(operation, payload, authToken)` with the auth token
+   as its own explicitly-named parameter, kept separate from `payload` so it
+   can't be confused with — or smuggled through — the destination-field
+   defense already in place there.
+7. **`docs/privacy-features-gap-remediation-plan.md`'s Phase 2 summary still
+   described the payload defense as an operation allowlist alone**, without
+   the payload-shape check §13 point 1 had already added to the detailed
+   design doc. Same class of gap as §12.1 (a summary restating a
+   since-corrected design in less precise terms) — fixed by extending the
+   parenthetical to name the payload-shape check and cross-reference A.4.
+
+Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/comments`
+(date-filtered to this round) that only CodeRabbit posted; no Codex or
+Greptile activity this round. Targeted tests
+(`sessionVaultCrypto.decoySession.test.js`, `sessionVaultCrypto.salt.test.js`,
+`VaultUnlockModal.test.jsx` — 42 tests) and `eslint` all pass; markdownlint
+(MD040/MD018) clean on all three touched doc files.
+
+## 15. Implementation status — seventh CodeRabbit review round (2026-08-26)
+
+A `@coderabbitai full review` requested after §14's fixes found 6 more
+issues, all in `docs/onion-sync-transport-phases-2-4-plan.md` (still fully
+unimplemented — Phases 2-4 have no code yet, so this remains doc-only, zero
+regression risk) except one nitpick in this file. Verified each against
+current code before fixing, same discipline as §9-14.
+
+### 15.1 A.4/B.3: the `vault_sync` payload defense was a denylist of destination-looking names, not an enforceable schema
+
+§13 point 1 (round 5) added "reject a payload containing `url`/`host`/
+`proxy`/`origin`," but that is a denylist — it says nothing about allowed
+fields, types, or nested structure, so a field the denylist did not name
+(or a nested object carrying one) would pass straight through. Verified
+what "sync data" actually means by reading the real contract end to end:
+`frontend/src/contexts/VaultContext.jsx`'s `syncData` object (`last_sync`,
+`items[]`, `deleted_items[]`) is posted to `/vault/sync/`, validated
+server-side by `password_manager/vault/serializer.py`'s `SyncSerializer`
+(exactly those three top-level fields) and `VaultItemSerializer` (`item_id`,
+`encrypted_data`, `item_type`, `favorite`, `folder_id`, `tags`, plus
+server-assigned `id`/`created_at`/`updated_at`). Fixed by replacing the
+denylist with an allowlist mirroring those two serializers exactly — any
+top-level or nested key outside that list is refused outright, closing the
+gap for a field name no one has thought to denylist yet, not just the four
+named so far. Same fix mirrored in `docs/privacy-features-gap-remediation-plan.md`'s
+Phase 2 summary, which had described the same defense in the same
+under-specified terms.
+
+### 15.2 A.4: nothing said how `onionTransport.js`, in the main process, ever learns the onion address at all
+
+A.4 said the `.onion` origin comes from `capabilities.anonymity.onion_address`
+"fetched over clearnet on the first call," cross-referencing A.5 for which
+service makes that call — but A.5's `getCapabilities()` call lives in the
+**renderer's** clearnet service, and the `TOR_PROXY` IPC channel (by the
+payload-shape defense in §13/§15.1) carries sync data and `authToken` only,
+never a destination. There was no path left for the main process to receive
+this value at all. Fixed by having `onionTransport.js` make its own,
+independent clearnet fetch to the same capabilities endpoint, authenticated
+with the same forwarded `authToken` it uses for the `vault_sync` POST, and
+cache the resolved address for the session — explicitly documented as a
+separate fetch from A.5's renderer-side one, not a shared value, so the two
+are never conflated again. Validation of the resolved value as a well-formed
+`.onion` hostname before dial, and the empty-cache-first-call test, are both
+specified alongside it.
+
+### 15.3 A.5: the availability check could read a bootstrap snapshot instead of awaiting it, making A.3's own promise unreachable
+
+A.3 says the sidecar's first subsequent `proxyVaultOperation` call awaits
+its readiness — but `prefer_onion`/`require_onion` decide whether to call
+`proxyVaultOperation` at all based on `isOnionSyncAvailable()`, which A.5
+specifies as a synchronous read of `torSidecar.getStatus()`. A snapshot
+taken mid-bootstrap (which is exactly when a first sync after a mode change
+is most likely to run) reads as "not ready," so `prefer_onion` silently
+falls back to clearnet and `require_onion` fails closed during perfectly
+normal startup — A.3's await is never reached, because the availability
+gate upstream already returned false. Fixed by specifying that the
+mode-change handler exposes its in-flight `start()` promise, and the
+availability check awaits that promise (bounded by A.3's own ~60s deadline)
+before reading `getStatus()`, with concurrent callers sharing the same
+in-flight promise rather than each starting a second sidecar.
+
+### 15.4 B.3: the Android cleartext exception named a runtime value a packaged config file cannot hold
+
+B.3's Network Security Configuration fix (round 6, §14 point 5) scoped the
+cleartext exception to "the exact `.onion` hostname" — but that hostname
+comes from `capabilities.anonymity.onion_address` at runtime, per B.3's own
+no-hardcoding rule, while Android's Network Security Configuration is
+packaged into the APK at build time and cannot be altered after install
+(confirmed against Android's own documentation: domain-config entries are
+static and cannot change at runtime). An exact-hostname `<domain>` entry
+therefore cannot name a value the app does not learn until its first
+network call. Fixed by reframing the packaged hostname as a build-time
+deployment constant (injected via a Gradle-generated resource value when
+the APK is built for a given backend, the same way a backend URL is
+typically parameterized per build flavor) rather than a runtime-discovered
+one, with a runtime check that `capabilities.anonymity.onion_address`
+matches the compiled-in value exactly before attempting the request — a
+mismatch is treated as unavailable, never as grounds to widen the exception
+or attempt a request Android will block anyway.
+
+### 15.5 §9 "Cross-cutting rules" point 3 still omitted device-local transport readiness that A.5 itself requires
+
+The same class of miss as §12.1: A.5 gates desktop/mobile availability on
+`anonymity.available && onion_address` **and** that platform's own local
+sidecar/Orbot readiness (added in round 5, §13 point 2) — but §9 point 3's
+summary of the same rule, last touched in §12.1, only ever named the first
+two conditions. A reader relying on the summary alone would rebuild the
+version A.5 already found and fixed to be incomplete. Fixed by adding the
+local-readiness clause to §9 point 3 itself, cross-referencing A.5 rather
+than restating its full argument a second time.
+
+### 15.6 `unlockEnvelopeStore.js` (this file, §3.2): the documented `setDecoySlot` signature carried a parameter the shipped function never had
+
+§3.2 documented `setDecoySlot({ userId, vaultPassword, decoyPassword,
+decoyDek })` — but the actual implementation (`unlockEnvelopeStore.js:232`)
+generates the decoy DEK internally
+(`window.crypto.getRandomValues(new Uint8Array(32))`) and never accepts one
+from the caller; a caller passing `decoyDek` would have it silently
+ignored. Fixed by removing the parameter from the documented signature so
+it matches what shipped.
+
+Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/comments`
+(date-filtered to this round) that only CodeRabbit posted this round.
+Doc-only changes; no code touched, so no test suite run beyond the
+markdownlint check already required by this repo's convention for
+doc-only PRs.
+
+## 16. Implementation status — eighth CodeRabbit review round (2026-08-26)
+
+An eighth `@coderabbitai full review` found 7 distinct issues, organized into
+four numbered sections below (§16.1–§16.4; the last bundles four related
+stale-reference corrections rather than being one finding): **2 in shipped
+code** (the first code findings since round 6), 1 allowlist gap, and 4
+status/cross-reference corrections. One of the two shipped-code findings was
+accepted in part and declined in part, for a reason recorded below rather
+than silently dropped.
+
+### 16.1 §11.5's decoy write-gate missed the two mutation paths that never encrypt — Major, and the same "built the guard, forgot a caller" pattern this PR family keeps hitting
+
+§11.5 (round 3) stopped a decoy session from corrupting the real vault by
+refusing inside `sessionVaultCrypto.encryptItem()`. That covers
+`VaultContext.addItem` and `updateItem`, since both call `encryptEnvelope`
+→ `encryptItem` before writing. It does **not** cover the two mutation
+paths that legitimately never encrypt anything, verified by reading each
+end to end:
+
+- **`VaultContext.deleteItem`** calls `vaultService.deleteVaultItem(itemId)`
+  directly and sends no ciphertext at all, so it never reaches the gate. In
+  a decoy session this would issue a real `DELETE` against the one shared,
+  server-side item list — **destroying a genuine item irreversibly**. That
+  is strictly worse than the corruption §11.5 was written to prevent: a
+  corrupt row at least still exists.
+- **`VaultContext.toggleFavorite`** deliberately bypasses the re-encrypt
+  path (its own comment explains why: `favorite` is non-secret metadata and
+  the item may be lazy-loaded with no decrypted payload available), issuing
+  a metadata-only `PATCH`. Lower severity, but still a real mutation of a
+  real item's persisted state from a session that is not the real user's,
+  and it applies an optimistic local flip before the request.
+
+**Fix:** both now check `sessionVaultCrypto.isDecoySession()` **before the
+request and before any optimistic state change**, mirroring the
+`hasVaultSessionKey()` guard pattern `addItem`/`updateItem` already use in
+the same file — no new mechanism, just the existing one applied where it was
+missing. New test file
+`frontend/src/contexts/__tests__/VaultContext.decoySession.test.jsx`
+(6 tests) asserts, for each path: no service call is made, no state change
+is applied, a real session is unaffected, and the surfaced message stays
+generic. **Negative-controlled before being trusted** (the discipline
+[[feedback-verify-bot-review-findings]] and PR #488's own round-4 lesson
+already established): disabling both guards makes 4 of the 6 fail, and the
+2 that still pass are exactly the two "a real session still works" cases
+that must not depend on the guard. Restoration verified byte-identical
+against a pre-edit copy, not by eye.
+
+Deliberately **not** extended to reads: this fix's scope is the mutation
+paths §11.5 was already about. A believable decoy experience remains §7's
+deferred product work.
+
+> **Superseded in part by §18.1 (round 10).** This paragraph originally also
+> excluded "backup/restore, or folder/tag operations" from the gate. That was
+> wrong for backup/restore, and wrong in a way worth recording rather than
+> quietly editing away: it excluded them by CATEGORY NAME rather than by what
+> they actually do. `restoreBackup` is an item-mutation path — the server's
+> `_restore_from_items` can `filter(user=request.user).delete()` and then
+> batch `update_or_create` — so it belonged inside this fix's own stated
+> scope all along. See §18.1.
+
+### 16.2 The decoy write-refusal message named the duress feature to anyone watching the screen — accepted; the suggested console log was declined
+
+`encryptItem`'s refusal threw `'Vault is in a decoy session: new items
+cannot be saved.'`, and `VaultContext` surfaces `error.message` verbatim via
+`setError`. So a coercer standing over the user during a duress unlock could
+read the existence of the duress feature off a single failed save — which
+defeats the entire point of the decoy, and is a different failure from the
+one §11.5 explicitly deferred ("making the write-refusal message
+indistinguishable from an unrelated save failure" was deferred as UX
+polish; *actively naming the feature* is an information leak, and fixing it
+is a one-line change). **Fixed:** the message is now `'Failed to save item.
+Please try again.'` — wording an ordinary failure could equally produce, and
+consistent with `VaultContext`'s own existing fallback strings. The two new
+guards in §16.1 use the same generic style for the same reason.
+
+**Declined, deliberately: the other half of the suggestion, "log the
+decoy-specific reason to the console."** That directly contradicts this
+plan's own §3.5 rule 4 ("**No logging branch.** No `console.*` may mention
+slots or duress"), which is a reviewed, deliberate decision, and round 6
+(§14 point 3) went as far as adding a console-output-equality assertion to
+`VaultUnlockModal.test.jsx` to enforce it. Logging the reason would not
+remove the tell — it would move it from the UI to devtools, where a coercer
+sophisticated enough to look is exactly the coercer this feature is trying
+to survive. The refusal needs no log to be debuggable: `isDecoySession()` is
+already exported and is what the tests assert on.
+
+The existing test that pinned `/decoy session/i` was updated to assert the
+**gate** fired (via `isDecoySession()`) rather than the message text — pinning
+the old wording would have re-pinned exactly the string that must not leak —
+plus a new test asserting the message matches the generic form exactly and
+contains no `decoy`/`duress`/`slot` wording.
+
+### 16.3 The `vault_sync` payload allowlist omitted `expected_sync_version`, which the sync view really does accept
+
+Round 7 (§15.1) derived the allowlist from `SyncSerializer`'s declared
+fields. Verified this round that the sync view reads one more field straight
+off `request.data`, **outside** the serializer entirely
+(`password_manager/vault/views/crud_views.py:373`): `expected_sync_version`,
+an optional integer used for optimistic concurrency against the locked
+`UserSalt.sync_version` row, returning 409 on mismatch. No client sends it
+today, so nothing is broken right now — but the first concurrency-aware
+client to start sending it would be rejected at the IPC boundary, and the
+failure would look like a transport bug rather than a stale allowlist.
+Added to the allowlist in `docs/onion-sync-transport-phases-2-4-plan.md`
+with the reasoning inline. It is a plain integer with no destination
+semantics, so admitting it costs nothing the schema protects. **Lesson: a
+serializer's declared fields are not automatically the endpoint's full
+accepted input — check the view body for direct `request.data` reads
+before treating the serializer as the complete contract.**
+
+### 16.4 Three stale cross-references and one stale status claim
+
+- This file's opening summary still said "five review rounds (§9–§13)" after
+  §14 and §15 had been appended. Updated to §9–§16.
+- §0's verdict table still listed `VaultUnlockModal` as "Not integrated" —
+  true when written, false since this PR shipped. Rather than rewriting the
+  historical verdicts (which would destroy the baseline the rest of the plan
+  argues against), §0 is now explicitly **labelled** the pre-implementation
+  baseline, in its own heading and in a note at the top of the file.
+- §3.6 step 2 still said "Client generates a fresh decoy DEK", contradicting
+  §15.6's own correction one round earlier — the same one-place-fixed,
+  other-place-missed pattern as §12.1 and §15.5. Fixed to say the service
+  generates it internally.
+- `docs/privacy-features-gap-remediation-plan.md`'s summary paragraph
+  referred to "§13" and "§9 through §13" without naming which document those
+  sections live in — and the bare `§N` numbers refer to THIS file while the
+  surrounding sentence was describing findings in the onion-sync plan.
+  Clarified by naming the document explicitly, stating that every bare `§N`
+  in that paragraph refers to this file, and extending the range to §15.
+
+Targeted tests only, per the standing preference recorded in
+[[feedback_targeted_testing]]: the 7 files covering the changed paths
+(`VaultContext.decoySession.test.jsx`, `VaultContext.addItem/updateItem/lock`,
+`sessionVaultCrypto.decoySession.test.js`, `VaultUnlockModal.test.jsx`,
+`unlockEnvelopeStore.test.js`) — 59 tests, all passing, including the
+console-equality assertion from §14 that the message change could plausibly
+have broken. `eslint` clean on all four changed files (0 errors; the 8
+warnings are pre-existing and none fall on a changed line). The full
+frontend suite is CI's job, not this change's.
+
+## 17. Implementation status — ninth CodeRabbit review round (2026-08-27)
+
+A ninth `@coderabbitai full review` found 9 issues: 1 nitpick in shipped
+code, and 8 actionable findings split across this file, `docs/onion-sync-transport-phases-2-4-plan.md`
+(still fully unimplemented, so zero code-regression risk for those two), and
+`frontend/src/Components/layout/Sidebar.jsx`. Verified each against current
+code before fixing, same discipline as every prior round.
+
+### 17.1 `frontend/src/services/sessionVaultCrypto.js`: `unlockWithVaultPassword` and `exportWrappedDekRaw` duplicated the entire wrapped-record-unwrap step
+
+Confirmed by reading both functions in full: record load, JSON parse,
+version check, KEK derivation, and the `unwrapKey` call (algorithm, key
+length, and the canonical "Incorrect vault password." error) were
+byte-identical between the two, differing only in the `extractable` flag
+passed to `unwrapKey` — exactly the duplication `exportWrappedDekRaw`'s own
+comment already flagged as a "keep these two in sync by hand" risk.
+
+**Fix, scoped carefully to avoid a subtler regression the full suggested
+extraction would have introduced:** only the KEK-derive-and-unwrap step
+(the part with real crypto parameters, where a silent drift would be a
+security bug) was extracted into a new private `unwrapDek(vaultPassword,
+record, extractable)`. The record-loading/parsing/version-check lines stay
+duplicated deliberately. Reason: `unlockWithVaultPassword` reserves
+`sessionGeneration` **after** its synchronous validation completes but
+**before** the slow KEK/unwrap step — capturing generation any earlier
+would mean a call that fails on a corrupt record (synchronously, before
+ever reaching this line) still advances the counter, which could
+spuriously invalidate a genuinely-in-flight concurrent call that reserved
+its own generation just before it. Folding the synchronous validation into
+the shared helper would have made preserving that exact ordering
+impossible from the outside. The extracted helper never touches
+`sessionGeneration` at all, so this risk does not apply to it.
+
+New test file `sessionVaultCrypto.exportWrappedDekRaw.test.js` (3 tests,
+real WebCrypto/localStorage, no mocks): both functions recover the
+identical DEK from the same wrapped record, both reject a wrong password
+with the identical message, and `exportWrappedDekRaw` still touches no
+session state. **Negative-controlled**: swapping the two `extractable`
+arguments (making `exportWrappedDekRaw` request a non-extractable key)
+made 2 of the 3 new tests fail with a real `InvalidAccessException` from
+WebCrypto itself, not a mock; restoration verified byte-identical against
+a pre-edit backup.
+
+### 17.2 `docs/onion-sync-transport-phases-2-4-plan.md` A.3: the sidecar lifecycle-owner design had no path for the renderer's mode to actually reach the main process
+
+A.3 makes the desktop main process the sole owner of
+`torSidecar.start()`/`stop()`, driven by "the privacy-mode setting" — but
+`getSyncPrivacyMode()`/`setSyncPrivacyMode()` (`onionSyncService.js`) are
+renderer-local `localStorage` reads/writes, and Electron's main process has
+no access to the renderer's `localStorage` without an explicit bridge.
+Nothing in the design said how a live mode change, or the mode already
+persisted from a previous session, would ever reach the main process at
+all. Fixed with two additive steps: `setSyncPrivacyMode()` also calls the
+existing `TOR_START`/`TOR_STOP` IPC channels when running under Electron
+(making `start()`/`stop()` idempotent, so a redundant call from a
+non-off-to-non-off change is harmless); and the renderer calls the same
+step once, unconditionally, on startup using whatever mode is currently
+persisted — closing the "user relaunches with `require_onion` already set"
+gap. Test guidance added for both: startup with a persisted non-off mode,
+and the `prefer_onion` → `off` transition through this same handoff.
+
+### 17.3 `docs/onion-sync-transport-phases-2-4-plan.md` C.3: `IsAuthenticated OR HasAnonymousCredential` accepted a request presenting both
+
+A request carrying a valid JWT alongside a valid anonymous credential would
+pass the OR'd permission check on the JWT alone, and dispatch is
+`request.user`-scoped — so the server could link that specific credential
+redemption to a real user identity, defeating C.5's own acceptance
+criterion that onion-routed sync "carries no JWT and no user identifier"
+for exactly the requests where it matters most. Fixed by requiring EXACTLY
+ONE authentication mode before dispatch, at the same point the
+unconditional onion-ingress check already lives (and for the identical
+reason: a boundary that must not depend on which permission class happens
+to evaluate first) — additive to the existing OR, not a replacement for
+it. Added a C.4 test bullet for the mixed-credential-over-onion case,
+distinct from the existing clearnet-refusal bullet (which already covers
+"both credentials, over clearnet" but never asserted anything about a
+mixed request that reaches the onion-ingress check successfully).
+
+### 17.4 This file's round-count claims had drifted from its own section numbers, in three places
+
+- The opening summary said "seven CodeRabbit review rounds (§9–§16)" —
+  §9 through §16 is eight sections, not seven. Fixed to state the count
+  that will be true once this section is added: nine rounds, §9–§17.
+- §14 said it found 8 issues (1 code + 7 doc-only) but its own numbered
+  list has exactly 7 entries (1 code + 6 doc-only). Corrected the prose to
+  match the list that was already there.
+- §16 said it found 6 issues while its own four numbered subsections
+  describe 2 code issues + 1 allowlist issue + 4 bundled status/cross-reference
+  corrections (§16.4 alone bundles four) — 7 distinct findings, not 6.
+  Corrected to state the count explicitly as 7, organized into 4 numbered
+  sections, naming why the two numbers differ (§16.4 bundles four related
+  corrections under one heading) rather than leaving the mismatch for the
+  next round to catch.
+
+`docs/privacy-features-gap-remediation-plan.md`'s own summary paragraph
+inherited §14's miscount (it said "20 more issues" for rounds five through
+seven, which was `6 + 8 + 6` using §14's WRONG count of 8) — corrected
+there too, to the accurate `6 + 7 + 6 + 7 + 9 = 35` across rounds five
+through nine, and its `§9 through §15` cross-reference extended to `§9
+through §17`. **Lesson, extending §12.1's own: a summary that cites a
+per-round count doesn't just need updating when a round is APPENDED — it
+needs re-checking when an EARLIER round's own stated count turns out to
+have been wrong, since the summary already baked in the mistake.**
+
+### 17.5 §3.2/§3.4: `open()`'s documented return shape didn't match what shipped, and the flow steps that followed it compounded the mismatch
+
+§3.2 declared `open({ userId, password }): Promise<{ slotIndex, payload }>`.
+The actual shipped function (`unlockEnvelopeStore.js:320`) returns `{
+slotIndex, dekBytes, saltB64, duressToken }` — it unpacks the slot's JSON
+payload via `parseSlotPayload` before returning, never exposing a raw
+`payload` object at all. §3.4's own flow steps then compounded this by
+describing calls that only make sense under the STALE shape
+(`installRawDek(payload.dek, payload.salt, userId)`,
+`reportUnlockForSlot(..., slotIndex, payload)`) rather than the real one.
+Verified against `VaultUnlockModal.jsx`'s actual call site
+(`sessionVaultCrypto.installRawDek(dekBytes, saltB64, ...)`,
+`reportUnlockForSlot(getAccessToken?.(), slotIndex, { __duress_signal:
+duressToken })`) before fixing, rather than guessing which side was
+correct. Fixed §3.2's declared signature and §3.4's two flow-step
+descriptions to match the shipped shape exactly.
+
+### 17.6 §4: the no-decoy test description read as if slot 1 successfully decrypts
+
+"`provision()` with no decoy: ... slot 1 decrypts under no known password"
+is ambiguous — it can be misread as a successful decryption under some
+condition, when the actual, tested property is the opposite: `open()`
+**rejects** every attempt against an unconfigured slot 1, with the
+identical `WrongPasswordError` a wrong password against a *configured*
+decoy produces. Verified against the real test
+(`unlockEnvelopeStore.test.js`: "a no-decoy blob rejects an arbitrary
+password with `WrongPasswordError`, not a crash") before rewording, rather
+than guessing at the intended meaning. Reworded as an explicit negative
+assertion.
+
+### 17.7 §5: the acceptance checklist had drifted out of sync with tests that already passed
+
+Six of eight checklist items were unchecked despite being genuinely covered
+by existing, currently-passing tests — verified by running the actual
+targeted suites (`unlockEnvelopeStore.test.js`, `VaultUnlockModal.test.jsx`,
+`duressSignalService.test.js`, and #486's `test_duress_signal.py`, 49 + 32
+tests, all passing) and matching each criterion to the specific test that
+covers it, the same discipline the existing (already-checked)
+indistinguishability item already modeled. Checked: vault/decoy unlock +
+DEK install + vault renders (via `onUnlocked` firing — §3.4 step 5's own
+documented trigger for `App.jsx`'s `vault:updated` dispatch); no password
+in any unlock-path request body (`duressSignalService.test.js`'s
+`reportUnlock` body-shape assertion — verified this is the ONLY network
+call the unlock path makes, since `open()`/`installRawDek()`/
+`unlockWithVaultPassword()` are pure local crypto); `DuressEvent`
+created-on-decoy/not-on-normal (combined client + #486 server coverage);
+OAuth upgrade transparent + failed-upgrade non-fatal; slot 1 of a no-decoy
+blob indistinguishable; and Argon2 parameters unchanged (verified directly:
+`DEFAULT_KDF_TIME`/`_MEMORY_KIB`/`_PARALLELISM` in `hiddenVaultEnvelope.js`
+still match §3.7's stated values). **Left deliberately unchecked**: the
+p50/p95 performance measurement — §3.7's own status note already explains
+why it remains genuinely undone, and checking it would have been the exact
+mistake this finding warns against, in the other direction.
+
+### 17.8 Risk table: the missing-envelope recovery claim was stated as unconditional when it only applies to one of two cases
+
+"A MISSING envelope always fell back to the legacy path (`upgrade` mode)"
+is only true for a user who already has a legacy `vaultWrappedDEK` record.
+Verified against `VaultUnlockModal.jsx`'s actual mode-selection logic
+(lines 44-52): a user with NEITHER `hasEnvelope()` NOR `hasWrappedKey()`
+takes the `setup` branch instead, not `upgrade` — provisioning a fresh
+envelope from scratch, per §0's own verdict table and §3.4. Scoped the
+claim to the case it actually describes, and named the `setup` branch for
+the other case rather than leaving it implied.
+
+### 17.9 `frontend/src/Components/layout/Sidebar.jsx`: the new Vault Duress nav link had no accessible name when the sidebar is collapsed
+
+`NavItemText` is `display: none` while `collapsed` is true (removed from
+the accessibility tree, not just visually hidden), and the link's only
+other child is a decorative icon (`<FaMask />`) with no text alternative —
+so a collapsed sidebar left this link with no accessible name at all for
+screen-reader users. `NavItem` is `styled(NavLink)`, which forwards
+arbitrary props straight to the underlying `<a>`, confirmed before adding
+one. Fixed with `aria-label="Vault Duress"` on this one `NavItem`.
+**Deliberately not applied to the sidebar's other nav items** — every one
+of them shares the identical `NavItemText`/`display:none` pattern and so
+has the same latent gap, but none of them were touched by this PR; fixing
+pre-existing, out-of-diff items on this PR's own initiative would be the
+exact scope creep [[privacy-features-gap-plan]]'s PR #488 round-4 lesson
+already warns against. Left as a separate, real, awareness item for
+whoever next touches the sidebar broadly.
+
+Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/comments`
+(date-filtered to this round) that only CodeRabbit posted this round.
+Targeted tests: `sessionVaultCrypto.exportWrappedDekRaw.test.js` (new, 3
+tests) plus `sessionVaultCrypto.decoySession.test.js`,
+`sessionVaultCrypto.salt.test.js`, and `VaultUnlockModal.test.jsx` — 46
+tests, all passing, plus the backend `test_duress_signal.py` (32 passed, 1
+environment-gated skip) run in support of §17.7's checklist verification.
+`eslint` clean on all three changed frontend files (0 errors; pre-existing
+warnings unrelated to any changed line). `markdownlint` (MD018/MD022/MD040
+— the rules this repo's history actually enforces; MD013/MD025/MD031/MD060
+are pre-existing, unenforced style choices, not this PR's concern) clean on
+all three touched doc files.
+
+## 18. Implementation status — tenth CodeRabbit review round (2026-08-27)
+
+A tenth `@coderabbitai full review` found 9 issues: **2 in shipped code**, 6
+in `docs/onion-sync-transport-phases-2-4-plan.md` and
+`docs/privacy-features-gap-remediation-plan.md`, and 1 repeat of a prior
+round's finding that had been fixed at the wrong level. Verified each against
+current code before fixing, same discipline as every prior round. Notably,
+**both code findings are cases where an EARLIER round of this same PR drew a
+scope boundary in the wrong place** — recorded as such rather than presented
+as new discoveries.
+
+### 18.1 The decoy write-gate still missed `restoreBackup`, which can wipe the real vault — §16.1's own scoping note was the cause
+
+§16.1 (round 8) extended §11.5's decoy gate to `deleteItem` and
+`toggleFavorite`, then explicitly excluded "reads, backup/restore, or
+folder/tag operations" as out of scope. Traced what `restoreBackup` actually
+does before accepting or rejecting this finding, rather than re-reading the
+scoping sentence: `VaultContext.restoreBackup` POSTs to
+`/vault/restore_backup/<id>/`, which reaches `backup_views.py`'s
+`_restore_from_items` — and that function, when `clear_existing` is set, runs
+`EncryptedVaultItem.objects.filter(user=request.user).delete()` and then
+`update_or_create` for every item in the payload. **On `request.user`: the
+REAL user.** So a decoy session could wipe and overwrite the real vault
+irreversibly — the same class as the `deleteItem` gap §16.1 itself was
+written to close, with a strictly larger blast radius (the whole vault, not
+one row).
+
+The root cause is worth stating plainly because it is a reasoning error, not
+an oversight: §16.1 excluded these paths **by category name** ("backup/
+restore") rather than by what they do. `restoreBackup` IS an item-mutation
+path; it simply does not go through `addItem`/`updateItem`. The rule already
+recorded in memory from that very round — "if it does not encrypt (a delete,
+a metadata-only PATCH, **a bulk operation**), it needs its own explicit
+guard" — names bulk operations explicitly, and then §16.1's own prose
+excluded the one bulk operation in the codebase.
+
+**Fix:** both `createBackup` and `restoreBackup` now check
+`sessionVaultCrypto.isDecoySession()` before their request, with the same
+generic non-revealing message the other guards use (§16.2). `restoreBackup`'s
+guard also runs before the `refreshItems()` that would otherwise reload an
+overwritten list. `createBackup` is guarded too, at lower severity and for
+consistency rather than destructiveness: `create_backup` snapshots the real
+user's items into a new server-side `VaultBackup` row, so it is still a real
+write from a session that is not the real user's. `getBackups` is deliberately
+**left unguarded** — it is a read, and reads remain out of scope by the same
+§11.5 boundary that has held since round 3.
+
+3 new tests in `VaultContext.decoySession.test.jsx`: restore makes no request
+and triggers no refresh (asserted by pinning the GET count, not by "never
+called", since mount already performs one), create makes no request, and a
+real session still does both. Negative-controlled together with §18.2:
+disabling all four guards fails 11 of the file's 34 tests.
+
+### 18.2 `parseSlotPayload` validated the DEK's length but not the duress token's, leaving a wire-length tell
+
+§11.6 (round 3) added a `dekBytes.byteLength === 32` check to
+`parseSlotPayload` for exactly the right reason — so a corrupt-envelope
+failure lands inside `open()`'s call stack where `VaultUnlockModal`'s
+`envelopeUnusable` fallback catches it. The `__duress_signal` field sitting
+two lines below got no equivalent check: `typeof x === 'string' ? x : null`
+accepted **any** string, of any length.
+
+Traced the consequence rather than assuming one: `open()` returns that token
+→ `VaultUnlockModal` passes it to `reportUnlockForSlot` → `reportUnlock`
+sends `JSON.stringify({ signal })`. A present-but-wrong-length token
+therefore changes the **request body's byte length**, which is precisely the
+invariant §3.5 rule 1 exists to protect ("same endpoint, same body size,
+every unlock") and which `duressSignalService.test.js` already asserts for
+the real-vs-noise case. That is a genuine indistinguishability break.
+
+**Severity, stated honestly rather than inherited from the review's framing:**
+this is defense-in-depth, not a live exploitable bug. The slot payload lives
+inside AES-GCM-authenticated ciphertext, so an attacker cannot tamper with it
+without the password, and the only writer (`setDecoySlot`) always uses
+`generateSignalToken()`, which is always 44 chars. The realistic trigger is a
+future code change, which is exactly what a regression guard is for.
+
+**Fix:** `parseSlotPayload` now rejects a PRESENT `__duress_signal` that is
+not a string of exactly `SIGNAL_TOKEN_LENGTH` characters, throwing
+`MalformedSlotPayloadError` — same error, same placement, same fallback
+behaviour as the DEK check above it. `duressSignalService` gained an exported
+`SIGNAL_TOKEN_LENGTH` (derived from its own `SIGNAL_BYTES`, not a literal
+`44`) so the check cannot drift if the token size ever changes — the same
+reasoning that already made `REPORT_TIMEOUT_MS` an export.
+
+**Declined, deliberately: rejecting a MISSING token.** The review asked for
+"missing, non-string, or non-44-character" to all be rejected. A missing
+token is the one case that leaks nothing: `reportUnlock` then generates noise
+at its correct full length, so the wire is unchanged. Throwing would instead
+make a decoy password *fail to open the decoy vault* — under duress, in front
+of a coercer — over a payload with no tell in it. That trade is strictly
+worse for the threat model this feature serves, so a missing token still
+yields `null`. 7 new tests in `unlockEnvelopeStore.test.js` cover both
+halves: five malformed shapes rejected, and missing/well-formed accepted.
+
+### 18.3 `docs/onion-sync-transport-phases-2-4-plan.md` A.3: the control-port test asserted the wrong thing, and "mode 0700" is POSIX-only
+
+Two separate defects in adjacent bullets, both real:
+
+- **The auth test.** A.3 asked for "a test asserting an unauthenticated
+  control connection is rejected". `CookieAuthentication 1` does not refuse
+  the TCP connection — Tor accepts it and then rejects control *commands*
+  until a valid `AUTHENTICATE`, closing the connection on failure. The test
+  as specified would fail against a correctly-configured Tor while never
+  exercising the authorization check. Rewritten to: connect, issue a command
+  (`GETINFO version`) with no prior `AUTHENTICATE`, assert an auth error or
+  closure; then repeat with a deliberately wrong cookie.
+- **The permissions.** "mode 0700" is a POSIX instruction, and this app
+  ships a Windows target (`desktop/package.json` `build.win`) where
+  `fs.chmod` is effectively a no-op and the directory inherits the parent's
+  ACL — which on a shared machine can include other local users. Since the
+  control-port **cookie file is the credential**, that is a real gap, not a
+  cosmetic one. Now specifies an owner-only DACL with inheritance disabled on
+  Windows alongside 0700 elsewhere, and requires the test to attempt access
+  as a second local user on every shipped platform — a test that only checks
+  POSIX mode bits passes on Windows while proving nothing.
+
+### 18.4 A.3's `start()` idempotency wording contradicted A.5's await-readiness requirement — both written in round 9
+
+§17.2 (round 9) specified `start()` as "a no-op returning current status"
+when already bootstrapping. §17.3, in the same round, established that the
+availability check must be able to **await** an in-flight bootstrap, because
+a mid-bootstrap snapshot makes `prefer_onion` fall back to clearnet and
+`require_onion` fail closed during normal startup. A status snapshot is
+exactly what §17.3 rules out, so the two sections shipped contradicting each
+other. Fixed: `start()` returns the SAME in-flight readiness promise while
+bootstrapping, and is a genuine no-op only once it has settled. Test guidance
+added for two concurrent first syncs from a stopped state sharing one promise.
+
+**Lesson, and the second instance of this exact shape in two rounds:** round
+9 fixed a stale count in one document that had already propagated into
+another; this round found two sections of the SAME round contradicting each
+other. When one round changes a design fact in more than one place, the
+places must be diffed against each other before the round is called done —
+not just each one checked against the finding that prompted it.
+
+### 18.5 A.8's no-survivor acceptance criterion promised what A.3 already said was impossible
+
+A.8 read "No `tor` process survives app quit, crash, or force-quit" —
+unconditional. A.3's own exit-path bullet already states, correctly and at
+length, that `process.on('exit')` cannot await anything, `app.exit()` skips
+the quit handlers entirely, and SIGKILL runs no JS at all. A criterion that
+contradicts its own design section is one nobody can honestly tick. Split
+into two: a normal-quit criterion verifiable by observation, and a separate
+criterion requiring a **named OS-level parent-lifetime mechanism per
+platform** (Windows Job Object with `KILL_ON_JOB_CLOSE`; process-group kill /
+`PR_SET_PDEATHSIG` / `kqueue NOTE_EXIT` on the Unix targets) verified by a
+real parent-kill test rather than by calling `stop()`.
+
+### 18.6 B.2 treated Orbot's SOCKS port as fixed at 9050
+
+B.2 described "a stable SOCKS5 endpoint on `127.0.0.1:9050`". Verified
+against Orbot's own documented behaviour: 9050 is the **default**, the port
+is user-configurable, Orbot writes the configured value into the torrc it
+generates, and `0` is the documented value for **disabling** the SOCKS
+listener. A hardcoded 9050 would work on a default install and fail silently
+for anyone who changed it — and would connect to *something else* entirely if
+another process held that port. Fixed: discover the configured port from
+Orbot's own status/binding surface, treat `0`/absent/unparseable as "onion
+sync unavailable" rather than falling back to 9050, and verify the resolved
+listener accepts a connection before reporting availability — the same
+"confirm one real SOCKS5 connection" discipline A.3 already requires of the
+desktop sidecar's ephemeral port. Tests required for a non-default port and
+for port 0.
+
+### 18.7 `docs/privacy-features-gap-remediation-plan.md`: a historical scope statement read as current status, and the Phase 2 summary could rebuild a fixed bug
+
+- The "**Not delivered — deliberately out of scope for this PR**" paragraph
+  describes PR #486's scope at merge time, but reads as present-tense status
+  and lists §4.2 as undelivered — which PR #489 delivered. The same paragraph
+  already had the right pattern for §4.4 ("since delivered in the PR #488
+  follow-up"), so applied it to §4.2 as well and marked §4.1 as still open,
+  rather than rewriting the historical statement and destroying the record of
+  what #486 actually scoped.
+- The Phase 2 summary said to route the sync request "through the `.onion`
+  from `getCapabilities()`", which is the pre-§15.2 design: `onionTransport.js`
+  resolves the address itself, in the main process, precisely so the IPC
+  channel can carry no destination field. The summary also said nothing about
+  availability gating, leaving an implementer who read only it free to gate on
+  `vault_proxy.available` — structurally always `false` on desktop, the exact
+  bug §10.4/§15.5 already fixed twice. Corrected both, with the gating rule
+  stated inline rather than only cross-referenced.
+
+Targeted tests only, per the standing preference recorded in
+[[feedback_targeted_testing]]: the files covering the changed paths —
+`unlockEnvelopeStore.test.js` and `VaultContext.decoySession.test.jsx`
+(34 tests, 10 of them new this round), plus `VaultUnlockModal.test.jsx`,
+`duressSignalService.test.js`, `sessionVaultCrypto.decoySession.test.js`,
+`sessionVaultCrypto.exportWrappedDekRaw.test.js`,
+`sessionVaultCrypto.salt.test.js`, `VaultDuressSetup.test.jsx`, and the three
+sibling `VaultContext.*` suites that share the mocked module surface. Both
+code fixes negative-controlled before being trusted (disabling all four decoy
+guards plus the duress-length check fails 11 of 34 tests; restoration
+verified byte-identical against pre-edit backups). `eslint` clean on the
+changed files. `markdownlint` (MD018/MD022/MD040) clean on all three touched
+doc files. The full frontend suite is CI's job, not this change's.
+
+## 19. Implementation status — eleventh CodeRabbit review round (2026-08-27)
+
+An eleventh `@coderabbitai full review` found 5 issues: 1 hardening gap in
+shipped code and 4 in `docs/onion-sync-transport-phases-2-4-plan.md` (still
+fully unimplemented). **Three of the four doc findings are internal
+contradictions introduced by MY OWN earlier rounds of this same PR** — the
+pattern §18.4 already flagged, now at its third and fourth instance. That is
+no longer a coincidence and is recorded as such in §19.6.
+
+### 19.1 `provision()` validated every argument except `saltB64`, and a missing one writes a permanently dead envelope
+
+`provision()` guards `userId`, `vaultPassword`, and `dekBytes` (the last with
+an explicit 32-byte length check, added in §11.6) but never checked
+`saltB64`. Traced what a bad value actually does rather than filing it as a
+generic missing-guard: `buildSlotPayload` places `salt: saltB64` into an
+object it hands to `jsonToBytes`, and **`JSON.stringify` drops a key whose
+value is `undefined` entirely**. So `provision({..., saltB64: undefined})`
+writes a structurally valid, correctly-sized, successfully-encrypting blob
+whose payload simply has no `salt` key — and `parseSlotPayload` requires
+`typeof obj.salt === 'string'`, so **every subsequent `open()` fails with
+`MalformedSlotPayloadError`, permanently**. The envelope is dead on arrival
+and the failure surfaces far from the call that caused it.
+
+**Severity, stated honestly:** a hardening gap, not a live bug. The only
+production caller (`VaultUnlockModal.jsx`) always passes a real string from
+`sessionVaultCrypto`. But this is the same shape as §11.6's own finding —
+validate the field where a bad value is CREATED, not where it is later
+discovered — and the guard is one line.
+
+**Fix:** reject a non-string or empty `saltB64` at entry, so a bad envelope
+is never written. 4 new parameterised tests in `unlockEnvelopeStore.test.js`
+cover `undefined`/`null`/number/empty-string and additionally assert
+`hasEnvelope()` is still `false` afterwards — proving nothing was persisted,
+not merely that the call threw. Negative-controlled: disabling the guard
+fails all 4.
+
+### 19.2 C.3 asserted an ordering about the SHIPPED code that is factually false — and PR C's own design depended on it
+
+An earlier draft of C.3 (mine, round 9) justified the onion-ingress check's
+placement by claiming it "already runs endpoint-wide, unconditionally,
+**before either permission class is even evaluated**." Verified against the
+installed DRF source rather than reasoning about it: `APIView.dispatch()`
+calls `self.initial(...)`, which calls `check_permissions()` at
+`rest_framework/views.py:421`, and only afterwards invokes the handler at
+`:512`. `DarkProtocolVaultProxyView.post()` is that handler, and it is what
+calls `DarkProtocolService.proxy_vault_operation(...)` — so the ingress
+check runs **strictly after** permission evaluation, not before.
+
+This is harmless in the code as it exists today: the endpoint is
+`IsAuthenticated`-only, the two checks are independent, and neither can mask
+the other. But PR C is precisely where a false ordering assumption turns
+into a real bug, because it adds a second permission class whose
+interaction with the first is the whole point. Corrected the claim, kept the
+requirement it was (badly) justifying: the ingress check stays on
+`proxy_vault_operation`, ahead of and independent of vault dispatch, and
+must never be moved or duplicated inside `HasAnonymousCredential` alone.
+
+**Consequence for the mixed-credential rule (§17.3):** that rule said to put
+the exactly-one-auth-mode check "before dispatch — same place as the
+onion-ingress check," which inherits the same wrong premise and is too late
+to be what it claims. A mixed request passes `IsAuthenticated` on its JWT
+during `check_permissions()` and arrives at the handler with `request.user`
+populated. Corrected to name a hook that genuinely precedes permission
+evaluation: override `initial()` and run the check **before**
+`super().initial(...)`. Noted that doing it at the top of `post()` would
+also close the hole, but leaves the guarantee resting on every future
+handler remembering to call it, where `initial()` is structural. Test all
+four shapes: JWT only, credential only, both, neither.
+
+### 19.3 An anonymous redemption would still carry `session_id`, a user-scoped handle
+
+C.3's frontend bullet said the redemption happens in
+`darkProtocolService.proxyVaultOperation` and left it there. But that
+function's existing signature is `(operation, payload, sessionId)` and it
+sends `session_id` in the body alongside `authHeader()`'s bearer token —
+and the server resolves that value as `GarlicSession.objects.filter(
+session_id=session_id, user=user, ...)` in `_record_operation_traffic`.
+**It is user-scoped.** Stripping the `Authorization` header alone would
+therefore not make the request anonymous: the accounting path re-links it to
+an account identity by a different route, defeating the same C.5 criterion
+the mixed-credential rule protects.
+
+Fixed by defining the anonymous redemption request explicitly — credential,
+`operation`, sync-data-only `payload`, and nothing else: no bearer token, no
+`session_id`, no other account-scoped handle. Traffic accounting simply does
+not occur for these requests, which needs no server change
+(`_record_operation_traffic` already returns early on a falsy `session_id`)
+and is the correct outcome anyway: inventing an "anonymous" accounting
+handle would recreate the correlation under a new name. Requires a
+**wire-level** test asserting on the serialized request rather than the
+function's arguments, since what matters is what leaves the machine.
+
+### 19.4 A.5's own test list contradicted A.5's own prose, three sections apart
+
+§17.3 (round 9) established that `isOnionSyncAvailable()` must be able to
+AWAIT an in-flight bootstrap, because a mid-bootstrap snapshot makes
+`prefer_onion` fall back to clearnet and `require_onion` fail closed during
+normal startup. A.5's test list, a few dozen lines below and untouched since
+round 5, still required that the same function "returns `false` while the
+sidecar is still bootstrapping (any percentage short of 100)." Those cannot
+both hold.
+
+Root cause: "still bootstrapping" was being treated as ONE state when it is
+two, and the resolution is to distinguish them rather than pick a side:
+- **A bootstrap is in flight** (a tracked `start()` promise exists): await
+  it, bounded by A.3's ~60s deadline, and answer from the settled outcome.
+- **No bootstrap is in flight** (never started, deliberately stopped, or the
+  last attempt already failed — `lastError` set, restart budget spent):
+  return `false` immediately, without awaiting and without starting one as a
+  side effect. A crashed sidecar must not hang a caller for 60s waiting on a
+  promise that will never exist.
+
+Both branches now have their own test requirements.
+
+### 19.5 B.3 point 6's blanket "No hardcoding" contradicted point 5's packaged-hostname requirement
+
+§15.4 (round 7) established that Android's Network Security Configuration is
+packaged at build time and cannot name a runtime-discovered hostname, so the
+cleartext exception must use a build-time deployment constant. Point 6, four
+lines below, still said "**Onion address** from
+`capabilities.anonymity.onion_address`, same as desktop. No hardcoding." —
+which reads as forbidding exactly what point 5 requires.
+
+Fixed by splitting point 6 into the two genuinely different values it was
+conflating: the **runtime request target** (always from capabilities, never
+hardcoded — rule unchanged) and the **hostname baked into
+`network_security_config.xml`** (necessarily a compile-time per-flavour
+deployment parameter, the same kind of thing the clearnet backend URL
+already is, with point 5's runtime match-check as the safeguard). Also noted
+the failure modes at both extremes: a build shipping without the exception
+has no working onion sync at all on API 28+, and a build that "avoids
+hardcoding" by widening cleartext globally is strictly worse than either.
+
+### 19.6 The recurring failure mode on this PR, now named
+
+Four rounds running, the most substantive findings have not been new bugs in
+new code — they have been **contradictions between two places that describe
+the same fact**, introduced when an earlier round fixed one place and not
+the other:
+
+| Round | What contradicted what |
+|---|---|
+| 9 (§17.4) | A stale round-count in one document, already propagated into a second |
+| 10 (§18.4) | `start()`'s "returns current status" vs. the await-readiness rule — both written in round 9 |
+| 10 (§18.1) | A scope note excluding "backup/restore" vs. its own rule naming bulk operations |
+| 11 (§19.2) | A claimed DRF ordering vs. the actual shipped code |
+| 11 (§19.4) | A.5's prose vs. A.5's own test list |
+| 11 (§19.5) | B.3 point 5 vs. B.3 point 6 |
+
+The lesson recorded in round 10 — "when a round changes a design fact in
+more than one place, diff those places against each other before calling the
+round done" — was correct but under-applied: it was read as being about the
+places a round EDITS, when the real requirement is to search for every place
+that RESTATES the changed fact, including ones the round never touched.
+§19.4 and §19.5 are both cases where the contradicting text had not been
+edited in rounds, and was found only because a reviewer read the section
+end-to-end. Practical rule going forward: after changing a design fact in
+these plans, grep for its distinctive terms across all three documents and
+read every hit, rather than trusting that the sections touched this round
+are the only ones that state it.
+
+Targeted tests only, per the standing preference recorded in
+[[feedback_targeted_testing]]: `unlockEnvelopeStore.test.js` (29 tests, 4 new
+this round) plus the suites sharing its module surface —
+`VaultContext.decoySession.test.jsx`, `VaultUnlockModal.test.jsx`,
+`duressSignalService.test.js`, `sessionVaultCrypto.decoySession.test.js`,
+`sessionVaultCrypto.exportWrappedDekRaw.test.js`,
+`sessionVaultCrypto.salt.test.js`, `VaultDuressSetup.test.jsx`, and the three
+sibling `VaultContext.*` suites. The one code fix was negative-controlled
+before being trusted (disabling the guard fails all 4 new tests; restoration
+verified byte-identical against a pre-edit backup). `eslint` clean on the
+changed files. `markdownlint` (MD018/MD022/MD040) clean on all touched doc
+files. The full frontend suite is CI's job, not this change's.
+
+## 20. Implementation status — twelfth CodeRabbit review round (2026-08-28)
+
+A twelfth `@coderabbitai full review` found 4 issues: 1 in shipped code, and
+3 in `docs/onion-sync-transport-phases-2-4-plan.md` (still fully
+unimplemented). Confirmed via the GraphQL review-threads API, not just the
+pasted transcript, that all 4 were genuinely unresolved (`isResolved: false`)
+and distinct from three OTHER CodeRabbit batches posted the same day that
+rounds 9–11 had already closed — this PR now gets multiple review batches
+per day, so date/thread-id verification matters more than it did earlier.
+
+### 20.1 A decoy session's own vault UI outed the decoy the moment it rendered
+
+`VaultUnlockModal.jsx`'s `runEnvelopeUnlock` installs the decoy DEK and
+completes the unlock normally; `onUnlocked` then lets the dashboard render.
+`VaultItemsSection` (`App.jsx`) reads the one shared, server-side item list
+from `useVault()` and calls `decryptEnvelope` on every row — with no
+decoy-session gate of any kind. A decoy DEK cannot decrypt anything sealed
+under the real DEK, so every row rendered `"Decryption failed"` (and logged
+a decrypt error per item) within moments of a decoy unlock succeeding — the
+single most visible possible tell that a duress unlock is fake, defeating
+the indistinguishability §11.5's write-refusal and §19's request/DOM/console
+work were all built to protect.
+
+This is the same read-side limitation §11.5 already named and deliberately
+deferred ("giving reads a friendlier indicator... belongs with the
+'believable decoy contents' work §7 already defers"). What changed: §11.5's
+own compat table (§4) already sets an achievable floor below full believable
+content — **"an empty decoy still beats no decoy"** — and the shipped code
+did not clear even that floor; it rendered visibly broken, not empty.
+Closing that specific gap does not require the deferred product decision
+(what a believable decoy contains), only that a decoy session stop
+attempting real decryption at all.
+
+**First attempt, rejected before being applied:** gating `VaultContext.jsx`'s
+exposed `items` (the single value every consumer reads) to `[]` during a
+decoy session. Rejected upon checking it against the EXISTING test suite
+first, not just against the new requirement: `VaultContext.decoySession.test.jsx`
+(§16, §18.1) asserts `result.current.items` still reflects the real,
+untouched row after a blocked `deleteItem`/`toggleFavorite`/`restoreBackup`
+call precisely to prove no optimistic mutation slipped through the write
+gate — six passing tests that a shared-`items` gate would have broken to fix
+an unrelated read-side issue. Generalizes
+[[feedback_verify_bot_review_findings]] point 5 (trace a fix forward to
+every caller) one step further: an existing, already-passing TEST SUITE is a
+caller too, and is cheaper to check against than to discover has broken
+after the fact.
+
+**Fix actually applied**, scoped to the one component CodeRabbit's own
+trace showed is unconditionally rendered right after unlock
+(`App.jsx`'s dashboard route): `VaultItemsSection` now derives a local
+`visibleItems = isDecoySession() ? [] : items` (memoized on `items`, so the
+array reference used for both the decrypt effect and the render stays
+stable across renders — an unmemoized version was caught by
+`react-hooks/exhaustive-deps` during verification, since a fresh `[]`
+literal every render would otherwise re-trigger the decrypt effect on every
+render) and decrypts/renders that instead of the raw `items` from context.
+`VaultContext`'s own exported `items` — and every OTHER consumer of it — is
+untouched. A decoy session now renders the existing, already-styled
+`"No passwords saved yet"` empty state instead of a wall of decrypt
+failures, with no decrypt attempt and no error logged.
+
+**Deliberately not attempted, same as §11.5:** populating the decoy with
+believable fake entries. That is still the separate §7 product decision;
+this fix's scope is "empty, not broken," matching the plan's own documented
+floor, nothing more.
+
+**Not yet extended to:** `AdaptivePasswordDashboard.jsx` and
+`SecurityDashboard.jsx`, which also read `items`/`decryptItem` from the same
+context and are reachable via in-app navigation, not just the initial
+dashboard render. CodeRabbit's finding traced only the automatic
+post-unlock path (`VaultItemsSection`); these two were not cited and are
+noted here as a known follow-up rather than folded into this fix silently.
+`VaultItem.jsx`/`VaultItemCard.jsx`/`VaultItemDetail.jsx` were checked and
+are not currently reachable from any route or parent component, so are out
+of scope, not merely unaddressed.
+
+New test file `VaultItemsSection.decoySession.test.jsx` (2 tests): a decoy
+session renders the empty-vault state and never calls `decryptEnvelope`; a
+real session decrypts and renders normally. Required exporting
+`VaultItemsSection` as a named export (it was previously module-private) —
+the only way to test it without instantiating all of `App.jsx`'s routing and
+auth machinery, which has no existing test harness at all. This is additive
+only; `App`'s existing default export and all current behavior are
+unchanged.
+
+### 20.2 The Tor control endpoint was never actually specified
+
+A.3's "Authenticated control port" bullet requires `CookieAuthentication 1`
+but never says what the control endpoint itself IS: `ControlPort` or
+`ControlSocket`, bound where, allocated how, or discoverable from where. A
+plan that fully specifies authenticating a connection to an endpoint it
+never defines cannot actually be implemented as written — and the gap is
+exactly the kind that matters here, since `ControlSocket` (a Unix domain
+socket) silently does not exist on Windows, which `desktop/package.json`'s
+`build.win` target ships to. Fixed: `ControlPort auto` (loopback-bound,
+ephemeral — the same treatment, and the same collision reasoning, `SocksPort
+auto` already gets two paragraphs above), read back and validated
+loopback-only the same way `socksPort` already is, and added to `start()`'s
+return value and `getStatus()` as `controlPort`. New test requirement:
+concurrent sidecar instances get distinct control ports, and a non-loopback
+control endpoint is never configured or reported.
+
+### 20.3 The main process's own clearnet capability fetch had no transport requirement at all
+
+A.4 documents `onionTransport.js` making its own clearnet GET to the
+capabilities endpoint, carrying the same bearer `authToken` used for the
+eventual `vault_sync` POST — but the very next bullet after it is "use
+`http://`, not `https://`" for the ONION request, and nothing distinguished
+the two. An implementer skimming both bullets together could reasonably
+conclude the same weak-transport posture applies to the clearnet fetch,
+which would send a live bearer token in the clear. Fixed by stating
+explicitly that this fetch must be HTTPS-only, must validate certificates,
+and must refuse (not follow) a downgrade redirect to `http://`, using the
+same redirect-hardening approach A.4 already requires for the `vault_sync`
+request itself, with a cross-reference forward to the specific bullet the
+`http://` exception belongs to and does not extend from.
+
+### 20.4 Orbot's config plugin queried package visibility, never service identity
+
+B.3 point 3 required Android 11+ `<queries>` visibility for
+`org.torproject.android`, which only lets this app confirm SOME installed
+package declares Orbot's action — not that the package IS Orbot. An
+implicit, action-only bind can be satisfied by any locally installed app
+declaring the same action, which could then hand back an attacker-controlled
+port this app would trust as Orbot's own SOCKS proxy, sitting directly in
+the path of `vault_sync` traffic. Fixed: bind with an explicit
+`setPackage("org.torproject.android")` target rather than an implicit
+action-only intent, and verify the bound `ComponentName`'s package before
+trusting anything it returns (including the discovered port point 5
+already reads). New test requirement: a second, locally-installed app
+declaring the same action must never be treated as Orbot, and an
+already-occupied local port must be handled as "unavailable," not silently
+connected to.
+
+Verified via `gh api repos/Rajarshi1-source/Modern_Password_Manager01/pulls/489/comments`
+(date-filtered) and the GraphQL `reviewThreads` API (resolution-filtered)
+that only CodeRabbit posted this round and that all 4 threads were
+genuinely open; no Codex or Greptile activity — Codex's last comment on this
+PR is still the 2026-08-25 usage-limit notice, and Greptile remains absent
+from every commenter list checked across all twelve rounds. Targeted tests:
+new `VaultItemsSection.decoySession.test.jsx` (2 tests) plus the suites
+sharing `sessionVaultCrypto`'s decoy-session surface —
+`VaultContext.decoySession.test.jsx`, `VaultUnlockModal.test.jsx`,
+`sessionVaultCrypto.decoySession.test.js` — 38 tests total, all passing.
+`eslint` clean on `App.jsx` and the new test file (an initial version
+tripped `react-hooks/exhaustive-deps`, fixed with `useMemo` before being
+counted as clean — see §20.1). `markdownlint` (MD040/MD018) clean on the one
+touched doc file. No change was needed in
+`docs/privacy-features-gap-remediation-plan.md` this round: all 3 doc
+findings are implementation detail nested under sections that document's own
+Phase 2/3 summary already defers to ("See A.4 for the full schema and the
+required tests"), not changes to a design fact the summary itself states.
+
+## 20. Implementation status — thirteenth review round: Greptile + CodeRabbit (2026-08-28)
+
+The first round on this PR with findings from TWO reviewers: Greptile raised
+2 P1 security findings (and failed its own merge gate at confidence 1/5),
+CodeRabbit raised 7. Both of Greptile's, and one of CodeRabbit's, are the
+SAME class of defect this PR keeps producing — a guard applied to one path
+and not its sibling (§19.6) — and one of them invalidates a security
+justification I wrote myself two rounds earlier.
+
+### 20.1 The duress recovery form was a password-classification oracle — Greptile P1, and my own round-10 reasoning was wrong
+
+`VaultDuressSetup`'s "Recover unregistered alarm" form produced three
+visibly distinct outcomes for a submitted password: the real vault password
+got *"That opened the real vault, not the decoy slot"*, a valid decoy
+password got a success message, and anything else got *"Incorrect decoy
+password."* Anyone who can operate an authenticated session can therefore
+type a password into this form and learn which of the three it is.
+
+**Why this is severe, and why my earlier justification was wrong.** §12.2
+introduced that specific wording with an explicit rationale, quoted from the
+code comment: *"this settings screen already presupposes the user knows
+about and is managing the duress feature, so telling them 'that opened the
+real vault' is not a signal that helps a coercer."* That reasoning assumed
+only the legitimate user ever reaches this screen. **It does not hold.**
+Reaching `/security/vault-duress` requires only an AUTHENTICATED session —
+and a coerced unlock produces exactly that, decoy or not. So a coercer who
+has just forced an unlock can navigate here, type the password they were
+handed, and be told by the application itself that it was a decoy. That is
+precisely the disclosure the entire feature exists to prevent, delivered by
+the one screen built to support it.
+
+**Fix:** one outcome for all three password classes. `open()` is still
+called (recovery genuinely needs the token from slot 1), but a
+`WrongPasswordError` is no longer treated as an error at all — it is one of
+the indistinguishable outcomes — and a real-slot open no longer gets its
+own branch. The single message is worded to stay truthful in every case:
+*"If that was your decoy password, its alarm is now registered..."*, plus an
+explicit note that the message is the same whichever password was entered,
+so the legitimate user is not misled into thinking it confirms anything.
+The `catch` that remains handles only genuine operational faults
+(registration request failed, envelope unreadable), which are unreachable
+for a merely wrong or real password and say nothing about slots.
+
+New test asserts the security property directly: decoy, real, and wrong
+passwords all produce **byte-identical** rendered output, compared on the
+serialized container rather than hand-picked strings, so a future
+contributor reintroducing any branch fails it. Negative-controlled —
+restoring the classifying branch fails 3 tests.
+
+### 20.2 `/vault/dashboard` rendered the real vault during a decoy session — Greptile P1 and CodeRabbit, same finding
+
+§19-era work added the decoy display gate to `VaultItemsSection`, the
+`/vault` list. It did not add it to `VaultDashboardRoute`, which passes
+`useVault().items` straight into `VaultDashboard`. A decoy session
+navigating to `/vault/dashboard` therefore rendered the real inventory —
+leaking real item metadata AND outing the decoy, since none of it decrypts
+under the decoy DEK.
+
+This is the third occurrence of the identical pattern (§16.1: gated
+`encryptItem`, missed `deleteItem`/`toggleFavorite`; §18.1: missed
+`restoreBackup`; now: gated one display surface, missed the other).
+
+**Fix, deliberately structural rather than a second copy of the check:** a
+shared `useDisplaySafeItems(items)` hook in `App.jsx`, used by BOTH
+surfaces, carrying the rationale in one place and stating that any new
+surface rendering `useVault().items` must go through it. Adding the gate
+inline in `VaultDashboardRoute` would have fixed this instance while
+leaving the next one exactly as likely.
+
+CodeRabbit additionally caught a real defect in the ORIGINAL gate that the
+copy would have propagated: `useMemo(..., [items])` omitted the decoy flag
+from its dependency array, so a session flipping decoy state without
+`items` changing identity would keep serving the memoized real list. The
+shared hook reads the flag on every render (it is a module boolean — free)
+and includes it in the deps.
+
+`VaultDashboardRoute` is now exported for the same reason `VaultItemsSection`
+already was: this gate needs a direct regression test. 3 new tests assert
+the decoy case receives `[]` (and that no real identifier appears anywhere
+in the props), the real case still receives the full list, and `undefined`
+is still normalised to `[]`. Negative-controlled — and notably, breaking the
+shared hook fails the tests for BOTH surfaces, which is the point of it
+being shared.
+
+### 20.3 `parseSlotPayload` let a raw `atob` DOMException escape as a second error contract
+
+`fromB64` calls `atob`, which throws `InvalidCharacterError` (a
+`DOMException`) for input that is not valid base64 — not this module's
+`MalformedSlotPayloadError`. So "the stored payload is corrupt" left
+`open()` as two different error types depending on HOW it was corrupt.
+
+Impact is narrow but real. `VaultUnlockModal`'s fallback tags ANY
+non-`WrongPasswordError` as `envelopeUnusable`, so its recovery path was
+never broken — which is exactly why this could sit unnoticed. But
+`VaultDuressSetup`'s recovery form surfaces `err.message` directly, so a
+user would have seen a raw *"Failed to execute 'atob' on 'Window'..."*
+string. Reachability is limited to a hand-crafted or externally corrupted
+envelope, since `provision()`/`setDecoySlot()` only ever write `toB64`
+output — this is hardening, in the same category as §19.1's `saltB64`
+guard, not a live bug. Normalized to `MalformedSlotPayloadError`; the new
+test asserts both the type AND that the message does not mention `atob`.
+
+### 20.4 A.3's lifecycle contract omitted `controlPort` that A.3's own body requires
+
+The `start()`/`getStatus()` signature block at the top of A.3 still read
+`Promise<{ socksPort }>` / `{ state, bootstrapPercent, socksPort,
+lastError }`, while the requirements below it — written one round earlier —
+explicitly say to "add it to `start()`'s return value and `getStatus()` as
+`controlPort`". Same self-contradiction pattern as §19.4/§19.5, in the same
+section, one round later. Added `controlPort` to both, and specified what
+the port fields hold when nothing is running (`null`, never a stale value
+from a previous run that a caller could dial into nothing).
+
+### 20.5 A single shared `DataDirectory` makes A.3's own concurrent-instance test impossible
+
+A.3 says each sidecar gets its `DataDirectory` at
+`PathUtils.getUserDataPath()/tor` — one fixed path — while also (again,
+added one round earlier) requiring a test that starts **two sidecars
+concurrently**. Tor takes an exclusive lock on a `lock` file inside its
+`DataDirectory`, and a second process pointed at the same directory refuses
+to start; distinct `ControlPort`/`SocksPort` values do not isolate it,
+because the lock is on the directory. The two requirements cannot both be
+satisfied.
+
+Fixed to allocate a per-instance child directory
+(`.../tor/<instanceId>`), keep that instance's control cookie inside it,
+and clean it up on a successful `stop()`. Kept the owner-only permission
+requirements (POSIX mode plus the Windows DACL) and noted that the
+concurrency test has to run against the real bundled binary, since a mocked
+test cannot exercise a lock the real Tor process takes.
+
+### 20.6 The `vault_sync` item allowlist was wrong for the second consecutive round
+
+§16.3 added `expected_sync_version` after finding the allowlist omitted a
+field the endpoint really accepts. This round: it also omits `last_used_at`,
+which appears in `VaultItemSerializer.fields` and NOT in its
+`read_only_fields`, so it is genuinely writable (model:
+`null=True, blank=True`, hence "or null"). No current producer sends it, so
+nothing is broken today — but a serializer-shaped item would be rejected at
+the IPC boundary for a field the server accepts, and the failure would look
+like a transport bug.
+
+Added, along with the observation that matters more than the field itself:
+**the allowlist has now been wrong twice because it was derived by reading
+the serializer rather than mechanically from `fields` minus
+`read_only_fields`.** The plan now says to derive it that way.
+
+### 20.7 The `require_onion` acceptance criterion contradicted A.5's await rule
+
+A.8 said `require_onion` "fails closed on desktop when bootstrap has not
+completed" — which covers the normal in-flight state that §19.4 established
+must be AWAITED, not failed. As written it would make the first sync after
+every launch fail during ordinary startup: the precise bug A.5's await
+requirement exists to prevent. Narrowed to failure only when bootstrap
+failed, hit the startup deadline, or was never started.
+
+### 20.8 Two stale decoy-display claims found by applying §19.6's own rule
+
+CodeRabbit flagged that `VaultDuressSetup`'s "Know the limits" notice still
+described the pre-§20.2 behaviour ("shows your real vault's item list with
+each entry failing to open"). Correct — and grepping for that claim per
+§19.6's rule found a SECOND copy CodeRabbit did not flag, in the component's
+own module docstring, plus a third in §4's live test guidance in this plan.
+All three now describe the actual behaviour: a decoy session shows an EMPTY
+vault. All three also keep the warning that empty is not the same as
+believable — someone who knows the account is not empty may still find it
+suspicious, and populating a plausible decoy remains §7's product work.
+
+Historical changelog text in §10.3, §11.5, and §11.7 still describes the old
+behaviour and is deliberately LEFT AS-IS: those sections are records of what
+was true in those rounds, and rewriting them would destroy the audit trail
+this document exists to keep. Only live guidance was corrected — the same
+distinction applied in earlier rounds.
+
+Targeted tests only, per [[feedback_targeted_testing]]: the 4 files covering
+the changed paths (`VaultDuressSetup.test.jsx`,
+`VaultDashboardRoute.decoySession.test.jsx` (new),
+`VaultItemsSection.decoySession.test.jsx`, `unlockEnvelopeStore.test.js`) —
+44 tests, plus the wider decoy/envelope suite as a regression sweep. All
+three code fixes were negative-controlled before being trusted, and every
+restoration verified byte-identical against a pre-edit backup. `eslint`
+clean on the changed files; `markdownlint` (MD018/MD022/MD040) clean on all
+touched docs.
+
+## 21. Implementation status — fourteenth review round: Greptile + CodeRabbit (2026-08-28)
+
+Greptile raised 2 more P1s (both on `VaultDuressSetup`, both about password
+classification) and CodeRabbit 6. Three code fixes landed; **one P1 is
+recorded here as an OPEN, verified-unfixable-frontend-only issue** rather
+than papered over, because every remedy available on this side of the wire
+is worse than the leak — see §21.3, which is the most important part of this
+section.
+
+### 21.1 The SETUP form was still a password oracle after §20.1 fixed the recovery form — Greptile P1
+
+§20.1 removed password classification from the "Recover unregistered alarm"
+form. The setup form directly above it, on the same screen, kept it:
+
+| Password typed into "Current vault password" | Result |
+|---|---|
+| the real vault password | success |
+| a garbage password | "Incorrect vault password." |
+| **the DECOY password** | **"setDecoySlot: vaultPassword did not resolve to the real slot."** |
+
+That third row is the whole leak: `unlockEnvelopeStore.setDecoySlot` threw a
+plain `Error` naming the slot when the supplied "vault password" opened slot
+1, and `handleSubmit`'s `else` branch surfaced `err?.message` verbatim. So
+the same coercer-with-an-authenticated-session from §20.1 could confirm a
+password was the decoy — via the sibling form of the one that had just been
+fixed. **Fourth occurrence of "guard one path, miss its sibling"** (§16.1,
+§18.1, §20.2, now this), and the second time on this one screen.
+
+**Fix, at the service layer rather than the component**, so it holds for
+every caller instead of depending on each one remembering not to echo:
+`setDecoySlot` now raises `WrongPasswordError` — the SAME type `decode()`
+raises when no slot matches — **with a byte-identical message**. Type parity
+alone was not enough and the first attempt at this fix proved it: the
+regression test caught that the two messages still differed, which would
+have left any message-echoing caller (exactly what caused this bug) able to
+distinguish them. Both outcomes are now indistinguishable on every channel a
+caller can read. `VaultDuressSetup` additionally stops echoing `err.message`
+at all for non-`WrongPasswordError` faults, so no future service-layer
+string can reach the screen unreviewed.
+
+Semantically this is also the more correct contract: "the value you gave me
+as the real vault password is not the real vault password" is one outcome,
+whether it opens the decoy slot or nothing at all.
+
+### 21.2 `loadEnvelope` let a raw `atob` DOMException escape
+
+Exactly the §20.3 defect one layer up, and it survived that round because
+§20.3 fixed `parseSlotPayload`'s `dek` decode without checking whether the
+same `fromB64` call appeared anywhere else. It does: `loadEnvelope` decodes
+the whole stored blob outside its own try. `hasEnvelope` only checks that a
+value *exists*, so a corrupt stored blob still renders `VaultDuressSetup`'s
+forms, which then surfaced a literal *"Failed to execute 'atob' on
+'Window'"* to the user. Normalized to `MalformedSlotPayloadError`; `null`
+stays reserved for "nothing is stored". Regression test asserts both the
+type and that `atob` does not appear in the message.
+
+### 21.3 The recovery form classified the decoy password over the NETWORK — RESOLVED in §22, which supersedes the "open" status recorded below
+
+Greptile's second P1, which CodeRabbit independently raised. It is correct,
+and it is **not fixed in this round.** The reasoning is recorded in full
+because the obvious remedy is actively dangerous.
+
+**The finding.** §20.1 made the recovery form's rendered output identical
+for real / decoy / wrong passwords. The *request* pattern is not: a
+`POST /duress/signal/register/` is issued only when the password opens the
+decoy slot. Anyone who can watch the browser's network activity therefore
+still learns the classification — the same coercer, one panel over.
+
+**Why "just always send the request" must NOT be done.** Verified against
+`duress_code_service.register_signal_token`: it deactivates **every** active
+`DuressSignal` for the user and creates a new one from the submitted token.
+So registering noise on the non-decoy path would **permanently disarm the
+user's real duress alarm** — replacing the working token with one no decoy
+password can ever produce. That converts an information leak into total
+loss of the alarm, under exactly the coercion conditions the feature exists
+for. Strictly worse.
+
+**Why the other frontend options also fail.**
+- `reportUnlock` is safe for noise (unmatched → 204 no-op) but *triggers the
+  alarm* if sent the real decoy token, so it cannot carry the decoy path.
+- Sending register on one path and report on the other equalises request
+  *count* but not URL, and an observer reading the network panel reads URLs.
+- A `probe: true`-style no-op flag on the register endpoint does not help
+  either: the same observer reads the request body, so the flag is itself
+  the tell.
+
+**What would actually close it** (either, not both, and both are real design
+work rather than a patch):
+1. **Backend:** an endpoint that accepts a fixed-shape token submission and
+   registers it ONLY if it matches the caller's decoy slot — impossible as
+   stated, since the server never sees the envelope — or, more practically,
+   a registration mode that is a no-op for a token that does not match the
+   pending registration, leaving any existing active signal untouched. The
+   client then always sends one byte-identical request.
+2. **Frontend redesign:** gate recovery behind the REAL vault password in
+   addition to the decoy one. A coercer holding only the decoy password then
+   cannot operate the oracle at all; one holding the real password does not
+   need it, having already got the vault. This is cheap but changes the
+   recovery UX and does not make the request pattern uniform — it removes
+   the attacker's *access* to the oracle rather than the oracle itself.
+
+**Interim status:** the leak is bounded to an observer who can read the
+browser's own network traffic on an unlocked, authenticated session, and it
+reveals classification only for a password that observer already possesses
+and submitted. It does not expose vault contents, the real password, or the
+duress token. That is a real weakening of plausible deniability and is NOT
+being claimed as acceptable — it is being recorded as open, with the fix
+deferred to a decision between the two designs above rather than resolved by
+the one change that would have broken the alarm.
+
+### 21.4 C.3's permission change was specified in a form DRF evaluates as AND
+
+"accept *either* `IsAuthenticated` **or** a valid anonymous credential"
+would naturally be written `permission_classes = [IsAuthenticated,
+HasAnonymousCredential]`, which DRF evaluates as an implicit **AND** — every
+listed class must pass. That would demand a JWT *and* a credential on every
+request: the feature would not work at all, and the only requests satisfying
+it would be exactly the mixed-credential ones §19.2 requires be rejected.
+Verified against the installed DRF 3.16.1 (`permissions.py` defines
+`OperationHolderMixin.__or__` and an `OR` class), the plan now specifies
+`[IsAuthenticated | HasAnonymousCredential]`, with a custom composed
+permission class named as an acceptable equivalent.
+
+### 21.5 C.2 point 3's "authorises nothing else" had tests but no gate
+
+C.4 required negative tests proving a credential cannot reach `vault_list`,
+`vault_delete`, and the rest — but C.3 only changed *authentication*, and
+nothing anywhere rejected a credential-authorised request that named another
+operation. The tests would have been asserting a property no code
+implemented. Added the missing route-scope gate (reject unless
+`operation == 'vault_sync'` when the request was authorised by credential
+rather than JWT, JWT range unchanged), and tightened the test requirement to
+assert the vault view is **never reached**, since a 4xx produced after
+dispatch would still have touched the vault.
+
+### 21.6 C.2 point 4's double-spend store was specified as check-then-mark
+
+"Redis set of spent nonces" describes the storage, not the operation, and
+the natural implementation (`EXISTS` then `SET`) is precisely the race the
+bullet exists to prevent — two concurrent redemptions both read "unspent"
+and both dispatch. Now requires a single atomic claim (`SET … NX EX`, whose
+reply *is* the result), the same property for the durable fallback (unique
+constraint, losing insert's `IntegrityError` as the claim failure), and an
+explicit statement of which store is authoritative when the two disagree.
+Test tightened to count **dispatches** rather than check that one response
+was an error.
+
+### 21.7 Anonymous sync's payload still identifies the account
+
+C.3 requires dropping the JWT and `session_id`, but the `vault_sync` body
+itself carries `item_id` — a stable, client-generated, globally unique key
+already sent under JWT-authenticated syncs, so the server can match an
+"anonymous" redemption to the account that previously synced those ids —
+and `expected_sync_version`, whose value comes from the per-user
+`UserSalt.sync_version` row. Stripping the header does nothing about either.
+Added as C.2 point 6, tied to the same "if this cannot be solved cleanly,
+Phase 4 does not ship" test the ownership-scoping problem already carries,
+since it is that problem seen from the payload side. Tests must assert on
+the serialized body.
+
+Targeted tests only, per [[feedback_targeted_testing]]:
+`unlockEnvelopeStore.test.js` and `VaultDuressSetup.test.jsx` (43 tests, 4
+new this round) plus the wider decoy/envelope suites as a regression sweep.
+All three code fixes negative-controlled; restorations verified
+byte-identical. `eslint` clean on changed files; `markdownlint`
+(MD018/MD022/MD040) clean on all touched docs.
+
+## 22. Closing §21.3 — the recovery form's network-side password oracle (2026-08-29)
+
+§21.3 left one finding open: the "Recover unregistered alarm" form issues a
+`POST /duress/signal/register/` **only** when the submitted password opens
+the decoy slot, so an observer of the browser's network panel could still
+classify a password even after §20.1 equalised the rendered output. This
+section closes it, and records why the option that looked most natural is
+not merely expensive but **architecturally forbidden by this project's own
+zero-knowledge invariant**.
+
+### 22.1 The backend option is impossible, not just costly — correcting §21.3's own framing
+
+§21.3 listed as its first remedy "a backend registration mode that is a
+no-op for a token that does not match the pending registration." Re-examined
+against the code rather than restated: **the server cannot implement that,
+by design.** `DuressSignal`'s own model docstring states the ZK split
+explicitly —
+
+> the server matches the hash and fires the existing silent-alarm machinery
+> without ever learning the password, **or which slot exists, or even that a
+> decoy vault was configured until it actually fires.**
+
+The envelope is client-side only; the server holds nothing but SHA-256 of
+whatever token was last registered. "Does this token belong to your decoy
+slot?" is therefore a question the server has no basis to answer, and any
+backend design that *could* answer it would have to be given knowledge of
+the envelope — which is precisely what the invariant in
+`docs/adaptive-password-zk-remediation-plan.md` §1 forbids and what
+`DuressSignal` was built to avoid.
+
+So the choice was never "backend vs. frontend, pick the cheaper." Option 1
+would have required weakening the ZK property this whole feature exists to
+demonstrate, in order to fix a leak that is strictly smaller than that
+property. It is rejected on architectural grounds and should not be
+revisited without a fundamentally different primitive (e.g. a client-side
+proof, which is disproportionate here).
+
+For completeness, the two other frontend equalisations remain rejected for
+the reasons §21.3 records: always registering noise **permanently disarms
+the real alarm** (`register_signal_token` deactivates every active signal),
+and `reportUnlock` cannot carry the decoy path because a matching token
+*fires* the alarm.
+
+### 22.2 What shipped: close ACCESS to the oracle rather than the oracle itself
+
+Recovery now requires the **real vault password** in addition to the decoy
+one. The handler verifies it first — `open()` with that password must
+resolve to `slotIndex === 0` — and returns before issuing any request at all
+if it does not.
+
+The reasoning is a threat-model argument, not an obfuscation:
+
+- A coercer holding **only** a password handed over under duress cannot
+  submit the form at all, so the oracle is unreachable for exactly the
+  adversary the duress feature exists to defend against.
+- A coercer holding the **real** vault password can still observe the
+  request pattern — but they already have the real vault. The decoy is moot
+  at that point; there is no deniability left for the oracle to breach.
+
+This keeps the fix entirely client-side, adds nothing to what the server
+learns, and so preserves the ZK invariant intact.
+
+**The gate is itself non-classifying**, which matters as much as the gate:
+typing the DECOY password into the vault-password field yields the same
+"Incorrect vault password." as typing nonsense. That follows the asymmetry
+§21.1 established for the setup form — revealing "that IS the real vault
+password" is unavoidable (it is the credential that grants access), while
+revealing "that is the DECOY" must never happen. Without this, the gate
+added to close one oracle would have opened another.
+
+### 22.3 What is now true, precisely
+
+| Observer | Can they classify a candidate password as the decoy? |
+|---|---|
+| Watching the SCREEN only | No — one identical outcome for decoy / real / wrong (§20.1) |
+| Watching the NETWORK, without the real vault password | No — cannot get past the gate; no request is issued |
+| Watching the NETWORK, with the real vault password | Yes — but they already hold the real vault |
+
+The `/vault-proxy/`-style claim this supports: **the duress feature's
+deniability now holds against any observer who does not already possess the
+real vault password.** That is the strongest statement the architecture
+permits without either weakening ZK or disarming the alarm, and it is
+materially stronger than §21.3's "holds against an observer of the screen,
+not the network panel."
+
+### 22.4 Cost accepted, and what was deliberately NOT done
+
+Recovery now runs `open()` twice — once for the gate, once for the decoy
+password — so two Argon2id derivations instead of one (§3.7: ~0.2–0.5 s each
+on a mid-range laptop). Accepted: this is a rare settings-screen recovery
+action, not the unlock path, and the gate short-circuits before the second
+derivation whenever the vault password is wrong, which is the attacker case.
+
+**Considered and rejected:** storing a copy of the duress token in the REAL
+slot under a separate key (e.g. `__duress_recovery`), which would let
+recovery need only the real vault password and always issue exactly one
+request — fully uniform. Rejected because it changes the stored payload
+format (existing envelopes would need re-provisioning before recovery
+worked), puts duress material in the slot a coercer opens after extracting
+the real password, and buys uniformity only against an adversary who, per
+§22.2, has already won. Recorded here so the option is not rediscovered as
+novel; it is a real design with real costs, not an oversight.
+
+5 tests in `VaultDuressSetup.test.jsx` cover the change: the gate blocks a
+correct decoy password when the vault password is wrong **and issues no
+registration request** (the property the whole change exists for); the gate
+does not itself classify (decoy-in-gate renders byte-identically to
+garbage-in-gate, with input `value` attributes normalised so the comparison
+tests the component's output rather than what the test typed); and the three
+existing post-gate indistinguishability assertions still hold. Negative-
+controlled: disabling the gate fails exactly the two tests written for it.
+
+Targeted run: 323 tests across 32 files. `eslint` clean (0 errors, 0
+warnings on the changed files). `markdownlint` (MD018/MD022/MD040) clean.
+
+## 23. Fifteenth review round: Greptile + CodeRabbit (2026-08-29)
+
+Two code fixes, five doc corrections, and **one Greptile P1 assessed as not a
+valid finding** — recorded with the reasoning rather than silently skipped,
+since declining a P1 needs more justification than accepting one.
+
+### 23.1 A decoy session could still flush the REAL session's queued sync — the fifth missed sibling
+
+`VaultContext.syncVault` had no decoy gate. That looked safe because every
+path that CREATES a pending change is already gated (§16.1 add/update/delete/
+favorite, §18.1 backups) — but `handleLockVault` does **not** clear
+`pendingChanges`. So:
+
+1. Real session: user edits and deletes items → `pendingChanges` fills up
+2. Auto-lock (or manual lock) — queue survives untouched
+3. Decoy unlock
+4. `syncVault` fires from either `setTimeout(() => syncVault(), 0)` call site
+   → POSTs the real session's queued `items` **and `deleted_items`**, which
+   the sync endpoint applies as real deletions
+
+Fifth occurrence of "guard one path, miss its sibling" (§16.1, §18.1, §20.2,
+§21.1, now this) — and the first where the gap was not a *sibling function*
+but a *different lifecycle*: the write was created legitimately in one
+session and flushed in another. Gating the creators was not sufficient
+because the queue outlives the session that filled it.
+
+**Fix:** a decoy check at the top of `syncVault`, next to the existing
+empty-queue early return. It **returns rather than throws** — both call sites
+are `setTimeout(() => syncVault(), 0)`, where a rejection would surface as an
+unhandled promise rejection and reach no caller — and it leaves
+`pendingChanges` intact on purpose, so the real session flushes the queue on
+its next sync rather than losing the user's work.
+
+### 23.2 `provision()` could silently destroy a configured decoy
+
+`VaultUnlockModal` picks `internalMode` from a `useMemo` snapshot of
+`hasEnvelope()`, and neither `runSetup` nor `runUpgrade` re-checks before
+calling `provision()`. Since `provision()` always encodes with
+`decoyPassword: null`, a second tab (or another device syncing into
+localStorage) that configures a decoy *after* that snapshot leaves the first
+modal ready to overwrite it — **destroying the decoy DEK and its
+`__duress_signal` with no error anywhere.** The alarm simply stops working.
+That is the worst failure mode this feature has, precisely because it is
+silent.
+
+**Fix:** `provision()` now refuses when an envelope already exists, with an
+explicit `replaceExisting` opt-in for the one caller that must overwrite —
+§9.1's corrupt-envelope self-heal, where the stored blob cannot be decoded
+and so has no decoy left to protect. Both existing callers already treat a
+provisioning failure as non-fatal, so the refusal degrades to "the envelope
+upgrade retries next unlock" and breaks no unlock. `runUpgrade` takes the
+flag and only the fallback passes `true`, asserted in both directions.
+
+### 23.3 DECLINED: "Setup registration traffic classifies vault credentials" (Greptile P1)
+
+Greptile's second P1 this round: after `setDecoySlot` succeeds the setup form
+calls `finishRegistration`, which POSTs to `/duress/signal/register/`; a real
+vault password reaches that call while a decoy or invalid password throws
+before it — so network activity distinguishes the real password.
+
+**The observation is factually correct and the conclusion does not follow.**
+The claimed harm is "distinguish the real password from the decoy password,
+defeating the duress feature's plausible-deniability boundary." What is
+actually distinguishable here is *real vs. not-real*, and after §21.1 a decoy
+password and a garbage password produce byte-identical outcomes on this form
+— so the decoy is **not** identifiable, which is the property the boundary
+is made of.
+
+Revealing "that IS the real vault password" is not a leak this feature can or
+should prevent:
+
+- The form's own **visible** outcome already reveals it. Supplying the real
+  password saves a new decoy and renders "Decoy password saved."; anything
+  else renders an error. The network request carries no information the
+  screen has not already given, so equalising it closes nothing.
+- Making the visible outcome uniform is not an option either — a settings
+  form that cannot tell you whether it saved is broken.
+- More fundamentally, *every* authenticated action reveals whether the
+  supplied credential was the real one; that is what a credential is. The
+  unlock modal is the canonical example and must behave this way.
+
+The asymmetry §21.1 established is the governing rule and it is deliberate:
+**revealing "this is the real password" is unavoidable (it grants access);
+revealing "this is the decoy" must never happen.** This finding asks for the
+first, which cannot be delivered and would not help.
+
+Declined as not-a-defect. If it is re-raised, the question to ask is
+"does this let an attacker identify the DECOY?" — here, no.
+
+### 23.4 `folder_id` was typed as a string in the sync allowlist; it is an integer
+
+Verified rather than assumed: `VaultFolder` (`vault/models/folder_models.py`)
+declares no explicit primary key, so Django gives it an implicit integer
+`AutoField`, and `_UserScopedFolderPrimaryKeyRelatedField` is a
+`PrimaryKeyRelatedField`, which serializes that pk directly. The allowlist's
+"string or null" would therefore reject every folder-bearing item at the IPC
+boundary. Corrected to integer-or-null, with a round-trip test required for
+an item that HAS a folder — an item without one passes under either typing,
+which is exactly why this would have survived a casual test.
+
+**Third consecutive round with a wrong item-schema entry** (§16.3
+`expected_sync_version`, §21.7 `last_used_at`, now this). §21.7 already
+prescribed deriving the allowlist mechanically from `fields` minus
+`read_only_fields`; this adds that the *types* must come from the field
+classes too, not from what the JSON happens to look like in a sample.
+
+### 23.5 A.3's `before-quit` handler would have looped forever
+
+`app.quit()` called after `event.preventDefault()` **re-emits** `before-quit`.
+A handler that unconditionally prevents therefore never terminates: it
+prevents, cleans up, calls `app.quit()`, gets re-entered, prevents again.
+Specified the one-shot flag (`quitting`) that breaks the cycle, plus the test
+that actually catches a regression here — first event prevented, `stop()`
+called exactly once, second event not prevented, app quits.
+
+### 23.6 A.3's start/stop idempotency did not cover start-versus-stop
+
+The plan required `start()` and `stop()` to be individually idempotent, which
+answers "two starts" and "two stops" but says nothing about a `stop()`
+arriving while a `start()` is still bootstrapping — which a
+`prefer_onion → off` toggle produces directly. The in-flight bootstrap can
+then settle *after* the stop and publish a ready status for a sidecar that no
+longer exists, so `isOnionSyncAvailable()` reports available and
+`proxyVaultOperation` dials a dead port. The reverse ordering races a new
+start against a dying process for the same `DataDirectory` lock. Now requires
+a transition lock or generation stamp, with a rapid `non-off → off → non-off`
+test.
+
+### 23.7 Double-spend: atomicity was specified, post-claim failure was not
+
+§21.6 required an atomic claim, which closes the concurrency race but leaves
+the question it exposes: what happens between the claim and a *successful*
+dispatch? Claim-then-dispatch burns a valid token on any timeout or 5xx;
+dispatch-then-claim reopens the race. The plan now requires picking one
+explicitly — a bounded RESERVE → FINALIZE (with the un-finalized window
+stated, since it is a replay window) or consume-on-attempt with a specified
+client retry — and testing downstream failure as its own case.
+
+### 23.8 PR C's credential plumbing was specified for the web transport only
+
+C.3 puts credential selection in `darkProtocolService.proxyVaultOperation`
+and says `onionSyncService` "should not need to change at all." True for web
+— and wrong for the platforms PR C exists to serve, because A.5's
+`getVaultProxyTransport()` deliberately routes desktop and mobile *around*
+that service to their own native shims. As written, PR C would ship anonymous
+on web and silently JWT-authenticated on desktop and mobile: worse than not
+shipping, since the UI would claim anonymity the transport does not provide.
+Now specifies one transport-neutral envelope (`{ operation, payload,
+credential }`, exactly one of `authToken`/`credential`, never both — the
+client-side mirror of the server's exactly-one rule), with wire-level tests
+on both native paths.
+
+Also fixed a precedence contradiction between the two boundary checks: C.4
+requires a mixed-credential request over clearnet to be refused *identically*
+to the other clearnet shapes, but the mixed-credential check sits in
+`initial()` while the ingress check runs later inside
+`proxy_vault_operation`, so the mixed case would have returned a different
+error and told a clearnet caller the server had noticed two credentials.
+Resolved by ordering: ingress check first, also in `initial()`, ahead of the
+exactly-one-auth-mode check — keeping `proxy_vault_operation`'s existing
+check as defense in depth.
+
+Targeted tests only, per [[feedback_targeted_testing]]: the 12 files covering
+the changed paths — 150 tests, all passing. Both code fixes negative-
+controlled (disabling each fails exactly the test written for it), with
+restorations verified byte-identical. `eslint` clean; `markdownlint`
+(MD018/MD022/MD040) clean on all touched docs.
+
+## 24. Sixteenth review round: Greptile + CodeRabbit (2026-08-29)
+
+Four code fixes and four doc corrections. **The headline is that §23.3's
+decline was wrong** — not in its reasoning about the real session, but
+because it answered the wrong question about the decoy one.
+
+### 24.1 §23.3 CORRECTED: the duress settings screen contradicts itself in a decoy session
+
+Greptile re-raised "setup outcomes reveal the real vault password" after
+§23.3 declined it. Re-examined from a different angle, and the decline was
+wrong.
+
+§23.3 asked *"can the form distinguish the decoy password from garbage?"* —
+no, and that remains true (§21.1 made them byte-identical). It then
+concluded the residual real-vs-not-real signal is inherent to any credential,
+which is also true **in a real session**.
+
+The question it never asked is *"does the app contradict what the coercer has
+already observed?"* In a **decoy session** it does, flatly:
+
+1. Coercer watches password D unlock the vault.
+2. Coercer opens `/security/vault-duress` — reachable, since the route gates
+   on `isAuthenticated` and a decoy unlock is authenticated, and
+   `envelopeReady` is true because an envelope exists.
+3. Coercer types D. The app answers **"Incorrect vault password."**
+
+A password that demonstrably *just worked* being rejected is a direct
+contradiction with no innocent explanation. It outs the decoy far more
+decisively than the empty item list, which at least has one. This is a
+strictly sharper leak than the network-shape concern the finding was filed
+under, and §23.3 missed it by scoping the analysis to one session type.
+
+**Fix:** the screen renders a neutral panel with **no forms and no password
+fields** whenever `isDecoySession()` is true. With nothing to submit there is
+no outcome to contradict — and, as a side effect, no registration request
+either, which answers the original network-shape complaint in the only
+coherent way available (a decoy session makes no request because it makes no
+submission). Deliberately does **not** reuse the existing "you haven't
+created a vault password yet" copy: that is its own contradiction for someone
+who just unlocked with one.
+
+The real-session behaviour is unchanged and still correct: real saves, decoy
+and garbage produce one identical error.
+
+**Lesson, and it generalises past this feature:** when judging a duress
+finding, "can they distinguish X from Y?" is only half the test. The other
+half is "does any surface contradict what this session has already shown
+them?" A decoy session is a *claim* the whole app has to keep consistent, and
+every screen reachable from it is part of that claim.
+
+### 24.2 `pendingChanges` outlived the identity that created it
+
+§23.1 gated `syncVault` during decoy sessions and deliberately preserved the
+queue so the real session could flush it. That is only safe if the queue
+cannot outlive the *account* that built it — and it could. The auth effect
+clears `items` and `decryptedItems` on an identity change but never touched
+`pendingChanges`, so account A's queued writes and deletions survived a
+switch to account B and would be flushed by B's next sync: A's ciphertext
+POSTed into B's vault, A's `item_id`s deleted from it.
+
+Fixed by clearing the queue in that same effect, alongside the caches it
+already clears. The decoy case is unaffected because a decoy unlock is the
+*same* identity, so the effect does not re-run and §23.1's preservation still
+holds.
+
+### 24.3 The self-heal's `replaceExisting` was a boolean, and the window is two key derivations wide
+
+§23.2's `replaceExisting: true` authorised replacing *whatever is stored now*.
+But `runUpgrade` awaits `unlockWithVaultPassword` **and**
+`exportWrappedDekRaw` — two PBKDF2-310k derivations — between the failed
+`open()` and the `provision()`. Another tab configuring a decoy inside that
+window would have been destroyed by the overwrite: exactly the failure
+§23.2 was written to prevent, reintroduced through its own escape hatch.
+
+Fixed by making the parameter a **compare-and-swap token** rather than a
+boolean: `replaceExisting` is now the exact raw blob the caller saw (from a
+new `readRawEnvelope()`, which reads storage without decoding and so never
+throws on the corrupt value that put us here). `provision` replaces only if
+the stored value still matches. On mismatch it refuses, `runUpgrade` swallows
+that as a non-fatal upgrade failure, and the user still unlocks via the
+legacy record — the correct outcome, since the envelope is now someone
+else's newer, valid one. The unsafe form is not merely discouraged; it no
+longer exists.
+
+### 24.4 §2's deniability claim covered a mechanism this PR never touched
+
+§22.3 wrote that deniability "holds against any observer who does not already
+possess the real vault password." True for the `VaultUnlockModal` envelope
+path built here — and the origin plan's §2 heading also covers
+`StegoVaultDashboard`, the separate stego-image decoy mechanism, which
+**openly renders the slot it opened** (`StegoVaultDashboard.jsx:618`:
+"Unlocked slot index:" plus the decrypted payload). Anyone with only the
+decoy password distinguishes the session there immediately.
+
+Narrowed the claim in the origin plan to the envelope path, and recorded the
+stego behaviour explicitly rather than leaving a reader to carry the
+guarantee across. Deliberately **not** changed: it predates this PR, sits
+outside its diff, and is arguably defensible for a screen whose stated
+purpose is managing one's own decoy images. Flagged, not fixed.
+
+### 24.5 Four doc corrections
+
+- **`start()`'s return shape was inconsistent with its own idempotent path.**
+  Declared as `{ socksPort, controlPort }` while the idempotent call was
+  documented as returning full status. Unified on one `Status` shape for
+  every path, so an idempotent start and a first start are indistinguishable
+  to a caller.
+- **A Tor process dying AFTER ready never invalidated readiness.** The
+  failure rule covered only death before bootstrap completes. A later crash
+  or OOM-kill left the cached status reporting ready forever, so
+  `isOnionSyncAvailable()` answered true and `proxyVaultOperation` dialled a
+  dead listener. Now requires a persistent exit handler that clears the
+  ports, sets `lastError`, and leaves the ready state, plus a
+  crash-after-ready test.
+- **The first capability fetch was unbounded.** A.3's startup deadline covers
+  the sidecar, not `onionTransport.js`'s own clearnet capabilities GET, so an
+  endpoint that accepts and never answers would hang the first `vault_sync`
+  with no sidecar failure to trip anything. Now requires its own timeout
+  mapped onto the existing transport-unavailable outcome.
+- **A test asserted absence via the wrong signal.**
+  `exportSessionDekRaw()` rejects both when no session exists *and* when a
+  session key exists but is non-extractable — and every install path creates
+  non-extractable keys — so the rejection alone would have passed even if
+  `exportWrappedDekRaw` had installed a session. Added the direct
+  `hasSessionKey()` assertion.
+
+Targeted tests only, per [[feedback_targeted_testing]]: 332 tests across 32
+files, all passing. All four code fixes negative-controlled, restorations
+verified byte-identical. `eslint` 0 errors; `markdownlint` clean.
+
+## 25. Closing §24.4 — the stego dashboard's slot disclosure (2026-08-30)
+
+§24.4 narrowed the deniability claim to exclude `StegoVaultDashboard` and
+flagged its slot disclosure as out-of-diff. Fixed now on request. The
+verification is worth recording, because the disclosure sat directly against
+a comment already explaining why it must not exist.
+
+### 25.1 What was actually wrong
+
+`onExtract` strips `__duress_signal` from the payload before rendering it,
+and says why in its own comment:
+
+> Never render the raw duress token ... a coercer watching that screen during
+> a "successful" decoy unlock must not see anything that reveals an alarm
+> fired.
+
+The very next statement was `setExtractResult({ slotIndex, json: displayJson })`,
+and the panel rendered **"Unlocked slot index: 1"** immediately above the
+payload. So the strip hid the alarm *token* while the line above it announced
+the alarm *fact* in plain words. Against the observer that comment was
+written for, the protection was self-defeating — the same
+"guard one surface, miss the one beside it" pattern §19.6 names, this time
+with the two surfaces four lines apart.
+
+### 25.2 Verification before changing anything
+
+Three things were checked, because the fix is only surgical if they hold:
+
+1. **`extractResult.slotIndex` had exactly one consumer** — the display line.
+   Nothing else read it.
+2. **The alarm does not depend on that state.**
+   `reportUnlockForSlot(getAccessToken(), slotIndex, json)` reads the LOCAL
+   `slotIndex` destructured from `extractVault()`, not `extractResult`. So
+   removing it from render state cannot weaken duress reporting — the thing
+   that would have made this a bad trade.
+3. **ZK is unaffected.** `slotIndex` never crosses the wire. The only
+   outbound call is `reportUnlock`'s fixed-length 44-char token-or-noise, and
+   the server is designed never to learn which slot exists (`DuressSignal`'s
+   own docstring). This is a client-side display change with no server
+   counterpart, so no ZK surface moves.
+
+### 25.3 The fix
+
+`slotIndex` is no longer carried into `extractResult` at all — kept out of
+state rather than merely unrendered, so no future render can reintroduce it —
+and the display line is replaced by a comment recording why nothing goes
+there.
+
+Nothing legitimate is lost: the user knows which password they typed, and the
+payload shown is either their real vault or the decoy they authored
+themselves. A decoy extraction and a real one now produce the same panel
+containing that slot's own contents, which is exactly what a believable decoy
+should look like. **Unlike the envelope path (§20.2), the decoy here has
+genuine user-authored contents, so this screen reaches real
+indistinguishability rather than the empty-vault floor.**
+
+### 25.4 The test caught a false positive in itself, which is worth noting
+
+The first assertion was page-wide: `expect(container.textContent).not.toMatch(/Unlocked slot/i)`.
+It failed against the FIXED code, because the section's own intro copy reads
+"password-**unlocked slot**s with plausible deniability" — innocent
+descriptive text, matched case-insensitively. The source was already correct.
+
+Rescoped to the result panel (`container.querySelector('pre').parentElement`),
+which is where a disclosure would actually appear, and additionally asserts
+the panel contains no bare `0`/`1`. Recorded because the failure looked at
+first like a second undiscovered leak, and treating it as one would have
+produced a pointless change to correct code — the inverse of the §13
+misattribution lesson: verify not just whether a finding is real, but whether
+a failing assertion is testing what it claims to.
+
+Three tests: a decoy extraction names no slot; the alarm still receives the
+true `slotIndex` (proving this is display-only); and real vs. decoy panels
+are byte-identical once each slot's own payload is normalised away.
+Negative-controlled — restoring the disclosure fails two of the three.
+
+335 tests across 33 files; `eslint` clean.
+
+## 26. Sixteenth review round (CodeRabbit) — the CAS check ran on the wrong side of the await
+
+### 26.1 The compare-and-swap was correct and still lost the decoy
+
+§24.3 replaced `replaceExisting: true` with a compare-and-swap token, closing
+the window between `runUpgrade`'s snapshot and its `provision()` call. The
+comparison itself, though, sat *before* `await encode(...)` — and `encode`
+performs two Argon2 derivations of its own. So the guard covered the caller's
+window and left `provision`'s own, seconds wide, wide open: a tab completing
+`setDecoySlot()` inside it is overwritten by a blob the pre-encode check had
+already judged safe, since `provision` always encodes with
+`decoyPassword: null`. That destroys the decoy DEK and its `__duress_signal`
+with no error anywhere — the same failure §23.2 and §24.3 each exist to
+prevent, surviving both fixes because both looked only at the caller's side of
+the await.
+
+Verified before changing anything: `readRawEnvelope` reads storage without
+decoding (so it cannot throw on the corrupt blob that reaches this path), and
+both callers already treat a provisioning failure as non-fatal, so an extra
+refusal degrades to "the upgrade is retried next unlock" rather than blocking
+an unlock.
+
+### 26.2 The fix
+
+Repeat the identical comparison immediately before `saveEnvelope`. It is
+written as `hasEnvelope(userId) && readRawEnvelope(userId) !== replaceExisting`,
+so it also covers the `replaceExisting === undefined` case the pre-encode
+branch cannot: an envelope that *appeared* during the await now fails the
+comparison instead of being silently replaced.
+
+Tested by suspending inside the mocked KDF — the fast SHA-256 stand-in leaves
+no real timing window, so the decoy write is injected from a one-shot
+`argon2.hash` implementation that restores itself before `setDecoySlot` derives
+its own keys. Negative-controlled: removing the re-check fails the new test
+while the existing pre-encode test still passes, which is precisely the gap.
+
+### 26.3 Three smaller items from the same round
+
+- **A regex of literal backspaces.** §25.4's added assertion was written as
+  `/<U+0008>[01]<U+0008>/` — real backspace characters, not `\b` word
+  boundaries — so it matched backspace-delimited digits and never the standalone
+  slot indicator it claimed to check. The assertion had been passing for the
+  wrong reason. Replaced with `/\b[01]\b/`; it still passes against the fixed
+  source and still fails when the disclosure is restored.
+- **Hardcoded token lengths.** `duressSignalService` exports
+  `SIGNAL_TOKEN_LENGTH` specifically so callers do not write `44`; three
+  assertions in `unlockEnvelopeStore.test.js` did anyway, and would have failed
+  for the wrong reason had `SIGNAL_BYTES` changed. Derived from the constant.
+- **A duplicated record load.** `unlockWithVaultPassword` and
+  `exportWrappedDekRaw` (§3.4) carried byte-identical copies of the storage
+  read, `JSON.parse`, and `WRAPPED_VERSION` check. Extracted as
+  `loadWrappedRecord(userId, fnName)`, the same de-duplication `unwrapDek`
+  already applied to the unwrap step. Error messages and their order are
+  unchanged, and `unlockWithVaultPassword` still reserves its session
+  generation *after* the validation and *before* the first await, which is the
+  ordering its own comment documents.
+
+725 tests across 59 files, targeted to the services, security, auth, context
+and route suites this round touches.
+
+## 27. Seventeenth review round (CodeRabbit) — the same await window, in the two places §26 did not look
+
+### 27.1 `setDecoySlot` had the identical unguarded window
+
+§26 closed `provision`'s check-then-write-across-an-await gap and stopped
+there. `setDecoySlot` sits beside it, reads the envelope at its top, then runs
+`decode()` **and** `encode()` — three Argon2 derivations — before writing
+unconditionally. Two losses are reachable inside that window, both silent:
+
+- **Two `setDecoySlot` calls race.** The loser's slot 1 is overwritten, but its
+  caller has already handed the returned `duressToken` to
+  `duressSignalService`. That token can never fire again: the alarm is dead,
+  with no error anywhere. This is precisely the failure the `provision` guard
+  was written for, reachable through the function the guard did not cover.
+- **§9.1's self-heal `provision` completes inside the window** with a new real
+  DEK. `realPayloadBytes` was decoded from the stale blob, so the write carries
+  the superseded real DEK forward and strands everything encrypted under the
+  new one.
+
+Fixed with the same compare-and-swap `provision` uses: a `readRawEnvelope()`
+snapshot taken from the same read as `existing`, re-compared immediately before
+`saveEnvelope`. Refusing is the safe direction here — `duressToken` is returned
+only on success, so nothing has been registered yet, and the caller sees "the
+decoy setup failed, try again" rather than a dead alarm.
+
+This does not create a duress oracle: the refusal is reachable only *after*
+`decode()` succeeded on slot 0, i.e. only for the correct real vault password.
+A decoy or wrong password still throws `WrongPasswordError` earlier, with the
+message §21.1 equalised.
+
+### 27.2 The self-heal's CAS token named the wrong blob
+
+§24.3 established that `replaceExisting` must be the blob the caller *saw*.
+`VaultUnlockModal` read it in the `catch`, i.e. **after** `open()` had already
+awaited a decode. A tab replacing the envelope during that decode wins the
+read, so the self-heal would authorise replacing a NEWER, VALID envelope —
+destroying exactly the decoy DEK and duress token the compare-and-swap exists
+to protect — instead of the broken blob the attempt actually failed on.
+
+Moved the read to before `runEnvelopeUnlock()` is invoked. The token now names
+the blob this attempt set out to open; if the stored value moved on since,
+`provision` refuses, `runUpgrade` swallows that as a non-fatal upgrade failure,
+and the user still unlocks via the legacy record. A snapshot taken fractionally
+before `open()`'s own load can at worst be one revision stale, which fails
+safe in the same direction.
+
+### 27.3 The recovery form's error text was still a classifier
+
+§22 removed the recovery form's *network-side* oracle and §20.1 its rendered
+one, and the catch block's own comment claimed its message "says nothing about
+which slot anything opened." It echoed `err?.message`. `registerSignalToken` is
+called on exactly one path — the one where the submitted password opened slot 1
+— so its failure text ("Failed to register duress signal token") was reachable
+**only** for the decoy password, while a real or wrong password took the
+success path. The error channel was doing the classification the display and
+network channels had each been fixed not to do.
+
+Now a fixed string for every fault, with the real error going to
+`console.warn` for diagnosis. This is the third channel of the same finding
+(display § 20.1, network § 22, error text § 27.3) — the recurring lesson is
+that equalising an outcome means equalising it on *every* surface a caller can
+read, and that a comment asserting a property is not evidence the code has it.
+
+### 27.4 Three plan-doc corrections from the same round
+
+- **"Leaves ready" read two ways.** §26's Tor-lifecycle wording meant "departs
+  from ready"; read as "remains ready" it contradicted the rule 20 lines above
+  and would license an availability gate accepting cleared ports. Rewritten to
+  order the transition explicitly: leave ready FIRST, then clear
+  `socksPort`/`controlPort` and set `lastError`.
+- **The transport's third argument was already taken.** The plan proposed
+  `proxyVaultOperation(operation, payload, authToken)` for the native
+  transports, but the shipped web function is
+  `proxyVaultOperation(operation, payload, sessionId)`, which serializes
+  argument three as `session_id` — and A.5's `getVaultProxyTransport()` puts
+  both behind one call site. A native call would have landed its bearer token
+  in a user-scoped `GarlicSession` handle. Replaced with one options object,
+  `{ authToken, credential, sessionId }`, carrying the same "exactly one
+  authentication mode" rule at the client boundary.
+- **The availability check leaked what the redemption no longer carries.**
+  `syncVault()` calls `isOnionSyncAvailable()`, which calls the
+  JWT-authenticated `getCapabilities()`. Under PR C every anonymous redemption
+  would be immediately preceded by an authenticated clearnet request from the
+  same IP naming the same account — the correlation by timing that removing the
+  JWT from the body was supposed to prevent. The cache-only rule §26 gave
+  desktop's main-process lookup now extends to the renderer check for every
+  transport; Phases 1-3 are unchanged.
+
+728 tests across 59 files, targeted to the services, security, auth, context
+and route suites; all three code fixes negative-controlled (reverting any one
+fails its own new test and nothing else). `eslint` clean on the changed files.
+
+## 28. Eighteenth review round (CodeRabbit) — one export, and three places the plan contradicted reality
+
+### 28.1 `readRawEnvelope` was missing from the default export
+
+The default export aggregate listed every operation except `readRawEnvelope`.
+Nothing was broken — all three consumers use `import * as` — but the omission
+is not cosmetic given what that function now is: after §24.3, §26 and §27.1 it
+is half of the compare-and-swap contract, since `provision({ replaceExisting })`
+and `setDecoySlot` both require a snapshot taken with it. A consumer holding
+only the default export could call the guarded replace path but never obtain
+the token it demands. Added, with a test asserting the aggregate matches the
+named exports so the next operation added cannot silently miss it.
+
+### 28.2 The IPC allowlist would reject every queued `add`
+
+A.4's item allowlist is derived from `VaultItemSerializer`'s writable fields
+and refuses any other key, correctly excluding the server-assigned `id`,
+`created_at` and `updated_at`. But `VaultContext.addItem` builds its
+pending-change item from the POST response and keeps all three
+(`VaultContext.jsx:712-721`), and `syncVault` spreads that item into
+`syncData.items[]` deleting only `type` and `data` (`:534-547`). So the shipped
+producer sends exactly the three keys the boundary refuses — the native
+transport would fail for the one operation it exists to carry, and only on
+desktop/mobile.
+
+Recorded as a producer-side normalisation requirement, not a softened
+allowlist: those fields are `read_only_fields` server-side, so the clearnet
+path already ignores them and stripping them loses nothing, whereas admitting
+them at the boundary would defeat the point of deriving the schema from the
+writable set. The required test is a round trip from `addItem` through
+`syncVault`, because a test built from a hand-written item literal would pass
+while the real producer's shape fails — it is the producer that is wrong here,
+not the schema.
+
+No code change in this PR: Phase 2 is unimplemented, and rewriting the shipped
+clearnet sync path for a transport that does not exist yet is churn this PR
+should not carry. The requirement is written where the implementer will be
+standing.
+
+### 28.3 A process-group kill cannot satisfy a parent-SIGKILL criterion
+
+A.8's crash/SIGKILL criterion offered "a process-group kill (or
+`prctl(PR_SET_PDEATHSIG)` on Linux / `kqueue` `NOTE_EXIT` watch on macOS)".
+The `or` makes the first option sufficient on its own, and it is not:
+`killpg()` only signals a group when some LIVE process calls it, and a
+SIGKILLed parent calls nothing — which is the entire scenario. The same
+objection sinks a `kqueue` watch owned by the parent: the watcher must be the
+child or an independent process, never the process whose death is the event.
+
+Rewritten to name the mechanism per platform (Windows Job Object with
+`KILL_ON_JOB_CLOSE`; child-side `prctl(PR_SET_PDEATHSIG, SIGKILL)` on Linux;
+an independent supervisor or a child-side `kqueue` watch on the parent's pid
+on macOS), to demote process-group kill to a complement for the paths where JS
+does run, and to require the test to SIGKILL the parent and assert `tor` no
+longer holds the `DataDirectory` lock — a surviving lock being what blocks the
+next launch.
+
+### 28.4 "Answer from the same cache" named no path between the two processes
+
+§27.4's fix said the renderer's `isOnionSyncAvailable()` must answer from the
+issuance-time cached onion address rather than fetching capabilities. That
+cache lives in the desktop MAIN process; the availability check runs in the
+RENDERER. The rule was therefore not implementable as written, and the obvious
+implementation — ship the address across IPC — is precisely what A.4 forbids,
+since `TOR_PROXY` has no destination field so a compromised renderer cannot
+choose where the main process POSTs.
+
+Defined as a boolean readiness answer instead: the issuing process caches the
+validated address and never sends it anywhere; a status-shaped channel answers
+"is a validated address cached AND is the transport ready?"; a miss is
+unavailable with no fallback fetch; web has no second process and caches in
+page memory. The test asserts the IPC reply contains no `.onion` string, not
+merely that the outcome was right — the leak this design avoids is in the
+reply's contents, so that is what has to be checked.
+
+**The pattern across 28.2 and 28.4 is worth naming:** both are places where a
+rule was correct in isolation and impossible against the thing it had to meet
+— a schema versus its actual producer, a cache versus the process boundary
+between its writer and its reader. A requirement that never states which
+component satisfies it reads as complete and cannot be implemented.
+
+729 tests across 59 files; `eslint` clean on the changed files. The export fix
+is negative-controlled: removing the entry fails its test alone.
+
+## 29. Nineteenth review round — a real queue race, and a P1 that the decoy gate already answers
+
+### 29.1 The sync queue survived an identity change through the REF, not the state
+
+§23.1 added `setPendingChanges([])` to the identity effect so account A's queued
+writes and deletions could not be flushed by account B. That clears the STATE.
+`syncVault` reads `pendingChangesRef.current` — deliberately, because it runs
+from `setTimeout(() => syncVault(), 0)` where a state read would be stale — and
+that ref is refreshed by a separate effect on a LATER commit. So the fix cleared
+the copy nothing reads and left the copy everything reads:
+
+```
+identity switches A → B
+  ├─ setPendingChanges([])        state cleared, re-render scheduled
+  ├─ [timer fires here]           pendingChangesRef.current is STILL A's queue
+  └─ effect: pendingChangesRef.current = []
+```
+
+A timer landing in that gap POSTs A's ciphertext, and A's `deleted_items` ids
+(which the sync endpoint applies as real deletions), into B's vault under B's
+credentials — precisely the outcome §23.1 was written to prevent, surviving
+through the reference the guard never touched. This is the §26/§27 lesson in a
+third form: **a guard is only as good as the copy of the state it clears**, the
+same way a check is only as good as the side of the `await` it sits on.
+
+Two changes close it:
+
+- `syncVault` refuses any queue whose owner is not the identity now
+  authenticated. Both sides are read from REFS, never from the callback's own
+  scope: the closure predates the switch, so nothing lexically in it can be
+  trusted for this comparison. `activeIdentityRef` is written during RENDER
+  rather than in an effect, because an effect's write lands one commit late —
+  which is the very gap being closed. The stale queue is dropped rather than
+  kept: it can never be flushed correctly by a session that does not own it.
+- The identity effect drops the ref alongside the state, matching how every
+  other per-account cache on those lines is handled.
+
+**Reported honestly: the owner guard is the load-bearing fix and the ref drop
+is not independently covered.** The new logout test fails when the guard is
+removed and passes when only the ref drop is removed — because through the
+public API React's effects always flush before a test can call `syncVault`, so
+the gap the ref drop closes is not reachable from a test, and the guard closes
+it anyway. The ref drop stays as the same clearing discipline its neighbours
+follow, not as a second load-bearing mechanism.
+
+The logout case is what makes the guard testable, and it is a real gap in its
+own right: the identity effect's `!isAuthenticated` branch returns early and
+clears neither the queue state nor its ref, so between logout and the next
+login the queue sits armed. Only the owner comparison stops it.
+
+### 29.2 Greptile P1 "setup registration classifies the real password" — declined, with the work shown
+
+The claim: only the real vault password reaches `finishRegistration`, which
+produces both a success message and an authenticated `registerSignalToken`
+request, while decoy and invalid passwords produce an identical failure and no
+request — so an observer can distinguish the real password, defeating
+deniability.
+
+Every factual part is accurate. The conclusion does not follow, by the two
+tests §24.1 established after a P1 was wrongly declined on the first alone:
+
+- **(a) Does it identify the DECOY?** No. Decoy and invalid are byte-identical
+  in output AND in traffic (§21.1, and Greptile's own probe reports "setup
+  decoy and invalid output/calls match"). What is distinguishable is the REAL
+  password — which §22 already recorded as unavoidable and harmless: it is the
+  credential that grants access, and anyone who can demonstrate it already
+  holds the vault.
+- **(b) Does any surface CONTRADICT what this session already showed the
+  coercer?** No, because the premise "someone who can operate this
+  authenticated screen" is not satisfiable by a coercer. §23.1 blocks the
+  ENTIRE screen — setup form included — in a decoy session, rendering a
+  neutral panel with no inputs. There is no submission to make and no
+  registration request to observe. That gate is enforced by tests asserting
+  no form, no input, no "incorrect", and no `registerSignalToken` /
+  `setDecoySlot` / `open` call.
+
+That leaves exactly one operator: someone in a REAL session, who therefore
+supplied the real password already, or who found an unattended unlocked vault
+and can read every stored secret directly. In neither case does the duress
+feature have anything left to protect.
+
+**No code change.** The mitigation the finding asks for already exists one
+layer up, and making setup "independent of the password class" would mean a
+setup form that cannot report a wrong current password — breaking the feature
+for the legitimate user to defend against an operator who cannot reach it.
+
+### 29.3 The cache-handoff comment was already addressed
+
+CodeRabbit's re-posted cache-handoff finding predates commit `10711eb`; §28.4
+defines the handoff (boolean readiness answer, address never crossing IPC,
+miss fails closed). No change.
+
+732 tests across 60 files. The queue-identity fix is negative-controlled on
+its owner guard; `eslint` on `VaultContext.jsx` reports the same six
+pre-existing warnings as before the change, none new.
+
+## 30. Twentieth review round — reversing §29.2, because the gate had a third state
+
+### 30.1 Greptile re-filed the setup-form oracle, and this time it is valid
+
+§29.2 declined "setup registration classifies the real vault password" on two
+grounds: decoy and invalid are indistinguishable from each other (§21.1), and
+the premise "someone who can operate this authenticated screen" is unsatisfiable
+by a coercer because §23.1 blocks the screen in a decoy session.
+
+The first ground still holds. **The second was wrong, and the error was in how
+I enumerated the states.** I checked two — decoy session (blocked) and real
+session (operator already holds the password) — and never asked what happens
+when there is NO session:
+
+- `isDecoySession()` returns `sessionIsDecoy`, which answers "is the CURRENT
+  session a decoy". While the vault is **locked** there is no session, so it
+  answers `false` and the gate does not fire.
+- `handleLockVault` calls `clearSessionKey()`, which sets `sessionIsDecoy = false`
+  (`sessionVaultCrypto.js:548`). So **locking a decoy session turns the §23.1
+  gate off**, and the screen reopens to the coercer who was just holding it.
+- `VaultDuressSetup` had no unlocked-session gate at all. Its render conditions
+  were `isAuthenticated` → `isDecoySession()` → `envelopeReady`, and
+  `envelopeReady` is a localStorage read. None of them require the operator to
+  have proven anything.
+
+So the attack needs no decoy session and no real one. With the vault locked and
+the account still signed in, a coercer holding the password D they were handed
+opens this screen, types D into the current-vault-password field, and
+`setDecoySlot` decodes it to slot 1 and raises `WrongPasswordError` — the app
+answers **"Incorrect vault password."** for a password that visibly unlocks this
+very vault. That is precisely the contradiction §23.1 was written to prevent,
+reached by visiting the screen BEFORE unlocking rather than after.
+
+§29.2's own conclusion ("that leaves exactly one operator: someone in a REAL
+session") was therefore false. The reasoning method was right and the state
+enumeration was incomplete, which is the more dangerous of the two failures
+because the conclusion still reads as rigorous.
+
+### 30.2 The fix
+
+Require a live vault session to render either form:
+
+```js
+if (!sessionLive) { /* neutral "unlock your vault first" panel */ }
+```
+
+placed after the decoy gate and after `envelopeReady`, so a user who has no
+vault password yet still gets the guidance that tells them how to make one.
+
+This closes the oracle on exactly the principle §22 used for the recovery form:
+only the real vault password installs a non-decoy session key, so an operator
+who passes this gate has **already demonstrated the real credential** and learns
+nothing from the verification the form performs. Everyone else — locked vault,
+decoy session, decoy session that was then locked — gets no form, no submission,
+and no request. Fails closed.
+
+`sessionLive` is state synced from the `vault:updated` event VaultContext
+already dispatches, rather than a bare read on every render, so unlocking while
+this screen is mounted reveals the forms instead of leaving a stale panel.
+
+What is deliberately NOT done, because both alternatives are worse: equalising
+the setup form's OUTCOME (a wrong current password reported as "saved") would
+leave a user who typoed believing they have duress protection they do not have
+— a false sense of safety in the one situation that matters. And equalising its
+TRAFFIC by registering on failure is the §22 finding in reverse:
+`register_signal_token` deactivates every active `DuressSignal`, so a noise
+registration permanently disarms the user's real alarm.
+
+### 30.3 The lesson, which is a sharpening of §24.1's
+
+§24.1 established two tests for a duress finding: does it identify the decoy,
+and does any surface contradict what the session already showed. Both are
+tests about a STATE, and §29.2 applied them to an incomplete list of states.
+
+**Before declining a duress finding on "the operator cannot reach this screen",
+enumerate every state in which the screen RENDERS — including the states with
+no session at all, and the states reachable by LOCKING out of another one.**
+A gate written as "not a decoy session" is not the same predicate as "has
+proven the real password", and the gap between them is exactly where this bug
+lived. Two of the last eight rounds' P1s have been the same shape: a guard
+whose predicate was close to, but not the same as, the property it needed.
+
+### 30.4 CodeRabbit's queue race was already fixed
+
+Its re-posted `VaultContext.jsx:197` comment predates commit `287520f9`, which
+added the owner guard and the synchronous ref drop (§29.1). No change.
+
+794 tests across 70 files. The new gate is negative-controlled: removing it
+fails both new tests and nothing else; `eslint` is clean on both changed files.
+
+## 31. Twenty-first review round — §30's own gate went stale on every lock path
+
+### 31.1 The fix from one round ago cached the decision it was gating on
+
+§30 required a live vault session to render either duress form. It read that
+through `useState` seeded from `hasSessionKey()` and refreshed only on
+`vault:updated`. `handleLockVault` — the single path taken by the manual lock,
+the inactivity auto-lock, and the cross-tab lock (`vaultLockState` storage
+event → `handleLockVault(false)`) — calls `sessionVaultCrypto.clearSessionKey()`
+and **dispatches no DOM event at all**; it sets React state inside
+`VaultContext` instead. So none of the three lock paths refreshed the cached
+copy, and a duress-settings page already mounted kept rendering its forms after
+the vault had locked. The oracle §30 closed was open again for anyone who left
+the screen open.
+
+This is the third consecutive round of one shape, now stated as plainly as it
+can be:
+
+| round | predicate written | property needed |
+|---|---|---|
+| §29.1 | "`pendingChanges` state is cleared" | "the queue the consumer READS is cleared" |
+| §30.1 | "not a decoy session" | "has proven the real vault password" |
+| §31.1 | "no `vault:updated` since mount" | "there is a session key RIGHT NOW" |
+
+Each was a near-miss on the same axis: a cached or adjacent signal standing in
+for the live fact. **Enumerating the events that should invalidate a cache is
+the trap** — §30 got the state enumeration wrong, and fixing it by listing
+events would have been the identical mistake one level down.
+
+### 31.2 The fix: stop caching, and put the boundary where a render is not required
+
+Two changes, and the second is the load-bearing one:
+
+- **The render gate reads `sessionVaultCrypto.hasSessionKey()` live**, on every
+  render, instead of consulting cached state. There is no event list to keep
+  complete, and any re-render from any cause shows the correct panel.
+- **Both submit handlers re-check `hasSessionKey()` before touching the
+  envelope.** This is what actually closes the oracle, because the leak requires
+  a SUBMISSION and a submission always runs this code — no render needs to have
+  happened, so the guarantee no longer depends on React's scheduling at all.
+  Placed before any `setDecoySlot`/`open` call, so no decode, no request, and no
+  password-dependent message can precede it.
+
+The retained listeners (`vault:updated`, plus `storage` for the cross-tab case)
+are now explicitly a re-render nudge for the panel, not the mechanism that makes
+the gate correct — and the comment says so, since the previous round's bug was
+exactly a listener being mistaken for a guarantee.
+
+The refusal message is fixed text, identical for every password class, and is
+asserted to be so: a post-lock submission renders byte-identical output for the
+real, decoy and garbage passwords. That check exists because a refusal added to
+remove a classifier is the most natural place to introduce a new one.
+
+### 31.3 What the tests had to be rewritten to express
+
+The first draft filled and submitted in one helper and failed against the FIXED
+code: the live render gate flips the panel on the first `fireEvent.change`, so
+the decoy-password field no longer existed by the time the helper clicked. That
+failure was the fix working. The real sequence a lock produces is *fill while
+unlocked, lock, then click* — the click landing on a form rendered while the
+vault was still open, which is the only path where the submit-time re-check is
+what stops it. Rewritten that way, and negative-controlled: removing just the
+two submit guards fails exactly those two tests and nothing else.
+
+797 tests across 70 files; `eslint` clean on both changed files.
+
+## 32. Twenty-second review round — the await window, one level further out
+
+### 32.1 §31's submit-time check did not cover the submit's own await
+
+§31 moved the duress screen's security boundary into the submit handlers,
+because a submission always runs that code and a render may never happen. The
+check ran, correctly, *before* `setDecoySlot`. It then awaited three Argon2
+derivations and called `finishRegistration(duressToken)` unconditionally.
+
+So a vault that locks inside that window — inactivity, manual, or cross-tab,
+all `clearSessionKey()` — is followed by an authenticated `registerSignalToken`
+request and a success message, for a session that no longer exists. This is
+§26's finding ("a guard before an `await` does not cover the await's own
+window") reappearing in the code written to fix §31, which was itself a fix to
+§30. The recurring axis, stated once more: **the check must sit on the same
+side of the await as the thing it protects.**
+
+### 32.2 Why the check compares GENERATIONS, not `hasSessionKey()`
+
+The obvious repair — re-read `hasSessionKey()` after the await — is wrong in a
+way worth recording, because it looks right. A lock followed by ANY unlock
+leaves `hasSessionKey()` true again, including an unlock with the **decoy**
+password. That continuation would then register the real alarm from inside a
+decoy session, which is a worse outcome than the bug being fixed.
+
+`clearSessionKey()` already does `sessionGeneration += 1`
+(`sessionVaultCrypto.js:544`), so the counter moves on every lock, every
+install, and every decoy unlock. Capturing it before the slow step and
+comparing after detects all three. This is the pattern the module's own
+`reserveSessionGeneration` docstring describes for `installRawDek`; what was
+missing was a way to OBSERVE the generation without reserving one, since
+`reserveSessionGeneration()` increments and would invalidate an unrelated
+in-flight unlock. Added as `currentSessionGeneration()`, two lines, documented
+against exactly that misuse.
+
+Applied to BOTH handlers in the same round, per §27's rule: the recovery form
+awaits two `open()` calls before it registers, and had the identical window.
+Grepping the sibling was not optional — it is the third time in this PR that a
+class fixed in one function was still live in its neighbour.
+
+The blob `setDecoySlot` already saved is deliberately left in place: the decoy
+IS configured, only its token is unregistered, which is precisely the state the
+recovery form exists to finish. Rolling it back would need the vault password
+that is no longer usable.
+
+### 32.3 `envelopeReady` was the same stale-cache mistake, one line up
+
+`useMemo(() => hasEnvelope(userId), [userId])` reads localStorage, which the
+unlock modal (same tab) or another tab can populate while this screen stays
+mounted. §31's re-render nudge would then repaint a memo that never
+recomputed, leaving "You haven't created one yet" until a remount. Read live,
+same as the session gate immediately below it. The `useMemo` import went with
+it.
+
+### 32.4 Four plan corrections
+
+- **The stopped-state startup contract.** A.3's test read "the first sync from
+  a fully-stopped state (sidecar starts...)" while A.5 requires
+  `isOnionSyncAvailable()` to answer `false` when nothing is in flight and
+  explicitly not to start one. Both cannot hold if the sync is what starts the
+  sidecar. Reconciled by stating the ownership literally — the main-process
+  handoff is the ONLY caller of `start()`, and both its moments (live mode
+  change, persisted mode at launch) are already specified — so a sync under a
+  non-`off` mode always finds a bootstrap in flight or a failure, never a
+  stopped sidecar it must start. Test reworded to "after the mode is enabled".
+- **Orbot's package name is not its identity.** `setPackage()` plus the
+  returned `ComponentName` check both verify only a string. With genuine Orbot
+  absent, a counterfeit package claiming `org.torproject.android` satisfies
+  both and receives the bearer token, the credential, and the sync body. Pin
+  the signer with `hasSigningCertificate(..., CERT_INPUT_SHA256)` (API 28+,
+  rotation-aware), with a counterfeit-package test.
+- **The cached SOCKS port is a TOCTOU gap.** Discovering `orbotSocksPort` once
+  and reusing it means that if Orbot stops and releases the port, any other
+  local process can bind it and receive the credentialed request. Hold the
+  binding, clear the port on disconnect, revalidate before every request, and
+  treat a revalidation failure as transport-unavailable rather than a clearnet
+  retry.
+- **RESERVE → FINALIZE needs fencing.** An expiring reservation makes the token
+  spendable again while the first attempt may still be in flight, so a late
+  completion plus a second redemption can both dispatch — the double-spend the
+  atomic claim exists to prevent, reached through the timeout path. Carry a
+  fencing token through dispatch and reject a completion whose fence is stale.
+
+800 tests across 70 files. Both generation checks are negative-controlled:
+removing them fails exactly the three new lock-race tests. `eslint` reports
+only the two pre-existing warnings in `sessionVaultCrypto.js`.
+
+## 33. Twenty-third review round — a decoy write path around the gate, and a red CI check
+
+### 33.1 `encryptEnvelope` let a decoy session write through the v3 branch
+
+The decoy write gate lives in `sessionVaultCrypto.encryptItem` (v2). But
+`vaultEnvelope.encryptEnvelope` — the single point where add/edit reaches
+either crypto layer — picks v3 whenever `sessionVaultCryptoV3.hasSessionKey()`,
+and **v3 has no concept of a decoy session at all** (`grep isDecoySession
+sessionVaultCryptoV3.js` returns nothing). Verified in the source rather than
+assumed: `VaultUnlockModal` never touches `sessionVaultCryptoV3`, and
+`installRawDek` — which is what sets `sessionIsDecoy` — does not clear it. So
+a decoy unlock installs the decoy DEK on v2 while leaving any live v3 key in
+place, and the very next add or edit takes the v3 branch and never consults
+the gate. That is the row-corrupting write `sessionIsDecoy`'s own comment
+describes: encrypted under one key, stamped with the real slot's salt,
+unopenable by the real session afterwards.
+
+Gated at the choke point, ahead of the v2/v3 choice, rather than inside each
+implementation — so a future third layer cannot reintroduce the bypass simply
+by not knowing about decoys.
+
+**The message is byte-identical to the v2 gate's** (`'Failed to save item.
+Please try again.'`), and that is not cosmetic: `VaultContext` surfaces
+`error.message` to the screen, so two different refusal strings would tell a
+coercer which layer declined — a fresh tell inside the guard added to remove
+one. That is the §27.3 lesson applied before the bug rather than after it.
+
+### 33.2 Queue ownership was tagged at commit time, not at mutation start
+
+§29.1 tagged the pending-changes queue with the identity active when the queue
+was *committed*. §29's own write-up named the residual hole and deferred it;
+this round it was filed, so it is closed. A request begun by A that resolves
+after B signs in appends to a queue the identity effect has already cleared,
+and the commit-time tag then labels A's work **B-owned** — so `syncVault`'s
+owner check passes it.
+
+All three mutations now capture `activeIdentityRef.current` before their first
+await and bail on mismatch afterwards, beside the existing `isMountedRef`
+guard, which catches an unmount and not an account switch. `updateItem` is
+included even though it does not queue: it writes `setItems` after its awaits,
+which is the same late-write shape and the §27 rule says fix the siblings in
+the same round.
+
+### 33.3 A dead-end error message
+
+With an unusable envelope and no legacy wrapped-DEK record, the fallback
+rethrew the decoder's own text and `handleSubmit` rendered it — the user saw
+`bad magic` and retried a password that could never work. Replaced with one
+fixed, actionable, password-independent string. The wrong-password path is
+untouched, since it is normalised earlier and must stay identical.
+
+### 33.4 A test that could not fail
+
+The setup-form oracle test fed **two identical mock errors** into the same
+render helper and compared the resulting HTML. Equal by construction: it could
+not detect a decoy-vs-garbage branch in the component, and read as coverage it
+never provided. The real invariant — that `setDecoySlot` raises the same type
+AND a byte-identical message for both — belongs to the store and is already
+asserted there against the real implementation. What is left here is the claim
+this file can actually test: any `WrongPasswordError` renders one fixed string
+and names no slot.
+
+Also: `exportWrappedDekRaw`'s "does not touch session state" test cleared the
+session first, so `hasSessionKey()` was already false and the assertion passed
+whatever the export did. Added the production ordering — `runUpgrade` exports
+right after `unlockWithVaultPassword` installs a session — and asserted the
+session survives and stays non-extractable.
+
+### 33.5 The failing CI check: three expired suppressions, resolved by removal
+
+`Multi-Scanner Security Scan / Dependency Vulnerability Scan` failed in 16s —
+the "Validate pip-audit ignore expiries" pre-check, which fails on any entry
+whose date is `< today`. PYSEC-2025-211/212/213 expired 2026-09-01.
+
+Renewing them would have been wrong twice over: 214/215/216 were dated
+2026-09-05 and would have failed the same check the next day, and — re-checked
+the way the manifest's own torch block says to, against what CI actually scans
+rather than the lock file — all eight are inert. CI runs
+`pip-audit -r requirements.txt`, where transformers is `>=4.35.1` with no
+ceiling and nothing else constraining it; that resolves to the latest **stable**
+release, 5.16.1 (verified against PyPI, and note pip would not pick the lock
+file's `5.0.0rc3` for that specifier anyway). Every advisory caps far below it,
+verified per-ID against OSV: 4.54.1, 4.54.1, 4.55.0, 4.57.0, 4.57.0, 4.57.0,
+5.0.0-rc0, 4.57.1.
+
+So all eight were **removed, not renewed** — the same "our pin is outside it,
+nothing to suppress" resolution the manifest already used for
+PYSEC-2025-183/189-197/210 and PYSEC-2024-277. The old reachability argument
+(`from_pretrained` only ever called with the hard-coded
+`config.BERT_MODEL_NAME`) remains true but is no longer what carries them: the
+findings are fixed by version, not accepted by reachability.
+
+835 tests across 75 files. The decoy-bypass fix, the identity guard, and the
+message change are each negative-controlled; `eslint` reports the same eight
+pre-existing warnings as before the change, none new.
+
+## 34. Twenty-fourth review round — the read side of §33, and a genuinely new CVE
+
+### 34.1 A decrypt in flight outlived the lock that was supposed to stop it
+
+`VaultContext.decryptItem` awaits `decryptEnvelope`, then unconditionally
+caches the plaintext into `decryptedItems` and returns it. `lockVault()` —
+manual, inactivity, or cross-tab — can land inside that await: it clears the
+session key and the item list, but nothing stopped the pending continuation
+from writing the secret it already held into the cache. And `decryptItem` reads
+that cache as its **first** action, before it looks the item up or checks
+anything else, so a later call kept serving the secret out of a locked vault.
+
+Two guards, because they fail independently:
+
+- The continuation compares `sessionVaultCrypto.currentSessionGeneration()`
+  captured before the await, and returns the same non-cached
+  `_decryptionFailed` placeholder an undecryptable payload already produces.
+  Generation, not `hasSessionKey()`, for §32's reason: a lock followed by ANY
+  unlock — including a **decoy** one — answers true again, which would cache
+  real plaintext into a decoy session.
+- `handleLockVault` clears `decryptedItems` alongside `items`.
+
+**Both are negative-controlled, and getting there corrected a bad assertion.**
+The cache-clear test first asserted "`decryptEnvelope` was not called again",
+which passes whether or not the cache is cleared — an uncleared cache returns
+the secret *without* calling it. Rewritten to assert on the returned value, it
+fails when the clear is removed. The cache lookup being first is exactly what
+made the weak assertion look right.
+
+### 34.2 `decryptEnvelope`'s v3 fallback was the read-side twin of §33.1
+
+§33.1 closed the write side: `encryptEnvelope` picked v3 whenever a v3 key was
+live, and v3 knows nothing about decoy sessions. The read side had the same
+shape and was missed in that round — the sibling sweep §27 mandates should have
+caught it, since both functions live in the same file.
+
+`decryptEnvelope` calls v2 first; a REAL item cannot be opened by the decoy
+DEK, so v2 returns the `_legacyPlaintext` marker — **which is precisely the
+condition that triggers the v3 fallback**, handing back the real plaintext v2
+had just correctly refused. Now skipped while `isDecoySession()`.
+
+Skipping the fallback rather than refusing outright is deliberate: v2 still
+decrypts the decoy slot's own items normally, which is what makes the decoy
+vault believable. Only the escape hatch to the real key closes. Tested both
+ways — a decoy session never reaches v3, a normal session still does.
+
+### 34.3 `syncVault` validated ownership before the request, not after
+
+The §29.1 owner check runs before `await onionSyncService.syncVault(...)`. If B
+signs in while A's sync is in flight, the continuation applied A's server
+response to B's list and then called `setPendingChanges([])`, discarding work B
+had queued since. Same await-window rule as everywhere else in this file; the
+identity is now captured before the request and re-checked after it.
+
+### 34.4 The failing CI check was a new advisory, not the last round's edit
+
+`Dependency Vulnerability Scan` failed after ~1m this time rather than 16s —
+past the expiry pre-check, inside `pip-audit` itself. Read from the actual run
+log rather than inferred, and it was **not** a regression from §33.5's
+suppression removal: `transformers` resolves to 5.16.1, which OSV reports with
+zero advisories. Three genuinely new findings:
+
+- **djangorestframework 3.16.1 — CVE-2026-73228 and CVE-2026-73229**, both
+  fixed in 3.17.2. The first is `request.data` bypassing Django's
+  `DATA_UPLOAD_MAX_MEMORY_SIZE`; that is core DRF request parsing on every API
+  view here, so a non-reachability suppression would have been dishonest. (The
+  second, an `AdminRenderer` disclosure, *is* unreachable — `AdminRenderer`
+  appears nowhere — but it is fixed by the same bump.) **Pinned to 3.17.2** in
+  both `requirements.txt` and `requirements-lock.txt`; verified compatible
+  before bumping: 3.17.2 declares `requires_python >=3.10` (CI runs 3.11) and
+  `django>=4.2` with an explicit Django 5.1 classifier, matching the 5.1.15
+  pin. This is a much smaller move than the deferred Django 5.2/6.0 upgrade the
+  manifest suppresses, so the "too large for this PR" reasoning does not apply.
+- **nltk 3.10.3 — CVE-2026-81726 (PYSEC-2026-3740 / GHSA-8mgp-746c-j5xp)**,
+  model-artifact APIs escaping their allowed roots. **No fix exists**: the GHSA
+  range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every release
+  including the one CI resolves, and pip-audit reports `fix_versions: []`.
+  Suppressed with the assessment re-verified by grep on the day: `import nltk`
+  / `from nltk` / `nltk.` return zero matches across `password_manager/`.
+
+  Worth recording because it would mislead the next renewal: the **PYSEC**
+  record for this same CVE says `fixed: 3.10.3`, which would make our resolved
+  version clean. The **GHSA** alias does not, and pip-audit follows the wider
+  range. Reading only the PYSEC half would "resolve" this by deleting an entry
+  CI still needs.
+
+841 tests across 76 files. Each code fix is negative-controlled; `eslint`
+reports the same six pre-existing warnings, none new. The DRF bump is a backend
+dependency change with no frontend test coverage — CI's backend suites are its
+verification.
+
+## 35. Twenty-fifth review round — the last lock path that told nobody, and four stale re-posts
+
+### 35.1 What was actually left
+
+Greptile's own body text this round records the duress findings as disproved —
+"stale locked-session forms reject submission", "locks during setup or recovery
+prevent later registration" — while its score blurb still claims the oracle
+"remains". Verified against the source rather than either sentence: the render
+gate at `VaultDuressSetup.jsx:234` reads
+`sessionVaultCrypto.hasSessionKey()` live, both submit handlers re-check it
+(`:299`, `:387`), and both are generation-bound across their awaits (`:330`).
+A submission after a lock is refused, byte-identically for every password class
+(§31's own test asserts that). So there is no oracle left.
+
+What *was* still true is the narrower claim in the same paragraph: **no lock
+path notified anything inside its own tab.** `handleLockVault` sets React state
+and calls `broadcastVaultLock()`, which talks to OTHER tabs; `VaultDuressSetup`
+is not a context consumer, so nothing forced it to re-render. Its forms stayed
+on screen after a manual, inactivity, or cross-tab lock until some unrelated
+render happened. Harmless — every submission through them was already refused —
+but it looks exactly like the gate failing, which is why it kept being re-filed.
+
+Closed with one dispatch and one listener: `handleLockVault` now emits
+`vault:locked`, and the screen's existing re-render nudge listens for it.
+
+**Deliberately its own event, not `vault:updated`:** this context's own
+`vault:updated` listener calls `refreshItems()`, so reusing it would refetch
+the item list microseconds after the lock cleared it and leave a locked vault
+showing rows again. And the comment on the dispatch says plainly that this is
+display freshness and not the boundary — §31 was precisely the bug of a
+listener being mistaken for a guarantee, and this file should not read as if
+that lesson were forgotten.
+
+### 35.2 Two decrypt tests were filed under the wrong describe block
+
+The §34.2 read-side tests call `decryptEnvelope` but sat inside
+`describe('encryptEnvelope')`, so the read-side gate's coverage was reported
+under the write-side group. Moved. No assertion changed.
+
+### 35.3 Four findings re-posted that the plan already answers
+
+Verified each against the current document rather than the review text, and
+skipped with reason:
+
+- **RESERVE → FINALIZE fencing** — added in §32.4; the plan already requires a
+  fencing token carried through dispatch and rejected at FINALIZE when stale,
+  with the delayed-first/second-redemption test spelled out.
+- **Mixed JWT + anonymous credential** — already required in C.3, including
+  *where* the check goes (`initial()`, before `check_permissions()`) and the
+  precedence rule that the onion-ingress refusal must come first.
+- **`item_id` linkability under anonymous sync** — already C.2 point 6, which
+  names it "the primary key of the correlation", flags
+  `expected_sync_version` as account-scoped state, proposes per-credential
+  item references or issuance-keyed blinding, and applies the same "if this
+  cannot be solved cleanly, Phase 4 does not ship" test.
+- **`socks-proxy-agent` / `proxy: false` / `maxRedirects: 0`** — A.4 already
+  requires the dependency addition, `socks5h://` for proxy-side DNS, and
+  redirect rejection off the `.onion` origin.
+
+### 35.4 The dependency scan is green again
+
+`Multi-Scanner Security Scan / Dependency Vulnerability Scan` passes after
+§34.4's DRF bump to 3.17.2 and the nltk suppression — including the backend
+test suites, which were the DRF bump's only real verification.
+
+842 tests across 76 files. The `vault:locked` repaint is negative-controlled
+(removing the listener fails its test alone); `eslint` reports the same six
+pre-existing warnings, none new.
+
+## 36. Twenty-sixth review round — the success SIGNAL crossed an unguarded await
+
+### 36.1 `runSetup` and `runUpgrade` reported success for a session that could be gone
+
+`runEnvelopeUnlock` has carried the generation pattern since §3.7: reserve
+before the slow step, hand it to `installRawDek`, which validates. Its two
+siblings did not. Both install a session (`setupVaultPassword` /
+`unlockWithVaultPassword`, each of which bumps and validates the generation
+internally) and then run **unguarded** awaits — `exportSessionDekRaw` /
+`exportWrappedDekRaw`, then `provision()`, which is two Argon2 derivations on
+its own. A `clearSessionKey()` (logout, lock) or a newer unlock landing in that
+window leaves both helpers resolving normally, so `handleSubmit` calls
+`onUnlocked()` and the app shows an unlocked vault with no session key — or
+attributes a newer session's success to this stale attempt.
+
+This is §32 again, one level out: **the check must sit on the same side of the
+await as the thing it protects, and here the thing being protected is the
+SUCCESS SIGNAL, not a write.** The provisioning itself is deliberately
+non-fatal and stays that way; only the report changes.
+
+Both paths now capture `currentSessionGeneration()` immediately after the
+install and compare after the provisioning block, throwing the same
+`'Vault session initialization was superseded by a newer request.'`
+`installRawDek` raises for the identical condition — so all three unlock paths
+now fail identically rather than each inventing its own wording.
+
+**Placed after `reportNoise()` on purpose.** That fixed-shape report is what
+keeps this path's wire profile constant (§3.5); withholding it on a superseded
+attempt would make the stale case observably different on the network. Only the
+success signal is withheld. Not a password oracle either: the guard is reachable
+only *after* the password already verified, and identically in both paths.
+
+**A test-hygiene note worth keeping:** the first draft of these tests passed in
+isolation and failed in the file, because `vi.clearAllMocks()` resets calls but
+NOT implementations — the setup test's `currentSessionGeneration.mockReturnValue(2)`
+leaked into every later case. Reset in the shared `beforeEach`. This is the
+second file in this PR to need that (§32 did the same for the duress mocks); a
+mock that encodes a *state* rather than a return shape must always be reset
+there.
+
+### 36.2 The queue test asserted one half of a two-part claim
+
+§34.3's test says A's late sync response must neither apply its items nor clear
+the queue, and asserted only the first. A regression that kept filtering A's
+items while still running `setPendingChanges([])` would have passed.
+
+Adding the missing half surfaced that the obvious framing is wrong: after an
+A→B switch, **A's** queue is dropped legitimately by the identity effect
+(§29.1), so asserting "A's queue survives" tests the opposite of the design.
+The work actually at risk is **B's** — queued after the switch and wiped by A's
+stale continuation. The new test queues an item as B while A's sync is still
+open, resolves A's response, and asserts B's item is still there to flush. Both
+tests fail when the post-await identity check is removed.
+
+### 36.3 The desktop availability predicate read as a contradiction
+
+Phase 2 step 2 forbids gating desktop on `vault_proxy.available`; step 3 says
+the renderer contract is reused "verbatim … identical across web and desktop".
+Phase 1's `isOnionSyncAvailable()` is defined in terms of exactly that field,
+so read literally the two cannot both hold: keep the predicate and desktop is
+never available; change it and the contract is not identical.
+
+They hold under the reading A.5 already specifies, which the summary never
+stated: **"identical" is the API surface — same function, signature and call
+sites — not the same internal predicate.** Spelled out in the privacy plan with
+the per-platform branch (web keeps `vault_proxy.available` unchanged;
+desktop/mobile use `anonymity.available && onion_address` plus local transport
+readiness), the handoff named (`getVaultProxyTransport()` plus the sidecar
+status call the service already makes — not a new parameter threaded from a
+caller, which is what would genuinely break the contract), and coverage
+required for both `prefer_onion` and `require_onion` on the non-web branch.
+
+845 tests across 76 files. Both modal guards and the sync guard are
+negative-controlled; `eslint` reports the same eight pre-existing warnings,
+none new. All CI checks were already green entering this round.
+
+## 37. Twenty-seventh review round — the read/write split answered the wrong question
+
+### 37.1 `getBackups` leaked the real vault's shape into a decoy session
+
+§18.1 settled which backup paths the decoy flag guards by tracing what each one
+WRITES server-side: `createBackup` snapshots the real user's items,
+`restoreBackup` can wipe and overwrite the real vault, so both are gated;
+`getBackups` writes nothing, so it was deliberately left open. That test was
+right about corruption and blind to disclosure.
+
+`BackupManager` calls `getBackups()` on mount and renders each row's `name`,
+`created_at`, **`item_count`** and size. The endpoint is `request.user`-scoped,
+so those are the REAL vault's backups. A decoy session shows a near-empty
+vault; the backup list beside it says "247 items", backed up last Tuesday.
+That is the §24.1 test (b) failing outright — a surface contradicting what the
+session already showed the coercer — and it is the §20.2 failure exactly, just
+reached through backup metadata instead of the item list.
+
+**The rule this corrects, and it is the one the guarded-set note in §18.1 got
+half right:** membership is decided by what a path writes *and* by what it
+DISPLAYS. Those are two questions, and "it is only a read" answers just the
+first.
+
+Returns an empty list rather than throwing, and returns it BEFORE the request
+so the metadata never reaches the renderer or the network log. An error on this
+one screen would be its own tell; a user with no backups is entirely ordinary.
+
+### 37.2 The generation contract every await-guard rests on was never asserted
+
+`VaultUnlockModal` (§36), `VaultDuressSetup` (§32) and `VaultContext`'s decrypt
+guard (§34) all decide "is this still the session that authorised me?" by
+comparing `currentSessionGeneration()` across an await — and every one of those
+tests mocks the accessor. Nothing proved the counter actually MOVES when the
+session changes; a regression making `clearSessionKey()` stop bumping it would
+have left all three guards silently inert with every test still green.
+
+Asserted once, against the real module: `clearSessionKey()` advances it,
+installing a new session advances it (tested with a DECOY install, the case
+where `hasSessionKey()` answers true again and only the counter distinguishes),
+and reading it does not advance it — the `reserveSessionGeneration()` confusion
+§32 warned about, now pinned by a test.
+
+### 37.3 Two smaller items
+
+- **The mid-KDF write injection is now one helper.** Both compare-and-swap
+  tests hand-rolled the same self-restoring `argon2.hash` wrapper, whose subtle
+  part — restore BEFORE running the injected write, or it re-enters — was
+  duplicated in a comment rather than in code. Extracted as
+  `injectWriteDuringFirstDerivation`. Re-verified after the refactor by
+  removing `setDecoySlot`'s CAS again: the refactored test still fails, so the
+  extraction did not blunt it.
+- **The nltk suppression described its dependency wrongly.** It called nltk
+  "only present as a transitive ML dependency"; `requirements.txt` declares
+  `nltk>=3.9.4` directly and the lock file pins it. Corrected — and the
+  correction matters in the opposite direction to the obvious one: the
+  declaration sits under "Security overrides for transitive dependencies"
+  beside cbor2/keras/tornado/Twisted/ujson, so it exists purely to RAISE THE
+  FLOOR on a version something else pulls in. Deleting it as an "unused
+  dependency" would let an older, vulnerable nltk back in transitively. Nothing
+  imports it; the suppression still stands on non-reachability.
+
+850 tests across 76 files. The backup gate is negative-controlled; `eslint`
+reports the same six pre-existing warnings, none new. No CI check was failing
+entering this round.
+
+## 38. Twenty-eighth review round — §34.2's own await, and a boundary weaker than its display
+
+### 38.1 The v3 fallback checked the decoy flag, then awaited
+
+§34.2 closed the read-side hole by adding `!isDecoySession()` to the condition
+guarding `decryptEnvelope`'s v3 fallback. The check is evaluated **before**
+`await sessionVaultCryptoV3.decryptItem(...)`, and that await is a real
+AES-GCM decrypt — so a decoy unlock landing inside the window passes the check
+and still returns the REAL plaintext v2 had refused. The fix for an await-window
+bug had an await window of its own, which is §26/§32/§36 for the fourth time.
+
+**Guarded at `decryptEnvelope` rather than at the callers, and the caller count
+is the argument.** There are six: `App.jsx:148`, `ExportVault.jsx:411`, and four
+in `VaultContext` (`:285`, `:499`, `:514`, `:701`). Exactly ONE — the on-demand
+`decryptItem` at `:285` — carries §34.1's caller-side generation guard. The
+other five have none, and they include the vault EXPORT path, which writes
+plaintext out of the app. Guarding the choke point covers all six at once;
+guarding callers would have meant five separate edits and a standing invitation
+for the seventh caller to forget.
+
+Both predicates are re-read after the await, deliberately: the generation moves
+on any lock or install (catching a logout, a newer real unlock, or a decoy one),
+while `isDecoySession()` also covers a generation captured after the transition.
+It returns `v2Result` rather than throwing, because that is exactly what this
+function yields for a decoy session that never entered the fallback — the two
+outcomes stay indistinguishable to every caller.
+
+### 38.2 `hasSessionKey()` is not "a real session", and the submit gate said it was
+
+The §30 gate reasoned that "only the real vault password installs a session".
+**That is false.** A decoy unlock installs a session DEK too, through
+`installRawDek(..., isDecoy=true)`. The render path never depended on the claim
+— it stacks two gates, the §23.1 decoy panel and then the live-session check —
+but **both submit handlers checked only `hasSessionKey()`**.
+
+So a decoy unlock landing between this screen's last render and a submit left
+the key present and the handler willing to proceed. The session-generation check
+further down cannot cover it either: that generation is captured *after* the
+submit gate, so it already reflects the decoy install and compares equal.
+
+That asymmetry inverts §31's own finding. §31 established that the submit
+handler is the boundary and the render gate is display freshness — so a boundary
+checking *less* than the display is exactly backwards. Both gates now check both
+predicates.
+
+### 38.3 The mobile summary invited the bug it was describing
+
+Phase 3's line reads "wiring `DarkProtocolService.js`'s
+already-present-but-unused `proxyVaultOperation`". Read literally that is an
+instruction to call the existing function — which POSTs the bearer token and
+encrypted payload to `${API_BASE_URL}/api/...` over ordinary clearnet, with no
+transport selector and no fallback control. Under `prefer_onion`/`require_onion`
+that would put vault traffic in the clear while the UI claimed otherwise.
+
+B.3 already specifies the real adapter in full (ported three-mode service with
+fail-closed `require_onion`, the availability-check fix, signature
+normalisation, Orbot binding with signing-certificate verification, OkHttp
+native SOCKS with redirect hardening and per-request port revalidation). The
+summary simply never pointed at it — the §36.3 shape again, where a one-line
+summary understates what the detailed section requires. Pointer added, with the
+four test cases named, including direct-fallback refusal.
+
+### 38.4 A test that proved nothing until it was made deterministic
+
+The first draft of the v3 await-window tests set the generation mock
+synchronously after calling `decryptEnvelope`. But the guard captures the
+generation only *after* the v2 await resolves, so the mutation landed before the
+capture and the post-check compared equal — the logout case failed while the
+decoy case passed only because `isDecoySession()` caught it independently.
+Rewritten so the v3 mock signals when it is entered, and the test waits for that
+signal before moving the session. **A timing test that does not synchronise on
+the thing it is timing is asserting nothing**, and here it would have shipped a
+green test over a live hole.
+
+853 tests across 76 files. All three guards are negative-controlled — removing
+the v3 post-await check fails both new decrypt tests, removing the decoy half of
+the submit gate fails the mid-submit test, and nothing else moves. `eslint` is
+clean on all three changed files.
+
+## 39. Twenty-ninth review round — the pin that CI reads is not the pin that ships
+
+### 39.1 The DRF bump reached one requirements file out of five
+
+§34.4 bumped `djangorestframework` to 3.17.2 in `requirements.txt` and
+`requirements-lock.txt`, verified it against CI's dependency scan, and called it
+done. Three more files still pinned **3.16.1**, and they are the ones that build
+what actually runs:
+
+- `requirements-prod.txt` + `requirements-constraints.txt` — `Dockerfile.prod`
+  installs `-r requirements-prod.txt -c requirements-constraints.txt`, so the
+  production image took 3.16.1, and the constraints file would have **blocked**
+  an upgrade even if the prod file had been bumped alone.
+- `requirements-core.txt` — `docker/backend/Dockerfile` installs `-r
+  requirements-core.txt`. **The review named prod and constraints but not this
+  one**; it was found by grepping all five files rather than by working from the
+  finding's list, which is the only reason it was caught in the same round.
+
+`security.yml` also audits prod+constraints, so the security scan was reporting
+on 3.16.1 while the multi-scanner audited `requirements.txt`'s 3.17.2 and passed.
+Both were "green" about different files.
+
+**The shape, and it is the inverse of §29.1's:** that round fixed the copy of the
+state that nothing read and left the copy the consumer actually used. This one
+fixed the copy CI reads and left the copies production installs from. Same
+question either way — *which copy does the thing I care about actually consume?*
+— and the answer has to be found by enumerating them, not by fixing the file the
+tool happened to point at. All five now agree.
+
+### 39.2 The abandoned sync left the next identity stuck on 'syncing'
+
+§34.3's identity re-check returns early when B signs in during A's sync.
+`syncStatus` is set to `'syncing'` before the request and every other exit lands
+on `'success'` or `'error'` — this early return was the one path that left it
+hanging. The provider instance is **shared across the identity change**, so the
+stale `'syncing'` belongs to A but is what B's UI renders, and nothing clears it
+until B completes a sync of their own. Reset to `'idle'`, which is the state's
+own initial value and truthful for B: from their perspective no sync has run.
+
+Small, but it is the third distinct thing that early return had to remember to
+do (don't apply the response, don't clear the queue, don't strand the status) —
+worth noting that an early return added for a security reason inherits every
+cleanup obligation of the path it skips.
+
+### 39.3 The byte-identical refusal rule was held together by copied literals
+
+§33.1 required `encryptEnvelope`'s decoy refusal to be byte-identical to
+`sessionVaultCrypto.encryptItem`'s, because `VaultContext` surfaces
+`error.message` verbatim and two different strings would tell a coercer which
+layer declined. That requirement was enforced by **four copies of the same
+literal** — two in source, two in tests. Copied literals cannot enforce
+identity; editing one silently breaks the property, and the tests would have
+agreed with whichever copy they happened to mirror.
+
+Now `DECOY_WRITE_REFUSAL`, exported from `sessionVaultCrypto` beside
+`sessionIsDecoy` itself, referenced by the choke point and asserted against by
+both tests. Verified it actually enforces the rule rather than merely tidying
+it: making the choke point diverge fails two tests, where before it would have
+failed none.
+
+The wording assertion is kept separately (`not.toMatch(/decoy|duress|slot/i)`)
+because a single owner can still be edited into something that names the
+feature — one constant proves the paths agree, not that they agree on something
+safe.
+
+### 39.4 Two test-hygiene items
+
+- **A never-resolving mock outliving its test.** Two §38 tests install a v3
+  implementation that never resolves, to hold the await window open.
+  `vi.clearAllMocks()` keeps implementations, so a later test reaching the v3
+  path would hang to the Vitest timeout rather than fail readably. Reset in the
+  shared `beforeEach` — the §36 rule again, now for an implementation rather
+  than a return value.
+- **A dead assignment** (`provisionGenerationMoved`) left in the §36 modal
+  tests. Nothing reads it; the race is driven entirely by the generation mock
+  inside `provision`. Removed before it could be mistaken for the switch.
+
+854 tests across 76 files. The status reset and the constant are both
+negative-controlled; `eslint` reports the same eight pre-existing warnings,
+none new.

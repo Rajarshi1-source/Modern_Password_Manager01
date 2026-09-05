@@ -38,9 +38,22 @@ export const VaultProvider = ({ children }) => {
   const [pendingChanges, setPendingChanges] = useState([]);
   // Fix stale closure in syncVault when called via setTimeout
   const pendingChangesRef = useRef(pendingChanges);
+  // The identity that queued whatever `pendingChangesRef` currently holds.
+  // `syncVault` refuses to flush a queue whose owner is not the identity now
+  // authenticated -- see its guard, and the identity effect that resets both.
+  const pendingChangesOwnerRef = useRef(null);
+  // Mirrors the authenticated identity for the same reason the queue does:
+  // `syncVault` runs from a `setTimeout` whose closure can predate an account
+  // switch, so it cannot read identity from its own scope.
+  const activeIdentityRef = useRef(null);
 
   useEffect(() => {
     pendingChangesRef.current = pendingChanges;
+    // Tag the queue with whoever is authenticated as it is committed. The
+    // identity effect below updates `activeIdentityRef` before clearing the
+    // queue, so a queue committed under A keeps owner A even after the
+    // switch, and the guard in `syncVault` sees the mismatch.
+    pendingChangesOwnerRef.current = activeIdentityRef.current;
   }, [pendingChanges]);
 
   const [lastSyncTime, setLastSyncTime] = useState(localStorage.getItem('lastSyncTime') || new Date().toISOString());
@@ -54,6 +67,14 @@ export const VaultProvider = ({ children }) => {
   // dispatches once the session key is established).
   const [sessionUnlocked, setSessionUnlocked] = useState(() => hasVaultSessionKey());
   const { isAuthenticated, user } = useAuth(); // Get auth status + identity
+  // Written during RENDER, not in an effect. An effect's write lands one
+  // commit late, and the gap between an account switch and that commit is
+  // exactly where a queued `setTimeout(() => syncVault(), 0)` fires. Assigning
+  // a ref from a value derived purely from context is idempotent and safe to
+  // do here; it is what lets `syncVault` compare "who owns this queue"
+  // against "who is authenticated now" without either value coming from its
+  // own (possibly pre-switch) closure.
+  activeIdentityRef.current = isAuthenticated ? (user?.id ?? user?.email ?? null) : null;
 
   // Fix #8: Use useMemo for vaultService
   const vaultService = useMemo(() => new VaultService(), []);
@@ -184,6 +205,28 @@ export const VaultProvider = ({ children }) => {
     // plaintext.
     setItems([]);
     setDecryptedItems(new Map());
+    // Queued mutations are per-account and must not outlive the identity that
+    // created them. `items`/`decryptedItems` were already cleared here;
+    // `pendingChanges` was not, so account A's queued writes AND deletions
+    // survived a switch to account B and would be flushed by B's next
+    // `syncVault` -- POSTing A's ciphertext into B's vault and deleting B's
+    // rows by A's item_ids. Clearing here (rather than scoping the queue by
+    // id) matches how every other per-account cache in this effect is
+    // handled, and the decoy case is unaffected: a decoy unlock is the SAME
+    // identity, so this effect does not re-run and the queue is preserved for
+    // the real session exactly as `syncVault`'s decoy gate intends.
+    setPendingChanges([]);
+    // ...and drop the REF synchronously, which the state update alone does
+    // not do. `setPendingChanges` only schedules a re-render;
+    // `pendingChangesRef` is refreshed by the effect above on a LATER commit,
+    // and `syncVault` reads the ref, not the state. A
+    // `setTimeout(() => syncVault(), 0)` queued by the previous identity can
+    // fire inside that gap and flush account A's ciphertext and deletion ids
+    // using account B's credentials -- the exact outcome clearing the queue
+    // here was added to prevent, surviving through the ref the queue is
+    // actually read from.
+    pendingChangesRef.current = [];
+    pendingChangesOwnerRef.current = activeIdentityRef.current;
     setSessionUnlocked(hasVaultSessionKey());
     refreshItems();
     // 'vault:updated' fires from the add/edit write paths AND from the login
@@ -231,6 +274,9 @@ export const VaultProvider = ({ children }) => {
       throw new Error('Item not found');
     }
 
+    // Captured before the await below -- see the guard after it.
+    const decryptGeneration = sessionVaultCrypto.currentSessionGeneration();
+
     try {
       console.time(`on-demand-decrypt-${itemId}`);
       // PR F: decrypt via the shared sessionVaultCrypto (v2→v3) envelope helper
@@ -238,6 +284,25 @@ export const VaultProvider = ({ children }) => {
       // never-initialised vaultService.cryptoService.
       const data = await decryptEnvelope(item.encrypted_data);
       console.timeEnd(`on-demand-decrypt-${itemId}`);
+
+      // The session that authorised this decrypt must still be the one in
+      // place when it resolves. `decryptEnvelope` awaits a real AES-GCM
+      // decrypt, and `lockVault()` (manual, inactivity, or cross-tab) can land
+      // inside that window: it clears the session key and the item list, but
+      // nothing stops this continuation from caching the plaintext it already
+      // holds into `decryptedItems` and returning it. The cache is read at the
+      // TOP of this function, so a later call would keep serving that secret
+      // from a locked vault.
+      //
+      // Compared by generation for the same reason §32 gives: `hasSessionKey()`
+      // answers true again after a lock followed by ANY unlock, including a
+      // DECOY one, which would cache real plaintext into a decoy session.
+      // Returning the same non-cached failure placeholder an undecryptable
+      // payload produces, rather than throwing, keeps every caller's existing
+      // handling intact and lets a later attempt retry after a real unlock.
+      if (sessionVaultCrypto.currentSessionGeneration() !== decryptGeneration) {
+        return { ...item, _decryptionFailed: true };
+      }
 
       // A `_legacyPlaintext` marker (or any payload with no usable object)
       // is NOT editable: re-encrypting an empty form over it would corrupt the
@@ -269,6 +334,12 @@ export const VaultProvider = ({ children }) => {
     // Lock the dashboard edit gate (canEdit) — the session key is about to go.
     setSessionUnlocked(false);
     setItems([]);
+    // The plaintext cache has to go with them: `decryptItem` returns straight
+    // from `decryptedItems` before it checks anything else, so leaving it
+    // populated keeps every already-opened secret readable from a locked
+    // vault. Defense in depth alongside the generation guard above, which
+    // stops a decrypt in flight from repopulating it.
+    setDecryptedItems(new Map());
 
     // Drop the in-memory vault session keys (v2 + v3) so they cannot be reused
     // after a manual or cross-tab lock — matching the logout path in App.jsx.
@@ -283,6 +354,28 @@ export const VaultProvider = ({ children }) => {
       // rather than swallow, mirroring the logout handler.
       console.warn('Failed to clear v3 vault session key on lock:', clearErr);
     }
+
+    // Tell this tab's own screens the vault just locked.
+    //
+    // Every lock path -- the manual button, the inactivity timer, and the
+    // cross-tab handler -- funnels through here, and until now none of them
+    // notified anything inside this tab: `broadcastVaultLock()` below talks to
+    // OTHER tabs, and the React state set above only reaches consumers of this
+    // context. `VaultDuressSetup` is not one: it reads
+    // `sessionVaultCrypto.hasSessionKey()` live at render, but nothing was
+    // forcing it to render, so its password forms stayed on screen after a
+    // lock until some unrelated re-render happened.
+    //
+    // Deliberately its OWN event rather than reusing `vault:updated`: this
+    // context's own `vault:updated` listener calls `refreshItems()`, which
+    // would refetch the item list microseconds after the lock cleared it and
+    // leave a locked vault showing rows again.
+    //
+    // This is a display-freshness fix, NOT the security boundary. Submissions
+    // are already refused by the live re-check inside both duress handlers and
+    // by their session-generation binding (§31, §32); a listener is never
+    // allowed to be what makes a gate correct -- that mistake is §31 itself.
+    window.dispatchEvent(new Event('vault:locked'));
 
     // Reset last activity timestamp
     lastActivityRef.current = Date.now();
@@ -489,6 +582,38 @@ export const VaultProvider = ({ children }) => {
     const currentPendingChanges = pendingChangesRef.current;
     if (currentPendingChanges.length === 0) return;
 
+    // Decoy sessions must not push the REAL session's queued work. This is a
+    // distinct hole from the add/update/delete/favorite/backup gates: those
+    // stop a decoy session from CREATING changes, but `handleLockVault` does
+    // not clear `pendingChanges`, so work queued in an earlier REAL session
+    // survives lock → decoy unlock and would be flushed from here — including
+    // `deleted_items`, which the sync endpoint applies as real deletions.
+    //
+    // Returns rather than throws: both call sites are `setTimeout(() =>
+    // syncVault(), 0)`, where a rejection would surface as an unhandled
+    // promise rejection rather than reaching any caller. The queue is left
+    // intact on purpose, so the real session flushes it on its next sync.
+    if (sessionVaultCrypto.isDecoySession()) {
+      return;
+    }
+
+    // Queued work belongs to the identity that created it. This callback runs
+    // from `setTimeout(..., 0)`, so it can fire after an account switch while
+    // still holding the previous account's queue; flushing then would POST A's
+    // ciphertext into B's vault and delete B's rows by A's item_ids, using B's
+    // credentials. Both sides are read from refs on purpose -- the closure
+    // itself predates the switch, so nothing in scope here is trustworthy for
+    // this comparison. Dropping the queue rather than keeping it is right:
+    // it can never be flushed correctly from a session that does not own it.
+    // Captured for the post-request re-check below, before anything awaits.
+    const syncIdentity = activeIdentityRef.current;
+
+    if (pendingChangesOwnerRef.current !== activeIdentityRef.current) {
+      pendingChangesRef.current = [];
+      pendingChangesOwnerRef.current = activeIdentityRef.current;
+      return;
+    }
+
     try {
       // Update sync status
       setSyncStatus('syncing');
@@ -543,6 +668,24 @@ export const VaultProvider = ({ children }) => {
         // onion routing and did not get it. Reporting 'success' here would be
         // a false privacy promise, which is the one outcome this feature has
         // to avoid. ('require_onion' never reaches this line -- it throws.)
+        // The owner check above ran BEFORE this request; re-check after it.
+        // If B signed in while A's sync was in flight, applying A's response
+        // would write A's server state into B's list -- and the
+        // `setPendingChanges([])` further down would discard work B has queued
+        // since. Same await-window rule as everywhere else in this file.
+        if (activeIdentityRef.current !== syncIdentity) {
+          // Reset the status before leaving. `syncStatus` was set to 'syncing'
+          // before the request, and every other exit from this function lands
+          // on 'success' or 'error' -- this early return was the one path that
+          // left it stuck. The provider instance is SHARED across the identity
+          // change, so the stale 'syncing' belongs to A but is what B's UI
+          // renders, and nothing clears it until B happens to complete a sync
+          // of their own. 'idle' is this state's own initial value, and is
+          // truthful here: from B's perspective no sync has run.
+          setSyncStatus('idle');
+          return;
+        }
+
         setSyncTransport(syncResult.transport);
         setSyncDegraded(syncResult.degraded);
 
@@ -661,6 +804,8 @@ export const VaultProvider = ({ children }) => {
   // on a live session key on EITHER crypto layer (`hasVaultSessionKey`); only
   // ciphertext (never the plaintext `data`) is sent.
   const addItem = useCallback(async (item) => {
+    // Captured before any await -- see the post-await guard below.
+    const identityAtStart = activeIdentityRef.current;
     if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to add items.');
       if (isMountedRef.current) setError(lockedErr.message);
@@ -680,6 +825,15 @@ export const VaultProvider = ({ children }) => {
       });
 
       if (!isMountedRef.current) return;
+      // The identity that STARTED this mutation must still be the one
+      // authenticated now. `isMountedRef` above catches an unmount, not an
+      // account switch: a request begun by A that resolves after B signs in
+      // would otherwise write A's item into B's list and, below, append A's
+      // work to a queue the identity effect had already cleared -- which the
+      // commit-time owner tag would then label B's, so `syncVault`'s owner
+      // check would pass it. Captured at the START of the call, because that
+      // is the only moment the initiating identity is knowable.
+      if (activeIdentityRef.current !== identityAtStart) return;
 
       // Add new item to state
       const created = response?.data || {};
@@ -747,6 +901,8 @@ export const VaultProvider = ({ children }) => {
   // touches `favorite` (owned by the metadata-only toggleFavorite PATCH) or
   // `item_type`, so an edit can't clobber a concurrent favorite change.
   const updateItem = useCallback(async (item) => {
+    // Captured before any await -- see the post-await guard below.
+    const identityAtStart = activeIdentityRef.current;
     if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to edit items.');
       if (isMountedRef.current) setError(lockedErr.message);
@@ -760,6 +916,15 @@ export const VaultProvider = ({ children }) => {
       const response = await axios.patch(`/api/vault/${item.id}/`, { encrypted_data });
 
       if (!isMountedRef.current) return;
+      // The identity that STARTED this mutation must still be the one
+      // authenticated now. `isMountedRef` above catches an unmount, not an
+      // account switch: a request begun by A that resolves after B signs in
+      // would otherwise write A's item into B's list and, below, append A's
+      // work to a queue the identity effect had already cleared -- which the
+      // commit-time owner tag would then label B's, so `syncVault`'s owner
+      // check would pass it. Captured at the START of the call, because that
+      // is the only moment the initiating identity is knowable.
+      if (activeIdentityRef.current !== identityAtStart) return;
 
       const updatedAt = response?.data?.updated_at || new Date().toISOString();
       // Replace the row with the freshly-encrypted ciphertext, keeping the
@@ -798,6 +963,20 @@ export const VaultProvider = ({ children }) => {
   }, []);
 
   const deleteItem = useCallback(async (itemId) => {
+    // Captured before any await -- see the post-await guard below.
+    const identityAtStart = activeIdentityRef.current;
+    // Decoy sessions must not mutate the REAL vault. `encryptItem`'s own
+    // refusal (sessionVaultCrypto.js) covers add/edit, but a delete carries no
+    // ciphertext, so it never reaches that gate -- it would issue a real
+    // DELETE against the one shared, server-side item list and destroy a
+    // genuine item irreversibly. Checked BEFORE the request and before any
+    // optimistic state change. Message stays generic for the same reason
+    // encryptItem's does: it must not reveal the duress feature.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to delete item. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -805,6 +984,15 @@ export const VaultProvider = ({ children }) => {
       await vaultService.deleteVaultItem(itemId);
 
       if (!isMountedRef.current) return;
+      // The identity that STARTED this mutation must still be the one
+      // authenticated now. `isMountedRef` above catches an unmount, not an
+      // account switch: a request begun by A that resolves after B signs in
+      // would otherwise write A's item into B's list and, below, append A's
+      // work to a queue the identity effect had already cleared -- which the
+      // commit-time owner tag would then label B's, so `syncVault`'s owner
+      // check would pass it. Captured at the START of the call, because that
+      // is the only moment the initiating identity is knowable.
+      if (activeIdentityRef.current !== identityAtStart) return;
 
       // Remove item from state
       setItems(prevItems => prevItems.filter(i => i.id !== itemId));
@@ -853,6 +1041,16 @@ export const VaultProvider = ({ children }) => {
     // persist stale state.
     if (favoriteInFlightRef.current.has(id)) return;
 
+    // Same decoy gate as deleteItem above: `favorite` is non-secret metadata
+    // and so never goes through `encryptItem`, but the PATCH still mutates a
+    // REAL item's persisted state from a session that is not the real user's.
+    // Checked before the optimistic flip, so no state change is applied either.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to update favorite. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
+
     const target = items.find(i => i.id === id);
     if (!target) return;
 
@@ -898,6 +1096,16 @@ export const VaultProvider = ({ children }) => {
 
   // Add these new methods for backup/restore
   const createBackup = async () => {
+    // Same decoy gate as deleteItem/toggleFavorite above. create_backup
+    // snapshots the REAL user's items into a new server-side VaultBackup row
+    // (backup_views.py filters on request.user), so it is a real write made
+    // from a session that is not the real user's -- non-destructive, unlike
+    // restoreBackup below, but still not something a decoy session may do.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to create backup. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -920,6 +1128,23 @@ export const VaultProvider = ({ children }) => {
   };
 
   const getBackups = async () => {
+    // A READ, and gated anyway -- the write-vs-read split that put
+    // createBackup/restoreBackup behind this flag and left getBackups outside
+    // it was the right test for the WRONG axis. Reads cannot corrupt the real
+    // vault, but they can DISPLAY it, and `BackupManager` renders each row's
+    // name, timestamp and `item_count` on mount. A decoy session showing a
+    // near-empty vault next to "247 items" backed up last Tuesday contradicts
+    // itself in front of the coercer -- the §20.2 failure exactly, reached
+    // through backup metadata instead of the item list.
+    //
+    // Returns an EMPTY LIST rather than throwing: an error here would be its
+    // own tell ("why does only this screen fail?"), whereas a user with no
+    // backups is entirely ordinary. Returned BEFORE the request, so the
+    // real metadata never reaches the renderer or the network log.
+    if (sessionVaultCrypto.isDecoySession()) {
+      return [];
+    }
+
     try {
       const response = await api.get('/vault/backups/');
       return response.data;
@@ -932,6 +1157,19 @@ export const VaultProvider = ({ children }) => {
   };
 
   const restoreBackup = async (backupId) => {
+    // The most destructive path guarded by this flag, and the reason the
+    // §16.1 scoping note that excluded "backup/restore" was wrong: the server
+    // side (backup_views.py `_restore_from_items`) can
+    // `EncryptedVaultItem.objects.filter(user=request.user).delete()` and then
+    // batch `update_or_create` -- i.e. wipe and overwrite the REAL vault, from
+    // a decoy session, irreversibly. Same class as deleteItem, larger blast
+    // radius. Checked before the request AND before the refreshItems() that
+    // would otherwise reload the overwritten list.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const decoyErr = new Error('Failed to restore backup. Please try again.');
+      if (isMountedRef.current) setError(decoyErr.message);
+      throw decoyErr;
+    }
     try {
       setLoading(true);
       setError(null);

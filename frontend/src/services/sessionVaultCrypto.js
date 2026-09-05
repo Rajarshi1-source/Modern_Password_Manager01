@@ -18,6 +18,13 @@
  *       unwraps the DEK back into module memory. `hasWrappedKey(userId)` tells
  *       the UI whether to show a setup or an unlock prompt.
  *
+ *       (C) `../hiddenVault/unlockEnvelopeStore.js` layers a two-slot duress
+ *       envelope on top of this same DEK — see its own header comment and
+ *       docs/vault-unlock-envelope-integration-plan.md. `installRawDek`,
+ *       `exportSessionDekRaw`, and `exportWrappedDekRaw` below exist only to
+ *       move that DEK's raw bytes into and out of that envelope; they are not
+ *       a third independent key.
+ *
  * Item payload format (JSON string):
  *   { v: 'svc-gcm-1', iv: base64, ct: base64, salt: base64 }
  *
@@ -46,6 +53,20 @@ const WRAPPED_DEK_STORAGE_KEY = 'vaultWrappedDEK';
 
 let sessionKey = null;
 let sessionSaltB64 = null;
+// True only when `installRawDek` installed the DECOY slot's DEK (path C).
+// `encryptItem` refuses to write while this is set -- see its own comment.
+// Without this, a new item added during a decoy session would be encrypted
+// under the decoy DEK but stamped with the REAL slot's salt (setDecoySlot
+// reuses it, see unlockEnvelopeStore.js), and the real session would later
+// try to open it with the REAL DEK because `keyForSalt` fast-paths on a
+// matching salt -- an AES-GCM auth failure that permanently corrupts a row
+// in the one shared, server-side item list. Every OTHER session-establishing
+// function (`initSessionKeyFromPassword`, `setupVaultPassword`,
+// `unlockWithVaultPassword`, `clearSessionKey`) explicitly resets this to
+// `false` next to its own `sessionKey` assignment, so a stale `true` from an
+// earlier decoy session can never survive into a later real one that
+// installs a session key WITHOUT going through `installRawDek` again.
+let sessionIsDecoy = false;
 // Retained ONLY for path (A) (direct derivation), so `decryptItem` can derive a
 // key for an envelope written under a DIFFERENT salt than this device's -- see
 // `keyForSalt`. This does not widen the master password's blast radius: the
@@ -117,7 +138,7 @@ const wrappedStorageKey = (userId) =>
  * key). Without this, the only evidence was a vault full of items that quietly
  * needed re-derivation.
  */
-const getOrCreateUserSalt = (userId) => {
+export const getOrCreateUserSalt = (userId) => {
   const storageKey = saltStorageKey(userId);
   let salt = localStorage.getItem(storageKey);
   if (!salt) {
@@ -205,6 +226,11 @@ export const initSessionKeyFromPassword = async (password, userId) => {
   sessionSaltB64 = saltB64;
   sessionKey = key;
   sessionPassword = password;
+  // Path (A) never installs a decoy DEK -- clear a stale flag from a PRIOR
+  // decoy session that never went through clearSessionKey(), so a genuine
+  // real session installed after one doesn't inherit encryptItem's write
+  // refusal. See sessionIsDecoy's own comment.
+  sessionIsDecoy = false;
   // A re-init (different account, or the same one after a password change)
   // invalidates every memoized key -- they were derived from the OLD password.
   foreignSaltKeys.clear();
@@ -277,16 +303,54 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
   // derive foreign-salt keys FROM, so drop any path-(A) leftovers rather than
   // letting `keyForSalt` derive with a password that doesn't match this session.
   sessionPassword = null;
+  // See initSessionKeyFromPassword -- this is the freshly-generated REAL DEK,
+  // never a decoy one, so any stale flag from an earlier decoy session must
+  // not survive into it.
+  sessionIsDecoy = false;
   foreignSaltKeys.clear();
 };
 
 /**
- * Unlock an existing wrapped DEK using the user's vault password. Installs
- * the unwrapped DEK as the current session key. Throws if the password is
- * wrong or the stored record is missing/corrupt.
+ * Derive the KEK from `vaultPassword` and unwrap `record`'s wrapped DEK.
+ * Shared by `unlockWithVaultPassword` (needs a non-extractable key, since it
+ * becomes the live session key) and `exportWrappedDekRaw` (needs the same
+ * DEK as extractable raw bytes) below -- `extractable` is the only thing
+ * that differs between the two callers, so the unwrap parameters
+ * (algorithm, key length, the canonical wrong-password error) can no longer
+ * drift out of sync between them the way a hand-maintained "keep these two
+ * in sync" comment could not actually guarantee.
  */
-export const unlockWithVaultPassword = async (vaultPassword, userId) => {
-  if (!userId) throw new Error('unlockWithVaultPassword: userId required');
+const unwrapDek = async (vaultPassword, record, extractable) => {
+  const kek = await deriveKEK(vaultPassword, record.salt);
+  try {
+    return await window.crypto.subtle.unwrapKey(
+      'raw',
+      fromB64(record.wrapped),
+      kek,
+      { name: 'AES-GCM', iv: fromB64(record.iv) },
+      { name: 'AES-GCM', length: 256 },
+      extractable,
+      ['encrypt', 'decrypt']
+    );
+  } catch {
+    // AES-GCM unwrap failure is the canonical "wrong password" signal, for
+    // both callers.
+    throw new Error('Incorrect vault password.');
+  }
+};
+
+/**
+ * Load and validate the path (B) wrapped-DEK record for `userId`.
+ *
+ * Shared by `unlockWithVaultPassword` and `exportWrappedDekRaw`, which read
+ * the SAME record: one copy of the storage key, the parse, and the version
+ * check, so a later record-format change cannot be applied to one caller and
+ * forgotten in the other. Purely synchronous — callers that reserve a session
+ * generation must still do so AFTER this returns and BEFORE any await, which
+ * is the ordering `unlockWithVaultPassword` documents below.
+ */
+const loadWrappedRecord = (userId, fnName) => {
+  if (!userId) throw new Error(`${fnName}: userId required`);
   const raw = localStorage.getItem(wrappedStorageKey(userId));
   if (!raw) throw new Error('No vault key has been set up for this account.');
 
@@ -299,27 +363,22 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
   if (!record || record.v !== WRAPPED_VERSION) {
     throw new Error('Unsupported vault key record version.');
   }
+  return record;
+};
 
+/**
+ * Unlock an existing wrapped DEK using the user's vault password. Installs
+ * the unwrapped DEK as the current session key. Throws if the password is
+ * wrong or the stored record is missing/corrupt.
+ */
+export const unlockWithVaultPassword = async (vaultPassword, userId) => {
+  const record = loadWrappedRecord(userId, 'unlockWithVaultPassword');
+
+  // Reserved AFTER the synchronous validation above (so a record that fails
+  // to even parse never bumps this) and BEFORE the slow unwrap step below --
+  // see initSessionKeyFromPassword for why the position matters.
   const generation = ++sessionGeneration;
-  const kek = await deriveKEK(vaultPassword, record.salt);
-
-  let dek;
-  try {
-    dek = await window.crypto.subtle.unwrapKey(
-      'raw',
-      fromB64(record.wrapped),
-      kek,
-      { name: 'AES-GCM', iv: fromB64(record.iv) },
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-  } catch {
-    // AES-GCM unwrap failure is the canonical "wrong password" signal. Kept
-    // in its own try/catch so a stale-generation throw below (unrelated to
-    // whether the password was right) can never be relabeled as this.
-    throw new Error('Incorrect vault password.');
-  }
+  const dek = await unwrapDek(vaultPassword, record, false);
   if (generation !== sessionGeneration) {
     // See `initSessionKeyFromPassword`.
     throw new Error('Vault session initialization was superseded by a newer request.');
@@ -328,6 +387,9 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
   sessionKey = dek;
   // See `setupVaultPassword` — path (B) has no password to memoize against.
   sessionPassword = null;
+  // See initSessionKeyFromPassword -- this is the legacy wrapped-DEK record's
+  // REAL key, never a decoy one.
+  sessionIsDecoy = false;
   foreignSaltKeys.clear();
 };
 
@@ -340,11 +402,159 @@ export const clearWrappedKey = (userId) => {
   localStorage.removeItem(wrappedStorageKey(userId));
 };
 
+/**
+ * Re-derive the path (B) wrapped DEK as EXTRACTABLE raw bytes, without
+ * installing it as the session key.
+ *
+ * `unlockWithVaultPassword` above unwraps the same record but deliberately
+ * installs a NON-extractable key (`extractable: false` in its `unwrapKey`
+ * call) -- raw key material should not be exportable for the lifetime of a
+ * normal session. Provisioning the hidden-vault envelope
+ * (docs/vault-unlock-envelope-integration-plan.md §3.4 "upgrade" path) needs
+ * the opposite for one instant: the raw bytes, so the SAME DEK this record
+ * already protects can also be sealed into envelope slot 0. Rather than
+ * weaken `unlockWithVaultPassword`'s key for every caller, this does a
+ * second, independent unwrap via the shared `unwrapDek` helper above with
+ * `extractable: true` -- the unwrap parameters themselves can no longer
+ * drift between the two callers, since there is only one copy of them.
+ *
+ * Does NOT touch module session state (`sessionKey` etc.) -- call
+ * `unlockWithVaultPassword` separately to actually unlock the session; this
+ * is a side channel for provisioning only.
+ */
+export const exportWrappedDekRaw = async (vaultPassword, userId) => {
+  const record = loadWrappedRecord(userId, 'exportWrappedDekRaw');
+
+  const dek = await unwrapDek(vaultPassword, record, true);
+  const rawDek = await window.crypto.subtle.exportKey('raw', dek);
+  return { dekBytes: new Uint8Array(rawDek), saltB64: record.salt };
+};
+
+/**
+ * Export the CURRENT in-memory session DEK as raw bytes, if it is
+ * extractable.
+ *
+ * Only the fresh DEK `setupVaultPassword` just generated is extractable --
+ * `unlockWithVaultPassword` and `installRawDek` (below) both install
+ * NON-extractable keys, keeping raw key material out of reach for the
+ * lifetime of a normal session. So this is meant to be called immediately
+ * after `setupVaultPassword` resolves, to seed the hidden-vault envelope
+ * with the SAME key it just created — not as a general-purpose export. It
+ * throws for any other session shape rather than silently returning nothing.
+ */
+export const exportSessionDekRaw = async () => {
+  if (!sessionKey) {
+    throw new Error('exportSessionDekRaw: no session key installed');
+  }
+  let raw;
+  try {
+    raw = await window.crypto.subtle.exportKey('raw', sessionKey);
+  } catch {
+    throw new Error('exportSessionDekRaw: current session key is not extractable.');
+  }
+  return new Uint8Array(raw);
+};
+
+/**
+ * Reserve a session-generation token before starting a slow OUT-OF-MODULE
+ * async operation that will eventually call `installRawDek` — e.g.
+ * `unlockEnvelopeStore.open()`'s two Argon2id derivations
+ * (docs/vault-unlock-envelope-integration-plan.md §3.7 notes these can run
+ * over a second combined).
+ *
+ * Every other session-establishing function in this module captures
+ * `generation = ++sessionGeneration` BEFORE its own slow step and checks it
+ * after, so a `clearSessionKey()` (logout) or a newer call that lands mid-
+ * flight is detected rather than silently overwritten -- see
+ * `initSessionKeyFromPassword`. That pattern only works when the slow step
+ * is INSIDE this module. `unlockEnvelopeStore.open()` is not, so
+ * `installRawDek` bumping its own generation internally would be blind to
+ * anything that happened during the caller's `open()` await -- a logout or a
+ * newer unlock landing in that window would go undetected, and the stale
+ * result would resurrect a session nobody is in anymore. Call this BEFORE
+ * the slow external step and pass the result to `installRawDek` as
+ * `expectedGeneration` to close that gap.
+ */
+export const reserveSessionGeneration = () => ++sessionGeneration;
+
+/**
+ * Read the current session generation WITHOUT reserving one.
+ *
+ * For callers that need to detect whether the session changed under them but
+ * are NOT installing a session of their own -- e.g. `VaultDuressSetup`, whose
+ * `setDecoySlot()` call runs three Argon2 derivations during which the vault
+ * can lock (`clearSessionKey()` bumps this counter) or be re-unlocked with the
+ * DECOY password. Capture before the slow step, compare after.
+ *
+ * Deliberately separate from `reserveSessionGeneration()`: that one
+ * INCREMENTS, which is correct for a caller about to install a key but would
+ * invalidate an unrelated in-flight unlock if used merely to observe. A bare
+ * `hasSessionKey()` re-check is not equivalent either -- it answers true again
+ * after a lock followed by any unlock, including a decoy one.
+ */
+export const currentSessionGeneration = () => sessionGeneration;
+
+/**
+ * Install a raw 32-byte DEK as the session key.
+ *
+ * Used by the hidden-vault envelope unlock path
+ * (docs/vault-unlock-envelope-integration-plan.md §3.3), where the DEK
+ * arrives already decrypted from an envelope slot rather than unwrapped from
+ * the path (B) wrapped-DEK record. Mirrors `unlockWithVaultPassword`'s tail
+ * exactly (generation check, salt, session state) — keep the two in sync;
+ * see that function's comments for why each line here exists. The imported
+ * key is non-extractable, matching `unlockWithVaultPassword`'s posture.
+ *
+ * @param {number|null} [expectedGeneration] - a token from
+ *   `reserveSessionGeneration()`, captured by the caller BEFORE its own slow
+ *   pre-processing (e.g. envelope decode). When supplied, validated against
+ *   the live counter before any work happens here, catching a race that
+ *   started before this function was even called. When omitted, falls back
+ *   to the original self-contained behaviour (generation captured and
+ *   checked entirely within this call) — used only by callers with no slow
+ *   step of their own to protect.
+ * @param {boolean} [isDecoy] - true when `dekBytes` came from the hidden-vault
+ *   envelope's DECOY slot (unlockEnvelopeStore.open()'s `slotIndex === 1`).
+ *   Sets `sessionIsDecoy`, which `encryptItem` refuses to write under — see
+ *   that flag's own comment for why this must never be left to default true.
+ */
+export const installRawDek = async (dekBytes, saltB64, userId, expectedGeneration = null, isDecoy = false) => {
+  if (!userId) throw new Error('installRawDek: userId required');
+  if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
+    throw new Error('installRawDek: dekBytes must be a 32-byte Uint8Array');
+  }
+  if (expectedGeneration !== null && expectedGeneration !== sessionGeneration) {
+    throw new Error('Vault session initialization was superseded by a newer request.');
+  }
+
+  const generation = expectedGeneration ?? ++sessionGeneration;
+  const dek = await window.crypto.subtle.importKey(
+    'raw',
+    dekBytes,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  if (generation !== sessionGeneration) {
+    // See `initSessionKeyFromPassword`.
+    throw new Error('Vault session initialization was superseded by a newer request.');
+  }
+  sessionSaltB64 = saltB64;
+  sessionKey = dek;
+  sessionIsDecoy = isDecoy;
+  // See `setupVaultPassword` — path (B)/(C) have no password to memoize against.
+  sessionPassword = null;
+  foreignSaltKeys.clear();
+};
+
 // ----------------------------------------------------------------------------
 // Session key + item encryption (shared by both paths).
 // ----------------------------------------------------------------------------
 
 export const hasSessionKey = () => sessionKey !== null;
+
+/** True only for a session installed from the hidden-vault envelope's decoy slot. */
+export const isDecoySession = () => sessionIsDecoy;
 
 export const clearSessionKey = () => {
   // Invalidates any in-flight init/setup/unlock call -- see `sessionGeneration`.
@@ -352,6 +562,7 @@ export const clearSessionKey = () => {
   sessionKey = null;
   sessionSaltB64 = null;
   sessionPassword = null;
+  sessionIsDecoy = false;
   foreignSaltKeys.clear();
 };
 
@@ -413,10 +624,48 @@ const keyForSalt = async (saltB64) => {
  * Encrypt a plain JS object into an `encrypted_data` string.
  * Throws if no session key is initialized — callers MUST handle this
  * (e.g. prompt the user to log in with password, or show an error).
+ *
+ * Also throws for a decoy session (`isDecoySession()`). setDecoySlot stamps
+ * the decoy slot with the SAME salt as the real slot
+ * (unlockEnvelopeStore.js), so a new item written here would be encrypted
+ * under the decoy DEK but carry the real slot's salt — `keyForSalt`'s
+ * matching-salt fast path would later hand the REAL session's DEK to
+ * decrypt it, an AES-GCM failure that permanently corrupts a row in the one
+ * shared, server-side item list. There is no salt this function could stamp
+ * instead that fixes this: OAuth/envelope sessions never set
+ * `sessionPassword` (see its own comment), so ANY foreign salt already falls
+ * through to `sessionKey` in `keyForSalt` -- the failure is structural, not
+ * a salt-choice bug, so refusing the write here is the actual fix.
  */
+/**
+ * The single refusal string every decoy-session write path must raise.
+ *
+ * Indistinguishability requires that EVERY refusal emit one byte-identical
+ * message: `VaultContext` surfaces `error.message` straight to the screen, so
+ * two different strings would tell a coercer which layer declined. That rule
+ * was being held by copied literals in `encryptItem` below and in
+ * `vaultEnvelope.encryptEnvelope`, which cannot enforce it -- editing one copy
+ * silently breaks the property. Owned here, beside `sessionIsDecoy` itself.
+ *
+ * Deliberately generic and deliberately never logged: it must stay plausible
+ * as an ordinary save failure, and per the plan's §3.5 rule 4 no `console.*`
+ * may mention slots or duress, which would just move the tell to devtools.
+ */
+export const DECOY_WRITE_REFUSAL = 'Failed to save item. Please try again.';
+
 export const encryptItem = async (obj) => {
   if (!sessionKey) {
     throw new Error('Vault is locked: session encryption key is not initialized.');
+  }
+  if (sessionIsDecoy) {
+    // Deliberately generic, and deliberately NOT logged anywhere: this string
+    // reaches the UI (VaultContext's `setError(error.message || ...)`), so a
+    // coercer watching the screen during a duress unlock must not be able to
+    // read the duress feature's existence off a failed save. It must stay
+    // plausible as an ordinary save failure. Per the plan's §3.5 rule 4 ("no
+    // `console.*` may mention slots or duress") the reason is not logged
+    // either -- a console message would just move the same tell to devtools.
+    throw new Error(DECOY_WRITE_REFUSAL);
   }
   const iv = window.crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(obj));
@@ -506,8 +755,16 @@ export default {
   unlockWithVaultPassword,
   hasWrappedKey,
   clearWrappedKey,
+  exportWrappedDekRaw,
+  exportSessionDekRaw,
+  reserveSessionGeneration,
+  currentSessionGeneration,
+  DECOY_WRITE_REFUSAL,
+  installRawDek,
   hasSessionKey,
+  isDecoySession,
   clearSessionKey,
   encryptItem,
   decryptItem,
+  getOrCreateUserSalt,
 };
