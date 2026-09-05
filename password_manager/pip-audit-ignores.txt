@@ -282,6 +282,10 @@ PYSEC-2026-97 exp:2026-09-15
 # "remove an unused dependency" -- dropping the line would let a transitively
 # resolved, older, vulnerable nltk back in. Nothing imports it; the pin is a
 # floor, and the suppression stands on non-reachability either way.
+# Accepted-risk record: SECURITY.md "Accepted & Tracked Risks" entry 5, as
+# DEPENDENCY_POLICY.md line 59 requires ("Accepted risks must be documented in
+# SECURITY.md"). This manifest is the ENFORCEMENT layer; that entry is the
+# disclosure one. Keep them in sync on every renewal.
 PYSEC-2026-3740 exp:2026-10-25
 
 # nltk.data.load()/find() percent-encoded path traversal (CVE-2026-12243,
