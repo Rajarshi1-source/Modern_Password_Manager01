@@ -674,6 +674,15 @@ export const VaultProvider = ({ children }) => {
         // `setPendingChanges([])` further down would discard work B has queued
         // since. Same await-window rule as everywhere else in this file.
         if (activeIdentityRef.current !== syncIdentity) {
+          // Reset the status before leaving. `syncStatus` was set to 'syncing'
+          // before the request, and every other exit from this function lands
+          // on 'success' or 'error' -- this early return was the one path that
+          // left it stuck. The provider instance is SHARED across the identity
+          // change, so the stale 'syncing' belongs to A but is what B's UI
+          // renders, and nothing clears it until B happens to complete a sync
+          // of their own. 'idle' is this state's own initial value, and is
+          // truthful here: from B's perspective no sync has run.
+          setSyncStatus('idle');
           return;
         }
 

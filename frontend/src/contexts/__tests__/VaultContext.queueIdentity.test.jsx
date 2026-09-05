@@ -206,6 +206,36 @@ describe('VaultContext sync queue across an identity change', () => {
 
   });
 
+  test("A's abandoned sync does not leave B's provider stuck on 'syncing'", async () => {
+    // The provider instance is SHARED across the identity change, so the
+    // 'syncing' status set before A's request is what B's UI renders. Every
+    // other exit from syncVault lands on 'success' or 'error'; the
+    // identity-mismatch early return was the one path that left it hanging,
+    // and nothing clears it until B happens to complete a sync of their own.
+    const { result, rerender } = await mountAndQueueForA();
+
+    let resolveSync;
+    mockOnionSyncVault.mockReturnValueOnce(new Promise((r) => { resolveSync = r; }));
+    let syncPromise;
+    await act(async () => { syncPromise = result.current.syncVault(); });
+    await waitFor(() => expect(mockOnionSyncVault).toHaveBeenCalled());
+    expect(result.current.syncStatus).toBe('syncing');
+
+    mockAuthState.mockReturnValue(USER_B);
+    await act(async () => { rerender(); });
+
+    await act(async () => {
+      resolveSync({
+        data: { success: true, items: [], deleted_items: [] },
+        transport: 'clearnet', degraded: false,
+      });
+      await syncPromise;
+    });
+
+    // Truthful for B: from their perspective no sync has run.
+    expect(result.current.syncStatus).toBe('idle');
+  });
+
   test("A's late sync response does not wipe work B queued after the switch", async () => {
     // The SECOND half of the same guard. Asserting only that A's items are not
     // applied leaves a regression that still runs `setPendingChanges([])` in

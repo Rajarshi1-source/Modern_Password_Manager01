@@ -3961,3 +3961,84 @@ green test over a live hole.
 the v3 post-await check fails both new decrypt tests, removing the decoy half of
 the submit gate fails the mid-submit test, and nothing else moves. `eslint` is
 clean on all three changed files.
+
+## 39. Twenty-ninth review round — the pin that CI reads is not the pin that ships
+
+### 39.1 The DRF bump reached one requirements file out of five
+
+§34.4 bumped `djangorestframework` to 3.17.2 in `requirements.txt` and
+`requirements-lock.txt`, verified it against CI's dependency scan, and called it
+done. Three more files still pinned **3.16.1**, and they are the ones that build
+what actually runs:
+
+- `requirements-prod.txt` + `requirements-constraints.txt` — `Dockerfile.prod`
+  installs `-r requirements-prod.txt -c requirements-constraints.txt`, so the
+  production image took 3.16.1, and the constraints file would have **blocked**
+  an upgrade even if the prod file had been bumped alone.
+- `requirements-core.txt` — `docker/backend/Dockerfile` installs `-r
+  requirements-core.txt`. **The review named prod and constraints but not this
+  one**; it was found by grepping all five files rather than by working from the
+  finding's list, which is the only reason it was caught in the same round.
+
+`security.yml` also audits prod+constraints, so the security scan was reporting
+on 3.16.1 while the multi-scanner audited `requirements.txt`'s 3.17.2 and passed.
+Both were "green" about different files.
+
+**The shape, and it is the inverse of §29.1's:** that round fixed the copy of the
+state that nothing read and left the copy the consumer actually used. This one
+fixed the copy CI reads and left the copies production installs from. Same
+question either way — *which copy does the thing I care about actually consume?*
+— and the answer has to be found by enumerating them, not by fixing the file the
+tool happened to point at. All five now agree.
+
+### 39.2 The abandoned sync left the next identity stuck on 'syncing'
+
+§34.3's identity re-check returns early when B signs in during A's sync.
+`syncStatus` is set to `'syncing'` before the request and every other exit lands
+on `'success'` or `'error'` — this early return was the one path that left it
+hanging. The provider instance is **shared across the identity change**, so the
+stale `'syncing'` belongs to A but is what B's UI renders, and nothing clears it
+until B completes a sync of their own. Reset to `'idle'`, which is the state's
+own initial value and truthful for B: from their perspective no sync has run.
+
+Small, but it is the third distinct thing that early return had to remember to
+do (don't apply the response, don't clear the queue, don't strand the status) —
+worth noting that an early return added for a security reason inherits every
+cleanup obligation of the path it skips.
+
+### 39.3 The byte-identical refusal rule was held together by copied literals
+
+§33.1 required `encryptEnvelope`'s decoy refusal to be byte-identical to
+`sessionVaultCrypto.encryptItem`'s, because `VaultContext` surfaces
+`error.message` verbatim and two different strings would tell a coercer which
+layer declined. That requirement was enforced by **four copies of the same
+literal** — two in source, two in tests. Copied literals cannot enforce
+identity; editing one silently breaks the property, and the tests would have
+agreed with whichever copy they happened to mirror.
+
+Now `DECOY_WRITE_REFUSAL`, exported from `sessionVaultCrypto` beside
+`sessionIsDecoy` itself, referenced by the choke point and asserted against by
+both tests. Verified it actually enforces the rule rather than merely tidying
+it: making the choke point diverge fails two tests, where before it would have
+failed none.
+
+The wording assertion is kept separately (`not.toMatch(/decoy|duress|slot/i)`)
+because a single owner can still be edited into something that names the
+feature — one constant proves the paths agree, not that they agree on something
+safe.
+
+### 39.4 Two test-hygiene items
+
+- **A never-resolving mock outliving its test.** Two §38 tests install a v3
+  implementation that never resolves, to hold the await window open.
+  `vi.clearAllMocks()` keeps implementations, so a later test reaching the v3
+  path would hang to the Vitest timeout rather than fail readably. Reset in the
+  shared `beforeEach` — the §36 rule again, now for an implementation rather
+  than a return value.
+- **A dead assignment** (`provisionGenerationMoved`) left in the §36 modal
+  tests. Nothing reads it; the race is driven entirely by the generation mock
+  inside `provision`. Removed before it could be mistaken for the switch.
+
+854 tests across 76 files. The status reset and the constant are both
+negative-controlled; `eslint` reports the same eight pre-existing warnings,
+none new.

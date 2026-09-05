@@ -637,6 +637,22 @@ const keyForSalt = async (saltB64) => {
  * through to `sessionKey` in `keyForSalt` -- the failure is structural, not
  * a salt-choice bug, so refusing the write here is the actual fix.
  */
+/**
+ * The single refusal string every decoy-session write path must raise.
+ *
+ * Indistinguishability requires that EVERY refusal emit one byte-identical
+ * message: `VaultContext` surfaces `error.message` straight to the screen, so
+ * two different strings would tell a coercer which layer declined. That rule
+ * was being held by copied literals in `encryptItem` below and in
+ * `vaultEnvelope.encryptEnvelope`, which cannot enforce it -- editing one copy
+ * silently breaks the property. Owned here, beside `sessionIsDecoy` itself.
+ *
+ * Deliberately generic and deliberately never logged: it must stay plausible
+ * as an ordinary save failure, and per the plan's §3.5 rule 4 no `console.*`
+ * may mention slots or duress, which would just move the tell to devtools.
+ */
+export const DECOY_WRITE_REFUSAL = 'Failed to save item. Please try again.';
+
 export const encryptItem = async (obj) => {
   if (!sessionKey) {
     throw new Error('Vault is locked: session encryption key is not initialized.');
@@ -649,7 +665,7 @@ export const encryptItem = async (obj) => {
     // plausible as an ordinary save failure. Per the plan's §3.5 rule 4 ("no
     // `console.*` may mention slots or duress") the reason is not logged
     // either -- a console message would just move the same tell to devtools.
-    throw new Error('Failed to save item. Please try again.');
+    throw new Error(DECOY_WRITE_REFUSAL);
   }
   const iv = window.crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(obj));
@@ -743,6 +759,7 @@ export default {
   exportSessionDekRaw,
   reserveSessionGeneration,
   currentSessionGeneration,
+  DECOY_WRITE_REFUSAL,
   installRawDek,
   hasSessionKey,
   isDecoySession,

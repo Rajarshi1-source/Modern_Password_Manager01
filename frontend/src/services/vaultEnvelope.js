@@ -127,7 +127,7 @@ export async function encryptEnvelope(data) {
   // declined -- a new tell in the very guard added to remove one. Not logged,
   // for the same §3.5 reason that gate gives.
   if (sessionVaultCrypto.isDecoySession()) {
-    throw new Error('Failed to save item. Please try again.');
+    throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
   }
   if (sessionVaultCryptoV3.hasSessionKey()) {
     return sessionVaultCryptoV3.encryptItem(data);
