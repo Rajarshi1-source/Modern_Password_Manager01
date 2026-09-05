@@ -302,7 +302,17 @@ const VaultDuressSetup = () => {
     // this code. Placed before any envelope call, so nothing observable --
     // no decode, no request, no password-dependent message -- happens first.
     // The message is identical for every password class.
-    if (!sessionVaultCrypto.hasSessionKey()) {
+    // Both predicates, matching the render gate above -- `hasSessionKey()`
+    // alone is NOT "a real session". A DECOY unlock installs a session DEK
+    // too, so a decoy unlock landing between this screen's last render and
+    // this submit leaves the key present and the form live. The generation
+    // check further down cannot cover it either: that generation is captured
+    // AFTER this point, so it already reflects the decoy install.
+    //
+    // Leaving this weaker than the render gate would invert §31's whole
+    // finding -- the submit handler is the boundary, the render gate is
+    // display freshness, so the boundary must never check less.
+    if (!sessionVaultCrypto.hasSessionKey() || sessionVaultCrypto.isDecoySession()) {
       setError('Unlock your vault first, then set up a decoy password.');
       return;
     }
@@ -390,7 +400,17 @@ const VaultDuressSetup = () => {
     // this code. Placed before any envelope call, so nothing observable --
     // no decode, no request, no password-dependent message -- happens first.
     // The message is identical for every password class.
-    if (!sessionVaultCrypto.hasSessionKey()) {
+    // Both predicates, matching the render gate above -- `hasSessionKey()`
+    // alone is NOT "a real session". A DECOY unlock installs a session DEK
+    // too, so a decoy unlock landing between this screen's last render and
+    // this submit leaves the key present and the form live. The generation
+    // check further down cannot cover it either: that generation is captured
+    // AFTER this point, so it already reflects the decoy install.
+    //
+    // Leaving this weaker than the render gate would invert §31's whole
+    // finding -- the submit handler is the boundary, the render gate is
+    // display freshness, so the boundary must never check less.
+    if (!sessionVaultCrypto.hasSessionKey() || sessionVaultCrypto.isDecoySession()) {
       setRecoveryError('Unlock your vault first, then try the recovery step again.');
       return;
     }

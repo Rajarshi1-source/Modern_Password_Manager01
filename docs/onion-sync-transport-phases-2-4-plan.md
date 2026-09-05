@@ -944,6 +944,17 @@ protection the platform cannot deliver.
 
 ## B.3 Work items
 
+**The privacy plan's Phase 3 summary says "wiring
+`DarkProtocolService.js`'s already-present-but-unused `proxyVaultOperation`" —
+this section is what that wiring actually means.** That existing function POSTs
+the bearer token and encrypted payload to `${API_BASE_URL}/api/...` over plain
+clearnet, with no transport selector and no fallback control; calling it as-is
+under `prefer_onion`/`require_onion` would send vault traffic in the clear while
+the UI claimed otherwise. Everything below is required before that call is an
+onion transport, and the acceptance tests must include **direct clearnet
+fallback being REFUSED** rather than silently taken.
+
+
 1. **Port the Phase 1 service.** New `mobile/src/services/onionSyncService.js`,
    a direct port of the web one: same three modes, same fail-closed
    `require_onion`, same `degraded` flag. Storage via `AsyncStorage` (or

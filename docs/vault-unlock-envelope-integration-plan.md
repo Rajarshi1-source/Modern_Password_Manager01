@@ -3882,3 +3882,82 @@ and reading it does not advance it — the `reserveSessionGeneration()` confusio
 850 tests across 76 files. The backup gate is negative-controlled; `eslint`
 reports the same six pre-existing warnings, none new. No CI check was failing
 entering this round.
+
+## 38. Twenty-eighth review round — §34.2's own await, and a boundary weaker than its display
+
+### 38.1 The v3 fallback checked the decoy flag, then awaited
+
+§34.2 closed the read-side hole by adding `!isDecoySession()` to the condition
+guarding `decryptEnvelope`'s v3 fallback. The check is evaluated **before**
+`await sessionVaultCryptoV3.decryptItem(...)`, and that await is a real
+AES-GCM decrypt — so a decoy unlock landing inside the window passes the check
+and still returns the REAL plaintext v2 had refused. The fix for an await-window
+bug had an await window of its own, which is §26/§32/§36 for the fourth time.
+
+**Guarded at `decryptEnvelope` rather than at the callers, and the caller count
+is the argument.** There are six: `App.jsx:148`, `ExportVault.jsx:411`, and four
+in `VaultContext` (`:285`, `:499`, `:514`, `:701`). Exactly ONE — the on-demand
+`decryptItem` at `:285` — carries §34.1's caller-side generation guard. The
+other five have none, and they include the vault EXPORT path, which writes
+plaintext out of the app. Guarding the choke point covers all six at once;
+guarding callers would have meant five separate edits and a standing invitation
+for the seventh caller to forget.
+
+Both predicates are re-read after the await, deliberately: the generation moves
+on any lock or install (catching a logout, a newer real unlock, or a decoy one),
+while `isDecoySession()` also covers a generation captured after the transition.
+It returns `v2Result` rather than throwing, because that is exactly what this
+function yields for a decoy session that never entered the fallback — the two
+outcomes stay indistinguishable to every caller.
+
+### 38.2 `hasSessionKey()` is not "a real session", and the submit gate said it was
+
+The §30 gate reasoned that "only the real vault password installs a session".
+**That is false.** A decoy unlock installs a session DEK too, through
+`installRawDek(..., isDecoy=true)`. The render path never depended on the claim
+— it stacks two gates, the §23.1 decoy panel and then the live-session check —
+but **both submit handlers checked only `hasSessionKey()`**.
+
+So a decoy unlock landing between this screen's last render and a submit left
+the key present and the handler willing to proceed. The session-generation check
+further down cannot cover it either: that generation is captured *after* the
+submit gate, so it already reflects the decoy install and compares equal.
+
+That asymmetry inverts §31's own finding. §31 established that the submit
+handler is the boundary and the render gate is display freshness — so a boundary
+checking *less* than the display is exactly backwards. Both gates now check both
+predicates.
+
+### 38.3 The mobile summary invited the bug it was describing
+
+Phase 3's line reads "wiring `DarkProtocolService.js`'s
+already-present-but-unused `proxyVaultOperation`". Read literally that is an
+instruction to call the existing function — which POSTs the bearer token and
+encrypted payload to `${API_BASE_URL}/api/...` over ordinary clearnet, with no
+transport selector and no fallback control. Under `prefer_onion`/`require_onion`
+that would put vault traffic in the clear while the UI claimed otherwise.
+
+B.3 already specifies the real adapter in full (ported three-mode service with
+fail-closed `require_onion`, the availability-check fix, signature
+normalisation, Orbot binding with signing-certificate verification, OkHttp
+native SOCKS with redirect hardening and per-request port revalidation). The
+summary simply never pointed at it — the §36.3 shape again, where a one-line
+summary understates what the detailed section requires. Pointer added, with the
+four test cases named, including direct-fallback refusal.
+
+### 38.4 A test that proved nothing until it was made deterministic
+
+The first draft of the v3 await-window tests set the generation mock
+synchronously after calling `decryptEnvelope`. But the guard captures the
+generation only *after* the v2 await resolves, so the mutation landed before the
+capture and the post-check compared equal — the logout case failed while the
+decoy case passed only because `isDecoySession()` caught it independently.
+Rewritten so the v3 mock signals when it is entered, and the test waits for that
+signal before moving the session. **A timing test that does not synchronise on
+the thing it is timing is asserting nothing**, and here it would have shipped a
+green test over a live hole.
+
+853 tests across 76 files. All three guards are negative-controlled — removing
+the v3 post-await check fails both new decrypt tests, removing the decoy half of
+the submit gate fails the mid-submit test, and nothing else moves. `eslint` is
+clean on all three changed files.

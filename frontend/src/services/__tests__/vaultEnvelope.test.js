@@ -15,6 +15,9 @@ vi.mock('../sessionVaultCrypto', () => ({
     // Default false: a normal (non-decoy) session, which is what every
     // pre-existing case in this file assumes.
     isDecoySession: vi.fn(() => false),
+    // Stable by default so the v3 fallback's post-await generation check
+    // passes; the mid-decrypt cases move it deliberately.
+    currentSessionGeneration: vi.fn(() => 4),
   },
 }));
 vi.mock('../sessionVaultCryptoV3', () => ({
@@ -34,6 +37,7 @@ beforeEach(() => {
   // clearAllMocks resets calls but NOT implementations, so a case that sets a
   // decoy session would otherwise leak into every later case in this file.
   sessionVaultCrypto.isDecoySession.mockReturnValue(false);
+  sessionVaultCrypto.currentSessionGeneration.mockReturnValue(4);
 });
 
 describe('decryptEnvelope', () => {
@@ -103,6 +107,62 @@ describe('decryptEnvelope', () => {
 
     expect(out).toEqual({ _legacyPlaintext: true });
     expect(sessionVaultCryptoV3.decryptItem).not.toHaveBeenCalled();
+  });
+
+  test('a decoy unlock DURING the v3 decrypt does not yield the real plaintext', async () => {
+    // The pre-await check passes (not a decoy yet), then the decoy unlock
+    // lands while v3's AES-GCM decrypt is in flight. Without the post-await
+    // re-check the real plaintext v2 refused is handed straight back.
+    sessionVaultCrypto.decryptItem.mockResolvedValue({ _legacyPlaintext: true });
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+
+    // Signal when v3 actually starts: the guard captures the generation only
+    // AFTER the v2 await resolves, so changing it synchronously here would
+    // land before the capture and prove nothing.
+    let resolveV3;
+    let v3Started;
+    const v3HasStarted = new Promise((r) => { v3Started = r; });
+    sessionVaultCryptoV3.decryptItem.mockImplementation(() => {
+      v3Started();
+      return new Promise((r) => { resolveV3 = r; });
+    });
+
+    const pending = decryptEnvelope('real-item-envelope');
+    await v3HasStarted;
+
+    // installRawDek(..., isDecoy=true) sets the flag AND bumps the counter.
+    sessionVaultCrypto.isDecoySession.mockReturnValue(true);
+    sessionVaultCrypto.currentSessionGeneration.mockReturnValue(5);
+    resolveV3({ name: 'REAL SECRET', password: 'hunter2' });
+
+    const out = await pending;
+
+    expect(out).toEqual({ _legacyPlaintext: true });
+    expect(JSON.stringify(out)).not.toMatch(/hunter2|REAL SECRET/);
+  });
+
+  test('a LOGOUT during the v3 decrypt is caught by the generation alone', async () => {
+    // clearSessionKey() bumps the counter without setting the decoy flag, so
+    // this half is carried by the generation comparison rather than by
+    // isDecoySession() -- both are checked for that reason.
+    sessionVaultCrypto.decryptItem.mockResolvedValue({ _legacyPlaintext: true });
+    sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
+
+    let resolveV3;
+    let v3Started;
+    const v3HasStarted = new Promise((r) => { v3Started = r; });
+    sessionVaultCryptoV3.decryptItem.mockImplementation(() => {
+      v3Started();
+      return new Promise((r) => { resolveV3 = r; });
+    });
+
+    const pending = decryptEnvelope('real-item-envelope');
+    await v3HasStarted;
+
+    sessionVaultCrypto.currentSessionGeneration.mockReturnValue(9);
+    resolveV3({ name: 'REAL SECRET' });
+
+    await expect(pending).resolves.toEqual({ _legacyPlaintext: true });
   });
 
   test('a NON-decoy session still uses the v3 fallback', async () => {
