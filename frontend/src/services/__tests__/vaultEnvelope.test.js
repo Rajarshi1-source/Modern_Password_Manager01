@@ -18,6 +18,10 @@ vi.mock('../sessionVaultCrypto', () => ({
     // Stable by default so the v3 fallback's post-await generation check
     // passes; the mid-decrypt cases move it deliberately.
     currentSessionGeneration: vi.fn(() => 4),
+    // The real module owns this string; mirroring the literal here would
+    // recreate exactly the copied-literal problem the constant removes, so the
+    // assertions below compare against whatever the module exports.
+    DECOY_WRITE_REFUSAL: 'Failed to save item. Please try again.',
   },
 }));
 vi.mock('../sessionVaultCryptoV3', () => ({
@@ -38,6 +42,11 @@ beforeEach(() => {
   // decoy session would otherwise leak into every later case in this file.
   sessionVaultCrypto.isDecoySession.mockReturnValue(false);
   sessionVaultCrypto.currentSessionGeneration.mockReturnValue(4);
+  // Two tests install a NEVER-RESOLVING v3 implementation to hold the await
+  // window open. `clearAllMocks` keeps implementations, so without this a
+  // later test reaching the v3 path would hang to the Vitest timeout rather
+  // than fail with something readable.
+  sessionVaultCryptoV3.decryptItem.mockReset();
 });
 
 describe('decryptEnvelope', () => {
@@ -187,7 +196,7 @@ describe('encryptEnvelope', () => {
     sessionVaultCryptoV3.hasSessionKey.mockReturnValue(true);
 
     await expect(encryptEnvelope({ name: 'New', password: 'secret' }))
-      .rejects.toThrow('Failed to save item. Please try again.');
+      .rejects.toThrow(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
 
     expect(sessionVaultCryptoV3.encryptItem).not.toHaveBeenCalled();
     expect(sessionVaultCrypto.encryptItem).not.toHaveBeenCalled();
@@ -202,7 +211,7 @@ describe('encryptEnvelope', () => {
 
     // What sessionVaultCrypto.encryptItem itself raises for a decoy session,
     // asserted in sessionVaultCrypto.decoySession.test.js.
-    expect(viaChokePoint).toBe('Failed to save item. Please try again.');
+    expect(viaChokePoint).toBe(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
   });
 
   test('prefers v3 when a v3 session key is present', async () => {

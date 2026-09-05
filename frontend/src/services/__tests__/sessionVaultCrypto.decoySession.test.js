@@ -25,6 +25,7 @@ import {
   hasSessionKey,
   clearSessionKey,
   currentSessionGeneration,
+  DECOY_WRITE_REFUSAL,
   encryptItem,
   decryptItem,
   initSessionKeyFromPassword,
@@ -147,9 +148,16 @@ describe('encryptItem refuses to write during a decoy session', () => {
     // VaultContext's `setError(error.message || ...)`, so it must read as an
     // ordinary save failure. A regression that reintroduces "decoy"/"duress"
     // wording is a real information leak, not a cosmetic change.
+    // Compared against the exported constant, not a copied literal: the
+    // property under test is that every refusal path emits ONE string, and a
+    // literal here would drift out of sync with the module the moment someone
+    // edits it -- the same copied-literal weakness the constant removes.
     await expect(encryptItem({ title: 'anything' })).rejects.toThrow(
-      /^Failed to save item\. Please try again\.$/
+      DECOY_WRITE_REFUSAL
     );
+    // Still asserted on the wording itself, since the constant could in
+    // principle be edited to something that names the feature.
+    expect(DECOY_WRITE_REFUSAL).not.toMatch(/decoy|duress|slot/i);
   });
 
   test('a real session (isDecoy false) can still write and read back its own item', async () => {

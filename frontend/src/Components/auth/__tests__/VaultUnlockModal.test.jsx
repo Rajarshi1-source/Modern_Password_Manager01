@@ -132,7 +132,6 @@ describe('setup mode (no wrapped key, no envelope)', () => {
     // no session key.
     sessionVaultCrypto.setupVaultPassword.mockResolvedValue(undefined);
     sessionVaultCrypto.exportSessionDekRaw.mockResolvedValue(DEK);
-    sessionVaultCrypto.provisionGenerationMoved = false;
     unlockEnvelopeStore.provision.mockImplementation(async () => {
       // The logout happens while provision is awaiting.
       sessionVaultCrypto.currentSessionGeneration.mockReturnValue(2);
