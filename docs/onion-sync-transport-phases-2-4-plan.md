@@ -426,13 +426,21 @@ New `desktop/src/main/onionTransport.js`:
   to. That exception exists because the `.onion` listener has no TLS
   certificate to present; it is not license to weaken transport for this
   unrelated clearnet call. Configure this fetch's HTTP client to refuse a
-  non-HTTPS URL outright and to refuse (not follow) any redirect that
-  downgrades to `http://`, using the same redirect-hardening approach
+  non-HTTPS URL outright and to refuse (not follow) any redirect that leaves
+  the exact capabilities origin, using the same redirect-hardening approach
   (`maxRedirects: 0` / origin-validated redirects) this section already
-  requires for the onion-routed `vault_sync` request itself. Add a test for
-  an initial `http://` capabilities URL being refused before any request is
-  attempted, and one for an `https://` request that receives a redirect to
-  `http://` being refused rather than followed.
+  requires for the onion-routed `vault_sync` request itself.
+  **"Downgrade" is the wrong predicate on its own, and an earlier draft of
+  this bullet used it alone.** An `https://` → `https://attacker.example`
+  redirect is not a downgrade, so a client implementing "refuse downgrades"
+  literally would FOLLOW it and hand the bearer `authToken` to a host of the
+  redirector's choosing — over TLS, which is precisely what makes it look
+  safe. The rule is exact-origin, and a scheme downgrade is just one way to
+  fail it. Three tests: an initial `http://` capabilities URL refused before
+  any request is attempted; an `https://` request receiving a redirect to
+  `http://` refused rather than followed; and an `https://` request receiving
+  a redirect to a DIFFERENT `https://` origin refused, asserting no follow-up
+  request carries the `authToken`.
 
   **PR C removes the `authToken` this bootstrap depends on — resolve the
   address at ISSUANCE time once C lands.** The capabilities endpoint is
@@ -1176,6 +1184,24 @@ implementation. It must settle:
 2. **Issuance.** Over clearnet, authenticated by the existing JWT. N tokens per
    issuance; N is a privacy parameter (too few and issuance timing correlates
    with redemption; too many and a stolen batch is worth more).
+   **"Over clearnet" states the ROUTE, not the transport security, and this
+   exchange carries the JWT — so state the transport too.** A.4 already spells
+   this out for the main-process capability fetch, on exactly the same
+   reasoning (a bearer token crossing the open Internet), and this document
+   also contains an explicit `http://` exception for `.onion` requests — so
+   leaving issuance as bare "clearnet" invites an implementer to read that
+   exception as the house style. It is not: the exception exists only because
+   the `.onion` listener has no TLS certificate to present, and Tor supplies
+   the encryption itself. Issuance must be **HTTPS-only with certificate
+   validation**, must refuse a non-HTTPS issuance URL outright before the JWT
+   is transmitted, and must refuse (not follow) any redirect that leaves the
+   exact issuance origin — the same exact-origin rule as A.4, not merely a
+   no-downgrade one. Test all three: a non-HTTPS issuance URL refused before
+   any request; an `https://` → `http://` redirect refused; and an
+   `https://` → different-`https://`-origin redirect refused, asserting the
+   JWT never reaches the redirect target. **This applies to the address
+   caching that A.4 moves into this same exchange**, which is the other thing
+   riding on it.
 3. **Redemption.** Over onion only. A redeemed token authorises exactly one
    `vault_sync`, and authorises **nothing else** — it must not be usable to
    read or enumerate the vault.

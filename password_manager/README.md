@@ -529,7 +529,9 @@ Common utilities, constants, and helpers.
 
 ### Requirements
 
-- Python 3.8+ (compatible with Python 3.13)
+- Python 3.10+ (compatible with Python 3.13; CI runs 3.11)
+  - Raised from 3.8+ when `djangorestframework` was pinned to 3.17.2, which
+    declares `requires_python >=3.10` — DRF 3.17.0 dropped Python 3.9.
 - PostgreSQL (production) / SQLite (development)
 - Redis (for Celery)
 - Node.js 14+ (for frontend)

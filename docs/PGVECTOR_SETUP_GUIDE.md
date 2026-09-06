@@ -20,7 +20,7 @@ pgvector is an **optional** PostgreSQL extension that provides efficient similar
 - PostgreSQL 11+ (14+ recommended)
 - PostgreSQL development headers
 - C compiler (gcc)
-- Python 3.8+
+- Python 3.10+ (see the backend README; DRF 3.17.2 requires >=3.10)
 
 ## Installation
 
