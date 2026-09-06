@@ -19,7 +19,7 @@ pyasn1-modules==0.4.2
 # stack (hyperframe<4, h2<3) is intentionally NOT pinned here — it is incompatible
 # with h2 4.3.0 and is not pulled by any declared dependency (django-push-notifications
 # is installed without the [apns] extra).
-h2==4.3.0
+h2==4.4.1
 hyperframe==6.1.0
 hpack==4.1.0
 
