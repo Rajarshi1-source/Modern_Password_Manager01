@@ -12,7 +12,7 @@ The password manager uses GeoIP databases to:
 
 ## 📋 Prerequisites
 
-- Python 3.8+ with Django
+- Python 3.10+ with Django (see the backend README; DRF 3.17.2 requires >=3.10)
 - MaxMind account (free)
 - Internet connection for downloading databases
 

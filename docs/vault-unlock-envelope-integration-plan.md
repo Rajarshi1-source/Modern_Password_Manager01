@@ -4128,3 +4128,78 @@ deliberately rather than discovering them as a red check.
 854 tests across 76 files. `eslint` clean on the changed test file; the
 `importOriginal` fix is verified by source-side divergence rather than by the
 choke-point divergence that previously passed for a control.
+
+## 41. Thirty-first review round — "downgrade" was the wrong predicate, and a JWT with no stated transport
+
+### 41.1 A.4's redirect rule protected against the wrong thing
+
+A.4 required the main-process capability fetch to "refuse (not follow) any
+redirect that **downgrades to `http://`**". That is not the property needed.
+
+An `https://` → `https://attacker.example` redirect is **not a downgrade**, so a
+client implementing that rule literally would follow it and hand the bearer
+`authToken` to a host of the redirector's choosing — over TLS, which is exactly
+what makes it look safe. The parenthetical named the right mechanism
+(`maxRedirects: 0` / origin-validated redirects), but the stated rule and both
+required tests were about the scheme, and an implementer follows the rule, not
+the parenthetical.
+
+Rewritten as **exact-origin**, with a scheme downgrade demoted to one way of
+failing it, and a third test added for the HTTPS→different-HTTPS case asserting
+no follow-up request carries the token.
+
+**This is the §33.1 lesson about refusal messages, applied to a predicate:** a
+rule that is *nearly* the property you want will be implemented exactly as
+written, and the gap between "nearly" and "exactly" is where the bug lives.
+
+### 41.2 C.2 said "over clearnet" and stopped
+
+C.2's issuance step read: *"Over clearnet, authenticated by the existing JWT."*
+That names the ROUTE and says nothing about transport security — for an exchange
+that carries the JWT across the open Internet.
+
+The omission is worse than a plain gap because of what surrounds it. A.4 spells
+out HTTPS-only + certificate validation + downgrade rejection for the capability
+fetch **on identical reasoning** (a bearer token crossing clearnet), and the same
+document carries an explicit `http://` exception for `.onion` requests. An
+implementer reading "clearnet" with that exception nearby can reasonably conclude
+plain HTTP is this project's house style for non-onion calls. It is not: that
+exception exists solely because the `.onion` listener has no TLS certificate to
+present and Tor supplies the encryption itself.
+
+Issuance now carries the same requirement and the same three tests, and the
+privacy plan mirrors it — this exchange is also where §28's address caching was
+moved to, so both things ride on it.
+
+**Third round running where the finding was "a sibling path needs the rule that
+one path already states"** (§38.2 submit-vs-render gate, §40.3
+changelog-vs-contract, this). The recurring question to ask when writing any
+security rule: *which other path has the same exposure, and does the rule reach
+it?*
+
+### 41.3 The DRF bump invalidated a documented Python floor
+
+`djangorestframework==3.17.2` declares `requires_python >=3.10` (verified from
+PyPI metadata in §34.4; DRF 3.17.0 dropped Python 3.9). Three docs still
+advertised **Python 3.8+**: `password_manager/README.md`,
+`password_manager/GEOIP_SETUP.md`, `docs/PGVECTOR_SETUP_GUIDE.md`.
+
+Nothing breaks in CI — every image and workflow already runs 3.11 — so no check
+would ever have caught this. It is purely a promise to a reader following the
+setup guide on 3.8 or 3.9, who would hit an unresolvable pin. Raised to 3.10+,
+with the reason recorded inline so the next person can see *why* the floor moved
+rather than treating it as arbitrary.
+
+**A dependency bump's blast radius includes the prose that describes the
+dependency.** §39.1 was the same lesson for the four other requirements files;
+this is its documentation half.
+
+### 41.4 Still deferred
+
+`PYSEC-2025-121` and `PYSEC-2026-97` expire 2026-09-15, nine days out —
+unchanged from §40.4. Nothing expired, dependency scan green, so still not
+renewed without a triggering failure.
+
+Docs-only round: no frontend or backend source changed (`git diff --stat` over
+`frontend/**` and `password_manager/**/*.py` is empty), so the 854-test suite
+from §40 stands unchanged.
