@@ -154,7 +154,7 @@ multidict==6.7.1
 murmurhash==1.0.15
 namex==0.1.0
 networkx==3.5
-nltk==3.9.4
+nltk==3.10.3
 numpy==2.3.5
 oauthlib==3.2.2
 opt_einsum==3.4.0
