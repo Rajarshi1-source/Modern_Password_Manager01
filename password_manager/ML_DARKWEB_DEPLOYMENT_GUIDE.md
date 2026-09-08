@@ -69,8 +69,8 @@ Before deploying to production, ensure you have:
 # Ubuntu/Debian
 sudo apt-get update
 sudo apt-get install -y \
-    python3.11 \
-    python3.11-dev \
+    python3.12 \
+    python3.12-dev \
     python3-pip \
     redis-server \
     postgresql-15 \

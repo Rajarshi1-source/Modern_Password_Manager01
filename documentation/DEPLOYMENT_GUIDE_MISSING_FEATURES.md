@@ -9,7 +9,7 @@ This guide provides step-by-step instructions to deploy the newly implemented mi
 ## ✅ Pre-Deployment Checklist
 
 ### System Requirements
-- [ ] Python 3.10+ installed
+- [ ] Python 3.12+ installed
 - [ ] Node.js 18+ installed
 - [ ] PostgreSQL 14+ running
 - [ ] Redis 7+ running (for Celery/caching)

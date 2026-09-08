@@ -49,7 +49,7 @@ This guide covers the complete deployment of the Password Manager application wi
 # Ubuntu/Debian
 sudo apt-get update
 sudo apt-get install -y \
-    python3.11 python3-pip python3-venv \
+    python3.12 python3-pip python3-venv \
     postgresql postgresql-contrib \
     redis-server \
     nodejs npm \
@@ -179,7 +179,7 @@ sudo apt-get update && sudo apt-get upgrade -y
 
 # Install system dependencies
 sudo apt-get install -y \
-    python3.11 python3-pip python3-venv \
+    python3.12 python3-pip python3-venv \
     postgresql postgresql-contrib \
     redis-server \
     nginx \
@@ -199,7 +199,7 @@ git clone https://github.com/yourusername/password-manager.git
 cd password-manager
 
 # Setup virtual environment
-python3.11 -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
 
 # Install Python dependencies

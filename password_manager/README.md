@@ -529,9 +529,16 @@ Common utilities, constants, and helpers.
 
 ### Requirements
 
-- Python 3.10+ (compatible with Python 3.13; CI runs 3.11)
-  - Raised from 3.8+ when `djangorestframework` was pinned to 3.17.2, which
-    declares `requires_python >=3.10` — DRF 3.17.0 dropped Python 3.9.
+- Python 3.12+ (compatible with Python 3.13; CI, Docker and the deployed
+  image all run 3.12)
+  - `SECURITY.md` is the authority here: it lists Python below 3.12 as
+    unsupported, so 3.12 is the floor the whole project builds and tests on.
+    Raising the config to match that statement, rather than lowering the
+    statement to match a lagging config, is the direction a password manager
+    should move in.
+  - The dependency floor is lower and is a separate constraint:
+    `djangorestframework` 3.17.2 declares `requires_python >=3.10` (3.17.0
+    dropped Python 3.9). The project floor is the higher of the two.
 - PostgreSQL (production) / SQLite (development)
 - Redis (for Celery)
 - Node.js 14+ (for frontend)
