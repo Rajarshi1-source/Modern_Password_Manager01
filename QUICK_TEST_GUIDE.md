@@ -4,7 +4,7 @@
 
 ### Prerequisites
 - Ensure `.env` file in `password_manager/` directory has `DEBUG=True`
-- Python 3.11+ and Node.js 18+ installed
+- Python 3.12+ and Node.js 18+ installed
 
 ### 1. Start Backend Server
 ```bash

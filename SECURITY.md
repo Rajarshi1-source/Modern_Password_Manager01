@@ -59,7 +59,9 @@ Scans are required:
 
 ### 5️⃣ `nltk` – Model-Artifact Path Traversal (CVE-2026-81726)
 - **Source:** Declared in `requirements.txt` under "Security overrides for transitive dependencies" (`nltk>=3.9.4`), pinned `nltk==3.9.4` in `requirements-lock.txt`. The declaration exists only to raise the floor on a version a transitive dependency pulls in — it is not an imported dependency of this codebase.
-- **Severity:** Medium (Arbitrary file read/write outside allowed roots)
+- **Severity (upstream):** High — the GitHub advisory GHSA-8mgp-746c-j5xp classifies it High. Recorded as the advisory states it, not as this repository experiences it.
+- **Severity (residual, this repository):** Medium — the affected model-artifact loaders are unreachable here (see Mitigation), so the arbitrary file read/write cannot be triggered by this codebase. The two lines are kept separate on purpose: collapsing them into one number silently overrides the advisory, and a reader comparing this file against the advisory has no way to tell a considered downgrade from a mistake.
+- **CVSS:** none asserted. The advisory publishes no CVSS score, so neither does this entry.
 - **Issue:** NLTK's model-artifact APIs bypass `pathsec` and can touch files outside their allowed roots. Tracked as PYSEC-2026-3740 / GHSA-8mgp-746c-j5xp.
 - **Mitigation:** Unreachable in this codebase — `import nltk`, `from nltk` and `nltk.` return zero matches across `password_manager/`, so none of the affected loaders is ever called, with or without an attacker-controlled path.
 - **Status:** Accepted risk (no upstream fix exists — the GHSA range is `introduced: 0` → `last_affected: 3.10.3`, i.e. every published release including the one CI resolves, and pip-audit reports `fix_versions: []`; pinning cannot help). Suppressed in `password_manager/pip-audit-ignores.txt` with a dated expiry, re-evaluated on each renewal.
