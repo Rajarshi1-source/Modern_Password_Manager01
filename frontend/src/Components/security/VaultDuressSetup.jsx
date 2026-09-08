@@ -648,8 +648,12 @@ const VaultDuressSetup = () => {
         return;
       }
       // Fixed string, never `err.message`: the underlying errors here name
-      // slots and decoy state, and this screen's copy must not.
-      console.warn('VaultDuressSetup: decoy contents submission failed.');
+      // slots and decoy state, and this screen's copy must not. The log line
+      // says no more than the sibling handler's does, per the plan's §3.5
+      // rule 4 -- a console message naming the feature just moves the tell to
+      // devtools. (This form only renders in a REAL session, so a coercer
+      // never sees it; the rule is kept anyway rather than argued around.)
+      console.warn('VaultDuressSetup: contents submission failed.');
       setContentsError('Could not save the decoy contents. Please try again.');
     } finally {
       setContentsBusy(false);
