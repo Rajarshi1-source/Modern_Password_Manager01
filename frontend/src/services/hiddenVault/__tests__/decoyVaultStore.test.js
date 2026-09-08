@@ -237,6 +237,82 @@ describe('failure modes all return an empty list', () => {
   });
 });
 
+describe('concurrency', () => {
+  test('a backfill that starts before a seed does not overwrite it', async () => {
+    // The interleaving that matters: `open()` calls writeUnconfigured on every
+    // unlock, and its key-generation plus AES-GCM work is a real await window.
+    // A seed landing inside that window must survive -- otherwise the user
+    // saves decoy contents and the next decoy unlock renders empty.
+    // Synchronise on the await being timed rather than racing it and hoping:
+    // the backfill is held INSIDE its own AES-GCM call until the seed has
+    // finished writing, which is the ordering the re-check exists for. Racing
+    // the two unsynchronised passes for the wrong reason -- the backfill's
+    // crypto is shorter, so it usually finishes first and the seed lands on
+    // top of it regardless of whether the re-check exists.
+    const realEncrypt = webcrypto.subtle.encrypt.bind(webcrypto.subtle);
+    let releaseBackfill;
+    const held = new Promise((resolve) => { releaseBackfill = resolve; });
+    let firstCall = true;
+    vi.spyOn(window.crypto.subtle, 'encrypt').mockImplementation(async (...args) => {
+      const out = await realEncrypt(...args);
+      if (firstCall) {
+        firstCall = false;
+        await held;
+      }
+      return out;
+    });
+
+    const backfill = decoyVaultStore.writeUnconfigured(USER);
+    await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: ITEMS });
+    releaseBackfill();
+    const wrote = await backfill;
+
+    // Refused, because the key it checked for as absent is now present.
+    expect(wrote).toBe(false);
+    vi.restoreAllMocks();
+    await enterDecoySession(dek(7));
+    // The assertion that actually matters: the seeded CONTENTS are still
+    // readable. A return value can be right for the wrong reason.
+    expect(await decoyVaultStore.loadForSession(USER)).toHaveLength(2);
+  });
+
+  test('two appends in the same millisecond get distinct ids', async () => {
+    await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: [] });
+    await enterDecoySession(dek(7));
+    vi.spyOn(sessionVaultCrypto, 'encryptDecoyItem').mockResolvedValue('SEALED');
+    // Freeze the clock: a timestamp-only id repeats here, and both
+    // deleteItem and toggleFavorite match rows by id -- one delete would
+    // remove both rows.
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+
+    await decoyVaultStore.addRowForSession(USER, { data: { name: 'one' } });
+    await decoyVaultStore.addRowForSession(USER, { data: { name: 'two' } });
+
+    const rows = await decoyVaultStore.loadForSession(USER);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].id).not.toBe(rows[1].id);
+  });
+
+  test('serialized mutations do not discard each other', async () => {
+    await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: ITEMS });
+    await enterDecoySession(dek(7));
+
+    // Two overlapping read-modify-writes on DIFFERENT rows. Unserialized, both
+    // load the same snapshot and the second save discards the first --
+    // `favoriteInFlightRef` only serializes per item id, so this is reachable
+    // by toggling two rows.
+    const [a, b] = await Promise.all([
+      decoyVaultStore.mutate(USER, (rows) => rows.map((r, i) => (i === 0 ? { ...r, favorite: true } : r))),
+      decoyVaultStore.mutate(USER, (rows) => rows.map((r, i) => (i === 1 ? { ...r, favorite: true } : r))),
+    ]);
+
+    expect(a).toBe(true);
+    expect(b).toBe(true);
+    const rows = await decoyVaultStore.loadForSession(USER);
+    expect(rows.map((r) => r.favorite)).toEqual([true, true]);
+  });
+});
+
 describe('capacity', () => {
   const oversized = Array.from({ length: 200 }, (_, i) => ({
     site: `site-${i}.example.com`,

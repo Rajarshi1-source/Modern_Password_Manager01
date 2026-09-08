@@ -46,10 +46,14 @@ This guide covers the complete deployment of the Password Manager application wi
 ### Software Dependencies
 
 > **Python 3.12 availability.** `python3.12` is in the default repositories on
-> **Ubuntu 24.04 LTS or newer** and **Debian 13 or newer**. On Ubuntu 22.04
-> (default 3.10) and Debian 12 (default 3.11) the `apt-get install` below will
-> fail on that package; add the `deadsnakes` PPA
-> (`sudo add-apt-repository ppa:deadsnakes/ppa`) or build from source first.
+> **Ubuntu 24.04 LTS or newer** only.
+> - **Ubuntu 22.04** (default 3.10): add the deadsnakes PPA —
+>   `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt-get update`.
+> - **Debian**: there is no `python3.12` package in any current release —
+>   bookworm (12) ships 3.11 and trixie (13) ships 3.13, and deadsnakes is
+>   Ubuntu-only. Install 3.12 with `pyenv` or build from source, or run the
+>   backend from `docker/backend/Dockerfile`, which pins its own interpreter.
+>
 > The project's floor is 3.12 — see `SECURITY.md`.
 
 ```bash

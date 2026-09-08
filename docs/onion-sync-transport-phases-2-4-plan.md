@@ -1656,4 +1656,8 @@ implementation. It must settle:
   invariant forbids the server learning which envelope slot unlocked a
   session, which is why the decoy's contents are device-local rather than
   synced — the same reason this plan cannot ask the server to distinguish
-  onion from clearnet callers by identity.
+  onion from clearnet callers by identity. Its §13.1 is also worth reading
+  before touching any SBOM or scanner step here: a `> file || true` pattern
+  produced a green job and a zero-byte signed artifact, which is the
+  supply-chain analogue of the fail-open modes this plan's §A.5 argues
+  against.

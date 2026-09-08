@@ -183,7 +183,16 @@ export const writeUnconfigured = async (userId) => {
   if (!userId) return false;
   if (readRaw(userId) !== null) return false;
   const throwaway = await importDecoyKey(window.crypto.getRandomValues(new Uint8Array(32)));
-  return writeRaw(userId, await encryptContainer(throwaway, []));
+  const blob = await encryptContainer(throwaway, []);
+  // Re-checked AFTER the awaits, not only before them. `open()` calls this on
+  // every successful unlock, and the key-generation plus AES-GCM work above is
+  // a real window: another tab (or this one's own setup screen) can seed
+  // contents inside it, and an unconditional write here would replace that
+  // seed with filler nothing can decrypt -- the next decoy unlock would render
+  // empty. Same compare-before-write shape `provision` already uses across its
+  // own Argon2 awaits, for the same reason.
+  if (readRaw(userId) !== null) return false;
+  return writeRaw(userId, blob);
 };
 
 // ---------------------------------------------------------------------------
@@ -426,7 +435,12 @@ export const addRowForSession = async (userId, { data, itemType = 'password', fa
   return mutate(userId, (rows) => [
     ...rows,
     {
-      id: `d${Date.now()}`,
+      // Random suffix, not the timestamp alone: `mutate` serializes writes but
+      // does nothing about the CLOCK, so two appends inside one millisecond
+      // produced the same `id`. `VaultContext.deleteItem` and `toggleFavorite`
+      // both match rows by `id`, so one delete would have removed both rows and
+      // one favourite toggle flipped both.
+      id: `d${Date.now()}_${window.crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`,
       item_id: id,
       item_type: itemType,
       encrypted_data: encrypted,
