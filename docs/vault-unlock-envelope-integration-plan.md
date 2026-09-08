@@ -4224,3 +4224,12 @@ are now historical rather than current:
 `DECOY_WRITE_REFUSAL` remains the single string every decoy-session write
 failure emits, and §39.3's rule that it must be sourced rather than copied now
 covers three call sites.
+
+Round 2 of that PR is worth reading against §33.1's sibling-sweep rule
+specifically: the round-1 fix migrated ONE of three `cyclonedx-py` call sites
+off a broken CLI, and the sibling it missed (`ci-sbom.yml`) was uploading a
+zero-byte SBOM next to the cosign-signed image SBOM — green job, empty
+artifact. Same shape as §34.2, in workflow files rather than source. It also
+found the await-window rule applying to a NON-crypto guard: `writeUnconfigured`
+checked the storage key was absent, awaited key generation, then wrote
+unconditionally, so a seed landing inside that window was replaced by filler.

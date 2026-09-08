@@ -694,6 +694,12 @@ onion case):
     limitations survive and are named in the setup screen's own copy:
     device-local only, a decoy write sends no request while a real one
     POSTs (so traffic still distinguishes them), and backups still refuse.
+    Two review rounds followed; `docs/decoy-vault-contents-plan.md` §12-§13
+    record them. Round 1 found the feature did not actually work (a
+    hand-written envelope version string the reader rejects); round 2 found a
+    row-id collision, a backfill that could overwrite a seed, and — outside
+    this PR's diff entirely — a signed but EMPTY Python SBOM in
+    `ci-sbom.yml`.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could

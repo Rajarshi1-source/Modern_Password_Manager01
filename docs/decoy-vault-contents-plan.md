@@ -525,3 +525,110 @@ currently-green job — a trade to make deliberately, not inside a review round.
 
 Frontend suite after this round: **79 files, 907 tests, all passing**; eslint
 clean. No backend Python changed, so the backend suites from §10 stand.
+
+---
+
+## 13. Review round 2 (PR #503, 2026-09-08) — CodeRabbit
+
+**No CI check was failing.** The PR read "All checks have passed" — 34
+successful, 7 skipped, 1 neutral — before and after this round. Everything
+below is a correctness finding.
+
+Each claim was checked against the source, and three were checked against the
+live CI logs rather than reasoned about, which changed the answer twice.
+
+### 13.1 A silent, signed, EMPTY SBOM (the one that mattered)
+
+`.github/workflows/ci-sbom.yml` — a file this PR never touched — ran
+`cyclonedx-py -r -i ... > sbom.python.cyclonedx.json || true` on the legacy 1.x
+CLI. Reading the log for commit `31a144d`: it died with
+`ImportError: cannot import name 'appdirs' from 'pkg_resources.extern'`, the
+redirect had already created a **zero-byte file**, `|| true` swallowed the exit
+code, and the job uploaded that empty file alongside the cosign-signed image
+SBOM. Green job, empty artifact, asserting something untrue about the
+dependency tree.
+
+This is the same defect §12.5 fixed in `security-sbom.yml`, in a sibling that
+round did not sweep. **The rule I already had and did not apply: fixing a bug
+class in one file is not fixing the class — grep every sibling in the SAME
+round.** There were three `cyclonedx-py` call sites; I fixed one.
+
+Now on the 7.x line the repo's own `requirements-lock.txt` already pins
+(`cyclonedx-bom==7.2.1`), with `|| true` gone and a verify step that fails on an
+empty file *or* a zero-component document.
+
+**`security.yml` is deliberately left on the 1.x CLI.** Its log shows a real
+3705-byte SBOM: it works because it pins `setuptools<81`, which still vendors
+the module 1.x imports. It also has its own verify step, so it fails loudly
+rather than silently. That evidence also corrects §12.5's wording — the trigger
+is the SETUPTOOLS version, not Python 3.12.
+
+### 13.2 Two real defects in this PR's own code
+
+- **Decoy row ids could collide.** `addRowForSession` used `d${Date.now()}`.
+  `mutate` serializes writes but does nothing about the clock, so two appends
+  inside one millisecond shared an id — and `deleteItem`/`toggleFavorite` match
+  by id, so one delete would have removed both rows. Now carries a random
+  suffix.
+- **The backfill could overwrite a seed.** `writeUnconfigured` checked the key
+  was absent, then did key generation and AES-GCM work, then wrote
+  unconditionally. A seed landing in that window was replaced by filler nothing
+  can decrypt, and the next decoy unlock would render empty. It now re-checks
+  immediately before writing — the same compare-before-write shape `provision`
+  already uses across its Argon2 awaits.
+
+The interleaving test for the second one was **verified to fail without the
+fix**. It first passed for the wrong reason: raced unsynchronised, the
+backfill's crypto is shorter, so it usually finished first and the seed landed
+on top regardless. It now holds the backfill inside its own AES-GCM call until
+the seed has committed (§38.4 — synchronise on the thing being timed).
+
+### 13.3 Test isolation
+
+`conftest.py` wrapped `caches[alias].clear()` in `except Exception: pass`. A
+swallowed failure leaves an alias uncleared while the suite still reports
+green — silently restoring the exact leakage §10 added the fixture to prevent.
+The guard is gone; under `TESTING` both aliases are LocMemCache and cannot
+fail, and a future alias that can is a configuration problem worth failing on.
+
+### 13.4 Documentation that had become false
+
+- **`README.md` claimed "CI, Docker and the deployed image all run 3.12".**
+  My own sentence, and untrue since §12.5 pinned `Dockerfile.prod` back to
+  3.11. Now states the exception explicitly.
+- **The Debian claim was wrong.** Both guides said `python3.12` is in the
+  default repositories on "Debian 13+". Checking `packages.debian.org/trixie`
+  directly: **not available in this suite.** Debian ships no `python3.12`
+  package in any current release (bookworm has 3.11, trixie has 3.13), and
+  deadsnakes is Ubuntu-only. Both guides now say Ubuntu 24.04+ only and point
+  Debian users at pyenv, a source build, or the backend container.
+
+### 13.5 Declined, with the evidence
+
+- **"Run Safety on 3.11 instead of 3.12."** Checked the live log: Safety 2.3.5
+  runs fine on 3.12 — it prints its banner and emits only a `pkg_resources`
+  deprecation warning. The support matrix does not list 3.12; the tool works.
+  No change for a hypothetical.
+- **"Remove `|| true` from `security.yml`'s safety and pip-audit steps."**
+  That is a policy change, not a bug fix, and it would turn a green gate red
+  immediately — this repository carries 309 open Dependabot advisories on
+  `main`. pip-audit is *already* properly gated in
+  `security-multi-scanner.yml`, with the dated `pip-audit-ignores.txt` expiry
+  manifest and a pre-check that fails on stale suppressions. Duplicating that
+  gate without the suppression mechanism would block every PR on findings the
+  project has already triaged. Worth doing deliberately, in its own PR, with
+  the manifest wired in.
+- **`Dockerfile.prod`'s entrypoint.** The finding is almost certainly right:
+  the distroless runtime supplies its own `ENTRYPOINT`, so `CMD ["daphne", …]`
+  becomes arguments to the interpreter and Python looks for a *file* named
+  `daphne`; separately the copied venv's interpreter symlink points at a path
+  the runtime image does not have. Not changed, because nothing here can
+  verify a change — **no CI job builds this file** (only docs reference it) and
+  the local Docker engine is erroring, so any "fix" would be reasoning
+  presented as a result. The failure modes are now written into the file so
+  nobody deploys it believing it works; it needs its own PR with a build-and-run
+  smoke test.
+
+Frontend after this round: **79 files, 910 tests, all passing**; eslint clean.
+Backend: `test_layered_recovery.py` 18 passed, confirming the conftest fixture
+still isolates without the swallowed exception.

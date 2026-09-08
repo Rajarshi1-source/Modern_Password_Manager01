@@ -113,10 +113,15 @@ def _clear_django_caches():
 
     def _clear_all():
         for alias in settings.CACHES:
-            try:
-                caches[alias].clear()
-            except Exception:  # noqa: BLE001 - a broken alias must not fail tests
-                pass
+            # Deliberately NOT wrapped in try/except. A swallowed failure here
+            # leaves that alias uncleared while the suite still reports green,
+            # which silently gives back the exact cross-test leakage this
+            # fixture exists to prevent -- the failure mode is invisible and
+            # the results become untrustworthy rather than merely noisy. Under
+            # ``TESTING`` both aliases are LocMemCache and cannot fail; if a
+            # future alias can, that is a configuration problem worth failing
+            # loudly on.
+            caches[alias].clear()
 
     _clear_all()
     yield

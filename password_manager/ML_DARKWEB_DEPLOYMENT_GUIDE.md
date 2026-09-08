@@ -66,9 +66,10 @@ Before deploying to production, ensure you have:
 ### System Packages
 
 ```bash
-# Ubuntu 24.04+ / Debian 13+ -- older releases (Ubuntu 22.04, Debian 12) do
-# not carry python3.12 in their default repositories; add the deadsnakes PPA
-# or build from source there.
+# Ubuntu 24.04+ only: python3.12 / python3.12-dev are in the default
+# repositories there. On Ubuntu 22.04 add the deadsnakes PPA. Debian ships no
+# python3.12 package in any current release (bookworm has 3.11, trixie 3.13),
+# so use pyenv or a source build, or run the backend container instead.
 sudo apt-get update
 sudo apt-get install -y \
     python3.12 \

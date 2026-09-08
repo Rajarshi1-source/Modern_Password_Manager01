@@ -529,10 +529,17 @@ Common utilities, constants, and helpers.
 
 ### Requirements
 
-- Python 3.12+ (compatible with Python 3.13; CI, Docker and the deployed
-  image all run 3.12)
+- Python 3.12+ for development, CI, and the `docker/backend/Dockerfile`
+  image (compatible with Python 3.13)
+  - **One documented exception:** `password_manager/Dockerfile.prod` builds
+    and runs on Python **3.11**, because its runtime stage is
+    `gcr.io/distroless/python3-debian12`, whose interpreter is Debian 12's
+    3.11. The builder must match that ABI or the copied `/venv` cannot load.
+    Raising it requires changing the runtime image too — see that file's
+    header. No CI job builds it, so nothing enforces this either way.
   - `SECURITY.md` is the authority here: it lists Python below 3.12 as
-    unsupported, so 3.12 is the floor the whole project builds and tests on.
+    unsupported, so 3.12 is the floor everything except the exception above
+    builds and tests on.
     Raising the config to match that statement, rather than lowering the
     statement to match a lagging config, is the direction a password manager
     should move in.
