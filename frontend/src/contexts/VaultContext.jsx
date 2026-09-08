@@ -8,6 +8,8 @@ import sessionVaultCrypto from '../services/sessionVaultCrypto';
 import sessionVaultCryptoV3 from '../services/sessionVaultCryptoV3';
 import { decryptEnvelope, encryptEnvelope, hasVaultSessionKey } from '../services/vaultEnvelope';
 import onionSyncService from '../services/onionSyncService';
+import decoyVaultStore from '../services/hiddenVault/decoyVaultStore';
+import { vaultUserId } from '../services/hiddenVault/vaultIdentity';
 
 const VaultContext = createContext();
 
@@ -74,7 +76,7 @@ export const VaultProvider = ({ children }) => {
   // do here; it is what lets `syncVault` compare "who owns this queue"
   // against "who is authenticated now" without either value coming from its
   // own (possibly pre-switch) closure.
-  activeIdentityRef.current = isAuthenticated ? (user?.id ?? user?.email ?? null) : null;
+  activeIdentityRef.current = isAuthenticated ? vaultUserId(user) : null;
 
   // Fix #8: Use useMemo for vaultService
   const vaultService = useMemo(() => new VaultService(), []);
@@ -803,9 +805,81 @@ export const VaultProvider = ({ children }) => {
   // detail route — NOT the never-initialised vaultService.cryptoService. Gated
   // on a live session key on EITHER crypto layer (`hasVaultSessionKey`); only
   // ciphertext (never the plaintext `data`) is sent.
+  // ---------------------------------------------------------------------
+  // Decoy-session mutations
+  // ---------------------------------------------------------------------
+  //
+  // A decoy session's add/edit/delete/favorite land in the device-local decoy
+  // store (`services/hiddenVault/decoyVaultStore`), never on `/api/vault/`.
+  // Before this existed they were simply refused, which made the decoy vault
+  // read-only -- a coercer who asks for an entry to be added and watches the
+  // save fail has learned something. See docs/decoy-vault-contents-plan.md §4.
+  //
+  // What this does NOT fix, stated here so it is not mistaken for solved: a
+  // real write POSTs and a decoy write does not, so a passive network observer
+  // can still tell them apart. That gap is pre-existing (the old refusal made
+  // no request either) and is not closable from this side -- emitting a
+  // matching POST means writing decoy ciphertext into the one shared item
+  // list, which is the exact corruption `encryptItem`'s refusal exists to
+  // prevent (sessionVaultCrypto.js). Recorded in the plan §8 and SECURITY.md.
+  //
+  // Every failure raises the shared `DECOY_WRITE_REFUSAL` string rather than
+  // anything operation-specific: in a decoy session that message is read off
+  // the screen by whoever is applying the coercion, so it must stay
+  // indistinguishable from an ordinary save failure and identical across
+  // layers (vault-unlock-envelope-integration-plan.md §33.1, §39.3).
+  const mutateDecoyRows = useCallback(async (mutator) => {
+    const userId = vaultUserId(user);
+    // Bind to the session that STARTED this mutation. `loadForSession` and
+    // `saveForSession` each re-check `isDecoySession()`, but that flag answers
+    // "is this A decoy session", not "is it the SAME one": a lock plus a
+    // second decoy unlock passes the flag test while being a different
+    // session (§32). The generation counter is the only monotonic answer.
+    const generation = sessionVaultCrypto.currentSessionGeneration();
+    const rows = await decoyVaultStore.loadForSession(userId);
+    if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
+      throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+    }
+    const next = mutator(rows);
+    const saved = await decoyVaultStore.saveForSession(userId, next);
+    if (!saved) {
+      // Covers a locked session, a storage failure, and a capacity overflow
+      // alike -- deliberately one outcome, because distinguishing them on
+      // screen would itself be an oracle.
+      throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+    }
+    // Display-freshness only, never a gate: the rows are re-read from the
+    // store by `useDisplaySafeItems`. Its own event, not `vault:updated`,
+    // which this context answers with `refreshItems()` -- the real fetch that
+    // a decoy session must keep making on its normal schedule and no other.
+    window.dispatchEvent(new Event('vault:decoy-updated'));
+  }, [user]);
+
   const addItem = useCallback(async (item) => {
     // Captured before any await -- see the post-await guard below.
     const identityAtStart = activeIdentityRef.current;
+    if (sessionVaultCrypto.isDecoySession()) {
+      try {
+        setError(null);
+        const encrypted_data = await sessionVaultCrypto.encryptDecoyItem(item.data);
+        const itemId = item.item_id || `item_${Date.now()}`;
+        await mutateDecoyRows((rows) => [
+          ...rows,
+          {
+            id: `d${Date.now()}`,
+            item_id: itemId,
+            item_type: item.type || item.item_type || 'password',
+            encrypted_data,
+            favorite: Boolean(item.favorite),
+            created_at: new Date().toISOString(),
+          },
+        ]);
+        return { ...item, item_id: itemId };
+      } catch {
+        if (isMountedRef.current) setError(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+        throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+      }
+    }
     if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to add items.');
       if (isMountedRef.current) setError(lockedErr.message);
@@ -886,7 +960,7 @@ export const VaultProvider = ({ children }) => {
         setLoading(false);
       }
     }
-  }, [firebaseInitialized, syncVault]);
+  }, [firebaseInitialized, syncVault, mutateDecoyRows]);
 
   // PR F: edit re-encrypts the secret and persists it via the proven detail
   // route (/api/vault/{id}/). Crypto goes through encryptEnvelope (v3-preferred,
@@ -903,6 +977,23 @@ export const VaultProvider = ({ children }) => {
   const updateItem = useCallback(async (item) => {
     // Captured before any await -- see the post-await guard below.
     const identityAtStart = activeIdentityRef.current;
+    // See `mutateDecoyRows` above. Edits a decoy row in place; the real item
+    // list is never touched, and no PATCH is issued.
+    if (sessionVaultCrypto.isDecoySession()) {
+      try {
+        setError(null);
+        const encrypted_data = await sessionVaultCrypto.encryptDecoyItem(item.data);
+        await mutateDecoyRows((rows) =>
+          rows.map((row) => (row.id === item.id
+            ? { ...row, ...item, data: undefined, encrypted_data, updated_at: new Date().toISOString() }
+            : row))
+        );
+        return item;
+      } catch {
+        if (isMountedRef.current) setError(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+        throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+      }
+    }
     if (!hasVaultSessionKey()) {
       const lockedErr = new Error('Unlock your vault to edit items.');
       if (isMountedRef.current) setError(lockedErr.message);
@@ -960,22 +1051,27 @@ export const VaultProvider = ({ children }) => {
         setLoading(false);
       }
     }
-  }, []);
+  }, [mutateDecoyRows]);
 
   const deleteItem = useCallback(async (itemId) => {
     // Captured before any await -- see the post-await guard below.
     const identityAtStart = activeIdentityRef.current;
-    // Decoy sessions must not mutate the REAL vault. `encryptItem`'s own
-    // refusal (sessionVaultCrypto.js) covers add/edit, but a delete carries no
-    // ciphertext, so it never reaches that gate -- it would issue a real
-    // DELETE against the one shared, server-side item list and destroy a
-    // genuine item irreversibly. Checked BEFORE the request and before any
-    // optimistic state change. Message stays generic for the same reason
-    // encryptItem's does: it must not reveal the duress feature.
+    // Decoy sessions must not mutate the REAL vault. A delete carries no
+    // ciphertext, so it never reaches `encryptItem`'s refusal -- left alone it
+    // would issue a real DELETE against the one shared, server-side item list
+    // and destroy a genuine item irreversibly. It is now serviced from the
+    // decoy store instead: the row disappears for the decoy session and the
+    // real vault never learns of it. Checked BEFORE any request and before any
+    // optimistic state change.
     if (sessionVaultCrypto.isDecoySession()) {
-      const decoyErr = new Error('Failed to delete item. Please try again.');
-      if (isMountedRef.current) setError(decoyErr.message);
-      throw decoyErr;
+      try {
+        setError(null);
+        await mutateDecoyRows((rows) => rows.filter((row) => row.id !== itemId));
+        return;
+      } catch {
+        if (isMountedRef.current) setError(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+        throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+      }
     }
     try {
       setLoading(true);
@@ -1025,7 +1121,7 @@ export const VaultProvider = ({ children }) => {
         setLoading(false);
       }
     }
-  }, [vaultService, syncVault]);
+  }, [vaultService, syncVault, mutateDecoyRows]);
 
   // Toggle the favorite flag on a vault item.
   //
@@ -1041,14 +1137,26 @@ export const VaultProvider = ({ children }) => {
     // persist stale state.
     if (favoriteInFlightRef.current.has(id)) return;
 
-    // Same decoy gate as deleteItem above: `favorite` is non-secret metadata
-    // and so never goes through `encryptItem`, but the PATCH still mutates a
+    // Same routing as deleteItem above: `favorite` is non-secret metadata and
+    // so never goes through `encryptItem`, but a PATCH would still mutate a
     // REAL item's persisted state from a session that is not the real user's.
-    // Checked before the optimistic flip, so no state change is applied either.
+    // Serviced from the decoy store instead. `items` is deliberately not
+    // consulted here -- in a decoy session the displayed rows come from the
+    // store, so the id being toggled belongs to it, not to the real list.
     if (sessionVaultCrypto.isDecoySession()) {
-      const decoyErr = new Error('Failed to update favorite. Please try again.');
-      if (isMountedRef.current) setError(decoyErr.message);
-      throw decoyErr;
+      favoriteInFlightRef.current.add(id);
+      try {
+        setError(null);
+        await mutateDecoyRows((rows) =>
+          rows.map((row) => (row.id === id ? { ...row, favorite: !row.favorite } : row))
+        );
+      } catch {
+        if (isMountedRef.current) setError(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+        throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+      } finally {
+        favoriteInFlightRef.current.delete(id);
+      }
+      return;
     }
 
     const target = items.find(i => i.id === id);
@@ -1080,7 +1188,7 @@ export const VaultProvider = ({ children }) => {
     } finally {
       favoriteInFlightRef.current.delete(id);
     }
-  }, [items, vaultService]);
+  }, [items, vaultService, mutateDecoyRows]);
 
   const updateAutoLockTimeout = (minutes) => {
     setAutoLockTimeout(minutes);

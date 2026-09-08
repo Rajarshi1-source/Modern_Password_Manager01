@@ -28,9 +28,17 @@ const { mockV2HasSessionKey, mockV3HasSessionKey } = vi.hoisted(() => ({
   mockV2HasSessionKey: vi.fn(() => true),
   mockV3HasSessionKey: vi.fn(() => false),
 }));
-vi.mock('../../services/sessionVaultCrypto', () => ({
-  default: { hasSessionKey: mockV2HasSessionKey },
-}));
+// Spread the REAL module rather than hand-listing the members this context
+// happens to call today: a hand-written mock silently omits anything added
+// later, and one new `isDecoySession()` call site is enough to break every
+// test in this file with a bare "is not a function".
+vi.mock('../../services/sessionVaultCrypto', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    default: { ...actual.default, hasSessionKey: mockV2HasSessionKey, isDecoySession: () => false },
+  };
+});
 vi.mock('../../services/sessionVaultCryptoV3', () => ({
   default: { hasSessionKey: mockV3HasSessionKey },
 }));

@@ -33,8 +33,35 @@ const { mockV2HasSessionKey, mockV3HasSessionKey, mockIsDecoySession } = vi.hois
   mockV3HasSessionKey: vi.fn(() => false),
   mockIsDecoySession: vi.fn(() => false),
 }));
-vi.mock('../../services/sessionVaultCrypto', () => ({
-  default: { hasSessionKey: mockV2HasSessionKey, isDecoySession: mockIsDecoySession },
+// Spread the REAL module rather than hand-listing what the context happens to
+// call. Two reasons, both learned the hard way. A hand-written mock silently
+// omits anything added later -- adding one `isDecoySession()` call site broke
+// six unrelated tests in this suite. And `DECOY_WRITE_REFUSAL` must be the
+// genuine exported constant: re-typing the literal here would make the
+// assertions below compare the mock against itself, which is exactly the
+// self-referential test the envelope plan's §39.3/§40.1 records.
+vi.mock('../../services/sessionVaultCrypto', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      hasSessionKey: mockV2HasSessionKey,
+      isDecoySession: mockIsDecoySession,
+    },
+  };
+});
+// The decoy store is where a decoy-session mutation now LANDS. Mocked so these
+// tests keep asserting the property they were written for -- that no request
+// reaches the real vault -- independently of whether the store itself succeeds.
+const { mockDecoyLoad, mockDecoySave } = vi.hoisted(() => ({
+  mockDecoyLoad: vi.fn(async () => []),
+  mockDecoySave: vi.fn(async () => true),
+}));
+vi.mock('../../services/hiddenVault/decoyVaultStore', () => ({
+  default: { loadForSession: mockDecoyLoad, saveForSession: mockDecoySave },
+  loadForSession: mockDecoyLoad,
+  saveForSession: mockDecoySave,
 }));
 vi.mock('../../services/sessionVaultCryptoV3', () => ({
   default: { hasSessionKey: mockV3HasSessionKey },
@@ -86,6 +113,7 @@ vi.mock('../../services/vaultService', () => ({
 
 import axios from 'axios';
 import api from '../../services/api';
+import { DECOY_WRITE_REFUSAL } from '../../services/sessionVaultCrypto';
 import { VaultProvider, useVault } from '../VaultContext';
 
 const wrapper = ({ children }) => <VaultProvider>{children}</VaultProvider>;
@@ -114,30 +142,39 @@ beforeEach(() => {
   mockIsDecoySession.mockReturnValue(false);
   mockUseAuthUser.mockReturnValue({ id: 1, email: 'u@e.com' });
   axios.get.mockResolvedValue({ data: { items: [EXISTING_ITEM] } });
+  mockDecoyLoad.mockResolvedValue([]);
+  // Reset the IMPLEMENTATION, not just the call history: `vi.clearAllMocks()`
+  // leaves a `mockResolvedValue(false)` set by an earlier test in place, so a
+  // mock that encodes a STATE has to be re-armed here or the file passes under
+  // `-t` and fails as a whole.
+  mockDecoySave.mockResolvedValue(true);
   mockDeleteVaultItem.mockResolvedValue({ data: {} });
   mockToggleFavorite.mockResolvedValue({ data: {} });
   api.post.mockResolvedValue({ data: { backup_id: 'b-1' } });
 });
 
 describe('VaultContext.deleteItem during a decoy session', () => {
-  test('makes no request and leaves the item list untouched', async () => {
+  test('makes no request and leaves the REAL item list untouched', async () => {
     mockIsDecoySession.mockReturnValue(true);
     const { result } = await mountVault();
 
-    let caught;
     await act(async () => {
-      caught = await result.current.deleteItem(42).catch((e) => e);
+      await result.current.deleteItem(42).catch((e) => e);
     });
 
-    expect(caught).toBeInstanceOf(Error);
+    // The property under test is not "it throws" -- a decoy delete now
+    // SUCCEEDS against the local store. What must never happen is a DELETE
+    // against the one shared, server-side list, which would destroy a genuine
+    // item irreversibly.
     expect(mockDeleteVaultItem).not.toHaveBeenCalled();
     // The real row must still be there -- no optimistic removal either.
     expect(result.current.items).toHaveLength(1);
     expect(result.current.items[0].id).toBe(42);
   });
 
-  test('the surfaced message never names the duress feature', async () => {
+  test('a store failure surfaces the shared refusal string, never a named one', async () => {
     mockIsDecoySession.mockReturnValue(true);
+    mockDecoySave.mockResolvedValue(false);
     const { result } = await mountVault();
 
     let caught;
@@ -145,8 +182,35 @@ describe('VaultContext.deleteItem during a decoy session', () => {
       caught = await result.current.deleteItem(42).catch((e) => e);
     });
 
-    expect(caught.message).toBe('Failed to delete item. Please try again.');
+    // Compared against the module's own constant, not a copy of the literal.
+    // Every decoy-session write failure must emit ONE byte-identical string:
+    // it reaches the screen a coercer is watching, so two different messages
+    // would tell them which layer declined.
+    expect(caught.message).toBe(DECOY_WRITE_REFUSAL);
     expect(caught.message).not.toMatch(/decoy|duress|slot/i);
+  });
+
+  test('a working store removes the row locally and still sends no request', async () => {
+    mockIsDecoySession.mockReturnValue(true);
+    mockDecoyLoad.mockResolvedValue([
+      { id: 'd1', item_id: 'decoy-1', encrypted_data: 'X' },
+      { id: 'd2', item_id: 'decoy-2', encrypted_data: 'Y' },
+    ]);
+    const { result } = await mountVault();
+
+    await act(async () => {
+      await result.current.deleteItem('d1');
+    });
+
+    expect(mockDeleteVaultItem).not.toHaveBeenCalled();
+    // Asserting the VALUE handed to the store, not merely that it was called:
+    // a negative control that only checks which branch ran can pass for the
+    // wrong reason (envelope plan §34.1).
+    const [, savedRows] = mockDecoySave.mock.calls[0];
+    expect(savedRows.map((r) => r.id)).toEqual(['d2']);
+    // The REAL list is untouched -- a decoy delete must never reach it.
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.items[0].id).toBe(42);
   });
 
   test('a real session still deletes normally', async () => {
@@ -162,23 +226,23 @@ describe('VaultContext.deleteItem during a decoy session', () => {
 });
 
 describe('VaultContext.toggleFavorite during a decoy session', () => {
-  test('makes no request and applies no optimistic flip', async () => {
+  test('makes no request and applies no optimistic flip to the REAL list', async () => {
     mockIsDecoySession.mockReturnValue(true);
     const { result } = await mountVault();
 
-    let caught;
     await act(async () => {
-      caught = await result.current.toggleFavorite(42).catch((e) => e);
+      await result.current.toggleFavorite(42).catch((e) => e);
     });
 
-    expect(caught).toBeInstanceOf(Error);
     expect(mockToggleFavorite).not.toHaveBeenCalled();
-    // The gate runs BEFORE the optimistic setItems, so the flag is unchanged.
+    // The decoy branch returns before the optimistic setItems, so a real
+    // item's flag is unchanged whether the store write succeeded or not.
     expect(result.current.items[0].favorite).toBe(false);
   });
 
-  test('the surfaced message never names the duress feature', async () => {
+  test('a store failure surfaces the shared refusal string, never a named one', async () => {
     mockIsDecoySession.mockReturnValue(true);
+    mockDecoySave.mockResolvedValue(false);
     const { result } = await mountVault();
 
     let caught;
@@ -186,8 +250,25 @@ describe('VaultContext.toggleFavorite during a decoy session', () => {
       caught = await result.current.toggleFavorite(42).catch((e) => e);
     });
 
-    expect(caught.message).toBe('Failed to update favorite. Please try again.');
+    // Byte-identical to deleteItem's above, and to encryptItem's, by
+    // construction: all three read the same exported constant.
+    expect(caught.message).toBe(DECOY_WRITE_REFUSAL);
     expect(caught.message).not.toMatch(/decoy|duress|slot/i);
+  });
+
+  test('a working store flips the decoy row and still sends no PATCH', async () => {
+    mockIsDecoySession.mockReturnValue(true);
+    mockDecoyLoad.mockResolvedValue([{ id: 'd1', item_id: 'decoy-1', favorite: false }]);
+    const { result } = await mountVault();
+
+    await act(async () => {
+      await result.current.toggleFavorite('d1');
+    });
+
+    expect(mockToggleFavorite).not.toHaveBeenCalled();
+    const [, savedRows] = mockDecoySave.mock.calls[0];
+    expect(savedRows[0].favorite).toBe(true);
+    expect(result.current.items[0].favorite).toBe(false);
   });
 
   test('a real session still toggles normally', async () => {

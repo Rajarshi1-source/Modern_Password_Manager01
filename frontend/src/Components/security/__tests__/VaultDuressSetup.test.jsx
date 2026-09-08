@@ -35,6 +35,7 @@ vi.mock('../../../hooks/useAuth', () => ({
 vi.mock('../../../services/hiddenVault/unlockEnvelopeStore', () => ({
   hasEnvelope: vi.fn(),
   setDecoySlot: vi.fn(),
+  seedDecoyContents: vi.fn(),
   open: vi.fn(),
 }));
 
@@ -635,4 +636,137 @@ describe('during a DECOY session', () => {
     expect(getByLabelText(/current vault password/i)).toBeInTheDocument();
     expect(getByRole('button', { name: /recover unregistered alarm/i })).toBeInTheDocument();
   });
+});
+
+// ---------------------------------------------------------------------------
+// Decoy vault contents (docs/decoy-vault-contents-plan.md §5)
+// ---------------------------------------------------------------------------
+
+const submitContents = (
+  getByLabelText, getByRole, { vaultPassword = REAL_PASSWORD, decoyPassword = 'a decoy password 12+', entry } = {}
+) => {
+  fireEvent.change(getByLabelText(/vault password/i, { selector: '#duress-contents-vault-password' }), {
+    target: { value: vaultPassword },
+  });
+  fireEvent.change(getByLabelText(/decoy password/i, { selector: '#duress-contents-decoy-password' }), {
+    target: { value: decoyPassword },
+  });
+  if (entry) {
+    fireEvent.change(getByLabelText(/site or app/i, { selector: '#decoy-site-0' }), {
+      target: { value: entry.site ?? '' },
+    });
+    fireEvent.change(getByLabelText(/username/i, { selector: '#decoy-username-0' }), {
+      target: { value: entry.username ?? '' },
+    });
+    fireEvent.change(getByLabelText(/password/i, { selector: '#decoy-password-0' }), {
+      target: { value: entry.password ?? '' },
+    });
+  }
+  fireEvent.click(getByRole('button', { name: /save decoy contents/i }));
+};
+
+test('decoy contents: seeds only the entries that were filled in', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+  unlockEnvelopeStore.seedDecoyContents.mockResolvedValue(undefined);
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  await act(async () => {
+    submitContents(getByLabelText, getByRole, {
+      entry: { site: 'mail.example.com', username: 'me', password: 'p' },
+    });
+  });
+
+  await findByRole('status');
+  // Asserting the ARGUMENT, not just that it was called: the two untouched
+  // rows must be dropped, because a decoy vault padded with blank entries is
+  // worse than a shorter one.
+  const [args] = unlockEnvelopeStore.seedDecoyContents.mock.calls;
+  expect(args[0].items).toEqual([
+    { site: 'mail.example.com', username: 'me', password: 'p', notes: '' },
+  ]);
+  expect(args[0].decoyPassword).toBe('a decoy password 12+');
+});
+
+test('decoy contents: refuses without the REAL vault password, and seeds nothing', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  await act(async () => {
+    submitContents(getByLabelText, getByRole, {
+      vaultPassword: 'not the real one',
+      entry: { site: 'x.example.com' },
+    });
+  });
+
+  // Without this gate the form is a password classifier: a coercer types the
+  // password they were handed and reads the outcome. See the handler's comment
+  // and the envelope plan's §22.
+  expect((await findByRole('alert')).textContent).toMatch(/Incorrect vault password/i);
+  expect(unlockEnvelopeStore.seedDecoyContents).not.toHaveBeenCalled();
+});
+
+test('decoy contents: a capacity refusal says so without naming the feature', async () => {
+  const { DecoyCapacityError } = await import('../../../services/hiddenVault/decoyVaultStore');
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+  unlockEnvelopeStore.seedDecoyContents.mockRejectedValue(new DecoyCapacityError('too big'));
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  await act(async () => {
+    submitContents(getByLabelText, getByRole, { entry: { site: 'x.example.com' } });
+  });
+
+  const alert = await findByRole('alert');
+  expect(alert.textContent).toMatch(/do not fit/i);
+  // The underlying errors name slots and decoy state; this screen's copy must
+  // not, and it never surfaces `err.message`.
+  expect(alert.textContent).not.toMatch(/slot|capacity error/i);
+});
+
+test('decoy contents: a lock landing mid-submit withholds the success message', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+  // Move the counter from inside the seed call, so the change lands in the
+  // await window the guard exists to cover rather than merely before or after.
+  unlockEnvelopeStore.seedDecoyContents.mockImplementation(async () => {
+    mockGeneration.mockReturnValue(8);
+  });
+
+  const { getByLabelText, getByRole, findByRole, queryByRole } = render(<VaultDuressSetup />);
+  await act(async () => {
+    submitContents(getByLabelText, getByRole, { entry: { site: 'x.example.com' } });
+  });
+
+  expect((await findByRole('alert')).textContent).toMatch(/Unlock your vault first/i);
+  expect(queryByRole('status')).toBeNull();
+});
+
+test('decoy contents: the form is absent entirely in a decoy session', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockIsDecoySession.mockReturnValue(true);
+
+  const { queryByLabelText, queryByRole } = render(<VaultDuressSetup />);
+
+  // Inherits the component-level decoy gate rather than adding its own: there
+  // must be nothing to submit, so there is no outcome to contradict what the
+  // coercer just watched happen.
+  expect(queryByLabelText(/site or app/i)).toBeNull();
+  expect(queryByRole('button', { name: /save decoy contents/i })).toBeNull();
+});
+
+test('decoy contents: the form is absent while the vault is locked', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockHasSessionKey.mockReturnValue(false);
+
+  const { queryByRole } = render(<VaultDuressSetup />);
+
+  expect(queryByRole('button', { name: /save decoy contents/i })).toBeNull();
 });

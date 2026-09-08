@@ -53,6 +53,7 @@ import {
   WrongPasswordError,
 } from './hiddenVaultEnvelope';
 import { generateSignalToken, SIGNAL_TOKEN_LENGTH } from '../duressSignalService';
+import decoyVaultStore from './decoyVaultStore';
 
 const ENVELOPE_TIER = TIERS.TIER0_32K;
 const SLOT_PAYLOAD_VERSION = 'hv-slot-1';
@@ -330,6 +331,60 @@ export async function provision({
     throw new Error('provision: the stored envelope changed; refusing to replace it.');
   }
   saveEnvelope(userId, blob);
+
+  // Every provisioned account gets a decoy-contents blob, configured or not.
+  // This is the storage-layer twin of `encode()`'s throwaway-key decoy SLOT:
+  // a key that appeared only once a decoy existed would let anyone with
+  // devtools read the feature's existence straight off the key list, which is
+  // precisely the oracle the decoy exists to deny. See decoyVaultStore's
+  // header, rule 1.
+  //
+  // Deliberately AFTER `saveEnvelope` and deliberately not awaited into the
+  // failure path: the envelope is the thing that must land. A decoy-contents
+  // blob that fails to write leaves the account exactly as it was before this
+  // feature shipped (decoy renders empty), whereas letting it reject here
+  // would turn a cosmetic miss into a failed unlock.
+  try {
+    await decoyVaultStore.writeUnconfigured(userId);
+  } catch {
+    /* see above -- non-fatal by construction */
+  }
+}
+
+/**
+ * Replace the decoy vault's displayed contents.
+ *
+ * Requires the DECOY password, not the real one, because the contents are
+ * keyed by the decoy slot's DEK and slot 1 is the only place it exists. Lives
+ * here rather than in `decoyVaultStore` so that opening the slot and using
+ * what it holds happen in one place: no component ever handles decoy key
+ * material, matching the discipline `setDecoySlot` already follows.
+ *
+ * Independent of `setDecoySlot`: this does NOT re-encode the envelope, so the
+ * duress token survives untouched and needs no re-registration. Editing the
+ * decoy's contents must not cost the user their alarm.
+ *
+ * @param {Object} args
+ * @param {string} args.userId
+ * @param {string} args.decoyPassword
+ * @param {Array<Object>} args.items
+ * @throws {WrongPasswordError} neither slot matched
+ * @throws {Error} the REAL password was supplied (see below)
+ * @throws {import('./decoyVaultStore').DecoyCapacityError} items do not fit
+ */
+export async function seedDecoyContents({ userId, decoyPassword, items }) {
+  if (!userId) throw new Error('seedDecoyContents: userId required');
+  if (!decoyPassword) throw new Error('seedDecoyContents: decoyPassword required');
+  const { slotIndex, dekBytes, saltB64 } = await open({ userId, password: decoyPassword });
+  if (slotIndex === 0) {
+    // The real password opened it, so no decoy is configured (or the user
+    // typed the wrong one of the two). Refusing is the only safe direction:
+    // sealing the contents under the REAL dek would produce a container the
+    // decoy session cannot open -- the decoy would stay empty while the setup
+    // screen reported success.
+    throw new Error('No decoy password is configured for this account.');
+  }
+  await decoyVaultStore.seedWithKey({ userId, dekBytes, saltB64, items });
 }
 
 /**
@@ -507,6 +562,7 @@ export default {
   clearEnvelope,
   provision,
   setDecoySlot,
+  seedDecoyContents,
   open,
   MalformedSlotPayloadError,
 };
