@@ -585,6 +585,19 @@ const VaultDuressSetup = () => {
       return;
     }
 
+    // Both predicates, BEFORE the generation capture and before any envelope
+    // work -- exactly what the two sibling handlers above already do, and this
+    // one was missing it. The render gate returns a neutral panel for a locked
+    // or decoy session, but a form ALREADY on screen when the session changed
+    // could still be submitted: `open()` would then run and answer "Incorrect
+    // vault password." to a coercer who has just watched that very password
+    // unlock this vault. The boundary must never check less than the render
+    // gate (§31, §38.2).
+    if (!sessionVaultCrypto.hasSessionKey() || sessionVaultCrypto.isDecoySession()) {
+      setContentsError('Unlock your vault first, then set decoy contents.');
+      return;
+    }
+
     // Same session binding as the two forms above: captured BEFORE the slow
     // Argon2 work so a lock or a re-unlock landing inside it is caught, and
     // compared against the counter rather than re-testing `hasSessionKey()`
@@ -613,11 +626,20 @@ const VaultDuressSetup = () => {
       }
 
       // Blank rows are dropped rather than stored: a decoy vault containing
-      // empty entries is worse than one with fewer.
+      // empty entries is worse than one with fewer. `notes` counts as content
+      // -- a notes-only row was silently discarded, and since a seed REPLACES
+      // the whole cache, what the user typed simply vanished.
       const items = contentsRows
-        .filter((row) => row.site.trim() || row.username.trim() || row.password.trim())
+        .filter((row) => row.site.trim() || row.username.trim()
+          || row.password.trim() || row.notes.trim())
+        // `name` / `website`, NOT `site`: these are the field names the vault's
+        // own display surfaces read (App.jsx's list renders `data.name` and
+        // `data.website`). A decoy entry stored under `site` rendered as
+        // "Untitled" with no address -- visibly unlike every real entry, which
+        // is the one thing decoy contents must never be.
         .map((row) => ({
-          site: row.site.trim(),
+          name: row.site.trim(),
+          website: row.site.trim(),
           username: row.username.trim(),
           password: row.password,
           notes: row.notes.trim(),
@@ -737,7 +759,9 @@ const VaultDuressSetup = () => {
         {success && (
           <div role="status" style={successStyle}>
             Decoy password saved. It will open the decoy vault and silently
-            alert your contacts the next time it is used to unlock.
+            alert your contacts the next time it is used to unlock. Saving a
+            decoy password always generates a new key, so any decoy contents
+            you had were cleared — enter them again below.
           </div>
         )}
 

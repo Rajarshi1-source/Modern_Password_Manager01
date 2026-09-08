@@ -403,3 +403,125 @@ own PR with its own fallout — but recorded so no future session reads
 - `docs/privacy-features-gap-remediation-plan.md` §4.2 — origin of the duress work
 - `docs/adaptive-password-zk-remediation-plan.md` §1–2 — the ZK invariant that rules out a server-side decoy
 - `password_manager/hidden_vault/SPEC.md` — blob format and slot semantics
+
+---
+
+## 12. Review round 1 (PR #503, 2026-09-08) — Codex + CodeRabbit
+
+Two bots reviewed the same diff. Every finding below was verified against the
+source before acting; the ones declined are recorded with the reason, because
+"the bot said so" is not evidence and neither is "the bot is wrong".
+
+**No CI check was failing when this round started** — the SBOM break from the
+Python bump had already been fixed, and the full matrix settled with zero
+failures. These are correctness findings, not red builds.
+
+### 12.1 The envelope version — the one that made the feature not work
+
+`seedWithKey` hand-wrote `v: 'v2'` into each row's `encrypted_data`.
+`sessionVaultCrypto.decryptItem` accepts **only** `PAYLOAD_VERSION`, which is
+`'svc-gcm-1'`, and returns `{_legacyPlaintext: true}` for anything else. So
+every SEEDED row rendered as a "legacy plaintext — re-save to encrypt" warning,
+while rows added later through `encryptDecoyItem` decrypted correctly: a decoy
+vault that was half warning banners is worse than the empty one it replaced.
+
+This is §39.3's copied-literal trap, in a module written to avoid it, and the
+test suite missed it for the §34.1 reason: `decoyVaultStore.test.js` decrypted
+the row with raw WebCrypto, which is exactly the check that cannot notice a
+wrong version string. `PAYLOAD_VERSION` is now exported and imported, and a new
+test runs a seeded row through the real `decryptItem` and asserts
+`_legacyPlaintext` is absent — an assertion on the returned VALUE, not on which
+branch ran.
+
+**The rule, stated so the next module inherits it:** a value two modules must
+agree on byte-for-byte cannot be a literal in both, and a test that verifies
+the producer without the consumer verifies nothing about the pair.
+
+### 12.2 Three gaps in "the decoy behaves like a real vault"
+
+- **`decryptItem` could not find a decoy row.** It looks up `items`, which in a
+  decoy session deliberately holds the REAL list (fetched for traffic analysis,
+  never displayed), so every click on a decoy row threw "Item not found". It
+  now falls back to the store in a decoy session.
+- **The canonical Add form never reached the decoy path.** `App.jsx`'s
+  "Add New Password" `handleSubmit` calls `encryptEnvelope` and `axios.post`
+  directly — it renders OUTSIDE `VaultProvider`, so it cannot use `addItem` at
+  all. Only VaultContext's copy had a decoy branch, so the screen a coercer is
+  most likely to be sitting in front of still visibly failed. Both now call one
+  shared `decoyVaultStore.addRowForSession`.
+- **Seeded entries rendered as "Untitled".** The setup form stored `site`; the
+  vault's display surfaces read `data.name` and `data.website`. Contents the
+  user wrote to look plausible rendered unlike every real entry.
+
+**One shape underneath all three: the feature was verified against the modules
+it touched, not against the screens a user reaches.** Grep for the CONSUMER of
+every field and every id before calling a display path done.
+
+### 12.3 Two indistinguishability holes
+
+- **The contents blob was only created by `provision()`**, which an existing
+  user with an envelope never runs again — their unlocks go straight to
+  `open()`. For them the key would first appear when they SEEDED contents,
+  making its presence in `localStorage` the exact "a decoy exists" oracle the
+  always-present fixed-length design denies. `open()` now backfills it after a
+  successful decode (so a wrong-password probe writes nothing).
+- **`handleSeedContents` had no submit-time session gate**, while both sibling
+  handlers on the same screen do. A form already on screen when the session
+  flipped could still be submitted, and would answer "Incorrect vault
+  password." to a coercer who had just watched that password unlock the vault.
+  §38.2's rule restated: the boundary must never check less than the render
+  gate — and this is now the third handler on this one screen to need it.
+
+### 12.4 Three data-integrity findings
+
+- **Changing the decoy password orphaned the contents.** `setDecoySlot` mints a
+  fresh decoy DEK on every run and did not touch the container, so the next
+  decoy unlock silently opened empty. Migration is impossible from there (it
+  needs the OLD decoy password, which that function is never given), so the
+  container is re-keyed to an empty one under the new DEK and `setDecoySlot`
+  returns `contentsReset` for the UI to say so.
+- **The decoy edit spread the whole `item` over the row**, so a caller passing
+  `favorite: undefined` cleared the flag (`stripDisplayFlags` drops undefined).
+  The real path deliberately PATCHes `encrypted_data` alone for exactly this
+  reason; the decoy branch now matches it.
+- **Concurrent mutations could discard each other.** Each did its own
+  load-modify-save, and `favoriteInFlightRef` only serializes per item id.
+  Serialization now lives in `decoyVaultStore.mutate` — at the store, so every
+  caller inherits it, rather than in the one caller that noticed.
+
+Also: `seedWithKey` discarded `writeRaw`'s boolean, so a `localStorage`
+rejection reported success for contents that were never stored.
+
+### 12.5 CI and docs
+
+- **`Dockerfile.prod` is now the one file deliberately NOT on the 3.12 floor**,
+  and reverting it is the fix, not an exception grudgingly made: its runtime is
+  `gcr.io/distroless/python3-debian12`, whose interpreter is Debian 12's 3.11.
+  A 3.12 builder produces a `/venv` with 3.12 paths and 3.12-ABI extension
+  wheels that the 3.11 runtime cannot load — and no CI job builds this file, so
+  nothing would have caught it. **A version bump's blast radius includes every
+  image whose interpreter it does not own.**
+- **`safety==2.3.5` removed from two installs.** In `ci.yml` it was installed
+  *after* `requirements.txt` (which pins `safety>=3.8.1` and `packaging==25.0`);
+  2.3.5 requires `packaging<22`, so pip downgraded packaging inside the very
+  environment the tests then ran in. In `backend-ci.yml`'s lint job it was never
+  invoked at all. The two `pipx install` uses are left alone: pipx isolates them
+  in their own venv and they are demonstrably green on 3.12 in this PR's runs.
+- **`SECURITY.md` now records CVSS v4.0 8.3 with its vector.** The previous
+  entry said "none asserted", which was wrong — verified by fetching the
+  advisory rather than taking either bot's word, which also caught that the
+  vector is `AT:N`, not the `AT:P` one of the review comments quoted.
+- Deployment guides now name the releases that actually carry `python3.12`
+  (Ubuntu 24.04+/Debian 13+) instead of a generic "Ubuntu/Debian".
+
+### 12.6 Declined
+
+Nothing was declined outright this round. The `pipx`-isolated Safety installs
+are the only finding not acted on, and the reason is above rather than a
+disagreement about the underlying fact: Safety 2.3.5 genuinely does not claim
+3.12 support, but pipx removes the dependency conflict that made it a problem,
+and changing the pin risks Safety 3.x's authentication requirements on a
+currently-green job — a trade to make deliberately, not inside a review round.
+
+Frontend suite after this round: **79 files, 907 tests, all passing**; eslint
+clean. No backend Python changed, so the backend suites from §10 stand.

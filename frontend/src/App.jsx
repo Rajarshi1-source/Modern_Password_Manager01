@@ -1289,6 +1289,35 @@ function App() {
       return;
     }
 
+    // This form is the canonical "Add New Password" screen and it does NOT go
+    // through VaultContext -- it renders outside VaultProvider, so it cannot.
+    // It therefore needs its own decoy branch: without one, `encryptEnvelope`
+    // below refuses in a decoy session and the save visibly fails on the exact
+    // screen a coercer is most likely to be watching, which is precisely when
+    // the decoy has to behave like a real vault. The row-building itself is
+    // the store's shared `addRowForSession`, not a second copy of it.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const saved = await decoyVaultStore.addRowForSession(vaultUserId(user), {
+        data: {
+          name: formData.name,
+          username: formData.username,
+          password: formData.password,
+          website: formData.website,
+          notes: formData.notes,
+        },
+      });
+      if (!saved) {
+        // The shared refusal string, sourced from the module: every
+        // decoy-session write failure must read identically on screen.
+        setError(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+        return;
+      }
+      setFormData({ name: '', username: '', password: '', website: '', notes: '' });
+      setError(null);
+      window.dispatchEvent(new Event('vault:decoy-updated'));
+      return;
+    }
+
     try {
       // Through the shared helper, not `sessionVaultCrypto.encryptItem`
       // directly: this was a second write path that silently diverged from
@@ -1344,7 +1373,7 @@ function App() {
       console.error('Error adding vault item:', err);
       setError('Failed to add new password. Please try again.');
     }
-  }, [formData]);
+   }, [formData, user]);
 
   const handleLogin = useCallback(async (loginData) => {
     try {

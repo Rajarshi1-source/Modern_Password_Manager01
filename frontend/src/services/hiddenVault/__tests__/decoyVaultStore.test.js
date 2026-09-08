@@ -14,7 +14,7 @@ import { webcrypto } from 'node:crypto';
 
 import * as decoyVaultStore from '../decoyVaultStore';
 import { DecoyCapacityError } from '../decoyVaultStore';
-import sessionVaultCrypto from '../../sessionVaultCrypto';
+import sessionVaultCrypto, { PAYLOAD_VERSION } from '../../sessionVaultCrypto';
 
 const USER = 'user-1';
 const KEY = `vaultLocalCache:${USER}`;
@@ -118,7 +118,11 @@ describe('round trip', () => {
     expect(rows[0]).toMatchObject({ item_type: 'password', _lazyLoaded: true, _decrypted: false });
     expect(typeof rows[0].encrypted_data).toBe('string');
     const envelope = JSON.parse(rows[0].encrypted_data);
-    expect(envelope).toMatchObject({ v: 'v2', salt: SALT });
+    // The version comes from the shared constant. It was hard-coded 'v2' here
+    // and in the module, so this assertion compared the copy against itself
+    // and passed while `decryptItem` rejected every seeded row as legacy
+    // plaintext -- the copied-literal trap, in a test written to catch it.
+    expect(envelope).toMatchObject({ v: PAYLOAD_VERSION, salt: SALT });
     expect(envelope.iv).toEqual(expect.any(String));
     expect(envelope.ct).toEqual(expect.any(String));
   });
@@ -138,6 +142,32 @@ describe('round trip', () => {
     ));
 
     expect(plain).toEqual(ITEMS[0]);
+  });
+
+  test('a seeded row decrypts through the real decryptItem path', async () => {
+    // The assertion that actually matters, and the one this file was missing:
+    // the earlier round-trip test decrypted the row with raw WebCrypto, which
+    // is exactly the check that CANNOT notice a wrong envelope version. The
+    // app reads these rows through sessionVaultCrypto, so the test must too.
+    await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: ITEMS });
+    await enterDecoySession(dek(7));
+    const rows = await decoyVaultStore.loadForSession(USER);
+
+    // Real module, not the spied decoy helpers: installRawDek puts the same
+    // key in as the session key, so decryptItem opens the row the way the
+    // display path does.
+    vi.restoreAllMocks();
+    sessionVaultCrypto.clearSessionKey();
+    await sessionVaultCrypto.installRawDek(dek(7), SALT, USER, null, true);
+
+    const plain = await sessionVaultCrypto.decryptItem(rows[0].encrypted_data);
+
+    expect(plain).toEqual(ITEMS[0]);
+    // A wrong version does not throw -- it returns this marker, which renders
+    // as a "legacy plaintext" warning banner instead of an entry. Asserting
+    // its ABSENCE is what makes the check meaningful.
+    expect(plain._legacyPlaintext).toBeUndefined();
+    sessionVaultCrypto.clearSessionKey();
   });
 
   test('created_at is spread out, not all stamped at one instant', async () => {

@@ -46,7 +46,13 @@
  */
 
 const PBKDF2_ITERATIONS = 310000;
-const PAYLOAD_VERSION = 'svc-gcm-1';
+// Exported because `decoyVaultStore.seedWithKey` builds an envelope by hand
+// (it seals under the DECOY slot's key, which no session holds at seed time,
+// so it cannot go through `sealItem`). It first hard-coded 'v2' here, which
+// `decryptItem` below rejects -- every seeded decoy row came back as
+// `_legacyPlaintext` and rendered as a warning instead of an entry. A byte
+// string that two modules must agree on cannot be a literal in both.
+export const PAYLOAD_VERSION = 'svc-gcm-1';
 const WRAPPED_VERSION = 'svc-wrap-1';
 const USER_SALT_STORAGE_KEY = 'vaultKeySalt';
 const WRAPPED_DEK_STORAGE_KEY = 'vaultWrappedDEK';

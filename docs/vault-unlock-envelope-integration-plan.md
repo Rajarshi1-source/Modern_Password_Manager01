@@ -464,7 +464,7 @@ plan should guess at.
    server-side opaque blob — plausible via the `sessionVaultCryptoV3`
    server-wrapped-DEK machinery, but that is a storage design with its own
    migration, not a bolt-on.
-3. **Populating a believable decoy vault.** Product work.
+3. ~~**Populating a believable decoy vault.** Product work.~~ **Delivered by PR #503** — `docs/decoy-vault-contents-plan.md`. The decoy vault holds user-authored entries in a device-local, fixed-length, always-present container keyed by the decoy DEK, and decoy-session writes land there rather than being refused. Read that plan's §12 before touching any decoy path: its first review round found that `seedWithKey` stamped a hand-written `v: 'v2'` where `decryptItem` requires `PAYLOAD_VERSION` — every seeded row came back `_legacyPlaintext` — which is §39.3's copied-literal trap reappearing in a module written to avoid it.
 4. **Removing `verify_password_or_duress`.** #486 scoped it to short duress
    codes and documented the constraint; deleting it is separate.
 
@@ -4203,3 +4203,24 @@ renewed without a triggering failure.
 Docs-only round: no frontend or backend source changed (`git diff --stat` over
 `frontend/**` and `password_manager/**/*.py` is empty), so the 854-test suite
 from §40 stands unchanged.
+
+---
+
+## 42. Superseded by PR #503
+
+§7.3 above ("populating a believable decoy vault") is no longer deferred; the
+work is in `docs/decoy-vault-contents-plan.md`. Two statements in this document
+are now historical rather than current:
+
+- The decoy session no longer renders an EMPTY vault. `useDisplaySafeItems`
+  returns the decoy rows, which are shaped exactly like server rows and decrypt
+  through the ordinary `decryptEnvelope` path.
+- Decoy-session writes are no longer refused outright. `encryptItem` still
+  refuses — that gate is untouched, and it is what keeps decoy ciphertext out
+  of the one shared server-side list — but `encryptDecoyItem` /
+  `encryptDecoyContainer` were added beside it as its exact mirror, and the
+  mutations route into the device-local store instead.
+
+`DECOY_WRITE_REFUSAL` remains the single string every decoy-session write
+failure emits, and §39.3's rule that it must be sourced rather than copied now
+covers three call sites.
