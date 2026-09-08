@@ -667,6 +667,20 @@ export const encryptItem = async (obj) => {
     // either -- a console message would just move the same tell to devtools.
     throw new Error(DECOY_WRITE_REFUSAL);
   }
+  return sealItem(obj);
+};
+
+/**
+ * The envelope format itself, with no session-kind opinion.
+ *
+ * Factored out of `encryptItem` so `encryptDecoyItem` below cannot drift from
+ * it: a decoy row has to be byte-shaped exactly like a server row or the
+ * display path stops treating the two identically, which is the whole basis
+ * of docs/decoy-vault-contents-plan.md. Two copies of these fifteen lines
+ * would be two things to keep in sync; one is not. Private on purpose -- the
+ * only legitimate entry points are the two gated wrappers.
+ */
+const sealItem = async (obj) => {
   const iv = window.crypto.getRandomValues(new Uint8Array(12));
   const plaintext = new TextEncoder().encode(JSON.stringify(obj));
   const ctBuf = await window.crypto.subtle.encrypt(
@@ -680,6 +694,96 @@ export const encryptItem = async (obj) => {
     ct: toB64(new Uint8Array(ctBuf)),
     salt: sessionSaltB64,
   });
+};
+
+/**
+ * Seal one row for the DECOY vault's local store.
+ *
+ * Mirror of `encryptItem`'s predicate (see `encryptDecoyContainer` below for
+ * why the two are written as a partition of one flag). The result never goes
+ * near `/api/vault/` -- `decoyVaultStore` is the only caller and it writes to
+ * `localStorage` -- so the row corruption `encryptItem`'s refusal exists to
+ * prevent is structurally out of reach here.
+ */
+export const encryptDecoyItem = async (obj) => {
+  if (!sessionKey) {
+    throw new Error('Vault is locked: session encryption key is not initialized.');
+  }
+  if (!sessionIsDecoy) {
+    throw new Error('encryptDecoyItem: not a decoy session.');
+  }
+  const generation = sessionGeneration;
+  const sealed = await sealItem(obj);
+  if (generation !== sessionGeneration) {
+    throw new Error('Vault session changed while encrypting.');
+  }
+  return sealed;
+};
+
+/**
+ * Encrypt/decrypt the DECOY vault's local container under the session key.
+ *
+ * These are the exact MIRROR of `encryptItem`'s predicate, and they live here
+ * rather than in `decoyVaultStore` for two reasons. First, the session key is
+ * imported non-extractable, so the decoy DEK cannot be handed out -- the only
+ * way to use it is a function that already holds it. Second, and more
+ * important, the gate belongs at the choke point where the key is, not in
+ * each caller (docs/vault-unlock-envelope-integration-plan.md §33.1).
+ *
+ *   encryptItem              refuses iff  sessionIsDecoy
+ *   encryptDecoyContainer    refuses iff !sessionIsDecoy
+ *
+ * Written next to each other on purpose: they partition one flag, so neither
+ * can be widened without the other becoming visibly wrong. A decoy-session
+ * write must never reach `/api/vault/` (see `encryptItem` above for why that
+ * corrupts a row permanently), and a real-session write must never land in
+ * the decoy container, where it would be a real secret stored under a key a
+ * coerced password opens.
+ *
+ * The generation checks are the standard await guard: `subtle.encrypt` is
+ * async, and a logout or a re-unlock landing inside that window must not have
+ * its result written anywhere. Compare against `currentSessionGeneration()`
+ * rather than re-testing `isDecoySession()` after the await -- a lock plus
+ * any unlock answers the flag question again, but never the identity one
+ * (§32).
+ */
+export const encryptDecoyContainer = async (plaintextBytes) => {
+  if (!sessionKey) {
+    throw new Error('Vault is locked: session encryption key is not initialized.');
+  }
+  if (!sessionIsDecoy) {
+    throw new Error('encryptDecoyContainer: not a decoy session.');
+  }
+  const generation = sessionGeneration;
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const ctBuf = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    sessionKey,
+    plaintextBytes
+  );
+  if (generation !== sessionGeneration) {
+    throw new Error('Vault session changed while encrypting.');
+  }
+  return { iv, ct: new Uint8Array(ctBuf) };
+};
+
+export const decryptDecoyContainer = async (iv, ct) => {
+  if (!sessionKey) {
+    throw new Error('Vault is locked: session encryption key is not initialized.');
+  }
+  if (!sessionIsDecoy) {
+    throw new Error('decryptDecoyContainer: not a decoy session.');
+  }
+  const generation = sessionGeneration;
+  const ptBuf = await window.crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    sessionKey,
+    ct
+  );
+  if (generation !== sessionGeneration) {
+    throw new Error('Vault session changed while decrypting.');
+  }
+  return new Uint8Array(ptBuf);
 };
 
 /**
@@ -766,5 +870,8 @@ export default {
   clearSessionKey,
   encryptItem,
   decryptItem,
+  encryptDecoyItem,
+  encryptDecoyContainer,
+  decryptDecoyContainer,
   getOrCreateUserSalt,
 };

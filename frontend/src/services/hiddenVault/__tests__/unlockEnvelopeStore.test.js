@@ -560,3 +560,83 @@ describe('MalformedSlotPayloadError', () => {
     expect(new MalformedSlotPayloadError()).toBeInstanceOf(HiddenVaultError);
   });
 });
+
+describe('decoy contents (docs/decoy-vault-contents-plan.md)', () => {
+  test('provision writes the local-cache blob for an account with NO decoy', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+
+    // The blob has to exist for EVERY provisioned account. If it appeared only
+    // once a decoy was configured, its mere presence in localStorage would
+    // announce the feature to anyone with devtools -- the same reason
+    // encode() fills an unconfigured decoy SLOT with a throwaway-key payload.
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).not.toBeNull();
+  });
+
+  test('seedDecoyContents stores contents the decoy DEK can open', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+    const beforeSeed = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+
+    await unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID,
+      decoyPassword: DECOY_PASSWORD,
+      items: [{ site: 'example.com', username: 'u', password: 'p', notes: '' }],
+    });
+
+    const afterSeed = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+    expect(afterSeed).not.toBe(beforeSeed);
+    // Fixed-length container: the write changed the bytes but not the size, so
+    // an observer cannot tell that contents were added.
+    expect(afterSeed.length).toBe(beforeSeed.length);
+  });
+
+  test('seeding leaves the envelope -- and therefore the duress token -- untouched', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    const { duressToken } = await setDecoySlot({
+      userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD,
+    });
+    const envelopeBefore = readRawEnvelope(USER_ID);
+
+    await unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID, decoyPassword: DECOY_PASSWORD, items: [],
+    });
+
+    // Editing decoy CONTENTS must not cost the user their alarm: re-encoding
+    // the envelope would mint a new token and silently orphan the registered
+    // one. This is why seeding is a separate operation from setDecoySlot.
+    expect(readRawEnvelope(USER_ID)).toBe(envelopeBefore);
+    const reopened = await open({ userId: USER_ID, password: DECOY_PASSWORD });
+    expect(reopened.duressToken).toBe(duressToken);
+  });
+
+  test('refuses the REAL password rather than sealing contents no decoy can open', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+    const before = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+
+    // Sealing under the REAL dek would produce a container the decoy session
+    // cannot open: the setup screen would report success and the decoy would
+    // still open empty.
+    await expect(unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID, decoyPassword: REAL_PASSWORD, items: [{ site: 'x' }],
+    })).rejects.toThrow(/No decoy password is configured/);
+
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).toBe(before);
+  });
+
+  test('a wrong password raises WrongPasswordError and writes nothing', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+    const before = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+
+    await expect(unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID, decoyPassword: 'neither of the two', items: [{ site: 'x' }],
+    })).rejects.toBeInstanceOf(WrongPasswordError);
+
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).toBe(before);
+  });
+
+  test('the default export carries seedDecoyContents', () => {
+    expect(unlockEnvelopeStore.seedDecoyContents).toBeTypeOf('function');
+  });
+});
