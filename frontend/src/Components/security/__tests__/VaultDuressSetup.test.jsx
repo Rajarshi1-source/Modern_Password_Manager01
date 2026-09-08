@@ -683,8 +683,17 @@ test('decoy contents: seeds only the entries that were filled in', async () => {
   // rows must be dropped, because a decoy vault padded with blank entries is
   // worse than a shorter one.
   const [args] = unlockEnvelopeStore.seedDecoyContents.mock.calls;
+  // `name` / `website`, not `site`: these are the keys App.jsx's list actually
+  // renders (`data.name`, `data.website`). Stored under `site`, every seeded
+  // decoy entry showed as "Untitled" with no address.
   expect(args[0].items).toEqual([
-    { site: 'mail.example.com', username: 'me', password: 'p', notes: '' },
+    {
+      name: 'mail.example.com',
+      website: 'mail.example.com',
+      username: 'me',
+      password: 'p',
+      notes: '',
+    },
   ]);
   expect(args[0].decoyPassword).toBe('a decoy password 12+');
 });
@@ -769,4 +778,95 @@ test('decoy contents: the form is absent while the vault is locked', async () =>
   const { queryByRole } = render(<VaultDuressSetup />);
 
   expect(queryByRole('button', { name: /save decoy contents/i })).toBeNull();
+});
+
+test('decoy contents: a decoy session that arrives after render cannot submit', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+
+  const { getByLabelText, getByRole, queryByRole } = render(<VaultDuressSetup />);
+
+  // Fill the form while the session is still real: any re-render AFTER the
+  // flip re-evaluates the render gate and removes these fields, so the inputs
+  // have to be populated first.
+  fireEvent.change(getByLabelText(/vault password/i, { selector: '#duress-contents-vault-password' }), {
+    target: { value: REAL_PASSWORD },
+  });
+  fireEvent.change(getByLabelText(/decoy password/i, { selector: '#duress-contents-decoy-password' }), {
+    target: { value: 'a decoy password 12+' },
+  });
+
+  // The render gate hides the form for a decoy session, but a form ALREADY on
+  // screen when the session changed can still be SUBMITTED -- that is the
+  // window this test covers. Without a submit-time check, open() would run and
+  // answer "Incorrect vault password." to a coercer who just watched that
+  // password unlock this vault, the contradiction the feature exists to prevent.
+  mockIsDecoySession.mockReturnValue(true);
+  await act(async () => {
+    fireEvent.click(getByRole('button', { name: /save decoy contents/i }));
+  });
+
+  // Asserted on the SIDE EFFECT, not on an on-screen message: the re-render
+  // that follows the submit swaps the whole panel for the neutral decoy one,
+  // so no alert survives to be read -- which is the correct behaviour and is
+  // exactly why the boundary cannot be tested through the UI text. What must
+  // hold is that no envelope work happened at all.
+  expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();
+  expect(unlockEnvelopeStore.seedDecoyContents).not.toHaveBeenCalled();
+  expect(queryByRole('button', { name: /save decoy contents/i })).toBeNull();
+});
+
+test('decoy contents: a locked vault that arrives after render cannot submit', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+
+  const { getByLabelText, getByRole, queryByRole } = render(<VaultDuressSetup />);
+
+  fireEvent.change(getByLabelText(/vault password/i, { selector: '#duress-contents-vault-password' }), {
+    target: { value: REAL_PASSWORD },
+  });
+  fireEvent.change(getByLabelText(/decoy password/i, { selector: '#duress-contents-decoy-password' }), {
+    target: { value: 'a decoy password 12+' },
+  });
+
+  mockHasSessionKey.mockReturnValue(false);
+  await act(async () => {
+    fireEvent.click(getByRole('button', { name: /save decoy contents/i }));
+  });
+
+  // Same reasoning as the decoy case above: the locked render gate replaces
+  // the panel, so the property under test is that no envelope work ran.
+  expect(unlockEnvelopeStore.open).not.toHaveBeenCalled();
+  expect(unlockEnvelopeStore.seedDecoyContents).not.toHaveBeenCalled();
+  expect(queryByRole('button', { name: /save decoy contents/i })).toBeNull();
+});
+
+test('decoy contents: a notes-only entry is kept, not silently dropped', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+  unlockEnvelopeStore.seedDecoyContents.mockResolvedValue(undefined);
+
+  const { getByLabelText, getByRole, findByRole } = render(<VaultDuressSetup />);
+  await act(async () => {
+    fireEvent.change(getByLabelText(/vault password/i, { selector: '#duress-contents-vault-password' }), {
+      target: { value: REAL_PASSWORD },
+    });
+    fireEvent.change(getByLabelText(/decoy password/i, { selector: '#duress-contents-decoy-password' }), {
+      target: { value: 'a decoy password 12+' },
+    });
+    fireEvent.change(getByLabelText(/notes/i, { selector: '#decoy-notes-0' }), {
+      target: { value: 'recovery codes in the drawer' },
+    });
+    fireEvent.click(getByRole('button', { name: /save decoy contents/i }));
+  });
+
+  await findByRole('status');
+  // A seed REPLACES the whole cache, so a dropped row is typed content that
+  // simply vanishes.
+  const [args] = unlockEnvelopeStore.seedDecoyContents.mock.calls;
+  expect(args[0].items).toHaveLength(1);
+  expect(args[0].items[0].notes).toBe('recovery codes in the drawer');
 });

@@ -166,7 +166,12 @@ jobs:
           # fits the full ML dep tree in the runner's disk budget.
           python -m pip install --no-cache-dir --upgrade pip
           pip install --no-cache-dir -r requirements.txt
-          pip install --no-cache-dir pytest pytest-django pytest-cov flake8 black isort "safety==2.3.5" bandit
+          # safety is NOT pinned here: requirements.txt above already installs
+          # it (safety>=3.8.1, locked at 3.8.1) alongside packaging==25.0.
+          # Re-installing safety==2.3.5 on top forces packaging<22, so pip
+          # downgrades packaging inside the very environment the tests then run
+          # in. The `safety check` step below works on 3.x.
+          pip install --no-cache-dir pytest pytest-django pytest-cov flake8 black isort bandit
           # Show what we actually used vs what's left.
           df -h /
       

@@ -1650,3 +1650,10 @@ implementation. It must settle:
 - `password_manager/security/services/tor_service.py:638` — the ingress contract
 - `docker-compose.yml` (`--profile tor`), `k8s/tor.yaml` — deployment
 - `docs/vault-unlock-envelope-integration-plan.md` — the other #486 carry-over
+- `docs/decoy-vault-contents-plan.md` — PR #503, which closes that plan's
+  §7.3. Unrelated to this transport work and lands independently, but it
+  shares one constraint worth knowing before either is extended: the ZK
+  invariant forbids the server learning which envelope slot unlocked a
+  session, which is why the decoy's contents are device-local rather than
+  synced — the same reason this plan cannot ask the server to distinguish
+  onion from clearnet callers by identity.

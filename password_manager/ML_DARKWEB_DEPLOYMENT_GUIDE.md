@@ -66,7 +66,9 @@ Before deploying to production, ensure you have:
 ### System Packages
 
 ```bash
-# Ubuntu/Debian
+# Ubuntu 24.04+ / Debian 13+ -- older releases (Ubuntu 22.04, Debian 12) do
+# not carry python3.12 in their default repositories; add the deadsnakes PPA
+# or build from source there.
 sudo apt-get update
 sudo apt-get install -y \
     python3.12 \

@@ -270,8 +270,17 @@ export const VaultProvider = ({ children }) => {
       return decryptedItems.get(itemId);
     }
 
-    // Find the item
-    const item = items.find(i => i.item_id === itemId);
+    // Find the item. In a DECOY session the displayed rows come from
+    // `decoyVaultStore`, not from `items` -- the real list is fetched (traffic
+    // analysis) but never rendered -- so a lookup restricted to `items` threw
+    // "Item not found" for every decoy row. That left the dashboard unable to
+    // open or edit anything it had just displayed: a populated decoy vault
+    // that falls apart on the first click is not a believable one.
+    let item = items.find(i => i.item_id === itemId);
+    if (!item && sessionVaultCrypto.isDecoySession()) {
+      const decoyRows = await decoyVaultStore.loadForSession(vaultUserId(user));
+      item = decoyRows.find(i => i.item_id === itemId);
+    }
     if (!item) {
       throw new Error('Item not found');
     }
@@ -329,7 +338,7 @@ export const VaultProvider = ({ children }) => {
       console.error('On-demand decryption failed:', error);
       throw error;
     }
-  }, [items, decryptedItems]);
+   }, [items, decryptedItems, user]);
 
   const handleLockVault = useCallback((broadcast = true) => {
     setIsUnlocked(false);
@@ -829,23 +838,17 @@ export const VaultProvider = ({ children }) => {
   // indistinguishable from an ordinary save failure and identical across
   // layers (vault-unlock-envelope-integration-plan.md §33.1, §39.3).
   const mutateDecoyRows = useCallback(async (mutator) => {
-    const userId = vaultUserId(user);
-    // Bind to the session that STARTED this mutation. `loadForSession` and
-    // `saveForSession` each re-check `isDecoySession()`, but that flag answers
-    // "is this A decoy session", not "is it the SAME one": a lock plus a
-    // second decoy unlock passes the flag test while being a different
-    // session (§32). The generation counter is the only monotonic answer.
-    const generation = sessionVaultCrypto.currentSessionGeneration();
-    const rows = await decoyVaultStore.loadForSession(userId);
-    if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
-      throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
-    }
-    const next = mutator(rows);
-    const saved = await decoyVaultStore.saveForSession(userId, next);
+    // The read-modify-write, its serialization, and the session-generation
+    // binding all live in `decoyVaultStore.mutate` -- not here. Two callers
+    // now share them (this context, and App.jsx's own Add form, which renders
+    // outside VaultProvider and so cannot reach this context at all), and a
+    // per-caller copy of a read-modify-write is exactly how two overlapping
+    // mutations end up discarding each other.
+    const saved = await decoyVaultStore.mutate(vaultUserId(user), mutator);
     if (!saved) {
-      // Covers a locked session, a storage failure, and a capacity overflow
-      // alike -- deliberately one outcome, because distinguishing them on
-      // screen would itself be an oracle.
+      // One outcome for a moved session, a locked vault, a capacity overflow
+      // and a storage failure alike: distinguishing them on screen would
+      // itself be an oracle.
       throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
     }
     // Display-freshness only, never a gate: the rows are re-read from the
@@ -861,19 +864,17 @@ export const VaultProvider = ({ children }) => {
     if (sessionVaultCrypto.isDecoySession()) {
       try {
         setError(null);
-        const encrypted_data = await sessionVaultCrypto.encryptDecoyItem(item.data);
         const itemId = item.item_id || `item_${Date.now()}`;
-        await mutateDecoyRows((rows) => [
-          ...rows,
-          {
-            id: `d${Date.now()}`,
-            item_id: itemId,
-            item_type: item.type || item.item_type || 'password',
-            encrypted_data,
-            favorite: Boolean(item.favorite),
-            created_at: new Date().toISOString(),
-          },
-        ]);
+        // The shared append, so this and App.jsx's Add form build a decoy row
+        // exactly the same way.
+        const saved = await decoyVaultStore.addRowForSession(vaultUserId(user), {
+          data: item.data,
+          itemType: item.type || item.item_type || 'password',
+          favorite: item.favorite,
+          itemId,
+        });
+        if (!saved) throw new Error(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+        window.dispatchEvent(new Event('vault:decoy-updated'));
         return { ...item, item_id: itemId };
       } catch {
         if (isMountedRef.current) setError(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
@@ -960,7 +961,7 @@ export const VaultProvider = ({ children }) => {
         setLoading(false);
       }
     }
-  }, [firebaseInitialized, syncVault, mutateDecoyRows]);
+  }, [firebaseInitialized, syncVault, user]);
 
   // PR F: edit re-encrypts the secret and persists it via the proven detail
   // route (/api/vault/{id}/). Crypto goes through encryptEnvelope (v3-preferred,
@@ -983,9 +984,16 @@ export const VaultProvider = ({ children }) => {
       try {
         setError(null);
         const encrypted_data = await sessionVaultCrypto.encryptDecoyItem(item.data);
+        // ONLY the two fields an edit owns, matching the real path below,
+        // which deliberately PATCHes `encrypted_data` alone so an edit "can't
+        // clobber a concurrent favorite change". Spreading the whole `item`
+        // broke that rule: a caller passing `favorite: undefined` merged an
+        // undefined over the stored flag, and `stripDisplayFlags` drops
+        // undefined values, so the row reloaded as unfavourited. `item_type`
+        // was exposed the same way.
         await mutateDecoyRows((rows) =>
           rows.map((row) => (row.id === item.id
-            ? { ...row, ...item, data: undefined, encrypted_data, updated_at: new Date().toISOString() }
+            ? { ...row, encrypted_data, updated_at: new Date().toISOString() }
             : row))
         );
         return item;

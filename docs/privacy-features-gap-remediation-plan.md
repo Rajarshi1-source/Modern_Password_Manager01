@@ -684,9 +684,16 @@ onion case):
   outcomes, and the write/display gates on a decoy session. It is **not** a
   claim about §2's "Plausible Deniability Vault" as a whole, for two
   reasons that must not be blurred:
-  - **Decoy CONTENTS remain out of scope** (that plan's §7). A decoy
-    session renders an empty vault, which is honest but not believable to
-    anyone who knows the account is not empty.
+  - **Decoy CONTENTS were out of scope** (that plan's §7) and a decoy
+    session rendered an empty vault — honest, but not believable to anyone
+    who knows the account is not empty. **Closed by PR #503**; see
+    `docs/decoy-vault-contents-plan.md`. The decoy vault now holds entries
+    the user writes, stored device-locally under the decoy DEK in a
+    fixed-length, always-present container, and decoy-session
+    add/edit/delete/favourite land there instead of being refused. Three
+    limitations survive and are named in the setup screen's own copy:
+    device-local only, a decoy write sends no request while a real one
+    POSTs (so traffic still distinguishes them), and backups still refuse.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could
@@ -697,10 +704,13 @@ onion case):
     reads the value returned by `extractVault()` rather than the render
     state, so this was display-only and touched no ZK surface. A decoy
     extraction and a real one now render the same panel containing that
-    slot's own contents. **This screen therefore reaches genuine
-    indistinguishability, which the envelope path does not**: the stego
-    decoy holds real user-authored contents, whereas a decoy session in the
-    main app still shows an empty vault (§7's deferred product work).
+    slot's own contents. **This screen reached genuine
+    indistinguishability before the envelope path did**: the stego decoy has
+    always held real user-authored contents, whereas a decoy session in the
+    main app showed an empty vault. PR #503 closed that asymmetry on the
+    display and write axes; what still separates them is transport — a decoy
+    WRITE in the main app issues no network request while a real one POSTs,
+    which the stego path, being entirely local, never had to solve.
   **All review rounds for both carry-overs are recorded in one place:
   `docs/vault-unlock-envelope-integration-plan.md` §9 through §25** (every
   bare `§N` in this paragraph refers to that document, including the

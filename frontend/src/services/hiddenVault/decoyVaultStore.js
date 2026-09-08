@@ -49,7 +49,7 @@
  * that is a true description and it names nothing.
  */
 
-import sessionVaultCrypto from '../sessionVaultCrypto';
+import sessionVaultCrypto, { PAYLOAD_VERSION } from '../sessionVaultCrypto';
 import { HiddenVaultError } from './hiddenVaultEnvelope';
 
 // Deliberately does NOT import `unlockEnvelopeStore`, which imports this
@@ -204,7 +204,11 @@ export const writeUnconfigured = async (userId) => {
  * @param {Uint8Array} args.dekBytes - the DECOY slot's 32-byte DEK
  * @param {string} args.saltB64 - the salt that slot stamps
  * @param {Array<Object>} args.items - plain objects, each the `data` of one
- *   vault item (e.g. `{ site, username, password, notes }`).
+ *   vault item, in the schema the vault's own display surfaces read
+ *   (`{ name, username, password, website, notes }`).
+ * @returns {Promise<boolean>} false when the write itself failed (a
+ *   localStorage rejection in private browsing). Callers must not report
+ *   success on a false: the contents were never stored.
  * @throws {DecoyCapacityError} the items do not fit
  */
 export const seedWithKey = async ({ userId, dekBytes, saltB64, items }) => {
@@ -221,7 +225,28 @@ export const seedWithKey = async ({ userId, dekBytes, saltB64, items }) => {
   // for an oversized set, and it must do so with the previous contents still
   // intact rather than after having cleared them.
   const blob = await encryptContainer(key, rows);
-  writeRaw(userId, blob);
+  return writeRaw(userId, blob);
+};
+
+/**
+ * Re-key the container to an empty one under a NEW decoy DEK.
+ *
+ * `setDecoySlot` generates a fresh decoy DEK every time it runs, so replacing
+ * a decoy password leaves any existing contents sealed under a key nothing
+ * holds any more. `loadForSession` then returns [] and the decoy silently
+ * opens empty -- the user believes their decoy vault is intact and it is not.
+ *
+ * Migration is impossible here: re-encrypting needs the OLD decoy DEK, and
+ * `setDecoySlot` is given the real vault password and the NEW decoy password,
+ * never the old one. So the honest resolution is to drop the unreadable
+ * ciphertext and have the setup screen tell the user to re-enter the contents,
+ * which is what `VaultDuressSetup` now does.
+ */
+export const resetForNewKey = async (userId, dekBytes) => {
+  if (!userId) return false;
+  if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) return false;
+  const key = await importDecoyKey(dekBytes);
+  return writeRaw(userId, await encryptContainer(key, []));
 };
 
 /**
@@ -242,7 +267,11 @@ const buildRow = async (key, saltB64, data, index) => {
     item_id: `item_${Date.now() - index * 1000}`,
     item_type: data?.item_type || 'password',
     encrypted_data: JSON.stringify({
-      v: 'v2',
+      // The shared constant, never a literal. Hard-coding 'v2' here made
+      // `decryptItem` reject every seeded row as `_legacyPlaintext`: rows added
+      // later went through `encryptDecoyItem` and decrypted fine, so the decoy
+      // vault rendered a mix of real entries and warning banners.
+      v: PAYLOAD_VERSION,
       iv: toB64(iv),
       ct: toB64(new Uint8Array(ctBuf)),
       salt: saltB64,
@@ -332,9 +361,87 @@ const stripDisplayFlags = (row) => STORED_ROW_FIELDS.reduce((acc, field) => {
   return acc;
 }, {});
 
+/**
+ * Serialized read-modify-write over the decoy rows.
+ *
+ * Every decoy-session mutation goes through here, and they are chained rather
+ * than run concurrently. Two overlapping mutations each load the SAME snapshot
+ * and the second write silently discards the first -- `favoriteInFlightRef`
+ * in VaultContext only serializes per item id, so toggling two different rows
+ * is enough to lose one. Chaining is the whole fix: the queue is per module,
+ * the operations are short, and correctness beats parallelism for a list this
+ * size.
+ *
+ * The generation binding lives here too, not in the callers: `isDecoySession()`
+ * answers "is this A decoy session", not "the SAME one" -- a lock plus a
+ * second decoy unlock passes the flag test while being a different session
+ * (vault-unlock-envelope-integration-plan.md §32).
+ *
+ * @returns {Promise<boolean>} false if the session moved, the vault locked, the
+ *   contents would not fit, or storage refused. Callers turn a false into the
+ *   shared `DECOY_WRITE_REFUSAL` string -- never a message of their own.
+ */
+let mutationQueue = Promise.resolve();
+
+export const mutate = (userId, mutator) => {
+  const run = async () => {
+    if (!userId || !sessionVaultCrypto.isDecoySession()) return false;
+    const generation = sessionVaultCrypto.currentSessionGeneration();
+    const rows = await loadForSession(userId);
+    if (sessionVaultCrypto.currentSessionGeneration() !== generation) return false;
+    let next;
+    try {
+      next = mutator(rows);
+    } catch {
+      return false;
+    }
+    if (sessionVaultCrypto.currentSessionGeneration() !== generation) return false;
+    return saveForSession(userId, next);
+  };
+  // The queue must not break on a rejection, so failures are absorbed into a
+  // `false` and the chain continues with a resolved promise either way.
+  const result = mutationQueue.then(run, run);
+  mutationQueue = result.then(() => undefined, () => undefined);
+  return result;
+};
+
+/**
+ * Append one item to the decoy vault.
+ *
+ * Shared by BOTH write paths rather than reimplemented in each: VaultContext's
+ * `addItem`, and the canonical "Add New Password" form in App.jsx, which posts
+ * to `/api/vault/` directly and never goes through VaultContext at all (it
+ * renders outside `VaultProvider`, so it cannot). Before this, only the first
+ * had a decoy branch -- so the form a coercer is most likely to be sitting in
+ * front of still visibly failed to save.
+ */
+export const addRowForSession = async (userId, { data, itemType = 'password', favorite = false, itemId } = {}) => {
+  let encrypted;
+  try {
+    encrypted = await sessionVaultCrypto.encryptDecoyItem(data || {});
+  } catch {
+    return false;
+  }
+  const id = itemId || `item_${Date.now()}`;
+  return mutate(userId, (rows) => [
+    ...rows,
+    {
+      id: `d${Date.now()}`,
+      item_id: id,
+      item_type: itemType,
+      encrypted_data: encrypted,
+      favorite: Boolean(favorite),
+      created_at: new Date().toISOString(),
+    },
+  ]);
+};
+
 export default {
   writeUnconfigured,
   seedWithKey,
+  resetForNewKey,
+  mutate,
+  addRowForSession,
   loadForSession,
   saveForSession,
   DecoyCapacityError,

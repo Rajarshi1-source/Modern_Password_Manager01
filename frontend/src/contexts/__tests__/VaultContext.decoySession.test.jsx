@@ -54,12 +54,27 @@ vi.mock('../../services/sessionVaultCrypto', async (importOriginal) => {
 // The decoy store is where a decoy-session mutation now LANDS. Mocked so these
 // tests keep asserting the property they were written for -- that no request
 // reaches the real vault -- independently of whether the store itself succeeds.
-const { mockDecoyLoad, mockDecoySave } = vi.hoisted(() => ({
+const { mockDecoyLoad, mockDecoySave, mockDecoyAddRow } = vi.hoisted(() => ({
   mockDecoyLoad: vi.fn(async () => []),
   mockDecoySave: vi.fn(async () => true),
+  mockDecoyAddRow: vi.fn(async () => true),
 }));
+// `mutate` keeps the real module's read-modify-write SHAPE (load, apply the
+// caller's mutator, save) rather than being a bare stub, so the assertions
+// below can still inspect the rows actually handed to the store. Its
+// serialization and session-generation binding are the real module's job and
+// are covered in decoyVaultStore.test.js.
+const mockDecoyMutate = vi.fn(async (userId, mutator) => {
+  const rows = await mockDecoyLoad(userId);
+  return mockDecoySave(userId, mutator(rows));
+});
 vi.mock('../../services/hiddenVault/decoyVaultStore', () => ({
-  default: { loadForSession: mockDecoyLoad, saveForSession: mockDecoySave },
+  default: {
+    loadForSession: mockDecoyLoad,
+    saveForSession: mockDecoySave,
+    mutate: (...args) => mockDecoyMutate(...args),
+    addRowForSession: (...args) => mockDecoyAddRow(...args),
+  },
   loadForSession: mockDecoyLoad,
   saveForSession: mockDecoySave,
 }));
@@ -148,6 +163,7 @@ beforeEach(() => {
   // mock that encodes a STATE has to be re-armed here or the file passes under
   // `-t` and fails as a whole.
   mockDecoySave.mockResolvedValue(true);
+  mockDecoyAddRow.mockResolvedValue(true);
   mockDeleteVaultItem.mockResolvedValue({ data: {} });
   mockToggleFavorite.mockResolvedValue({ data: {} });
   api.post.mockResolvedValue({ data: { backup_id: 'b-1' } });

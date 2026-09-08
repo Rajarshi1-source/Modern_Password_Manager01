@@ -384,7 +384,13 @@ export async function seedDecoyContents({ userId, decoyPassword, items }) {
     // screen reported success.
     throw new Error('No decoy password is configured for this account.');
   }
-  await decoyVaultStore.seedWithKey({ userId, dekBytes, saltB64, items });
+  // Propagated, not discarded: `seedWithKey` returns false when localStorage
+  // refuses the write (private browsing), and a setup screen that reports
+  // success for contents that were never stored is worse than one that fails.
+  const stored = await decoyVaultStore.seedWithKey({ userId, dekBytes, saltB64, items });
+  if (!stored) {
+    throw new Error('Could not store the decoy contents on this device.');
+  }
 }
 
 /**
@@ -517,7 +523,29 @@ export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
   }
   saveEnvelope(userId, blob);
 
-  return { duressToken };
+  // The decoy DEK above is freshly generated on EVERY call, so any decoy
+  // contents already stored are sealed under a key that no longer exists
+  // anywhere. Left alone, `loadForSession` just returns [] and the decoy
+  // opens empty -- the user changes their decoy password and silently loses
+  // the vault they built, with nothing on screen saying so.
+  //
+  // Migrating them is impossible from here: re-encrypting needs the OLD decoy
+  // DEK, and this function is given the real vault password and the NEW decoy
+  // password, never the old one. So the honest resolution is to replace the
+  // unreadable ciphertext with an empty container under the new key and
+  // report it, which is what `contentsReset` is for -- `VaultDuressSetup`
+  // turns it into "your decoy contents were cleared; enter them again".
+  //
+  // Non-fatal, like the provision backfill: the decoy slot itself is saved and
+  // its alarm token must still be returned for registration.
+  let contentsReset = false;
+  try {
+    contentsReset = await decoyVaultStore.resetForNewKey(userId, decoyDekBytes);
+  } catch {
+    /* see above */
+  }
+
+  return { duressToken, contentsReset };
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +575,24 @@ export async function open({ userId, password }) {
   }
   const { slotIndex, payload } = await decode(blob, password);
   const { dekBytes, saltB64, duressToken } = parseSlotPayload(payload);
+
+  // Backfill the decoy-contents blob for accounts whose envelope predates it.
+  // `provision()` writes it, but an existing user with an envelope never runs
+  // provision again -- their unlocks come straight here. For them the blob
+  // would first appear the moment they SEEDED decoy contents, making its mere
+  // presence in localStorage the exact "a decoy is configured" oracle the
+  // fixed-length, always-present design exists to deny.
+  //
+  // Placed after a successful decode so a wrong password creates nothing (the
+  // recovery and contents forms probe `open()` with candidate passwords), and
+  // it is a no-op once the key exists. Non-fatal: an unlock must never fail
+  // because a cosmetic placeholder could not be written.
+  try {
+    await decoyVaultStore.writeUnconfigured(userId);
+  } catch {
+    /* see above */
+  }
+
   return { slotIndex, dekBytes, saltB64, duressToken };
 }
 

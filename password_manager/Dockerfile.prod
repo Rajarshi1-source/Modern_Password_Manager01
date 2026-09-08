@@ -1,7 +1,15 @@
 # =========================
 # Stage 1: Builder
 # =========================
-FROM python:3.12-slim-bookworm AS builder
+# Pinned to 3.11 DELIBERATELY, and it is the one place in this repo that is
+# not on the 3.12 floor. The runtime stage below is
+# gcr.io/distroless/python3-debian12, whose interpreter is Debian 12's -- i.e.
+# Python 3.11 -- and this stage's whole output is a /venv copied into it. A
+# 3.12 builder produces /venv/bin/python symlinks and lib/python3.12 paths plus
+# compiled extension wheels with a 3.12 ABI tag, none of which the 3.11 runtime
+# can load: daphne would fail at start, and no CI job builds this file, so
+# nothing would have caught it. Raise this only together with the runtime image.
+FROM python:3.11-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
