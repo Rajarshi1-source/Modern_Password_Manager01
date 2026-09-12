@@ -699,7 +699,9 @@ onion case):
     hand-written envelope version string the reader rejects); round 2 found a
     row-id collision, a backfill that could overwrite a seed, and — outside
     this PR's diff entirely — a signed but EMPTY Python SBOM in
-    `ci-sbom.yml`.
+    `ci-sbom.yml`. Round 3 found a cross-tab stale write that no
+    session-generation guard could catch (the counter is per-tab), and
+    that one of round 2's own new tests was flaky 1 run in 3.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could

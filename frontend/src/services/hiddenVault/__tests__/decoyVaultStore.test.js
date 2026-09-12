@@ -252,17 +252,26 @@ describe('concurrency', () => {
     const realEncrypt = webcrypto.subtle.encrypt.bind(webcrypto.subtle);
     let releaseBackfill;
     const held = new Promise((resolve) => { releaseBackfill = resolve; });
-    let firstCall = true;
+    // Armed for the BACKFILL's encrypt only, then disarmed. A "hold the first
+    // call" latch is a race, not an ordering: the seed below also encrypts,
+    // and when its call arrived first the latch held the SEED instead and the
+    // test deadlocked on its own await. That made this test flaky ~1 run in 3.
+    let armed = true;
+    let backfillInsideEncrypt = false;
     vi.spyOn(window.crypto.subtle, 'encrypt').mockImplementation(async (...args) => {
       const out = await realEncrypt(...args);
-      if (firstCall) {
-        firstCall = false;
+      if (armed) {
+        armed = false;
+        backfillInsideEncrypt = true;
         await held;
       }
       return out;
     });
 
     const backfill = decoyVaultStore.writeUnconfigured(USER);
+    // Synchronise on the backfill being inside its encryption before seeding,
+    // so the interleaving under test is the one that actually happens.
+    await vi.waitFor(() => expect(backfillInsideEncrypt).toBe(true));
     await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: ITEMS });
     releaseBackfill();
     const wrote = await backfill;
@@ -274,6 +283,55 @@ describe('concurrency', () => {
     // The assertion that actually matters: the seeded CONTENTS are still
     // readable. A return value can be right for the wrong reason.
     expect(await decoyVaultStore.loadForSession(USER)).toHaveLength(2);
+  });
+
+  test('a stale mutation cannot overwrite a rotated container', async () => {
+    // The cross-tab case. Tab A holds a decoy session and starts a mutation;
+    // tab B holds a REAL session and rotates the decoy password, which mints a
+    // fresh decoy DEK and re-keys the container. Tab A's session-generation
+    // counter is module state -- it cannot see tab B at all -- so without a
+    // compare-and-swap on the stored bytes, tab A's in-flight write lands on
+    // top of the rotation with ciphertext sealed under the OLD dek, and the
+    // new decoy password then opens a vault nothing can decrypt.
+    await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: ITEMS });
+    await enterDecoySession(dek(7));
+
+    const realEncrypt = webcrypto.subtle.encrypt.bind(webcrypto.subtle);
+    let releaseMutation;
+    const held = new Promise((resolve) => { releaseMutation = resolve; });
+    // Armed for the MUTATION's encrypt only. A plain "hold the first call"
+    // latch deadlocks here: `mutate` runs off a microtask queue, so the
+    // rotation's own encrypt can be the first to arrive and then nothing can
+    // release it.
+    let armed = true;
+    let mutationInsideEncrypt = false;
+    vi.spyOn(window.crypto.subtle, 'encrypt').mockImplementation(async (...args) => {
+      const out = await realEncrypt(...args);
+      if (armed) {
+        armed = false;
+        mutationInsideEncrypt = true;
+        await held;
+      }
+      return out;
+    });
+
+    const staleWrite = decoyVaultStore.mutate(USER, (rows) => [...rows, {
+      id: 'dStale', item_id: 'stale', item_type: 'password',
+      encrypted_data: 'X', favorite: false, created_at: new Date().toISOString(),
+    }]);
+    // Synchronise on the mutation actually being inside its encryption before
+    // rotating -- otherwise the test races the thing it is trying to order.
+    await vi.waitFor(() => expect(mutationInsideEncrypt).toBe(true));
+
+    // The rotation lands while that mutation is held mid-encrypt.
+    await decoyVaultStore.resetForNewKey(USER, dek(9));
+    const rotated = localStorage.getItem(`vaultLocalCache:${USER}`);
+    releaseMutation();
+
+    expect(await staleWrite).toBe(false);
+    vi.restoreAllMocks();
+    // Byte-for-byte untouched: the rotation's container is what remains.
+    expect(localStorage.getItem(`vaultLocalCache:${USER}`)).toBe(rotated);
   });
 
   test('two appends in the same millisecond get distinct ids', async () => {

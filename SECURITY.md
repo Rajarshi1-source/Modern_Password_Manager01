@@ -10,7 +10,8 @@ Only the **latest main branch** is supported.
 |---------|-------|
 | Django Backend | ✅ Supported |
 | ML Dark Web Engine | ✅ Supported |
-| Docker Production Image | ✅ Supported |
+| Docker Production Image (`docker/backend/Dockerfile`) | ✅ Supported |
+| `password_manager/Dockerfile.prod` | ❌ Not Supported — nothing builds it and it has a recorded startup-blocking defect. Not the deployed image. |
 | Legacy Python (<3.12) | ❌ Not Supported |
 
 ---
