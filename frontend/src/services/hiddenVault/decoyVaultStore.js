@@ -337,7 +337,7 @@ export const loadForSession = async (userId) => {
  * coercer's screen and must stay indistinguishable from an ordinary save
  * failure (`sessionVaultCrypto.DECOY_WRITE_REFUSAL`).
  */
-export const saveForSession = async (userId, rows) => {
+export const saveForSession = async (userId, rows, expectedRaw) => {
   if (!userId || !sessionVaultCrypto.isDecoySession()) return false;
   try {
     const { iv, ct } = await sessionVaultCrypto.encryptDecoyContainer(
@@ -346,6 +346,18 @@ export const saveForSession = async (userId, rows) => {
     const out = new Uint8Array(iv.byteLength + ct.byteLength);
     out.set(iv, 0);
     out.set(ct, iv.byteLength);
+    // Compare-and-swap against the exact bytes the caller read, when it
+    // supplied them. The session-generation checks in `mutate` and inside
+    // `encryptDecoyContainer` cover this TAB -- they cannot cover another one,
+    // because the generation counter is module state and a second tab has its
+    // own. A real session in tab B rotating the decoy password
+    // (`setDecoySlot` -> `resetForNewKey`) is invisible to a decoy session in
+    // tab A, whose in-flight mutation would otherwise write old-DEK ciphertext
+    // over the freshly re-keyed container -- leaving the new decoy password
+    // opening a vault nothing can decrypt. Comparing stored BYTES is what
+    // crosses the tab boundary; `provision` and `setDecoySlot` already use
+    // exactly this idiom on the envelope itself.
+    if (expectedRaw !== undefined && readRaw(userId) !== expectedRaw) return false;
     return writeRaw(userId, toB64(out));
   } catch {
     // Includes DecoyCapacityError: a decoy-session add that would overflow is
@@ -396,6 +408,10 @@ export const mutate = (userId, mutator) => {
   const run = async () => {
     if (!userId || !sessionVaultCrypto.isDecoySession()) return false;
     const generation = sessionVaultCrypto.currentSessionGeneration();
+    // The exact stored bytes these rows were decoded from, so the write below
+    // can prove nothing replaced them -- including from another tab, which no
+    // generation check can see. See `saveForSession`.
+    const snapshot = readRaw(userId);
     const rows = await loadForSession(userId);
     if (sessionVaultCrypto.currentSessionGeneration() !== generation) return false;
     let next;
@@ -405,7 +421,7 @@ export const mutate = (userId, mutator) => {
       return false;
     }
     if (sessionVaultCrypto.currentSessionGeneration() !== generation) return false;
-    return saveForSession(userId, next);
+    return saveForSession(userId, next, snapshot);
   };
   // The queue must not break on a rejection, so failures are absorbed into a
   // `false` and the chain continues with a resolved promise either way.

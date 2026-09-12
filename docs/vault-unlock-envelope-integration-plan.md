@@ -4233,3 +4233,9 @@ artifact. Same shape as §34.2, in workflow files rather than source. It also
 found the await-window rule applying to a NON-crypto guard: `writeUnconfigured`
 checked the storage key was absent, awaited key generation, then wrote
 unconditionally, so a seed landing inside that window was replaced by filler.
+Round 3 then found the limit of §32's generation guard: the counter is MODULE
+state, so it orders awaits within one tab and says nothing about a second one.
+A decoy session in tab A and a real session in tab B rotating the decoy
+password could not see each other, and only a compare-and-swap on the stored
+BYTES crosses that boundary -- the idiom `provision` already used. When a guard
+is per-process, ask what the other process sees.

@@ -632,3 +632,92 @@ fail, and a future alias that can is a configuration problem worth failing on.
 Frontend after this round: **79 files, 910 tests, all passing**; eslint clean.
 Backend: `test_layered_recovery.py` 18 passed, confirming the conftest fixture
 still isolates without the swallowed exception.
+
+---
+
+## 14. Review round 3 (PR #503, 2026-09-12) — CodeRabbit
+
+**No CI check was failing.** "All checks have passed" — 34 successful, 7
+skipped, 1 neutral. Correctness findings only.
+
+Most of this round was a **re-post of round 2**, several comments literally
+marked *Outdated* by the bot itself. Per the rule in the envelope plan's §35.1,
+re-posted findings are checked against the answer already in this document
+before anything is touched. Three things were genuinely new.
+
+### 14.1 A cross-tab stale write (real, and the only new code defect)
+
+`saveForSession` encrypted, then wrote, without comparing against what was
+stored. Within one tab that is covered: `mutate` brackets its awaits with
+session-generation checks, `encryptDecoyContainer` guards its own await, and
+there is no await between it returning and `writeRaw`.
+
+**Across tabs it was not covered, because the generation counter is module
+state and a second tab has its own.** Tab A holds a decoy session and starts a
+mutation; tab B holds a real session and rotates the decoy password, which
+mints a fresh DEK and re-keys the container (`setDecoySlot` → `resetForNewKey`).
+Tab A cannot see any of that, so its in-flight write lands on top of the
+rotation carrying old-DEK ciphertext — and the *new* decoy password then opens
+a vault nothing can decrypt.
+
+Fixed with a compare-and-swap on the stored bytes: `mutate` snapshots the raw
+value it decoded from and `saveForSession` refuses if storage has moved.
+Comparing bytes is what crosses the tab boundary, and it is the idiom
+`provision` and `setDecoySlot` already use on the envelope itself. Only
+`mutate` carries the snapshot — adding it to `seedWithKey`/`resetForNewKey`
+would make a legitimate rotation refuse whenever a decoy tab wrote
+concurrently, which is backwards.
+
+Verified to fail without the fix.
+
+### 14.2 A flaky test I introduced in round 2
+
+Adding the rotation test exposed that §13's backfill test was **not
+deterministic**: it held "the first `subtle.encrypt` call", but the seed it
+races also encrypts, so when the seed's call arrived first the latch held the
+*seed* and the test deadlocked on its own await. Measured: 1 failure in 3 runs.
+
+Both tests now arm the latch for one specific operation and `waitFor` that
+operation to actually be inside its encryption before the interleaving is
+triggered. Five consecutive clean runs.
+
+**"Hold the first call" is a race, not an ordering** — the §38.4 lesson one
+level deeper: synchronising on *a* call is not synchronising on *the* call.
+
+### 14.3 Documentation contradictions, including one of my own siblings
+
+- **The deployment guide's production section was the sibling I missed.** Round
+  2 fixed the Quick Start block's Python note and left the Production block's
+  identical `apt-get install python3.12` untouched — **in the same file**. That
+  is the sibling-sweep rule failing twice in three rounds, the second time
+  inside a single document.
+- **README vs. SECURITY.md vs. the Dockerfile disagreed about the production
+  image.** The resolution is a fact worth stating plainly rather than a wording
+  tweak: every workflow builds `docker/backend/Dockerfile` and that is what
+  Kubernetes deploys; `password_manager/Dockerfile.prod` is built by **nothing**
+  and carries a recorded startup-blocking defect. SECURITY.md's support row now
+  names the file it means, and lists `Dockerfile.prod` as unsupported. The
+  README no longer presents it as a "production exception".
+
+### 14.4 Declined — the Safety pin, for the third time in three rounds
+
+Each round has proposed a different remedy for `safety==2.3.5` on Python 3.12:
+first "use 3.11", now "pin `safety==3.8.1` to match the repo". The stated harm
+this time is that "its unguarded installation can stop each job before the scan
+runs". **That is measurably false** — the `security.yml` log shows Safety
+installing and running on 3.12, printing its banner and a full report.
+
+The proposed replacement is not clearly better: `safety check` is deprecated
+upstream (the 3.x CLI prints *"will be unsupported beyond 1 May 2024"*,
+verified locally against safety 3.7.0 in the project venv), and all three call
+sites are wrapped in `|| true` / `continue-on-error`. Swapping a working tool
+for a deprecated code path behind a swallow is how working scan output becomes
+silently empty output — the exact failure §13.1 was about.
+
+The real remedy is migrating to `safety scan` with a `SAFETY_API_KEY` secret,
+which is an infrastructure change needing a credential, not a review-round
+edit. Recorded here as a standing item so the fourth round does not re-litigate
+it from scratch.
+
+Frontend after this round: **79 files, 911 tests**, five consecutive clean runs
+of the concurrency suite; eslint 0 errors. No backend source changed.

@@ -189,6 +189,11 @@ daphne -b 0.0.0.0 -p 8001 password_manager.asgi:application
 sudo apt-get update && sudo apt-get upgrade -y
 
 # Install system dependencies
+# python3.12 is in the default repositories on Ubuntu 24.04+ ONLY. See the
+# "Python 3.12 availability" note under Software Dependencies above before
+# running this on Ubuntu 22.04 (deadsnakes PPA) or on any Debian release
+# (no python3.12 package exists there; use pyenv, a source build, or the
+# backend container).
 sudo apt-get install -y \
     python3.12 python3-pip python3-venv \
     postgresql postgresql-contrib \

@@ -1660,4 +1660,6 @@ implementation. It must settle:
   before touching any SBOM or scanner step here: a `> file || true` pattern
   produced a green job and a zero-byte signed artifact, which is the
   supply-chain analogue of the fail-open modes this plan's §A.5 argues
-  against.
+  against. Its §14.1 is the multi-tab counterpart of the same theme: a guard
+  held in one process's memory orders that process only, which is worth keeping
+  in mind wherever this plan has a client decide its own transport state.
