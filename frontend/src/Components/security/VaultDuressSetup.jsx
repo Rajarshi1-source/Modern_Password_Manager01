@@ -14,24 +14,37 @@
  * `VaultUnlockModal` owns. Password-login users unlock a different way and
  * are out of scope here — see the integration plan §7.
  *
- * LIMITATION, stated plainly rather than implied: the unlock MECHANISM is
+ * LIMITATIONS, stated plainly rather than implied. The unlock MECHANISM is
  * genuinely indistinguishable (same endpoint, same request size, same
- * constant-time slot check — see `unlockEnvelopeStore.open`). What is NOT
- * solved here is the vault CONTENTS. `/api/vault/` returns one shared item
- * list for the account regardless of which slot's key unlocked the session,
- * so every DISPLAY surface now gates on `isDecoySession()` and renders an
- * EMPTY vault during a decoy session (`useDisplaySafeItems` in App.jsx) —
- * chosen because the alternative, rendering the real list with every row
- * failing to decrypt, outs the decoy instantly. An empty vault is still not
- * a BELIEVABLE one: anyone who knows the account is not empty may find it
- * suspicious. Populating a plausible decoy is a materially larger problem
- * and is intentionally not attempted here — see the integration plan §7.
- * Do not remove or soften this notice without solving that problem first.
+ * constant-time slot check — see `unlockEnvelopeStore.open`).
+ *
+ * The vault CONTENTS used to be the gap: `/api/vault/` returns one shared
+ * item list for the account regardless of which slot's key unlocked the
+ * session, so `useDisplaySafeItems` (App.jsx) rendered an EMPTY vault in a
+ * decoy session — better than the real list failing to decrypt row by row,
+ * but not believable to anyone who knows the account is not empty. The
+ * contents form below closes that: the decoy vault now holds entries the user
+ * writes, sealed under the decoy DEK in `decoyVaultStore`, shaped exactly like
+ * server rows so every display path handles them unchanged. See
+ * docs/decoy-vault-contents-plan.md.
+ *
+ * THREE things are still not solved, and the on-screen notice says all three:
+ *   1. DEVICE-LOCAL. The decoy vault lives beside the envelope in
+ *      localStorage; a decoy unlock on a second device shows an empty vault.
+ *   2. WRITE TRAFFIC. A real save POSTs, a decoy save does not, so a passive
+ *      network observer can still distinguish them. Not closable from this
+ *      side — see VaultContext's `mutateDecoyRows` for why emitting a matching
+ *      POST would corrupt the real item list.
+ *   3. BACKUPS. `createBackup`/`getBackups`/`restoreBackup` still refuse in a
+ *      decoy session.
+ * Do not remove or soften that notice without solving the item it covers.
  */
 
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import * as unlockEnvelopeStore from '../../services/hiddenVault/unlockEnvelopeStore';
+import { DecoyCapacityError } from '../../services/hiddenVault/decoyVaultStore';
+import { vaultUserId } from '../../services/hiddenVault/vaultIdentity';
 import { WrongPasswordError } from '../../services/hiddenVault/hiddenVaultEnvelope';
 import { registerSignalToken } from '../../services/duressSignalService';
 import sessionVaultCrypto from '../../services/sessionVaultCrypto';
@@ -93,9 +106,11 @@ const successStyle = {
 
 const MIN_LENGTH = 12;
 
+const emptyContentRow = () => ({ site: '', username: '', password: '', notes: '' });
+
 const VaultDuressSetup = () => {
   const { isAuthenticated, user, getAccessToken } = useAuth();
-  const userId = user?.id ?? user?.email ?? null;
+  const userId = vaultUserId(user);
 
   // Read live, not memoized, for the same reason the session gate below is:
   // `hasEnvelope` reads localStorage, which another tab -- or this tab's own
@@ -103,7 +118,7 @@ const VaultDuressSetup = () => {
   // screen stays mounted. A memo keyed on `userId` alone keeps answering
   // "you haven't created one yet" until a remount, so the re-render nudge
   // below would repaint a stale answer.
-  const envelopeReady = Boolean(userId) && unlockEnvelopeStore.hasEnvelope(userId);
+  const envelopeReady = userId != null && unlockEnvelopeStore.hasEnvelope(userId);
 
   const [vaultPassword, setVaultPassword] = useState('');
   const [decoyPassword, setDecoyPassword] = useState('');
@@ -159,6 +174,18 @@ const VaultDuressSetup = () => {
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoveryError, setRecoveryError] = useState('');
   const [recoverySuccess, setRecoverySuccess] = useState(false);
+
+  // Decoy vault contents (docs/decoy-vault-contents-plan.md §5). Both
+  // passwords are required for the same reason the recovery form above
+  // requires both -- see `handleSeedContents`.
+  const [contentsVaultPassword, setContentsVaultPassword] = useState('');
+  const [contentsDecoyPassword, setContentsDecoyPassword] = useState('');
+  const [contentsRows, setContentsRows] = useState(() => [
+    emptyContentRow(), emptyContentRow(), emptyContentRow(),
+  ]);
+  const [contentsBusy, setContentsBusy] = useState(false);
+  const [contentsError, setContentsError] = useState('');
+  const [contentsSuccess, setContentsSuccess] = useState(false);
 
   if (!isAuthenticated) {
     return (
@@ -529,6 +556,136 @@ const VaultDuressSetup = () => {
     }
   };
 
+  /**
+   * Write the decoy vault's displayed contents.
+   *
+   * Requires the REAL vault password as well as the decoy one, on exactly the
+   * argument §22 makes for the recovery form above: without that gate this
+   * form is a password classifier. A coercer with an authenticated session
+   * types the password they were handed, and a success/failure split tells
+   * them whether it was the decoy — the disclosure this whole feature exists
+   * to prevent. Requiring the real password means only someone who already
+   * has the real vault can operate the form, and they learn nothing.
+   *
+   * Past that gate the messages are allowed to be specific: the operator has
+   * demonstrated the real credential, so telling them "that isn't the decoy
+   * password" reveals nothing they could not establish by unlocking.
+   */
+  const handleSeedContents = async (e) => {
+    e.preventDefault();
+    setContentsError('');
+    setContentsSuccess(false);
+
+    if (userId == null) {
+      setContentsError('Unlock your vault first, then set decoy contents.');
+      return;
+    }
+    if (!contentsVaultPassword || !contentsDecoyPassword) {
+      setContentsError('Both your vault password and your decoy password are required.');
+      return;
+    }
+
+    // Both predicates, BEFORE the generation capture and before any envelope
+    // work -- exactly what the two sibling handlers above already do, and this
+    // one was missing it. The render gate returns a neutral panel for a locked
+    // or decoy session, but a form ALREADY on screen when the session changed
+    // could still be submitted: `open()` would then run and answer "Incorrect
+    // vault password." to a coercer who has just watched that very password
+    // unlock this vault. The boundary must never check less than the render
+    // gate (§31, §38.2).
+    if (!sessionVaultCrypto.hasSessionKey() || sessionVaultCrypto.isDecoySession()) {
+      setContentsError('Unlock your vault first, then set decoy contents.');
+      return;
+    }
+
+    // Same session binding as the two forms above: captured BEFORE the slow
+    // Argon2 work so a lock or a re-unlock landing inside it is caught, and
+    // compared against the counter rather than re-testing `hasSessionKey()`
+    // (a lock plus ANY unlock, decoy included, answers that true again — §32).
+    const generation = sessionVaultCrypto.currentSessionGeneration();
+
+    setContentsBusy(true);
+    try {
+      let realPasswordOk = false;
+      try {
+        const openedReal = await unlockEnvelopeStore.open({
+          userId,
+          password: contentsVaultPassword,
+        });
+        realPasswordOk = openedReal.slotIndex === 0;
+      } catch (err) {
+        if (!(err instanceof WrongPasswordError)) throw err;
+      }
+      if (!realPasswordOk) {
+        setContentsError('Incorrect vault password.');
+        return;
+      }
+      if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
+        setContentsError('Unlock your vault first, then set decoy contents.');
+        return;
+      }
+
+      // Blank rows are dropped rather than stored: a decoy vault containing
+      // empty entries is worse than one with fewer. `notes` counts as content
+      // -- a notes-only row was silently discarded, and since a seed REPLACES
+      // the whole cache, what the user typed simply vanished.
+      const items = contentsRows
+        .filter((row) => row.site.trim() || row.username.trim()
+          || row.password.trim() || row.notes.trim())
+        // `name` / `website`, NOT `site`: these are the field names the vault's
+        // own display surfaces read (App.jsx's list renders `data.name` and
+        // `data.website`). A decoy entry stored under `site` rendered as
+        // "Untitled" with no address -- visibly unlike every real entry, which
+        // is the one thing decoy contents must never be.
+        .map((row) => ({
+          name: row.site.trim(),
+          website: row.site.trim(),
+          username: row.username.trim(),
+          password: row.password,
+          notes: row.notes.trim(),
+        }));
+
+      await unlockEnvelopeStore.seedDecoyContents({
+        userId,
+        decoyPassword: contentsDecoyPassword,
+        items,
+      });
+      if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
+        // The contents ARE written at this point; only the confirmation is
+        // withheld, because reporting success for a session that has since
+        // been replaced is the §36.1 mistake.
+        setContentsError('Unlock your vault first, then set decoy contents.');
+        return;
+      }
+      setContentsVaultPassword('');
+      setContentsDecoyPassword('');
+      setContentsSuccess(true);
+    } catch (err) {
+      if (err instanceof DecoyCapacityError) {
+        setContentsError('Those entries do not fit. Remove one and try again.');
+        return;
+      }
+      if (err instanceof WrongPasswordError) {
+        setContentsError('That decoy password does not match the one you saved.');
+        return;
+      }
+      // Fixed string, never `err.message`: the underlying errors here name
+      // slots and decoy state, and this screen's copy must not. The log line
+      // says no more than the sibling handler's does, per the plan's §3.5
+      // rule 4 -- a console message naming the feature just moves the tell to
+      // devtools. (This form only renders in a REAL session, so a coercer
+      // never sees it; the rule is kept anyway rather than argued around.)
+      console.warn('VaultDuressSetup: contents submission failed.');
+      setContentsError('Could not save the decoy contents. Please try again.');
+    } finally {
+      setContentsBusy(false);
+    }
+  };
+
+  const updateContentRow = (index, field, value) => {
+    setContentsRows((rows) => rows.map((row, i) => (i === index ? { ...row, [field]: value } : row)));
+  };
+
   return (
     <div style={panelStyle}>
       <h2>Vault duress protection</h2>
@@ -542,13 +699,15 @@ const VaultDuressSetup = () => {
       </p>
 
       <div style={noticeStyle}>
-        <strong>Know the limits:</strong> the unlock itself is indistinguishable,
-        but this does not yet build out believable decoy contents — a decoy
-        unlock currently shows an <em>empty</em> vault, not a plausible,
-        populated one. That is deliberate (an empty vault beats one that
-        visibly fails to decrypt), but someone who knows your vault is not
-        empty may still find it suspicious. Do not rely on this alone if that
-        matters for your situation.
+        <strong>Know the limits:</strong> the unlock itself is
+        indistinguishable, and you can now fill the decoy vault with entries of
+        your own below, so it no longer opens on an empty list. Three things it
+        still does not do. The decoy is stored <em>on this device only</em> —
+        unlocking with the decoy password on another device shows an empty
+        vault. Saving a new entry during a decoy session sends no network
+        request, while a real one does, so someone watching your traffic can
+        still tell the two apart. And backups stay unavailable in a decoy
+        session. Do not rely on this alone if those matter for your situation.
       </div>
 
       <form onSubmit={handleSubmit}>
@@ -600,13 +759,150 @@ const VaultDuressSetup = () => {
         {success && (
           <div role="status" style={successStyle}>
             Decoy password saved. It will open the decoy vault and silently
-            alert your contacts the next time it is used to unlock.
+            alert your contacts the next time it is used to unlock. Saving a
+            decoy password always generates a new key, so any decoy contents
+            you had were cleared — enter them again below.
           </div>
         )}
 
         <div style={{ marginTop: '1.25rem' }}>
           <button type="submit" style={buttonPrimary} disabled={busy}>
             {busy ? 'Saving…' : 'Save decoy password'}
+          </button>
+        </div>
+      </form>
+
+      <hr style={{ margin: '1.75rem 0', border: 'none', borderTop: '1px solid #e5e7eb' }} />
+
+      <h3 style={{ fontSize: '1rem', margin: '0 0 0.5rem' }}>Decoy vault contents</h3>
+      <p style={{ color: '#6b7280', fontSize: 13 }}>
+        What someone sees after unlocking with your decoy password. Write
+        entries that are plausible for you — a few accounts you would not mind
+        handing over. They are stored on this device, encrypted with your decoy
+        password, and are never sent to the server or mixed into your real
+        vault. Saving again replaces the whole list; it does not affect your
+        decoy password or its alarm.
+      </p>
+      <p style={{ color: '#6b7280', fontSize: 13 }}>
+        There is deliberately no “generate some for me” button: what looks
+        plausible depends entirely on you and on who is asking, and a generator
+        would produce the same recognisable set for every user of this app.
+      </p>
+      <form onSubmit={handleSeedContents}>
+        <div className="form-group">
+          <label htmlFor="duress-contents-vault-password">Vault password</label>
+          <input
+            id="duress-contents-vault-password"
+            type="password"
+            autoComplete="off"
+            style={inputStyle}
+            value={contentsVaultPassword}
+            onChange={(e) => setContentsVaultPassword(e.target.value)}
+            disabled={contentsBusy}
+            required
+          />
+        </div>
+        <div className="form-group">
+          <label htmlFor="duress-contents-decoy-password">Decoy password</label>
+          <input
+            id="duress-contents-decoy-password"
+            type="password"
+            autoComplete="off"
+            style={inputStyle}
+            value={contentsDecoyPassword}
+            onChange={(e) => setContentsDecoyPassword(e.target.value)}
+            disabled={contentsBusy}
+            required
+          />
+        </div>
+
+        {contentsRows.map((row, index) => (
+          <fieldset
+            key={index}
+            style={{
+              border: '1px solid #e5e7eb',
+              borderRadius: 8,
+              padding: '0.75rem 0.9rem',
+              margin: '0.9rem 0 0',
+            }}
+          >
+            <legend style={{ fontSize: 12, color: '#6b7280', padding: '0 0.35rem' }}>
+              Entry {index + 1}
+            </legend>
+            <label htmlFor={`decoy-site-${index}`} style={{ fontSize: 13 }}>Site or app</label>
+            <input
+              id={`decoy-site-${index}`}
+              type="text"
+              autoComplete="off"
+              style={inputStyle}
+              value={row.site}
+              onChange={(e) => updateContentRow(index, 'site', e.target.value)}
+              disabled={contentsBusy}
+            />
+            <label htmlFor={`decoy-username-${index}`} style={{ fontSize: 13 }}>Username</label>
+            <input
+              id={`decoy-username-${index}`}
+              type="text"
+              autoComplete="off"
+              style={inputStyle}
+              value={row.username}
+              onChange={(e) => updateContentRow(index, 'username', e.target.value)}
+              disabled={contentsBusy}
+            />
+            <label htmlFor={`decoy-password-${index}`} style={{ fontSize: 13 }}>Password</label>
+            <input
+              id={`decoy-password-${index}`}
+              type="text"
+              autoComplete="off"
+              style={inputStyle}
+              value={row.password}
+              onChange={(e) => updateContentRow(index, 'password', e.target.value)}
+              disabled={contentsBusy}
+            />
+            <label htmlFor={`decoy-notes-${index}`} style={{ fontSize: 13 }}>Notes</label>
+            <input
+              id={`decoy-notes-${index}`}
+              type="text"
+              autoComplete="off"
+              style={inputStyle}
+              value={row.notes}
+              onChange={(e) => updateContentRow(index, 'notes', e.target.value)}
+              disabled={contentsBusy}
+            />
+          </fieldset>
+        ))}
+
+        <div style={{ marginTop: '0.75rem' }}>
+          <button
+            type="button"
+            onClick={() => setContentsRows((rows) => [...rows, emptyContentRow()])}
+            disabled={contentsBusy}
+            style={{
+              background: 'transparent',
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              padding: '0.35rem 0.8rem',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
+          >
+            Add another entry
+          </button>
+        </div>
+
+        {contentsError && (
+          <div role="alert" style={errorStyle}>{contentsError}</div>
+        )}
+        {contentsSuccess && (
+          <div role="status" style={successStyle}>
+            Decoy contents saved. Your decoy password now opens a vault holding
+            these entries on this device.
+          </div>
+        )}
+
+        <div style={{ marginTop: '1rem' }}>
+          <button type="submit" style={buttonPrimary} disabled={contentsBusy}>
+            {contentsBusy ? 'Saving…' : 'Save decoy contents'}
           </button>
         </div>
       </form>

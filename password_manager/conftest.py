@@ -71,3 +71,58 @@ def _ensure_user_manager_patched():
     """Idempotent safety net in case plugins reload the manager module."""
     _patch_user_manager()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_django_caches():
+    """Isolate every test from the process-global cache.
+
+    Under ``TESTING`` (``settings/base.py``) both cache aliases are
+    ``LocMemCache``, which lives in the pytest process and is never reset
+    between tests. Django rolls the DATABASE back per test; it does nothing
+    for the cache, so anything written there leaks into every later test in
+    the run.
+
+    The concrete failure this fixes: DRF's ``SimpleRateThrottle`` keeps its
+    request history in exactly that cache. ``settings/base.py`` already clears
+    ``DEFAULT_THROTTLE_CLASSES`` under ``TESTING``, but the recovery views set
+    ``throttle_classes`` explicitly (``auth_module/wrapped_dek_view.py``,
+    ``recovery_factor_view.py``, ``time_locked_view.py``), so that override
+    never reaches them. ``RecoveryThrottle`` allows 3/hour keyed on
+    ``<view class>_<user.id>`` -- and on SQLite the PK sequence rolls back with
+    each test's transaction, so every test's fresh user gets the SAME id and
+    therefore the same throttle bucket. The 4th request in a class was refused
+    with a 429, failing six tests in ``auth_module/tests/test_layered_recovery.py``
+    that pass individually.
+
+    That the same suite is green on CI is not evidence of isolation: CI runs
+    PostgreSQL, whose sequences are non-transactional, so ``nextval`` does not
+    roll back and each test happens to land in a different bucket. The
+    IP-keyed throttles (``RecoveryInitiateThrottle``,
+    ``RecoveryCompleteThrottle``, keyed on ``get_ident`` -- constant
+    ``127.0.0.1`` for every test) have no such accidental protection and would
+    bite on any backend once enough tests hit them. Clearing the cache fixes
+    the class rather than the six symptoms.
+
+    Cleared on BOTH sides: before, so a leak from an earlier test cannot reach
+    this one; after, so a test that fails midway cannot leave state behind for
+    the next.
+    """
+    from django.core.cache import caches
+    from django.conf import settings
+
+    def _clear_all():
+        for alias in settings.CACHES:
+            # Deliberately NOT wrapped in try/except. A swallowed failure here
+            # leaves that alias uncleared while the suite still reports green,
+            # which silently gives back the exact cross-test leakage this
+            # fixture exists to prevent -- the failure mode is invisible and
+            # the results become untrustworthy rather than merely noisy. Under
+            # ``TESTING`` both aliases are LocMemCache and cannot fail; if a
+            # future alias can, that is a configuration problem worth failing
+            # loudly on.
+            caches[alias].clear()
+
+    _clear_all()
+    yield
+    _clear_all()

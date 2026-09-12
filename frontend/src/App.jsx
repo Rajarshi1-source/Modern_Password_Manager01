@@ -24,6 +24,8 @@ import abTestingService from './services/abTestingService';
 import preferencesService from './services/preferencesService';
 import { useAuth } from './hooks/useAuth.jsx'; // JWT Authentication Hook
 import sessionVaultCrypto from './services/sessionVaultCrypto';
+import decoyVaultStore from './services/hiddenVault/decoyVaultStore';
+import { vaultUserId } from './services/hiddenVault/vaultIdentity';
 import sessionVaultCryptoV3 from './services/sessionVaultCryptoV3';
 import {
   classifyV3UnlockError,
@@ -89,17 +91,80 @@ const BehavioralRecoveryStatus = lazy(() => import('./Components/dashboard/Behav
 // renders `useVault().items` must go through this hook too.
 //
 // `items` itself is deliberately left untouched -- non-display vault logic
-// (e.g. VaultContext's own write gates) still needs the real list. This is
-// the documented floor of that plan's §4 compat table ("an empty decoy still
-// beats no decoy"); a believable, populated decoy is the separate §7 product
-// decision this does not attempt.
+// (e.g. VaultContext's own write gates) still needs the real list.
+//
+// A decoy session now renders the account's DECOY vault rather than an empty
+// one (docs/decoy-vault-contents-plan.md). The rows come from
+// `decoyVaultStore`, are shaped exactly like server rows, and decrypt through
+// the same `decryptEnvelope` path -- so nothing downstream of this hook knows
+// the difference. What has NOT changed: `refreshItems()` still issues its
+// real `GET /api/vault/` on the same schedule with the same response, because
+// suppressing it would make a decoy session distinguishable by traffic
+// analysis alone (vault-unlock-envelope-integration-plan.md §21.1). The real
+// list is fetched and simply not displayed.
+const useDecoyRows = (isDecoy) => {
+  const { user } = useAuth();
+  // Must match the id the ENVELOPE is stored under, or the store is read
+  // from a key nothing ever wrote -- see vaultIdentity's own comment.
+  const userId = vaultUserId(user);
+  // The session generation, not the decoy flag, is what identifies WHICH
+  // session these rows belong to. A lock plus any unlock flips the flag back
+  // to the same value while being a different session; only the counter moves
+  // monotonically (vault-unlock-envelope-integration-plan.md §32). Keying the
+  // effect on it is what makes a re-unlock reload rather than reuse.
+  const generation = sessionVaultCrypto.currentSessionGeneration();
+  const [rows, setRows] = useState([]);
+  // Bumped by `vault:decoy-updated`, which VaultContext dispatches after a
+  // decoy-session write. Display freshness only: the rows are re-read from the
+  // store, so a missed event costs a stale render, never a wrong gate --
+  // vault-unlock-envelope-integration-plan.md §31 is the record of what
+  // happens when a listener IS what makes a gate correct.
+  const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    const onDecoyUpdated = () => setReloadTick((n) => n + 1);
+    window.addEventListener('vault:decoy-updated', onDecoyUpdated);
+    return () => window.removeEventListener('vault:decoy-updated', onDecoyUpdated);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isDecoy || userId == null) {
+      setRows([]);
+      return () => { cancelled = true; };
+    }
+    (async () => {
+      // `loadForSession` never throws -- every failure (no blob, an
+      // unconfigured random one, corruption, a wrong key) returns []. The
+      // fallback direction is deliberate: an empty decoy is what shipped
+      // before this feature, whereas falling back to the real list would be
+      // strictly worse than the problem this hook exists to solve.
+      const loaded = await decoyVaultStore.loadForSession(userId);
+      if (cancelled) return;
+      // The session must still be the one this load started for. A lock (or a
+      // re-unlock into a REAL session) landing during the await would
+      // otherwise paint decoy rows over a real session's dashboard.
+      if (!sessionVaultCrypto.isDecoySession()) return;
+      if (sessionVaultCrypto.currentSessionGeneration() !== generation) return;
+      setRows(loaded);
+    })();
+    return () => { cancelled = true; };
+  }, [isDecoy, userId, generation, reloadTick]);
+
+  return rows;
+};
+
 const useDisplaySafeItems = (items) => {
   // Read on every render rather than inside the memo: it is a module-level
   // boolean, so this is free, and including it in the dep array is what
   // makes the memo actually recompute when a session flips decoy state
   // without `items` changing identity.
   const isDecoy = sessionVaultCrypto.isDecoySession();
-  return useMemo(() => (isDecoy ? [] : items || []), [isDecoy, items]);
+  const decoyRows = useDecoyRows(isDecoy);
+  return useMemo(
+    () => (isDecoy ? decoyRows : items || []),
+    [isDecoy, decoyRows, items],
+  );
 };
 
 // Exported for the same reason VaultItemsSection below is: both are display
@@ -1224,6 +1289,35 @@ function App() {
       return;
     }
 
+    // This form is the canonical "Add New Password" screen and it does NOT go
+    // through VaultContext -- it renders outside VaultProvider, so it cannot.
+    // It therefore needs its own decoy branch: without one, `encryptEnvelope`
+    // below refuses in a decoy session and the save visibly fails on the exact
+    // screen a coercer is most likely to be watching, which is precisely when
+    // the decoy has to behave like a real vault. The row-building itself is
+    // the store's shared `addRowForSession`, not a second copy of it.
+    if (sessionVaultCrypto.isDecoySession()) {
+      const saved = await decoyVaultStore.addRowForSession(vaultUserId(user), {
+        data: {
+          name: formData.name,
+          username: formData.username,
+          password: formData.password,
+          website: formData.website,
+          notes: formData.notes,
+        },
+      });
+      if (!saved) {
+        // The shared refusal string, sourced from the module: every
+        // decoy-session write failure must read identically on screen.
+        setError(sessionVaultCrypto.DECOY_WRITE_REFUSAL);
+        return;
+      }
+      setFormData({ name: '', username: '', password: '', website: '', notes: '' });
+      setError(null);
+      window.dispatchEvent(new Event('vault:decoy-updated'));
+      return;
+    }
+
     try {
       // Through the shared helper, not `sessionVaultCrypto.encryptItem`
       // directly: this was a second write path that silently diverged from
@@ -1279,7 +1373,7 @@ function App() {
       console.error('Error adding vault item:', err);
       setError('Failed to add new password. Please try again.');
     }
-  }, [formData]);
+   }, [formData, user]);
 
   const handleLogin = useCallback(async (loginData) => {
     try {
@@ -2093,7 +2187,7 @@ function App() {
                 OAuth sessions that don't carry a master password. */}
             <VaultUnlockModal
               isOpen={isAuthenticated && showVaultUnlock}
-              userId={user?.id ?? user?.email ?? null}
+              userId={vaultUserId(user)}
               getAccessToken={getAccessToken}
               onUnlocked={() => {
                 setShowVaultUnlock(false);

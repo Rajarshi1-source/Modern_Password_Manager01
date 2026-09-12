@@ -104,7 +104,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           # PR #278 review (CodeRabbit): no ``cache: 'pip'`` here —
           # the install step below uses ``pip install --no-cache-dir``
           # to avoid the wheel-cache disk hit (Phase G / G2), so the
@@ -166,7 +166,12 @@ jobs:
           # fits the full ML dep tree in the runner's disk budget.
           python -m pip install --no-cache-dir --upgrade pip
           pip install --no-cache-dir -r requirements.txt
-          pip install --no-cache-dir pytest pytest-django pytest-cov flake8 black isort "safety==2.3.5" bandit
+          # safety is NOT pinned here: requirements.txt above already installs
+          # it (safety>=3.8.1, locked at 3.8.1) alongside packaging==25.0.
+          # Re-installing safety==2.3.5 on top forces packaging<22, so pip
+          # downgrades packaging inside the very environment the tests then run
+          # in. The `safety check` step below works on 3.x.
+          pip install --no-cache-dir pytest pytest-django pytest-cov flake8 black isort bandit
           # Show what we actually used vs what's left.
           df -h /
       
@@ -533,7 +538,7 @@ jobs:
           # OS packages only (libraries handled by the filesystem SCA scanners).
           vuln-type: 'os'
           # NOTE: deliberately does NOT load trivy.yaml/.trivyignore. The ignore
-          # entries are written against the backend's python:3.11-slim-bookworm
+          # entries are written against the backend's python:3.12-slim-bookworm
           # image (e.g. the curl CVEs are justified by "no curl binary; healthcheck
           # uses urllib"). The frontend is nginx:alpine and DOES install + use curl
           # in its HEALTHCHECK (docker/frontend/Dockerfile), so reusing those

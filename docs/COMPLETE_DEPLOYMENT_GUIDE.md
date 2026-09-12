@@ -45,11 +45,23 @@ This guide covers the complete deployment of the Password Manager application wi
 
 ### Software Dependencies
 
+> **Python 3.12 availability.** `python3.12` is in the default repositories on
+> **Ubuntu 24.04 LTS** only (later Ubuntu releases default to 3.13 and do
+> not carry a `python3.12` package either).
+> - **Ubuntu 22.04** (default 3.10): add the deadsnakes PPA —
+>   `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt-get update`.
+> - **Debian**: there is no `python3.12` package in any current release —
+>   bookworm (12) ships 3.11 and trixie (13) ships 3.13, and deadsnakes is
+>   Ubuntu-only. Install 3.12 with `pyenv` or build from source, or run the
+>   backend from `docker/backend/Dockerfile`, which pins its own interpreter.
+>
+> The project's floor is 3.12 — see `SECURITY.md`.
+
 ```bash
-# Ubuntu/Debian
+# Ubuntu 24.04 LTS (see the note above for every other release)
 sudo apt-get update
 sudo apt-get install -y \
-    python3.11 python3-pip python3-venv \
+    python3.12 python3-pip python3.12-venv \
     postgresql postgresql-contrib \
     redis-server \
     nodejs npm \
@@ -178,8 +190,13 @@ daphne -b 0.0.0.0 -p 8001 password_manager.asgi:application
 sudo apt-get update && sudo apt-get upgrade -y
 
 # Install system dependencies
+# python3.12 is in the default repositories on Ubuntu 24.04 LTS ONLY. See the
+# "Python 3.12 availability" note under Software Dependencies above before
+# running this on Ubuntu 22.04 (deadsnakes PPA) or on any Debian release
+# (no python3.12 package exists there; use pyenv, a source build, or the
+# backend container).
 sudo apt-get install -y \
-    python3.11 python3-pip python3-venv \
+    python3.12 python3-pip python3.12-venv \
     postgresql postgresql-contrib \
     redis-server \
     nginx \
@@ -199,7 +216,7 @@ git clone https://github.com/yourusername/password-manager.git
 cd password-manager
 
 # Setup virtual environment
-python3.11 -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate
 
 # Install Python dependencies

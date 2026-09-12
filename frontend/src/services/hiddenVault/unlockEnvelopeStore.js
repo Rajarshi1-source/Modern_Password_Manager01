@@ -53,6 +53,7 @@ import {
   WrongPasswordError,
 } from './hiddenVaultEnvelope';
 import { generateSignalToken, SIGNAL_TOKEN_LENGTH } from '../duressSignalService';
+import decoyVaultStore from './decoyVaultStore';
 
 const ENVELOPE_TIER = TIERS.TIER0_32K;
 const SLOT_PAYLOAD_VERSION = 'hv-slot-1';
@@ -86,7 +87,10 @@ export class MalformedSlotPayloadError extends HiddenVaultError {}
 // ---------------------------------------------------------------------------
 
 export const hasEnvelope = (userId) => {
-  if (!userId) return false;
+  // `== null`, not `!userId`: `vaultIdentity.vaultUserId` preserves an `id` of
+  // 0 (it uses `??`, and its test pins that), so a falsy check here would make
+  // this module disagree with the identity every other artefact is keyed by.
+  if (userId == null) return false;
   try {
     return localStorage.getItem(storageKey(userId)) !== null;
   } catch {
@@ -97,7 +101,7 @@ export const hasEnvelope = (userId) => {
 };
 
 export const loadEnvelope = (userId) => {
-  if (!userId) return null;
+  if (userId == null) return null;
   let raw;
   try {
     raw = localStorage.getItem(storageKey(userId));
@@ -128,7 +132,7 @@ export const loadEnvelope = (userId) => {
  * `replaceExisting`.
  */
 export const readRawEnvelope = (userId) => {
-  if (!userId) return null;
+  if (userId == null) return null;
   try {
     return localStorage.getItem(storageKey(userId));
   } catch {
@@ -137,7 +141,7 @@ export const readRawEnvelope = (userId) => {
 };
 
 export const saveEnvelope = (userId, blob) => {
-  if (!userId) throw new Error('saveEnvelope: userId required');
+  if (userId == null) throw new Error('saveEnvelope: userId required');
   if (!(blob instanceof Uint8Array)) {
     throw new Error('saveEnvelope: blob must be Uint8Array');
   }
@@ -145,7 +149,7 @@ export const saveEnvelope = (userId, blob) => {
 };
 
 export const clearEnvelope = (userId) => {
-  if (!userId) return;
+  if (userId == null) return;
   localStorage.removeItem(storageKey(userId));
 };
 
@@ -261,7 +265,7 @@ const parseSlotPayload = (payloadBytes) => {
 export async function provision({
   userId, vaultPassword, dekBytes, saltB64, replaceExisting,
 }) {
-  if (!userId) throw new Error('provision: userId required');
+  if (userId == null) throw new Error('provision: userId required');
   if (!vaultPassword) throw new Error('provision: vaultPassword required');
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
     throw new Error('provision: dekBytes must be a 32-byte Uint8Array');
@@ -330,6 +334,66 @@ export async function provision({
     throw new Error('provision: the stored envelope changed; refusing to replace it.');
   }
   saveEnvelope(userId, blob);
+
+  // Every provisioned account gets a decoy-contents blob, configured or not.
+  // This is the storage-layer twin of `encode()`'s throwaway-key decoy SLOT:
+  // a key that appeared only once a decoy existed would let anyone with
+  // devtools read the feature's existence straight off the key list, which is
+  // precisely the oracle the decoy exists to deny. See decoyVaultStore's
+  // header, rule 1.
+  //
+  // Deliberately AFTER `saveEnvelope` and deliberately not awaited into the
+  // failure path: the envelope is the thing that must land. A decoy-contents
+  // blob that fails to write leaves the account exactly as it was before this
+  // feature shipped (decoy renders empty), whereas letting it reject here
+  // would turn a cosmetic miss into a failed unlock.
+  try {
+    await decoyVaultStore.writeUnconfigured(userId);
+  } catch {
+    /* see above -- non-fatal by construction */
+  }
+}
+
+/**
+ * Replace the decoy vault's displayed contents.
+ *
+ * Requires the DECOY password, not the real one, because the contents are
+ * keyed by the decoy slot's DEK and slot 1 is the only place it exists. Lives
+ * here rather than in `decoyVaultStore` so that opening the slot and using
+ * what it holds happen in one place: no component ever handles decoy key
+ * material, matching the discipline `setDecoySlot` already follows.
+ *
+ * Independent of `setDecoySlot`: this does NOT re-encode the envelope, so the
+ * duress token survives untouched and needs no re-registration. Editing the
+ * decoy's contents must not cost the user their alarm.
+ *
+ * @param {Object} args
+ * @param {string} args.userId
+ * @param {string} args.decoyPassword
+ * @param {Array<Object>} args.items
+ * @throws {WrongPasswordError} neither slot matched
+ * @throws {Error} the REAL password was supplied (see below)
+ * @throws {import('./decoyVaultStore').DecoyCapacityError} items do not fit
+ */
+export async function seedDecoyContents({ userId, decoyPassword, items }) {
+  if (userId == null) throw new Error('seedDecoyContents: userId required');
+  if (!decoyPassword) throw new Error('seedDecoyContents: decoyPassword required');
+  const { slotIndex, dekBytes, saltB64 } = await open({ userId, password: decoyPassword });
+  if (slotIndex === 0) {
+    // The real password opened it, so no decoy is configured (or the user
+    // typed the wrong one of the two). Refusing is the only safe direction:
+    // sealing the contents under the REAL dek would produce a container the
+    // decoy session cannot open -- the decoy would stay empty while the setup
+    // screen reported success.
+    throw new Error('No decoy password is configured for this account.');
+  }
+  // Propagated, not discarded: `seedWithKey` returns false when localStorage
+  // refuses the write (private browsing), and a setup screen that reports
+  // success for contents that were never stored is worse than one that fails.
+  const stored = await decoyVaultStore.seedWithKey({ userId, dekBytes, saltB64, items });
+  if (!stored) {
+    throw new Error('Could not store the decoy contents on this device.');
+  }
 }
 
 /**
@@ -354,7 +418,7 @@ export async function provision({
  *   ordering note below).
  */
 export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
-  if (!userId) throw new Error('setDecoySlot: userId required');
+  if (userId == null) throw new Error('setDecoySlot: userId required');
   if (!vaultPassword) throw new Error('setDecoySlot: vaultPassword required');
   if (!decoyPassword) throw new Error('setDecoySlot: decoyPassword required');
   if (decoyPassword === vaultPassword) {
@@ -462,7 +526,29 @@ export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
   }
   saveEnvelope(userId, blob);
 
-  return { duressToken };
+  // The decoy DEK above is freshly generated on EVERY call, so any decoy
+  // contents already stored are sealed under a key that no longer exists
+  // anywhere. Left alone, `loadForSession` just returns [] and the decoy
+  // opens empty -- the user changes their decoy password and silently loses
+  // the vault they built, with nothing on screen saying so.
+  //
+  // Migrating them is impossible from here: re-encrypting needs the OLD decoy
+  // DEK, and this function is given the real vault password and the NEW decoy
+  // password, never the old one. So the honest resolution is to replace the
+  // unreadable ciphertext with an empty container under the new key and
+  // report it, which is what `contentsReset` is for -- `VaultDuressSetup`
+  // turns it into "your decoy contents were cleared; enter them again".
+  //
+  // Non-fatal, like the provision backfill: the decoy slot itself is saved and
+  // its alarm token must still be returned for registration.
+  let contentsReset = false;
+  try {
+    contentsReset = await decoyVaultStore.resetForNewKey(userId, decoyDekBytes);
+  } catch {
+    /* see above */
+  }
+
+  return { duressToken, contentsReset };
 }
 
 // ---------------------------------------------------------------------------
@@ -492,6 +578,24 @@ export async function open({ userId, password }) {
   }
   const { slotIndex, payload } = await decode(blob, password);
   const { dekBytes, saltB64, duressToken } = parseSlotPayload(payload);
+
+  // Backfill the decoy-contents blob for accounts whose envelope predates it.
+  // `provision()` writes it, but an existing user with an envelope never runs
+  // provision again -- their unlocks come straight here. For them the blob
+  // would first appear the moment they SEEDED decoy contents, making its mere
+  // presence in localStorage the exact "a decoy is configured" oracle the
+  // fixed-length, always-present design exists to deny.
+  //
+  // Placed after a successful decode so a wrong password creates nothing (the
+  // recovery and contents forms probe `open()` with candidate passwords), and
+  // it is a no-op once the key exists. Non-fatal: an unlock must never fail
+  // because a cosmetic placeholder could not be written.
+  try {
+    await decoyVaultStore.writeUnconfigured(userId);
+  } catch {
+    /* see above */
+  }
+
   return { slotIndex, dekBytes, saltB64, duressToken };
 }
 
@@ -507,6 +611,7 @@ export default {
   clearEnvelope,
   provision,
   setDecoySlot,
+  seedDecoyContents,
   open,
   MalformedSlotPayloadError,
 };

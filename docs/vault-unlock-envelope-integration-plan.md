@@ -464,7 +464,7 @@ plan should guess at.
    server-side opaque blob — plausible via the `sessionVaultCryptoV3`
    server-wrapped-DEK machinery, but that is a storage design with its own
    migration, not a bolt-on.
-3. **Populating a believable decoy vault.** Product work.
+3. ~~**Populating a believable decoy vault.** Product work.~~ **Delivered by PR #503** — `docs/decoy-vault-contents-plan.md`. The decoy vault holds user-authored entries in a device-local, fixed-length, always-present container keyed by the decoy DEK, and decoy-session writes land there rather than being refused. Read that plan's §12 before touching any decoy path: its first review round found that `seedWithKey` stamped a hand-written `v: 'v2'` where `decryptItem` requires `PAYLOAD_VERSION` — every seeded row came back `_legacyPlaintext` — which is §39.3's copied-literal trap reappearing in a module written to avoid it.
 4. **Removing `verify_password_or_duress`.** #486 scoped it to short duress
    codes and documented the constraint; deleting it is separate.
 
@@ -4203,3 +4203,50 @@ renewed without a triggering failure.
 Docs-only round: no frontend or backend source changed (`git diff --stat` over
 `frontend/**` and `password_manager/**/*.py` is empty), so the 854-test suite
 from §40 stands unchanged.
+
+---
+
+## 42. Superseded by PR #503
+
+§7.3 above ("populating a believable decoy vault") is no longer deferred; the
+work is in `docs/decoy-vault-contents-plan.md`. Two statements in this document
+are now historical rather than current:
+
+- The decoy session no longer renders an EMPTY vault. `useDisplaySafeItems`
+  returns the decoy rows, which are shaped exactly like server rows and decrypt
+  through the ordinary `decryptEnvelope` path.
+- Decoy-session writes are no longer refused outright. `encryptItem` still
+  refuses — that gate is untouched, and it is what keeps decoy ciphertext out
+  of the one shared server-side list — but `encryptDecoyItem` /
+  `encryptDecoyContainer` were added beside it as its exact mirror, and the
+  mutations route into the device-local store instead.
+
+`DECOY_WRITE_REFUSAL` remains the single string every decoy-session write
+failure emits, and §39.3's rule that it must be sourced rather than copied now
+covers three call sites.
+
+Round 2 of that PR is worth reading against §33.1's sibling-sweep rule
+specifically: the round-1 fix migrated ONE of three `cyclonedx-py` call sites
+off a broken CLI, and the sibling it missed (`ci-sbom.yml`) was uploading a
+zero-byte SBOM next to the cosign-signed image SBOM — green job, empty
+artifact. Same shape as §34.2, in workflow files rather than source. It also
+found the await-window rule applying to a NON-crypto guard: `writeUnconfigured`
+checked the storage key was absent, awaited key generation, then wrote
+unconditionally, so a seed landing inside that window was replaced by filler.
+Round 3 then found the limit of §32's generation guard: the counter is MODULE
+state, so it orders awaits within one tab and says nothing about a second one.
+A decoy session in tab A and a real session in tab B rotating the decoy
+password could not see each other, and only a compare-and-swap on the stored
+BYTES crosses that boundary -- the idiom `provision` already used. When a guard
+is per-process, ask what the other process sees. Round 4 then found the QUEUE
+form of §26's own rule: both decoy write paths encrypt BEFORE entering that
+round's new serialization queue, so the generation `mutate` read was the one
+current when the queued job finally ran, not the one the ciphertext was sealed
+under. A guard captured after a queue does not cover the wait in front of it --
+**adding a queue moves where "now" is**, and every value captured across it has
+to be pinned explicitly. Round 5 then found that pin had been made OPT-IN:
+the two encrypting callers passed it and the other two passed nothing, so
+the paths that did not opt in still read the generation after the queue
+released them. It now defaults to the invocation-time value. **A guard with
+an "off" setting will eventually be used with it off** -- make the safe case
+the default and let stricter callers tighten it.

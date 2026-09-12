@@ -529,9 +529,26 @@ Common utilities, constants, and helpers.
 
 ### Requirements
 
-- Python 3.10+ (compatible with Python 3.13; CI runs 3.11)
-  - Raised from 3.8+ when `djangorestframework` was pinned to 3.17.2, which
-    declares `requires_python >=3.10` — DRF 3.17.0 dropped Python 3.9.
+- Python 3.12+ for development, CI, and the `docker/backend/Dockerfile`
+  image (compatible with Python 3.13)
+  - The image that actually ships is **`docker/backend/Dockerfile`** — it is
+    what every workflow builds (`ci.yml`, `backend-ci.yml`, `ci-sbom.yml`) and
+    what Kubernetes deploys — and it is on 3.12.
+  - **`password_manager/Dockerfile.prod` is NOT that image and is not
+    deployable.** No workflow builds it, and it carries a recorded
+    startup-blocking defect (its distroless runtime supplies its own
+    `ENTRYPOINT`, so the `CMD` becomes arguments to the interpreter). Its
+    builder is pinned to 3.11 to match that runtime's ABI. Treat it as stale
+    until it has a build-and-run smoke test; see the header of that file.
+  - `SECURITY.md` is the authority here: it lists Python below 3.12 as
+    unsupported, so 3.12 is the floor everything except the exception above
+    builds and tests on.
+    Raising the config to match that statement, rather than lowering the
+    statement to match a lagging config, is the direction a password manager
+    should move in.
+  - The dependency floor is lower and is a separate constraint:
+    `djangorestframework` 3.17.2 declares `requires_python >=3.10` (3.17.0
+    dropped Python 3.9). The project floor is the higher of the two.
 - PostgreSQL (production) / SQLite (development)
 - Redis (for Celery)
 - Node.js 14+ (for frontend)

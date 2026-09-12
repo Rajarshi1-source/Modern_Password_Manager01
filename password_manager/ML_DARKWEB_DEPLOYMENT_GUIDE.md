@@ -66,11 +66,14 @@ Before deploying to production, ensure you have:
 ### System Packages
 
 ```bash
-# Ubuntu/Debian
+# Ubuntu 24.04 LTS only: python3.12 / python3.12-dev are in the default
+# repositories there. On Ubuntu 22.04 add the deadsnakes PPA. Debian ships no
+# python3.12 package in any current release (bookworm has 3.11, trixie 3.13),
+# so use pyenv or a source build, or run the backend container instead.
 sudo apt-get update
 sudo apt-get install -y \
-    python3.11 \
-    python3.11-dev \
+    python3.12 \
+    python3.12-dev \
     python3-pip \
     redis-server \
     postgresql-15 \

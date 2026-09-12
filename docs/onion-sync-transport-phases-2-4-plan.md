@@ -1650,3 +1650,21 @@ implementation. It must settle:
 - `password_manager/security/services/tor_service.py:638` — the ingress contract
 - `docker-compose.yml` (`--profile tor`), `k8s/tor.yaml` — deployment
 - `docs/vault-unlock-envelope-integration-plan.md` — the other #486 carry-over
+- `docs/decoy-vault-contents-plan.md` — PR #503, which closes that plan's
+  §7.3. Unrelated to this transport work and lands independently, but it
+  shares one constraint worth knowing before either is extended: the ZK
+  invariant forbids the server learning which envelope slot unlocked a
+  session, which is why the decoy's contents are device-local rather than
+  synced — the same reason this plan cannot ask the server to distinguish
+  onion from clearnet callers by identity. Its §13.1 is also worth reading
+  before touching any SBOM or scanner step here: a `> file || true` pattern
+  produced a green job and a zero-byte signed artifact, which is the
+  supply-chain analogue of the fail-open modes this plan's §A.5 argues
+  against. Its §14.1 is the multi-tab counterpart of the same theme: a guard
+  held in one process's memory orders that process only, which is worth keeping
+  in mind wherever this plan has a client decide its own transport state. Its
+  §15.1 adds the queue form of the same caution: anything that defers work
+  (a retry queue, a batched flush) moves where "now" is, so a value captured
+  before the wait has to be pinned rather than re-read after it -- and per its
+  §16.1, that pin should DEFAULT to the safe value rather than being a
+  parameter each caller remembers to pass.

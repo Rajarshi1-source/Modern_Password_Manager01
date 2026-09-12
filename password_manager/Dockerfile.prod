@@ -1,6 +1,14 @@
 # =========================
 # Stage 1: Builder
 # =========================
+# Pinned to 3.11 DELIBERATELY, and it is the one place in this repo that is
+# not on the 3.12 floor. The runtime stage below is
+# gcr.io/distroless/python3-debian12, whose interpreter is Debian 12's -- i.e.
+# Python 3.11 -- and this stage's whole output is a /venv copied into it. A
+# 3.12 builder produces /venv/bin/python symlinks and lib/python3.12 paths plus
+# compiled extension wheels with a 3.12 ABI tag, none of which the 3.11 runtime
+# can load: daphne would fail at start, and no CI job builds this file, so
+# nothing would have caught it. Raise this only together with the runtime image.
 FROM python:3.11-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -60,4 +68,21 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 
 EXPOSE 8000
 
+# KNOWN ISSUE, recorded rather than blind-fixed -- see the note below before
+# deploying from this file.
+#
+# The distroless runtime sets its own ENTRYPOINT to the system interpreter, so
+# these become ARGUMENTS to it: the container runs `python daphne -b ...` and
+# Python looks for a FILE named `daphne`. Separately, `python -m venv` in the
+# builder records that stage's `/usr/local/bin/python` as the venv's base, and
+# that path does not exist in the runtime image, so `/venv/bin/*` console
+# scripts have a dangling interpreter. Either alone stops the container from
+# starting; the HEALTHCHECK below has the same shape (it needs a shell, and
+# distroless has none).
+#
+# Not changed here because nothing can verify a change: NO CI job builds this
+# file (grep the workflows -- only docs reference it), and the fix has to be
+# validated against the real image, not reasoned about. It needs its own PR
+# with a build-and-run smoke test. Recorded so nobody deploys this believing
+# it works.
 CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "password_manager.asgi:application"]

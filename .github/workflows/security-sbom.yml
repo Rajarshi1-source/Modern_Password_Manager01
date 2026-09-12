@@ -24,14 +24,25 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: 'pip'
           cache-dependency-path: 'password_manager/requirements.txt'
 
       - name: Install SBOM tools
         run: |
           pip install --upgrade pip
-          pip install "cyclonedx-bom>=1.4.3,<2"
+          # cyclonedx-bom 1.x imports `cyclonedx.parser.environment`, which
+          # imports `pkg_resources.extern.appdirs` -- removed from current
+          # setuptools, so `cyclonedx-py` dies with an ImportError before it
+          # reads a single requirement. Discovered by this job failing in 14s
+          # when the project moved to a 3.12 floor, but the trigger is the
+          # SETUPTOOLS version, not the Python one: `security.yml` still runs
+          # the 1.x CLI successfully on 3.12 because it pins `setuptools<81`.
+          # That workflow is left alone deliberately -- it works, and it fails
+          # loudly (its own verify step) rather than silently.
+          # 7.x is the current line and has a different CLI (subcommands
+          # instead of `-r -i`), so the generate step below changed with it.
+          pip install "cyclonedx-bom>=7,<8"
 
       - name: Install CycloneDX CLI
         run: |
@@ -51,7 +62,11 @@ jobs:
 
       - name: Generate CycloneDX SBOM
         run: |
-          cyclonedx-py -r -i password_manager/requirements.txt --format json -o sbom.json
+          # `--sv 1.5` is deliberate, not a default: cyclonedx-bom 7 emits 1.6
+          # unless told otherwise, and the cyclonedx-cli v0.25.0 pinned below
+          # validates up to 1.5 -- so leaving it off moves the failure from
+          # this step to the validate step.
+          cyclonedx-py requirements password_manager/requirements.txt --sv 1.5 --of JSON -o sbom.json
 
       - name: Verify SBOM exists
         run: |

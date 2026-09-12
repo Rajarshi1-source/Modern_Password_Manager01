@@ -41,6 +41,8 @@ import unlockEnvelopeStore from '../unlockEnvelopeStore';
 import argon2 from 'argon2-browser';
 import { WrongPasswordError, TIERS, tierBytes, encode, jsonToBytes } from '../hiddenVaultEnvelope';
 import { SIGNAL_TOKEN_LENGTH } from '../../duressSignalService';
+import sessionVaultCrypto from '../../sessionVaultCrypto';
+import decoyVaultStore from '../decoyVaultStore';
 
 const USER_ID = 'user-42';
 const REAL_PASSWORD = 'correct horse battery staple';
@@ -558,5 +560,170 @@ describe('MalformedSlotPayloadError', () => {
   test('is exported and descends from the hiddenVaultEnvelope error hierarchy', async () => {
     const { HiddenVaultError } = await import('../hiddenVaultEnvelope');
     expect(new MalformedSlotPayloadError()).toBeInstanceOf(HiddenVaultError);
+  });
+});
+
+describe('decoy contents (docs/decoy-vault-contents-plan.md)', () => {
+  test('provision writes the local-cache blob for an account with NO decoy', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+
+    // The blob has to exist for EVERY provisioned account. If it appeared only
+    // once a decoy was configured, its mere presence in localStorage would
+    // announce the feature to anyone with devtools -- the same reason
+    // encode() fills an unconfigured decoy SLOT with a throwaway-key payload.
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).not.toBeNull();
+  });
+
+  test('seedDecoyContents stores contents the decoy DEK can open', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+    const beforeSeed = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+
+    await unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID,
+      decoyPassword: DECOY_PASSWORD,
+      items: [{ site: 'example.com', username: 'u', password: 'p', notes: '' }],
+    });
+
+    const afterSeed = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+    expect(afterSeed).not.toBe(beforeSeed);
+    // Fixed-length container: the write changed the bytes but not the size, so
+    // an observer cannot tell that contents were added.
+    expect(afterSeed.length).toBe(beforeSeed.length);
+
+    // ...and the contents are actually READABLE through the decoy-session
+    // path. Comparing stored bytes only proves something was written; this is
+    // the assertion the test's own name was making, and it is the only one
+    // that covers seedDecoyContents' job of fetching the right dek and salt
+    // from slot 1 and handing them on. The round-trip tests elsewhere call
+    // seedWithKey directly and so skip exactly that step.
+    const opened = await open({ userId: USER_ID, password: DECOY_PASSWORD });
+    sessionVaultCrypto.clearSessionKey();
+    await sessionVaultCrypto.installRawDek(
+      opened.dekBytes, opened.saltB64, USER_ID, null, true,
+    );
+    const rows = await decoyVaultStore.loadForSession(USER_ID);
+    expect(rows).toHaveLength(1);
+    expect(await sessionVaultCrypto.decryptItem(rows[0].encrypted_data)).toEqual({
+      site: 'example.com', username: 'u', password: 'p', notes: '',
+    });
+    sessionVaultCrypto.clearSessionKey();
+  });
+
+  test('seeding leaves the envelope -- and therefore the duress token -- untouched', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    const { duressToken } = await setDecoySlot({
+      userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD,
+    });
+    const envelopeBefore = readRawEnvelope(USER_ID);
+
+    await unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID, decoyPassword: DECOY_PASSWORD, items: [],
+    });
+
+    // Editing decoy CONTENTS must not cost the user their alarm: re-encoding
+    // the envelope would mint a new token and silently orphan the registered
+    // one. This is why seeding is a separate operation from setDecoySlot.
+    expect(readRawEnvelope(USER_ID)).toBe(envelopeBefore);
+    const reopened = await open({ userId: USER_ID, password: DECOY_PASSWORD });
+    expect(reopened.duressToken).toBe(duressToken);
+  });
+
+  test('refuses the REAL password rather than sealing contents no decoy can open', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+    const before = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+
+    // Sealing under the REAL dek would produce a container the decoy session
+    // cannot open: the setup screen would report success and the decoy would
+    // still open empty.
+    await expect(unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID, decoyPassword: REAL_PASSWORD, items: [{ site: 'x' }],
+    })).rejects.toThrow(/No decoy password is configured/);
+
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).toBe(before);
+  });
+
+  test('a wrong password raises WrongPasswordError and writes nothing', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+    const before = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+
+    await expect(unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID, decoyPassword: 'neither of the two', items: [{ site: 'x' }],
+    })).rejects.toBeInstanceOf(WrongPasswordError);
+
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).toBe(before);
+  });
+
+  test('the default export carries seedDecoyContents', () => {
+    expect(unlockEnvelopeStore.seedDecoyContents).toBeTypeOf('function');
+  });
+});
+
+describe('decoy contents lifecycle (PR #503 review round 1)', () => {
+  test('open() backfills the contents blob for an envelope that predates it', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    // Simulate an account provisioned before decoy contents existed: the
+    // envelope is there, the contents blob is not.
+    localStorage.removeItem(`vaultLocalCache:${USER_ID}`);
+
+    await open({ userId: USER_ID, password: REAL_PASSWORD });
+
+    // Without this, the blob would first appear when the user SEEDED contents,
+    // so its presence in localStorage would announce that a decoy exists --
+    // the precise oracle the always-present fixed-length design denies.
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).not.toBeNull();
+  });
+
+  test('a wrong password creates nothing', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    localStorage.removeItem(`vaultLocalCache:${USER_ID}`);
+
+    await expect(open({ userId: USER_ID, password: 'not either password' }))
+      .rejects.toBeInstanceOf(WrongPasswordError);
+
+    // The recovery and contents forms probe open() with candidate passwords;
+    // a failed probe must not write anything.
+    expect(localStorage.getItem(`vaultLocalCache:${USER_ID}`)).toBeNull();
+  });
+
+  test('replacing the decoy password re-keys the contents container', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+    await unlockEnvelopeStore.seedDecoyContents({
+      userId: USER_ID, decoyPassword: DECOY_PASSWORD, items: [{ name: 'a.example.com' }],
+    });
+    const seeded = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+
+    const result = await setDecoySlot({
+      userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: 'a second decoy phrase',
+    });
+
+    // setDecoySlot mints a NEW decoy DEK every run, so the old ciphertext is
+    // unreadable by anyone. Leaving it there made the decoy silently open
+    // empty after a password change; it is replaced with an empty container
+    // under the new key, and the caller is told so it can say so on screen.
+    expect(result.contentsReset).toBe(true);
+    const rekeyed = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
+    expect(rekeyed).not.toBe(seeded);
+    // Still the same fixed length -- re-keying must not become a size tell.
+    expect(rekeyed.length).toBe(seeded.length);
+  });
+
+  test('seedDecoyContents raises rather than reporting a write that did not happen', async () => {
+    await provision({ userId: USER_ID, vaultPassword: REAL_PASSWORD, dekBytes: DEK, saltB64: SALT });
+    await setDecoySlot({ userId: USER_ID, vaultPassword: REAL_PASSWORD, decoyPassword: DECOY_PASSWORD });
+
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    try {
+      await expect(unlockEnvelopeStore.seedDecoyContents({
+        userId: USER_ID, decoyPassword: DECOY_PASSWORD, items: [{ name: 'a.example.com' }],
+      })).rejects.toThrow(/Could not store/);
+    } finally {
+      setItem.mockRestore();
+    }
   });
 });

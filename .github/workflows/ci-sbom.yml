@@ -135,11 +135,31 @@ jobs:
           done
           ls -lh sbom.image.*
 
-      - name: (Optional) Generate SBOM for python env (cyclonedx-py)
+      - name: Generate SBOM for python env (cyclonedx-py)
         run: |
-          python -m pip install "cyclonedx-bom>=1.4.3,<2"
-          cyclonedx-py -r -i password_manager/requirements-prod.txt > sbom.python.cyclonedx.json || true
-        continue-on-error: true
+          # This step was silently producing a ZERO-BYTE SBOM that the upload
+          # below then attached alongside the signed image SBOM. cyclonedx-bom
+          # 1.x imports `pkg_resources.extern.appdirs`, which current
+          # setuptools no longer vendors, so `cyclonedx-py` died with an
+          # ImportError -- and `> file || true` had already created the empty
+          # file and swallowed the exit code. Confirmed in the run for commit
+          # 31a144d, where the job was green and the artifact was empty.
+          #
+          # 7.x is the line `requirements-lock.txt` already pins
+          # (cyclonedx-bom==7.2.1) and uses subcommands instead of `-r -i`.
+          # `--sv 1.5` matches the schema the sibling security-sbom workflow
+          # validates against.
+          python -m pip install "cyclonedx-bom>=7,<8"
+          cyclonedx-py requirements password_manager/requirements-prod.txt --sv 1.5 --of JSON -o sbom.python.cyclonedx.json
+
+      - name: Verify python SBOM is present and non-empty
+        run: |
+          # An empty file is the exact failure this replaces, so existence
+          # alone is not enough -- it must contain real components. An SBOM
+          # that is signed and attested while being empty is worse than one
+          # that is missing, because it asserts something untrue.
+          test -s sbom.python.cyclonedx.json || { echo "::error::sbom.python.cyclonedx.json missing or empty" >&2; exit 1; }
+          python -c "import json,sys; d=json.load(open('sbom.python.cyclonedx.json')); n=len(d.get('components',[])); print(f'python SBOM: {n} components'); sys.exit(1 if n == 0 else 0)"
 
 
 
