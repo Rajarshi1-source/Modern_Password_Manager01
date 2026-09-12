@@ -96,6 +96,9 @@ const fromB64 = (b64) => {
   return bytes;
 };
 
+/** Short random token, so two writes in one millisecond cannot collide. */
+const randomSuffix = () => window.crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
+
 const importDecoyKey = (dekBytes) => window.crypto.subtle.importKey(
   'raw',
   dekBytes,
@@ -180,7 +183,7 @@ const readRaw = (userId) => {
  * `provision` with `replaceExisting`) would otherwise destroy them.
  */
 export const writeUnconfigured = async (userId) => {
-  if (!userId) return false;
+  if (userId == null) return false;
   if (readRaw(userId) !== null) return false;
   const throwaway = await importDecoyKey(window.crypto.getRandomValues(new Uint8Array(32)));
   const blob = await encryptContainer(throwaway, []);
@@ -221,7 +224,7 @@ export const writeUnconfigured = async (userId) => {
  * @throws {DecoyCapacityError} the items do not fit
  */
 export const seedWithKey = async ({ userId, dekBytes, saltB64, items }) => {
-  if (!userId) throw new Error('seedWithKey: userId required');
+  if (userId == null) throw new Error('seedWithKey: userId required');
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
     throw new Error('seedWithKey: dekBytes must be a 32-byte Uint8Array');
   }
@@ -252,7 +255,7 @@ export const seedWithKey = async ({ userId, dekBytes, saltB64, items }) => {
  * which is what `VaultDuressSetup` now does.
  */
 export const resetForNewKey = async (userId, dekBytes) => {
-  if (!userId) return false;
+  if (userId == null) return false;
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) return false;
   const key = await importDecoyKey(dekBytes);
   return writeRaw(userId, await encryptContainer(key, []));
@@ -308,7 +311,7 @@ const buildRow = async (key, saltB64, data, index) => {
  * Never throws, because its caller is a render path.
  */
 export const loadForSession = async (userId) => {
-  if (!userId || !sessionVaultCrypto.isDecoySession()) return [];
+  if (userId == null || !sessionVaultCrypto.isDecoySession()) return [];
   const raw = readRaw(userId);
   if (raw === null) return [];
   try {
@@ -338,7 +341,7 @@ export const loadForSession = async (userId) => {
  * failure (`sessionVaultCrypto.DECOY_WRITE_REFUSAL`).
  */
 export const saveForSession = async (userId, rows, expectedRaw) => {
-  if (!userId || !sessionVaultCrypto.isDecoySession()) return false;
+  if (userId == null || !sessionVaultCrypto.isDecoySession()) return false;
   try {
     const { iv, ct } = await sessionVaultCrypto.encryptDecoyContainer(
       padPlaintext({ v: CONTAINER_VERSION, rows: rows.map(stripDisplayFlags) }),
@@ -404,9 +407,21 @@ const stripDisplayFlags = (row) => STORED_ROW_FIELDS.reduce((acc, field) => {
  */
 let mutationQueue = Promise.resolve();
 
-export const mutate = (userId, mutator) => {
+export const mutate = (userId, mutator, expectedGeneration) => {
   const run = async () => {
-    if (!userId || !sessionVaultCrypto.isDecoySession()) return false;
+    if (userId == null || !sessionVaultCrypto.isDecoySession()) return false;
+    // When the caller encrypted something BEFORE queuing, it must pin the
+    // generation it encrypted under. `encryptDecoyItem` guards its own await,
+    // but the row then waits in this queue, and the generation captured below
+    // is read when `run` finally executes -- so a lock plus a different decoy
+    // unlock in between would store ciphertext sealed under the OLD dek inside
+    // a container sealed under the NEW one. That row is then permanently
+    // undecryptable, and in a decoy session it renders as a failed row, which
+    // is itself a tell. Checked first, before any work.
+    if (expectedGeneration !== undefined
+        && sessionVaultCrypto.currentSessionGeneration() !== expectedGeneration) {
+      return false;
+    }
     const generation = sessionVaultCrypto.currentSessionGeneration();
     // The exact stored bytes these rows were decoded from, so the write below
     // can prove nothing replaced them -- including from another tab, which no
@@ -441,13 +456,21 @@ export const mutate = (userId, mutator) => {
  * front of still visibly failed to save.
  */
 export const addRowForSession = async (userId, { data, itemType = 'password', favorite = false, itemId } = {}) => {
+  // Captured BEFORE the encryption, and handed to `mutate` so the queued write
+  // is refused if the session moved in between -- see `mutate`.
+  const generation = sessionVaultCrypto.currentSessionGeneration();
   let encrypted;
   try {
     encrypted = await sessionVaultCrypto.encryptDecoyItem(data || {});
   } catch {
     return false;
   }
-  const id = itemId || `item_${Date.now()}`;
+  // Random suffix for the same reason the row `id` carries one: two adds in a
+  // single millisecond otherwise share an `item_id`, and App.jsx keys the
+  // decrypted-payload map AND the React list by it
+  // (`Object.fromEntries([item_id, data])`), so one row's plaintext would
+  // replace the other's in the rendered vault.
+  const id = itemId || `item_${Date.now()}_${randomSuffix()}`;
   return mutate(userId, (rows) => [
     ...rows,
     {
@@ -456,14 +479,14 @@ export const addRowForSession = async (userId, { data, itemType = 'password', fa
       // produced the same `id`. `VaultContext.deleteItem` and `toggleFavorite`
       // both match rows by `id`, so one delete would have removed both rows and
       // one favourite toggle flipped both.
-      id: `d${Date.now()}_${window.crypto.getRandomValues(new Uint32Array(1))[0].toString(36)}`,
+      id: `d${Date.now()}_${randomSuffix()}`,
       item_id: id,
       item_type: itemType,
       encrypted_data: encrypted,
       favorite: Boolean(favorite),
       created_at: new Date().toISOString(),
     },
-  ]);
+  ], generation);
 };
 
 export default {

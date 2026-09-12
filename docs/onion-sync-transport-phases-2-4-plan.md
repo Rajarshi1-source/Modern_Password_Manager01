@@ -1662,4 +1662,7 @@ implementation. It must settle:
   supply-chain analogue of the fail-open modes this plan's §A.5 argues
   against. Its §14.1 is the multi-tab counterpart of the same theme: a guard
   held in one process's memory orders that process only, which is worth keeping
-  in mind wherever this plan has a client decide its own transport state.
+  in mind wherever this plan has a client decide its own transport state. Its
+  §15.1 adds the queue form of the same caution: anything that defers work
+  (a retry queue, a batched flush) moves where "now" is, so a value captured
+  before the wait has to be pinned rather than re-read after it.

@@ -87,7 +87,10 @@ export class MalformedSlotPayloadError extends HiddenVaultError {}
 // ---------------------------------------------------------------------------
 
 export const hasEnvelope = (userId) => {
-  if (!userId) return false;
+  // `== null`, not `!userId`: `vaultIdentity.vaultUserId` preserves an `id` of
+  // 0 (it uses `??`, and its test pins that), so a falsy check here would make
+  // this module disagree with the identity every other artefact is keyed by.
+  if (userId == null) return false;
   try {
     return localStorage.getItem(storageKey(userId)) !== null;
   } catch {
@@ -98,7 +101,7 @@ export const hasEnvelope = (userId) => {
 };
 
 export const loadEnvelope = (userId) => {
-  if (!userId) return null;
+  if (userId == null) return null;
   let raw;
   try {
     raw = localStorage.getItem(storageKey(userId));
@@ -129,7 +132,7 @@ export const loadEnvelope = (userId) => {
  * `replaceExisting`.
  */
 export const readRawEnvelope = (userId) => {
-  if (!userId) return null;
+  if (userId == null) return null;
   try {
     return localStorage.getItem(storageKey(userId));
   } catch {
@@ -138,7 +141,7 @@ export const readRawEnvelope = (userId) => {
 };
 
 export const saveEnvelope = (userId, blob) => {
-  if (!userId) throw new Error('saveEnvelope: userId required');
+  if (userId == null) throw new Error('saveEnvelope: userId required');
   if (!(blob instanceof Uint8Array)) {
     throw new Error('saveEnvelope: blob must be Uint8Array');
   }
@@ -146,7 +149,7 @@ export const saveEnvelope = (userId, blob) => {
 };
 
 export const clearEnvelope = (userId) => {
-  if (!userId) return;
+  if (userId == null) return;
   localStorage.removeItem(storageKey(userId));
 };
 
@@ -262,7 +265,7 @@ const parseSlotPayload = (payloadBytes) => {
 export async function provision({
   userId, vaultPassword, dekBytes, saltB64, replaceExisting,
 }) {
-  if (!userId) throw new Error('provision: userId required');
+  if (userId == null) throw new Error('provision: userId required');
   if (!vaultPassword) throw new Error('provision: vaultPassword required');
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
     throw new Error('provision: dekBytes must be a 32-byte Uint8Array');
@@ -373,7 +376,7 @@ export async function provision({
  * @throws {import('./decoyVaultStore').DecoyCapacityError} items do not fit
  */
 export async function seedDecoyContents({ userId, decoyPassword, items }) {
-  if (!userId) throw new Error('seedDecoyContents: userId required');
+  if (userId == null) throw new Error('seedDecoyContents: userId required');
   if (!decoyPassword) throw new Error('seedDecoyContents: decoyPassword required');
   const { slotIndex, dekBytes, saltB64 } = await open({ userId, password: decoyPassword });
   if (slotIndex === 0) {
@@ -415,7 +418,7 @@ export async function seedDecoyContents({ userId, decoyPassword, items }) {
  *   ordering note below).
  */
 export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
-  if (!userId) throw new Error('setDecoySlot: userId required');
+  if (userId == null) throw new Error('setDecoySlot: userId required');
   if (!vaultPassword) throw new Error('setDecoySlot: vaultPassword required');
   if (!decoyPassword) throw new Error('setDecoySlot: decoyPassword required');
   if (decoyPassword === vaultPassword) {

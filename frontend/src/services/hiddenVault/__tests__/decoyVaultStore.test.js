@@ -349,6 +349,43 @@ describe('concurrency', () => {
     const rows = await decoyVaultStore.loadForSession(USER);
     expect(rows).toHaveLength(2);
     expect(rows[0].id).not.toBe(rows[1].id);
+    // `item_id` too, not just `id`: App.jsx keys the decrypted-payload map by
+    // item_id (`Object.fromEntries([item_id, data])`) AND uses it as the React
+    // list key, so a duplicate silently drops one row's plaintext.
+    expect(rows[0].item_id).not.toBe(rows[1].item_id);
+  });
+
+  test('a queued add is refused when the session moved after encryption', async () => {
+    await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: [] });
+    await enterDecoySession(dek(7));
+    const before = localStorage.getItem(`vaultLocalCache:${USER}`);
+
+    // encryptDecoyItem resolves under one generation; the counter then moves
+    // before the queued mutation runs, exactly as a lock plus a second decoy
+    // unlock would. Without the pin, ciphertext sealed under the old dek lands
+    // in a container sealed under the new one and can never be read back.
+    vi.spyOn(sessionVaultCrypto, 'encryptDecoyItem').mockImplementation(async () => {
+      const sealed = 'SEALED-UNDER-OLD-DEK';
+      sessionVaultCrypto.reserveSessionGeneration();
+      return sealed;
+    });
+
+    const ok = await decoyVaultStore.addRowForSession(USER, { data: { name: 'x' } });
+
+    expect(ok).toBe(false);
+    expect(localStorage.getItem(`vaultLocalCache:${USER}`)).toBe(before);
+  });
+
+  test('mutate without an expected generation still runs', async () => {
+    // delete/favourite encrypt nothing beforehand, so they pass no generation
+    // and must not be caught by the new guard.
+    await decoyVaultStore.seedWithKey({ userId: USER, dekBytes: dek(7), saltB64: SALT, items: ITEMS });
+    await enterDecoySession(dek(7));
+
+    const ok = await decoyVaultStore.mutate(USER, (rows) => rows.slice(1));
+
+    expect(ok).toBe(true);
+    expect(await decoyVaultStore.loadForSession(USER)).toHaveLength(1);
   });
 
   test('serialized mutations do not discard each other', async () => {

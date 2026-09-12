@@ -129,7 +129,7 @@ const useDecoyRows = (isDecoy) => {
 
   useEffect(() => {
     let cancelled = false;
-    if (!isDecoy || !userId) {
+    if (!isDecoy || userId == null) {
       setRows([]);
       return () => { cancelled = true; };
     }

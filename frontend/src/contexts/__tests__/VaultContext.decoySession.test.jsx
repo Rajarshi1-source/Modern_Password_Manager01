@@ -28,10 +28,16 @@ vi.mock('axios', () => ({
   },
 }));
 
-const { mockV2HasSessionKey, mockV3HasSessionKey, mockIsDecoySession } = vi.hoisted(() => ({
+const {
+  mockV2HasSessionKey, mockV3HasSessionKey, mockIsDecoySession, mockEncryptDecoyItem,
+} = vi.hoisted(() => ({
   mockV2HasSessionKey: vi.fn(() => true),
   mockV3HasSessionKey: vi.fn(() => false),
   mockIsDecoySession: vi.fn(() => false),
+  // Stubbed because the real one needs a live session key; these tests are
+  // about the ROUTING of a decoy write, not about the crypto itself (that is
+  // covered in sessionVaultCrypto.decoyPrimitives.test.js).
+  mockEncryptDecoyItem: vi.fn(async () => 'SEALED'),
 }));
 // Spread the REAL module rather than hand-listing what the context happens to
 // call. Two reasons, both learned the hard way. A hand-written mock silently
@@ -48,6 +54,7 @@ vi.mock('../../services/sessionVaultCrypto', async (importOriginal) => {
       ...actual.default,
       hasSessionKey: mockV2HasSessionKey,
       isDecoySession: mockIsDecoySession,
+      encryptDecoyItem: mockEncryptDecoyItem,
     },
   };
 });
@@ -164,6 +171,7 @@ beforeEach(() => {
   // `-t` and fails as a whole.
   mockDecoySave.mockResolvedValue(true);
   mockDecoyAddRow.mockResolvedValue(true);
+  mockEncryptDecoyItem.mockResolvedValue('SEALED');
   mockDeleteVaultItem.mockResolvedValue({ data: {} });
   mockToggleFavorite.mockResolvedValue({ data: {} });
   api.post.mockResolvedValue({ data: { backup_id: 'b-1' } });
@@ -270,6 +278,24 @@ describe('VaultContext.toggleFavorite during a decoy session', () => {
     // construction: all three read the same exported constant.
     expect(caught.message).toBe(DECOY_WRITE_REFUSAL);
     expect(caught.message).not.toMatch(/decoy|duress|slot/i);
+  });
+
+  test('an edit pins the generation it encrypted under', async () => {
+    // updateItem encrypts, then queues the mutation. The store must be told
+    // WHICH generation the ciphertext belongs to, or a lock plus a second
+    // decoy unlock in the gap writes an unreadable row.
+    mockIsDecoySession.mockReturnValue(true);
+    const { result } = await mountVault();
+
+    await act(async () => {
+      await result.current.updateItem({ id: 'd1', data: { name: 'x' } }).catch(() => {});
+    });
+
+    // Third argument is the pinned generation, and it must be the value read
+    // BEFORE encryptDecoyItem ran -- asserted as a real number rather than
+    // merely "defined", since undefined would silently disable the guard.
+    const [, , passedGeneration] = mockDecoyMutate.mock.calls[0];
+    expect(typeof passedGeneration).toBe('number');
   });
 
   test('a working store flips the decoy row and still sends no PATCH', async () => {

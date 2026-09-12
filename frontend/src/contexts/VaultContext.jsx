@@ -837,14 +837,14 @@ export const VaultProvider = ({ children }) => {
   // the screen by whoever is applying the coercion, so it must stay
   // indistinguishable from an ordinary save failure and identical across
   // layers (vault-unlock-envelope-integration-plan.md §33.1, §39.3).
-  const mutateDecoyRows = useCallback(async (mutator) => {
+  const mutateDecoyRows = useCallback(async (mutator, expectedGeneration) => {
     // The read-modify-write, its serialization, and the session-generation
     // binding all live in `decoyVaultStore.mutate` -- not here. Two callers
     // now share them (this context, and App.jsx's own Add form, which renders
     // outside VaultProvider and so cannot reach this context at all), and a
     // per-caller copy of a read-modify-write is exactly how two overlapping
     // mutations end up discarding each other.
-    const saved = await decoyVaultStore.mutate(vaultUserId(user), mutator);
+    const saved = await decoyVaultStore.mutate(vaultUserId(user), mutator, expectedGeneration);
     if (!saved) {
       // One outcome for a moved session, a locked vault, a capacity overflow
       // and a storage failure alike: distinguishing them on screen would
@@ -983,6 +983,11 @@ export const VaultProvider = ({ children }) => {
     if (sessionVaultCrypto.isDecoySession()) {
       try {
         setError(null);
+        // Captured BEFORE the encryption and pinned on the queued mutation:
+        // the row waits in the store's queue, and a lock plus a different
+        // decoy unlock in between would otherwise write ciphertext sealed
+        // under the old dek into a container sealed under the new one.
+        const generation = sessionVaultCrypto.currentSessionGeneration();
         const encrypted_data = await sessionVaultCrypto.encryptDecoyItem(item.data);
         // ONLY the two fields an edit owns, matching the real path below,
         // which deliberately PATCHes `encrypted_data` alone so an edit "can't
@@ -994,7 +999,8 @@ export const VaultProvider = ({ children }) => {
         await mutateDecoyRows((rows) =>
           rows.map((row) => (row.id === item.id
             ? { ...row, encrypted_data, updated_at: new Date().toISOString() }
-            : row))
+            : row)),
+          generation,
         );
         return item;
       } catch {

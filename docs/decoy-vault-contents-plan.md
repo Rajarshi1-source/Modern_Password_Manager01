@@ -349,7 +349,7 @@ fails in the full run. That evidence was real but the conclusion was too
 vague to act on. Running the file by itself reproduces all six failures in
 3m33s, and the traceback names the mechanism outright:
 
-```
+```text
 rest_framework.exceptions.Throttled: Request was throttled. Expected available in 3598 seconds.
 ```
 
@@ -721,3 +721,88 @@ it from scratch.
 
 Frontend after this round: **79 files, 911 tests**, five consecutive clean runs
 of the concurrency suite; eslint 0 errors. No backend source changed.
+
+---
+
+## 15. Review round 4 (PR #503, 2026-09-12) — CodeRabbit
+
+**No CI check was failing** — 33 successful, 1 in progress. Six findings, four
+of them real, and three of those were consequences of fixes made in earlier
+rounds of this same PR.
+
+### 15.1 The generation guard stopped at the queue
+
+Round 3 added `mutate`'s serialization queue. That queue introduced a gap
+nothing was guarding: **both write paths encrypt BEFORE they enter it.**
+`encryptDecoyItem` guards its own await, but the sealed row then waits its turn,
+and the generation `mutate` reads is the one current when `run` finally
+executes. A lock plus a *different* decoy unlock in that window means ciphertext
+sealed under the old DEK is written into a container sealed under the new one —
+a row that can never be decrypted again, rendering as a failed row in a decoy
+session, which is itself a tell.
+
+`mutate` now takes an `expectedGeneration`, captured **before** the encryption
+by `addRowForSession` and by `VaultContext.updateItem`, and refuses the queued
+write on mismatch. `deleteItem`/`toggleFavorite` encrypt nothing beforehand and
+pass none; a test pins that they still run, so the new argument cannot quietly
+become mandatory.
+
+Verified to fail without the pin.
+
+**The lesson, because it is the third variant of one rule in this PR:** §26's
+"a guard before an await does not cover the await's own window" now has a queue
+form — *a guard captured after a queue does not cover the wait in front of it*.
+Adding a queue moves where "now" is.
+
+### 15.2 `item_id` could collide, and `id` was only half the fix
+
+Round 2 gave the row `id` a random suffix. The `item_id` beside it kept
+`item_${Date.now()}` — and `item_id` is the one that matters more:
+`App.jsx` builds the decrypted-payload map with
+`Object.fromEntries([item_id, data])` and uses `item_id` as the React list key,
+so two rows sharing one would collapse to a single payload in the rendered
+vault. Both now carry the same random suffix, from one shared helper, and the
+frozen-clock test asserts both fields.
+
+**Fixing the field the finding named instead of the field class it belonged
+to** — the same half-sweep shape as §13's three call sites and §14.3's
+same-file sibling.
+
+### 15.3 `vaultIdentity` and its consumers disagreed about `id: 0`
+
+`vaultUserId` uses `??` deliberately, so an `id` of 0 is preserved, and
+`vaultIdentity.test.js` pins that ("an id of 0 still wins over email"). But
+every consumer rejected it with `!userId` — `loadForSession`, `mutate`,
+`useDecoyRows`, and all eight sites in `unlockEnvelopeStore`. An account with
+that id would have had an envelope it could not find and a decoy vault that read
+empty and refused writes.
+
+Not reachable with Django's auto PKs, which start at 1 — but the codebase
+asserted one thing and did another, and the whole point of extracting
+`vaultIdentity` was that every artefact is keyed the same way. All consumers now
+use `== null`, including `unlockEnvelopeStore`'s pre-existing checks: leaving
+those would have meant the decoy store accepting an identity whose envelope
+module rejects it, which is the inconsistency in a new place rather than fixed.
+
+### 15.4 Documentation
+
+- An unlabeled fenced block (MD040) is now `text`. Worth noting that the stated
+  premise — "the repository convention requires markdownlint" — is **not**
+  backed by anything in this repo: there is no markdownlint config and no
+  workflow runs it. The change is correct on its own merits, not because the
+  convention exists. A sweep found no other unlabeled fence in this document.
+- `privacy-features-gap-remediation-plan.md` said "Two review rounds followed
+  … §12-§13", which I wrote in round 2 and did not update when round 3 added
+  §14. Now counts four and spans §12-§15.
+
+### 15.5 Not a defect
+
+The report also flagged the `item_id` generation in `VaultContext.addItem`'s
+REAL path, which has the same `item_${Date.now()}` shape. Left alone: that path
+POSTs to the server one item at a time behind a form submission, so two
+generations inside one millisecond need two concurrent submissions from one
+user. It is pre-existing, unrelated to the decoy work, and changing a
+server-facing id format is not something to do inside a review round.
+
+Frontend after this round: **79 files, 914 tests**, three consecutive clean
+full runs; eslint 0 errors. No backend source changed.
