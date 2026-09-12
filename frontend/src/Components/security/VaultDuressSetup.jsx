@@ -118,7 +118,7 @@ const VaultDuressSetup = () => {
   // screen stays mounted. A memo keyed on `userId` alone keeps answering
   // "you haven't created one yet" until a remount, so the re-render nudge
   // below would repaint a stale answer.
-  const envelopeReady = Boolean(userId) && unlockEnvelopeStore.hasEnvelope(userId);
+  const envelopeReady = userId != null && unlockEnvelopeStore.hasEnvelope(userId);
 
   const [vaultPassword, setVaultPassword] = useState('');
   const [decoyPassword, setDecoyPassword] = useState('');
@@ -576,7 +576,7 @@ const VaultDuressSetup = () => {
     setContentsError('');
     setContentsSuccess(false);
 
-    if (!userId) {
+    if (userId == null) {
       setContentsError('Unlock your vault first, then set decoy contents.');
       return;
     }

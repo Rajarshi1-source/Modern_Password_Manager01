@@ -1665,4 +1665,6 @@ implementation. It must settle:
   in mind wherever this plan has a client decide its own transport state. Its
   §15.1 adds the queue form of the same caution: anything that defers work
   (a retry queue, a batched flush) moves where "now" is, so a value captured
-  before the wait has to be pinned rather than re-read after it.
+  before the wait has to be pinned rather than re-read after it -- and per its
+  §16.1, that pin should DEFAULT to the safe value rather than being a
+  parameter each caller remembers to pass.

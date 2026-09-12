@@ -99,6 +99,16 @@ const fromB64 = (b64) => {
 /** Short random token, so two writes in one millisecond cannot collide. */
 const randomSuffix = () => window.crypto.getRandomValues(new Uint32Array(1))[0].toString(36);
 
+/**
+ * The decoy vault's item id.
+ *
+ * Exported because `VaultContext` mints one too (it needs the value for its
+ * own return), and a second `item_${Date.now()}` written there silently
+ * bypassed the suffix added here -- the caller's id wins, so fixing only the
+ * fallback fixed nothing for that path. One generator, no second copy.
+ */
+export const newItemId = () => `item_${Date.now()}_${randomSuffix()}`;
+
 const importDecoyKey = (dekBytes) => window.crypto.subtle.importKey(
   'raw',
   dekBytes,
@@ -407,7 +417,20 @@ const stripDisplayFlags = (row) => STORED_ROW_FIELDS.reduce((acc, field) => {
  */
 let mutationQueue = Promise.resolve();
 
-export const mutate = (userId, mutator, expectedGeneration) => {
+export const mutate = (
+  userId,
+  mutator,
+  // Defaults to the generation at INVOCATION, so the binding is unconditional
+  // rather than opt-in. delete/favourite passed nothing, and for them the
+  // check below was reading a generation captured after the queue released the
+  // job -- so a different account unlocking while their mutation waited would
+  // run it against the NEW session's dek but the OLD account's userId:
+  // `loadForSession` fails to decrypt, returns [], and the save then replaces
+  // that account's whole container with an empty one. Callers that encrypt
+  // BEFORE queuing (addRowForSession, VaultContext.updateItem) pass their own
+  // pre-encryption value instead, which is stricter still.
+  expectedGeneration = sessionVaultCrypto.currentSessionGeneration(),
+) => {
   const run = async () => {
     if (userId == null || !sessionVaultCrypto.isDecoySession()) return false;
     // When the caller encrypted something BEFORE queuing, it must pin the
@@ -418,11 +441,10 @@ export const mutate = (userId, mutator, expectedGeneration) => {
     // a container sealed under the NEW one. That row is then permanently
     // undecryptable, and in a decoy session it renders as a failed row, which
     // is itself a tell. Checked first, before any work.
-    if (expectedGeneration !== undefined
-        && sessionVaultCrypto.currentSessionGeneration() !== expectedGeneration) {
+    if (sessionVaultCrypto.currentSessionGeneration() !== expectedGeneration) {
       return false;
     }
-    const generation = sessionVaultCrypto.currentSessionGeneration();
+    const generation = expectedGeneration;
     // The exact stored bytes these rows were decoded from, so the write below
     // can prove nothing replaced them -- including from another tab, which no
     // generation check can see. See `saveForSession`.
@@ -470,7 +492,7 @@ export const addRowForSession = async (userId, { data, itemType = 'password', fa
   // decrypted-payload map AND the React list by it
   // (`Object.fromEntries([item_id, data])`), so one row's plaintext would
   // replace the other's in the rendered vault.
-  const id = itemId || `item_${Date.now()}_${randomSuffix()}`;
+  const id = itemId || newItemId();
   return mutate(userId, (rows) => [
     ...rows,
     {
@@ -490,6 +512,7 @@ export const addRowForSession = async (userId, { data, itemType = 'password', fa
 };
 
 export default {
+  newItemId,
   writeUnconfigured,
   seedWithKey,
   resetForNewKey,

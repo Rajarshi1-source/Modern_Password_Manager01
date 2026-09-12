@@ -806,3 +806,106 @@ server-facing id format is not something to do inside a review round.
 
 Frontend after this round: **79 files, 914 tests**, three consecutive clean
 full runs; eslint 0 errors. No backend source changed.
+
+---
+
+## 16. Review round 5 (PR #503, 2026-09-12) — CodeRabbit
+
+**No CI check was failing** — 34 successful, 7 skipped, 1 neutral. Six
+findings, five acted on, one declined with reasoning.
+
+### 16.1 The generation binding was opt-in, so half the callers had none
+
+Round 4 added `expectedGeneration` to `mutate` and had the two *encrypting*
+callers pass it. `deleteItem` and `toggleFavorite` pass nothing, and for them
+the guard read a generation captured **after** the queue released the job —
+which is the same defect round 4 was fixing, still live on the paths that did
+not opt in.
+
+The consequence is worse than the one round 4 closed. Account A queues a
+delete; account B unlocks before it runs. The job still holds A's `userId` but
+B's session key, so `loadForSession` cannot decrypt A's container and returns
+`[]`; the mutator runs on `[]`; and the CAS passes because nothing rewrote the
+key. A's entire decoy vault is replaced with an empty container sealed under
+B's DEK.
+
+`expectedGeneration` now **defaults to the invocation-time generation**, so the
+binding is unconditional and the two encrypting callers merely pass something
+stricter. The `!== undefined` escape hatch is gone — a guard with an "off"
+setting will eventually be used with it off.
+
+### 16.2 My round-4 `item_id` fix was bypassed by my own round-2 caller
+
+Round 4 gave `addRowForSession`'s generated `item_id` a random suffix. But
+`VaultContext`'s decoy-add branch mints its own `item_${Date.now()}` and passes
+it in — and the caller's id wins, so the decoy path that matters kept the
+colliding id. Fixing the fallback fixed nothing for that caller.
+
+There is now one exported `newItemId()` and both sites use it. **This is the
+third round in which I fixed the instance a finding named rather than the
+generator behind it.** The durable form of the rule: when a value can be
+produced in two places, delete one of them rather than fixing both.
+
+### 16.3 The identity sweep missed a third file
+
+Round 4 swept `!userId` → `== null` across `decoyVaultStore`,
+`unlockEnvelopeStore` and `App.jsx`. `VaultDuressSetup` has two more —
+`Boolean(userId)` gating `envelopeReady`, and `!userId` in
+`handleSeedContents` — and both were left behind, so an `id` of 0 would have
+seen "you haven't created a vault password yet" on a screen whose envelope
+exists. Swept now.
+
+### 16.4 Two tests that could pass for the wrong reason
+
+- `VaultDashboardRoute.decoySession.test.jsx` mocked the user id as `1` while
+  the session generation is also `1`, so `toHaveBeenCalledWith(1)` could not
+  distinguish "received the user id" from "received the generation". The id is
+  now `7`.
+- `unlockEnvelopeStore.test.js`'s seeding test is named *"stores contents the
+  decoy DEK can open"* and only compared stored bytes. It now opens slot 1,
+  installs that DEK as a decoy session, and asserts the row decrypts to the
+  seeded fields — which is the only assertion that covers `seedDecoyContents`'
+  actual job of fetching the right dek and salt and handing them on. The
+  round-trip tests elsewhere call `seedWithKey` directly and skip exactly that
+  step.
+
+Both are §34.1 in test-shaped form: an assertion that cannot fail for the
+reason you care about is not evidence.
+
+### 16.5 Documentation
+
+`python3-venv` on the Ubuntu 22.04 deadsnakes path installs venv for Python
+**3.10**, so the `python3.12 -m venv` two blocks later fails. Both apt blocks
+now install `python3.12-venv`, which is also correct on 24.04. While fixing
+that, a stale "Debian 13+" from round 2 turned up in the same file's code-block
+comment — **a fourth sibling miss inside one document**. Version claims are now
+"Ubuntu 24.04 LTS" everywhere, since later Ubuntu releases default to 3.13 and
+carry no `python3.12` package either.
+
+### 16.6 Declined — Web Locks for cross-tab atomicity
+
+The finding is **technically correct**: `saveForSession` does `readRaw` then
+`writeRaw` as two operations, and the WHATWG storage spec provides no
+cross-document lock, so another tab can in principle rotate the key between
+them.
+
+Not acted on, for three reasons stated together rather than hidden behind one:
+
+1. **The window is not the one that was closed.** Round 3's CAS removed a gap
+   spanning an entire AES-GCM encryption; what remains is two adjacent
+   synchronous statements with no `await` between them, against a rotation that
+   takes seconds of Argon2 work.
+2. **The fix would be untestable here.** `navigator.locks` does not exist in
+   jsdom, so the lock path would never execute in this suite — the test would
+   exercise a fallback and prove nothing about the lock. The request for "a
+   two-page browser test" is correct and this repo has no such harness.
+3. **My own rule.** When I cannot verify a change, documenting beats guessing
+   (§13.5). Shipping an unverified concurrency primitive into the module that
+   holds duress state is exactly the wrong place to start.
+
+Recorded as a known residual. A real fix wants Web Locks *plus* the two-page
+harness, together, as its own change.
+
+Frontend after this round: **79 files, 914 tests**, three consecutive clean
+full runs; eslint 0 errors (a numeric separator in one test also turned out to
+trip the configured parser, and is gone). No backend source changed.

@@ -40,8 +40,12 @@ vi.mock('../services/hiddenVault/decoyVaultStore', () => ({
   default: { loadForSession: mockDecoyLoad },
 }));
 
+// id 7, deliberately NOT 1: the session generation is also 1 in this suite, so
+// `toHaveBeenCalledWith(7)` could have passed while the hook handed
+// loadForSession the GENERATION instead of the user id. An assertion that
+// cannot distinguish the two values proves nothing about either.
 vi.mock('../hooks/useAuth.jsx', () => ({
-  useAuth: () => ({ user: { id: 1 }, isAuthenticated: true }),
+  useAuth: () => ({ user: { id: 7 }, isAuthenticated: true }),
 }));
 
 vi.mock('../contexts/VaultContext', () => ({
@@ -145,7 +149,7 @@ describe('VaultDashboardRoute during a decoy session', () => {
     await renderRoute();
 
     expect(mockUseVault).toHaveBeenCalled();
-    expect(mockDecoyLoad).toHaveBeenCalledWith(1);
+    expect(mockDecoyLoad).toHaveBeenCalledWith(7);
   });
 
   test('a real session still receives the full item list', async () => {

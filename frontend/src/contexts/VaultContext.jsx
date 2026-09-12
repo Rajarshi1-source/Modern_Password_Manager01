@@ -864,7 +864,7 @@ export const VaultProvider = ({ children }) => {
     if (sessionVaultCrypto.isDecoySession()) {
       try {
         setError(null);
-        const itemId = item.item_id || `item_${Date.now()}`;
+        const itemId = item.item_id || decoyVaultStore.newItemId();
         // The shared append, so this and App.jsx's Add form build a decoy row
         // exactly the same way.
         const saved = await decoyVaultStore.addRowForSession(vaultUserId(user), {
