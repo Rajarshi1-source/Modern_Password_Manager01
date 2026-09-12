@@ -694,14 +694,17 @@ onion case):
     limitations survive and are named in the setup screen's own copy:
     device-local only, a decoy write sends no request while a real one
     POSTs (so traffic still distinguishes them), and backups still refuse.
-    Two review rounds followed; `docs/decoy-vault-contents-plan.md` §12-§13
+    Four review rounds followed; `docs/decoy-vault-contents-plan.md` §12-§15
     record them. Round 1 found the feature did not actually work (a
     hand-written envelope version string the reader rejects); round 2 found a
     row-id collision, a backfill that could overwrite a seed, and — outside
     this PR's diff entirely — a signed but EMPTY Python SBOM in
     `ci-sbom.yml`. Round 3 found a cross-tab stale write that no
     session-generation guard could catch (the counter is per-tab), and
-    that one of round 2's own new tests was flaky 1 run in 3.
+    that one of round 2's own new tests was flaky 1 run in 3. Round 4 found
+    that round 3's serialization queue had opened a window of its own --
+    both write paths encrypt before entering it, so the queued write has to
+    pin the generation its ciphertext was sealed under.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could

@@ -4238,4 +4238,10 @@ state, so it orders awaits within one tab and says nothing about a second one.
 A decoy session in tab A and a real session in tab B rotating the decoy
 password could not see each other, and only a compare-and-swap on the stored
 BYTES crosses that boundary -- the idiom `provision` already used. When a guard
-is per-process, ask what the other process sees.
+is per-process, ask what the other process sees. Round 4 then found the QUEUE
+form of §26's own rule: both decoy write paths encrypt BEFORE entering that
+round's new serialization queue, so the generation `mutate` read was the one
+current when the queued job finally ran, not the one the ciphertext was sealed
+under. A guard captured after a queue does not cover the wait in front of it --
+**adding a queue moves where "now" is**, and every value captured across it has
+to be pinned explicitly.
