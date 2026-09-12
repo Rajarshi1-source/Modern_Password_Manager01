@@ -4244,4 +4244,9 @@ round's new serialization queue, so the generation `mutate` read was the one
 current when the queued job finally ran, not the one the ciphertext was sealed
 under. A guard captured after a queue does not cover the wait in front of it --
 **adding a queue moves where "now" is**, and every value captured across it has
-to be pinned explicitly.
+to be pinned explicitly. Round 5 then found that pin had been made OPT-IN:
+the two encrypting callers passed it and the other two passed nothing, so
+the paths that did not opt in still read the generation after the queue
+released them. It now defaults to the invocation-time value. **A guard with
+an "off" setting will eventually be used with it off** -- make the safe case
+the default and let stricter callers tighten it.

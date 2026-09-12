@@ -341,7 +341,7 @@ describe('concurrency', () => {
     // Freeze the clock: a timestamp-only id repeats here, and both
     // deleteItem and toggleFavorite match rows by id -- one delete would
     // remove both rows.
-    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    vi.spyOn(Date, 'now').mockReturnValue(1700000000000);
 
     await decoyVaultStore.addRowForSession(USER, { data: { name: 'one' } });
     await decoyVaultStore.addRowForSession(USER, { data: { name: 'two' } });

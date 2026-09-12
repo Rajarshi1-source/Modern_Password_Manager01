@@ -41,6 +41,8 @@ import unlockEnvelopeStore from '../unlockEnvelopeStore';
 import argon2 from 'argon2-browser';
 import { WrongPasswordError, TIERS, tierBytes, encode, jsonToBytes } from '../hiddenVaultEnvelope';
 import { SIGNAL_TOKEN_LENGTH } from '../../duressSignalService';
+import sessionVaultCrypto from '../../sessionVaultCrypto';
+import decoyVaultStore from '../decoyVaultStore';
 
 const USER_ID = 'user-42';
 const REAL_PASSWORD = 'correct horse battery staple';
@@ -588,6 +590,24 @@ describe('decoy contents (docs/decoy-vault-contents-plan.md)', () => {
     // Fixed-length container: the write changed the bytes but not the size, so
     // an observer cannot tell that contents were added.
     expect(afterSeed.length).toBe(beforeSeed.length);
+
+    // ...and the contents are actually READABLE through the decoy-session
+    // path. Comparing stored bytes only proves something was written; this is
+    // the assertion the test's own name was making, and it is the only one
+    // that covers seedDecoyContents' job of fetching the right dek and salt
+    // from slot 1 and handing them on. The round-trip tests elsewhere call
+    // seedWithKey directly and so skip exactly that step.
+    const opened = await open({ userId: USER_ID, password: DECOY_PASSWORD });
+    sessionVaultCrypto.clearSessionKey();
+    await sessionVaultCrypto.installRawDek(
+      opened.dekBytes, opened.saltB64, USER_ID, null, true,
+    );
+    const rows = await decoyVaultStore.loadForSession(USER_ID);
+    expect(rows).toHaveLength(1);
+    expect(await sessionVaultCrypto.decryptItem(rows[0].encrypted_data)).toEqual({
+      site: 'example.com', username: 'u', password: 'p', notes: '',
+    });
+    sessionVaultCrypto.clearSessionKey();
   });
 
   test('seeding leaves the envelope -- and therefore the duress token -- untouched', async () => {

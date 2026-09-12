@@ -704,7 +704,10 @@ onion case):
     that one of round 2's own new tests was flaky 1 run in 3. Round 4 found
     that round 3's serialization queue had opened a window of its own --
     both write paths encrypt before entering it, so the queued write has to
-    pin the generation its ciphertext was sealed under.
+    pin the generation its ciphertext was sealed under. Round 5 found that
+    pin was opt-in and half the callers had none, that round 4's `item_id`
+    fix was bypassed by a caller minting its own id, and that round 4's
+    identity sweep had missed a third file.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could
