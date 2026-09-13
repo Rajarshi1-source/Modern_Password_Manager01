@@ -557,7 +557,7 @@ Common utilities, constants, and helpers.
 
 1. Create virtual environment:
    ```bash
-   python -m venv venv
+   python3.12 -m venv venv
    source venv/bin/activate  # Windows: venv\Scripts\activate
    ```
 

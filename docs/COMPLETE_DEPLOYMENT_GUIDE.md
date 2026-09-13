@@ -95,7 +95,7 @@ cd password-manager
 cd password_manager
 
 # Create virtual environment
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # Install dependencies

@@ -4260,4 +4260,11 @@ in a place this plan's own design note had hidden: the decoy session swapped the
 ITEMS but still rendered the real `GET /api/vault/`'s `loading` and `error`, so
 a failed real fetch showed a decoy session the real vault's error text. **When a
 gate replaces a value, check what is rendered AROUND that value too** -- status,
-counts and empty-states are display surfaces exactly as the list is.
+counts and empty-states are display surfaces exactly as the list is. Round 8
+then found the documentation equivalent: the decoy plan's risk table asserted
+"a real session can never write the store -- impossible by predicate", naming a
+function that never shipped, while `setDecoySlot` and `seedDecoyContents` do
+exactly that by design. **A stated invariant that the code deliberately violates
+is more dangerous than a stale name**, because the next reader may delete a
+guard to satisfy it. Grep every symbol a claim names before trusting the claim
+-- including in THIS document.

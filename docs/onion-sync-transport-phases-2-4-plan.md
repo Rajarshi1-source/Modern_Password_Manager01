@@ -1674,4 +1674,7 @@ implementation. It must settle:
   the runnable-command counterpart: naming an interpreter fixes the VERSION,
   not the ENVIRONMENT, so any command in this plan that invokes a script
   importing installed dependencies must document the activated environment
-  rather than a versioned binary.
+  rather than a versioned binary -- while its §19.3 is the complement: naming
+  the interpreter IS right when the command CREATES the environment
+  (`python3.12 -m venv`), and wrong when it runs inside one. Same token,
+  opposite meaning; decide by which of the two the command is doing.
