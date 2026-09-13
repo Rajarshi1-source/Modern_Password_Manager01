@@ -704,7 +704,11 @@ describe('decoy contents lifecycle (PR #503 review round 1)', () => {
     // unreadable by anyone. Leaving it there made the decoy silently open
     // empty after a password change; it is replaced with an empty container
     // under the new key, and the caller is told so it can say so on screen.
-    expect(result.contentsReset).toBe(true);
+    // Named for what it reports: the empty REPLACEMENT was written. It is not
+    // "were the contents invalidated" -- that already happened unconditionally
+    // when the envelope was saved under a new decoy dek, which is why the UI
+    // warns about the loss on every outcome rather than branching on this.
+    expect(result.emptyContainerWritten).toBe(true);
     const rekeyed = localStorage.getItem(`vaultLocalCache:${USER_ID}`);
     expect(rekeyed).not.toBe(seeded);
     // Still the same fixed length -- re-keying must not become a size tell.

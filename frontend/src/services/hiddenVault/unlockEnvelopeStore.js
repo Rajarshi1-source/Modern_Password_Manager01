@@ -536,19 +536,28 @@ export async function setDecoySlot({ userId, vaultPassword, decoyPassword }) {
   // DEK, and this function is given the real vault password and the NEW decoy
   // password, never the old one. So the honest resolution is to replace the
   // unreadable ciphertext with an empty container under the new key and
-  // report it, which is what `contentsReset` is for -- `VaultDuressSetup`
+  // report it, which is what the returned flag below is for -- `VaultDuressSetup`
   // turns it into "your decoy contents were cleared; enter them again".
   //
   // Non-fatal, like the provision backfill: the decoy slot itself is saved and
   // its alarm token must still be returned for registration.
-  let contentsReset = false;
+  //
+  // NAMING MATTERS HERE: this reports whether the empty REPLACEMENT container
+  // was written, NOT whether the old contents were invalidated. Invalidation
+  // already happened unconditionally at `saveEnvelope` above -- the envelope
+  // now carries a decoy dek nothing else has, so the previous container is
+  // unreadable whatever happens next. A caller reading a false here as
+  // "contents survived" would have it exactly backwards, which is why the
+  // field is not called `contentsReset`, and why `VaultDuressSetup` warns
+  // about the loss on EVERY outcome rather than branching on this.
+  let emptyContainerWritten = false;
   try {
-    contentsReset = await decoyVaultStore.resetForNewKey(userId, decoyDekBytes);
+    emptyContainerWritten = await decoyVaultStore.resetForNewKey(userId, decoyDekBytes);
   } catch {
     /* see above */
   }
 
-  return { duressToken, contentsReset };
+  return { duressToken, emptyContainerWritten };
 }
 
 // ---------------------------------------------------------------------------

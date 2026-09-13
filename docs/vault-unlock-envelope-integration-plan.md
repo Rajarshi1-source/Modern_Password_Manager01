@@ -4249,4 +4249,10 @@ the two encrypting callers passed it and the other two passed nothing, so
 the paths that did not opt in still read the generation after the queue
 released them. It now defaults to the invocation-time value. **A guard with
 an "off" setting will eventually be used with it off** -- make the safe case
-the default and let stricter callers tighten it.
+the default and let stricter callers tighten it. Round 6 found the same
+shape in a RETURN value: `setDecoySlot`'s `contentsReset` reported whether the
+empty replacement container was written, but the contents are invalidated
+unconditionally the moment the new envelope is saved -- so `false` read as
+"they survived" when it actually meant "they are gone AND the cleanup failed".
+**A boolean's name must answer the question a caller will ask**, not the one
+the implementation happens to track.
