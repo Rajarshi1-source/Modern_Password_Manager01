@@ -53,7 +53,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15-alpine
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_USER: test_user
           POSTGRES_PASSWORD: test_password
