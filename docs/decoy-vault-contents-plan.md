@@ -1135,3 +1135,83 @@ command *creates* the environment or *runs inside* it.
 
 Frontend after this round: **79 files, 918 tests**, three consecutive clean full
 runs; eslint clean. No backend source changed.
+
+## 20. Review round 9 (PR #503, 2026-09-13) — CodeRabbit
+
+**No CI check was failing** — 34 successful, 0 failed, 1 neutral (Trivy: no
+matching configs), 7 skipped (deploy jobs gated on push, not PR). Four
+findings, all real. No Greptile review exists on this PR despite the request
+naming it — confirmed via `gh api repos/.../pulls/503/reviews`: only
+`coderabbitai` and `chatgpt-codex-connector` have ever reviewed it.
+
+### 20.1 `VaultItemsSection`'s decrypted-item cache outlived the session it was decrypted for
+
+`decryptedItems` (App.jsx) is a `{item_id: plaintext}` map, replaced wholesale
+once its `Promise.all` resolves, but read by `item_id` on every render in
+between. A session change (lock, or lock+unlock into a different session --
+real or decoy) changes `visibleItems`'s identity immediately, but left the
+PREVIOUS session's cache in place until the new decrypt finished; a colliding
+item_id in that window would have rendered the old session's plaintext under
+the new session's row. Real item_ids are server-issued `uuid4().hex` (32 hex
+chars, DB `unique=True`) and decoy ones are `item_<timestamp>_<suffix>`, so a
+same-string collision is not currently reachable — but treating that as a
+guarantee is exactly the implicit-invariant trap this document has been burned
+by before (§14.2, §15.1). Fixed the way `useDecoyRows` already does it:
+capture `currentSessionGeneration()` at effect start, clear the cache
+synchronously when the generation differs from the one the cache was last
+populated for (tracked in a ref, not state, so a same-session refresh --
+periodic refetch, one item added -- does not ALSO clear it and flash the whole
+list to "Decrypting…"), and re-check the generation before committing the
+async decrypt's result.
+
+### 20.2 The generation-change return in `handleSubmit` dropped the contents-loss warning it needs
+
+`setDecoySlot` saves the new decoy blob — minting a fresh key, which is what
+clears prior decoy contents — BEFORE `handleSubmit`'s post-await generation
+check runs. On a mismatch the code returned the generic "Unlock your vault
+first" text: accurate for the pre-submit gate, wrong here, because the blob IS
+already saved. A user who simply locked and re-unlocked with their REAL
+password (landing back on this same form, still a real session, so the render
+gate does not intervene) was told nothing happened when their decoy contents
+had in fact just been cleared and the alarm never registered. Same fix round 6
+already applied to `finishRegistration`'s own catch branch (§17), this time
+reused rather than duplicated: extracted `DECOY_SAVED_ALARM_UNREGISTERED_MESSAGE`
+as a shared constant used by both. Two existing tests asserted the old generic
+string for this exact branch (`VaultDuressSetup.test.jsx`); updated both to
+assert the shared message instead of loosening or deleting them.
+
+### 20.3 `sessionVaultCrypto.js` and `VaultUnlockModal.jsx` never got the `id === 0` sweep
+
+`vaultUserId` (`user?.id ?? user?.email ?? null`) deliberately preserves an id
+of 0. `decoyVaultStore.js` and `unlockEnvelopeStore.js` were swept to
+`userId == null` for this back in round 5 (§16.3); `sessionVaultCrypto.js` was
+not part of that sweep and still rejected 0 with `!userId` in `hasWrappedKey`,
+`setupVaultPassword`, `loadWrappedRecord`, `clearWrappedKey`, `installRawDek`,
+and the `saltStorageKey`/`wrappedStorageKey` key composers — the last two
+would have silently reused the *unsuffixed* storage key for id 0, so fixing
+only the guard clauses and leaving these ternaries as `userId ? … : …` would
+have collided id 0's state with path (A)'s no-userId key instead of fixing
+anything. `VaultUnlockModal.jsx`'s own mode-detection gate had the same bug,
+forcing "setup" mode for a returning id-0 account regardless of an existing
+envelope or wrapped key. All seven sites swept to `!= null`/`== null`;
+`vaultIdentity.test.js`'s own comment — documenting a "branch on falsy"
+contract that round 5 had already made false — corrected to match.
+`reputation/index.js` already used the correct `!userId && userId !== 0`
+pattern and needed no change; `PasskeyPrimaryRecoveryInitiate.jsx` and
+`useBreachWebSocket.js` use an unrelated `userId` (a raw auth id, not
+`vaultUserId`) and are out of scope.
+
+### 20.4 The deployment guide's system-requirements table still said 3.11+
+
+`docs/COMPLETE_DEPLOYMENT_GUIDE.md:41` said "Python: 3.11+", 20 lines above its
+own "The project's floor is 3.12" note (added round 6). Last remaining 3.11
+reference in that file — checked with a full-file grep for `3\.11`, not just
+the flagged line.
+
+Targeted suites green: `VaultDuressSetup`, `vaultIdentity`, `VaultUnlockModal`,
+`VaultItemsSection`/`VaultDashboardRoute` decoy-session,
+`sessionVaultCrypto.decoyPrimitives`, `VaultContext` add/update/decoy-session,
+`decoyVaultStore`, `unlockEnvelopeStore` (172 tests, 11 files); eslint clean on
+every touched file (pre-existing warnings only, none new). Full suite not run
+this round — targeted testing on a scoped fix, per standing preference. No
+backend source changed.
