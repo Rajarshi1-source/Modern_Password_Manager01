@@ -982,3 +982,71 @@ an activated 3.12+ virtualenv.
 Frontend after this round: **79 files, 914 tests**, three consecutive clean full
 runs; eslint 0 errors. No backend source changed — the only backend file touched
 is documentation.
+
+---
+
+## 18. Review round 7 (PR #503, 2026-09-13) — CodeRabbit
+
+**No CI check was failing** — 34 successful, 7 skipped, 1 neutral, covering
+round 6's commit. Three findings, all real. One of them required **undoing a
+change round 6 made**, which is the more useful half of this round.
+
+### 18.1 A decoy session rendered the REAL fetch's loading and error
+
+`VaultItemsSection` renders `loading ? spinner : error ? message : rows`, and
+both came straight from `useVault()` — i.e. from the real `GET /api/vault/`
+that a decoy session still issues on purpose, because suppressing it would make
+the session distinguishable by traffic alone.
+
+So the decoy vault's display was gated on the real vault's network state. A slow
+fetch showed a spinner over decoy rows already in memory; **a failed one showed
+the decoy session the real vault's error text verbatim** — "Request failed with
+status code 500", an expired-token message, whatever the server said. An error a
+decoy vault has no reason to produce is a surface contradicting what the session
+claims to be. That is the *display* half of the two-question rule
+(envelope plan §37.1), and this PR's own §1 design note — "no display code
+learns that decoy rows exist" — was the reason it went unnoticed: the items were
+swapped, the status around them was not.
+
+`useDisplaySafeItems` is now `useDisplaySafeVault` and returns
+`{ items, loading, error }`. In a decoy session the status comes from the decoy
+load's **own** pending flag, and `error` is always null. A real session is
+untouched, pinned by a test asserting it still reports real faults. Both failure
+directions verified to fail without the gate.
+
+### 18.2 Correcting round 6: naming the interpreter made the command worse
+
+Round 6 changed `python setup_geoip.py` to `python3.12 setup_geoip.py` across
+four sites, on the reasoning that `python` resolves to whatever is on `PATH`.
+
+Reading `setup_geoip.py` this round: **it imports Django** (line 137). A bare
+`python3.12` bypasses a virtualenv's `site-packages`, so on the most common
+setup — the one this repo documents — round 6's "fix" turned a working command
+into an `ImportError`. The cron entry was worse: `/usr/bin/python3.12` is a
+hardcoded path that does not exist on macOS or any Homebrew install.
+
+Reverted to `python`, with the **environment** documented instead: activate a
+3.12+ virtualenv that has the backend requirements installed. The cron entry now
+uses `/path/to/venv/bin/python`.
+
+**The rule I got wrong: naming an interpreter fixes the VERSION, not the
+ENVIRONMENT.** For any script that imports installed dependencies, the
+environment is the thing that has to be right, and a bare versioned interpreter
+actively breaks it. `QUICK_TEST_GUIDE.md` had the same shape — `python manage.py`
+under a "Python 3.12+" prerequisite — and got the same treatment rather than the
+same mistake.
+
+### 18.3 A cross-reference that has gone stale three rounds running
+
+`privacy-features-gap-remediation-plan.md` said "Four review rounds followed;
+§12-§15". It said "two" after round 2, "four" after round 4, and was wrong again
+after rounds 5, 6 and 7. I have now patched this same sentence three times.
+
+Replaced with a form that cannot go stale: "one section per round from §12
+onward", plus an explicit note saying the count is deliberately not stated and
+why. **A number that must be updated whenever another document grows is a
+maintenance trap, not a cross-reference** — the same lesson as §17.3's Ubuntu
+version, at a one-round shelf life instead of six months.
+
+Frontend after this round: **79 files, 917 tests**, three consecutive clean full
+runs; eslint 0 errors. No backend source changed.

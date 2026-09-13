@@ -694,8 +694,12 @@ onion case):
     limitations survive and are named in the setup screen's own copy:
     device-local only, a decoy write sends no request while a real one
     POSTs (so traffic still distinguishes them), and backups still refuse.
-    Four review rounds followed; `docs/decoy-vault-contents-plan.md` §12-§15
-    record them. Round 1 found the feature did not actually work (a
+    Its review rounds are recorded in `docs/decoy-vault-contents-plan.md`,
+    one section per round from §12 onward -- deliberately NOT stated as a
+    count here, because this sentence has gone stale at three consecutive
+    rounds (two, then four, then six) and a number that needs updating
+    every time the other document grows is a maintenance trap, not a
+    cross-reference. Round 1 found the feature did not actually work (a
     hand-written envelope version string the reader rejects); round 2 found a
     row-id collision, a backfill that could overwrite a seed, and — outside
     this PR's diff entirely — a signed but EMPTY Python SBOM in
@@ -710,7 +714,11 @@ onion case):
     identity sweep had missed a third file. Round 6 corrected a return
     value whose name inverted its meaning (`contentsReset`), added the
     contents-loss warning to the alarm-registration failure path, and swept
-    four stale Python-version claims out of the deployment guides.
+    four stale Python-version claims out of the deployment guides. Round 7
+    stopped a decoy session from rendering the real fetch's loading and error
+    state, and reverted a round-6 docs change that had named a bare
+    `python3.12` interpreter for scripts that import Django -- which bypasses
+    a virtualenv and breaks the documented command.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could

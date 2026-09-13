@@ -7,7 +7,7 @@
  * section, leaving `/vault/dashboard` rendering the real inventory during a
  * decoy session -- which both leaks real item metadata and instantly outs the
  * decoy (a decoy DEK cannot decrypt any of it). Both surfaces now go through
- * the shared `useDisplaySafeItems` hook; these tests pin that, and exist
+ * the shared `useDisplaySafeVault` hook; these tests pin that, and exist
  * specifically so the next display surface added cannot quietly repeat the
  * "guarded one path, missed its sibling" pattern recorded in
  * docs/vault-unlock-envelope-integration-plan.md §19.6.

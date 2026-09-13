@@ -4255,4 +4255,9 @@ empty replacement container was written, but the contents are invalidated
 unconditionally the moment the new envelope is saved -- so `false` read as
 "they survived" when it actually meant "they are gone AND the cleanup failed".
 **A boolean's name must answer the question a caller will ask**, not the one
-the implementation happens to track.
+the implementation happens to track. Round 7 then found §37.1's display half
+in a place this plan's own design note had hidden: the decoy session swapped the
+ITEMS but still rendered the real `GET /api/vault/`'s `loading` and `error`, so
+a failed real fetch showed a decoy session the real vault's error text. **When a
+gate replaces a value, check what is rendered AROUND that value too** -- status,
+counts and empty-states are display surfaces exactly as the list is.
