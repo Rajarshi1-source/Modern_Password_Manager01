@@ -108,6 +108,21 @@ const MIN_LENGTH = 12;
 
 const emptyContentRow = () => ({ site: '', username: '', password: '', notes: '' });
 
+// Shown whenever `setDecoySlot` has already saved the decoy blob (minting a
+// new key, which clears any prior decoy contents) but the duress alarm token
+// did not end up registered -- either `registerSignalToken` itself failed
+// (finishRegistration's catch), or the session changed before registration
+// could even be attempted (handleSubmit's generation check). Both leave the
+// SAME recoverable state -- the token still lives inside the saved envelope's
+// decoy slot -- so both use this one message rather than drifting apart.
+const DECOY_SAVED_ALARM_UNREGISTERED_MESSAGE =
+  'Decoy password saved, but the alarm could not be registered -- it will '
+  + 'not fire on a decoy unlock until registration succeeds. Use '
+  + '"Recover unregistered alarm" below with this same decoy password to '
+  + 'retry -- that works even if you reload this page first. Saving a '
+  + 'decoy password also clears any decoy contents you had, so enter '
+  + 'them again below once the alarm is registered.';
+
 const VaultDuressSetup = () => {
   const { isAuthenticated, user, getAccessToken } = useAuth();
   const userId = vaultUserId(user);
@@ -299,14 +314,7 @@ const VaultDuressSetup = () => {
       // even attempted. Reporting the loss only on the success path meant the
       // user whose alarm failed to register was never told their decoy vault
       // is now empty, which is the outcome they are least able to guess.
-      setError(
-        'Decoy password saved, but the alarm could not be registered -- it will '
-        + 'not fire on a decoy unlock until registration succeeds. Use '
-        + '"Recover unregistered alarm" below with this same decoy password to '
-        + 'retry -- that works even if you reload this page first. Saving a '
-        + 'decoy password also clears any decoy contents you had, so enter '
-        + 'them again below once the alarm is registered.'
-      );
+      setError(DECOY_SAVED_ALARM_UNREGISTERED_MESSAGE);
     }
   };
 
@@ -386,9 +394,14 @@ const VaultDuressSetup = () => {
       // The blob is already saved by this point and is deliberately left in
       // place: the decoy IS configured, only its token is unregistered, which
       // is exactly the state the recovery form below exists to finish. The
-      // message is password-independent, so it classifies nothing.
+      // message is password-independent, so it classifies nothing. Reuses
+      // finishRegistration's message rather than the generic "unlock first"
+      // text: that text would tell a user who locked and re-unlocked with
+      // their REAL password (still landing on this same form) that nothing
+      // happened, when their decoy contents were in fact just cleared and the
+      // alarm never registered.
       if (sessionVaultCrypto.currentSessionGeneration() !== generation) {
-        setError('Unlock your vault first, then set up a decoy password.');
+        setError(DECOY_SAVED_ALARM_UNREGISTERED_MESSAGE);
         return;
       }
       await finishRegistration(duressToken);

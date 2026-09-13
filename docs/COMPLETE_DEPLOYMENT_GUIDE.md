@@ -38,7 +38,7 @@ This guide covers the complete deployment of the Password Manager application wi
 - **OS**: Linux, macOS, or Windows 10/11
 - **RAM**: 8GB minimum (16GB recommended for ML training)
 - **Disk**: 10GB free space
-- **Python**: 3.11+
+- **Python**: 3.12+
 - **Node.js**: 18+
 - **PostgreSQL**: 13+
 - **Redis**: 6+

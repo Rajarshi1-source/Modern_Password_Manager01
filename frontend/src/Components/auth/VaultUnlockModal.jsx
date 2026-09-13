@@ -42,7 +42,10 @@ import { reportUnlock, reportUnlockForSlot } from '../../services/duressSignalSe
  */
 const VaultUnlockModal = ({ isOpen, userId, getAccessToken, onUnlocked, onClose }) => {
   const { mode, internalMode } = useMemo(() => {
-    if (!userId) return { mode: 'setup', internalMode: 'setup' };
+    // `!= null`, not truthy: `vaultUserId` preserves an `id` of 0, and this
+    // gate must accept it the same way hasEnvelope/hasWrappedKey below do, or
+    // a returning account whose id is 0 is forced back into "setup" mode.
+    if (userId == null) return { mode: 'setup', internalMode: 'setup' };
     if (unlockEnvelopeStore.hasEnvelope(userId)) {
       return { mode: 'unlock', internalMode: 'envelope' };
     }
