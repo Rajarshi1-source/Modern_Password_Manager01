@@ -1531,9 +1531,9 @@ erDiagram
 | Technology | Version | Purpose |
 |------------|---------|---------|
 | Python | 3.13 | Primary language |
-| Django | 4.2.27 | Web framework (LTS) |
-| Django REST Framework | 3.16+ | REST API |
-| Django Channels | 4.0+ | WebSocket support |
+| Django | 5.2.17 | Web framework (LTS, supported to April 2028) |
+| Django REST Framework | 3.17+ | REST API |
+| Django Channels | 4.3+ | WebSocket support |
 | Celery | 5.5+ | Background tasks |
 | Redis | 7.0+ | Cache & message broker |
 | PostgreSQL | 15+ | Primary database |
@@ -1786,8 +1786,8 @@ SecureVault's frontend uses a carefully curated set of libraries for security, p
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| Django | 4.2.27 | High-level Python web framework (LTS) |
-| djangorestframework | 3.16.1 | Powerful toolkit for building Web APIs |
+| Django | 5.2.17 | High-level Python web framework (LTS) |
+| djangorestframework | 3.17.2 | Powerful toolkit for building Web APIs |
 | djangorestframework-simplejwt | 5.2.2 | JWT authentication for Django REST Framework |
 | asgiref | 3.8.1 | ASGI specs, helper code, and adapters |
 
