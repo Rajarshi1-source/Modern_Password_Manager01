@@ -154,6 +154,12 @@ test('registration failure points at the recovery section, and touches the envel
   const alert = await findByRole('alert');
   expect(alert).toHaveTextContent(/could not be registered/i);
   expect(alert).toHaveTextContent(/recover unregistered alarm/i);
+  // The contents warning must appear on THIS path too. Saving a decoy password
+  // mints a new decoy key, so any decoy contents became unreadable when the
+  // envelope was written -- before registration was even attempted. It was
+  // reported only on the success path, so the user whose alarm failed to
+  // register was never told their decoy vault is now empty.
+  expect(alert).toHaveTextContent(/clears any decoy contents/i);
   expect(unlockEnvelopeStore.setDecoySlot).toHaveBeenCalledTimes(1);
 });
 

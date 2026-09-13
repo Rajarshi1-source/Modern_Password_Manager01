@@ -24,7 +24,10 @@ The password manager uses GeoIP databases to:
 1. **Run the setup script:**
    ```bash
    cd password_manager
-   python setup_geoip.py
+   # python3.12 explicitly: `python` resolves to whatever is first on PATH,
+   # and setup_geoip.py has no version guard of its own. Inside an activated
+   # 3.12+ virtualenv plain `python` is equivalent.
+   python3.12 setup_geoip.py
    ```
 
 2. **Follow the prompts:**
@@ -101,7 +104,7 @@ password_manager/
 
 1. **Using the setup script:**
    ```bash
-   python setup_geoip.py
+   python3.12 setup_geoip.py
    # Choose option 3: "Verify existing setup"
    ```
 
@@ -183,7 +186,7 @@ MaxMind updates their databases regularly. Set up automatic updates:
 
 ```bash
 # Add to crontab for monthly updates
-0 0 1 * * /path/to/password_manager/setup_geoip.py --auto-update
+0 0 1 * * /usr/bin/python3.12 /path/to/password_manager/setup_geoip.py --auto-update
 ```
 
 ## 📊 Performance Considerations
@@ -222,7 +225,7 @@ MaxMind updates their databases regularly. Set up automatic updates:
 If you encounter issues:
 
 1. Check the Django logs: `tail -f logs/debug.log`
-2. Run the verification script: `python setup_geoip.py`
+2. Run the verification script: `python3.12 setup_geoip.py`
 3. Review the MaxMind license key setup
 4. Ensure all dependencies are installed: `pip install -r requirements.txt`
 

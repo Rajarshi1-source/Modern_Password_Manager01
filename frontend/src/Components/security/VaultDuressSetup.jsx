@@ -293,11 +293,19 @@ const VaultDuressSetup = () => {
       setSuccess(true);
       setError('');
     } catch {
+      // The contents warning belongs on THIS path too. Saving a decoy password
+      // always mints a new decoy key, so any decoy contents became unreadable
+      // the moment the envelope was written -- before this registration was
+      // even attempted. Reporting the loss only on the success path meant the
+      // user whose alarm failed to register was never told their decoy vault
+      // is now empty, which is the outcome they are least able to guess.
       setError(
         'Decoy password saved, but the alarm could not be registered -- it will '
         + 'not fire on a decoy unlock until registration succeeds. Use '
         + '"Recover unregistered alarm" below with this same decoy password to '
-        + 'retry -- that works even if you reload this page first.'
+        + 'retry -- that works even if you reload this page first. Saving a '
+        + 'decoy password also clears any decoy contents you had, so enter '
+        + 'them again below once the alarm is registered.'
       );
     }
   };

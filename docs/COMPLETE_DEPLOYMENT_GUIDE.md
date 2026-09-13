@@ -46,8 +46,11 @@ This guide covers the complete deployment of the Password Manager application wi
 ### Software Dependencies
 
 > **Python 3.12 availability.** `python3.12` is in the default repositories on
-> **Ubuntu 24.04 LTS** only (later Ubuntu releases default to 3.13 and do
-> not carry a `python3.12` package either).
+> **Ubuntu 24.04 LTS** only. Later Ubuntu releases move their default
+> `python3` forward and do not carry a `python3.12` package either, so check
+> `apt-cache policy python3.12` on the release you are actually deploying to
+> rather than assuming — naming a specific successor version here would go
+> stale at every release.
 > - **Ubuntu 22.04** (default 3.10): add the deadsnakes PPA —
 >   `sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt-get update`.
 > - **Debian**: there is no `python3.12` package in any current release —
@@ -68,7 +71,7 @@ sudo apt-get install -y \
     git curl wget
 
 # macOS
-brew install python@3.11 postgresql redis node git
+brew install python@3.12 postgresql redis node git
 
 # Windows
 # Install via Chocolatey

@@ -1667,4 +1667,7 @@ implementation. It must settle:
   (a retry queue, a batched flush) moves where "now" is, so a value captured
   before the wait has to be pinned rather than re-read after it -- and per its
   §16.1, that pin should DEFAULT to the safe value rather than being a
-  parameter each caller remembers to pass.
+  parameter each caller remembers to pass. Its §17.3 is worth reading before
+  writing any version or capability claim in THIS plan's prose: a fact with a
+  six-month shelf life (which release ships which default) belongs in a command
+  the reader can run, not in a sentence that silently goes stale.

@@ -707,7 +707,10 @@ onion case):
     pin the generation its ciphertext was sealed under. Round 5 found that
     pin was opt-in and half the callers had none, that round 4's `item_id`
     fix was bypassed by a caller minting its own id, and that round 4's
-    identity sweep had missed a third file.
+    identity sweep had missed a third file. Round 6 corrected a return
+    value whose name inverted its meaning (`contentsReset`), added the
+    contents-loss warning to the alarm-registration failure path, and swept
+    four stale Python-version claims out of the deployment guides.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could

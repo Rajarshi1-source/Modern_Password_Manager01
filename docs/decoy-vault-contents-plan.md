@@ -909,3 +909,76 @@ harness, together, as its own change.
 Frontend after this round: **79 files, 914 tests**, three consecutive clean
 full runs; eslint 0 errors (a numeric separator in one test also turned out to
 trip the configured parser, and is gone). No backend source changed.
+
+---
+
+## 17. Review round 6 (PR #503, 2026-09-13) — CodeRabbit
+
+**No CI check was failing** — 34 successful, 7 skipped, 1 neutral. Four
+findings, all real, all acted on. Two were re-posts the previous round had not
+fully answered, which is itself the finding.
+
+### 17.1 A return value whose name said the opposite of the truth
+
+`setDecoySlot` returned `contentsReset`. Reading the code rather than the name:
+**the old decoy contents become unreadable the moment `saveEnvelope` writes the
+new envelope**, because that envelope carries a freshly minted decoy DEK and
+nothing else holds the old one. `resetForNewKey` runs *after* that and only
+decides whether an empty *replacement* container gets written.
+
+So `contentsReset: false` did not mean "the contents survived" — it meant "the
+contents are gone **and** we failed to leave a clean empty container in their
+place", which is strictly the worse outcome. A caller branching on it would
+have had the situation exactly inverted.
+
+Renamed to `emptyContainerWritten`, with the invalidation-is-unconditional fact
+stated at the return site. Nothing in production branched on it — the UI warns
+unconditionally, which is correct — so this is a contract-honesty fix, not a
+behaviour change.
+
+**The rule: a boolean's name has to answer the question a caller will actually
+ask.** "Did the thing I care about happen?" and "did my cleanup succeed?" are
+different questions, and naming the second as though it answered the first is
+how a reader reaches the wrong conclusion while reading carefully.
+
+### 17.2 The loss warning was missing from the path most likely to hit it
+
+`VaultDuressSetup` puts "your decoy contents were cleared" in the **success**
+copy. If `registerSignalToken` then fails, the handler replaces that with an
+alarm-registration error that says nothing about the contents — so the user
+whose alarm failed was never told their decoy vault is now empty. That is the
+user least able to guess it, and the contents were already gone before
+registration was even attempted.
+
+The failure message now carries the same warning, with a regression test
+asserting it.
+
+### 17.3 Documentation — two more siblings in a file edited three times
+
+- **The macOS quick-start installed `python@3.11`**, thirteen lines below a
+  note declaring 3.12 the floor. Same file, three prior rounds of edits, still
+  missed — because each round grepped for the *pattern it had just fixed*
+  (`python3-venv`, `Debian 13+`) rather than for every Python version in the
+  document.
+- **"Later Ubuntu releases default to 3.13" was already stale** — 26.04 ships
+  3.14. Naming a successor version dates the document at every release, so the
+  note now tells the reader to check `apt-cache policy python3.12` on the
+  release they are actually deploying to. **A fact with a six-month shelf life
+  does not belong in prose; the command that answers it does.**
+
+After fixing both, a sweep for every `python@3.11` / `python3.11` /
+`python3-venv` / `Python 3.11` across all six guides returned nothing.
+
+### 17.4 `GEOIP_SETUP.md` — four sites, not the one that was named
+
+`python setup_geoip.py` resolves to whatever is first on `PATH`, and
+`setup_geoip.py` has **no version guard** (its shebang is
+`#!/usr/bin/env python3`), so a documented command could run the setup under an
+unsupported 3.11. The finding named the prerequisite line; the file had **four**
+invocation sites including a cron entry that executes the script directly. All
+four now name `python3.12`, with a note that plain `python` is equivalent inside
+an activated 3.12+ virtualenv.
+
+Frontend after this round: **79 files, 914 tests**, three consecutive clean full
+runs; eslint 0 errors. No backend source changed — the only backend file touched
+is documentation.
