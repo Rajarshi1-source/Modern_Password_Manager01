@@ -202,6 +202,26 @@ const VaultDuressSetup = () => {
   const [contentsError, setContentsError] = useState('');
   const [contentsSuccess, setContentsSuccess] = useState(false);
 
+  // Shared across handleSubmit and handleSeedContents, in ADDITION to their
+  // own `busy`/`contentsBusy`. Those two handlers write to the SAME decoy-
+  // contents storage key through two INDEPENDENT paths -- setDecoySlot ->
+  // resetForNewKey, and seedDecoyContents -> seedWithKey -- neither of which
+  // is queued or compare-and-swapped against the other (decoyVaultStore's own
+  // `mutate` queue is decoy-SESSION-only; these are real-session setup
+  // writes). Each is preceded by several seconds of Argon2 work, so without
+  // this, submitting both forms while one is still in flight can interleave:
+  // a contents save started before a password rotation finishes can write the
+  // OLD decoy DEK's container after `resetForNewKey` has already written the
+  // new key's empty one (silently reviving unreadable ciphertext), or the
+  // rotation's empty container can land after the seed and erase what the
+  // user just typed. Disabling both submit buttons while EITHER operation is
+  // in flight closes the only reachable interleaving: this component is the
+  // sole caller of both functions, so a same-tab click is the only way to
+  // start them concurrently. A second tab doing the same is a pre-existing,
+  // separate class of risk (see decoyVaultStore's own cross-tab comments on
+  // `saveForSession`) and out of scope for this fix.
+  const [decoyWriteBusy, setDecoyWriteBusy] = useState(false);
+
   if (!isAuthenticated) {
     return (
       <div style={panelStyle}>
@@ -323,6 +343,16 @@ const VaultDuressSetup = () => {
     setError('');
     setSuccess(false);
 
+    // See decoyWriteBusy's own comment: refuse a submit that would run
+    // concurrently with a decoy-contents save already in flight, rather than
+    // relying only on the button's `disabled` prop (state updates are
+    // asynchronous, so a click landing before the re-render would not
+    // otherwise be caught).
+    if (decoyWriteBusy) {
+      setError('A decoy vault change is already in progress. Wait for it to finish, then try again.');
+      return;
+    }
+
     if (!vaultPassword || !decoyPassword) {
       setError('Both your current vault password and a new decoy password are required.');
       return;
@@ -366,6 +396,7 @@ const VaultDuressSetup = () => {
     }
 
     setBusy(true);
+    setDecoyWriteBusy(true);
     try {
       // Save the re-encoded blob FIRST, register the alarm token only after
       // it succeeds -- registering first and having the encode/save fail
@@ -421,6 +452,7 @@ const VaultDuressSetup = () => {
       }
     } finally {
       setBusy(false);
+      setDecoyWriteBusy(false);
     }
   };
 
@@ -597,6 +629,13 @@ const VaultDuressSetup = () => {
     setContentsError('');
     setContentsSuccess(false);
 
+    // See decoyWriteBusy's own comment: refuse a submit that would run
+    // concurrently with a decoy-password rotation already in flight.
+    if (decoyWriteBusy) {
+      setContentsError('A decoy vault change is already in progress. Wait for it to finish, then try again.');
+      return;
+    }
+
     if (userId == null) {
       setContentsError('Unlock your vault first, then set decoy contents.');
       return;
@@ -626,6 +665,7 @@ const VaultDuressSetup = () => {
     const generation = sessionVaultCrypto.currentSessionGeneration();
 
     setContentsBusy(true);
+    setDecoyWriteBusy(true);
     try {
       let realPasswordOk = false;
       try {
@@ -700,6 +740,7 @@ const VaultDuressSetup = () => {
       setContentsError('Could not save the decoy contents. Please try again.');
     } finally {
       setContentsBusy(false);
+      setDecoyWriteBusy(false);
     }
   };
 
@@ -741,7 +782,7 @@ const VaultDuressSetup = () => {
             style={inputStyle}
             value={vaultPassword}
             onChange={(e) => setVaultPassword(e.target.value)}
-            disabled={busy}
+            disabled={busy || decoyWriteBusy}
             required
           />
         </div>
@@ -755,7 +796,7 @@ const VaultDuressSetup = () => {
             style={inputStyle}
             value={decoyPassword}
             onChange={(e) => setDecoyPassword(e.target.value)}
-            disabled={busy}
+            disabled={busy || decoyWriteBusy}
             required
           />
         </div>
@@ -769,7 +810,7 @@ const VaultDuressSetup = () => {
             style={inputStyle}
             value={decoyConfirm}
             onChange={(e) => setDecoyConfirm(e.target.value)}
-            disabled={busy}
+            disabled={busy || decoyWriteBusy}
             required
           />
         </div>
@@ -787,7 +828,7 @@ const VaultDuressSetup = () => {
         )}
 
         <div style={{ marginTop: '1.25rem' }}>
-          <button type="submit" style={buttonPrimary} disabled={busy}>
+          <button type="submit" style={buttonPrimary} disabled={busy || decoyWriteBusy}>
             {busy ? 'Saving…' : 'Save decoy password'}
           </button>
         </div>
@@ -819,7 +860,7 @@ const VaultDuressSetup = () => {
             style={inputStyle}
             value={contentsVaultPassword}
             onChange={(e) => setContentsVaultPassword(e.target.value)}
-            disabled={contentsBusy}
+            disabled={contentsBusy || decoyWriteBusy}
             required
           />
         </div>
@@ -832,7 +873,7 @@ const VaultDuressSetup = () => {
             style={inputStyle}
             value={contentsDecoyPassword}
             onChange={(e) => setContentsDecoyPassword(e.target.value)}
-            disabled={contentsBusy}
+            disabled={contentsBusy || decoyWriteBusy}
             required
           />
         </div>
@@ -858,7 +899,7 @@ const VaultDuressSetup = () => {
               style={inputStyle}
               value={row.site}
               onChange={(e) => updateContentRow(index, 'site', e.target.value)}
-              disabled={contentsBusy}
+              disabled={contentsBusy || decoyWriteBusy}
             />
             <label htmlFor={`decoy-username-${index}`} style={{ fontSize: 13 }}>Username</label>
             <input
@@ -868,7 +909,7 @@ const VaultDuressSetup = () => {
               style={inputStyle}
               value={row.username}
               onChange={(e) => updateContentRow(index, 'username', e.target.value)}
-              disabled={contentsBusy}
+              disabled={contentsBusy || decoyWriteBusy}
             />
             <label htmlFor={`decoy-password-${index}`} style={{ fontSize: 13 }}>Password</label>
             <input
@@ -884,7 +925,7 @@ const VaultDuressSetup = () => {
               style={inputStyle}
               value={row.password}
               onChange={(e) => updateContentRow(index, 'password', e.target.value)}
-              disabled={contentsBusy}
+              disabled={contentsBusy || decoyWriteBusy}
             />
             <label htmlFor={`decoy-notes-${index}`} style={{ fontSize: 13 }}>Notes</label>
             <input
@@ -894,7 +935,7 @@ const VaultDuressSetup = () => {
               style={inputStyle}
               value={row.notes}
               onChange={(e) => updateContentRow(index, 'notes', e.target.value)}
-              disabled={contentsBusy}
+              disabled={contentsBusy || decoyWriteBusy}
             />
           </fieldset>
         ))}
@@ -903,7 +944,7 @@ const VaultDuressSetup = () => {
           <button
             type="button"
             onClick={() => setContentsRows((rows) => [...rows, emptyContentRow()])}
-            disabled={contentsBusy}
+            disabled={contentsBusy || decoyWriteBusy}
             style={{
               background: 'transparent',
               border: '1px solid #d1d5db',
@@ -928,7 +969,7 @@ const VaultDuressSetup = () => {
         )}
 
         <div style={{ marginTop: '1rem' }}>
-          <button type="submit" style={buttonPrimary} disabled={contentsBusy}>
+          <button type="submit" style={buttonPrimary} disabled={contentsBusy || decoyWriteBusy}>
             {contentsBusy ? 'Saving…' : 'Save decoy contents'}
           </button>
         </div>

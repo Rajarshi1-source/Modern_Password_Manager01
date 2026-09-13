@@ -901,3 +901,62 @@ test('decoy contents: a notes-only entry is kept, not silently dropped', async (
   expect(args[0].items).toHaveLength(1);
   expect(args[0].items[0].notes).toBe('recovery codes in the drawer');
 });
+
+// ---------------------------------------------------------------------------
+// Concurrent writes to the decoy-contents container (setDecoySlot ->
+// resetForNewKey vs seedDecoyContents -> seedWithKey). Neither write is
+// queued or compare-and-swapped against the other at the store layer, so the
+// two forms above must not be submittable at the same time -- see
+// decoyWriteBusy's own comment in the component for the interleaving this
+// closes.
+// ---------------------------------------------------------------------------
+
+test('a decoy-password rotation in flight disables the contents form, so a click during it reaches nothing', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  let resolveSetDecoySlot;
+  unlockEnvelopeStore.setDecoySlot.mockReturnValue(
+    new Promise((resolve) => { resolveSetDecoySlot = resolve; })
+  );
+
+  const { getByLabelText, getByRole } = render(<VaultDuressSetup />);
+  fillAndSubmit(getByLabelText, getByRole);
+  await waitFor(() => expect(unlockEnvelopeStore.setDecoySlot).toHaveBeenCalled());
+
+  // The button is disabled -- a real click cannot even reach handleSeedContents
+  // -- rather than merely erroring after the fact, which is why this asserts
+  // the disabled attribute directly instead of firing the click and reading an
+  // error message back.
+  const contentsButton = getByRole('button', { name: /save decoy contents/i });
+  expect(contentsButton).toBeDisabled();
+  fireEvent.click(contentsButton);
+  expect(unlockEnvelopeStore.seedDecoyContents).not.toHaveBeenCalled();
+
+  await act(async () => { resolveSetDecoySlot({ duressToken: DURESS_TOKEN }); });
+  // Released once the rotation settles.
+  await waitFor(() => expect(getByRole('button', { name: /save decoy contents/i })).not.toBeDisabled());
+});
+
+test('a contents save in flight disables the decoy-password form, so a click during it reaches nothing', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+  mockOpenBySlot({ decoyPassword: 'a decoy password 12+' });
+  let resolveSeed;
+  unlockEnvelopeStore.seedDecoyContents.mockReturnValue(
+    new Promise((resolve) => { resolveSeed = resolve; })
+  );
+
+  const { getByLabelText, getByRole } = render(<VaultDuressSetup />);
+  submitContents(getByLabelText, getByRole, {
+    entry: { site: 'x.example.com', username: 'u', password: 'p' },
+  });
+  await waitFor(() => expect(unlockEnvelopeStore.seedDecoyContents).toHaveBeenCalled());
+
+  const setupButton = getByRole('button', { name: /save decoy password/i });
+  expect(setupButton).toBeDisabled();
+  fireEvent.click(setupButton);
+  expect(unlockEnvelopeStore.setDecoySlot).not.toHaveBeenCalled();
+
+  await act(async () => { resolveSeed(undefined); });
+  await waitFor(() => expect(getByRole('button', { name: /save decoy password/i })).not.toBeDisabled());
+});
