@@ -12,7 +12,21 @@
   way, so naming `python3.12` explicitly would not help.
 
 ```bash
-python3.12 -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
+# macOS / Linux / Git Bash
+python3.12 -m venv venv
+source venv/bin/activate
+```
+```powershell
+# Windows (PowerShell)
+py -3.12 -m venv venv
+venv\Scripts\Activate.ps1
+```
+```cmd
+:: Windows (Command Prompt)
+py -3.12 -m venv venv
+venv\Scripts\activate.bat
+```
+```bash
 pip install -r password_manager/requirements.txt
 ```
 
