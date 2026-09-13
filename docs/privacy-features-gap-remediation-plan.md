@@ -722,7 +722,15 @@ onion case):
     table row in the decoy plan that asserted an invariant the shipped code
     deliberately violates, masked the one unmasked password field on the duress
     screen, and fixed the venv-creation command in the three canonical setup
-    docs.
+    docs. Round 9 scoped `VaultItemsSection`'s decrypted-item cache to the live
+    session generation so a stale real/decoy entry could no longer render
+    under a colliding item_id, restored the contents-loss warning to the
+    `setDecoySlot` generation-change path in `VaultDuressSetup.handleSubmit`
+    (round 6 had only reached `finishRegistration`'s own catch branch),
+    corrected the falsy `userId` guards `sessionVaultCrypto.js` and
+    `VaultUnlockModal.jsx` still had after round 5's sweep of the sibling
+    stores (§16.3), and fixed the last stale Python floor claim in the
+    deployment guide's system-requirements table.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could
