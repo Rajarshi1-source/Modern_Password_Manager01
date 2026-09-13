@@ -1670,4 +1670,8 @@ implementation. It must settle:
   parameter each caller remembers to pass. Its §17.3 is worth reading before
   writing any version or capability claim in THIS plan's prose: a fact with a
   six-month shelf life (which release ships which default) belongs in a command
-  the reader can run, not in a sentence that silently goes stale.
+  the reader can run, not in a sentence that silently goes stale. Its §18.2 is
+  the runnable-command counterpart: naming an interpreter fixes the VERSION,
+  not the ENVIRONMENT, so any command in this plan that invokes a script
+  importing installed dependencies must document the activated environment
+  rather than a versioned binary.

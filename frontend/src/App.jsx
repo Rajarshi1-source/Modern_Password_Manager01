@@ -114,6 +114,13 @@ const useDecoyRows = (isDecoy) => {
   // effect on it is what makes a re-unlock reload rather than reuse.
   const generation = sessionVaultCrypto.currentSessionGeneration();
   const [rows, setRows] = useState([]);
+  // The decoy load's OWN pending flag. The real vault's `loading` must not be
+  // used for this: a decoy session still issues the real `GET /api/vault/`
+  // (deliberately -- suppressing it would make the session distinguishable by
+  // traffic alone), so borrowing its status would let a slow or failed real
+  // fetch hide decoy rows that are already in memory. This one tracks only
+  // the localStorage read, which is why it starts true and settles once.
+  const [pending, setPending] = useState(isDecoy);
   // Bumped by `vault:decoy-updated`, which VaultContext dispatches after a
   // decoy-session write. Display freshness only: the rows are re-read from the
   // store, so a missed event costs a stale render, never a wrong gate --
@@ -131,8 +138,10 @@ const useDecoyRows = (isDecoy) => {
     let cancelled = false;
     if (!isDecoy || userId == null) {
       setRows([]);
+      setPending(false);
       return () => { cancelled = true; };
     }
+    setPending(true);
     (async () => {
       // `loadForSession` never throws -- every failure (no blob, an
       // unconfigured random one, corruption, a wrong key) returns []. The
@@ -147,23 +156,38 @@ const useDecoyRows = (isDecoy) => {
       if (!sessionVaultCrypto.isDecoySession()) return;
       if (sessionVaultCrypto.currentSessionGeneration() !== generation) return;
       setRows(loaded);
+      setPending(false);
     })();
     return () => { cancelled = true; };
   }, [isDecoy, userId, generation, reloadTick]);
 
-  return rows;
+  return { rows, pending };
 };
 
-const useDisplaySafeItems = (items) => {
+//
+// It returns STATUS as well as items, because the status is a display surface
+// too. `VaultItemsSection` renders `loading ? spinner : error ? message :
+// rows`, and both of those come from the REAL `GET /api/vault/` that a decoy
+// session still makes -- so a slow fetch showed a decoy session a spinner over
+// rows it already had, and a failed one showed it the real vault's error text
+// verbatim. The second is the serious one: an error a decoy vault has no
+// reason to produce is a surface contradicting what this session claims to be,
+// which is the display half of the two-question rule in
+// vault-unlock-envelope-integration-plan.md §37.1.
+const useDisplaySafeVault = (items, realStatus) => {
   // Read on every render rather than inside the memo: it is a module-level
   // boolean, so this is free, and including it in the dep array is what
   // makes the memo actually recompute when a session flips decoy state
   // without `items` changing identity.
   const isDecoy = sessionVaultCrypto.isDecoySession();
-  const decoyRows = useDecoyRows(isDecoy);
+  const { rows, pending } = useDecoyRows(isDecoy);
+  const loading = realStatus?.loading ?? false;
+  const error = realStatus?.error ?? null;
   return useMemo(
-    () => (isDecoy ? decoyRows : items || []),
-    [isDecoy, decoyRows, items],
+    () => (isDecoy
+      ? { items: rows, loading: pending, error: null }
+      : { items: items || [], loading, error }),
+    [isDecoy, rows, pending, items, loading, error],
   );
 };
 
@@ -175,7 +199,7 @@ export const VaultDashboardRoute = () => {
   // the legacy `isUnlocked` (which tracked the never-initialised vaultService
   // key and so was permanently false in the live flow).
   const { items, toggleFavorite, updateItem, deleteItem, decryptItem, canEdit } = useVault();
-  const visibleItems = useDisplaySafeItems(items);
+  const { items: visibleItems } = useDisplaySafeVault(items);
   const navigate = useNavigate();
   const goToVault = () => navigate('/vault');
   return (
@@ -196,11 +220,14 @@ export const VaultDashboardRoute = () => {
 // the same list the dashboard uses. Decryption stays client-side via
 // sessionVaultCrypto (v2) with a v3 fallback for migrated/freshly-written rows.
 export const VaultItemsSection = () => {
-  const { items, loading, error } = useVault();
+  const { items, loading: realLoading, error: realError } = useVault();
   const [decryptedItems, setDecryptedItems] = useState({});
-  // Shared with VaultDashboardRoute -- see useDisplaySafeItems above for why
-  // this is one hook and not a per-component check.
-  const visibleItems = useDisplaySafeItems(items);
+  // Shared with VaultDashboardRoute -- see useDisplaySafeVault above for why
+  // this is one hook and not a per-component check. `loading`/`error` come
+  // back from it too, so a decoy session never renders the REAL fetch's status.
+  const { items: visibleItems, loading, error } = useDisplaySafeVault(
+    items, { loading: realLoading, error: realError },
+  );
 
   useEffect(() => {
     let cancelled = false;

@@ -12,8 +12,11 @@ The password manager uses GeoIP databases to:
 
 ## 📋 Prerequisites
 
-- Python 3.12+ with Django (see the backend README; `SECURITY.md` lists
-  anything below 3.12 as unsupported)
+- Python 3.12+ with Django, in an ACTIVATED environment that has the backend
+  requirements installed (see the backend README; `SECURITY.md` lists anything
+  below 3.12 as unsupported). Every `python` below means that environment's
+  interpreter -- `setup_geoip.py` imports Django, so a bare system interpreter
+  will not do.
 - MaxMind account (free)
 - Internet connection for downloading databases
 
@@ -23,11 +26,13 @@ The password manager uses GeoIP databases to:
 
 1. **Run the setup script:**
    ```bash
+   # Activate the project's Python 3.12+ virtualenv FIRST. `setup_geoip.py`
+   # imports Django, so it needs the environment the backend requirements are
+   # installed into -- naming a bare interpreter (`python3.12 setup_geoip.py`)
+   # would bypass a virtualenv's site-packages and fail on that import.
    cd password_manager
-   # python3.12 explicitly: `python` resolves to whatever is first on PATH,
-   # and setup_geoip.py has no version guard of its own. Inside an activated
-   # 3.12+ virtualenv plain `python` is equivalent.
-   python3.12 setup_geoip.py
+   source ../venv/bin/activate    # or your own 3.12+ environment
+   python setup_geoip.py
    ```
 
 2. **Follow the prompts:**
@@ -104,7 +109,7 @@ password_manager/
 
 1. **Using the setup script:**
    ```bash
-   python3.12 setup_geoip.py
+   python setup_geoip.py
    # Choose option 3: "Verify existing setup"
    ```
 
@@ -186,7 +191,7 @@ MaxMind updates their databases regularly. Set up automatic updates:
 
 ```bash
 # Add to crontab for monthly updates
-0 0 1 * * /usr/bin/python3.12 /path/to/password_manager/setup_geoip.py --auto-update
+0 0 1 * * /path/to/venv/bin/python /path/to/password_manager/setup_geoip.py --auto-update
 ```
 
 ## 📊 Performance Considerations
@@ -225,7 +230,7 @@ MaxMind updates their databases regularly. Set up automatic updates:
 If you encounter issues:
 
 1. Check the Django logs: `tail -f logs/debug.log`
-2. Run the verification script: `python3.12 setup_geoip.py`
+2. Run the verification script: `python setup_geoip.py` (inside the activated 3.12+ environment)
 3. Review the MaxMind license key setup
 4. Ensure all dependencies are installed: `pip install -r requirements.txt`
 

@@ -5,6 +5,16 @@
 ### Prerequisites
 - Ensure `.env` file in `password_manager/` directory has `DEBUG=True`
 - Python 3.12+ and Node.js 18+ installed
+- A Python 3.12+ virtualenv, ACTIVATED, with `password_manager/requirements.txt`
+  installed. Every `python manage.py ...` below means that environment's
+  interpreter: a bare `python` takes whatever is first on `PATH`, which may be
+  an unsupported 3.11, and `manage.py` needs the installed requirements either
+  way, so naming `python3.12` explicitly would not help.
+
+```bash
+python3.12 -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r password_manager/requirements.txt
+```
 
 ### 1. Start Backend Server
 ```bash

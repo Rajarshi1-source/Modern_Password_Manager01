@@ -105,3 +105,52 @@ describe('VaultItemsSection during a decoy session', () => {
     expect(screen.queryByTestId('empty-vault')).not.toBeInTheDocument();
   });
 });
+
+describe('VaultItemsSection: real-vault status during a decoy session', () => {
+  test('a FAILED real fetch does not surface its error in a decoy session', async () => {
+    // The decoy session still issues the real GET /api/vault/ -- suppressing it
+    // would make the session distinguishable by traffic alone -- so that
+    // request can fail for reasons the decoy vault has no part in (expired
+    // token, 500, offline). Rendering its error text is a surface
+    // contradicting what this session claims to be, which is exactly the
+    // display half of the two-question decoy rule.
+    mockIsDecoySession.mockReturnValue(true);
+    mockUseVault.mockReturnValue({
+      items: [REAL_ITEM],
+      loading: false,
+      error: 'Request failed with status code 500',
+    });
+    mockDecoyLoad.mockResolvedValue([DECOY_ROW]);
+    mockDecryptEnvelope.mockResolvedValue({ name: 'Decoy Entry' });
+
+    render(<VaultItemsSection />);
+
+    expect(await screen.findByText('Decoy Entry')).toBeInTheDocument();
+    expect(screen.queryByTestId('vault-error')).toBeNull();
+    expect(screen.queryByText(/status code 500/i)).toBeNull();
+  });
+
+  test('a PENDING real fetch does not hide decoy rows already loaded', async () => {
+    mockIsDecoySession.mockReturnValue(true);
+    mockUseVault.mockReturnValue({ items: [], loading: true, error: null });
+    mockDecoyLoad.mockResolvedValue([DECOY_ROW]);
+    mockDecryptEnvelope.mockResolvedValue({ name: 'Decoy Entry' });
+
+    render(<VaultItemsSection />);
+
+    // The decoy rows come from localStorage and owe nothing to the network.
+    expect(await screen.findByText('Decoy Entry')).toBeInTheDocument();
+  });
+
+  test('a real session still shows its own loading and error', async () => {
+    mockIsDecoySession.mockReturnValue(false);
+    mockUseVault.mockReturnValue({
+      items: [], loading: false, error: 'Request failed with status code 500',
+    });
+
+    render(<VaultItemsSection />);
+
+    // The gate is decoy-only: a real session must keep reporting real faults.
+    expect(await screen.findByTestId('vault-error')).toHaveTextContent(/status code 500/i);
+  });
+});
