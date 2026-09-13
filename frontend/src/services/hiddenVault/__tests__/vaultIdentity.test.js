@@ -22,8 +22,9 @@ describe('vaultUserId', () => {
   });
 
   test('returns null rather than a usable-looking key when neither exists', () => {
-    // Consumers all branch on falsy to mean "no vault state available"; a
-    // string like "undefined" would instead become a real storage key.
+    // Consumers all branch on nullish (`== null`) to mean "no vault state
+    // available"; a string like "undefined" would instead become a real
+    // storage key, and a falsy check would also reject a real account id of 0.
     expect(vaultUserId({})).toBeNull();
     expect(vaultUserId(null)).toBeNull();
     expect(vaultUserId(undefined)).toBeNull();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, memo, useMemo, Suspense, lazy, useCallback } from 'react';
+import React, { useState, useEffect, memo, useMemo, useRef, Suspense, lazy, useCallback } from 'react';
 import axios from 'axios';
 import './App.css';
 import { AccessibilityProvider } from './contexts/AccessibilityContext';
@@ -228,9 +228,25 @@ export const VaultItemsSection = () => {
   const { items: visibleItems, loading, error } = useDisplaySafeVault(
     items, { loading: realLoading, error: realError },
   );
+  // Which session `decryptedItems` was last populated for. `decryptedItems`
+  // is read by item_id below, so a stale entry left over from a DIFFERENT
+  // session (real vs decoy, or an earlier generation of either) sitting under
+  // a colliding item_id would render as this session's own data for as long
+  // as a fresh decrypt is still in flight. Session generation, not the decoy
+  // flag, identifies the session -- see useDecoyRows above for why.
+  const decryptedForGenerationRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
+    const generation = sessionVaultCrypto.currentSessionGeneration();
+    // Clear synchronously, BEFORE the decrypt below starts, so a session
+    // change is never bridged by the previous session's cache. A same-
+    // session refresh (periodic refetch, one item added) must NOT clear it,
+    // or every such refresh would flash the whole list to "Decrypting…".
+    if (decryptedForGenerationRef.current !== generation) {
+      setDecryptedItems({});
+      decryptedForGenerationRef.current = generation;
+    }
     // Decrypt rows in parallel (faster initial render for large vaults). Each
     // resolves to an [item_id, data] entry. The v2→v3 envelope logic lives in
     // the shared services/vaultEnvelope helper (single source of crypto truth).
@@ -245,7 +261,12 @@ export const VaultItemsSection = () => {
     };
     (async () => {
       const entries = (await Promise.all(visibleItems.map(decryptOne))).filter(Boolean);
-      if (!cancelled) setDecryptedItems(Object.fromEntries(entries));
+      if (cancelled) return;
+      // Only commit to the session that started this decrypt -- one that
+      // locked or unlocked during the await must not receive a DIFFERENT
+      // session's plaintext.
+      if (sessionVaultCrypto.currentSessionGeneration() !== generation) return;
+      setDecryptedItems(Object.fromEntries(entries));
     })();
     return () => { cancelled = true; };
   }, [visibleItems]);

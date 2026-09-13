@@ -435,8 +435,14 @@ test('a lock-then-DECOY-unlock during the save is caught too, which hasSessionKe
   mockGeneration.mockReturnValue(9);
   await act(async () => { resolveSave({ duressToken: DURESS_TOKEN }); });
 
+  // The blob is already saved at this point -- registration is the only thing
+  // skipped -- so the message is the same "saved, but alarm not registered,
+  // contents cleared" text finishRegistration's own catch uses, not the
+  // generic "unlock your vault first" text (that would wrongly suggest
+  // nothing happened).
   const alert = await findByRole('alert');
-  expect(alert).toHaveTextContent(/unlock your vault first/i);
+  expect(alert).toHaveTextContent(/alarm could not be registered/i);
+  expect(alert).toHaveTextContent(/decoy contents you had/i);
   expect(registerSignalToken).not.toHaveBeenCalled();
 });
 

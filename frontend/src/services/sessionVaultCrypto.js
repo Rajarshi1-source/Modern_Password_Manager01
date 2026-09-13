@@ -120,11 +120,15 @@ const fromB64 = (b64) => {
   return bytes;
 };
 
+// `!= null`, not truthy: `vaultIdentity.vaultUserId` preserves an `id` of 0
+// (`??`, not `||`), so a falsy-but-present userId must still get its own
+// suffixed key rather than silently falling back to the unsuffixed one path
+// (A) callers with no userId at all intentionally use.
 const saltStorageKey = (userId) =>
-  userId ? `${USER_SALT_STORAGE_KEY}:${userId}` : USER_SALT_STORAGE_KEY;
+  userId != null ? `${USER_SALT_STORAGE_KEY}:${userId}` : USER_SALT_STORAGE_KEY;
 
 const wrappedStorageKey = (userId) =>
-  userId ? `${WRAPPED_DEK_STORAGE_KEY}:${userId}` : WRAPPED_DEK_STORAGE_KEY;
+  userId != null ? `${WRAPPED_DEK_STORAGE_KEY}:${userId}` : WRAPPED_DEK_STORAGE_KEY;
 
 /**
  * Read this device's per-user salt, minting one on first use.
@@ -252,7 +256,7 @@ export const initSessionKeyFromPassword = async (password, userId) => {
  * flow on subsequent logins.
  */
 export const hasWrappedKey = (userId) => {
-  if (!userId) return false;
+  if (userId == null) return false;
   return localStorage.getItem(wrappedStorageKey(userId)) !== null;
 };
 
@@ -265,7 +269,7 @@ export const setupVaultPassword = async (vaultPassword, userId) => {
   if (!vaultPassword || vaultPassword.length < 8) {
     throw new Error('Vault password must be at least 8 characters.');
   }
-  if (!userId) throw new Error('setupVaultPassword: userId required');
+  if (userId == null) throw new Error('setupVaultPassword: userId required');
 
   const generation = ++sessionGeneration;
   const saltB64 = getOrCreateUserSalt(userId);
@@ -356,7 +360,7 @@ const unwrapDek = async (vaultPassword, record, extractable) => {
  * is the ordering `unlockWithVaultPassword` documents below.
  */
 const loadWrappedRecord = (userId, fnName) => {
-  if (!userId) throw new Error(`${fnName}: userId required`);
+  if (userId == null) throw new Error(`${fnName}: userId required`);
   const raw = localStorage.getItem(wrappedStorageKey(userId));
   if (!raw) throw new Error('No vault key has been set up for this account.');
 
@@ -404,7 +408,7 @@ export const unlockWithVaultPassword = async (vaultPassword, userId) => {
  * the old DEK become unreadable. Intended for "reset vault" flows.
  */
 export const clearWrappedKey = (userId) => {
-  if (!userId) return;
+  if (userId == null) return;
   localStorage.removeItem(wrappedStorageKey(userId));
 };
 
@@ -525,7 +529,7 @@ export const currentSessionGeneration = () => sessionGeneration;
  *   that flag's own comment for why this must never be left to default true.
  */
 export const installRawDek = async (dekBytes, saltB64, userId, expectedGeneration = null, isDecoy = false) => {
-  if (!userId) throw new Error('installRawDek: userId required');
+  if (userId == null) throw new Error('installRawDek: userId required');
   if (!(dekBytes instanceof Uint8Array) || dekBytes.byteLength !== 32) {
     throw new Error('installRawDek: dekBytes must be a 32-byte Uint8Array');
   }
