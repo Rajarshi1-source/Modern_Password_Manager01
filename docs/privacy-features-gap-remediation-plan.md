@@ -730,7 +730,16 @@ onion case):
     corrected the falsy `userId` guards `sessionVaultCrypto.js` and
     `VaultUnlockModal.jsx` still had after round 5's sweep of the sibling
     stores (§16.3), and fixed the last stale Python floor claim in the
-    deployment guide's system-requirements table.
+    deployment guide's system-requirements table. Round 10 found that
+    `VaultDuressSetup`'s two forms -- decoy-password rotation and decoy-
+    contents seeding -- wrote the same device-local storage key through two
+    unqueued paths with independent busy flags, so submitting both at once
+    could interleave and either revive unreadable ciphertext or silently
+    erase what the user just typed; closed with one shared busy flag gating
+    both forms, since both writes are called from nowhere else. Also split a
+    Quick Test Guide command that mixed Unix `source` activation with a
+    Windows path in a trailing comment into separate bash/PowerShell/cmd
+    blocks.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could
