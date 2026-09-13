@@ -860,7 +860,13 @@ const VaultDuressSetup = () => {
             <label htmlFor={`decoy-password-${index}`} style={{ fontSize: 13 }}>Password</label>
             <input
               id={`decoy-password-${index}`}
-              type="text"
+              // Masked like every other password field on this screen. These
+              // are invented values rather than live credentials, so the cost
+              // of a shoulder-surfer reading them is not account compromise --
+              // it is that an observer who watches the setup can afterwards
+              // RECOGNISE a decoy session by its contents, which is the one
+              // thing this whole feature exists to prevent.
+              type="password"
               autoComplete="off"
               style={inputStyle}
               value={row.password}

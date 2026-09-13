@@ -718,7 +718,11 @@ onion case):
     stopped a decoy session from rendering the real fetch's loading and error
     state, and reverted a round-6 docs change that had named a bare
     `python3.12` interpreter for scripts that import Django -- which bypasses
-    a virtualenv and breaks the documented command.
+    a virtualenv and breaks the documented command. Round 8 corrected a risk-
+    table row in the decoy plan that asserted an invariant the shipped code
+    deliberately violates, masked the one unmasked password field on the duress
+    screen, and fixed the venv-creation command in the three canonical setup
+    docs.
   - **`StegoVaultDashboard` — the separate stego-image decoy mechanism —
     used to display the slot it opened**, rendering "Unlocked slot index:"
     above the payload, so anyone with only the decoy password could

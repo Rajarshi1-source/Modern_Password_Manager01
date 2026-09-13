@@ -2512,7 +2512,7 @@ docker-compose up -d
 ```bash
 # Backend Setup
 cd password_manager
-python -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 

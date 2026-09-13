@@ -849,6 +849,25 @@ test('decoy contents: a locked vault that arrives after render cannot submit', a
   expect(queryByRole('button', { name: /save decoy contents/i })).toBeNull();
 });
 
+test('decoy contents: every password field on the screen is masked', async () => {
+  useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
+  unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);
+
+  const { container } = render(<VaultDuressSetup />);
+
+  // A decoy entry's password was the one unmasked field among masked ones.
+  // These are invented values, so the risk is not account compromise -- it is
+  // that someone who watches the setup can afterwards RECOGNISE a decoy
+  // session by its contents, which is what the feature exists to prevent.
+  // Asserted over EVERY password input rather than the one row, so a second
+  // entry row cannot reintroduce it.
+  const passwordInputs = container.querySelectorAll('input[id*="password"]');
+  expect(passwordInputs.length).toBeGreaterThan(0);
+  passwordInputs.forEach((input) => {
+    expect(input).toHaveAttribute('type', 'password');
+  });
+});
+
 test('decoy contents: a notes-only entry is kept, not silently dropped', async () => {
   useAuth.mockReturnValue({ isAuthenticated: true, user: { id: USER_ID }, getAccessToken: () => TOKEN });
   unlockEnvelopeStore.hasEnvelope.mockReturnValue(true);

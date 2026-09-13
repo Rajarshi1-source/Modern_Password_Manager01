@@ -154,6 +154,9 @@ envelopes.
 ## 3. Reads
 
 `useDisplaySafeItems` (`App.jsx:96`) is already the single display choke point
+-- renamed `useDisplaySafeVault` in §18.1, which widened it to return
+`loading`/`error` alongside the rows; the name below is the one this section
+was written against, kept so the design reads in order
 and stays the only one. It changes from "empty in a decoy session" to "the
 decoy list in a decoy session":
 
@@ -280,10 +283,11 @@ Negative controls assert on the **returned value**, not on which branch ran
 | Risk | Handling |
 |---|---|
 | Padding bug leaks item count | Length asserted in tests against the `provision` filler, not just self-consistently |
-| A new display surface bypasses `useDisplaySafeItems` | Same exposure as today; the hook's comment already carries the rule |
+| A new display surface bypasses `useDisplaySafeVault` | Same exposure as today; the hook's comment already carries the rule. Renamed from `useDisplaySafeItems` in §18.1, which widened it to cover `loading`/`error` as well as the rows |
 | Decoy write overflows capacity mid-coercion | Refused with the byte-identical generic string; never truncates |
 | `localStorage` unavailable | Same accepted degradation as `hasEnvelope` — decoy renders empty, i.e. today's behaviour |
-| Real session ever writes the store | Impossible by predicate: `encryptForDecoyStore` refuses outside a decoy session |
+| Ordinary decoy-session mutations ever run from a REAL session | Impossible: `saveForSession` and `mutate` both require `sessionVaultCrypto.isDecoySession()`, and `encryptDecoyItem` / `encryptDecoyContainer` refuse outside one |
+| Setup writes the store from a real session | **By design, and the exception is deliberate.** `setDecoySlot` → `resetForNewKey` and `seedDecoyContents` → `seedWithKey` both run in a REAL session and write under the raw decoy DEK taken from slot 1 — a decoy session cannot do either, because neither the real vault password nor a slot re-encode is available to it. The session predicate guards the *mutation* API, not these two; §2's key table is the authority on which path holds which key. (This row previously claimed the write was "impossible by predicate" and cited `encryptForDecoyStore`, a name from the first draft that never shipped — an invariant stated in a plan is worth nothing if the code it describes deliberately violates it.) |
 
 ---
 
@@ -1050,3 +1054,84 @@ version, at a one-round shelf life instead of six months.
 
 Frontend after this round: **79 files, 917 tests**, three consecutive clean full
 runs; eslint 0 errors. No backend source changed.
+
+---
+
+## 19. Review round 8 (PR #503, 2026-09-13) — CodeRabbit
+
+**No CI check was failing** — 33 successful, 1 in progress. Three findings, all
+real. Two of them are about *this document* rather than the code, and both are
+the same failure: a plan asserting something the shipped code does not do.
+
+### 19.1 The risk table claimed an invariant the code deliberately breaks
+
+§7 said:
+
+> | Real session ever writes the store | Impossible by predicate:
+> `encryptForDecoyStore` refuses outside a decoy session |
+
+Two things wrong with one row.
+
+**The name never existed.** `encryptForDecoyStore` appears nowhere in the
+codebase — a grep finds it only in that line. It was the first draft's name for
+what shipped as `encryptDecoyItem` / `encryptDecoyContainer`. A reader checking
+the invariant would have found nothing to check.
+
+**The claim is false.** `setDecoySlot` → `resetForNewKey` and
+`seedDecoyContents` → `seedWithKey` both write the store **from a real
+session**, under the raw decoy DEK taken from slot 1. They have to: a decoy
+session holds neither the real vault password nor the ability to re-encode the
+envelope. The session predicate guards the *mutation* API, not these two.
+
+Both rows replaced — one for ordinary mutations (genuinely impossible by
+predicate), one naming the setup writes as the deliberate exception they are.
+
+**This is the most dangerous kind of documentation error in a security
+feature**: not a stale name, but a *stated invariant that is not true*. A future
+reader could cite that row to justify deleting a guard, or to conclude a real
+session write must be a bug. **An invariant in a plan is worth nothing if the
+code it describes deliberately violates it** — and the way to catch it is to
+grep for every symbol a claim names before trusting the claim.
+
+The same table also still said `useDisplaySafeItems`, renamed in §18.1 — fixed,
+with a pointer added at §3's first mention so a reader following the design in
+order does not grep for a symbol that no longer exists. §0's baseline table
+keeps the old name deliberately: that section describes what existed *before*
+this PR, where the name was correct.
+
+### 19.2 The decoy-entry password field was the only unmasked one on the screen
+
+`type="text"` on the mapped `row.password` input, among vault-password and
+decoy-password fields that are all `type="password"`.
+
+These are invented values, so the risk is **not** account compromise — it is
+that someone who watches the setup can afterwards **recognise a decoy session by
+its contents**, which is precisely what the feature exists to prevent. Now
+masked, with a test asserting it over *every* password input on the screen
+rather than the one row, so adding an entry row cannot reintroduce it. Verified
+to fail without the change.
+
+### 19.3 `python -m venv venv` — one finding, seven sites
+
+The finding named `password_manager/README.md:560`. A grep for `-m venv` found
+**seven** creation sites, of which six used a bare `python` or `python3` —
+including `docs/COMPLETE_DEPLOYMENT_GUIDE.md:98`, in a file this PR has now
+edited four times (round 5 fixed the *production* venv at line 222 and left the
+*quick-start* one at line 98 untouched).
+
+Fixed in the three canonical setup paths: `password_manager/README.md`,
+`docs/COMPLETE_DEPLOYMENT_GUIDE.md` (both sites now), and the root `README.md`.
+Four further sites live in `documentation/` status and analysis documents that
+this PR does not otherwise touch; they carry the same pattern and are left
+alone, recorded here with the grep that finds them
+(`grep -rn -- "-m venv" --include="*.md" .`) rather than swept silently into an
+unrelated diff.
+
+**Note this does not contradict §18.2.** Naming the interpreter is exactly right
+*here*: `python3.12 -m venv` is what selects the version the environment is
+**built with**. It was wrong for `python3.12 manage.py`, which bypasses the
+environment it needs. Same token, opposite meaning, depending on whether the
+command *creates* the environment or *runs inside* it.
+
+Frontend after this round: **79 files, 918 tests**, three consecutive clean full
+runs; eslint clean. No backend source changed.
