@@ -1215,3 +1215,98 @@ Targeted suites green: `VaultDuressSetup`, `vaultIdentity`, `VaultUnlockModal`,
 every touched file (pre-existing warnings only, none new). Full suite not run
 this round — targeted testing on a scoped fix, per standing preference. No
 backend source changed.
+
+## 21. Review round 10 (PR #503, 2026-09-13) — CodeRabbit
+
+CI was still settling when the review posted (33 successful, 1 in progress,
+1 neutral, 7 skipped); the in-progress job was an independent Docker build,
+unrelated to either finding. Two findings, both real, one Major.
+
+### 21.1 `handleSubmit` and `handleSeedContents` write the same decoy-contents key with no coordination between them
+
+`VaultDuressSetup` has two forms, each with its OWN `busy` flag
+(`busy`/`contentsBusy`), so nothing stopped a user from submitting both at
+once. Both eventually write `vaultLocalCache:<userId>` — `handleSubmit` via
+`unlockEnvelopeStore.setDecoySlot` → `decoyVaultStore.resetForNewKey`
+(re-keys the container to empty under a freshly minted decoy DEK) and
+`handleSeedContents` via `unlockEnvelopeStore.seedDecoyContents` →
+`decoyVaultStore.seedWithKey` (seals the typed entries under whatever DEK
+`open()` returned). Neither write goes through `decoyVaultStore`'s own
+`mutate()` queue — that queue's `run()` refuses outright when
+`!isDecoySession()` (line 435), and both of these are REAL-session setup
+writes by design, so plugging into it would mean weakening a security-load-
+bearing predicate for a UI convenience. Each write is preceded by several
+seconds of Argon2 work (three derivations for `setDecoySlot`, one plus a
+decrypt for `seedDecoyContents`'s `open()`), so the window is wide, not a
+one-tick race: a contents save that read the OLD decoy DEK before a rotation
+saved the new one can write ciphertext after `resetForNewKey`'s empty
+container, silently reviving unreadable data under a key nothing holds any
+more; the reverse ordering erases what the user just typed with an empty
+container.
+
+Fixed at the UI layer, matching the finding's own suggested remediation:
+one shared `decoyWriteBusy` boolean, set/cleared by both handlers around
+their own `busy`/`contentsBusy`, gating BOTH forms' inputs and submit
+buttons (`disabled={busy || decoyWriteBusy}` /
+`disabled={contentsBusy || decoyWriteBusy}`) and checked as an explicit
+early-return guard at the top of each handler (defense in depth for the
+narrow window between a click and the resulting re-render, which the
+`disabled` prop alone cannot cover). The recovery form
+(`handleRecoverRegistration`) was deliberately left out of the gate: it only
+calls `unlockEnvelopeStore.open()`, whose sole write side effect
+(`writeUnconfigured`'s backfill) already double-checks `readRaw(userId) ===
+null` before and after its own await, so it can only write when the
+container is genuinely unconfigured — it cannot clobber a real seed or a
+real rotation's result, and including it in the gate would just make the
+setup screen feel busier for no safety gain. Two regression tests assert the
+CROSS-form button is `disabled` while the other operation holds a pending
+promise, and that a click on the disabled button never reaches the
+underlying store call — checking the `disabled` attribute directly rather
+than firing a click and reading an error back, because `fireEvent.click` on
+an actually-disabled DOM button does not dispatch through React at all (the
+first attempt at these tests tried to assert an alert message and hung,
+`findByRole('alert')` timing out, which is itself confirmation the fix
+works: the click never reached the handler to produce one).
+
+**Declined: a store-level compare-and-swap on `resetForNewKey`/
+`seedWithKey`.** This closes only the SAME-TAB race; a second tab is not
+covered (the UI gate is per-component-instance React state). `setDecoySlot`
+and `seedDecoyContents` are called from nowhere but this one component
+(`grep -rn "setDecoySlot\|seedDecoyContents" frontend/src` outside
+`__tests__`/this file/its own module returns nothing), so same-tab is the
+only reachable vector and the UI gate closes it completely. A cross-tab CAS
+mirroring `saveForSession`'s own (`expectedRaw !== undefined && readRaw(...)
+!== expectedRaw`) is the same idiom already used three times in
+`decoyVaultStore.js`, so it would not be new architecture, and reads as
+directionally safe (a refused `resetForNewKey` leaves the OLD, now-orphaned
+ciphertext in place instead of a proper empty container, but the reader-side
+outcome is identical either way — `loadForSession` cannot decrypt either
+one under the new key). It is left for its own round rather than folded in
+here: touching `decoyVaultStore.js`'s write paths is the highest-blast-radius
+class of change in this file (nineteen-plus rounds of exactly this kind of
+fix creating the next round's bug, per [[pr-503-decoy-vault-contents]]'s own
+memory), the vector is narrower (two tabs, one screen, timed to a multi-
+second window) than the same-tab one just closed, and it matches the
+already-accepted precedent at §16.6 declining Web Locks for the sibling
+cross-tab case. Revisit if a future finding shows the cross-tab case is
+reachable in practice, not merely in theory.
+
+### 21.2 `QUICK_TEST_GUIDE.md`'s venv line was Unix `source` with a Windows path bolted on as a comment
+
+`python3.12 -m venv venv && source venv/bin/activate   # Windows:
+venv\Scripts\activate` inside one ` ```bash ` block: `source` does not exist
+on Windows, `python3.12` is not the standard Windows launcher (`py -3.12`
+is), and the trailing comment names only PowerShell/cmd's activation path,
+not their creation command. A Windows reader following the block literally
+cannot run it. Split into three fenced blocks (`bash` for macOS/Linux/Git
+Bash, `powershell` for PowerShell using `Activate.ps1`, `cmd` for Command
+Prompt using `activate.bat`), each pairing `py -3.12 -m venv venv` (or
+`python3.12` on Unix) with its own shell's activation syntax; the shared
+`pip install` line stays a single block after all three, since it does not
+vary by shell. Does not touch the "naming `python3.12` explicitly would not
+help" prose two lines above — that sentence is about `manage.py` invocations
+below, not venv creation, and remains correct (§18.2/§19.3's "creates the
+environment" vs "runs inside it" distinction).
+
+Targeted: `VaultDuressSetup` (39 tests, up from 37 — two new); eslint clean
+on both touched files. No backend or other frontend source changed.
