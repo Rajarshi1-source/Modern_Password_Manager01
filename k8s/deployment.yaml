@@ -35,6 +35,31 @@ spec:
         fsGroup: 10070
       containers:
       - name: postgres
+        # DELIBERATELY STILL 15 while CI and docker-compose moved to 17.
+        #
+        # This pod is stateful (postgres-pvc) and a major-version bump is a DATA
+        # MIGRATION, not an image-tag edit. Changing this line alone puts the
+        # pod into CrashLoopBackOff -- PostgreSQL refuses to start on a data
+        # directory initialised by another major version ("database files are
+        # incompatible with server"). On a password manager's vault that is the
+        # worst possible way to find out.
+        #
+        # PostgreSQL 15 is supported until 2027-11-11, so there is no urgency --
+        # but note that is BEFORE Django 5.2 LTS goes EOL (2028-04), so this
+        # upgrade is already scheduled inside the current Django version's life.
+        #
+        # To actually move to 17:
+        #   1. pg_dumpall from the running 15 pod, verified restorable.
+        #   2. Scale the app deployments to 0 so nothing writes mid-migration.
+        #   3. Either pg_upgrade against a copy of the PVC, or provision a fresh
+        #      17 PVC and restore the dump into it.
+        #   4. Flip this tag, then scale the app back up.
+        #
+        # If you switch to pgvector/pgvector:pg17 (what CI and compose use, for
+        # ml_dark_web's `CREATE EXTENSION vector`), ALSO revisit the pod
+        # securityContext above: it pins runAsUser/runAsGroup/fsGroup 10070 for
+        # the ALPINE postgres uid, and the pgvector images are Debian-based with
+        # a different postgres uid. Both must change together.
         image: postgres:15-alpine
         ports:
         - containerPort: 5432

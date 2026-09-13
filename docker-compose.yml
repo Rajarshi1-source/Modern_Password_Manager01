@@ -10,8 +10,23 @@
 
 services:
   # PostgreSQL Database
+  #
+  # pgvector/pgvector:pg17 rather than plain postgres:17-alpine: ml_dark_web's
+  # migration 0002 runs `CREATE EXTENSION IF NOT EXISTS vector`, and CI has
+  # always used the pgvector image. Plain postgres made that extension silently
+  # unavailable here (the migration swallows the failure by design), so this
+  # stack quietly lacked vector search while CI had it.
+  #
+  # UPGRADING AN EXISTING VOLUME FROM 15: PostgreSQL refuses to start on a data
+  # directory initialised by a different major version -- the container will
+  # exit with "database files are incompatible with server". For throwaway dev
+  # data, `docker compose down -v` (DESTROYS the volume) then `up` is enough.
+  # For data you care about, dump before switching and restore after:
+  #   docker compose exec postgres pg_dumpall -U pm_user > backup.sql
+  #   docker compose down -v && docker compose up -d postgres
+  #   docker compose exec -T postgres psql -U pm_user < backup.sql
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg17
     container_name: password_manager_postgres
     environment:
       POSTGRES_DB: ${DB_NAME:-password_manager}
