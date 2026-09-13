@@ -17,6 +17,15 @@ data:
   # Database
   DATABASE_HOST: "postgres-service"
   DATABASE_NAME: "password_manager"
+  # TLS to PostgreSQL. libpq's default ("prefer") silently falls back to an
+  # UNENCRYPTED connection when the server does not offer TLS, which for this
+  # application means vault ciphertext, auth hashes and session data crossing
+  # the cluster network in the clear with nothing logged. Production requires
+  # it. Use "verify-full" plus DATABASE_SSLROOTCERT once the server presents a
+  # CA-signed certificate — "require" encrypts but does not authenticate the
+  # server. If the Postgres deployment has no TLS configured yet, fix that
+  # rather than lowering this value.
+  DB_SSLMODE: "require"
   
   # Redis
   REDIS_HOST: "redis-service"

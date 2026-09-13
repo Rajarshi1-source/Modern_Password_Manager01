@@ -15,6 +15,7 @@ import secrets
 import warnings
 from pathlib import Path
 from datetime import timedelta
+from urllib.parse import unquote, urlparse
 from dotenv import load_dotenv
 
 # =============================================================================
@@ -357,40 +358,104 @@ else:
 # Database configuration
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-_USE_POSTGRES = bool(os.environ.get('DB_NAME'))
+# Three deployment surfaces disagreed about how to spell these, and only one
+# spelling was ever read:
+#   CI workflows    DB_NAME / DB_USER / DB_HOST / ...       <- what this file read
+#   docker-compose  DATABASE_URL=postgresql://...           <- never parsed
+#   k8s app-config  DATABASE_NAME / DATABASE_HOST / ...     <- never read
+# Because `_USE_POSTGRES` keyed off DB_NAME alone, compose and Kubernetes both
+# fell through to the SQLite branch below while a healthy Postgres container sat
+# unused beside them -- and in Kubernetes that SQLite file lives on the pod's
+# ephemeral disk, so the vault would not survive a restart. Only CI was ever
+# actually exercising PostgreSQL.
+#
+# All three spellings are resolved here. DB_* is checked FIRST, so CI's
+# behaviour is bit-for-bit unchanged.
+def _db_setting(*names, default=''):
+    """First non-empty value among `names`, else `default`."""
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return default
+
+
+_DB_URL = os.environ.get('DATABASE_URL', '')
+_DB_URL_PARTS = (
+    urlparse(_DB_URL) if _DB_URL.startswith(('postgres://', 'postgresql://')) else None
+)
+
+
+def _db_from_url(attr, default=''):
+    """Pull one component out of DATABASE_URL, percent-decoded."""
+    if _DB_URL_PARTS is None:
+        return default
+    raw = (
+        _DB_URL_PARTS.path.lstrip('/') if attr == 'name'
+        else getattr(_DB_URL_PARTS, attr, None)
+    )
+    return unquote(str(raw)) if raw else default
+
+
+_DB_NAME = _db_setting('DB_NAME', 'DATABASE_NAME') or _db_from_url('name')
+_USE_POSTGRES = bool(_DB_NAME)
+_DB_USER = _db_setting('DB_USER', 'DATABASE_USER') or _db_from_url('username', 'test_user')
+_DB_PASSWORD = _db_setting('DB_PASSWORD', 'DATABASE_PASSWORD') or _db_from_url('password', 'test_password')
+_DB_HOST = _db_setting('DB_HOST', 'DATABASE_HOST') or _db_from_url('hostname', '127.0.0.1')
+_DB_PORT = _db_setting('DB_PORT', 'DATABASE_PORT') or _db_from_url('port', '5432')
+
+# TLS to the database. libpq's own default is "prefer", which silently falls
+# back to an UNENCRYPTED connection when the server does not offer TLS -- for a
+# password manager that means vault ciphertext, auth hashes and session data
+# crossing the network in the clear, with nothing logged.
+#
+# The default stays "prefer" because that is what every current deployment
+# already relies on, and because CI runs `manage.py check --deploy` and
+# `migrate` with DEBUG=False against a TLS-less Postgres service
+# (backend-ci.yml) -- keying this off DEBUG would break CI on day one.
+# PRODUCTION MUST SET DB_SSLMODE=require (or verify-full with DB_SSLROOTCERT);
+# k8s/configmap.yaml does exactly that.
+_DB_SSLMODE = _db_setting('DB_SSLMODE', 'DATABASE_SSLMODE', default='prefer')
+_DB_SSLROOTCERT = _db_setting('DB_SSLROOTCERT', 'DATABASE_SSLROOTCERT')
+
+_PG_OPTIONS = {
+    'connect_timeout': 10,
+    'options': '-c statement_timeout=30000',
+    # Disable server-side prepared statements for PgBouncer transaction-mode compat
+    'prepare_threshold': int(os.environ.get('DB_PREPARE_THRESHOLD', '0')) or None,
+    'sslmode': _DB_SSLMODE,
+}
+if _DB_SSLROOTCERT:
+    _PG_OPTIONS['sslrootcert'] = _DB_SSLROOTCERT
 
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql' if _USE_POSTGRES else 'django.db.backends.sqlite3',
-        'NAME': os.environ.get('DB_NAME') if _USE_POSTGRES else BASE_DIR / 'db.sqlite3',
-        'USER': os.environ.get('DB_USER', 'test_user'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'test_password'),
-        'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+        'NAME': _DB_NAME if _USE_POSTGRES else BASE_DIR / 'db.sqlite3',
+        'USER': _DB_USER,
+        'PASSWORD': _DB_PASSWORD,
+        'HOST': _DB_HOST,
+        'PORT': _DB_PORT,
         'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
         'CONN_HEALTH_CHECKS': _USE_POSTGRES,
-        'OPTIONS': {
-            'connect_timeout': 10,
-            'options': '-c statement_timeout=30000',
-            # Disable server-side prepared statements for PgBouncer transaction-mode compat
-            'prepare_threshold': int(os.environ.get('DB_PREPARE_THRESHOLD', '0')) or None,
-        } if _USE_POSTGRES else {},
+        'OPTIONS': dict(_PG_OPTIONS) if _USE_POSTGRES else {},
     },
+    # Vestigial alias: nothing in the codebase does `using='postgresql'`, and the
+    # router (DATABASE_ROUTERS below) only ever addresses 'default'/'replica'.
+    # Kept so any out-of-tree caller still resolves, but fed from the same
+    # resolution as 'default' -- it previously re-read the DB_* names directly
+    # and so inherited the identical blind spot.
     'postgresql': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'test_db'),
-        'USER': os.environ.get('DB_USER', 'test_user'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', 'test_password'),
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+        'NAME': _DB_NAME or 'test_db',
+        'USER': _DB_USER,
+        'PASSWORD': _DB_PASSWORD,
+        'HOST': _DB_HOST,
+        'PORT': _DB_PORT,
         'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
         'CONN_HEALTH_CHECKS': True,
-        'OPTIONS': {
-            'connect_timeout': 10,
-            'options': '-c statement_timeout=30000',
-            'prepare_threshold': int(os.environ.get('DB_PREPARE_THRESHOLD', '0')) or None,
-        },
-    }    
+        'OPTIONS': dict(_PG_OPTIONS),
+    }
 }
 
 # Read replica (optional — activated by setting DATABASE_REPLICA_URL or DB_REPLICA_HOST)
