@@ -27,7 +27,7 @@ oauthlib==3.2.2
 requests-oauthlib==2.0.0
 
 # OpenID Connect (OIDC) Support
-mozilla-django-oidc>=4.0.0
+mozilla-django-oidc>=4.0.0,<5
 
 # Cryptography & Security
 # Pin 48.0.1 to fix GHSA-537c-gmf6-5ccf (the PyPI wheels bundle OpenSSL; <48.0.1
@@ -88,9 +88,9 @@ django-push-notifications==3.0.0
 pyfcm==1.5.4
 
 # Django Channels & WebSockets
-channels>=4.0.0
-channels-redis>=4.3.0
-daphne>=4.0.0
+channels>=4.0.0,<5
+channels-redis>=4.3.0,<5
+daphne>=4.0.0,<5
 
 # GeoIP & Device Detection
 geoip2==4.7.0
@@ -208,28 +208,28 @@ authy==2.2.6
 # ============================================================================
 
 # ASGI/WSGI Servers
-gunicorn>=21.2.0
+gunicorn>=21.2.0,<24
 uvicorn[standard]>=0.24.0
 
 # Static Files & Caching
-whitenoise>=6.6.0
-django-redis>=5.4.0
+whitenoise>=6.6.0,<7
+django-redis>=5.4.0,<7
 hiredis>=2.3.2
 
 # Monitoring & Error Tracking
 sentry-sdk>=1.40.0
-django-prometheus>=2.3.1
+django-prometheus>=2.3.1,<3
 psutil>=5.9.0
 
 # Security & Rate Limiting
-django-ratelimit>=4.1.0
-django-defender>=0.9.7
+django-ratelimit>=4.1.0,<5
+django-defender>=0.9.7,<1.0
 
 # Health Checks
-django-health-check>=3.18.0
+django-health-check>=3.18.0,<4
 
 # Profiling (Development)
-django-silk>=5.0.4
+django-silk>=5.0.4,<6
 
 # ============================================================================
 # Security Auditing (Development/CI)
