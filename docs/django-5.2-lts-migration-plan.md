@@ -1040,8 +1040,15 @@ instead of truncating). Checked before editing:
 |---|---|
 | `test_legacy_security_service.py` on **PostgreSQL 17.11** | **10 passed** (was 1 failed) |
 | `test_legacy_security_service.py` on **SQLite** | **10 passed** |
+| **Full `security/` suite (38 files) on SQLite, post-change** | **1234 passed, 7 skipped, 63 subtests, 0 failed** |
+| …versus the pre-change baseline in §15 | **1234 passed, 7 skipped, 63 subtests, 0 failed** — *identical counts* |
 | `manage.py check` | no issues |
 | `.extra(` / `RawSQL(` / `.raw(` sweep | no other occurrences |
+
+The regression check that mattered most was the full `security/` run **on SQLite**,
+because that is the backend whose behaviour this change alters — scoring now completes
+instead of aborting at the `EXTRACT` call. The counts come back identical to the
+baseline, so completing the calculation moved no existing assertion.
 
 ### 18.4 Noted, not fixed
 
