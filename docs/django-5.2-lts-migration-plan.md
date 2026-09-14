@@ -1369,3 +1369,54 @@ unchanged.
 | `git status --ignored` on the directory | `!!` (ignored) |
 | Files still present on disk for local Gradle | yes (`Test-Path` → `True`) |
 | `k8s/deployment.yaml` TLS wiring | unchanged — decline still stands |
+
+---
+
+## 24. Review round 7 (PR #512, 2026-09-14) — CodeRabbit
+
+**All checks passed** — 27 successful, 1 neutral (Trivy), 6 skipped. One new finding,
+real; the k8s `DB_SSLMODE` finding re-flagged as a duplicate, re-checked, still
+correctly declined (`k8s/deployment.yaml` unchanged — no TLS). CodeRabbit's file list
+also confirmed round 6's fix held: `mobile/modules/fhe-autofill/android/.gradle/
+buildOutputCleanup/cache.properties` and `debug_hre_output.txt` are now listed under
+"Files with no reviewable changes" — i.e. clean deletions, not edits.
+
+### 24.1 README's dependency-detail table understated the Channels version actually shipped
+
+Real. `README.md`'s **Technology Stack** table (a different table, further up the
+file) already correctly says `Django Channels | 4.3+` — an earlier phase (§15) fixed
+that one. The **Dependencies detail** table further down (`#### Django Channels &
+WebSockets`) was never swept in the same pass and still read `channels | 4.0.0+`,
+which is the *floor* in `requirements.txt`/`requirements-core.txt`
+(`channels>=4.0.0,<5`) but not what's actually locked and shipped
+(`requirements-lock.txt`/`requirements-prod.txt` pin `channels==4.3.2`).
+
+**Checked before fixing, not assumed:** grepped all four requirements files rather
+than trusting the table. Found a second, adjacent staleness CodeRabbit's finding
+didn't mention: the same table's `channels-redis | 4.1.0+` row no longer matches
+`requirements.txt`'s current floor, `channels-redis>=4.3.0,<5` — bumped in an earlier,
+unrelated commit (`ce6a9e9c`, "bump channels-redis 4.2.1->4.3.0 with asgiref co-bump")
+that predates this PR and never touched the README. `daphne | 4.0.0+` on the same
+table, checked for the same reason, still matches `requirements.txt`'s
+`daphne>=4.0.0,<5` exactly — left alone.
+
+**Fix (2-line README change, no code):**
+- `channels | 4.0.0+` → `channels | 4.0.0+ (4.3.2 in production)` — states the
+  floor and the shipped version, per CodeRabbit's own suggested resolution.
+- `channels-redis | 4.1.0+` → `channels-redis | 4.3.0+` — corrected to the current
+  floor (which is also what's locked, so no parenthetical needed).
+
+This is the same "partial sweep" failure mode this document has now recorded three
+times (§17.4, §19.3, and this one) — a value gets corrected in one place and a sibling
+copy elsewhere is missed. The recurring lesson, restated once more because it keeps
+paying off: **grep every restatement of a fact when you change the fact**, not just
+the one place a review comment points at.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `channels`/`channels-redis`/`daphne` versions vs. all 4 requirements files | grepped directly; table now matches |
+| `k8s/deployment.yaml` TLS wiring | unchanged — decline still stands |
+| Round 6 Gradle-cache fix | confirmed held — CodeRabbit lists the affected files as "no reviewable changes" |
+| Scope of change | README.md only, 2 lines; no application code, no tests needed |
