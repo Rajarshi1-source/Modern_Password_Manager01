@@ -1,4 +1,4 @@
-from django.test import TestCase, RequestFactory
+from django.test import TestCase, RequestFactory, override_settings
 from django.contrib.auth.models import User
 from django.utils import timezone
 from unittest.mock import patch, Mock, MagicMock
@@ -10,9 +10,20 @@ from ..services.security_service import SecurityService, NotificationService
 from auth_module.views import AuthViewSet
 
 
+# The risk scores asserted below must depend only on what each test sets up, not
+# on whatever the developer happens to have in their environment. `.env` here
+# ships `BLACKLISTED_IPS=192.168.1.100,10.0.0.5`, and 192.168.1.100 is the exact
+# address `create_mock_request` uses -- so `_is_ip_blacklisted` correctly fired,
+# added its +50, and pushed `test_analyze_successful_login_normal_case` from 75
+# to the 100 cap. CI sets no BLACKLISTED_IPS, so the suite passed there and
+# failed locally, which is the least useful way for a test to be wrong.
+# Neutralised for this class. The blacklist factor keeps its own dedicated
+# coverage in test_account_protection_hardening.py, which exercises
+# SecurityService._is_ip_blacklisted directly (CIDR ranges included).
+@override_settings(BLACKLISTED_IPS=set(), BLACKLISTED_IP_NETS=[])
 class SecurityServiceTestCase(TestCase):
     """Test cases for the SecurityService"""
-    
+
     def setUp(self):
         """Set up test data"""
         self.factory = RequestFactory()

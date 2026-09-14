@@ -938,3 +938,118 @@ pins exactly.
 
 Targeted suites only, per the standing preference — the full 2066-test run was done in
 §16.7 and nothing here touches application logic.
+
+---
+
+## 18. The `test_analyze_successful_login_normal_case` failure, diagnosed and fixed
+
+§16.7 recorded this test failing identically on Django 5.1.15+PG15, 5.2.17+PG15 and
+5.2.17+PG17 — enough to prove neither upgrade caused it, and it was left as
+"out of scope, deserves its own issue". Running that issue down produced a better
+answer than expected: **the test failure was environmental, but chasing it exposed a
+real security defect underneath.**
+
+### 18.1 The failure itself: a local `.env` value colliding with a hardcoded test IP
+
+Instrumenting the scoring rather than reasoning about it gave the exact factors:
+
+```
+threat_score = 100
+location     = ', '
+factors      = {'new_device': True, 'new_location': ', ',
+                'unusual_user_agent': 'Other on Other', 'blacklisted_ip': True}
+```
+
+`30 (new_device) + 30 (new_location) + 15 (unusual_user_agent) + 50 (blacklisted_ip)
+= 125`, capped to 100. The deciding factor is **`blacklisted_ip`**, and the reason is
+not subtle once seen:
+
+```
+.env:  BLACKLISTED_IPS=192.168.1.100,10.0.0.5
+test:  create_mock_request(ip='192.168.1.100')
+```
+
+The test hardcodes the *exact* address this repository's own `.env` blacklists, so
+`_is_ip_blacklisted` fired **correctly**. CI sets no `BLACKLISTED_IPS`, so the blacklist
+is empty there, the score is 75, and the suite passes — which is why this was green in
+CI and red locally, the least useful way for a test to be wrong.
+
+Fixed by neutralising the ambient setting for that test class:
+`@override_settings(BLACKLISTED_IPS=set(), BLACKLISTED_IP_NETS=[])`. `_is_ip_blacklisted`
+reads `getattr(settings, 'BLACKLISTED_IP_NETS', [])` at call time, so the override takes
+effect. **A unit test asserting a risk threshold must not depend on whatever the
+developer happens to have in their environment.**
+
+### 18.2 The real bug underneath: PostgreSQL-only SQL silently abandoning the risk calculation
+
+The question this left open was why the test ever passed on SQLite, where the same
+blacklist applies. The answer is a genuine defect:
+
+```python
+).extra(select={'hour': 'EXTRACT(hour FROM timestamp)'}).values_list('hour', flat=True)
+```
+
+`EXTRACT(hour FROM ...)` is PostgreSQL/MySQL syntax. **SQLite has no `EXTRACT`**, so the
+query raises — and `_calculate_risk_score` wraps its entire body in
+
+```python
+except Exception as e:
+    logger.error(f"Error calculating risk score: {e}")
+```
+
+so the exception is swallowed and the method **returns the partial score accumulated so
+far**. Everything below that line was skipped on any non-PostgreSQL backend:
+
+| Factor after the EXTRACT call | Weight | Status on SQLite |
+|---|---|---|
+| unusual time | +20 | never evaluated |
+| impossible travel | +50 | never evaluated |
+| unusual user agent | +15 | never evaluated |
+| **blacklisted IP** | **+50** | **never evaluated** |
+| velocity / multiple IPs | +30 | never evaluated |
+
+That is why the test passed on SQLite: scoring aborted at 60 before it could reach the
+blacklist check. The "passing" test was passing *because the security feature was
+silently broken*.
+
+Replaced with Django's portable `ExtractHour`, which compiles per-backend:
+
+```python
+).annotate(hour=ExtractHour('timestamp')).values_list('hour', flat=True)
+```
+
+`grep -rn "\.extra(" --include=*.py` now returns only the explanatory comment, and there
+are no `RawSQL(`/`.raw(` calls anywhere — so this was the only instance of the pattern,
+not one of several.
+
+### 18.3 Why this was safe to change
+
+The concern with fixing 18.2 is that SQLite scores now *rise* (the calculation completes
+instead of truncating). Checked before editing:
+
+- The only upper-bound assertion on a computed score in the touched file is the
+  `assertLess(..., 80)` at issue; the others are lower bounds (`> 0`, `> 30`) that a
+  higher score cannot break.
+- Every other `threat_score` assertion in the repository belongs to unrelated models
+  (`ml_security` uses a 0.0–1.0 scale; `test_predictive_expiration*` asserts on an
+  industry record), not to `SecurityService._calculate_risk_score`.
+- In CI, with no `BLACKLISTED_IPS`, a first login now scores 75 on **both** backends —
+  under the 80 suspicious threshold, so `is_suspicious` is unchanged.
+
+| Check | Result |
+|---|---|
+| `test_legacy_security_service.py` on **PostgreSQL 17.11** | **10 passed** (was 1 failed) |
+| `test_legacy_security_service.py` on **SQLite** | **10 passed** |
+| `manage.py check` | no issues |
+| `.extra(` / `RawSQL(` / `.raw(` sweep | no other occurrences |
+
+### 18.4 Noted, not fixed
+
+`location` came back as the string `', '` — a failed GeoIP lookup (`GeoLite2-City.mmdb`
+absent) still produces a truthy `"city, country"` join from two empty strings, which then
+satisfies `if user and login_attempt.location` and contributes `new_location` **+30**. So
+an unresolvable IP is scored as a *new location* rather than as no location at all.
+
+Left alone deliberately: it is pre-existing, orthogonal to both the Django and PostgreSQL
+upgrades, and changing it shifts scoring for every login path in the application — which
+wants its own change and its own regression run, not a ride-along in a dependency PR.
