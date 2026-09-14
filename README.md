@@ -1884,8 +1884,8 @@ SecureVault's frontend uses a carefully curated set of libraries for security, p
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| channels | 4.0.0+ | Async support for Django (WebSockets) |
-| channels-redis | 4.1.0+ | Redis channel layer for Django Channels |
+| channels | 4.0.0+ (4.3.2 in production) | Async support for Django (WebSockets) |
+| channels-redis | 4.3.0+ | Redis channel layer for Django Channels |
 | daphne | 4.0.0+ | HTTP/WebSocket protocol server (ASGI) |
 
 #### GeoIP & Device Detection

@@ -94,3 +94,15 @@ fix each time was the same: grep for the claim when you change the thing it desc
   "..."`) so git commits the index, not the working tree. Verify with `git ls-files
   <path>` (must be empty) and `git show --stat <commit>` (must show `-> 0 bytes`,
   not a byte-count change) before trusting an "untrack" commit.
+- **2026-09-14 — PR #512 review round 7 (CodeRabbit).** Fixed: `README.md`'s
+  "Dependencies detail" table (`#### Django Channels & WebSockets`) still said
+  `channels | 4.0.0+` and `channels-redis | 4.1.0+`, understating what's actually
+  locked/shipped (`channels==4.3.2`, `channels-redis>=4.3.0` per the requirements
+  files) — a *different* table from the already-correct "Technology Stack" one
+  higher up the file. Verified against all four requirements files before editing,
+  which also surfaced an unflagged sibling staleness (`channels-redis`) from an
+  unrelated earlier commit. This is the third recorded instance of the same
+  "partial sweep" failure (§17.4, §19.3, §24.1 of the migration doc) — a fact
+  gets corrected in one place and a duplicate elsewhere is missed. Declined again
+  (still valid, unchanged): `k8s/configmap.yaml`'s `DB_SSLMODE=prefer` duplicate —
+  `k8s/deployment.yaml` still has no server TLS.
