@@ -1060,3 +1060,96 @@ an unresolvable IP is scored as a *new location* rather than as no location at a
 Left alone deliberately: it is pre-existing, orthogonal to both the Django and PostgreSQL
 upgrades, and changing it shifts scoring for every login path in the application — which
 wants its own change and its own regression run, not a ride-along in a dependency PR.
+
+---
+
+## 19. Review round 2 (PR #512, 2026-09-14) — CodeRabbit
+
+**No CI check was failing** — 23 successful, 3 in progress, 1 neutral, 2 skipped. Three
+findings. Two are stale or missing *sibling* work from my own §16/§17 changes; one is a
+command in my own comment that does not run.
+
+### 19.1 The documented restore command aborts before reading the dump (Major)
+
+`docker-compose.yml`'s volume-upgrade note (added in §16.6) ended with:
+
+```
+docker compose exec -T postgres psql -U pm_user < backup.sql
+```
+
+`psql` defaults the database name to the **user** name, and Compose initialises
+`password_manager`, not `pm_user`. Verified against the real image rather than reasoned
+about:
+
+```
+$ psql -U pm_user -c 'SELECT 1'
+psql: error: FATAL:  database "pm_user" does not exist
+$ psql -U pm_user -d postgres -tAc 'SELECT current_database()'
+postgres
+```
+
+So anyone following that note to preserve data would have lost the window and landed on
+an empty cluster. Now `-d postgres`, which is also the correct target for a `pg_dumpall`
+restore — that dump carries its own `CREATE DATABASE`/`\connect` statements. The
+databases present on a fresh stack are exactly `password_manager`, `postgres`,
+`template0`, `template1`.
+
+### 19.2 The read replica silently omitted TLS — and §16.3 had broken its `NAME` (Major)
+
+CodeRabbit flagged that the optional replica's `OPTIONS` block omits `sslmode`. Correct,
+and checking it surfaced a second, worse problem it did not flag.
+
+**TLS:** `DATABASES['replica']` spelled its `OPTIONS` out longhand instead of reusing
+`_PG_OPTIONS`, so when an operator sets `DB_SSLMODE=require` the **primary honours it and
+the replica connects in cleartext** — carrying the same vault ciphertext. This is the
+sibling-sweep failure again: §16.4 updated `default` and the `postgresql` alias and
+stopped there.
+
+**`NAME`:** the block read `os.environ.get('DB_NAME')` directly. That was safe only while
+`_USE_POSTGRES` itself *required* `DB_NAME`. §16.3 made `DATABASE_NAME` and
+`DATABASE_URL` select PostgreSQL too — so a Kubernetes deployment with `DB_REPLICA_HOST`
+set would have produced a replica with **`NAME: None`**. A regression introduced by my
+own fix, invisible because no replica is configured in this repo.
+
+Both fixed by resolving from the shared `_DB_*` values and spreading `_PG_OPTIONS`,
+overriding only `options` to keep `default_transaction_read_only=on`. Verified:
+
+| Scenario | replica `NAME` | replica `sslmode` | read-only |
+|---|---|---|---|
+| `DB_*` + `DB_SSLMODE=require` | `test_db` | **require** | yes |
+| `DATABASE_NAME` (k8s) + `DB_SSLMODE=require` | **`password_manager`** (was `None`) | **require** | yes |
+| `DATABASE_URL` (compose) | `password_manager` | `prefer` | yes |
+| CI, no replica configured | *(not configured)* | — | — |
+
+### 19.3 A comment in `settings/base.py` claimed the opposite of what ships (Minor)
+
+```python
+# PRODUCTION MUST SET DB_SSLMODE=require (or verify-full with DB_SSLROOTCERT);
+# k8s/configmap.yaml does exactly that.
+```
+
+It did in §16.4 — and §17.1 changed it to `prefer` precisely because the server has no
+TLS, without updating this comment. An operator following it would set `require` and
+fail every connection. **This is the third time in this document a stated fact has
+outlived the code it described**; the fix is the same each time — grep for the claim
+when you change the thing it describes. Rewritten to say Kubernetes keeps `prefer` until
+the server serves TLS.
+
+### 19.4 Declined: enabling PostgreSQL server TLS in this PR
+
+CodeRabbit's "heavy lift" half — mount certificates and start the server with `ssl=on` —
+is **not done here**, for the reason §17.1 already gives: it needs cert issuance, a
+`0600`-mode key mount and a rollout to validate, none of which can be exercised from this
+branch. The procedure is written in `k8s/configmap.yaml`, and the client side is fully
+ready: `sslmode` and `sslrootcert` are configurable, and **both** the primary and (now)
+the replica honour them. Turning it on is one configmap value once the server can serve
+TLS.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `psql -U pm_user` vs `-d postgres` | reproduced the failure and the fix against `pgvector/pgvector:pg17` |
+| Replica resolution across DB_* / DATABASE_* / DATABASE_URL | all correct, TLS inherited, read-only preserved |
+| `manage.py check` | no issues |
+| `docker-compose.yml`, `k8s/configmap.yaml` YAML | parse |
