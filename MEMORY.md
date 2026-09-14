@@ -83,3 +83,14 @@ fix each time was the same: grep for the claim when you change the thing it desc
   tracked path under `mobile/`, `k8s/`, or elsewhere looks like it "keeps changing"
   with no corresponding source edit, check whether it's a build/cache artifact that
   was committed by mistake before assuming a real regression.
+- **2026-09-14 — git pitfall found the hard way, worth remembering.** `git rm
+  --cached <path>` stages a deletion, but a *later* `git commit -- <path>` does **not**
+  commit that staged deletion if `<path>` still exists on disk — it silently re-reads
+  the **working tree** for that path and commits that instead ("partial commit"
+  semantics), undoing the untrack. This is exactly how the previous entry's Gradle-cache
+  untrack fix failed the first time (caught by CodeRabbit, fixed in round 6, §23 of the
+  migration doc). **Rule: after `git rm --cached`, either delete the file for real, or
+  commit with no trailing pathspec** (`git commit -F <msgfile>` / plain `git commit -m
+  "..."`) so git commits the index, not the working tree. Verify with `git ls-files
+  <path>` (must be empty) and `git show --stat <commit>` (must show `-> 0 bytes`,
+  not a byte-count change) before trusting an "untrack" commit.
