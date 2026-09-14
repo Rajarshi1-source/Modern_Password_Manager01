@@ -380,10 +380,45 @@ def _db_setting(*names, default=''):
     return default
 
 
-_DB_URL = os.environ.get('DATABASE_URL', '')
-_DB_URL_PARTS = (
-    urlparse(_DB_URL) if _DB_URL.startswith(('postgres://', 'postgresql://')) else None
-)
+def _parse_db_url(raw_url):
+    """Parse DATABASE_URL, or return None when it is not a PostgreSQL URL.
+
+    `urlparse` is lazy: it splits eagerly but only validates `.port` when that
+    attribute is read. A password carrying an unencoded '#', '/' or '?' splits
+    the authority in the wrong place, so `.port` then raises ValueError -- and
+    `getattr(parts, 'port', default)` does NOT absorb it, because getattr's
+    default only covers AttributeError. Left alone that surfaces at settings
+    import as a bare "Port could not be cast to integer value", with the whole
+    process refusing to start.
+
+    Swallowing it would be worse than the crash: '#' truncates the URL at a
+    fragment, so the surviving `.hostname` is a fragment of the credentials
+    rather than the database host. For a password manager, quietly connecting
+    somewhere unintended -- or quietly falling back to SQLite -- beats a loud
+    failure only in the sense that nobody notices. So this fails loudly and
+    says exactly what to do about it.
+
+    docker-compose interpolates ${DB_PASSWORD} straight into DATABASE_URL, so
+    this is reachable with nothing more exotic than a generated password.
+    """
+    if not raw_url.startswith(('postgres://', 'postgresql://')):
+        return None
+    parts = urlparse(raw_url)
+    try:
+        parts.port
+    except ValueError as exc:
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            f'DATABASE_URL could not be parsed ({exc}). A username or password '
+            'containing "#", "/" or "?" must be percent-encoded (\'#\' -> %23, '
+            "'/' -> %2F, '?' -> %3F), or supply DB_NAME/DB_USER/DB_PASSWORD/"
+            'DB_HOST/DB_PORT separately instead -- those take precedence and '
+            'need no encoding.'
+        ) from exc
+    return parts
+
+
+_DB_URL_PARTS = _parse_db_url(os.environ.get('DATABASE_URL', ''))
 
 
 def _db_from_url(attr, default=''):

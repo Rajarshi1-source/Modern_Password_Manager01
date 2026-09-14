@@ -751,9 +751,17 @@ with nothing logged.
 
 The default deliberately **stays** `prefer`: `backend-ci.yml` runs `manage.py check
 --deploy` and `migrate` with `DEBUG=False` against a TLS-less Postgres service, so
-keying this off `DEBUG` would have broken CI on day one. Production opts in explicitly —
-`k8s/configmap.yaml` now sets `DB_SSLMODE=require`, and
-`DB_SSLROOTCERT`/`DATABASE_SSLROOTCERT` enable `verify-full`.
+keying this off `DEBUG` would have broken CI on day one. The setting is now
+*configurable* via `DB_SSLMODE`/`DATABASE_SSLMODE`, with
+`DB_SSLROOTCERT`/`DATABASE_SSLROOTCERT` for `verify-full`.
+
+> **Corrected in review round 1 (§17.1).** This section originally said
+> "`k8s/configmap.yaml` now sets `DB_SSLMODE=require`". It did, and that was wrong:
+> the PostgreSQL Deployment in the same manifest set runs the stock image with no
+> TLS, so `require` would have failed every pod. The configmap now ships `prefer`
+> with the enablement procedure written beside it. **Making `sslmode` settable is
+> the durable change here; the value itself cannot be raised until the server can
+> actually serve TLS.**
 
 ### 16.5 `scripts/init-db.sql` did not exist
 
@@ -832,3 +840,101 @@ factor queries evaluate on PostgreSQL, not in missing local infrastructure.
 - **Reliance on specialised PostgreSQL features?** Only `pgvector` (guarded, optional,
   verified working on 17 at 0.8.6) and one GIN-on-jsonb index (verified created on 17).
   No PostGIS, no `django.contrib.postgres`, no logical replication in this repository.
+
+---
+
+## 17. Review round 1 (PR #512, 2026-09-14) — CodeRabbit + Codex
+
+**No CI check was failing** — 27 successful, 1 neutral (Trivy: no matching configs),
+6 skipped (deploy jobs gated on push). Four findings, **all four real, and three of
+them are consequences of my own previous round.** That is the pattern to notice: the
+§16.3 fix (making Kubernetes genuinely reach PostgreSQL) turned three previously
+*dormant* misconfigurations into live rollout failures. A change that makes a code path
+execute for the first time inherits every latent defect on that path.
+
+### 17.1 `DB_SSLMODE=require` against a PostgreSQL that has no TLS (P1, both reviewers)
+
+Flagged independently by Codex and CodeRabbit, and correct. `k8s/deployment.yaml` runs
+the stock `postgres` image: no `-c ssl=on`, no certificate or key mounted, no TLS proxy.
+PostgreSQL ships `ssl = off`, so a client demanding `require` is refused with *"server
+does not support SSL, but SSL was required"*.
+
+On its own that was latent. Combined with §16.3 — which made these pods actually connect
+to PostgreSQL instead of silently using SQLite — it becomes a **guaranteed rollout
+failure**: the migrate Job, the collectstatic init container and every backend pod.
+
+Fixed by shipping `prefer` and writing the two-step enablement procedure into the
+configmap (mount a cert/key Secret and start the server with `ssl=on` — noting the key
+must be `0600`, so a cert-manager Secret needs `defaultMode: 0600` — *then* raise the
+value). §16.4 has been corrected, because it asserted the opposite.
+
+**The durable half of that change still stands: `sslmode` was previously impossible to
+set at all.** Adding the capability is the fix; setting a value the server cannot honour
+is not.
+
+### 17.2 NetworkPolicy denies the migration Job its database (P1, Codex)
+
+`migrate-job.yaml` labels its pod `component: migrate`. Under `default-deny-all`, no
+policy granted that label egress, and `allow-postgres` did not list it as an ingress
+source — blocked in **both** directions.
+
+Invisible until now for the same reason as §17.1: the Job received `DATABASE_NAME`, which
+settings did not read, so it ran on SQLite and never opened a socket to 5432. Now it does.
+
+Added `allow-migrate` (egress to `component: database` on 5432, modelled exactly on the
+existing `allow-maintenance`) and added `migrate` to `allow-postgres`'s ingress sources.
+Both halves are required — an egress rule is useless if the database refuses the ingress.
+DNS was already covered namespace-wide by `allow-dns`.
+
+### 17.3 A database password containing `#`, `/` or `?` crashed settings at import (P2, Codex)
+
+Real, and **worse than reported**. `urlparse` is lazy: it splits eagerly but only
+validates `.port` when read. An unencoded `#`, `/` or `?` in the password splits the
+authority wrongly, so `.port` raises `ValueError` — and `getattr(parts, 'port', default)`
+does **not** absorb it, because `getattr`'s default only covers `AttributeError`.
+Verified directly:
+
+```
+pw='plain'  -> hostname='postgres' port=5432
+pw='p#ss'   -> ValueError: Port could not be cast to integer value as 'p'
+pw='p/ss'   -> ValueError: ...
+pw='p?ss'   -> ValueError: ...
+pw='p@ss'   -> hostname='postgres' port=5432        # '@' is fine, last one wins
+getattr(u, 'port', 'DEFAULT')  ->  RAISED ValueError
+```
+
+`docker-compose.yml` interpolates `${DB_PASSWORD}` straight into `DATABASE_URL`, so this
+is reachable with nothing more exotic than a generated password.
+
+**A bare `try/except` returning the default would have been the wrong fix.** `#`
+truncates the URL at a fragment, so the surviving `.hostname` is a piece of the
+credentials rather than the database host — swallowing the error means quietly connecting
+somewhere unintended, or quietly dropping back to SQLite. Both are worse than a crash for
+a password manager. `_parse_db_url` therefore raises `ImproperlyConfigured` naming the
+offending characters, their encodings, and the `DB_*` alternative that needs no encoding.
+
+### 17.4 README dependency table still listed the pre-bump versions (minor, CodeRabbit)
+
+Correct: `django-cors-headers 4.0.0`, `django-storages 1.13.2`, `django-timezone-field
+7.1`, `drf-yasg 1.21.10`, `django-celery-beat 2.8.0`. §15 updated the Django and DRF rows
+and stopped there — the same partial-sweep shape this document has recorded before.
+
+All five corrected, then **cross-checked programmatically against
+`requirements.txt`** rather than by eye: all seven Django-ecosystem rows now match their
+pins exactly.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `manage.py check` | no issues |
+| k8s YAML parses (`configmap`, `network-policy`, `deployment`) | OK — 1 / 10 / 18 docs |
+| `allow-migrate` present; `allow-postgres` ingress | `backend, websocket, maintenance, migrate` |
+| `DB_SSLMODE` shipped value | `prefer` |
+| Malformed `DATABASE_URL` | clear `ImproperlyConfigured`, not "cast to integer" |
+| Percent-encoded / normal / CI / local-dev resolution | unchanged — postgresql, postgresql, postgresql, sqlite3 |
+| README rows vs `requirements.txt` | 7/7 match |
+| Targeted suites (`password_manager/`, `hidden_vault/`) | **79 passed, 19 subtests** |
+
+Targeted suites only, per the standing preference — the full 2066-test run was done in
+§16.7 and nothing here touches application logic.

@@ -20,12 +20,28 @@ data:
   # TLS to PostgreSQL. libpq's default ("prefer") silently falls back to an
   # UNENCRYPTED connection when the server does not offer TLS, which for this
   # application means vault ciphertext, auth hashes and session data crossing
-  # the cluster network in the clear with nothing logged. Production requires
-  # it. Use "verify-full" plus DATABASE_SSLROOTCERT once the server presents a
-  # CA-signed certificate — "require" encrypts but does not authenticate the
-  # server. If the Postgres deployment has no TLS configured yet, fix that
-  # rather than lowering this value.
-  DB_SSLMODE: "require"
+  # the cluster network in the clear with nothing logged.
+  #
+  # This SHOULD be "require". It is deliberately "prefer" today because the
+  # PostgreSQL Deployment in deployment.yaml runs the stock postgres image with
+  # no TLS: no `-c ssl=on`, no server certificate or key mounted. PostgreSQL
+  # ships with `ssl = off`, so a client asking for "require" is refused with
+  # "server does not support SSL, but SSL was required" -- and since the
+  # DATABASE_* fix means these pods now genuinely talk to PostgreSQL instead of
+  # silently using SQLite, that would fail the migrate Job, the collectstatic
+  # init container and every backend pod, i.e. block the whole rollout.
+  #
+  # TO TURN THIS ON (do both, in this order):
+  #   1. Give the server TLS. Mount a certificate/key Secret into the postgres
+  #      container and start it with
+  #        -c ssl=on -c ssl_cert_file=... -c ssl_key_file=...
+  #      The key must be mode 0600 and owned by the postgres user or the server
+  #      refuses to start, so a cert-manager Secret needs defaultMode: 0600
+  #      (cluster-issuer.yaml already provides an issuer).
+  #   2. Only then set this to "require" -- or better "verify-full" together
+  #      with DATABASE_SSLROOTCERT, since "require" encrypts but does not
+  #      authenticate the server.
+  DB_SSLMODE: "prefer"
   
   # Redis
   REDIS_HOST: "redis-service"
