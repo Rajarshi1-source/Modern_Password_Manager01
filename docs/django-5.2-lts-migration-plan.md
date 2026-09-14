@@ -1230,3 +1230,84 @@ this is guidance text for a future step), so the only change is to the comment.
 **Fix:** rewrote the step to describe the existing `fsGroup: 10070` and recommend
 `defaultMode: 0640` instead of `0600`+chown. No functional code touched — comment-only,
 inside a ConfigMap's YAML comments, so no test suite applies.
+
+---
+
+## 22. Review round 5 (PR #512, 2026-09-14) — CodeRabbit + Greptile
+
+**No CI check was failing** — 27 successful, 1 neutral (Trivy: no matching configs), 6
+skipped. Two findings. One real and fixed with runtime evidence (not just read from
+the code — reproduced first, per the standing "source code is the source of truth"
+rule); one a repeat of an already-declined finding, verified still correctly declined.
+
+### 22.1 `DATABASE_URL` was parsed eagerly at settings-import time, before its own
+explicit-value precedence was checked (Major, CodeRabbit — Quick win)
+
+Real, and **reproduced before touching anything**, in the `canny` venv, by importing
+settings in a subprocess with every `DB_*` value that can fall back to the URL set
+explicitly (`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `DB_SSLMODE`,
+`DB_SSLROOTCERT`) **and** a malformed `DATABASE_URL` (`p#ss` in the password) left
+sitting in the environment, unused:
+
+```
+Before fix: ImproperlyConfigured — "DATABASE_URL could not be parsed (Port could
+            not be cast to integer value as 'p')" — raised even though nothing
+            needed to read the URL.
+```
+
+The module-level line `_DB_URL_PARTS = _parse_db_url(os.environ.get('DATABASE_URL',
+''))` ran unconditionally at import, before any of `_db_from_url`'s or
+`_db_url_query`'s explicit-variable checks. §17.3 already made a malformed URL fail
+loudly *when the URL is actually the value being used* — correctly, per that section's
+own reasoning about `#`/`/`/`?` truncating the wrong thing silently. This finding is
+the missing other half: it must not fail when the URL **isn't** being used at all.
+
+**Fix:** replaced the eager module-level parse with `@lru_cache(maxsize=1) def
+_db_url_parts()`, called from inside `_db_from_url` and `_db_url_query` — i.e. only
+from the fallback branch that already runs *after* the explicit `DB_*`/`DATABASE_*`
+check via `or`. `lru_cache` preserves the original "parse once, reuse the result"
+behaviour; nothing else changed. 18 insertions / 6 deletions in one file.
+
+**Verified** (5 scenarios, each in its own subprocess so `lru_cache` and Django's
+settings singleton can't leak state between them):
+
+| Scenario | Expected | Result |
+|---|---|---|
+| Full explicit `DB_*`+`DB_SSLMODE`+`DB_SSLROOTCERT`, malformed `DATABASE_URL` | loads (was: `ImproperlyConfigured`) | **loads** — `postgresql`, `fulldb` |
+| CI-style `DB_*` only, no `DATABASE_URL` | loads, unchanged | loads — `postgresql`, `cidb` |
+| Compose-style well-formed `DATABASE_URL?sslmode=require` | loads, `sslmode` from URL (§20 regression check) | loads — `sslmode=require` |
+| Malformed `DATABASE_URL`, nothing else set | **still raises**, loudly (§17.3 regression check) | raises `ImproperlyConfigured`, same message |
+| No DB env (local dev) | `sqlite3`, unchanged | loads — `sqlite3` |
+
+The fourth row matters most: this is not a "swallow the error" fix. When the URL is
+genuinely the only source for a value, a malformed one still fails closed exactly as
+§17.3 designed — the fix only changes *when* parsing happens, not the failure mode.
+
+`manage.py check`: no issues. Targeted suite — `password_manager/` (the directory
+holding `tests/test_settings_guards.py`, the existing settings-import-guard tests):
+**63 passed, 19 subtests passed**, identical pass count to before the change.
+
+### 22.2 Declined (duplicate): `DB_SSLMODE: "prefer"` in `k8s/configmap.yaml` (CodeRabbit)
+
+Re-flagged, and re-checked against current code rather than taken on faith. `k8s/
+deployment.yaml` still has **zero** `ssl`/`tls`/`cert` references — the stock
+`postgres` image, no `-c ssl=on`, no certificate/key Secret mounted. Nothing has
+changed here since §17.1's original finding or §19.4's explicit decline. Raising
+`DB_SSLMODE` now would still fail every pod's DB connection (migrate Job,
+collectstatic init container, every backend pod) — a guaranteed regression, not a
+fix. **Not changed**, for the same reason §19.4 already gives; that section and the
+enablement procedure already written into the configmap's comments remain the correct
+and current answer. Client-side plumbing (`sslmode`/`sslrootcert`, both primary and
+replica) has been fully ready since §17.1/§19.2.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `manage.py check` | no issues |
+| Malformed `DATABASE_URL` + full explicit `DB_*` coverage | now loads (was `ImproperlyConfigured`) |
+| Malformed `DATABASE_URL` alone (§17.3 regression) | still raises, same message |
+| `DATABASE_URL` with `?sslmode=` query string (§20 regression) | still honoured |
+| CI (`DB_*` only) / local dev (no DB env) | unchanged |
+| `k8s/deployment.yaml` TLS wiring | unchanged — still no server TLS, decline stands |
+| Targeted suite (`password_manager/`) | **63 passed, 19 subtests**, same count as before |

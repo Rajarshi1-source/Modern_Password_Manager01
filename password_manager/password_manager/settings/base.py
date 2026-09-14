@@ -13,6 +13,7 @@ import os
 import sys
 import secrets
 import warnings
+from functools import lru_cache
 from pathlib import Path
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
@@ -418,16 +419,26 @@ def _parse_db_url(raw_url):
     return parts
 
 
-_DB_URL_PARTS = _parse_db_url(os.environ.get('DATABASE_URL', ''))
+@lru_cache(maxsize=1)
+def _db_url_parts():
+    """Parse DATABASE_URL lazily, once, only when a fallback path needs it.
+
+    DB_*/DATABASE_* are checked first by every caller below; this must not run
+    (and must not be able to raise) until one of them is actually missing, or
+    an unrelated/leftover DATABASE_URL would break settings import even when
+    every explicit value that could fall back to it is already supplied.
+    """
+    return _parse_db_url(os.environ.get('DATABASE_URL', ''))
 
 
 def _db_from_url(attr, default=''):
     """Pull one component out of DATABASE_URL, percent-decoded."""
-    if _DB_URL_PARTS is None:
+    parts = _db_url_parts()
+    if parts is None:
         return default
     raw = (
-        _DB_URL_PARTS.path.lstrip('/') if attr == 'name'
-        else getattr(_DB_URL_PARTS, attr, None)
+        parts.path.lstrip('/') if attr == 'name'
+        else getattr(parts, attr, None)
     )
     return unquote(str(raw)) if raw else default
 
@@ -443,9 +454,10 @@ def _db_url_query(name, default=''):
     ALSO set DB_SSLMODE separately. Every other DB_* value already falls back
     to the URL when unset; sslmode/sslrootcert are no different.
     """
-    if _DB_URL_PARTS is None or not _DB_URL_PARTS.query:
+    parts = _db_url_parts()
+    if parts is None or not parts.query:
         return default
-    values = parse_qs(_DB_URL_PARTS.query).get(name)
+    values = parse_qs(parts.query).get(name)
     return unquote(values[0]) if values else default
 
 
