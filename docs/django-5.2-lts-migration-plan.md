@@ -1311,3 +1311,61 @@ replica) has been fully ready since §17.1/§19.2.
 | CI (`DB_*` only) / local dev (no DB env) | unchanged |
 | `k8s/deployment.yaml` TLS wiring | unchanged — still no server TLS, decline stands |
 | Targeted suite (`password_manager/`) | **63 passed, 19 subtests**, same count as before |
+
+---
+
+## 23. Review round 6 (PR #512, 2026-09-14) — CodeRabbit
+
+**No CI check was failing** — checks were still in progress at review time; all had
+passed or were expected to. One finding, real, and a defect in *this document's own
+round 5 fix*, not a new one in application code.
+
+### 23.1 The round-5 "untrack the Gradle cache" fix only edited the files, it never deleted them
+
+CodeRabbit flagged that `mobile/modules/fhe-autofill/android/.gradle/buildOutputCleanup/
+cache.properties` was still tracked and still being rewritten by local Gradle runs
+after §22's fix claimed to have untracked it. Checked rather than dismissed:
+`git ls-files` at the commit CodeRabbit reviewed **did** still list all 8 files, and
+`git show --stat` on the "untrack" commit showed 4 of them as **modified** (`Bin 17 ->
+17 bytes`), not deleted.
+
+**Root cause, confirmed by reading `git commit`'s own semantics rather than assumed:**
+`git rm -r --cached` correctly staged all 8 deletions. The follow-up command was
+`git commit -m "..." -- mobile/.gitignore mobile/modules/fhe-autofill/android/.gradle
+debug_hre_output.txt` — and `git commit <pathspec>` does **not** commit the index for
+those paths; it re-reads the **working tree** for any matched path that still exists on
+disk and commits *that* content instead ("partial commit" semantics). The physical
+`.gradle` cache files were deliberately left on disk (§22 wanted to stop tracking them,
+not delete Gradle's live local cache), and a local Gradle run in the interim had
+rewritten 4 of the 8 with a new `gradle.version` (`8.9` → `9.2.0`). The pathspec commit
+silently re-added that new content over the staged deletion. The other 4 files, whose
+on-disk bytes happened to be unchanged since the original bad commit, show no diff at
+all under this mechanism — which is why `git ls-files` still listed all 8, not just 4.
+
+**Fix:** re-ran the identical `git rm -r --cached`, then committed with **no pathspec**
+(`git commit -F <message-file>`), which commits exactly the index instead of
+re-reading the working tree. Verified after: `git show --stat` on the new commit shows
+all 8 as `Bin N -> 0 bytes` / pure deletions, `git ls-files` under that directory
+returns nothing, `git status --ignored` reports `!!` (ignored) for the directory, and
+the files are still physically present on disk (confirmed with `Test-Path`) so the
+local Gradle daemon is unaffected.
+
+**Lesson for this repo, recorded because it will recur otherwise:** never combine
+`git rm --cached <path>` with a later `git commit -- <path>` when the untracked file is
+left on disk. Either delete the file for real, or stage-then-commit with **no**
+trailing pathspec so `git commit` uses the index, not the working tree.
+
+The k8s `configmap.yaml` `DB_SSLMODE` finding was re-flagged in the same review as a
+duplicate of §17.1/§19.4/§22.2. Re-checked, not just assumed still valid:
+`k8s/deployment.yaml` still has zero `ssl`/`tls`/`cert` references. Decline stands,
+unchanged.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `git ls-files mobile/modules/fhe-autofill/android/.gradle/` | empty (was: all 8 files) |
+| `git show --stat` on the fix commit | 8/8 shown as deletions (`Bin N -> 0`) |
+| `git status --ignored` on the directory | `!!` (ignored) |
+| Files still present on disk for local Gradle | yes (`Test-Path` → `True`) |
+| `k8s/deployment.yaml` TLS wiring | unchanged — decline still stands |
