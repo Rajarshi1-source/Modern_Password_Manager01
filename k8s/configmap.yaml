@@ -35,9 +35,11 @@ data:
   #   1. Give the server TLS. Mount a certificate/key Secret into the postgres
   #      container and start it with
   #        -c ssl=on -c ssl_cert_file=... -c ssl_key_file=...
-  #      The key must be mode 0600 and owned by the postgres user or the server
-  #      refuses to start, so a cert-manager Secret needs defaultMode: 0600
-  #      (cluster-issuer.yaml already provides an issuer).
+  #      The postgres pod already runs with fsGroup: 10070 (deployment.yaml),
+  #      matching its runAsGroup, so a root-owned key with defaultMode: 0640
+  #      is group-readable to the server without an init-container chown --
+  #      no need to make postgres the file's owning user.
+  #      (cluster-issuer.yaml already provides an issuer.)
   #   2. Only then set this to "require" -- or better "verify-full" together
   #      with DATABASE_SSLROOTCERT, since "require" encrypts but does not
   #      authenticate the server.

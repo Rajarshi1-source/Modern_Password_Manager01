@@ -1206,3 +1206,27 @@ source). `unquote` covers `%2F`-style percent-encoding.
 
 `manage.py check`: no issues. Targeted suites (`password_manager/`, `hidden_vault/`):
 **79 passed, 19 subtests**, identical to every prior round.
+
+## 21. Review round 4 (PR #512, 2026-09-14) — CodeRabbit
+
+**No CI check was failing** — 27 successful, 0 failed, 1 neutral, 6 skipped. One nitpick
+(🔵 Trivial), on `k8s/configmap.yaml`'s **not-yet-enabled** TLS-enablement comment (the
+Postgres server itself still runs with `ssl=off`; only the client-side `sslmode` plumbing
+from rounds 1–3 above is live).
+
+### 21.1 The TLS-enablement comment claimed the wrong access model
+
+The comment's step 1 said the mounted private key "must be ... owned by the postgres
+user or the server refuses to start", implying a chown init-container. Checked
+[k8s/deployment.yaml](../k8s/deployment.yaml) line 33-35: the postgres pod already sets
+`runAsUser: 10070`, `runAsGroup: 10070`, **`fsGroup: 10070`**. Kubernetes' Secret-volume
+plugin sets a mounted file's *group* ownership to `fsGroup` on mount, so a root-owned key
+with `defaultMode: 0640` (group-read) is already readable by a container running with
+`runAsGroup: 10070` — matching group membership is what grants access, not owning-user
+identity, and no chown init-container is needed. `k8s/cluster-issuer.yaml` was checked and
+confirms no `defaultMode` is set anywhere yet (TLS mounting itself isn't implemented —
+this is guidance text for a future step), so the only change is to the comment.
+
+**Fix:** rewrote the step to describe the existing `fsGroup: 10070` and recommend
+`defaultMode: 0640` instead of `0600`+chown. No functional code touched — comment-only,
+inside a ConfigMap's YAML comments, so no test suite applies.
