@@ -187,7 +187,37 @@ spec:
     - protocol: TCP
       port: 5432
 
-# Postgres: accept ingress from backend, websocket, celery, maintenance only
+# Migration Job: egress to Postgres.
+#
+# migrate-job.yaml labels its pod `component: migrate`, which no policy covered.
+# Under default-deny-all that was invisible for as long as the Job silently ran
+# on SQLite (it received DATABASE_NAME, which settings did not read, so it never
+# opened a socket). Now that settings resolve DATABASE_*, the Job makes a real
+# connection to 5432 and default-deny would fail every rollout's migrations.
+# DNS is already covered for the whole namespace by allow-dns above.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-migrate
+  namespace: password-manager
+spec:
+  podSelector:
+    matchLabels:
+      app: password-manager
+      component: migrate
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          component: database
+    ports:
+    - protocol: TCP
+      port: 5432
+
+# Postgres: accept ingress from backend, websocket, celery, maintenance, migrate
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -217,6 +247,12 @@ spec:
     - podSelector:
         matchLabels:
           component: maintenance
+    # The migration Job -- see allow-migrate above for why this was missing.
+    # Both directions are needed: its egress rule alone does not help if the
+    # database refuses the ingress.
+    - podSelector:
+        matchLabels:
+          component: migrate
     ports:
     - protocol: TCP
       port: 5432

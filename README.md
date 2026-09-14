@@ -1796,10 +1796,10 @@ SecureVault's frontend uses a carefully curated set of libraries for security, p
 | Package | Version | Description |
 |---------|---------|-------------|
 | django-extensions | 4.1 | Collection of custom extensions for Django |
-| django-cors-headers | 4.0.0 | Django app for handling CORS headers |
-| django-storages | 1.13.2 | Custom storage backends for Django |
-| django-timezone-field | 7.1 | Timezone field for Django models |
-| drf-yasg | 1.21.10 | Swagger/OpenAPI 2.0 documentation generator |
+| django-cors-headers | 4.9.0 | Django app for handling CORS headers |
+| django-storages | 1.14.6 | Custom storage backends for Django |
+| django-timezone-field | 7.2.2 | Timezone field for Django models |
+| drf-yasg | 1.21.15 | Swagger/OpenAPI 2.0 documentation generator |
 
 #### Authentication & OAuth 2.0 / OpenID Connect
 
@@ -1836,7 +1836,7 @@ SecureVault's frontend uses a carefully curated set of libraries for security, p
 | Package | Version | Description |
 |---------|---------|-------------|
 | celery | 5.5.1 | Distributed task queue |
-| django-celery-beat | 2.8.0 | Database-backed periodic tasks |
+| django-celery-beat | 2.9.0 | Database-backed periodic tasks |
 | django-celery-results | 2.6.0 | Celery result backends for Django |
 | amqp | 5.3.1 | AMQP client for Python |
 | billiard | 4.2.1 | Python multiprocessing fork |
