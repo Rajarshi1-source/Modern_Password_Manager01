@@ -24,7 +24,12 @@ services:
   # For data you care about, dump before switching and restore after:
   #   docker compose exec postgres pg_dumpall -U pm_user > backup.sql
   #   docker compose down -v && docker compose up -d postgres
-  #   docker compose exec -T postgres psql -U pm_user < backup.sql
+  #   docker compose exec -T postgres psql -U pm_user -d postgres < backup.sql
+  # `-d postgres` is required: psql defaults the database name to the USER name,
+  # and there is no `pm_user` database, so omitting it aborts with
+  # `FATAL: database "pm_user" does not exist` before reading a single line of
+  # the dump. `postgres` is also the right target for a pg_dumpall restore --
+  # that dump carries its own CREATE DATABASE/\connect statements.
   postgres:
     image: pgvector/pgvector:pg17
     container_name: password_manager_postgres

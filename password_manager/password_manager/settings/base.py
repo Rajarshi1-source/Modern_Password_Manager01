@@ -448,8 +448,12 @@ _DB_PORT = _db_setting('DB_PORT', 'DATABASE_PORT') or _db_from_url('port', '5432
 # already relies on, and because CI runs `manage.py check --deploy` and
 # `migrate` with DEBUG=False against a TLS-less Postgres service
 # (backend-ci.yml) -- keying this off DEBUG would break CI on day one.
-# PRODUCTION MUST SET DB_SSLMODE=require (or verify-full with DB_SSLROOTCERT);
-# k8s/configmap.yaml does exactly that.
+# Kubernetes currently ships DB_SSLMODE=prefer and MUST keep it until the
+# PostgreSQL workload itself serves TLS -- k8s/deployment.yaml runs the stock
+# image with no `-c ssl=on` and no certificate mounted, so demanding "require"
+# today fails every connection. k8s/configmap.yaml carries the enablement
+# procedure. Once the server has TLS, raise this to "require", or better
+# "verify-full" with DB_SSLROOTCERT, which also authenticates the server.
 _DB_SSLMODE = _db_setting('DB_SSLMODE', 'DATABASE_SSLMODE', default='prefer')
 _DB_SSLROOTCERT = _db_setting('DB_SSLROOTCERT', 'DATABASE_SSLROOTCERT')
 
@@ -498,17 +502,25 @@ _REPLICA_HOST = os.environ.get('DB_REPLICA_HOST', '')
 if _USE_POSTGRES and _REPLICA_HOST:
     DATABASES['replica'] = {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME'),
-        'USER': os.environ.get('DB_REPLICA_USER', os.environ.get('DB_USER', 'test_user')),
-        'PASSWORD': os.environ.get('DB_REPLICA_PASSWORD', os.environ.get('DB_PASSWORD', 'test_password')),
+        # Resolved the same way as 'default'. These read the DB_* names directly
+        # before, which was safe only while `_USE_POSTGRES` itself required
+        # DB_NAME. Now that DATABASE_NAME / DATABASE_URL also select PostgreSQL,
+        # a replica configured that way would have got NAME=None.
+        'NAME': _DB_NAME,
+        'USER': os.environ.get('DB_REPLICA_USER') or _DB_USER,
+        'PASSWORD': os.environ.get('DB_REPLICA_PASSWORD') or _DB_PASSWORD,
         'HOST': _REPLICA_HOST,
-        'PORT': os.environ.get('DB_REPLICA_PORT', os.environ.get('DB_PORT', '5432')),
+        'PORT': os.environ.get('DB_REPLICA_PORT') or _DB_PORT,
         'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '60')),
         'CONN_HEALTH_CHECKS': True,
+        # Inherits sslmode/sslrootcert from _PG_OPTIONS. This block used to spell
+        # its own OPTIONS out longhand and so silently omitted them: a replica
+        # holds the same vault ciphertext as the primary, so it must not connect
+        # in cleartext while the primary honours DB_SSLMODE. `options` is the one
+        # key overridden, to keep the read-only transaction default.
         'OPTIONS': {
-            'connect_timeout': 10,
+            **_PG_OPTIONS,
             'options': '-c statement_timeout=30000 -c default_transaction_read_only=on',
-            'prepare_threshold': int(os.environ.get('DB_PREPARE_THRESHOLD', '0')) or None,
         },
     }
 
