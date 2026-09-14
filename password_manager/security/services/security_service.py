@@ -3,6 +3,7 @@ from django.core.mail import send_mail
 from django.utils import timezone
 from django.contrib.auth.models import User
 from django.db.models import Q, Count
+from django.db.models.functions import ExtractHour
 from django.db import transaction
 import requests
 import ipaddress
@@ -305,11 +306,21 @@ class SecurityService:
             
             # Analyze user's typical login hours
             if user:
+                # `ExtractHour`, not `.extra(select={'hour': 'EXTRACT(...)'})`.
+                # That raw fragment is PostgreSQL/MySQL syntax: SQLite has no
+                # EXTRACT, so the query raised and the broad `except Exception`
+                # at the bottom of this method swallowed it -- silently
+                # ABANDONING the whole risk calculation partway through. Every
+                # factor below this point (unusual time, impossible travel,
+                # unusual user agent, blacklisted IP, velocity) was skipped and
+                # the caller received a truncated score with no error surfaced.
+                # `ExtractHour` compiles per-backend, so the scoring now runs to
+                # completion everywhere rather than only on PostgreSQL.
                 typical_hours = LoginAttempt.objects.filter(
                     user=user,
                     status='success',
                     timestamp__gte=timezone.now() - timedelta(days=30)
-                ).extra(select={'hour': 'EXTRACT(hour FROM timestamp)'}).values_list('hour', flat=True)
+                ).annotate(hour=ExtractHour('timestamp')).values_list('hour', flat=True)
                 
                 typical_hours_set = set(typical_hours)
                 if typical_hours_set and hour not in typical_hours_set:
