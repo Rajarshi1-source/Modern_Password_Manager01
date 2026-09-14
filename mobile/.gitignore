@@ -17,6 +17,11 @@ expo-env.d.ts
 *.key
 *.mobileprovision
 
+# Android / Gradle local build cache (machine-local, rewritten on every
+# build/sync -- must never be committed; tracking it makes git perpetually
+# report "modified" with no real source change).
+.gradle/
+
 # Metro
 .metro-health-check*
 
