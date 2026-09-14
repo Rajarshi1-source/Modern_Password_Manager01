@@ -1153,3 +1153,56 @@ TLS.
 | Replica resolution across DB_* / DATABASE_* / DATABASE_URL | all correct, TLS inherited, read-only preserved |
 | `manage.py check` | no issues |
 | `docker-compose.yml`, `k8s/configmap.yaml` YAML | parse |
+
+---
+
+## 20. Review round 3 (PR #512, 2026-09-14) — CodeRabbit
+
+**No CI check was failing** — 27 successful, 0 failed, 1 neutral, 6 skipped. One finding,
+real, in the exact function §17.3 hardened last round.
+
+### 20.1 `DATABASE_URL`'s own `?sslmode=` query string was discarded
+
+`_db_from_url` reads `_DB_URL_PARTS.path`/`.username`/`.password`/`.hostname`/`.port` —
+every *positional* component of the URL — but `_DB_SSLMODE` never looked at
+`_DB_URL_PARTS.query` at all. So `DATABASE_URL=postgresql://.../db?sslmode=require`, a
+standard libpq connection-URI convention that hosted Postgres providers append
+automatically, was **silently downgraded to `prefer`** unless the deployment also set
+`DB_SSLMODE` separately — an operator who believed the URL alone expressed their TLS
+policy would get the weaker mode with no error, no log line, nothing. Verified before
+fixing:
+
+```
+urlparse('postgresql://.../db?sslmode=require&sslrootcert=...').query
+  -> 'sslmode=require&sslrootcert=...'   # present, just never read again
+```
+
+No current deployment surface in this repo is affected — `docker-compose.yml`'s
+`DATABASE_URL` carries no query string, and Kubernetes never sets `DATABASE_URL` at all
+(§16.3's `DATABASE_NAME`/`DATABASE_HOST` path). This is a defect in the general-purpose
+parser itself, reachable by any future or external deployment that follows the common
+`?sslmode=` convention this file's own docstring for `_parse_db_url` already
+anticipates ("docker-compose interpolates `${DB_PASSWORD}` straight into
+`DATABASE_URL`" — same reasoning applies to whatever else a provider appends).
+
+Added `_db_url_query(name, default)`, parsing `_DB_URL_PARTS.query` once, and slotted it
+into the **same precedence chain already used by every other `_DB_*` value**:
+`DB_SSLMODE`/`DATABASE_SSLMODE` env var, then the URL's `?sslmode=`, then `prefer`. Same
+for `sslrootcert` — the sibling this file has now missed twice (§19.2 was the replica
+missing the *primary's* sslmode; this is the primary's sslmode missing its *own* URL
+source). `unquote` covers `%2F`-style percent-encoding.
+
+### Verification
+
+| Scenario | `sslmode` | Note |
+|---|---|---|
+| `DATABASE_URL=...?sslmode=require` | **`require`** | was silently `prefer` |
+| `DATABASE_URL=...?sslmode=verify-full&sslrootcert=%2Fetc%2Fca.pem` | **`verify-full`** | `sslrootcert` decoded to `/etc/ca.pem` |
+| Same URL, **`DB_SSLMODE=prefer`** also set | `prefer` | explicit env still wins, as designed |
+| CI (`DB_*` only) | `prefer` | unchanged |
+| k8s (`DATABASE_NAME` + `DB_SSLMODE=prefer`) | `prefer` | unchanged |
+| local dev, no DB env | *(sqlite3, n/a)* | unchanged |
+| plain compose URL, no query string | `prefer` | unchanged — the default still applies when the URL says nothing |
+
+`manage.py check`: no issues. Targeted suites (`password_manager/`, `hidden_vault/`):
+**79 passed, 19 subtests**, identical to every prior round.

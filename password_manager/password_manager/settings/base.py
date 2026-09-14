@@ -15,7 +15,7 @@ import secrets
 import warnings
 from pathlib import Path
 from datetime import timedelta
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from dotenv import load_dotenv
 
 # =============================================================================
@@ -432,6 +432,23 @@ def _db_from_url(attr, default=''):
     return unquote(str(raw)) if raw else default
 
 
+def _db_url_query(name, default=''):
+    """Pull one `?key=value` query parameter out of DATABASE_URL.
+
+    libpq connection URIs carry `sslmode`/`sslrootcert` this way (e.g. the
+    `?sslmode=require` a hosted Postgres provider appends automatically), and
+    until this function existed that query string was parsed by `urlparse` and
+    then never read again -- so a DATABASE_URL ending `?sslmode=require` was
+    silently downgraded to the `prefer` default below unless the deployment
+    ALSO set DB_SSLMODE separately. Every other DB_* value already falls back
+    to the URL when unset; sslmode/sslrootcert are no different.
+    """
+    if _DB_URL_PARTS is None or not _DB_URL_PARTS.query:
+        return default
+    values = parse_qs(_DB_URL_PARTS.query).get(name)
+    return unquote(values[0]) if values else default
+
+
 _DB_NAME = _db_setting('DB_NAME', 'DATABASE_NAME') or _db_from_url('name')
 _USE_POSTGRES = bool(_DB_NAME)
 _DB_USER = _db_setting('DB_USER', 'DATABASE_USER') or _db_from_url('username', 'test_user')
@@ -454,8 +471,12 @@ _DB_PORT = _db_setting('DB_PORT', 'DATABASE_PORT') or _db_from_url('port', '5432
 # today fails every connection. k8s/configmap.yaml carries the enablement
 # procedure. Once the server has TLS, raise this to "require", or better
 # "verify-full" with DB_SSLROOTCERT, which also authenticates the server.
-_DB_SSLMODE = _db_setting('DB_SSLMODE', 'DATABASE_SSLMODE', default='prefer')
-_DB_SSLROOTCERT = _db_setting('DB_SSLROOTCERT', 'DATABASE_SSLROOTCERT')
+_DB_SSLMODE = (
+    _db_setting('DB_SSLMODE', 'DATABASE_SSLMODE') or _db_url_query('sslmode') or 'prefer'
+)
+_DB_SSLROOTCERT = (
+    _db_setting('DB_SSLROOTCERT', 'DATABASE_SSLROOTCERT') or _db_url_query('sslrootcert')
+)
 
 _PG_OPTIONS = {
     'connect_timeout': 10,
