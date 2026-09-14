@@ -73,3 +73,13 @@ fix each time was the same: grep for the claim when you change the thing it desc
   `k8s/deployment.yaml` still has no server-side TLS, so raising it would break every
   pod's DB connection; already analyzed and correctly declined in round 1 (§17.1) and
   round 2 (§19.4) of the migration plan doc. Full detail: `docs/django-5.2-lts-migration-plan.md` §22.
+- **2026-09-14 — repo hygiene.** `mobile/modules/fhe-autofill/android/.gradle/` (8
+  files) had been accidentally committed in `9242485` (Homomorphic Autofill feature).
+  Gradle rewrites these machine-local build-cache files on every local build/sync, so
+  `mobile/` perpetually showed as "modified" in git/Cursor with zero real source
+  change — unrelated to any PR's actual diff. Untracked them (`git rm -r --cached`)
+  and added `.gradle/` to `mobile/.gitignore`. Also removed the stray, tracked
+  `debug_hre_output.txt` (an old Hardhat debug dump with no ongoing purpose). If a
+  tracked path under `mobile/`, `k8s/`, or elsewhere looks like it "keeps changing"
+  with no corresponding source edit, check whether it's a build/cache artifact that
+  was committed by mistake before assuming a real regression.
