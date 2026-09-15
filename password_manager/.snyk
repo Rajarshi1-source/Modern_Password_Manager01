@@ -1,0 +1,40 @@
+# Snyk (https://snyk.io) policy file, patches or ignores known vulnerabilities.
+version: v1.25.0
+ignore:
+  SNYK-PYTHON-ECDSA-6184115:
+    - '*':
+        reason: >-
+          Minerva timing attack on the P-256 curve (CVE-2024-23342 /
+          GHSA-wj6h-64fc-37mp). No fixed version exists for any ecdsa
+          release -- the python-ecdsa maintainers explicitly consider
+          side-channel attacks out of scope for a pure-Python
+          implementation (constant-time scalar multiplication is not
+          achievable in pure Python) and have stated there is no planned
+          fix. Not reachable from this codebase's own code: zero
+          `import ecdsa` / `from ecdsa` matches anywhere in
+          password_manager/. ecdsa is pulled in only transitively, by
+          web3/eth-account for Ethereum secp256k1 key handling; this
+          app's own signing/verification goes through cryptography
+          (Ed25519/EC via hazmat.primitives.asymmetric) and liboqs, never
+          ecdsa directly. Mirrors the equivalent suppression for the same
+          CVE (PYSEC-2026-1325) in password_manager/pip-audit-ignores.txt.
+        expires: 2026-10-30T00:00:00.000Z
+  SNYK-PYTHON-ECDSA-6219992:
+    - '*':
+        reason: >-
+          "ecdsa Missing Encryption of Sensitive Data" (CWE-311, CVSS 7.4,
+          no CVE assigned) -- Snyk's own broader classification of the
+          exact same root defect as SNYK-PYTHON-ECDSA-6184115 above: ecdsa
+          is a pure-Python implementation with no constant-time guarantee,
+          so an attacker observing a single sign/keygen/ECDH operation can
+          reconstruct the private key via timing. Snyk's own advisory
+          states "Fixes for side-channel vulnerabilities will not be
+          developed" and "There is no fixed version for ecdsa" -- pinning
+          cannot help here any more than for the ID above. Same
+          non-reachability: zero `import ecdsa` / `from ecdsa` matches
+          anywhere in password_manager/; ecdsa is pulled in only
+          transitively by web3/eth-account, and this app's own
+          signing/verification goes through cryptography and liboqs,
+          never ecdsa directly.
+        expires: 2026-10-30T00:00:00.000Z
+patch: {}

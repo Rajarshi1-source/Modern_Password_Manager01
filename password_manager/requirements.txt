@@ -32,8 +32,16 @@ mozilla-django-oidc>=4.0.0,<5
 # Cryptography & Security
 # Pin 48.0.1 to fix GHSA-537c-gmf6-5ccf (the PyPI wheels bundle OpenSSL; <48.0.1
 # ships the build hit by the 2026-06-09 advisory). Stay on 48.x, not 49.x:
-# pyOpenSSL 26.x requires cryptography<49. The exact pin below is what enforces
-# this — the pyOpenSSL>=26.0.0 floor does not cap cryptography on its own.
+# verified against each pyOpenSSL 26.x release's own metadata (not assumed),
+# only 26.2.0 declares "cryptography<49,>=46.0.0" -- 26.0.0/26.1.0 cap below
+# 48.0.1 (<47 / <48) and 26.3.0+ require >=49 -- so pip's resolver backtracks
+# the unbounded pyOpenSSL>=26.0.0 floor below onto exactly 26.2.0 (confirmed
+# via `pip install --dry-run`; see pyOpenSSL==26.2.0 in requirements-lock.txt).
+# Declined: GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (Bleichenbacher oracle in
+# PKCS#7 EnvelopedData decrypt, fixed 50.0.0) is not reachable — this codebase
+# never calls pkcs7_decrypt_der/_pem/_smime — and taking it would force
+# pyOpenSSL to 26.3.0+ (which needs cryptography>=49) alongside it. Revisit
+# both together if either is bumped.
 cryptography==48.0.1
 argon2-cffi==21.3.0
 argon2-cffi-bindings==25.1.0
@@ -90,7 +98,7 @@ pyfcm==1.5.4
 # Django Channels & WebSockets
 channels>=4.0.0,<5
 channels-redis>=4.3.0,<5
-daphne>=4.0.0,<5
+daphne>=4.2.2,<5  # GHSA-rrc9-mx66-ffcm (CVE-2026-44545): Daphne passed no WebSocket message/frame size limits to Autobahn (whose own defaults are unbounded), letting an unauthenticated client exhaust server memory; fixed in 4.2.2
 
 # GeoIP & Device Detection
 geoip2==4.7.0
@@ -111,7 +119,7 @@ python-dateutil==2.9.0.post0
 python-crontab==3.3.0
 cron-descriptor==1.4.5
 pytz==2025.2
-tzdata==2025.2
+tzdata==2026.2
 tzlocal==5.3.1
 
 # XML & Serialization
@@ -162,7 +170,25 @@ tensorflow>=2.13.0
 
 # Deep Learning - PyTorch & Transformers (Behavioral Recovery)
 torch>=2.12.0
-transformers>=4.35.1
+# No ceiling: capping this at <5.0 (an earlier revision of this file did,
+# citing GHSA-fgcw-684q-jj6r / CVE-2026-5241 as a "breaking major release
+# we don't need") was itself the bug. pip-audit's CI job resolves an
+# unbounded floor to the latest stable 5.x (verified against PyPI, not
+# assumed: transformers 5.17.0 as of 2026-09-15) -- a <5.0 cap
+# force-downgrades that to the newest 4.x instead, which reintroduces
+# five CVEs whose fixes only ever shipped in 5.x (PYSEC-2025-217/
+# CVE-2025-14929, PYSEC-2026-2288/CVE-2026-1839 fixed 5.0.0, PYSEC-2026-
+# 2289/CVE-2026-4372 fixed 5.3.0, PYSEC-2026-2290/CVE-2026-5241 fixed
+# 5.5.0, PYSEC-2026-3929/CVE-2026-9856 fixed 5.10.0).
+# Floor raised from 4.35.1 to 5.10.0 (CodeRabbit, PR #513): the old
+# 4.35.1 floor was wide enough that any 4.x release still satisfied it,
+# so if some future transitive constraint ever forced the resolver
+# below 5.0, pip would silently pick a vulnerable 4.x build instead of
+# failing loudly. >=5.10.0 -- the version fixing the last of the five
+# CVEs above -- makes that impossible: no version satisfying this floor
+# is vulnerable to any of them. Keep this unbounded; do not reintroduce
+# a <6.0 ceiling.
+transformers>=5.10.0
 
 # Quantum Random Number Generation
 httpx>=0.27.0
@@ -255,7 +281,7 @@ pytest-cov>=5.0.0
 # Optional: MongoDB Support
 # ============================================================================
 pymongo==4.6.3
-aiohttp>=3.14.1 # GHSA-jg22-mg44-37j8 (CookieJar.load RCE) + GHSA-hg6j-4rv6-33pg (cross-origin cookie leak) fixed in 3.14.0; >=3.14.1 also picks up the chunked-decompression / resource-exhaustion hardening (Snyk security upgrade, PR #348)
+aiohttp>=3.14.3 # GHSA-jg22-mg44-37j8 (CookieJar.load RCE) + GHSA-hg6j-4rv6-33pg (cross-origin cookie leak) fixed in 3.14.0; 3.14.1 picks up chunked-decompression / resource-exhaustion hardening (Snyk security upgrade, PR #348); + GHSA-mfx4-hv73-q22v (CVE-2026-69243) WebSocket-upgrade request smuggling, fixed 3.14.2; 3.14.3 adds permessage-deflate / control-frame hardening
 authlib>=1.6.12 # not directly required, pinned by Snyk to avoid a vulnerability
 filelock>=3.20.3 # not directly required, pinned by Snyk to avoid a vulnerability
 zipp>=3.23.1 # not directly required, pinned by Snyk to avoid a vulnerability
@@ -351,7 +377,7 @@ heartpy>=1.2.7             # Heart rate analysis from rPPG
 # ============================================================================
 # Web Scraping & Dark Web Monitoring
 # ============================================================================
-scrapy>=2.14.2
+scrapy>=2.17.0  # GHSA-76g3-c3x4-crvx (CVE-2026-84366): S3DownloadHandler sent signed s3:// requests over plaintext HTTP by default; fixed in 2.17.0 (HTTPS is now the default transport)
 
 # ============================================================================
 # AI-Powered Security Assistant (Claude API)
@@ -362,8 +388,15 @@ anthropic>=0.40.0
 # Security overrides for transitive dependencies
 # ============================================================================
 cbor2>=5.9.0
-keras>=3.13.2
-nltk>=3.9.4  # GHSA-gfwx-w7gr-fvh7 XSS, GHSA-jm6w-m3j8-898g unauth shutdown
-tornado>=6.5.7  # GHSA-mgf9-4vpg-hj56 (CVE-2026-49855) gzip-bomb DoS, GHSA-3x9g-8vmp-wqvf (CVE-2026-49853) cross-origin credential leak
+ecdsa>=0.19.2  # Declined-in-part: CVE-2024-23342 (Minerva P-256 timing attack, GHSA-wj6h-64fc-37mp) is an upstream won't-fix — pure-Python scalar multiplication cannot be made constant-time, and the maintainers explicitly do not recommend this library for production signing/ECDH. This project uses `cryptography`/liboqs for its own crypto; ecdsa is only a transitive dependency. 0.19.2 is still the safest available floor: it fixes CVE-2026-33936 (a DER-parsing truncation bug) and adds partial nonce-bit-size hardening against Minerva.
+h2>=4.4.1  # GHSA-6hr6-w5qg-qmwg (CVE-2026-71554): duplicate Host headers were forwarded unchecked, a request-smuggling primitive when an intermediary downgrades HTTP/2 to HTTP/1.1; fixed in 4.4.1
+httplib2>=0.32.0  # GHSA-j5g9-f88f-gfj3 (CVE-2026-59939): unbounded gzip/deflate response decompression allowed a small payload to expand to gigabytes in memory (decompression bomb); fixed in 0.32.0 with hard/safe/ratio limits
+keras>=3.15.1  # GHSA-5gwj-m78q-7pq3 (CVE-2026-12481) Lambda/TorchModuleWrapper.from_config deserialization bypassing safe_mode when unset, plus the HDF5/tar/zip archive hardening (ExternalLink/SoftLink, virtual datasets, shape bombs, path traversal) shipped across the 3.15.x line
+msgpack>=1.2.1  # GHSA-6v7p-g79w-8964 (CVE-2026-57585): reusing an Unpacker after a caught error could trigger an out-of-bounds read/SEGV; fixed in 1.2.1 (still create a new Unpacker after any error other than OutOfData)
+nltk>=3.10.3  # GHSA-x99w-6fgc-pmfw (CVE-2026-71513/CVE-2026-79657): AllowlistUnpickler validated only the pickle module, not the name, so dotted-name traversal (sklearn.os.system) and in-namespace gadgets (numpy.f2py.crackfortran.myeval) reached RCE through TransitionParser/Punkt model loading; fixed in 3.10.3. Supersedes the prior 3.9.4 GHSA-gfwx-w7gr-fvh7/GHSA-jm6w-m3j8-898g floor.
+pillow>=12.3.0  # Fixes a batch of memory-safety CVEs (WindowsViewer command injection CVE-2026-55798; FontFile/GD decompression-bomb bypasses CVE-2026-54059/-54060/-55379/-55380; JPEG2000/PDF/TGA/EPS/RankFilter/paste-crop/ImageCms OOB reads, writes, and infinite loops CVE-2026-59197/-59199/-59200/-59203/-59204/-59205 and related); fixed in 12.3.0
+protego>=0.6.2  # GHSA-wjmf-p669-5m5p (CVE-2026-55520): robots.txt Allow/Disallow wildcards compiled to regex could exponentially backtrack, freezing the crawler on a crafted robots.txt; fixed in 0.6.2 (wildcard matching no longer uses regex)
+soupsieve>=2.8.4  # GHSA-2wc2-fm75-p42x (CVE-2026-49476) unbounded memory from large comma-separated selector lists + GHSA-836r-79rf-4m37 (CVE-2026-49477) catastrophic-backtracking ReDoS on unterminated quoted attribute selectors; both fixed in 2.8.4
+tornado>=6.5.8  # + CVE-2026-82397/GHSA-mpf4-983q-p7j4: urlencoded body parsing omitted max_num_fields, so one request could stall the event loop; fixed in 6.5.8 (also adds multipart-parts and legacy set_cookie hardening). Prior GHSA-mgf9-4vpg-hj56 / GHSA-3x9g-8vmp-wqvf fixes still apply.
 Twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS
 ujson>=5.12.1  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump()

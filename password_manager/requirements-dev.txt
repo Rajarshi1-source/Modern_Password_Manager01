@@ -22,8 +22,10 @@ click>=8.1.8
 rich>=14.0.0
 
 # Web Scraping (Dev / ML)
-scrapy>=2.15.0,<3.0
+scrapy>=2.17.0,<3.0  # GHSA-76g3-c3x4-crvx (CVE-2026-84366): S3DownloadHandler sent signed s3:// requests over plaintext HTTP by default; fixed in 2.17.0
+protego>=0.6.2  # GHSA-wjmf-p669-5m5p (CVE-2026-55520): robots.txt Allow/Disallow wildcards compiled to regex could exponentially backtrack, freezing the crawler on a crafted robots.txt; fixed in 0.6.2 (transitive via scrapy)
 beautifulsoup4>=4.13.0
+soupsieve>=2.8.4  # GHSA-2wc2-fm75-p42x (CVE-2026-49476) unbounded memory from large comma-separated selector lists + GHSA-836r-79rf-4m37 (CVE-2026-49477) catastrophic-backtracking ReDoS on unterminated quoted attribute selectors; both fixed in 2.8.4 (transitive via beautifulsoup4)
 selenium>=4.39.0
 PySocks>=1.7.1
 

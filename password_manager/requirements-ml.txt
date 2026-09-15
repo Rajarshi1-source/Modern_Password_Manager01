@@ -23,7 +23,13 @@ tensorflow>=2.13.0
 
 # Deep Learning - PyTorch & Transformers (CPU-only wheels via index above)
 torch>=2.12.0
-transformers>=4.35.1
+# Floor raised to 5.10.0 -- keep in sync with requirements.txt's
+# transformers line and its comment there for the full rationale (a
+# <5.0 cap previously force-downgraded resolves onto a vulnerable 4.x
+# release; a floor below 5.10.0 left the door open for the same thing
+# via any future transitive <5.x constraint). No ceiling: do not
+# reintroduce a <6.0 cap.
+transformers>=5.10.0
 
 # Quantum Random Number Generation
 qiskit>=1.0.0
@@ -58,5 +64,7 @@ dlib>=19.24.2
 face-recognition>=1.3.0
 heartpy>=1.2.7
 
-# Keras override pinned for transitive security
-keras>=3.13.2
+# Security overrides for transitive dependencies
+h2>=4.4.1  # GHSA-6hr6-w5qg-qmwg (CVE-2026-71554): duplicate Host headers were forwarded unchecked, a request-smuggling primitive when an intermediary downgrades HTTP/2 to HTTP/1.1; fixed in 4.4.1
+keras>=3.15.1  # GHSA-5gwj-m78q-7pq3 (CVE-2026-12481) Lambda/TorchModuleWrapper.from_config deserialization bypassing safe_mode when unset, plus HDF5/tar/zip archive hardening shipped across the 3.15.x line
+pillow>=12.3.0  # Fixes a batch of memory-safety CVEs (WindowsViewer command injection CVE-2026-55798; FontFile/GD decompression-bomb bypasses; JPEG2000/PDF/TGA/EPS/RankFilter/paste-crop/ImageCms OOB reads, writes, and infinite loops); pulled in transitively by mediapipe/dlib/face-recognition; fixed in 12.3.0
