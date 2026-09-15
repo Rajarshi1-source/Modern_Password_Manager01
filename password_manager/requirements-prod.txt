@@ -24,7 +24,7 @@ psycopg[binary]==3.2.4
 # Channels / WebSockets
 channels==4.3.2
 channels-redis==4.3.0
-daphne==4.2.1
+daphne==4.2.3  # GHSA-rrc9-mx66-ffcm (CVE-2026-44545): unbounded WebSocket frame size let an unauthenticated client exhaust server memory; fixed in 4.2.2. Was pinned to the vulnerable 4.2.1 here while requirements-core.txt/requirements.txt already required >=4.2.2 -- matches requirements-lock.txt's resolved pin.
 
 # Cloud & Notifications
 firebase-admin==5.3.0
@@ -51,7 +51,7 @@ psutil>=5.9.0
 
 # ML Runtime (if enabled)
 torch>=2.12.0
-transformers>=4.57.2
+transformers>=5.10.0  # floor raised from 4.57.2 -- see requirements.txt's transformers line for the full rationale. No <6.0 ceiling.
 numpy>=2.2.0
 pandas>=2.2.0
 scikit-learn>=1.4.0
