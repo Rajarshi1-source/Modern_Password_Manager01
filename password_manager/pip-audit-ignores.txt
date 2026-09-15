@@ -297,3 +297,24 @@ PYSEC-2026-3740 exp:2026-10-25
 # name. Same package/class as PYSEC-2026-97 above; re-evaluate both when
 # nltk ships a fixed release.
 PYSEC-2026-597 exp:2026-09-20
+
+# ecdsa Minerva timing attack on the P-256 curve (PYSEC-2026-1325, aliases
+# CVE-2024-23342 / GHSA-wj6h-64fc-37mp), surfaced on PR #513's scan
+# 2026-09-15. NO upstream fix exists and none is planned: pure-Python
+# ecdsa.SigningKey.sign_digest()/keygen/ECDH cannot be made constant-time,
+# and the python-ecdsa maintainers explicitly consider side-channel attacks
+# out of scope for the project (fix_versions: [] in this scan's own
+# pip-audit-report.json — every release, including the current 0.19.2, is
+# and will stay affected). Pinning cannot help.
+#
+# Unreachable here, verified by grep rather than assumed: `import ecdsa` /
+# `from ecdsa` return zero matches across password_manager/ (excluding the
+# venv). ecdsa is not a direct dependency of this project's own code — it is
+# declared in requirements.txt's "Security overrides for transitive
+# dependencies" section purely as a floor (fixes CVE-2026-33936, a
+# DER-parsing bug, unrelated to Minerva) to keep a vulnerable OLDER ecdsa
+# from being pulled in transitively by web3/eth-account (Ethereum secp256k1
+# key handling), same reasoning as the nltk floor two entries up. This app's
+# own signing/verification goes through cryptography (Ed25519/EC via
+# hazmat.primitives.asymmetric) and liboqs, never ecdsa directly.
+PYSEC-2026-1325 exp:2026-10-30
