@@ -32,12 +32,16 @@ mozilla-django-oidc>=4.0.0,<5
 # Cryptography & Security
 # Pin 48.0.1 to fix GHSA-537c-gmf6-5ccf (the PyPI wheels bundle OpenSSL; <48.0.1
 # ships the build hit by the 2026-06-09 advisory). Stay on 48.x, not 49.x:
-# pyOpenSSL 26.x requires cryptography<49. The exact pin below is what enforces
-# this — the pyOpenSSL>=26.0.0 floor does not cap cryptography on its own.
+# verified against each pyOpenSSL 26.x release's own metadata (not assumed),
+# only 26.2.0 declares "cryptography<49,>=46.0.0" -- 26.0.0/26.1.0 cap below
+# 48.0.1 (<47 / <48) and 26.3.0+ require >=49 -- so pip's resolver backtracks
+# the unbounded pyOpenSSL>=26.0.0 floor below onto exactly 26.2.0 (confirmed
+# via `pip install --dry-run`; see pyOpenSSL==26.2.0 in requirements-lock.txt).
 # Declined: GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (Bleichenbacher oracle in
 # PKCS#7 EnvelopedData decrypt, fixed 50.0.0) is not reachable — this codebase
-# never calls pkcs7_decrypt_der/_pem/_smime — and taking it would break the
-# pyOpenSSL<49 constraint above. Revisit alongside a pyOpenSSL major bump.
+# never calls pkcs7_decrypt_der/_pem/_smime — and taking it would force
+# pyOpenSSL to 26.3.0+ (which needs cryptography>=49) alongside it. Revisit
+# both together if either is bumped.
 cryptography==48.0.1
 argon2-cffi==21.3.0
 argon2-cffi-bindings==25.1.0
