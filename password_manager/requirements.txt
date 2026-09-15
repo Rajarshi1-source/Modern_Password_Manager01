@@ -172,17 +172,23 @@ tensorflow>=2.13.0
 torch>=2.12.0
 # No ceiling: capping this at <5.0 (an earlier revision of this file did,
 # citing GHSA-fgcw-684q-jj6r / CVE-2026-5241 as a "breaking major release
-# we don't need") was itself the bug. pip-audit's CI job resolves this
-# floor with no ceiling, which already lands on the latest stable 5.x
-# (verified against PyPI, not assumed: transformers 5.17.0 as of
-# 2026-09-15) -- a <5.0 cap force-downgrades that to the newest 4.x
-# instead, which reintroduces five CVEs whose fixes only ever shipped in
-# 5.x (PYSEC-2025-217/CVE-2025-14929, PYSEC-2026-2288/CVE-2026-1839 fixed
-# 5.0.0, PYSEC-2026-2289/CVE-2026-4372 fixed 5.3.0, PYSEC-2026-2290/
-# CVE-2026-5241 fixed 5.5.0, PYSEC-2026-3929/CVE-2026-9856 fixed 5.10.0) --
-# all satisfied by the 5.17.0 the uncapped floor already installs. Keep
-# this unbounded; do not reintroduce a <5.0 ceiling.
-transformers>=4.35.1
+# we don't need") was itself the bug. pip-audit's CI job resolves an
+# unbounded floor to the latest stable 5.x (verified against PyPI, not
+# assumed: transformers 5.17.0 as of 2026-09-15) -- a <5.0 cap
+# force-downgrades that to the newest 4.x instead, which reintroduces
+# five CVEs whose fixes only ever shipped in 5.x (PYSEC-2025-217/
+# CVE-2025-14929, PYSEC-2026-2288/CVE-2026-1839 fixed 5.0.0, PYSEC-2026-
+# 2289/CVE-2026-4372 fixed 5.3.0, PYSEC-2026-2290/CVE-2026-5241 fixed
+# 5.5.0, PYSEC-2026-3929/CVE-2026-9856 fixed 5.10.0).
+# Floor raised from 4.35.1 to 5.10.0 (CodeRabbit, PR #513): the old
+# 4.35.1 floor was wide enough that any 4.x release still satisfied it,
+# so if some future transitive constraint ever forced the resolver
+# below 5.0, pip would silently pick a vulnerable 4.x build instead of
+# failing loudly. >=5.10.0 -- the version fixing the last of the five
+# CVEs above -- makes that impossible: no version satisfying this floor
+# is vulnerable to any of them. Keep this unbounded; do not reintroduce
+# a <6.0 ceiling.
+transformers>=5.10.0
 
 # Quantum Random Number Generation
 httpx>=0.27.0

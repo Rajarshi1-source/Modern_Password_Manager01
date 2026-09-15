@@ -23,13 +23,13 @@ tensorflow>=2.13.0
 
 # Deep Learning - PyTorch & Transformers (CPU-only wheels via index above)
 torch>=2.12.0
-# No ceiling: keep this in sync with requirements.txt's transformers line
-# and its comment there for the full rationale. A <5.0 cap here previously
-# force-downgraded the resolve to the newest 4.x release, which reintroduces
-# five CVEs (PYSEC-2025-217, PYSEC-2026-2288/2289/2290, PYSEC-2026-3929)
-# whose fixes only shipped in 5.x -- all satisfied by the latest stable
-# 5.x this uncapped floor already installs.
-transformers>=4.35.1
+# Floor raised to 5.10.0 -- keep in sync with requirements.txt's
+# transformers line and its comment there for the full rationale (a
+# <5.0 cap previously force-downgraded resolves onto a vulnerable 4.x
+# release; a floor below 5.10.0 left the door open for the same thing
+# via any future transitive <5.x constraint). No ceiling: do not
+# reintroduce a <6.0 cap.
+transformers>=5.10.0
 
 # Quantum Random Number Generation
 qiskit>=1.0.0
