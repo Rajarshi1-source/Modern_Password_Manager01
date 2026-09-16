@@ -107,12 +107,30 @@ jobs:
           cd password_manager
           python manage.py migrate --noinput
           python manage.py runserver 0.0.0.0:8000 &
-          sleep 10
-          curl -f http://localhost:8000/api/health/ || echo "Waiting for server..."
-          sleep 5
+          # Bounded polling instead of a fixed sleep + best-effort curl: the
+          # previous `sleep 10; curl -f ... || echo` masked a failed check
+          # (job kept going either way) and could let k6 start hammering a
+          # server that wasn't listening yet. This fails the step outright
+          # if Django never becomes ready within 60s.
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 http://localhost:8000/api/health/; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Django server did not become ready" >&2
+              exit 1
+            fi
+            sleep 2
+          done
 
       - name: Set up k6
         uses: grafana/setup-k6-action@db07bd9765aac508ef18982e52ab937fe633a065 # v1.2.1
+        with:
+          # Pinned deliberately: setup-k6-action defaults to whatever k6
+          # release is newest at run time, which could silently change this
+          # weekly smoke test's behavior or summary metrics without a repo
+          # change. Bump intentionally when reviewed.
+          k6-version: '2.2.0'
 
       - name: Run k6 load test
         id: k6
