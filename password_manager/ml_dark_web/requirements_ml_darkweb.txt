@@ -6,7 +6,11 @@ torch>=2.12.0
 torchvision>=0.20.1
 
 # Transformers for BERT models
-transformers>=4.46.2
+# Floor raised to 5.10.0 -- keep in sync with requirements.txt's
+# transformers line and its comment there for the full rationale (a
+# floor below 5.10.0 permits 4.x builds still vulnerable to CVEs fixed
+# across the 5.x line). No ceiling: do not reintroduce a <6.0 cap.
+transformers>=5.10.0
 tokenizers>=0.22.0,<0.24.0
 sentencepiece>=0.2.1
 
