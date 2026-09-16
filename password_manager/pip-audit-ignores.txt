@@ -246,13 +246,21 @@ PYSEC-2025-194 exp:2026-10-10
 # still true and still worth knowing, but it is no longer what carries these:
 # the finding is fixed by version, not accepted by reachability.
 
-# keras.utils.get_file tar extraction — we don't call get_file with
-# user-controlled URLs (grep -r returns no matches).
-PYSEC-2025-121 exp:2026-09-15
-
-# nltk.util.filestring path traversal — we don't call filestring
-# (grep -r returns no matches).
-PYSEC-2026-97 exp:2026-09-15
+# PYSEC-2025-121 (keras.utils.get_file tar extraction, CVE-2024-55459) and
+# PYSEC-2026-97 (nltk.util.filestring path traversal, CVE-2026-0846) were
+# suppressed here on reachability grounds (grep -r found no calls to
+# either function) until their exp:2026-09-15 date. Fresh threat
+# assessment at renewal time (2026-09-16, PR #514): both are now fixed by
+# version, not merely unreached. PYSEC-2025-121's last_affected is 3.7.0;
+# requirements.txt pins keras>=3.15.1. PYSEC-2026-97's last_affected is
+# 3.9.2; requirements.txt pins nltk>=3.10.3. Both floors are already well
+# outside their respective affected ranges, so pip-audit's own
+# version-range match will never raise either against what CI installs —
+# same "our pin is outside it, nothing to suppress" resolution as
+# PYSEC-2025-183, PYSEC-2024-277, PYSEC-2025-189/190/191, 192/193,
+# 195/196/197, 210/PYSEC-2026-139, and 216/217/218 above. Entries removed
+# rather than renewed; re-add only if a future downgrade of either
+# package's floor brings it back into the affected range.
 
 # nltk model-artifact APIs bypass pathsec and touch files outside allowed
 # roots (CVE-2026-81726 / GHSA-8mgp-746c-j5xp, reported by pip-audit as
