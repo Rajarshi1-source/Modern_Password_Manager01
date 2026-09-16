@@ -31,9 +31,13 @@
  *   time-locked-recover, tl-recover-username, tl-recover-file
  *   tl-recover-begin, tl-recover-poll, tl-recover-set-password
  */
-const { test, expect } = require('@playwright/test');
-const { execSync } = require('child_process');
-const path = require('path');
+import { test, expect } from '@playwright/test';
+import { execSync } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 const API_URL = process.env.API_URL || 'http://localhost:8000';
