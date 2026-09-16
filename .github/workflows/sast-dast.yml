@@ -38,6 +38,11 @@ jobs:
   semgrep:
     name: Semgrep SAST
     runs-on: ubuntu-latest
+    # step-security/harden-runner is intentionally NOT added to this job:
+    # it patches the runner's own network namespace and does not work
+    # inside a `container:` job (this one runs in returntocorp/semgrep).
+    # It is present on the nuclei job below and elsewhere in the repo's
+    # other non-containerized security workflows.
     container:
       image: returntocorp/semgrep:latest
     steps:
@@ -78,6 +83,11 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
