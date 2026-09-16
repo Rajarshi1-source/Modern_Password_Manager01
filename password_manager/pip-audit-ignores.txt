@@ -281,30 +281,39 @@ PYSEC-2025-194 exp:2026-10-10
 # path.
 #
 # Correcting how this entry described the dependency: `nltk` IS declared
-# directly (`nltk>=3.9.4` in requirements.txt, pinned `nltk==3.9.4` in
+# directly (`nltk>=3.10.3` in requirements.txt, pinned `nltk==3.10.3` in
 # requirements-lock.txt), not merely pulled in transitively. It sits under
 # requirements.txt's "Security overrides for transitive dependencies" heading
 # alongside cbor2/keras/tornado/Twisted/ujson: the declaration exists ONLY to
-# raise the floor on a version something else pulls in (its own comment names
-# GHSA-gfwx-w7gr-fvh7 and GHSA-jm6w-m3j8-898g). So it must not be deleted to
-# "remove an unused dependency" -- dropping the line would let a transitively
-# resolved, older, vulnerable nltk back in. Nothing imports it; the pin is a
-# floor, and the suppression stands on non-reachability either way.
+# raise the floor on a version something else pulls in. The floor was
+# originally 3.9.4 (its own comment named GHSA-gfwx-w7gr-fvh7 and
+# GHSA-jm6w-m3j8-898g); it was later raised again to 3.10.3 for an
+# unrelated AllowlistUnpickler RCE (GHSA-x99w-6fgc-pmfw / CVE-2026-79657).
+# So it must not be deleted to "remove an unused dependency" -- dropping
+# the line would let a transitively resolved, older, vulnerable nltk back
+# in. Nothing imports it; the pin is a floor, and the suppression stands
+# on non-reachability either way.
 # Accepted-risk record: SECURITY.md "Accepted & Tracked Risks" entry 5, as
 # DEPENDENCY_POLICY.md line 59 requires ("Accepted risks must be documented in
 # SECURITY.md"). This manifest is the ENFORCEMENT layer; that entry is the
 # disclosure one. Keep them in sync on every renewal.
 PYSEC-2026-3740 exp:2026-10-25
 
-# nltk.data.load()/find() percent-encoded path traversal (CVE-2026-12243,
-# incomplete fix for issue #3504). NO upstream fix exists — the advisory's
-# last_affected is 3.9.4, which is the current latest (fix_versions: []), so
-# every release is affected and pinning cannot help. nltk is not imported
-# anywhere in the codebase (grep -r "nltk" *.py returns no matches), so
-# nltk.data.load()/find() is never reached with a user-controlled resource
-# name. Same package/class as PYSEC-2026-97 above; re-evaluate both when
-# nltk ships a fixed release.
-PYSEC-2026-597 exp:2026-09-20
+# PYSEC-2026-597 (nltk.data.load()/find() percent-encoded path traversal,
+# CVE-2026-12243) was suppressed here on the same reachability grounds as
+# PYSEC-2026-97 above (grep -r found no nltk import at all) until its
+# exp:2026-09-20 date. Fresh threat assessment at renewal time (2026-09-16,
+# PR #514): PYSEC-2026-597's own record still lists last_affected 3.9.4
+# with no fix_versions, but its GHSA alias (GHSA-m42h-3232-vpv3) records
+# Fixed: 3.10.0 -- and PyPI's own vulnerability feed (the exact source
+# pip-audit's default PyPI service queries) confirms the GHSA side is
+# authoritative here: fetching https://pypi.org/pypi/nltk/3.10.3/json
+# lists only PYSEC-2026-3740's alias against this version, not this one,
+# while the same fetch for nltk/3.9.4/json lists both (plus 55 others).
+# requirements.txt's nltk>=3.10.3 floor is therefore already outside this
+# advisory's real affected range, same "our pin is outside it, nothing to
+# suppress" resolution as PYSEC-2025-121/2026-97 above and
+# PYSEC-2025-183/etc. Removed rather than renewed.
 
 # ecdsa Minerva timing attack on the P-256 curve (PYSEC-2026-1325, aliases
 # CVE-2024-23342 / GHSA-wj6h-64fc-37mp), surfaced on PR #513's scan
