@@ -4,7 +4,7 @@
  * standard base64 strings matching the backend `Base64BytesField` format.
  */
 
-import api from '../api';
+import { api } from '../api';
 
 const BASE = '/api/zk';
 

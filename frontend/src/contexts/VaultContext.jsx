@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import axios from 'axios';
 import { VaultService } from '../services/vaultService';
 import firebaseService from '../services/firebaseService';
-import api from '../services/api';
+import { api } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import sessionVaultCrypto from '../services/sessionVaultCrypto';
 import sessionVaultCryptoV3 from '../services/sessionVaultCryptoV3';

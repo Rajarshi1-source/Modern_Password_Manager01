@@ -114,7 +114,9 @@ vi.mock('../../services/onionSyncService', () => ({
 }));
 
 vi.mock('../../services/api', () => ({
-  default: {
+  // Named export, matching services/api.js's real shape (VaultContext
+  // imports the named `api` binding, not the unrelated default export).
+  api: {
     get: vi.fn(() => Promise.resolve({ data: {} })),
     post: vi.fn(() => Promise.resolve({ data: {} })),
   },
@@ -134,7 +136,7 @@ vi.mock('../../services/vaultService', () => ({
 }));
 
 import axios from 'axios';
-import api from '../../services/api';
+import { api } from '../../services/api';
 import { DECOY_WRITE_REFUSAL } from '../../services/sessionVaultCrypto';
 import { VaultProvider, useVault } from '../VaultContext';
 

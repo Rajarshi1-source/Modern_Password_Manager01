@@ -5,7 +5,7 @@
  * binding_hash, this module just shuttles base64 blobs to the server.
  */
 
-import api from '../api';
+import { api } from '../api';
 
 import { toBase64 } from '../zkProof';
 

@@ -5,7 +5,7 @@
  * features). This module only shuttles JSON.
  */
 
-import api from '../api';
+import { api } from '../api';
 
 const BASE = '/api/ambient';
 

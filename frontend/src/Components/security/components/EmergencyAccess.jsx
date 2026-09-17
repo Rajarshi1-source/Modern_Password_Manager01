@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import styled, { keyframes } from 'styled-components';
 import { FaUserPlus, FaUserShield, FaExclamationTriangle, FaCheck, FaTimes, FaHourglassHalf, FaKey, FaCog, FaTrash, FaShieldAlt } from 'react-icons/fa';
-import api from '../../../services/api';
+import { api } from '../../../services/api';
 import Button from '../../common/Button';
 import Input from '../../common/Input';
 import Modal from '../../common/Modal';
