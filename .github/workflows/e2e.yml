@@ -18,6 +18,19 @@ name: E2E Tests (Playwright)
 # all 5 projects serially would make this workflow prohibitively slow.
 # `npm run test:e2e:ci` (added alongside this workflow) pins
 # `--project=chromium`. Widen once the suite's actual pass rate is known.
+#
+# 2026-09-16 (run #3): the first real run confirmed the "not expected to be
+# clean" prediction above more severely than planned for — nearly all 317
+# tests failed (mostly ECONNREFUSED to 127.0.0.1:8000, since no backend is
+# booted here) and, combined with playwright.config.js's CI `retries: 2` and
+# the default 60s per-test timeout, that is up to ~3 minutes of dead time
+# PER failing test. Over ~300 failing tests, the job blew past GitHub's
+# hard 6-hour job cap and was killed mid-run without ever producing a
+# report. Retries exist for flaky tests, not deterministic
+# infra-is-missing failures, so `test:e2e:ci` now passes `--retries=0
+# --max-failures=40` (bail out after 40 failures) to bound runtime without
+# changing any individual test's pass/fail verdict. `timeout-minutes` below
+# is a hard backstop on top of that.
 # =============================================================================
 
 on:
@@ -40,6 +53,7 @@ jobs:
   e2e:
     name: Playwright E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Harden Runner
