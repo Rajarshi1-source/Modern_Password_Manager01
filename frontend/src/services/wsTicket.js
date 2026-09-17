@@ -1,4 +1,4 @@
-import api from './api';
+import { api } from './api';
 
 /**
  * Fetch a short-lived, single-use WebSocket ticket.

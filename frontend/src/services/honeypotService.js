@@ -8,7 +8,7 @@
  * @created 2026-02-01
  */
 
-import api from './api';
+import { api } from './api';
 
 const HONEYPOT_BASE = '/api/security/honeypot';
 

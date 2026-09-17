@@ -1,7 +1,9 @@
 import { vi, describe, test, expect } from 'vitest';
 
 vi.mock('./api', () => ({
-  default: {
+  // Named export, matching services/api.js's real shape
+  // (smartContractService imports the named `api` binding).
+  api: {
     get: (url) => Promise.resolve({ data: { ok: true, url, method: 'GET' } }),
     post: (url) => Promise.resolve({ data: { ok: true, url, method: 'POST' } }),
     patch: (url) => Promise.resolve({ data: { ok: true, url, method: 'PATCH' } }),

@@ -6,7 +6,7 @@
  * only has to present lifetime counters and let the user revoke.
  */
 
-import api from './api';
+import { api } from './api';
 
 const BASE = '/api/self-destruct';
 

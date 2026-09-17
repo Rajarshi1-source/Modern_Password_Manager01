@@ -6,7 +6,7 @@
  * multi-sig, DAO voting, escrow, and oracle.
  */
 
-import api from './api';
+import { api } from './api';
 
 const BASE_URL = '/api/smart-contracts';
 
