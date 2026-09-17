@@ -10,7 +10,7 @@
 import { test, expect, Page, Route } from '@playwright/test';
 
 // Test configuration
-const BASE_URL = process.env.TEST_URL || 'http://localhost:3000';
+const BASE_URL = process.env.TEST_URL || 'http://localhost:5173';
 const API_URL = process.env.API_URL || 'http://localhost:8000';
 
 // Mock data
