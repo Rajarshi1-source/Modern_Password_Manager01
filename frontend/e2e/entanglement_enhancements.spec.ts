@@ -6,7 +6,7 @@
 
 import { test, expect, Page, Route } from '@playwright/test';
 
-const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:3000';
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
 const API_BASE = process.env.PLAYWRIGHT_API_URL || 'http://localhost:8000';
 
 // Test data

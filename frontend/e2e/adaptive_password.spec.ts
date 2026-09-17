@@ -9,7 +9,7 @@
 import { test, expect, Page } from '@playwright/test';
 
 // Test configuration
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 const API_URL = process.env.API_URL || 'http://localhost:8000/api';
 
 // Test user credentials

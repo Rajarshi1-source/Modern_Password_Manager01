@@ -6,7 +6,7 @@
 
 import { test, expect, type Page, type BrowserContext, type APIRequestContext } from '@playwright/test';
 
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 
 // Test utilities
 const login = async (page: Page): Promise<void> => {
