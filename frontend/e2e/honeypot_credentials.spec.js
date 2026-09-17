@@ -89,6 +89,12 @@ test.describe('Honeypot alert toast', () => {
   test('settings screen renders the planted honeypot', async ({ page }) => {
     await page.goto('/security/honeypot-credentials');
 
+    // App.jsx renders VaultUnlockModal globally whenever an authenticated
+    // session has no in-memory vault key -- true here since this test
+    // fakes auth via a bare localStorage token/mocked /me, with no real
+    // vault setup. Dismiss it ("Later") so it doesn't cover the page.
+    await page.getByRole('button', { name: 'Later' }).click();
+
     // Heading rendered by HoneypotSettings.jsx.
     await expect(page.getByRole('heading', { name: /Honeypot credentials/i })).toBeVisible();
     // The stubbed honeypot row.
@@ -98,6 +104,7 @@ test.describe('Honeypot alert toast', () => {
 
   test('events screen shows a triggered alert row', async ({ page }) => {
     await page.goto('/security/honeypot-credentials/events');
+    await page.getByRole('button', { name: 'Later' }).click();
 
     await expect(page.getByRole('heading', { name: /Honeypot access log/i })).toBeVisible();
     await expect(page.getByText('203.0.113.9')).toBeVisible();
