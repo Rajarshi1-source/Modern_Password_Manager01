@@ -11,7 +11,7 @@
  *     to the dashboard after a simulated successful response.
  */
 
-const { test, expect } = require('@playwright/test');
+import { test, expect } from '@playwright/test';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 

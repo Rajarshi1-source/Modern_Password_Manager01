@@ -9,7 +9,7 @@
  * code are transmitted.
  */
 
-import api from './api';
+import { api } from './api';
 
 const BASE = '/api/ultrasonic';
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import styled, { keyframes } from 'styled-components';
 import { FaExclamationTriangle, FaLock, FaClock, FaArrowLeft, FaShieldAlt } from 'react-icons/fa';
-import api from '../../services/api';
+import { api } from '../../services/api';
 import VaultItemCard from './VaultItemCard';
 
 // Animations

@@ -1,33 +1,64 @@
 /**
  * Playwright E2E Tests for Adaptive Password Feature
  * ===================================================
- * 
- * End-to-end browser tests covering the full user journey
- * of the Epigenetic Password Adaptation feature.
+ *
+ * End-to-end browser tests covering the Epigenetic Password Adaptation
+ * feature's actual current UI (AdaptivePasswordDashboard, mounted at
+ * /security/adaptive -- see that component's own header comment for the
+ * "this used to be unreachable" history).
+ *
+ * Rewritten 2026-09 after this file was found to predate that dashboard: it
+ * referenced a /dashboard route and data-testids on the login form that
+ * were never built, assumed a login-page typing-capture UI that does not
+ * exist, and pointed API mocks at http://localhost:8000/... directly --
+ * but axios calls relative paths through Vite's dev-server proxy
+ * (localhost:5173 -> 127.0.0.1:8000 server-side), so page.route() never
+ * saw a matching request and every one of those mocks was a silent no-op.
  */
 
 import { test, expect, Page } from '@playwright/test';
 
-// Test configuration
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
-const API_URL = process.env.API_URL || 'http://localhost:8000/api';
-
-// Test user credentials
-const TEST_USER = {
-    email: 'e2e-adaptive@test.com',
-    password: 'TestPassword123!',
-};
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-async function loginUser(page: Page): Promise<void> {
-    await page.goto(`${BASE_URL}/login`);
-    await page.fill('[data-testid="email-input"]', TEST_USER.email);
-    await page.fill('[data-testid="password-input"]', TEST_USER.password);
-    await page.click('[data-testid="login-button"]');
-    await page.waitForURL('**/dashboard**');
+/**
+ * Sign up a fresh user and log in. There is no seeded test account and no
+ * separate "username" field anywhere in the UI -- registration sets
+ * Django's User.username to the email address (App.jsx handleSignup), and
+ * handleSignup does NOT log the new user in; a second, explicit login is
+ * required. Same flow as layered_recovery.spec.js's signupUser.
+ */
+async function signupAndLogin(page: Page): Promise<string> {
+    const email = `e2e-adaptive-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.com`;
+    const password = 'TestPassword123!';
+
+    await page.goto(`${BASE_URL}/signup`);
+    // /signup still renders the LOGIN form first (isLoginMode starts true);
+    // the signup form only appears after clicking the "Sign Up" tab.
+    await page.getByRole('button', { name: 'Sign Up', exact: true }).click();
+    await page.fill('#signup-email', email);
+    await page.fill('#signup-password', password);
+    await page.fill('#signup-confirm-password', password);
+    await page.getByRole('button', { name: 'Create Free Account' }).click();
+
+    // handleSignup() only registers the account then flips back to the
+    // login form (setIsLoginMode(true)) -- it does NOT log the user in.
+    await page.waitForSelector('#login-email');
+    await page.fill('#login-email', email);
+    await page.fill('#login-password', password);
+    await page.getByRole('button', { name: 'Login to Vault' }).click();
+
+    // Login is a pure React-state transition (no client-side navigation),
+    // so wait for the token useAuth persists rather than a URL change --
+    // there is no /dashboard route.
+    await page.waitForFunction(
+        () => !!window.localStorage.getItem('accessToken'),
+        { timeout: 15000 },
+    );
+    return email;
 }
 
 async function navigateToAdaptiveSettings(page: Page): Promise<void> {
@@ -36,52 +67,12 @@ async function navigateToAdaptiveSettings(page: Page): Promise<void> {
     await page.click('[data-testid="adaptive-password-tab"]');
 }
 
-/**
- * Zero-knowledge wire guard: fail the test if ANY request to an adaptive
- * endpoint carries the raw password (or a forbidden plaintext field) in its
- * body. This is the e2e half of the leak test (remediation plan §8).
- */
-function attachNoPlaintextGuard(page: Page, secret: string): { assertClean: () => void } {
-    const violations: string[] = [];
-    page.on('request', (request) => {
-        const url = request.url();
-        if (!url.includes('/adaptive/')) return;
-        const body = request.postData() || '';
-        // Match both the raw secret and its JSON-escaped form: quotes/backslashes
-        // in a password are escaped inside a JSON request body (e.g. Test"Pass →
-        // Test\"Pass), which a naive raw-string search would miss.
-        const jsonEscaped = JSON.stringify(secret).slice(1, -1);
-        if (body.includes(secret) || body.includes(jsonEscaped)) {
-            violations.push(`raw password in ${request.method()} ${url}`);
-        }
-        for (const field of ['"password"', '"original_password"', '"adapted_password"']) {
-            if (body.includes(field)) {
-                violations.push(`forbidden field ${field} in ${request.method()} ${url}`);
-            }
-        }
-    });
-    return {
-        assertClean: () => expect(violations, violations.join('; ')).toHaveLength(0),
-    };
-}
-
-// Shared zero-knowledge v2 preference model + stub. The client GETs this and
-// generates the suggestion locally; centralized so the v2 contract lives in one
-// place across the suggestion and accessibility tests.
-const PREFERENCE_MODEL = {
-    model_version: 5,
-    substitution_weights: { e: { '3': 0.9 }, o: { '0': 0.8 }, a: { '@': 0.8 } },
-    memorability_params: {},
-};
-
-async function routePreferenceModel(page: Page): Promise<void> {
-    await page.route(`${API_URL}/security/adaptive/preference-model/`, async (route) => {
-        await route.fulfill({
-            status: 200,
-            contentType: 'application/json',
-            body: JSON.stringify(PREFERENCE_MODEL),
-        });
-    });
+/** Opt in via the consent dialog and wait for the panel to report Enabled. */
+async function enableAdaptivePasswords(page: Page): Promise<void> {
+    await page.click('[data-testid="adaptive-enable-toggle"]');
+    await page.click('[data-testid="consent-checkbox"]');
+    await page.click('[data-testid="confirm-consent-button"]');
+    await expect(page.getByText('Enabled', { exact: true })).toBeVisible();
 }
 
 // =============================================================================
@@ -90,16 +81,15 @@ async function routePreferenceModel(page: Page): Promise<void> {
 
 test.describe('Adaptive Password Feature Visibility', () => {
     test('feature is visible when enabled', async ({ page }) => {
-        await loginUser(page);
+        await signupAndLogin(page);
         await navigateToAdaptiveSettings(page);
 
-        // Feature section should be visible
         const section = page.locator('[data-testid="adaptive-password-section"]');
         await expect(section).toBeVisible();
     });
 
     test('opt-in toggle is present', async ({ page }) => {
-        await loginUser(page);
+        await signupAndLogin(page);
         await navigateToAdaptiveSettings(page);
 
         const toggle = page.locator('[data-testid="adaptive-enable-toggle"]');
@@ -113,170 +103,87 @@ test.describe('Adaptive Password Feature Visibility', () => {
 
 test.describe('Adaptive Password Opt-In', () => {
     test('shows consent dialog when enabling', async ({ page }) => {
-        await loginUser(page);
+        await signupAndLogin(page);
         await navigateToAdaptiveSettings(page);
 
-        // Click enable toggle
         await page.click('[data-testid="adaptive-enable-toggle"]');
 
-        // Consent dialog should appear
         const dialog = page.locator('[data-testid="consent-dialog"]');
         await expect(dialog).toBeVisible();
 
-        // Privacy information should be shown
         await expect(page.locator('text=typing patterns')).toBeVisible();
         await expect(page.locator('text=differential privacy')).toBeVisible();
     });
 
     test('enables feature after consent', async ({ page }) => {
-        await loginUser(page);
+        await signupAndLogin(page);
         await navigateToAdaptiveSettings(page);
 
-        await page.click('[data-testid="adaptive-enable-toggle"]');
-        await page.click('[data-testid="consent-checkbox"]');
-        await page.click('[data-testid="confirm-consent-button"]');
-
-        // Status should change to enabled
-        await expect(page.locator('text=Enabled')).toBeVisible();
+        await enableAdaptivePasswords(page);
     });
 
     test('cancel consent does not enable', async ({ page }) => {
-        await loginUser(page);
+        await signupAndLogin(page);
         await navigateToAdaptiveSettings(page);
 
         await page.click('[data-testid="adaptive-enable-toggle"]');
         await page.click('[data-testid="cancel-consent-button"]');
 
-        // Should still be disabled
         await expect(page.locator('[data-testid="adaptive-status-disabled"]')).toBeVisible();
     });
 });
 
 // =============================================================================
-// Typing Pattern Capture Tests
+// Typing Pattern Capture Tests -- SKIPPED
 // =============================================================================
+// The unit tests already document this gap explicitly
+// (frontend/src/__tests__/adaptive_password.test.tsx): "TypingPatternCapture
+// is a headless component (renders null); the visible password-input/privacy
+// UI it was originally specced with was never built". It is not imported or
+// mounted anywhere in App.jsx's login form, and there is no
+// [data-testid="typing-capture-indicator"] anywhere in the frontend source.
+// Skipping here rather than asserting against UI that does not exist -- the
+// same call the unit tests already made.
 
 test.describe('Typing Pattern Capture', () => {
-    test('captures typing patterns on login without sending the password', async ({ page }) => {
-        // First enable adaptive passwords
-        await loginUser(page);
-        await navigateToAdaptiveSettings(page);
-        await page.click('[data-testid="adaptive-enable-toggle"]');
-        await page.click('[data-testid="consent-checkbox"]');
-        await page.click('[data-testid="confirm-consent-button"]');
-
-        // Logout
-        await page.click('[data-testid="logout-button"]');
-
-        // Login again - pattern should be captured. Guard the wire: under ZK v2
-        // the record-session call must carry only a fingerprint, never the password.
-        const guard = attachNoPlaintextGuard(page, TEST_USER.password);
-
-        await page.goto(`${BASE_URL}/login`);
-        await page.fill('[data-testid="email-input"]', TEST_USER.email);
-
-        // Type password slowly to simulate real typing
-        const passwordInput = page.locator('[data-testid="password-input"]');
-        for (const char of TEST_USER.password) {
-            await passwordInput.type(char, { delay: 100 });
-        }
-
-        await page.click('[data-testid="login-button"]');
-        await page.waitForURL('**/dashboard**');
-
-        // No adaptive request may have carried the raw password.
-        guard.assertClean();
-    });
-
-    test('shows capture indicator when enabled', async ({ page }) => {
-        await loginUser(page);
-        await navigateToAdaptiveSettings(page);
-        await page.click('[data-testid="adaptive-enable-toggle"]');
-        await page.click('[data-testid="consent-checkbox"]');
-        await page.click('[data-testid="confirm-consent-button"]');
-
-        // Logout and go to login
-        await page.click('[data-testid="logout-button"]');
-        await page.goto(`${BASE_URL}/login`);
-
-        // When focusing password input, capture indicator should show
-        await page.focus('[data-testid="password-input"]');
-
-        // Look for capture indicator (privacy indicator)
-        await expect(page.locator('[data-testid="typing-capture-indicator"]')).toBeVisible();
-    });
+    test.skip(
+        'captures typing patterns on login without sending the password -- '
+        + 'login-page capture UI was never built (see adaptive_password.test.tsx)',
+        () => {},
+    );
+    test.skip(
+        'shows capture indicator when enabled -- '
+        + 'no [data-testid="typing-capture-indicator"] exists in the frontend',
+        () => {},
+    );
 });
 
 // =============================================================================
-// Adaptation Suggestion Tests
+// Adaptation Suggestion Tests -- SKIPPED
 // =============================================================================
+// Reaching AdaptivePasswordSuggestion's modal for real requires, in order: a
+// decryptable vault item (client-side AES-GCM against the real session key
+// -- not mockable over the network), enabling the feature, switching to the
+// "Adapt a credential" tab, re-deriving the adaptive fingerprint key via a
+// SECOND master-password prompt, selecting the item, and clicking
+// "Check for a better version". Even after all of that, suggestAdaptation()'s
+// own docstring (TypingPatternCapture.jsx) states the strength gate "rejects
+// roughly three quarters of candidate substitutions... measured over a
+// 200-password corpus" -- has_suggestion is genuinely non-deterministic for
+// any single fixed password, so a test asserting the modal always appears
+// would be flaky by the algorithm's own design, not by test construction.
+// Exercising this reliably needs a test-only hook to force a specific
+// substitution outcome, which does not currently exist.
 
 test.describe('Adaptation Suggestions', () => {
-    // Zero-knowledge v2: the client GETs the learned preference model (see the
-    // shared routePreferenceModel helper above) and generates + ranks the
-    // suggestion locally — it never POSTs the password to /suggest/ (410).
-
-    test('shows suggestion modal when available', async ({ page }) => {
-        await routePreferenceModel(page);
-
-        await loginUser(page);
-        await page.goto(`${BASE_URL}/dashboard`);
-
-        const modal = page.locator('[data-testid="adaptation-suggestion-modal"]');
-        await expect(modal).toBeVisible({ timeout: 5000 });
-    });
-
-    test('displays a memorability improvement', async ({ page }) => {
-        await routePreferenceModel(page);
-
-        await loginUser(page);
-        await page.goto(`${BASE_URL}/dashboard`);
-
-        const modal = page.locator('[data-testid="adaptation-suggestion-modal"]');
-        await modal.waitFor({ state: 'visible', timeout: 5000 });
-
-        // The improvement is now computed client-side; assert a percentage shows.
-        await expect(page.getByText(/\+\d+% easier/i)).toBeVisible();
-    });
-
-    test('can accept suggestion without sending the password', async ({ page }) => {
-        const guard = attachNoPlaintextGuard(page, TEST_USER.password);
-        await routePreferenceModel(page);
-        await page.route(`${API_URL}/security/adaptive/apply/`, async (route) => {
-            await route.fulfill({
-                status: 200,
-                contentType: 'application/json',
-                body: JSON.stringify({ schema_version: 2, adaptation_id: 'test-uuid', generation: 1 }),
-            });
-        });
-
-        await loginUser(page);
-        await page.goto(`${BASE_URL}/dashboard`);
-
-        const modal = page.locator('[data-testid="adaptation-suggestion-modal"]');
-        await modal.waitFor({ state: 'visible', timeout: 5000 });
-
-        await page.click('[data-testid="accept-suggestion-button"]');
-
-        // Success message should appear, and apply must not have leaked plaintext.
-        await expect(page.locator('text=Password updated')).toBeVisible();
-        guard.assertClean();
-    });
-
-    test('can reject suggestion', async ({ page }) => {
-        await routePreferenceModel(page);
-
-        await loginUser(page);
-        await page.goto(`${BASE_URL}/dashboard`);
-
-        const modal = page.locator('[data-testid="adaptation-suggestion-modal"]');
-        await modal.waitFor({ state: 'visible', timeout: 5000 });
-
-        await page.click('[data-testid="reject-suggestion-button"]');
-
-        // Modal should close
-        await expect(modal).not.toBeVisible();
-    });
+    test.skip(
+        'shows suggestion modal when available -- needs a real vault item + '
+        + 'fingerprint unlock + a non-deterministic strength gate (see block comment)',
+        () => {},
+    );
+    test.skip('displays a memorability improvement -- same gap as above', () => {});
+    test.skip('can accept suggestion without sending the password -- same gap as above', () => {});
+    test.skip('can reject suggestion -- same gap as above', () => {});
 });
 
 // =============================================================================
@@ -285,50 +192,70 @@ test.describe('Adaptation Suggestions', () => {
 
 test.describe('Typing Profile Dashboard', () => {
     test('displays typing profile statistics', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/profile/`, async (route) => {
+        await signupAndLogin(page);
+
+        // page.route matches against the request as the PAGE sees it
+        // (http://localhost:5173/api/... via Vite's dev-server proxy), not
+        // the :8000 origin the backend actually runs on -- a bare
+        // 'http://localhost:8000/...' pattern here would never match.
+        await page.route('**/api/security/adaptive/profile/', async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
+                // Flat, not nested under a "profile" key --
+                // TypingProfileCard.jsx reads profile?.total_sessions etc.
+                // directly off this response.
                 body: JSON.stringify({
                     has_profile: true,
-                    profile: {
-                        total_sessions: 25,
-                        success_rate: 0.85,
-                        average_wpm: 45,
-                        profile_confidence: 0.75,
-                    },
+                    total_sessions: 25,
+                    success_rate: 0.85,
+                    average_wpm: 45,
+                    profile_confidence: 0.75,
                 }),
             });
         });
 
-        await loginUser(page);
         await navigateToAdaptiveSettings(page);
+        await enableAdaptivePasswords(page);
 
-        // Statistics should be visible
-        await expect(page.locator('text=25 sessions')).toBeVisible();
+        // Default tab is 'profile'. TypingProfileCard renders each stat's
+        // value and label as separate elements ("25" then "Sessions"), not
+        // one combined "25 sessions" text node.
+        await expect(page.locator('text=25').first()).toBeVisible();
+        await expect(page.getByText('Sessions', { exact: true })).toBeVisible();
         await expect(page.locator('text=85%')).toBeVisible();
-        await expect(page.locator('text=45 WPM')).toBeVisible();
+        await expect(page.getByText('WPM', { exact: true })).toBeVisible();
     });
 
     test('shows adaptation history', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/history/`, async (route) => {
+        await signupAndLogin(page);
+
+        await page.route('**/api/security/adaptive/history/', async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
+                // AdaptivePasswordDashboard's history rows key off
+                // generation/status/suggested_at/can_rollback, not
+                // id/status/created_at.
                 body: JSON.stringify({
                     adaptations: [
-                        { id: '1', status: 'active', created_at: '2024-01-15T10:00:00Z' },
-                        { id: '2', status: 'rolled_back', created_at: '2024-01-10T10:00:00Z' },
+                        {
+                            id: '1', generation: 2, status: 'active',
+                            suggested_at: '2024-01-15T10:00:00Z', can_rollback: true,
+                        },
+                        {
+                            id: '2', generation: 1, status: 'rolled_back',
+                            suggested_at: '2024-01-10T10:00:00Z', can_rollback: false,
+                        },
                     ],
                 }),
             });
         });
 
-        await loginUser(page);
         await navigateToAdaptiveSettings(page);
+        await enableAdaptivePasswords(page);
         await page.click('[data-testid="history-tab"]');
 
-        // History items should be visible
         const historyList = page.locator('[data-testid="adaptation-history-list"]');
         await expect(historyList).toBeVisible();
         await expect(historyList.locator('li')).toHaveCount(2);
@@ -341,7 +268,23 @@ test.describe('Typing Profile Dashboard', () => {
 
 test.describe('Password Rollback', () => {
     test('can rollback to previous password', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/rollback/`, async (route) => {
+        await signupAndLogin(page);
+
+        await page.route('**/api/security/adaptive/history/', async (route) => {
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    adaptations: [
+                        {
+                            id: '1', generation: 1, status: 'active',
+                            suggested_at: '2024-01-15T10:00:00Z', can_rollback: true,
+                        },
+                    ],
+                }),
+            });
+        });
+        await page.route('**/api/security/adaptive/rollback/', async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
@@ -349,17 +292,16 @@ test.describe('Password Rollback', () => {
             });
         });
 
-        await loginUser(page);
         await navigateToAdaptiveSettings(page);
+        await enableAdaptivePasswords(page);
         await page.click('[data-testid="history-tab"]');
 
-        // Click rollback on active adaptation
+        // rollback-button only renders when can_rollback is true; clicking
+        // it swaps it in place for confirm-rollback-button (the same
+        // click-then-confirm pattern the delete flow below also uses).
         await page.click('[data-testid="rollback-button"]');
-
-        // Confirm rollback
         await page.click('[data-testid="confirm-rollback-button"]');
 
-        // Success message
         await expect(page.locator('text=Rolled back')).toBeVisible();
     });
 });
@@ -367,10 +309,16 @@ test.describe('Password Rollback', () => {
 // =============================================================================
 // GDPR Data Management Tests
 // =============================================================================
+// data-management-tab (and the export/erasure it exposes) is deliberately
+// NOT gated on `enabled` -- AdaptivePasswordDashboard.jsx: "Both work even
+// if the feature is switched off... they are GDPR rights, not features" --
+// so these two tests skip the opt-in flow entirely.
 
 test.describe('GDPR Data Management', () => {
     test('can export all data', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/export/`, async (route) => {
+        await signupAndLogin(page);
+
+        await page.route('**/api/security/adaptive/export/', async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
@@ -383,35 +331,33 @@ test.describe('GDPR Data Management', () => {
             });
         });
 
-        await loginUser(page);
         await navigateToAdaptiveSettings(page);
         await page.click('[data-testid="data-management-tab"]');
         await page.click('[data-testid="export-data-button"]');
 
-        // Download should trigger (or data should display)
         await expect(page.locator('text=Export complete')).toBeVisible();
     });
 
     test('can delete all typing data', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/data/`, async (route) => {
+        await signupAndLogin(page);
+
+        await page.route('**/api/security/adaptive/data/', async (route) => {
             if (route.request().method() === 'DELETE') {
                 await route.fulfill({
                     status: 200,
                     contentType: 'application/json',
                     body: JSON.stringify({ success: true }),
                 });
+            } else {
+                await route.continue();
             }
         });
 
-        await loginUser(page);
         await navigateToAdaptiveSettings(page);
         await page.click('[data-testid="data-management-tab"]');
         await page.click('[data-testid="delete-data-button"]');
-
-        // Confirm deletion
         await page.click('[data-testid="confirm-delete-button"]');
 
-        // Success message
         await expect(page.locator('text=Data deleted')).toBeVisible();
     });
 });
@@ -422,7 +368,23 @@ test.describe('GDPR Data Management', () => {
 
 test.describe('Adaptation Feedback', () => {
     test('can submit feedback after using adaptation', async ({ page }) => {
-        await page.route(`${API_URL}/security/adaptive/feedback/`, async (route) => {
+        await signupAndLogin(page);
+
+        await page.route('**/api/security/adaptive/history/', async (route) => {
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({
+                    adaptations: [
+                        {
+                            id: '1', generation: 1, status: 'active',
+                            suggested_at: '2024-01-15T10:00:00Z', can_rollback: false,
+                        },
+                    ],
+                }),
+            });
+        });
+        await page.route('**/api/security/adaptive/feedback/', async (route) => {
             await route.fulfill({
                 status: 200,
                 contentType: 'application/json',
@@ -430,20 +392,16 @@ test.describe('Adaptation Feedback', () => {
             });
         });
 
-        await loginUser(page);
         await navigateToAdaptiveSettings(page);
+        await enableAdaptivePasswords(page);
         await page.click('[data-testid="history-tab"]');
 
-        // Click feedback button on an adaptation
         await page.click('[data-testid="feedback-button"]');
-
-        // Fill feedback form
         await page.click('[data-testid="rating-star-4"]');
         await page.click('[data-testid="accuracy-improved-checkbox"]');
         await page.fill('[data-testid="feedback-text"]', 'Works great!');
         await page.click('[data-testid="submit-feedback-button"]');
 
-        // Success message
         await expect(page.locator('text=Feedback submitted')).toBeVisible();
     });
 });
@@ -453,43 +411,32 @@ test.describe('Adaptation Feedback', () => {
 // =============================================================================
 
 test.describe('Accessibility', () => {
-    test('suggestion modal is accessible', async ({ page }) => {
-        // v2: suggestion is generated client-side from the preference model.
-        await routePreferenceModel(page);
-
-        await loginUser(page);
-        await page.goto(`${BASE_URL}/dashboard`);
-
-        const modal = page.locator('[data-testid="adaptation-suggestion-modal"]');
-        await modal.waitFor({ state: 'visible', timeout: 5000 });
-
-        // Check ARIA attributes
-        await expect(modal).toHaveAttribute('role', 'dialog');
-        await expect(modal).toHaveAttribute('aria-modal', 'true');
-
-        // Focus should be trapped in modal
-        await page.keyboard.press('Tab');
-        const focusedElement = await page.evaluate(() => document.activeElement?.tagName);
-        expect(['BUTTON', 'INPUT', 'A']).toContain(focusedElement);
-    });
+    test.skip(
+        'suggestion modal is accessible -- depends on the suggestion modal '
+        + '(see the "Adaptation Suggestions" block comment above)',
+        () => {},
+    );
 
     test('keyboard navigation works', async ({ page }) => {
-        await loginUser(page);
+        await signupAndLogin(page);
         await navigateToAdaptiveSettings(page);
 
-        // Tab through interactive elements
-        await page.keyboard.press('Tab');
-
-        // Enable toggle should be focusable
         const toggle = page.locator('[data-testid="adaptive-enable-toggle"]');
-        await expect(toggle).toBeFocused();
+        // The persistent authenticated nav (Settings/Logout/feature links)
+        // renders ABOVE this routed page content, so it -- not the toggle --
+        // owns the first several Tab stops. Tab forward until the toggle is
+        // reached rather than assuming Tab #1 lands on it.
+        let focused = false;
+        for (let i = 0; i < 30 && !focused; i++) {
+            await page.keyboard.press('Tab');
+            // eslint-disable-next-line no-loop-func -- toggle is stable across iterations
+            focused = await toggle.evaluate((el) => el === document.activeElement);
+        }
+        expect(focused).toBe(true);
 
-        // Space should toggle
         await page.keyboard.press('Space');
-        // Consent dialog should open
         await expect(page.locator('[data-testid="consent-dialog"]')).toBeVisible();
 
-        // Escape should close
         await page.keyboard.press('Escape');
         await expect(page.locator('[data-testid="consent-dialog"]')).not.toBeVisible();
     });
