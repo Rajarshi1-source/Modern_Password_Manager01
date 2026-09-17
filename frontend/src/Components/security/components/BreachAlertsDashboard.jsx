@@ -13,7 +13,7 @@ import BreachAlertCard from './BreachAlertCard';
 import BreachDetailModal from './BreachDetailModal';
 import ConnectionStatusBadge from './ConnectionStatusBadge';
 import ConnectionHealthMonitor from './ConnectionHealthMonitor';
-import ApiService from '../../../services/api';
+import { api } from '../../../services/api';
 import { errorTracker } from '../../../services/errorTracker';
 
 const DashboardContainer = styled.div`
@@ -304,7 +304,7 @@ const BreachAlertsDashboard = () => {
     const fetchAlerts = async () => {
       try {
         setLoading(true);
-        const response = await ApiService.api.get('/ml-darkweb/breach_matches/');
+        const response = await api.get('/ml-darkweb/breach_matches/');
         setAlerts(response.data || []);
       } catch (error) {
         console.error('Error fetching alerts:', error);
@@ -322,7 +322,7 @@ const BreachAlertsDashboard = () => {
   // Mark alert as read
   const handleMarkAsRead = async (alertId) => {
     try {
-      await ApiService.api.post('/ml-darkweb/resolve_match/', {
+      await api.post('/ml-darkweb/resolve_match/', {
         match_id: alertId
       });
       
