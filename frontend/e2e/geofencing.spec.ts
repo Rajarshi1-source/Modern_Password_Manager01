@@ -4,7 +4,7 @@
  * End-to-end tests for geofencing and impossible travel detection UI.
  */
 
-import { test, expect, type Page, type BrowserContext, type APIRequestContext } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 

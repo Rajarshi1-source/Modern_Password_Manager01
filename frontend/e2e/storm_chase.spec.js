@@ -60,6 +60,7 @@ test.describe('Storm Chase Mode E2E', () => {
     
     // Check for storm mode badge (might not be visible if no storms)
     const badge = page.locator('.storm-mode-badge');
+    await badge.isVisible().catch(() => false);
     
     // Just verify the element structure exists (may be hidden)
     await expect(page.locator('.storm-status-container')).toBeVisible();
@@ -98,6 +99,7 @@ test.describe('Storm Chase Mode E2E', () => {
     
     // Alert cards should have severity-based styling
     const alerts = page.locator('.storm-alert-card');
+    await alerts.count().catch(() => 0);
     
     // Check severity classes exist
     await expect(page.locator('.alert-severity')).toBeVisible();
@@ -181,6 +183,7 @@ test.describe('Storm Chase Mode E2E', () => {
     
     // Storm buoys should have special styling
     const stormBuoy = page.locator('.buoy-marker.storm-active');
+    await stormBuoy.count().catch(() => 0);
     // May not always be present if no storms
     await expect(page.locator('.buoy-marker')).toBeVisible();
   });

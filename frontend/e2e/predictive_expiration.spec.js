@@ -289,7 +289,8 @@ test.describe('Predictive Password Expiration E2E', () => {
     // Loading indicator might briefly appear
     const loadingIndicator = page.locator('.loading, .loader, .spinner');
     
-    // Either loading was visible or page loaded too fast
+    // Either loading was visible or page loaded too fast - don't fail either way
+    await loadingIndicator.isVisible().catch(() => false);
     await page.waitForTimeout(100);
   });
 
