@@ -12,6 +12,28 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Honeypot alert toast', () => {
   test.beforeEach(async ({ page }) => {
+    // Both routes are behind the `!isAuthenticated ? <Navigate to="/" />`
+    // guard in App.jsx, and useAuth only flips isAuthenticated once
+    // GET /api/auth/me/ resolves 200 for the token in localStorage. Without
+    // this, the page never mounts and the honeypot stubs below are never
+    // hit -- see liveness_ble_spo2.spec.js's header for the same guard.
+    // Stubbing /me (rather than requiring a live backend) keeps this test
+    // hermetic, matching its own stated design intent.
+    await page.addInitScript(() => {
+      localStorage.setItem('accessToken', 'e2e-honeypot-test-token');
+    });
+    await page.route('**/api/auth/me/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 1,
+          username: 'e2e-honeypot',
+          email: 'e2e-honeypot@test.com',
+        }),
+      });
+    });
+
     // Stub the honeypot credential list so the settings screen loads
     // deterministically without any auth flow noise.
     await page.route('**/api/honeypot/credentials/', async (route) => {
