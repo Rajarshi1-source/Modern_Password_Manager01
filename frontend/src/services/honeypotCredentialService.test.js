@@ -7,7 +7,11 @@ vi.mock('./api', () => {
     return Promise.resolve({ data: { ok: true, url, method } });
   };
   return {
-    default: {
+    // Named export, matching services/api.js's real shape: `api` is the
+    // configured axios instance; the default export (`ApiService`) is an
+    // unrelated namespaced object with no top-level get/post/etc. of its
+    // own. honeypotCredentialService imports the named `api` binding.
+    api: {
       get: (url) => mkResponse(url, 'GET'),
       post: (url) => mkResponse(url, 'POST'),
       patch: (url) => mkResponse(url, 'PATCH'),

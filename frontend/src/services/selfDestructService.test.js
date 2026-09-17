@@ -1,7 +1,9 @@
 import { vi, describe, test, expect } from 'vitest';
 
 vi.mock('./api', () => ({
-  default: {
+  // Named export, matching services/api.js's real shape
+  // (selfDestructService imports the named `api` binding).
+  api: {
     get: (url) => Promise.resolve({ data: { ok: true, url, method: 'GET' } }),
     post: (url, payload) => Promise.resolve({ data: { ok: true, url, payload, method: 'POST' } }),
     patch: (url, payload) => Promise.resolve({ data: { ok: true, url, payload, method: 'PATCH' } }),

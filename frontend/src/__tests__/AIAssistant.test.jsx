@@ -38,7 +38,9 @@ describe('aiAssistantService', () => {
     };
 
     vi.doMock('../services/api', () => ({
-      default: mockApi,
+      // Named export, matching services/api.js's real shape
+      // (aiAssistantService imports the named `api` binding).
+      api: mockApi,
     }));
 
     // Dynamic import to use mocked module
