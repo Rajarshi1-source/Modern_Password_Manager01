@@ -18,7 +18,18 @@
  *   * TIERS, tierBytes, slotPayloadLen
  */
 
-import argon2 from 'argon2-browser';
+// Namespace import, not a default import: argon2-browser is aliased straight
+// to its raw dist/argon2-bundled.min.js (vite.config.js resolve.alias, "Fix
+// for argon2-browser WASM issue in some bundler modes") and excluded from
+// Vite's dependency pre-bundling (optimizeDeps.exclude), so it's served as
+// raw CJS/UMD without esbuild's default-export interop shim. `import argon2
+// from 'argon2-browser'` throws "does not provide an export named 'default'"
+// as a result -- crashing every route, since App.jsx eagerly (non-lazily)
+// imports VaultUnlockModal, which imports this module. Every other caller in
+// this codebase (cryptoService.js, sessionVaultCryptoV3.js,
+// secureVaultCrypto.js) already uses the namespace form for exactly this
+// reason; this file was the one holdout.
+import * as argon2 from 'argon2-browser';
 
 // ---------------------------------------------------------------------------
 // Constants (must match SPEC.md + envelope.py)
