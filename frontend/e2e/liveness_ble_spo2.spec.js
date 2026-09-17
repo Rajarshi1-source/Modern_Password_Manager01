@@ -102,9 +102,22 @@ test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
 
     // The native Web Bluetooth chooser is out-of-page; a human selects the
     // device when the button is clicked (see the manual procedure above).
+    // Connecting is available from the first challenge onward ("optional"
+    // suffix on the button) -- do it as early as possible so the oximeter
+    // is already streaming once the pulse challenge starts.
     await page.getByRole('button', { name: /Connect pulse oximeter/i }).click();
 
-    // Once a device is streaming, the SpO2 tile appears with a plausible value.
+    // spo2-value only exists in the DOM while PulseChallenge is mounted
+    // (LivenessVerification renders it for the 'pulse' case only), which by
+    // REQUIRED_CHALLENGES default ('gaze', 'expression', 'pulse') is the
+    // THIRD challenge -- checking for the tile immediately after connecting
+    // would time out during gaze/expression even with a working oximeter.
+    // Wait for the pulse challenge to actually be showing first.
+    await expect(page.getByRole('heading', { name: '❤️ Pulse Detection' }))
+      .toBeVisible({ timeout: 120_000 });
+
+    // Once a device is streaming AND a face ROI is being processed, the
+    // SpO2 tile appears with a plausible value.
     const spo2 = page.getByTestId('spo2-value');
     await expect(spo2).toBeVisible({ timeout: 30_000 });
     const text = (await spo2.textContent()) || '';
@@ -119,6 +132,10 @@ test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
     // "button not found" timeout.
     await expect(page).toHaveURL(/liveness-verification/);
     await page.getByRole('button', { name: /Connect pulse oximeter/i }).click();
+    // See the first test above: spo2-value only exists during the pulse
+    // challenge (3rd by default), so wait for it before the tile check.
+    await expect(page.getByRole('heading', { name: '❤️ Pulse Detection' }))
+      .toBeVisible({ timeout: 120_000 });
     await expect(page.getByTestId('spo2-value')).toBeVisible({ timeout: 30_000 });
 
     // Operator powers off / unpairs the oximeter here (manual step). The tile
@@ -126,8 +143,13 @@ test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
     // or left stale once its hardware source is gone.
     // Printed, not just commented: without it the wait looks like a hang and
     // then fails as an opaque 30s timeout when the operator does nothing.
-    console.log('\n>>> MANUAL STEP: power off or unpair the oximeter now '
-      + '(30s) — the SpO2 tile must disappear.\n');
+    // Act promptly: the pulse challenge itself completes after ~10s
+    // (PulseChallenge's default duration) and unmounts this tile on its
+    // own, which would make this assertion pass for the wrong reason
+    // (challenge timeout, not disconnect-detection) if the operator is slow.
+    console.log('\n>>> MANUAL STEP: power off or unpair the oximeter NOW '
+      + '(the pulse challenge only runs ~10s) — the SpO2 tile must '
+      + 'disappear before the challenge itself would move on.\n');
     await expect(page.getByTestId('spo2-value')).toBeHidden({ timeout: 30_000 });
   });
 });
