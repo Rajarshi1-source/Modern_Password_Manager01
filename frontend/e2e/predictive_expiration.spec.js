@@ -31,41 +31,12 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { signupAndLogin as authSignupAndLogin } from './helpers/auth.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/**
- * Sign up a fresh user and log in. There is no seeded test account and no
- * separate "username" field anywhere in the UI -- registration sets
- * Django's User.username to the email address (App.jsx handleSignup), and
- * handleSignup does NOT log the new user in; a second, explicit login is
- * required. Same flow as adaptive_password.spec.ts's signupAndLogin.
- */
-async function signupAndLogin(page) {
-  const email = `e2e-predictive-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.com`;
-  const password = 'TestPassword123!';
-
-  await page.goto(`${BASE_URL}/signup`);
-  await page.getByRole('button', { name: 'Sign Up', exact: true }).click();
-  await page.fill('#signup-email', email);
-  await page.fill('#signup-password', password);
-  await page.fill('#signup-confirm-password', password);
-  await page.getByRole('button', { name: 'Create Free Account' }).click();
-
-  await page.waitForSelector('#login-email');
-  await page.fill('#login-email', email);
-  await page.fill('#login-password', password);
-  await page.getByRole('button', { name: 'Login to Vault' }).click();
-
-  await page.waitForFunction(
-    () => !!window.localStorage.getItem('accessToken'),
-    { timeout: 15000 },
-  );
-}
+const signupAndLogin = (page) =>
+  authSignupAndLogin(page, { baseUrl: BASE_URL, emailPrefix: 'e2e-predictive' });
 
 const DEFAULT_DASHBOARD = {
   overall_risk_score: 0.42,
@@ -317,8 +288,11 @@ test.describe('Predictive Password Expiration E2E', () => {
     await page.goto(`${BASE_URL}/security/predictive-expiration`);
 
     // Feature enable/disable is a header button (.btn-toggle), not a
-    // checkbox -- there is no dedicated PATCH endpoint call to assert
-    // here, only the label swapping between Enabled/Disabled.
+    // checkbox -- its label swaps between Enabled/Disabled.
+    await page.getByRole('button', { name: /Enabled/i }).click();
+    await expect(page.getByRole('button', { name: /Disabled/i })).toBeVisible();
+
+    await page.getByRole('button', { name: /Disabled/i }).click();
     await expect(page.getByRole('button', { name: /Enabled/i })).toBeVisible();
   });
 
@@ -353,11 +327,28 @@ test.describe('Predictive Password Expiration E2E', () => {
 
   test('should show loading state while fetching data', async ({ page }) => {
     await routeDashboardData(page);
-    await page.goto(`${BASE_URL}/security/predictive-expiration`);
 
-    // Loading indicator might briefly appear - don't fail either way.
-    await page.locator('.loading, .loader, .spinner').isVisible().catch(() => false);
-    await page.waitForTimeout(100);
+    // Hold the dashboard response open so the loading state is observable.
+    // Registered AFTER routeDashboardData(), so it takes precedence for this
+    // URL (Playwright runs the most recently registered matching route first).
+    let releaseDashboard;
+    const dashboardGate = new Promise((resolve) => { releaseDashboard = resolve; });
+    await page.route('**/api/security/predictive-expiration/dashboard/', async (route) => {
+      await dashboardGate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(DEFAULT_DASHBOARD),
+      });
+    });
+
+    await page.goto(`${BASE_URL}/security/predictive-expiration`);
+    try {
+      await expect(page.locator('.predictive-dashboard.loading')).toBeVisible();
+    } finally {
+      releaseDashboard(); // never leave the request hanging if the assertion fails
+    }
+    await expect(page.locator('.dashboard-header')).toBeVisible({ timeout: 10000 });
   });
 
   test('should show an error state when the dashboard fetch fails', async ({ page }) => {
@@ -504,6 +495,7 @@ test.describe('Predictive Expiration Integration', () => {
     });
 
     await page.goto(`${BASE_URL}/security/predictive-expiration`);
+    await expect(page.locator('.dashboard-header')).toBeVisible({ timeout: 10000 });
     const dashboardCallsBefore = dashboardCalls;
     await page.click('.btn-acknowledge');
 

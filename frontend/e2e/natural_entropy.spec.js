@@ -21,41 +21,13 @@
 
 // @ts-check
 import { test, expect } from '@playwright/test';
+import { signupAndLogin as authSignupAndLogin } from './helpers/auth.js';
 
 const BASE_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/**
- * Sign up a fresh user and log in. There is no seeded test account and no
- * separate "username" field anywhere in the UI -- registration sets
- * Django's User.username to the email address (App.jsx handleSignup), and
- * handleSignup does NOT log the new user in; a second, explicit login is
- * required. Same flow as adaptive_password.spec.ts's signupAndLogin.
- */
-async function signupAndLogin(page) {
-  const email = `e2e-entropy-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.com`;
-  const password = 'TestPassword123!';
-
-  await page.goto(`${BASE_URL}/signup`);
-  await page.getByRole('button', { name: 'Sign Up', exact: true }).click();
-  await page.fill('#signup-email', email);
-  await page.fill('#signup-password', password);
-  await page.fill('#signup-confirm-password', password);
-  await page.getByRole('button', { name: 'Create Free Account' }).click();
-
-  await page.waitForSelector('#login-email');
-  await page.fill('#login-email', email);
-  await page.fill('#login-password', password);
-  await page.getByRole('button', { name: 'Login to Vault' }).click();
-
-  await page.waitForFunction(
-    () => !!window.localStorage.getItem('accessToken'),
-    { timeout: 15000 },
-  );
-}
+/** @param {import('@playwright/test').Page} page */
+const signupAndLogin = (page) =>
+  authSignupAndLogin(page, { baseUrl: BASE_URL, emailPrefix: 'e2e-entropy' });
 
 const STATUS_RESPONSE = {
   sources: {
@@ -69,6 +41,10 @@ const STATUS_RESPONSE = {
   timestamp: new Date().toISOString(),
 };
 
+/**
+ * @param {import('@playwright/test').Page} page
+ * @param {Record<string, unknown>} [overrides]
+ */
 async function routeStatus(page, overrides = {}) {
   await page.route('**/api/security/natural/status/', async (route) => {
     await route.fulfill({
@@ -93,10 +69,11 @@ test.describe('Natural Entropy Enhancement E2E', () => {
     await page.goto(`${BASE_URL}/security/natural-entropy`);
 
     await expect(page.getByRole('heading', { name: /Ultimate Natural Entropy/i })).toBeVisible();
-    await expect(page.getByText('Ocean Waves')).toBeVisible();
-    await expect(page.getByText('Lightning')).toBeVisible();
-    await expect(page.getByText('Seismic')).toBeVisible();
-    await expect(page.getByText('Solar Wind')).toBeVisible();
+    const sourcesGrid = page.locator('.sources-grid');
+    await expect(sourcesGrid.getByText('Ocean Waves', { exact: true })).toBeVisible();
+    await expect(sourcesGrid.getByText('Lightning', { exact: true })).toBeVisible();
+    await expect(sourcesGrid.getByText('Seismic', { exact: true })).toBeVisible();
+    await expect(sourcesGrid.getByText('Solar Wind', { exact: true })).toBeVisible();
 
     // 3 of 4 mocked sources are available.
     await expect(page.getByText('3/4 sources online')).toBeVisible();
@@ -121,7 +98,7 @@ test.describe('Natural Entropy Enhancement E2E', () => {
     // All 4 sources start selected (component default), so the generate
     // button reads "...4 Sources". Deselecting one should update the count.
     await expect(page.getByRole('button', { name: /Generate from 4 Sources/i })).toBeVisible();
-    await page.getByText('Lightning').click();
+    await page.locator('.sources-grid').getByText('Lightning', { exact: true }).click();
     await expect(page.getByRole('button', { name: /Generate from 3 Sources/i })).toBeVisible();
   });
 
@@ -150,7 +127,7 @@ test.describe('Natural Entropy Enhancement E2E', () => {
     await expect(page.locator('.password-display code')).toHaveText('Xk9!mQ2wPz7#vL4t', {
       timeout: 10000,
     });
-    await expect(page.getByText('93%')).toBeVisible();
+    await expect(page.locator('.password-meta .quality-score')).toHaveText('93%');
   });
 
   test('adjusts password length via the range control', async ({ page }) => {

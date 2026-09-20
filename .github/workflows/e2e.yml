@@ -8,8 +8,9 @@ name: E2E Tests (Playwright)
 #
 # Deliberately non-blocking (`continue-on-error: true` on the test step):
 # the specs are a mixed bag — some mock every network call via `page.route`,
-# others call `/api/` endpoints directly with no mock and no backend booted
-# here — so a clean pass across all 19 on day one is not expected. Green vs.
+# others call `/api/` endpoints directly with no mock, against the Django
+# backend booted below — so a clean pass across all 19 on day one is not
+# expected. Green vs.
 # red on this check is diagnostic for now, not a merge gate.
 #
 # Chromium only, not the full 5-project matrix (chromium/firefox/webkit/

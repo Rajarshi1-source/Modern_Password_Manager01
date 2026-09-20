@@ -38,6 +38,7 @@ import { test, expect } from '@playwright/test';
 import { execSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { signupAndLogin } from './helpers/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,36 +53,10 @@ const API_URL = process.env.API_URL || 'http://localhost:8000';
 const RECOVERY_KEY_REGEX = /^[A-HJ-NP-Z2-9]{4}(-[A-HJ-NP-Z2-9]{4}){5}-[A-HJ-NP-Z2-9]{2}$/;
 
 // Django's User.username is set to the email address at registration
-// (App.jsx handleSignup: `username: signupData.email`) — there is no
-// separate username field anywhere in the UI. Callers must pass the same
-// `email` value wherever a "username" is needed downstream (recovery
-// forms, `advance_time_lock`).
-async function signupUser(page, { email, password }) {
-  await page.goto(`${BASE_URL}/signup`);
-  // /signup still renders the LOGIN form first (isLoginMode starts true);
-  // the signup form only appears after clicking the "Sign Up" tab.
-  await page.getByRole('button', { name: 'Sign Up', exact: true }).click();
-
-  await page.fill('#signup-email', email);
-  await page.fill('#signup-password', password);
-  await page.fill('#signup-confirm-password', password);
-  await page.getByRole('button', { name: 'Create Free Account' }).click();
-
-  // handleSignup() only registers the account then flips back to the
-  // login form (setIsLoginMode(true)) — it does NOT log the user in.
-  // A second, explicit login is required to actually authenticate.
-  await page.waitForSelector('#login-email');
-  await page.fill('#login-email', email);
-  await page.fill('#login-password', password);
-  await page.getByRole('button', { name: 'Login to Vault' }).click();
-
-  // Login is a pure React-state transition (no client-side navigation),
-  // so wait for the token useAuth persists rather than a URL change.
-  await page.waitForFunction(
-    () => !!window.localStorage.getItem('accessToken'),
-    { timeout: 15000 },
-  );
-}
+// (App.jsx handleSignup) -- callers must pass the same `email` wherever a
+// "username" is needed downstream (recovery forms, `advance_time_lock`).
+const signupUser = (page, { email, password }) =>
+  signupAndLogin(page, { baseUrl: BASE_URL, email, password });
 
 async function logout(page) {
   // Try the user menu logout button; fall back to clearing storage.
