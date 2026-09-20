@@ -25,34 +25,12 @@
  */
 
 import { test, expect } from '@playwright/test';
+import { signupAndLogin as authSignupAndLogin } from './helpers/auth.js';
 
 const BASE_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-// =============================================================================
-// Helpers
-// =============================================================================
-
-async function signupAndLogin(page) {
-  const email = `e2e-storm-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.com`;
-  const password = 'TestPassword123!';
-
-  await page.goto(`${BASE_URL}/signup`);
-  await page.getByRole('button', { name: 'Sign Up', exact: true }).click();
-  await page.fill('#signup-email', email);
-  await page.fill('#signup-password', password);
-  await page.fill('#signup-confirm-password', password);
-  await page.getByRole('button', { name: 'Create Free Account' }).click();
-
-  await page.waitForSelector('#login-email');
-  await page.fill('#login-email', email);
-  await page.fill('#login-password', password);
-  await page.getByRole('button', { name: 'Login to Vault' }).click();
-
-  await page.waitForFunction(
-    () => !!window.localStorage.getItem('accessToken'),
-    { timeout: 15000 },
-  );
-}
+const signupAndLogin = (page) =>
+  authSignupAndLogin(page, { baseUrl: BASE_URL, emailPrefix: 'e2e-storm' });
 
 const NO_STORM = {
   is_active: false,
@@ -133,7 +111,7 @@ test.describe('Storm Chase Mode E2E', () => {
 
     await expect(page.getByText('1 Active Storm Detected')).toBeVisible();
     await expect(page.getByText('+35% Entropy')).toBeVisible();
-    await expect(page.getByText('MAXIMUM ENTROPY AVAILABLE', { exact: false })).toBeVisible();
+    await expect(page.getByText('🔥 MAXIMUM ENTROPY AVAILABLE!', { exact: true })).toBeVisible();
   });
 
   test('lists storm alert details', async ({ page }) => {

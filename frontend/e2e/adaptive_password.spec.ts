@@ -17,49 +17,12 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
+import { signupAndLogin as authSignupAndLogin } from './helpers/auth.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 
-// =============================================================================
-// Helper Functions
-// =============================================================================
-
-/**
- * Sign up a fresh user and log in. There is no seeded test account and no
- * separate "username" field anywhere in the UI -- registration sets
- * Django's User.username to the email address (App.jsx handleSignup), and
- * handleSignup does NOT log the new user in; a second, explicit login is
- * required. Same flow as layered_recovery.spec.js's signupUser.
- */
-async function signupAndLogin(page: Page): Promise<string> {
-    const email = `e2e-adaptive-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.com`;
-    const password = 'TestPassword123!';
-
-    await page.goto(`${BASE_URL}/signup`);
-    // /signup still renders the LOGIN form first (isLoginMode starts true);
-    // the signup form only appears after clicking the "Sign Up" tab.
-    await page.getByRole('button', { name: 'Sign Up', exact: true }).click();
-    await page.fill('#signup-email', email);
-    await page.fill('#signup-password', password);
-    await page.fill('#signup-confirm-password', password);
-    await page.getByRole('button', { name: 'Create Free Account' }).click();
-
-    // handleSignup() only registers the account then flips back to the
-    // login form (setIsLoginMode(true)) -- it does NOT log the user in.
-    await page.waitForSelector('#login-email');
-    await page.fill('#login-email', email);
-    await page.fill('#login-password', password);
-    await page.getByRole('button', { name: 'Login to Vault' }).click();
-
-    // Login is a pure React-state transition (no client-side navigation),
-    // so wait for the token useAuth persists rather than a URL change --
-    // there is no /dashboard route.
-    await page.waitForFunction(
-        () => !!window.localStorage.getItem('accessToken'),
-        { timeout: 15000 },
-    );
-    return email;
-}
+const signupAndLogin = async (page: Page): Promise<string> =>
+  (await authSignupAndLogin(page, { baseUrl: BASE_URL, emailPrefix: 'e2e-adaptive' })).email;
 
 async function navigateToAdaptiveSettings(page: Page): Promise<void> {
     await page.click('[data-testid="settings-menu"]');

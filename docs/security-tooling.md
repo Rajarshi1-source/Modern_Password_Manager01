@@ -68,9 +68,9 @@ test` was a `devDependency` but nothing ever invoked `playwright test`.
 config declares — that config also sets `workers: 1` and `retries: 2` on
 CI, so 19 specs × 5 projects serially would be far too slow for a PR
 check. The job is `continue-on-error: true`: the specs are a mixed bag,
-some mock every network call and some hit `/api/` directly with no
-backend booted in this workflow, so day-one green across all 19 is not
-expected. Treat this as diagnostic, not a gate, until the suite's real
+some mock every network call and some hit `/api/` directly against the
+Django backend started by this workflow, so day-one green across all 19
+is not expected. Treat this as diagnostic, not a gate, until the suite's real
 pass rate is known.
 
 ### OpenSSF Scorecard (2026-09-16)
