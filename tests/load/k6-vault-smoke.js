@@ -13,7 +13,17 @@
 // Endpoints hit are both unauthenticated by design, since this workflow
 // does not provision a real user/vault:
 //   - GET /api/health/  - liveness/readiness probe (db, cache, migrations)
-//   - GET /             - plain JSON API-root view (no DRF, no auth)
+//   - GET /             - project-level api_root (password_manager/urls.py):
+//                         a plain JsonResponse behind @require_http_methods,
+//                         no DRF and no auth, so it returns 200 with no JWT.
+//                         Not GET /api/: api.urls.api_root is a DRF @api_view
+//                         with no permission_classes of its own, so it inherits
+//                         REST_FRAMEWORK['DEFAULT_PERMISSION_CLASSES']
+//                         (IsAuthenticated in settings/base.py) and returns 401
+//                         to this unauthenticated smoke test. That 401 is also
+//                         throttled, and each DRF rejection writes an ErrorLog
+//                         row via custom_exception_handler. /api/health/ already
+//                         covers the mounted /api/ prefix.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
