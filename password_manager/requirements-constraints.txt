@@ -11,7 +11,7 @@ PyJWT==2.13.0
 requests==2.33.0
 
 # Fixes for pyasn1 / pyasn1-modules compatibility (match service-identity / google-auth needs)
-pyasn1==0.6.3
+pyasn1==0.6.4
 pyasn1-modules==0.4.2
 
 # Modern HTTP/2 stack (used by httpx[http2]). h2 4.3.0 requires hyperframe>=6.1
@@ -19,7 +19,7 @@ pyasn1-modules==0.4.2
 # stack (hyperframe<4, h2<3) is intentionally NOT pinned here — it is incompatible
 # with h2 4.3.0 and is not pulled by any declared dependency (django-push-notifications
 # is installed without the [apns] extra).
-h2==4.3.0
+h2==4.4.1
 hyperframe==6.1.0
 hpack==4.1.0
 
@@ -62,7 +62,7 @@ urllib3>=2.7.0
 Twisted>=26.4.0
 pip>=25.0
 wheel>=0.46.2
-setuptools>=78.1.1,<81
+setuptools>=83.0.0,<84
 jaraco.context>=6.0.1
 python-dotenv>=1.2.2
 
