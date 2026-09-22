@@ -42,7 +42,7 @@ mozilla-django-oidc>=4.0.0,<5
 # never calls pkcs7_decrypt_der/_pem/_smime — and taking it would force
 # pyOpenSSL to 26.3.0+ (which needs cryptography>=49) alongside it. Revisit
 # both together if either is bumped.
-cryptography==48.0.1
+cryptography==50.0.0
 argon2-cffi==21.3.0
 argon2-cffi-bindings==25.1.0
 pyOpenSSL>=26.0.0
