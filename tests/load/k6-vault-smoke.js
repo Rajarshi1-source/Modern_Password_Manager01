@@ -47,6 +47,17 @@ export const options = {
     // CI-appropriate: generous enough to tolerate a shared runner and a
     // `manage.py runserver` dev server, tight enough to catch a real
     // regression (an endpoint timing out, a crash loop under concurrency).
+    //
+    // `checks` (CodeRabbit, PR #515): http_req_failed only counts a
+    // request as "failed" for network-level/5xx-class errors k6 itself
+    // flags -- a 204 or a redirect back from either endpoint still reads
+    // as a k6 "success" to http_req_failed even though the `check()`
+    // calls below (asserting status === 200) would fail. Without this
+    // threshold, every status check on /  and /api/health/ could be
+    // failing every request and the smoke test would still pass. This
+    // stays non-blocking like the rest of the thresholds above --
+    // exercise-and-report, not a hard merge gate.
+    checks: ['rate>0.95'],
     http_req_failed: ['rate<0.05'],
     http_req_duration: ['p(95)<2000'],
     'http_req_duration{endpoint:health}': ['p(95)<1000'],

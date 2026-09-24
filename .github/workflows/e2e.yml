@@ -59,6 +59,16 @@ name: E2E Tests (Playwright)
 # the one CI check that actually calls the live backend API could be
 # silently skipped on exactly the changes most likely to break it. Added
 # 'password_manager/**' below to close that gap.
+#
+# 2026-09-24: per CodeRabbit review on PR #515, `test:e2e:ci` passes
+# `--retries=0` (see the 2026-09-16 note above), but playwright.config.js's
+# `trace` setting only captures a trace ON THE FIRST RETRY -- with retries
+# disabled that condition can never trigger, so every failing run in this
+# workflow uploaded a playwright-report artifact with no trace to actually
+# debug the failure from. Passing `--trace=retain-on-failure` on the command
+# line records a trace on failure unconditionally, independent of the retry
+# count, so the non-blocking diagnostic signal this job exists to produce is
+# actually usable.
 # =============================================================================
 
 on:
@@ -203,7 +213,16 @@ jobs:
         # was already started above on :8000, which Vite's dev-server
         # proxy (vite.config.js) forwards /api, /auth, /dj-rest-auth and
         # /ws to.
-        run: npm run test:e2e:ci
+        #
+        # --trace=retain-on-failure: playwright.config.js only records a
+        # trace on the FIRST RETRY, but test:e2e:ci passes --retries=0 (see
+        # the 2026-09-16 postmortem comment above -- retries were removed on
+        # purpose to bound runtime on a shared runner). With zero retries,
+        # "record on first retry" never fires, so a failing run uploaded an
+        # empty/useless playwright-report artifact. This flag records a
+        # trace directly on failure regardless of retry count, without
+        # re-enabling retries.
+        run: npm run test:e2e:ci -- --trace=retain-on-failure
         continue-on-error: true
 
       - name: Upload Playwright report

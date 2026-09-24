@@ -11,7 +11,16 @@
  * - handleSignup does NOT log the new user in -- it registers, then flips
  *   back to the login form -- so a second, explicit login is required.
  * - Login is a pure React-state transition (no client-side navigation), so
- *   we wait for the accessToken that useAuth persists, not for a URL change.
+ *   we wait for the authenticated-UI signal App.jsx renders once
+ *   `isAuthenticated` flips true -- the `data-testid="login-success-status"`
+ *   sr-only span inside the authenticated branch of `mainContent` -- rather
+ *   than for a URL change or for `window.localStorage.accessToken`
+ *   specifically. Waiting on localStorage broke silently whenever
+ *   VITE_USE_COOKIE_AUTH=true, since useAuth clears localStorage and keeps
+ *   the token in memory / an httpOnly cookie in that mode; the current E2E
+ *   workflow doesn't set that env var, so this was a forward-compatibility
+ *   fix (CodeRabbit, PR #515) rather than an active CI failure. A UI
+ *   condition confirms login succeeded regardless of where the token lives.
  * - Generated emails end in @test.com: isValidEmail's dev/test carve-out
  *   (App.jsx) accepts any "@...test..." address outside production.
  *
@@ -38,10 +47,7 @@ export async function signupAndLogin(page, options) {
   await page.fill('#login-password', password);
   await page.getByRole('button', { name: 'Login to Vault' }).click();
 
-  await page.waitForFunction(
-    () => !!window.localStorage.getItem('accessToken'),
-    { timeout: 15000 },
-  );
+  await page.getByTestId('login-success-status').waitFor({ timeout: 15000 });
 
   return { email, password };
 }
