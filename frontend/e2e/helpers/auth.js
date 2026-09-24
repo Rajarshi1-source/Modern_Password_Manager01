@@ -49,5 +49,15 @@ export async function signupAndLogin(page, options) {
 
   await page.getByTestId('login-success-status').waitFor({ timeout: 15000 });
 
+  // handleLogin sets isAuthenticated before the vault key exists, so
+  // VaultUnlockModal can open over the page and stay there. Clicks on the
+  // page then never become actionable. Dismiss it when it is showing.
+  const later = page.getByRole('button', { name: 'Later' });
+  try {
+    await later.click({ timeout: 3000 });
+  } catch {
+    // Password login already closed the prompt.
+  }
+
   return { email, password };
 }
