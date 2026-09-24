@@ -69,6 +69,17 @@ const HARDWARE = process.env.LIVENESS_BLE_HARDWARE === '1';
 const AUTH_TOKEN = process.env.E2E_AUTH_TOKEN;
 
 test.describe('BLE pulse-oximeter SpO2 relay (real hardware)', () => {
+  // playwright.config.js sets the global per-test timeout to 60s (see the
+  // "default 60s per-test timeout" note in e2e.yml's header comment). That
+  // outer timeout kills the whole test function regardless of what any
+  // individual expect() call's own `timeout` option says, so the 120_000ms
+  // heading wait and 30_000ms SpO2-tile waits below were previously
+  // unreachable: Playwright aborted at 60s, ~60-90s before either could
+  // time out on its own terms. 180s gives real headroom for the worst case
+  // (120s heading wait + 30s SpO2 wait + setup/navigation overhead) without
+  // raising the global default for the other 18 specs in this suite.
+  test.describe.configure({ timeout: 180_000 });
+
   test.skip(
     !HARDWARE,
     'Requires a real BLE pulse oximeter and Web Bluetooth; set LIVENESS_BLE_HARDWARE=1 to run.',
