@@ -48,6 +48,17 @@ name: E2E Tests (Playwright)
 # assertions rather than connections — that is a much larger, separate
 # effort (per-spec fixture/seed work) intentionally left out of this
 # surgical fix.
+#
+# 2026-09-22: per CodeRabbit review on PR #515, the path filter below only
+# watched frontend/** — but the boot sequence right above this comment
+# (and the auth.js helper, which creates a user and logs in against the
+# live Django server) means this job exercises the backend just as much as
+# the frontend. A PR touching only password_manager/** (an auth view, a
+# vault API endpoint, a migration) matched neither 'frontend/**' nor
+# '.github/workflows/e2e.yml' and so never triggered this job at all —
+# the one CI check that actually calls the live backend API could be
+# silently skipped on exactly the changes most likely to break it. Added
+# 'password_manager/**' below to close that gap.
 # =============================================================================
 
 on:
@@ -55,6 +66,7 @@ on:
     branches: [main, develop]
     paths:
       - 'frontend/**'
+      - 'password_manager/**'
       - '.github/workflows/e2e.yml'
   schedule:
     - cron: '11 4 * * *'  # nightly at 04:11 UTC
