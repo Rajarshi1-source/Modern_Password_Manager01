@@ -11,7 +11,7 @@
  * ``response.data.duress`` / ``response.data.vault`` instead.
  */
 
-import api from './api';
+import { api } from './api';
 
 const BASE = '/api/heartbeat';
 

@@ -11,7 +11,8 @@
  *     to the dashboard after a simulated successful response.
  */
 
-const { test, expect } = require('@playwright/test');
+import { test, expect } from '@playwright/test';
+import { signupAndLogin } from './helpers/auth.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 
@@ -19,12 +20,13 @@ test.describe('Sign-in with DID', () => {
   test.beforeEach(async ({ context, page }) => {
     // Clear wallet state between tests.
     await context.clearCookies();
+    // Clear the wallet DB only. Clearing localStorage here runs on every
+    // navigation, which wipes the session created below and bounces
+    // /identity/wallet back to the public page.
     await page.addInitScript(() => {
       try {
         indexedDB.deleteDatabase('credential-wallet');
       } catch (_) { /* ignore */ }
-      localStorage.clear();
-      sessionStorage.clear();
     });
 
     // Hermetic API stubs.
@@ -79,6 +81,8 @@ test.describe('Sign-in with DID', () => {
   });
 
   test('create DID in wallet then sign in', async ({ page }) => {
+    // /identity/wallet is behind the auth guard.
+    await signupAndLogin(page, { baseUrl: BASE_URL, emailPrefix: 'e2e-did' });
     await page.goto(`${BASE_URL}/identity/wallet`);
     await expect(page.getByRole('heading', { name: /Decentralized Identity/i })).toBeVisible();
 

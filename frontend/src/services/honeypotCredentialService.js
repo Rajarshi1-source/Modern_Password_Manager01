@@ -7,7 +7,7 @@
  * /api/security/honeypot/. Importing symbols from both is safe.
  */
 
-import api from './api';
+import { api } from './api';
 
 const BASE = '/api/honeypot';
 

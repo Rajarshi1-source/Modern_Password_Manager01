@@ -5,7 +5,7 @@
  * Handles session management, message sending, and proactive suggestions.
  */
 
-import api from './api';
+import { api } from './api';
 
 const AI_ASSISTANT_BASE = '/api/ai-assistant';
 

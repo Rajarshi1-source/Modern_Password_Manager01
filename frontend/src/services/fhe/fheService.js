@@ -11,7 +11,7 @@
  * is not available (for development/testing purposes).
  */
 
-import api from '../api';
+import { api } from '../api';
 import { fheKeyManager } from './fheKeys';
 
 // Optional TFHE module name (using variable to prevent static analysis by bundlers)

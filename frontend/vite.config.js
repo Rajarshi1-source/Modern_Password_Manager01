@@ -60,13 +60,37 @@ export default defineConfig({
       'long',
       'crystals-kyber-js',
       'mlkem',
+      // argon2-browser's dist/argon2-bundled.min.js (aliased to above) is a
+      // UMD wrapper whose fallback branch assigns `this.argon2 = ...` when
+      // no CJS/AMD loader is detected. Vite's dev server previously served
+      // it as raw native ESM (excluded from pre-bundling) where top-level
+      // `this` is `undefined`, throwing "Cannot set properties of
+      // undefined (setting 'argon2')" and crashing the whole app the first
+      // time anything imported it -- e.g. every route, since App.jsx
+      // eagerly imports VaultUnlockModal -> hiddenVaultEnvelope.js ->
+      // argon2-browser. Unlike pqc-kyber/tfhe, this file has no static
+      // `import('*.wasm')`/`new URL('*.wasm', import.meta.url)` for esbuild
+      // to choke on -- it fetches/base64-decodes the wasm binary at
+      // runtime as plain JS -- so pre-bundling it (letting esbuild apply
+      // its own CJS/UMD interop, which synthesizes the `module`/`exports`
+      // context this file expects) is safe and resolves the crash.
+      'argon2-browser',
+      // Pure-JS CJS utility pulled in transitively by @tensorflow/tfjs-core
+      // and @tensorflow/tfjs-backend-cpu (both excluded below for WASM
+      // reasons). Vite doesn't pre-bundle a dependency's own deps once the
+      // parent is excluded, so this file was served as raw CommonJS to the
+      // browser -- which can't resolve its internal `require('./lib/alea')`
+      // call, throwing "require is not defined" and crashing the whole app
+      // the first time anything imports @tensorflow/tfjs (e.g. lazy-loaded
+      // ML components). No WASM involved here, so it's safe to pre-bundle
+      // on its own.
+      'seedrandom',
     ],
     exclude: [
       // WASM-heavy packages: let Vite serve them as native ESM so .wasm
       // files are fetched separately rather than inlined by esbuild (which
       // cannot handle WASM imports during dep pre-bundling).
       'pqc-kyber',
-      'argon2-browser',
       '@tensorflow/tfjs',
       '@tensorflow/tfjs-backend-webgl',
       '@tensorflow-models/universal-sentence-encoder',

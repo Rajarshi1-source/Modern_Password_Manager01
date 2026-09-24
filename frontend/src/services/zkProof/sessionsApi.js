@@ -11,7 +11,7 @@
  *     verified / failed. Every attempt is logged via ZKVerificationAttempt.
  */
 
-import api from '../api';
+import { api } from '../api';
 
 const BASE = '/api/zk/sessions';
 

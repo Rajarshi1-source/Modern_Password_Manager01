@@ -213,6 +213,7 @@ test.describe('Quantum Password Generation E2E', () => {
     // Get password
     const passwordField = page.locator('[data-testid="generated-password"], input[readonly]');
     const password = await passwordField.inputValue();
+    expect(password).toBeTruthy();
     
     // Use password for a vault item
     await page.click('[data-testid="use-password-button"], button:has-text("Use")');

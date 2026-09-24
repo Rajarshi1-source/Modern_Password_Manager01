@@ -14,32 +14,24 @@
  * @created 2026-03-13
  */
 
-const { test, expect } = require('@playwright/test');
+import { test, expect } from '@playwright/test';
+import { signupAndLogin } from './helpers/auth.js';
 
 // Test configuration
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 const API_URL = process.env.API_URL || 'http://localhost:8000';
-
-// Test user credentials
-const TEST_USER = {
-  email: 'e2e-assistant@test.com',
-  password: 'TestPassword123!',
-};
-
 
 // =============================================================================
 // Setup & Helpers
 // =============================================================================
 
 /**
- * Helper to login before tests
+ * Sign up a fresh user and log in. There is no seeded e2e-assistant account,
+ * and waitForURL(`${BASE_URL}/**`) matched the login page immediately, so the
+ * old helper never authenticated and every guarded route redirected home.
  */
 async function loginUser(page) {
-  await page.goto(`${BASE_URL}/login`);
-  await page.fill('input[name="email"]', TEST_USER.email);
-  await page.fill('input[name="password"]', TEST_USER.password);
-  await page.click('button[type="submit"]');
-  await page.waitForURL(`${BASE_URL}/**`, { timeout: 10000 });
+  await signupAndLogin(page, { baseUrl: BASE_URL, emailPrefix: 'e2e-assistant' });
 }
 
 

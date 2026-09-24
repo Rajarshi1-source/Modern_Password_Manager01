@@ -9,7 +9,7 @@
  * that can fill form fields but CANNOT be decrypted to reveal the password.
  */
 
-import api from '../api';
+import { api } from '../api';
 
 const API_BASE = '/api/fhe-sharing';
 
