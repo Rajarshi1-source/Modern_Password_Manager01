@@ -21,7 +21,7 @@
     "hardhat": "^3.0.15"
   },
   "dependencies": {
-    "dotenv": "^17.2.3"
+    "dotenv": "^18.0.3"
   },
   "overrides": {
     "tmp": "^0.2.6",
