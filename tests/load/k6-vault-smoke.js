@@ -66,7 +66,16 @@ export const options = {
 };
 
 export default function () {
+  // redirects: 0 (CodeRabbit, PR #515): without this, k6 follows up to
+  // its default redirect limit automatically -- so if either endpoint
+  // ever starts redirecting (a trailing-slash rule, an HTTPS-redirect
+  // middleware, an auth guard misfiring on a public route) to something
+  // that itself returns 200, both the check below and the `checks`
+  // threshold above would keep passing while silently testing the
+  // REDIRECT TARGET instead of the endpoint this script asked for --
+  // exactly the kind of regression this smoke test exists to catch.
   const health = http.get(`${BASE_URL}/api/health/`, {
+    redirects: 0,
     tags: { endpoint: 'health' },
   });
   check(health, {
@@ -74,6 +83,7 @@ export default function () {
   });
 
   const root = http.get(`${BASE_URL}/`, {
+    redirects: 0,
     tags: { endpoint: 'api_root' },
   });
   check(root, {

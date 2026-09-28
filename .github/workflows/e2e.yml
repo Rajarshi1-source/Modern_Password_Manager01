@@ -93,6 +93,19 @@ jobs:
     name: Playwright E2E
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # 2026-09-24: per CodeRabbit review on PR #515, continue-on-error was
+    # only set on the "Run Playwright E2E tests" step below -- so a
+    # failure in any EARLIER step (pip install, migrate, the Django
+    # readiness poll, npm ci, browser install) still fails the whole job,
+    # contradicting the "diagnostic, not a merge gate" intent stated
+    # throughout this file and docs/security-tooling.md. GitHub treats
+    # job-level and step-level continue-on-error as distinct settings;
+    # this job-level one makes ANY failure in this job report as
+    # non-blocking, not just a failing Playwright run. The step-level
+    # setting further down is kept too -- it's what lets "Upload
+    # Playwright report" still execute after a failing test step
+    # (belt-and-suspenders with that step's own `if: always()`).
+    continue-on-error: true
     # Job-level (not step-level) so these are also visible to the
     # "Run Playwright E2E tests" step: layered_recovery.spec.js shells
     # out to `python manage.py advance_time_lock` directly from the test
