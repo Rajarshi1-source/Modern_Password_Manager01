@@ -512,8 +512,11 @@ test.describe('Duress Codes Security', () => {
     else await page.getByRole('button', { name: 'Next →' }).click();
     await page.getByRole('button', { name: 'Next →' }).click();
     
-    // Enter a code
-    await page.fill('[data-testid="duress-code-input"]', 'SecretCode123!');
+    // Enter a code. DuressCodeSetup.jsx renders this field with the
+    // `.code-input` class and no data-testid (CodeRabbit, PR #515) --
+    // the previous [data-testid="duress-code-input"] selector matched
+    // nothing and timed out before the console assertion below ever ran.
+    await page.fill('.code-input', 'SecretCode123!');
     
     // Check console logs don't contain the code
     const hasLeakedCode = consoleLogs.some(log => log.includes('SecretCode123!'));

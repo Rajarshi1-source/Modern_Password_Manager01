@@ -33,10 +33,14 @@ variable to point at staging once it is deployed.
 
 GitHub's CodeQL **default setup** had been enabled at the repo-settings
 level since 2026-09-13, which conflicts with this repo's existing
-**advanced** `codeql.yml` workflow — both try to upload SARIF under the
-same `python` / `javascript-typescript` categories, and GitHub rejects
-the advanced workflow's upload with "CodeQL analyses from advanced
-configurations cannot be processed when the default setup is enabled".
+**advanced** `codeql.yml` workflow: with default setup enabled, GitHub
+rejects the advanced workflow's SARIF upload outright, with "CodeQL
+analyses from advanced configurations cannot be processed when the
+default setup is enabled". Both configurations also happen to upload
+under the same `python` / `javascript-typescript` categories, but that
+overlap isn't established as the cause — the rejection message doesn't
+mention categories, and GitHub's docs describe this as a blanket
+rejection whenever default setup is enabled, category aside.
 That made every push to `main` show `Analyze (python)` and
 `Analyze (javascript-typescript)` as failing, and had already forced
 `codeql.yml`'s `pull_request` trigger to be dropped as a workaround
@@ -55,8 +59,8 @@ default setup — isn't lost in the switch.
 
 Expect a one-time churn in the Security → Code scanning alert list as
 default setup's alerts are reconciled against the advanced workflow's
-re-upload under `/language:*` categories; no findings are lost, only
-re-categorized.
+re-upload under `/language:*` categories; coverage is expected to be
+preserved, but it is not confirmed against the pre-switch alert set.
 
 ### Playwright E2E (2026-09-16)
 
@@ -94,9 +98,14 @@ allow-list (`actions/checkout`, `actions/upload-artifact`,
 supply-chain-relevant job across `codeql.yml`, `security-multi-scanner.yml`,
 `ci-sbom.yml`, the `nuclei` job in `sast-dast.yml`, `scorecard.yml`,
 `e2e.yml`, and `load-test.yml`, with `egress-policy: audit`. Audit mode
-only observes and logs a job's outbound network calls in its summary —
-it cannot block a step or fail a build — so this is purely additive
-visibility, not a new gate. It was deliberately **not** added to the
+normally observes and logs a job's outbound network calls in its
+summary. The pinned `v2.21.1` action also enforces StepSecurity's
+global block list for known-malicious domains and IPs, even in audit
+mode, so a listed connection may still be blocked and a dependent step
+may fail — this is primarily additive visibility, with that global
+block-list exception, not the unconditional "cannot block a step or
+fail a build" guarantee this section previously claimed. It was
+deliberately **not** added to the
 `semgrep` job in `sast-dast.yml`: that job runs inside a `container:`
 (`returntocorp/semgrep`), and Harden-Runner does not work inside
 containerized jobs.
