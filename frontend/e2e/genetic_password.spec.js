@@ -12,7 +12,7 @@
  * @created 2026-01-17
  */
 
-const { test, expect } = require('@playwright/test');
+import { test, expect } from '@playwright/test';
 
 // Test configuration
 const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';

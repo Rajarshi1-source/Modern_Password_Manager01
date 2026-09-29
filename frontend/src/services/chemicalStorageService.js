@@ -19,7 +19,7 @@
  * @created 2026-01-17
  */
 
-import api from './api';
+import { api } from './api';
 
 // Cache for subscription status
 let subscriptionCache = null;

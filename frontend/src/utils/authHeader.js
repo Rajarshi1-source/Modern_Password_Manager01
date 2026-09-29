@@ -1,3 +1,5 @@
+import { getAccessToken as getInMemoryAccessToken } from '../services/tokenStore';
+
 /**
  * authHeader — build the Authorization header for the JWT-only backend.
  *
@@ -22,10 +24,9 @@
  * change. (The cleaner long-term move is routing these callers through the
  * shared authenticated axios client instead of hand-rolling headers.)
  *
- * @returns {{ Authorization: string } | {}} object to spread into request headers
+ * @returns {Record<string, string>} `{ Authorization: 'Bearer <token>' }`, or `{}`
+ *   when no token is present; spread into request headers.
  */
-import { getAccessToken as getInMemoryAccessToken } from '../services/tokenStore';
-
 export function authHeader() {
   const token =
     getInMemoryAccessToken() ||

@@ -2172,8 +2172,25 @@ function App() {
     );
   }, [isAuthenticated, authContent, showHelpCenter, handleLogout, isLoggingOut, pqCryptoInitialized, fheReady, error, handleSubmit, formData, handleInputChange]);
 
-  // Show loading screen while auth is initializing (after all hooks are called)
-  if (authLoading && !appInitialized) {
+  // Show loading screen while auth is initializing (after all hooks are called).
+  //
+  // Deliberately NOT `authLoading && !appInitialized` (as this was until
+  // 2026-09): the `initializeApp` effect a few hundred lines up depends on
+  // `[isAuthenticated, user]` and, on the very first render, `isAuthenticated`
+  // is still its initial `false` -- so it skips the `if (isAuthenticated &&
+  // user)` block entirely and reaches its `finally { setAppInitialized(true) }`
+  // almost immediately, well before useAuth's own `initAuth()` GET /api/auth/me/
+  // has resolved. `appInitialized` flipping true that early closed this gate
+  // one render early, before `isAuthenticated` was known -- so every
+  // `!isAuthenticated ? <Navigate to="/" /> : <Component />` route below (all
+  // of them; there is no separate loading check on any individual route)
+  // would redirect an about-to-be-authenticated user to "/" on the very first
+  // load of a deep link or a hard refresh, and there is no mechanism that
+  // routes them back once auth resolves a moment later. `authLoading` alone
+  // is the right signal: useAuth's initAuth() always eventually calls
+  // setIsLoading(false) on every path (token present or not, /me success or
+  // failure), so this cannot get stuck.
+  if (authLoading) {
     return (
       <div style={{
         display: 'flex',

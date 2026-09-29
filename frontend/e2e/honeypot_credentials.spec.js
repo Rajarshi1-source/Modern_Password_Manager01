@@ -12,6 +12,28 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Honeypot alert toast', () => {
   test.beforeEach(async ({ page }) => {
+    // Both routes are behind the `!isAuthenticated ? <Navigate to="/" />`
+    // guard in App.jsx, and useAuth only flips isAuthenticated once
+    // GET /api/auth/me/ resolves 200 for the token in localStorage. Without
+    // this, the page never mounts and the honeypot stubs below are never
+    // hit -- see liveness_ble_spo2.spec.js's header for the same guard.
+    // Stubbing /me (rather than requiring a live backend) keeps this test
+    // hermetic, matching its own stated design intent.
+    await page.addInitScript(() => {
+      localStorage.setItem('accessToken', 'e2e-honeypot-test-token');
+    });
+    await page.route('**/api/auth/me/**', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 1,
+          username: 'e2e-honeypot',
+          email: 'e2e-honeypot@test.com',
+        }),
+      });
+    });
+
     // Stub the honeypot credential list so the settings screen loads
     // deterministically without any auth flow noise.
     await page.route('**/api/honeypot/credentials/', async (route) => {
@@ -67,6 +89,12 @@ test.describe('Honeypot alert toast', () => {
   test('settings screen renders the planted honeypot', async ({ page }) => {
     await page.goto('/security/honeypot-credentials');
 
+    // App.jsx renders VaultUnlockModal globally whenever an authenticated
+    // session has no in-memory vault key -- true here since this test
+    // fakes auth via a bare localStorage token/mocked /me, with no real
+    // vault setup. Dismiss it ("Later") so it doesn't cover the page.
+    await page.getByRole('button', { name: 'Later' }).click();
+
     // Heading rendered by HoneypotSettings.jsx.
     await expect(page.getByRole('heading', { name: /Honeypot credentials/i })).toBeVisible();
     // The stubbed honeypot row.
@@ -76,6 +104,7 @@ test.describe('Honeypot alert toast', () => {
 
   test('events screen shows a triggered alert row', async ({ page }) => {
     await page.goto('/security/honeypot-credentials/events');
+    await page.getByRole('button', { name: 'Later' }).click();
 
     await expect(page.getByRole('heading', { name: /Honeypot access log/i })).toBeVisible();
     await expect(page.getByText('203.0.113.9')).toBeVisible();

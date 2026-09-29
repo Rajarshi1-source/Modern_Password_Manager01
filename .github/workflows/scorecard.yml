@@ -1,0 +1,73 @@
+name: OpenSSF Scorecard
+
+# =============================================================================
+# Supply-chain health scoring (branch protection, token permissions, pinned
+# actions, dependency update tooling, etc.) via https://scorecard.dev.
+#
+# `publish_results: true` submits this repo's scan to the public Scorecard
+# API/badge instead of relying on the upstream team's own periodic public
+# scan of this repo — recommended by ossf/scorecard-action's own docs for
+# public repositories, and the only way to get a scorecard.dev badge.
+#
+# ossf/scorecard-action enforces strict rules on ANY workflow that sets
+# publish_results: true (see "Workflow Restrictions" in its README):
+#   - no top-level `env:` or `defaults:` on this workflow
+#   - no workflow-level write permissions
+#   - only the job running scorecard-action may set `id-token: write`
+#   - that job may not have job-level env/defaults, containers, or services
+#   - that job's steps must all come from an approved action allow-list:
+#     actions/checkout, actions/upload-artifact,
+#     github/codeql-action/upload-sarif, ossf/scorecard-action,
+#     step-security/harden-runner
+# This file is written to satisfy every one of those constraints.
+# =============================================================================
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '30 5 * * 1'  # weekly on Monday at 05:30 UTC
+  workflow_dispatch: {}
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard analysis
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload Scorecard results as artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 14
+
+      - name: Upload results to code scanning
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: results.sarif
+          category: scorecard

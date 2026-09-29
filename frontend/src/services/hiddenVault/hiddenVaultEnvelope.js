@@ -18,7 +18,37 @@
  *   * TIERS, tierBytes, slotPayloadLen
  */
 
-import argon2 from 'argon2-browser';
+// Namespace import (`import * as argon2`), matching every other caller in
+// this codebase (cryptoService.js, sessionVaultCryptoV3.js,
+// secureVaultCrypto.js). argon2-browser is aliased to its raw
+// dist/argon2-bundled.min.js (vite.config.js resolve.alias, "Fix for
+// argon2-browser WASM issue in some bundler modes") and is listed in
+// vite.config.js's optimizeDeps.INCLUDE (not exclude -- an earlier version
+// of this comment said exclude; that was already stale by the time it was
+// written, since the file had by then been moved into include specifically
+// to fix the pre-bundling crash documented at that vite.config.js entry).
+//
+// 2026-09-24 (CodeRabbit, PR #515, re-verified rather than applied as-is):
+// a review flagged this namespace import as broken -- claiming esbuild only
+// exposes argon2-browser's `module.exports = I()` as a `default` export
+// during pre-bundling, so `argon2.hash`/`argon2.ArgonType` would be
+// `undefined` here, and suggested switching this file plus
+// secureVaultCrypto.js, sessionVaultCryptoV3.js and cryptoService.js to
+// default imports. Checked directly against the exact installed
+// dist/argon2-bundled.min.js with both bundlers this project actually
+// uses -- `esbuild --bundle --format=esm` (what Vite's dev-server
+// optimizeDeps runs) and Rollup + `@rollup/plugin-commonjs` using this
+// project's own `build.commonjsOptions` (the production path) -- and in
+// both, `argon2.hash` and `argon2.ArgonType` resolve correctly through
+// THIS namespace import, not just through a default import. Both
+// bundlers' CJS interop helpers (esbuild's `__toESM`/`__copyProps`,
+// Rollup's equivalent) copy the UMD module's exported properties onto the
+// namespace object dynamically at runtime, not via static analysis of the
+// `I()` call -- so the static-analysis argument the review made for why
+// namespace import "can't" work doesn't apply to what actually executes.
+// Left as a namespace import; changing it would touch four files and
+// their Vitest mocks for a bug that doesn't reproduce.
+import * as argon2 from 'argon2-browser';
 
 // ---------------------------------------------------------------------------
 // Constants (must match SPEC.md + envelope.py)

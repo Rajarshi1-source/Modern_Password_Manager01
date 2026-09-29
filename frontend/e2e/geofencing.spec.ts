@@ -4,17 +4,17 @@
  * End-to-end tests for geofencing and impossible travel detection UI.
  */
 
-import { test, expect, type Page, type BrowserContext, type APIRequestContext } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+import { signupAndLogin } from './helpers/auth.js';
 
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
 
 // Test utilities
+// No seeded test account exists in CI, so every test signs up a fresh user
+// (see helpers/auth.js). This wrapper keeps the existing `login(page)` call
+// sites unchanged.
 const login = async (page: Page): Promise<void> => {
-    await page.goto(`${BASE_URL}/login`);
-    await page.fill('input[name="email"]', 'test@example.com');
-    await page.fill('input[name="password"]', 'testpassword123');
-    await page.click('button[type="submit"]');
-    await page.waitForURL('**/dashboard**');
+    await signupAndLogin(page, { baseUrl: BASE_URL, emailPrefix: 'e2e-geofencing' });
 };
 
 // Mock location data

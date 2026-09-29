@@ -5,9 +5,9 @@
  * Frontend service for predictive password expiration API.
  */
 
-import api from './api';
+import { api } from './api';
 
-const PREDICTIVE_EXPIRATION_BASE = '/security/predictive-expiration';
+const PREDICTIVE_EXPIRATION_BASE = '/api/security/predictive-expiration';
 
 /**
  * Get the predictive expiration dashboard overview

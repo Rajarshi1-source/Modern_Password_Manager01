@@ -8,13 +8,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./api', () => ({
-  default: {
+  // Named export, matching services/api.js's real shape (heartbeatService
+  // imports the named `api` binding, not the unrelated default export).
+  api: {
     post: vi.fn(() => Promise.resolve({ data: {} })),
     get: vi.fn(() => Promise.resolve({ data: {} })),
   },
 }));
 
-import api from './api';
+import { api } from './api';
 import heartbeatService from './heartbeatService';
 
 describe('heartbeatService API surface', () => {

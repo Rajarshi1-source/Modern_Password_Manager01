@@ -25,6 +25,12 @@ import { fileURLToPath } from 'url';
 const extensionPath = process.env.PLAYWRIGHT_EXTENSION_PATH
   || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../browser-extension/dist');
 
+// This spec launches its own persistent browser context (not the `page`
+// fixture), so it doesn't inherit playwright.config.js's `use.baseURL` and
+// needs a fully-qualified URL. Kept configurable for consistency with the
+// other specs even though it isn't picked up by Playwright's own config.
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5173';
+
 test.describe('FHE Share sealed autofill canary', () => {
   test.skip(!process.env.PLAYWRIGHT_EXTENSION_PATH && !process.env.CI_RUN_EXTENSION_CANARY,
     'Set PLAYWRIGHT_EXTENSION_PATH or CI_RUN_EXTENSION_CANARY=1 to enable.');
@@ -40,7 +46,7 @@ test.describe('FHE Share sealed autofill canary', () => {
     });
     try {
       const page = await context.newPage();
-      await page.goto('http://localhost:5173/homomorphic-sharing', { waitUntil: 'domcontentloaded' });
+      await page.goto(`${BASE_URL}/homomorphic-sharing`, { waitUntil: 'domcontentloaded' });
 
       const ack = await page.evaluate(async () => {
         return await new Promise((resolve) => {
