@@ -69,6 +69,12 @@ name: E2E Tests (Playwright)
 # line records a trace on failure unconditionally, independent of the retry
 # count, so the non-blocking diagnostic signal this job exists to produce is
 # actually usable.
+#
+# 2026-09-28: job-level continue-on-error keeps a setup failure from
+# failing the check, but then Playwright is skipped and the upload step
+# used to ignore a missing report. The step after the test run writes a
+# job summary when Playwright was skipped, and the upload warns when no
+# report files exist.
 # =============================================================================
 
 on:
@@ -219,6 +225,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright E2E tests
+        id: playwright
         working-directory: ./frontend
         # playwright.config.js's `webServer` block boots `npm run dev` on
         # :5173 itself (reuseExistingServer is false on CI), so no manual
@@ -238,6 +245,16 @@ jobs:
         run: npm run test:e2e:ci -- --trace=retain-on-failure
         continue-on-error: true
 
+      - name: Note when Playwright never ran
+        if: always() && steps.playwright.outcome == 'skipped'
+        run: |
+          {
+            echo '## Playwright tests did not run'
+            echo ''
+            echo 'A setup step earlier in this job failed, so the Playwright test step was skipped.'
+            echo 'There is no playwright-report artifact for this run. Check the failed step above.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -246,5 +263,5 @@ jobs:
           path: |
             frontend/e2e-report/
             frontend/test-results/
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 14

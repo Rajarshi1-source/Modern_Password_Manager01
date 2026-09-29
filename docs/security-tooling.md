@@ -13,9 +13,9 @@ deliberately *not* adding yet (with the cost and trigger).
 | Nuclei | DAST | `.github/workflows/sast-dast.yml` → `nuclei` job (main + nightly) |
 | `eslint-plugin-security` | SAST (frontend) | `frontend/eslint.config.js` |
 | Bandit | SAST (Python) | `.github/workflows/ci.yml` → `backend-test` |
-| CodeQL (advanced setup) | SAST | `.github/workflows/codeql.yml` (push/PR to `main`/`develop`, weekly) |
-| Playwright E2E | E2E / functional | `.github/workflows/e2e.yml` (PR on `frontend/**`, nightly) — non-blocking |
-| OpenSSF Scorecard | Supply-chain posture | `.github/workflows/scorecard.yml` (push to `main`, weekly) |
+| CodeQL (advanced setup) | SAST | `.github/workflows/codeql.yml` (push/PR to `main`/`develop`, weekly, manual dispatch) |
+| Playwright E2E | E2E / functional | `.github/workflows/e2e.yml` (PR on `frontend/**`, nightly, manual dispatch) — non-blocking |
+| OpenSSF Scorecard | Supply-chain posture | `.github/workflows/scorecard.yml` (push to `main`, weekly, manual dispatch) |
 | `step-security/harden-runner` (audit mode) | Runner egress visibility | First step of `codeql.yml`, `security-multi-scanner.yml`, `ci-sbom.yml`, the `nuclei` job in `sast-dast.yml`, `scorecard.yml`, `e2e.yml`, `load-test.yml` |
 | k6 | Load/performance smoke | `.github/workflows/load-test.yml` (`workflow_dispatch` + weekly) — non-blocking |
 
@@ -81,7 +81,8 @@ pass rate is known.
 
 `scorecard.yml` runs the [OSSF Scorecard](https://scorecard.dev) checks
 (branch protection, token permissions, pinned actions, dependency
-update tooling, etc.) on push to `main` and weekly, publishing results
+update tooling, etc.) on push to `main`, weekly, and via manual
+dispatch, publishing results
 (`publish_results: true`) to the public Scorecard API/badge rather than
 relying on the upstream team's own periodic scan of public repos. Because
 of that setting, the job running `ossf/scorecard-action` is written to

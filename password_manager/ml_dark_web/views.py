@@ -20,13 +20,11 @@ from .tasks import (
     monitor_user_credentials, check_user_against_all_breaches,
     scrape_dark_web_source, scrape_all_active_sources
 )
-# NOTE: `.ml_services` is intentionally NOT imported at module level here,
-# even though ml_dark_web URLs are not currently wired into the root urls.py
-# (so this module is not loaded during pytest). This is defensive: if a
-# future change adds an `include('ml_dark_web.urls')` to the root config,
-# importing torch + transformers at the top of this file would re-introduce
-# the triton native-lib segfault that PR #241 fixed in `tasks.py`. Import
-# the helpers inside the view bodies that actually use them instead.
+# NOTE: `.ml_services` is intentionally NOT imported at module level.
+# The URLs are mounted at /api/ml-darkweb/ in the root urls.py. Importing
+# torch + transformers here would re-introduce the triton native-lib
+# segfault that PR #241 fixed in `tasks.py`. Import the helpers inside
+# the view bodies that actually use them instead.
 from vault.models import BreachAlert
 
 logger = logging.getLogger(__name__)
