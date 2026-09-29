@@ -74,6 +74,9 @@ export default function () {
   // threshold above would keep passing while silently testing the
   // REDIRECT TARGET instead of the endpoint this script asked for --
   // exactly the kind of regression this smoke test exists to catch.
+  // The overlapping-VU cache race is fixed in api/health.py with a
+  // per-request cache key. This view does not read the query string, so
+  // a client cache-busting param would not change that probe.
   const health = http.get(`${BASE_URL}/api/health/`, {
     redirects: 0,
     tags: { endpoint: 'health' },

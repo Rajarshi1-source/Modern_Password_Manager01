@@ -74,7 +74,7 @@ test.describe('Military-Grade Duress Codes E2E', () => {
     await page.locator('.level-select').selectOption('medium');
     await page.getByRole('button', { name: 'Add Code' }).click();
     
-    await expect(page.locator('.code-item, .setup-error')).toBeVisible();
+    await expect(page.locator('.code-item')).toBeVisible();
   });
 
   test('should validate duress code strength', async ({ page }) => {

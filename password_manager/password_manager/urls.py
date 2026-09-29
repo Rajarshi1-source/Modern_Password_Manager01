@@ -104,6 +104,12 @@ urlpatterns = [
     
     # ML Security API routes
     path('api/ml-security/', include('ml_security.urls')),
+
+    # ML Dark Web Monitoring. BreachAlertsDashboard calls
+    # /api/ml-darkweb/breach_matches/ and /api/ml-darkweb/resolve_match/.
+    # Those ViewSet actions exist; this mount was missing, so Vite served
+    # the frontend HTML instead of Django JSON.
+    path('api/ml-darkweb/', include('ml_dark_web.urls')),
     
     # Performance Monitoring API routes
     path('api/performance/', include('shared.urls')),

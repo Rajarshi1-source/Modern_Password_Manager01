@@ -4,6 +4,7 @@ from django.core.cache import cache
 from django.utils import timezone
 from django.conf import settings
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,11 @@ def health_check(request):
     
     # Check cache connectivity
     try:
-        cache_key = 'health_check_test'
+        # Unique key per request. A shared 'health_check_test' key lets one
+        # concurrent caller's delete land between another's set and get,
+        # so the second caller reports a false 503. Each probe uses its own
+        # entry. readiness_check and liveness_check do not touch the cache.
+        cache_key = f'health_check_test:{uuid.uuid4().hex}'
         cache.set(cache_key, 'test', 10)
         cached_value = cache.get(cache_key)
         if cached_value == 'test':
