@@ -381,7 +381,9 @@ export const AuthProvider = ({ children }) => {
     // to do with state).
     const hydrateUserFromMe = async () => {
       try {
-        const resp = await axios.get('/api/auth/me/', { _isBootstrap: true });
+        // Finite timeout: App.jsx gates every route on isLoading, so a stalled
+        // bootstrap request must reach the catch below and clear it.
+        const resp = await axios.get('/api/auth/me/', { _isBootstrap: true, timeout: 30000 });
         if (!cancelled) {
           setUser(resp.data);
           setIsAuthenticated(true);

@@ -92,6 +92,9 @@ export async function refreshAccessTokenViaCookie() {
       {
         withCredentials: true,
         headers: _commonHeaders,
+        // Finite timeout: initAuth awaits this at startup, and App.jsx gates
+        // every route on it; a stall throws into initAuth's fall-through.
+        timeout: 30000,
         // Don't let an interceptor recursively trigger a refresh on
         // the refresh call itself. Callers that wire up an axios
         // interceptor should skip `config.url === COOKIE_REFRESH_URL`.

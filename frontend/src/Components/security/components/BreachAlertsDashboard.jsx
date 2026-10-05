@@ -234,6 +234,9 @@ const AlertsList = styled.div`
 // WebSocket events and mark-alert-read all key on BreachAlert.id.
 // The card colours on UPPERCASE severity but alerts store it lowercase, and the
 // match confidence / monitored domain live in `exposed_data` / `identifier`.
+// Only ML-created alerts carry a confidence, and only they store a domain in
+// `identifier`; the breach-scan alerts store a vault item id or an email there,
+// so `domain` is left null for them instead of mislabelling it (Greptile P2).
 const toDisplayAlert = (record) => {
   const exposed =
     record.exposed_data && typeof record.exposed_data === 'object' ? record.exposed_data : {};
@@ -248,7 +251,7 @@ const toDisplayAlert = (record) => {
     resolved: Boolean(record.resolved),
     similarity_score: confidence,
     confidence_score: confidence,
-    domain: record.identifier || null,
+    domain: confidence !== null ? record.identifier || null : null,
   };
 };
 
@@ -329,9 +332,20 @@ const BreachAlertsDashboard = () => {
       try {
         setLoading(true);
         // Vite proxies /api to Django. The unprefixed path was served as
-        // frontend HTML. Returns { success, count, alerts: [...] }, not a bare list.
-        const response = await api.get('/api/ml-darkweb/breach-alerts/');
-        setAlerts((response.data?.alerts ?? []).map(toDisplayAlert));
+        // frontend HTML. Returns { success, count, has_more, alerts: [...] }, not a
+        // bare list, one page at a time: keep going so older unread alerts are
+        // reachable (the endpoint pages at 50).
+        const loaded = [];
+        let offset = 0;
+        for (;;) {
+          const { data } = await api.get('/api/ml-darkweb/breach-alerts/', { params: { offset } });
+          const page = data?.alerts ?? [];
+          loaded.push(...page);
+          if (!data?.has_more || page.length === 0) break;
+          offset += page.length;
+        }
+        // An alert arriving mid-load shifts the offset, so dedupe by id.
+        setAlerts([...new Map(loaded.map(a => [a.id, toDisplayAlert(a)])).values()]);
       } catch (error) {
         console.error('Error fetching alerts:', error);
         errorTracker.captureError(error, 'BreachAlertsDashboard:FetchAlerts', {}, 'error');

@@ -177,10 +177,14 @@ const BreachAlertCard = ({ alert, onMarkRead, onViewDetails }) => {
 
           <Metadata>
             <span>Detected {formatDate(alert.detected_at)}</span>
-            <Divider>•</Divider>
-            <span>
-              Match Confidence: {((alert.similarity_score || 0) * 100).toFixed(1)}%
-            </span>
+            {alert.similarity_score != null && (
+              <>
+                <Divider>•</Divider>
+                <span>
+                  Match Confidence: {(alert.similarity_score * 100).toFixed(1)}%
+                </span>
+              </>
+            )}
             {alert.domain && (
               <>
                 <Divider>•</Divider>

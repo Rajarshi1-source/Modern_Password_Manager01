@@ -584,7 +584,9 @@ def get_breach_alerts(request):
     Query params:
         - unread: true/false (filter by read status)
         - severity: LOW/MEDIUM/HIGH/CRITICAL
-        - limit: int (default: 50)
+        - limit: int (default: 50, max: 200)
+        - offset: int (default: 0); the response's `has_more` says whether
+          another page follows
     """
     try:
         alerts = BreachAlert.objects.filter(user=request.user)
@@ -599,10 +601,14 @@ def get_breach_alerts(request):
         if severity_filter:
             alerts = alerts.filter(severity=severity_filter.upper())
         
-        # Limit results
-        limit = int(request.query_params.get('limit', 50))
-        alerts = alerts.order_by('-detected_at')[:limit]
-        
+        # Paginate. `-id` breaks detected_at ties so pages never overlap, and
+        # one extra row is fetched to learn whether another page exists.
+        limit = max(1, min(int(request.query_params.get('limit', 50)), 200))
+        offset = max(0, int(request.query_params.get('offset', 0)))
+        page = list(alerts.order_by('-detected_at', '-id')[offset:offset + limit + 1])
+        has_more = len(page) > limit
+        alerts = page[:limit]
+
         # Serialize
         result = [{
             'id': alert.id,
@@ -625,6 +631,7 @@ def get_breach_alerts(request):
         return Response({
             'success': True,
             'count': len(result),
+            'has_more': has_more,
             'alerts': result
         })
     
