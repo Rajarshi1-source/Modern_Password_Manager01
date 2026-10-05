@@ -34,8 +34,8 @@ def train_intent_model():
     
     Collects feedback data and retrains to improve accuracy.
     """
-    from ..ml_models.intent_predictor import get_intent_predictor
-    from ..predictive_intent_models import (
+    from .ml_models.intent_predictor import get_intent_predictor
+    from .predictive_intent_models import (
         PasswordUsagePattern,
         PredictionFeedback,
     )
@@ -112,7 +112,7 @@ def cleanup_expired_predictions():
     
     Ensures no stale credential data remains in cache.
     """
-    from ..predictive_intent_models import (
+    from .predictive_intent_models import (
         IntentPrediction,
         PreloadedCredential,
         ContextSignal,
@@ -179,7 +179,7 @@ def cleanup_old_patterns():
     """
     Daily task to remove patterns beyond user retention settings.
     """
-    from ..predictive_intent_models import (
+    from .predictive_intent_models import (
         PasswordUsagePattern,
         PredictiveIntentSettings,
     )
@@ -228,8 +228,8 @@ def preload_morning_credentials():
     Runs at 6 AM to prepare credentials users typically access
     in the morning.
     """
-    from ..services.predictive_intent_service import get_predictive_intent_service
-    from ..predictive_intent_models import PasswordUsagePattern
+    from .services.predictive_intent_service import get_predictive_intent_service
+    from .predictive_intent_models import PasswordUsagePattern
     
     logger.info("Starting morning credential preload")
     
@@ -285,7 +285,7 @@ def analyze_usage_patterns():
     """
     Daily task to analyze usage patterns and update statistics.
     """
-    from ..predictive_intent_models import (
+    from .predictive_intent_models import (
         PasswordUsagePattern,
         IntentPrediction,
         PredictionFeedback,
