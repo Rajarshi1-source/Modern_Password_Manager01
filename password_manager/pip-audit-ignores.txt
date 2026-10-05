@@ -47,28 +47,16 @@
 # scan's own pip-audit-report.json reports zero vulns for our joblib pin.
 # Nothing to suppress.
 
-# cryptography advisories disclosed 2026-08 against our 48.0.1 pin, all
-# three in code paths this app never calls. Verified by grepping the whole
-# codebase rather than assumed: zero references to
-# pkcs7_decrypt_der/_pem/_smime, and zero references to cryptography.x509 or
-# the x509.verification module (PolicyBuilder / build_server_verifier /
-# build_client_verifier) anywhere. Everything this app actually uses the
-# library for — AESGCM/ChaCha20Poly1305 AEAD, Fernet, HKDF, Scrypt,
-# Ed25519/X25519/EC — is untouched by any of the three.
-#
-# PYSEC-2026-3552 (GHSA-g6cj-pr64-35w5, CVE-2026-69247): Bleichenbacher
-# oracle in pkcs7_decrypt_der/_pem/_smime. Not called anywhere.
-PYSEC-2026-3552 exp:2026-10-05
-
-# PYSEC-2026-3553 (GHSA-jwv3-5hgf-82ww, CVE-2026-69249): exponential-blowup
-# DoS in x509 chain validation via duplicate self-signed certs. The whole
-# x509.verification module is unused.
-PYSEC-2026-3553 exp:2026-10-10
-
-# PYSEC-2026-3554 (GHSA-m2h6-j472-rp4c, CVE-2026-69248): wildcard SAN escapes
-# a name-constrained sub-CA, same x509.verification module as PYSEC-2026-3553
-# above. Same non-reachability.
-PYSEC-2026-3554 exp:2026-10-10
+# PYSEC-2026-3552/3553/3554 (cryptography: CVE-2026-69247 Bleichenbacher
+# oracle in PKCS#7 decrypt, CVE-2026-69249 / CVE-2026-69248 x509.verification)
+# — REMOVED 2026-10-06, not renewed. These were suppressed as unreachable
+# (no x509/pkcs7 use anywhere) while a fix would have forced a major bump, but
+# upstream fixes exist and were taken instead: cryptography is now 50.0.2
+# (fixed in 49.0.0 / 50.0.0), with pyOpenSSL 26.4.0 and fido2 2.2.1 as the two
+# companions it required. pip-audit run against the full resolved set with
+# these entries removed reports no vulnerability; see the cryptography block
+# in requirements.txt for the compatibility evidence. The PYSEC-2026-3552
+# entry had already expired on 2026-10-05, which was failing this job.
 
 # Django advisories disclosed 2026-08 against our 5.1.15 pin. All six fixes
 # require Django 5.2.15+/6.0.6+ or 5.2.16+/6.0.7+ -- a MINOR version upgrade,
