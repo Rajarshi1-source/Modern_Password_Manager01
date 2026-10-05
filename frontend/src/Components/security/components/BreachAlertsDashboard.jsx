@@ -236,11 +236,15 @@ const AlertsList = styled.div`
 // match confidence / monitored domain live in `exposed_data` / `identifier`.
 // Only ML-created alerts carry a confidence, and only they store a domain in
 // `identifier`; the breach-scan alerts store a vault item id or an email there,
-// so `domain` is left null for them instead of mislabelling it (Greptile P2).
+// so it is shown for them as `affected_*` under a label matching `data_type`
+// rather than mislabelled as a domain (Greptile P2) or dropped (Greptile P1).
+const AFFECTED_LABELS = { email: 'Affected Email', password: 'Vault Item ID' };
+
 const toDisplayAlert = (record) => {
   const exposed =
     record.exposed_data && typeof record.exposed_data === 'object' ? record.exposed_data : {};
   const confidence = typeof exposed.confidence === 'number' ? exposed.confidence : null;
+  const hasAffected = confidence === null && record.identifier != null && record.identifier !== '';
   return {
     id: record.id,
     breach_title: record.breach_name,
@@ -252,6 +256,8 @@ const toDisplayAlert = (record) => {
     similarity_score: confidence,
     confidence_score: confidence,
     domain: confidence !== null ? record.identifier || null : null,
+    affected_label: hasAffected ? AFFECTED_LABELS[record.data_type] || 'Affected Item' : null,
+    affected_value: hasAffected ? String(record.identifier) : null,
   };
 };
 
@@ -331,6 +337,7 @@ const BreachAlertsDashboard = () => {
     const fetchAlerts = async () => {
       try {
         setLoading(true);
+        setAlerts([]); // drop any previous user's alerts before merging this load in
         // Vite proxies /api to Django. The unprefixed path was served as
         // frontend HTML. Returns { success, count, has_more, alerts: [...] }, not a
         // bare list, one page at a time: keep going so older unread alerts are
@@ -344,8 +351,19 @@ const BreachAlertsDashboard = () => {
           if (!data?.has_more || page.length === 0) break;
           offset += page.length;
         }
-        // An alert arriving mid-load shifts the offset, so dedupe by id.
-        setAlerts([...new Map(loaded.map(a => [a.id, toDisplayAlert(a)])).values()]);
+        // An alert arriving mid-load shifts the offset, so dedupe by id. Merge
+        // into the current state instead of replacing it: WebSocket alerts that
+        // arrived while the pages loaded stay, and a read-state update is never
+        // reverted by an older fetched copy.
+        const fetched = new Map(loaded.map(a => [a.id, toDisplayAlert(a)]));
+        setAlerts(prev => {
+          const live = prev.map(a => {
+            const f = fetched.get(a.id);
+            return f ? { ...f, is_read: f.is_read || a.is_read } : a;
+          });
+          const liveIds = new Set(prev.map(a => a.id));
+          return [...live, ...[...fetched.values()].filter(a => !liveIds.has(a.id))];
+        });
       } catch (error) {
         console.error('Error fetching alerts:', error);
         errorTracker.captureError(error, 'BreachAlertsDashboard:FetchAlerts', {}, 'error');
