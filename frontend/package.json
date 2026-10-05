@@ -82,7 +82,7 @@
     "vite": "^7.3.2",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.5.0",
-    "vitest": "^4.0.15"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "@tensorflow/tfjs-core": "^4.22.0",
