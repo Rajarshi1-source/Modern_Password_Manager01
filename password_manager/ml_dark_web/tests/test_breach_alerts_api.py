@@ -117,6 +117,18 @@ class BreachAlertsApiTests(TestCase):
         self.assertEqual(len(set(ids)), 5)
         self.assertEqual(ids, sorted(ids, reverse=True))
 
+    def test_list_severity_filter_matches_stored_lowercase_in_any_case(self):
+        # setUp's alert is stored as 'high'; the documented query values are uppercase.
+        BreachAlert.objects.create(
+            user=self.user, breach_name='Low one', identifier='x.example', severity='low',
+        )
+
+        for value in ('HIGH', 'high', 'High'):
+            ids = [a['id'] for a in self.client.get(LIST_URL, {'severity': value}).data['alerts']]
+            self.assertEqual(ids, [self.alert.id], value)
+
+        self.assertEqual(self.client.get(LIST_URL, {'severity': 'critical'}).data['count'], 0)
+
     def test_list_rejects_non_integer_pagination_with_400(self):
         for params in ({'offset': 'abc'}, {'limit': 'abc'}, {'offset': ''}):
             res = self.client.get(LIST_URL, params)

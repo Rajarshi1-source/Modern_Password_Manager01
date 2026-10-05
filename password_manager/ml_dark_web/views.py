@@ -599,7 +599,9 @@ def get_breach_alerts(request):
         
         severity_filter = request.query_params.get('severity')
         if severity_filter:
-            alerts = alerts.filter(severity=severity_filter.upper())
+            # Case-insensitive: BreachAlert stores severity lowercase, while the
+            # documented query values are LOW/MEDIUM/HIGH/CRITICAL.
+            alerts = alerts.filter(severity__iexact=severity_filter)
         
         # Paginate. `-id` breaks detected_at ties so pages never overlap, and
         # one extra row is fetched to learn whether another page exists.

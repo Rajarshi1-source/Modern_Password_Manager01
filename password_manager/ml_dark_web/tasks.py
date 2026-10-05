@@ -581,19 +581,31 @@ def send_breach_notification(alert_id: int):
         from asgiref.sync import async_to_sync
         
         channel_layer = get_channel_layer()
-        
+
         if channel_layer:
+            # The dashboard and BreachToast (and the test_breach_alert command)
+            # read `title`, UPPERCASE `severity`, and `confidence` / `domain`.
+            # `breach_name` is kept for existing readers.
+            message = {
+                'alert_id': alert.id,
+                'breach_name': alert.breach_name,
+                'title': alert.breach_name,
+                'severity': alert.severity.upper(),
+                'detected_at': alert.detected_at.isoformat(),
+                'description': alert.breach_description[:200]
+            }
+            # Only ML-created alerts carry a confidence, and only they store a
+            # domain in `identifier` (scan alerts store an email / vault item id).
+            confidence = (alert.exposed_data or {}).get('confidence')
+            if isinstance(confidence, (int, float)):
+                message['confidence'] = confidence
+                message['domain'] = alert.identifier
+
             async_to_sync(channel_layer.group_send)(
                 f"user_{alert.user.id}",
                 {
                     'type': 'breach_alert',
-                    'message': {
-                        'alert_id': alert.id,
-                        'breach_name': alert.breach_name,
-                        'severity': alert.severity,
-                        'detected_at': alert.detected_at.isoformat(),
-                        'description': alert.breach_description[:200]
-                    }
+                    'message': message
                 }
             )
             
