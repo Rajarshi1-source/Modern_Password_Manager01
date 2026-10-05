@@ -64,7 +64,7 @@ describe('BreachAlertsDashboard', () => {
     render(<BreachAlertsDashboard />);
 
     expect(await screen.findByText('Acme breach')).toBeInTheDocument();
-    expect(api.get).toHaveBeenCalledWith('/api/ml-darkweb/breach-alerts/');
+    expect(api.get).toHaveBeenCalledWith('/api/ml-darkweb/breach-alerts/', { params: { offset: 0 } });
 
     // Card fields come from the alert record, not from a match row.
     expect(screen.getByText('HIGH')).toBeInTheDocument(); // upper-cased for the card
@@ -92,6 +92,39 @@ describe('BreachAlertsDashboard', () => {
 
     await waitFor(() => expect(screen.queryByText('Mark as Read')).not.toBeInTheDocument());
     expect(screen.queryByText(/unread/)).not.toBeInTheDocument();
+  });
+
+  test('loads every page so older unread alerts are reachable', async () => {
+    api.get
+      .mockResolvedValueOnce({ data: { has_more: true, alerts: [unreadAlert] } })
+      .mockResolvedValueOnce({
+        data: { has_more: false, alerts: [{ ...unreadAlert, id: 13, breach_name: 'Older breach' }] },
+      });
+    render(<BreachAlertsDashboard />);
+
+    expect(await screen.findByText('Older breach')).toBeInTheDocument();
+    expect(screen.getByText('Acme breach')).toBeInTheDocument();
+    expect(api.get).toHaveBeenNthCalledWith(2, '/api/ml-darkweb/breach-alerts/', {
+      params: { offset: 1 },
+    });
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  test('does not label a breach-scan alert with a domain or a 0.0% confidence', async () => {
+    // Breach-scan alerts store an email / vault item id in `identifier` and
+    // have no exposed_data.confidence.
+    api.get.mockResolvedValue({
+      data: {
+        alerts: [{
+          ...unreadAlert, breach_name: 'Scan hit', identifier: 'person@example.net', exposed_data: {},
+        }],
+      },
+    });
+    render(<BreachAlertsDashboard />);
+
+    expect(await screen.findByText('Scan hit')).toBeInTheDocument();
+    expect(screen.queryByText('person@example.net')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Match Confidence/)).not.toBeInTheDocument();
   });
 
   test('tolerates an empty or malformed list response', async () => {

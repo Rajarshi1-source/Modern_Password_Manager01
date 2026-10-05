@@ -13,6 +13,9 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from ml_dark_web.models import (
+    BreachSource, MLBreachData, MLBreachMatch, UserCredentialMonitoring,
+)
 from vault.models import BreachAlert
 
 User = get_user_model()
@@ -93,3 +96,67 @@ class BreachAlertsApiTests(TestCase):
         foreign.refresh_from_db()
         self.assertFalse(foreign.is_read)
         broadcast.assert_not_called()
+
+    def test_list_pages_through_every_alert_without_overlap(self):
+        # Same detected_at on purpose: `-id` must keep the pages stable.
+        for i in range(4):
+            BreachAlert.objects.create(
+                user=self.user, breach_name=f'extra {i}', identifier='x.example',
+                detected_at=self.alert.detected_at,
+            )  # 5 alerts in total with setUp's
+
+        first = self.client.get(LIST_URL, {'limit': 2}).data
+        second = self.client.get(LIST_URL, {'limit': 2, 'offset': 2}).data
+        third = self.client.get(LIST_URL, {'limit': 2, 'offset': 4}).data
+
+        self.assertEqual([first['count'], second['count'], third['count']], [2, 2, 1])
+        self.assertEqual(
+            [first['has_more'], second['has_more'], third['has_more']], [True, True, False]
+        )
+        ids = [a['id'] for page in (first, second, third) for a in page['alerts']]
+        self.assertEqual(len(set(ids)), 5)
+        self.assertEqual(ids, sorted(ids, reverse=True))
+
+    def test_list_caps_limit_and_ignores_negative_offset(self):
+        res = self.client.get(LIST_URL, {'limit': 100000, 'offset': -5})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 1)
+        self.assertFalse(res.data['has_more'])
+
+    # breach_matches / resolve_match share the mount with the alert endpoints
+    # and must stay scoped to request.user too.
+    def _create_match(self, user):
+        source = BreachSource.objects.create(
+            name='Test source', url='https://example.com', source_type='forum',
+        )
+        breach = MLBreachData.objects.create(
+            breach_id=f'test-{user.pk}', title='Test breach',
+            description='Test description', source=source, severity='HIGH',
+            confidence_score=0.9, raw_content='Test content',
+        )
+        credential = UserCredentialMonitoring.objects.create(
+            user=user, email_hash=f'{user.pk:064x}', domain=f'{user.username}.example',
+        )
+        return MLBreachMatch.objects.create(
+            user=user, breach=breach, monitored_credential=credential,
+            similarity_score=0.9, confidence_score=0.9,
+        )
+
+    def test_breach_matches_excludes_other_users_matches(self):
+        own = self._create_match(self.user)
+        self._create_match(self.other)
+
+        res = self.client.get('/api/ml-darkweb/breach_matches/')
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([m['id'] for m in res.data], [own.id])
+
+    def test_resolve_match_rejects_other_users_match(self):
+        foreign = self._create_match(self.other)
+
+        res = self.client.post('/api/ml-darkweb/resolve_match/', {'match_id': foreign.id})
+
+        self.assertEqual(res.status_code, 404)
+        foreign.refresh_from_db()
+        self.assertFalse(foreign.resolved)

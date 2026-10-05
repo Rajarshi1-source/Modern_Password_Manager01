@@ -263,12 +263,14 @@ const BreachDetailModal = ({ alert, onClose }) => {
                 </Badge>
               </InfoCard>
 
-              <InfoCard>
-                <InfoLabel>Match Confidence</InfoLabel>
-                <InfoValue>
-                  {((alert.similarity_score || alert.confidence_score || 0) * 100).toFixed(1)}%
-                </InfoValue>
-              </InfoCard>
+              {(alert.similarity_score ?? alert.confidence_score) != null && (
+                <InfoCard>
+                  <InfoLabel>Match Confidence</InfoLabel>
+                  <InfoValue>
+                    {((alert.similarity_score ?? alert.confidence_score) * 100).toFixed(1)}%
+                  </InfoValue>
+                </InfoCard>
+              )}
 
               {alert.detected_at && (
                 <InfoCard>
