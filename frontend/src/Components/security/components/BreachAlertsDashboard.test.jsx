@@ -170,6 +170,27 @@ describe('BreachAlertsDashboard', () => {
     expect(screen.getAllByRole('heading', { name: 'Acme breach' })).toHaveLength(1); // merged, not duplicated
   });
 
+  test('keeps earlier pages and flags the list as incomplete when a later page fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    api.get
+      .mockResolvedValueOnce({ data: { has_more: true, alerts: [unreadAlert] } })
+      .mockRejectedValueOnce(new Error('network down'));
+    render(<BreachAlertsDashboard />);
+
+    expect(await screen.findByRole('heading', { name: 'Acme breach' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/may be incomplete/);
+    expect(screen.queryByText('All Clear!')).not.toBeInTheDocument();
+  });
+
+  test('shows an error, not "All Clear!", when the first request fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    api.get.mockRejectedValue(new Error('boom'));
+    render(<BreachAlertsDashboard />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not load/);
+    expect(screen.queryByText('All Clear!')).not.toBeInTheDocument();
+  });
+
   test('tolerates an empty or malformed list response', async () => {
     api.get.mockResolvedValue({ data: {} });
     render(<BreachAlertsDashboard />);

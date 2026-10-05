@@ -35,7 +35,7 @@
  *   tl-recover-begin, tl-recover-poll, tl-recover-set-password
  */
 import { test, expect } from '@playwright/test';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { signupAndLogin } from './helpers/auth.js';
@@ -159,8 +159,9 @@ test.describe('Layered Recovery — Tier 3 (Time-Locked)', () => {
     // signupUser above), so the full address must be passed here too. The
     // runner resolves the management command path relative to repo root.
     const repoRoot = path.resolve(__dirname, '..', '..');
-    execSync(
-      `python manage.py advance_time_lock ${email} --hours 169`,
+    execFileSync(
+      'python',
+      ['manage.py', 'advance_time_lock', email, '--hours', '169'],
       { cwd: path.join(repoRoot, 'password_manager'), stdio: 'inherit' },
     );
 

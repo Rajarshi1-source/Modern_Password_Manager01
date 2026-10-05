@@ -222,6 +222,16 @@ const EmptyText = styled.p`
   line-height: 1.6;
 `;
 
+const ErrorNotice = styled.div`
+  background: #fdecea;
+  border-left: 4px solid #dc3545;
+  border-radius: 8px;
+  color: #842029;
+  font-size: 14px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+`;
+
 const AlertsList = styled.div`
   display: flex;
   flex-direction: column;
@@ -264,6 +274,7 @@ const toDisplayAlert = (record) => {
 const BreachAlertsDashboard = () => {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [filter, setFilter] = useState('all');
   const [toastAlert, setToastAlert] = useState(null);
   const [selectedAlert, setSelectedAlert] = useState(null);
@@ -335,26 +346,12 @@ const BreachAlertsDashboard = () => {
   // Fetch existing alerts from API
   useEffect(() => {
     const fetchAlerts = async () => {
-      try {
-        setLoading(true);
-        setAlerts([]); // drop any previous user's alerts before merging this load in
-        // Vite proxies /api to Django. The unprefixed path was served as
-        // frontend HTML. Returns { success, count, has_more, alerts: [...] }, not a
-        // bare list, one page at a time: keep going so older unread alerts are
-        // reachable (the endpoint pages at 50).
-        const loaded = [];
-        let offset = 0;
-        for (;;) {
-          const { data } = await api.get('/api/ml-darkweb/breach-alerts/', { params: { offset } });
-          const page = data?.alerts ?? [];
-          loaded.push(...page);
-          if (!data?.has_more || page.length === 0) break;
-          offset += page.length;
-        }
-        // An alert arriving mid-load shifts the offset, so dedupe by id. Merge
-        // into the current state instead of replacing it: WebSocket alerts that
-        // arrived while the pages loaded stay, and a read-state update is never
-        // reverted by an older fetched copy.
+      const loaded = [];
+      // An alert arriving mid-load shifts the offset, so dedupe by id. Merge
+      // into the current state instead of replacing it: WebSocket alerts that
+      // arrived while the pages loaded stay, and a read-state update is never
+      // reverted by an older fetched copy.
+      const commitLoaded = () => {
         const fetched = new Map(loaded.map(a => [a.id, toDisplayAlert(a)]));
         setAlerts(prev => {
           const live = prev.map(a => {
@@ -364,7 +361,29 @@ const BreachAlertsDashboard = () => {
           const liveIds = new Set(prev.map(a => a.id));
           return [...live, ...[...fetched.values()].filter(a => !liveIds.has(a.id))];
         });
+      };
+      try {
+        setLoading(true);
+        setFetchError(false);
+        setAlerts([]); // drop any previous user's alerts before merging this load in
+        // Vite proxies /api to Django. The unprefixed path was served as
+        // frontend HTML. Returns { success, count, has_more, alerts: [...] }, not a
+        // bare list, one page at a time: keep going so older unread alerts are
+        // reachable (the endpoint pages at 50).
+        let offset = 0;
+        for (;;) {
+          const { data } = await api.get('/api/ml-darkweb/breach-alerts/', { params: { offset } });
+          const page = data?.alerts ?? [];
+          loaded.push(...page);
+          if (!data?.has_more || page.length === 0) break;
+          offset += page.length;
+        }
+        commitLoaded();
       } catch (error) {
+        // Keep the pages that did load and say the list is incomplete, rather
+        // than showing "All Clear!" for a failed (possibly partial) load.
+        commitLoaded();
+        setFetchError(true);
         console.error('Error fetching alerts:', error);
         errorTracker.captureError(error, 'BreachAlertsDashboard:FetchAlerts', {}, 'error');
       } finally {
@@ -490,12 +509,17 @@ const BreachAlertsDashboard = () => {
 
       {/* Content */}
       <ContentContainer>
+        {fetchError && !loading && (
+          <ErrorNotice role="alert">
+            Could not load all of your alerts, so this list may be incomplete. Reload to try again.
+          </ErrorNotice>
+        )}
         {loading ? (
           <LoadingContainer>
             <Spinner />
             <LoadingText>Loading security alerts...</LoadingText>
           </LoadingContainer>
-        ) : filteredAlerts.length === 0 ? (
+        ) : filteredAlerts.length === 0 && !fetchError ? (
           <EmptyState>
             <EmptyIcon>
               <FaCheckCircle />
