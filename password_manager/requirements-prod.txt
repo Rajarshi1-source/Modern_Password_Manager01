@@ -9,7 +9,7 @@ dj-rest-auth==7.0.1
 cryptography==48.0.1  # fix GHSA-537c-gmf6-5ccf (bundled OpenSSL); see requirements.txt's cryptography line for the full pyOpenSSL-compatibility rationale (only pyOpenSSL 26.2.0 supports 48.0.1). pyOpenSSL is not itself a dependency in this file.
 argon2-cffi==21.3.0
 pycryptodome>=3.20.0
-PyJWT==2.13.0
+PyJWT==2.15.1
 pyotp==2.10.0
 
 # Async & Messaging
@@ -38,7 +38,7 @@ requests==2.33.0
 # (-core, -lock, ml_dark_web -lock) are bumped in this same commit
 # so the production image (which installs requirements-prod.txt)
 # actually ships the fixed version, not the pre-bump 2.6.3.
-urllib3==2.7.0
+urllib3==2.8.0
 
 # Servers
 gunicorn>=21.2.0

@@ -142,21 +142,20 @@ All components use `styled-components` for styling. The color scheme follows you
 
 ### Endpoints Used
 
-1. **Fetch Alerts**: `GET /api/ml-darkweb/breach_matches/`
-2. **Mark as Read**: `POST /api/ml-darkweb/resolve_match/`
+1. **Fetch Alerts**: `GET /api/ml-darkweb/breach-alerts/` (returns `{ success, count, alerts }`)
+2. **Mark as Read**: `POST /api/ml-darkweb/mark-alert-read/<alert_id>/`
 
 ### Example API Call
 
 ```javascript
-import ApiService from '../../../services/api';
+import { api } from '../../../services/api';
 
 // Fetch alerts
-const response = await ApiService.api.get('/ml-darkweb/breach_matches/');
+const response = await api.get('/api/ml-darkweb/breach-alerts/');
+const alerts = response.data.alerts;
 
-// Mark alert as read
-await ApiService.api.post('/ml-darkweb/resolve_match/', {
-  match_id: alertId
-});
+// Mark alert as read (persists BreachAlert.is_read)
+await api.post(`/api/ml-darkweb/mark-alert-read/${alertId}/`);
 ```
 
 ## 🧪 Testing
@@ -208,7 +207,7 @@ If the backend is not running, the dashboard will show:
 
 1. **Check API endpoint**:
    - Open DevTools Network tab
-   - Verify `/api/ml-darkweb/breach_matches/` returns data
+   - Verify `/api/ml-darkweb/breach-alerts/` returns data
 
 2. **Check WebSocket messages**:
    - Open DevTools Console

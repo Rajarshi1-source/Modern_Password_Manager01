@@ -228,6 +228,30 @@ const AlertsList = styled.div`
   gap: 16px;
 `;
 
+// Maps a vault.BreachAlert record (what /api/ml-darkweb/breach-alerts/ returns)
+// onto the field names BreachAlertCard / BreachDetailModal read. The dashboard
+// lists alerts, not MLBreachMatch rows: `is_read` lives on the alert, and the
+// WebSocket events and mark-alert-read all key on BreachAlert.id.
+// The card colours on UPPERCASE severity but alerts store it lowercase, and the
+// match confidence / monitored domain live in `exposed_data` / `identifier`.
+const toDisplayAlert = (record) => {
+  const exposed =
+    record.exposed_data && typeof record.exposed_data === 'object' ? record.exposed_data : {};
+  const confidence = typeof exposed.confidence === 'number' ? exposed.confidence : null;
+  return {
+    id: record.id,
+    breach_title: record.breach_name,
+    breach_description: record.breach_description,
+    severity: String(record.severity || 'medium').toUpperCase(),
+    detected_at: record.detected_at,
+    is_read: Boolean(record.is_read),
+    resolved: Boolean(record.resolved),
+    similarity_score: confidence,
+    confidence_score: confidence,
+    domain: record.identifier || null,
+  };
+};
+
 const BreachAlertsDashboard = () => {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -305,10 +329,9 @@ const BreachAlertsDashboard = () => {
       try {
         setLoading(true);
         // Vite proxies /api to Django. The unprefixed path was served as
-        // frontend HTML. MLDarkWebViewSet.breach_matches is mounted at
-        // /api/ml-darkweb/breach_matches/.
-        const response = await api.get('/api/ml-darkweb/breach_matches/');
-        setAlerts(response.data || []);
+        // frontend HTML. Returns { success, count, alerts: [...] }, not a bare list.
+        const response = await api.get('/api/ml-darkweb/breach-alerts/');
+        setAlerts((response.data?.alerts ?? []).map(toDisplayAlert));
       } catch (error) {
         console.error('Error fetching alerts:', error);
         errorTracker.captureError(error, 'BreachAlertsDashboard:FetchAlerts', {}, 'error');
@@ -325,13 +348,13 @@ const BreachAlertsDashboard = () => {
   // Mark alert as read
   const handleMarkAsRead = async (alertId) => {
     try {
-      await api.post('/api/ml-darkweb/resolve_match/', {
-        match_id: alertId
-      });
-      
+      // Persists BreachAlert.is_read and broadcasts `marked_read`. resolve_match
+      // acted on an MLBreachMatch (a different table), so is_read was never saved.
+      await api.post(`/api/ml-darkweb/mark-alert-read/${alertId}/`);
+
       setAlerts(prev =>
         prev.map(alert =>
-          alert.id === alertId ? { ...alert, is_read: true, resolved: true } : alert
+          alert.id === alertId ? { ...alert, is_read: true } : alert
         )
       );
     } catch (error) {
