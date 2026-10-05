@@ -14,7 +14,7 @@ deliberately *not* adding yet (with the cost and trigger).
 | `eslint-plugin-security` | SAST (frontend) | `frontend/eslint.config.js` |
 | Bandit | SAST (Python) | `.github/workflows/ci.yml` → `backend-test` |
 | CodeQL (advanced setup) | SAST | `.github/workflows/codeql.yml` (push/PR to `main`/`develop`, weekly, manual dispatch) |
-| Playwright E2E | E2E / functional | `.github/workflows/e2e.yml` (PR on `frontend/**`, nightly, manual dispatch) — non-blocking |
+| Playwright E2E | E2E / functional | `.github/workflows/e2e.yml` (PR on `frontend/**` or `password_manager/**`, nightly, manual dispatch) — non-blocking |
 | OpenSSF Scorecard | Supply-chain posture | `.github/workflows/scorecard.yml` (push to `main`, weekly, manual dispatch) |
 | `step-security/harden-runner` (audit mode) | Runner egress visibility | First step of `codeql.yml`, `security-multi-scanner.yml`, `ci-sbom.yml`, the `nuclei` job in `sast-dast.yml`, `scorecard.yml`, `e2e.yml`, `load-test.yml` |
 | k6 | Load/performance smoke | `.github/workflows/load-test.yml` (`workflow_dispatch` + weekly) — non-blocking |
