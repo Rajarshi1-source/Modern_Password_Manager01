@@ -30,22 +30,21 @@ requests-oauthlib==2.0.0
 mozilla-django-oidc>=4.0.0,<5
 
 # Cryptography & Security
-# Pin 48.0.1 to fix GHSA-537c-gmf6-5ccf (the PyPI wheels bundle OpenSSL; <48.0.1
-# ships the build hit by the 2026-06-09 advisory). Stay on 48.x, not 49.x:
-# verified against each pyOpenSSL 26.x release's own metadata (not assumed),
-# only 26.2.0 declares "cryptography<49,>=46.0.0" -- 26.0.0/26.1.0 cap below
-# 48.0.1 (<47 / <48) and 26.3.0+ require >=49 -- so pip's resolver backtracks
-# the unbounded pyOpenSSL>=26.0.0 floor below onto exactly 26.2.0 (confirmed
-# via `pip install --dry-run`; see pyOpenSSL==26.2.0 in requirements-lock.txt).
-# Declined: GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (Bleichenbacher oracle in
-# PKCS#7 EnvelopedData decrypt, fixed 50.0.0) is not reachable — this codebase
-# never calls pkcs7_decrypt_der/_pem/_smime — and taking it would force
-# pyOpenSSL to 26.3.0+ (which needs cryptography>=49) alongside it. Revisit
-# both together if either is bumped.
-cryptography==48.0.1
+# 50.0.2 (wheels built against OpenSSL 4.0.3) fixes GHSA-537c-gmf6-5ccf (the
+# PyPI wheels bundle OpenSSL), GHSA-g6cj-pr64-35w5 / CVE-2026-69247 (fixed
+# 50.0.0) and the two x509.verification advisories PYSEC-2026-3553/3554 (fixed
+# 49.0.0), so pip-audit-ignores.txt no longer suppresses any of them.
+# Taking 49+ forced two companions, both verified rather than assumed: pyOpenSSL
+# 26.3.0+ (26.2.0 caps cryptography<49; 26.4.0 allows <51) and fido2 2.2.x
+# (2.0.x caps <48, 2.1.x <49, 2.2.1 allows <52). A sweep of the metadata of all
+# 344 packages in the CI-resolved set found those two as the only upper bounds
+# below 50; everything else sets a lower bound. Nothing in this codebase calls
+# a changed API: no x509/pkcs7, no raw algorithms.ChaCha20 (only the
+# ChaCha20Poly1305 AEAD), no DH, no removed *_KEY_TYPES alias.
+cryptography==50.0.2
 argon2-cffi==21.3.0
 argon2-cffi-bindings==25.1.0
-pyOpenSSL>=26.0.0
+pyOpenSSL>=26.3.0
 pycryptodome>=3.20.0
 pyotp==2.10.0
 
