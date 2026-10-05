@@ -191,6 +191,12 @@ const BreachAlertCard = ({ alert, onMarkRead, onViewDetails }) => {
                 <span>{alert.domain}</span>
               </>
             )}
+            {alert.affected_value && (
+              <>
+                <Divider>•</Divider>
+                <span>{alert.affected_label}: {alert.affected_value}</span>
+              </>
+            )}
           </Metadata>
 
           <Actions>

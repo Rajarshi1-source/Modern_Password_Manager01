@@ -289,6 +289,15 @@ const BreachDetailModal = ({ alert, onClose }) => {
                   </InfoValue>
                 </InfoCard>
               )}
+
+              {alert.affected_value && (
+                <InfoCard>
+                  <InfoLabel>{alert.affected_label}</InfoLabel>
+                  <InfoValue style={{ fontSize: '14px' }}>
+                    {alert.affected_value}
+                  </InfoValue>
+                </InfoCard>
+              )}
             </InfoGrid>
           </Section>
 

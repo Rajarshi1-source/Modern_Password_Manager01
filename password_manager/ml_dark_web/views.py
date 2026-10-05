@@ -603,8 +603,14 @@ def get_breach_alerts(request):
         
         # Paginate. `-id` breaks detected_at ties so pages never overlap, and
         # one extra row is fetched to learn whether another page exists.
-        limit = max(1, min(int(request.query_params.get('limit', 50)), 200))
-        offset = max(0, int(request.query_params.get('offset', 0)))
+        try:
+            limit = max(1, min(int(request.query_params.get('limit', 50)), 200))
+            offset = max(0, int(request.query_params.get('offset', 0)))
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'invalid_pagination'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         page = list(alerts.order_by('-detected_at', '-id')[offset:offset + limit + 1])
         has_more = len(page) > limit
         alerts = page[:limit]
@@ -624,7 +630,10 @@ def get_breach_alerts(request):
             # BreachAlertsDashboard lists these alerts (not MLBreachMatch rows)
             # and needs the monitored domain (`identifier`) and the match
             # confidence (`exposed_data['confidence']`) to render its card.
+            # `data_type` says what a breach-scan alert's identifier is (an
+            # email, or a vault item id) so the UI can label it accurately.
             'identifier': alert.identifier,
+            'data_type': alert.data_type,
             'exposed_data': alert.exposed_data,
         } for alert in alerts]
         

@@ -117,6 +117,24 @@ class BreachAlertsApiTests(TestCase):
         self.assertEqual(len(set(ids)), 5)
         self.assertEqual(ids, sorted(ids, reverse=True))
 
+    def test_list_rejects_non_integer_pagination_with_400(self):
+        for params in ({'offset': 'abc'}, {'limit': 'abc'}, {'offset': ''}):
+            res = self.client.get(LIST_URL, params)
+
+            self.assertEqual(res.status_code, 400, params)
+            self.assertEqual(res.data, {'error': 'invalid_pagination'})
+
+    def test_list_reports_data_type_so_scan_alerts_can_be_labelled(self):
+        scan = BreachAlert.objects.create(
+            user=self.user, breach_name='Scan hit', identifier='person@example.net',
+            data_type='email',
+        )
+
+        by_id = {a['id']: a for a in self.client.get(LIST_URL).data['alerts']}
+
+        self.assertEqual(by_id[scan.id]['data_type'], 'email')
+        self.assertEqual(by_id[scan.id]['identifier'], 'person@example.net')
+
     def test_list_caps_limit_and_ignores_negative_offset(self):
         res = self.client.get(LIST_URL, {'limit': 100000, 'offset': -5})
 

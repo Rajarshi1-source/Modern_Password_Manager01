@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import BreachAlertsDashboard from './BreachAlertsDashboard';
@@ -18,15 +18,22 @@ vi.mock('../../../services/errorTracker', () => ({
 vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({ user: { id: 7 } }),
 }));
+// Captures the dashboard's WebSocket callbacks so tests can push live events.
+const ws = vi.hoisted(() => ({ onAlert: null, onUpdate: null }));
+
 vi.mock('../../../hooks/useBreachWebSocket', () => ({
-  default: () => ({
-    isConnected: true,
-    connectionQuality: 'good',
-    reconnectAttempts: 0,
-    unreadCount: 0,
-    connectionError: null,
-    reconnect: vi.fn(),
-  }),
+  default: (_userId, onAlert, onUpdate) => {
+    ws.onAlert = onAlert;
+    ws.onUpdate = onUpdate;
+    return {
+      isConnected: true,
+      connectionQuality: 'good',
+      reconnectAttempts: 0,
+      unreadCount: 0,
+      connectionError: null,
+      reconnect: vi.fn(),
+    };
+  },
 }));
 
 // Shape returned by GET /api/ml-darkweb/breach-alerts/ (see get_breach_alerts).
@@ -110,21 +117,57 @@ describe('BreachAlertsDashboard', () => {
     expect(api.get).toHaveBeenCalledTimes(2);
   });
 
-  test('does not label a breach-scan alert with a domain or a 0.0% confidence', async () => {
+  test('shows a breach-scan alert\'s affected item under an accurate label, with no 0.0% confidence', async () => {
     // Breach-scan alerts store an email / vault item id in `identifier` and
     // have no exposed_data.confidence.
+    const scan = { ...unreadAlert, exposed_data: {} };
     api.get.mockResolvedValue({
       data: {
-        alerts: [{
-          ...unreadAlert, breach_name: 'Scan hit', identifier: 'person@example.net', exposed_data: {},
-        }],
+        alerts: [
+          { ...scan, id: 21, breach_name: 'Email scan hit', data_type: 'email', identifier: 'person@example.net' },
+          { ...scan, id: 22, breach_name: 'Password scan hit', data_type: 'password', identifier: '4821' },
+        ],
       },
     });
     render(<BreachAlertsDashboard />);
 
-    expect(await screen.findByText('Scan hit')).toBeInTheDocument();
-    expect(screen.queryByText('person@example.net')).not.toBeInTheDocument();
+    expect(await screen.findByText('Email scan hit')).toBeInTheDocument();
+    expect(screen.getByText('Affected Email: person@example.net')).toBeInTheDocument();
+    expect(screen.getByText('Vault Item ID: 4821')).toBeInTheDocument();
     expect(screen.queryByText(/Match Confidence/)).not.toBeInTheDocument();
+  });
+
+  test('keeps a WebSocket alert that arrived while the pages were loading', async () => {
+    let release;
+    api.get.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    render(<BreachAlertsDashboard />);
+    await waitFor(() => expect(ws.onAlert).toBeTruthy());
+
+    act(() => {
+      ws.onAlert({ alert_id: 99, title: 'Live breach', severity: 'high', detected_at: '2026-10-05T10:00:00Z' });
+    });
+    release({ data: { has_more: false, alerts: [unreadAlert] } });
+
+    // Card titles are headings (the toast repeats the title as plain text).
+    expect(await screen.findByRole('heading', { name: 'Acme breach' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Live breach' })).toBeInTheDocument();
+  });
+
+  test('a read update received mid-load is not reverted by the fetched copy', async () => {
+    let release;
+    api.get.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    render(<BreachAlertsDashboard />);
+    await waitFor(() => expect(ws.onAlert).toBeTruthy());
+
+    act(() => {
+      ws.onAlert({ alert_id: 11, title: 'Acme breach', severity: 'high' });
+      ws.onUpdate({ update_type: 'marked_read', alert_id: 11 });
+    });
+    release({ data: { has_more: false, alerts: [unreadAlert] } }); // fetched copy is still unread
+
+    expect(await screen.findByText('Reviewed')).toBeInTheDocument();
+    expect(screen.queryByText('Mark as Read')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { name: 'Acme breach' })).toHaveLength(1); // merged, not duplicated
   });
 
   test('tolerates an empty or malformed list response', async () => {
