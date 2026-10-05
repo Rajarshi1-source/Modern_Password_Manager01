@@ -25,7 +25,7 @@ drf-yasg==1.21.15
 django-allauth==65.14.1
 dj-rest-auth==7.0.1
 python3-openid==3.2.0
-oauthlib==3.2.2
+oauthlib==4.0.0
 requests-oauthlib==2.0.0
 mozilla-django-oidc>=4.0.0,<5
 
@@ -50,7 +50,7 @@ pycryptodome>=3.20.0
 pyotp==2.10.0
 
 # JWT & Tokens
-PyJWT==2.13.0
+PyJWT==2.15.1
 
 # Celery & Task Queue
 celery==5.6.3
@@ -71,7 +71,7 @@ requests==2.33.0
 certifi>=2026.4.22
 charset-normalizer==3.4.1
 idna==3.18
-urllib3==2.7.0
+urllib3==2.8.0
 dnspython==2.7.0
 httpx>=0.27.0
 

@@ -612,8 +612,14 @@ def get_breach_alerts(request):
             'detected_at': alert.detected_at,
             'is_read': alert.is_read,
             'read_at': alert.read_at,
+            'resolved': alert.resolved,
             'notified': alert.notified,
-            'notification_sent_at': alert.notification_sent_at
+            'notification_sent_at': alert.notification_sent_at,
+            # BreachAlertsDashboard lists these alerts (not MLBreachMatch rows)
+            # and needs the monitored domain (`identifier`) and the match
+            # confidence (`exposed_data['confidence']`) to render its card.
+            'identifier': alert.identifier,
+            'exposed_data': alert.exposed_data,
         } for alert in alerts]
         
         return Response({

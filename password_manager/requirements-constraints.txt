@@ -7,7 +7,7 @@ celery==5.6.3
 redis==7.0.1
 scrapy>=2.15.0
 selenium>=4.39.0
-PyJWT==2.13.0
+PyJWT==2.15.1
 requests==2.33.0
 
 # Fixes for pyasn1 / pyasn1-modules compatibility (match service-identity / google-auth needs)
@@ -58,7 +58,7 @@ webdriver-manager==4.0.2
 #                import); do NOT simply raise it, that breaks SBOM generation.
 #   jaraco.context — Trivy #1549: path traversal in <6.0.1
 #   python-dotenv — Trivy #1556: symlink-follow CVE in <1.1.1 / older system wheel
-urllib3>=2.7.0
+urllib3>=2.8.0
 Twisted>=26.4.0
 pip>=25.0
 wheel>=0.46.2

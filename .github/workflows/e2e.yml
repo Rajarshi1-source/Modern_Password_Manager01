@@ -98,7 +98,19 @@ jobs:
   e2e:
     name: Playwright E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 2026-10-05: raised 60 -> 90. Measured from the run logs, not guessed:
+    # setup is ~13-16 min and the Playwright step ~45 min, because ~30-39 of
+    # the failures each burn the full 60s per-test timeout (workers: 1) before
+    # `--max-failures=40` finally stops the run -- 40 x 60s is ~40 min of dead
+    # time by construction. That put runs at 59-63 min against a 60 min cap:
+    # one passed at 59, the next four were cancelled two failures short of
+    # max-failures. The report/trace upload still ran on cancellation
+    # (`if: always()`), so the artifact was never the problem -- the red
+    # "Cancelled" check was. 90 lets the already-bounded run finish. Cutting
+    # the waste itself means a lower `--timeout`/`--max-failures` (verdict- and
+    # coverage-affecting: quantum.e2e.spec.js has explicit 30s waits) or fixing
+    # the specs that wait on pages which never render; neither is done here.
+    timeout-minutes: 90
     # 2026-09-24: per CodeRabbit review on PR #515, continue-on-error was
     # only set on the "Run Playwright E2E tests" step below -- so a
     # failure in any EARLIER step (pip install, migrate, the Django
