@@ -57,6 +57,9 @@ KNOWN_BROKEN = {
     ),
     "Twisted CertificateRequest": "same X509Req removal as above",
 }
+# A KNOWN_BROKEN check is only XFAIL when it fails for the documented reason;
+# any other exception (a new breakage) must still fail the run.
+KNOWN_BROKEN_SIGNATURE = "X509Req"
 
 CHECKS = []
 
@@ -355,7 +358,7 @@ def main():
             fn()
         except Exception as exc:  # noqa: BLE001 - report every failure kind
             detail = f"{type(exc).__name__}: {str(exc)[:140]}"
-            if known:
+            if known and KNOWN_BROKEN_SIGNATURE in str(exc):
                 counts["XFAIL"] += 1
                 print(f"XFAIL {name}\n        known: {known}\n        got:   {detail}")
             else:
