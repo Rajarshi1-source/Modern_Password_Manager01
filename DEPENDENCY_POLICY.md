@@ -102,6 +102,13 @@ silently truncated buffer in production, not a CI failure.
 | liboqs (C library) | `0.11.0` | `6f30d7ef49ca590979d7a085cd662f00bb6855fe` | `docker/backend/Dockerfile` (`--branch 0.11.0`, asserted via `LIBOQS_COMMIT` ARG) |
 | liboqs-python | `0.10.0` | `02198f9c3366cfafdea38a7830b82b9bd78bcb32` | `docker/backend/Dockerfile` (`--branch 0.10.0`, asserted via `LIBOQSPY_COMMIT` ARG) + `requirements-lock.txt` |
 
+The `liboqs-python==0.10.0` line in `requirements-lock.txt` documents the image; it is **not
+installable from PyPI**, which only publishes the `0.16.x` line. Do not "fix" a failing
+lock-file resolve by bumping that one line: it would make the lock disagree with the image
+and break this pairing rule. The `Dependency Compatibility` workflow drops the line before
+resolving (and logs that it did), and `dependabot.yml` ignores the package. A real upgrade
+is a migration, see `docs/pqc-hybrid-architecture-review.md`.
+
 The Dockerfile clones by tag (fast, `--depth 1`) AND asserts the
 resulting commit SHA matches the value above. If upstream ever
 retargets a release tag, the build aborts loudly rather than silently

@@ -126,6 +126,12 @@ PRs that each fail to resolve.
   installed anywhere. Flip `advisory` to `false` once a leg has been green for a
   few weeks. Only the `requirements.txt` leg blocks from day one, because that
   exact file already resolves in CI on every run.
+  The lock legs resolve a copy without `liboqs-python` (it is built from git in the
+  image and not installable from PyPI at the pinned version); the drop is logged.
+  Their first run found real inconsistencies in the lock files (non-existent
+  `types-requests`, a `torchvision` pinned to a different `torch`, `grpcio` /
+  `hpack` / `typer` below what their companions require, a `cffi` below what
+  `cryptography` 50 needs); those were corrected in the same change.
 - `pip install --dry-run` can build an sdist's metadata, i.e. run package build
   code, like every existing `pip install` step. The job has `contents: read`, no
   secrets and Harden-Runner in audit mode.

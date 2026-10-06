@@ -82,15 +82,25 @@ jobs:
             args: -r password_manager/requirements.txt
             smoke: true
             advisory: false
+          # The lock files are resolved from a copy (resolve.txt) with the pins in
+          # `exclude` dropped: liboqs-python 0.10.0 does not exist on PyPI (only the
+          # 0.16.x line does). docker/backend/Dockerfile builds liboqs 0.11.0 +
+          # liboqs-python 0.10.0 from pinned git SHAs, so the lock line documents the
+          # image; changing it is a migration (see docs/pqc-hybrid-architecture-review.md),
+          # not a lock edit. The drop is printed in the log so it is never silent.
           - name: Lock file (requirements-lock.txt)
+            lock_file: password_manager/requirements-lock.txt
+            exclude: liboqs-python
             args: >-
-              -r password_manager/requirements-lock.txt
+              -r resolve.txt
               --extra-index-url https://download.pytorch.org/whl/cpu
             smoke: false
             advisory: true
           - name: Lock file (ml_dark_web/requirements-lock.txt)
+            lock_file: password_manager/ml_dark_web/requirements-lock.txt
+            exclude: liboqs-python
             args: >-
-              -r password_manager/ml_dark_web/requirements-lock.txt
+              -r resolve.txt
               --extra-index-url https://download.pytorch.org/whl/cpu
             smoke: false
             advisory: true
@@ -111,6 +121,25 @@ jobs:
         with:
           # Same interpreter as CI and docker/backend/Dockerfile.
           python-version: '3.12'
+
+      - name: Prepare lock file (drop pins that cannot come from PyPI)
+        if: matrix.lock_file
+        env:
+          LOCK_FILE: ${{ matrix.lock_file }}
+          EXCLUDE: ${{ matrix.exclude }}
+        run: |
+          python - <<'PY'
+          import os, re
+          drop = {n.strip().lower() for n in os.environ["EXCLUDE"].split(",") if n.strip()}
+          kept, dropped = [], []
+          for line in open(os.environ["LOCK_FILE"], encoding="utf-8").read().splitlines():
+              m = re.match(r"\s*([A-Za-z0-9_.\-]+)\s*==", line)
+              (dropped if m and m.group(1).lower() in drop else kept).append(line)
+          open("resolve.txt", "w", encoding="utf-8").write("\n".join(kept) + "\n")
+          print(f"{os.environ['LOCK_FILE']}: kept {len(kept)} lines, dropped {len(dropped)}:")
+          for d in dropped:
+              print(f"  DROPPED (not installable from PyPI, see matrix comment): {d}")
+          PY
 
       - name: Resolve (no install)
         env:
