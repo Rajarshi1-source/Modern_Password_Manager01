@@ -27,7 +27,7 @@ locally, or the code itself). Section 8 lists what was **not** verified.
 | 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several, and one is serious:** `behavioral_recovery/services/quantum_crypto_service.py` does `from oqs import KEM`, which does not exist in any liboqs-python version, so that service silently runs its non-post-quantum fallback even in the Docker image. See section 4. |
 | 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend silently selects a *simulated* KEM. A broken liboqs bump would pass CI. |
 | 6 | Is the proposed architecture better than what exists? | **Parts of it are; the whole is not.** Its password handling (never send the master password; one Argon2id run split with HKDF) and its use of standardized ML-KEM are better than the current code. Its single `K_master`, session-level hybrid handshake and storage schema are weaker than, or redundant with, what exists. Section 6. |
-| 7 | What is the most valuable post-quantum change? | **Not application-layer.** The master password reaches the server on every login; a recorded TLS session decrypted later reveals it directly. Fix that first, then enable hybrid post-quantum TLS at the edge. Section 7. |
+| 7 | What is the most valuable post-quantum change? | **Not application-layer.** The master password reaches the server on every login; a recorded TLS session decrypted later reveals it directly. Stop sending it (and do not replace it with a replayable derived value), then enable hybrid post-quantum TLS at the edge. Sections 6-7. |
 
 ---
 
@@ -147,7 +147,7 @@ told to leave it alone.
 | Vault crypto | `services/vaultEnvelope.js`, `sessionVaultCrypto.js` (v2 `svc-gcm-1`, v3 `svc-gcm-2`) | AES-GCM **DEK/KEK envelope**: random DEK wrapped under a KEK derived from the vault password, wrapped-DEK for OAuth users, decoy slots, recovery factors. |
 | KDF | `services/cryptoService.js` | Argon2id (adaptive parameters, "128 MB on capable devices"), PBKDF2 fallback; a legacy CryptoJS AES-CBC path (own TODO: no integrity tag) |
 | Login | `hooks/useAuth.jsx` | Posts `{username, password}` in both the cookie and token flows. |
-| Signup | `App.jsx` | Posts **both** `password` and a PBKDF2-SHA256 `auth_hash` (310 000 iterations, salt `pwm-auth|<email>`). |
+| Signup | `App.jsx` | Posts **both** `password` and a PBKDF2-SHA256 `auth_hash` (310 000 iterations, salt `pwm-auth\|<email>`). |
 | Tokens | `hooks/useAuth.jsx` | HttpOnly-cookie flow exists but is **opt-in** (`VITE_USE_COOKIE_AUTH`, default off). |
 | CSP | `docker/frontend/security-headers.conf` | `script-src 'self' 'unsafe-eval'`; kept deliberately for WASM glue (FHE and Kyber). |
 | TLS | `docker/nginx/nginx.conf` | `ssl_ecdh_curve` is commented out; image is `nginx:1.27-alpine`. **No hybrid post-quantum TLS.** |
@@ -269,6 +269,12 @@ These are fixable, but they show the plan is an illustration, not a drop-in desi
   WebCrypto's empty salt) is sound and matches the TLS hybrid style. It does not bind
   ciphertexts/public keys the way X-Wing does. `@noble/post-quantum` ships
   `ml_kem768_x25519` (X-Wing) if a bound combiner is wanted.
+- **`K_auth` is a bearer credential.** The plan sends `K_auth` to the server on every
+  login and the server only re-hashes it. Anyone who captures it (for example from
+  a TLS recording decrypted later) can **replay it to log in** until the password
+  changes, and can also test password guesses offline by recomputing `K_auth`. The
+  split protects `K_master` (so the vault stays undecryptable) and stops the server
+  seeing the password, but it does **not** make login replay-resistant.
 - **Salt = email + constant.** Deterministic and public; changing the email changes
   the keys, and it removes the per-user random salt that the current vault code uses.
 - **Single `K_master`** encrypting every item directly: changing the master password
@@ -287,7 +293,7 @@ These are fixable, but they show the plan is an illustration, not a drop-in desi
 
 | Area | Existing | Plan | Better |
 |---|---|---|---|
-| Master password handling | Raw password posted on every login; PBKDF2 `auth_hash` also sent at signup | Never sent; one Argon2id run split by HKDF into `K_auth` / `K_master` | **Plan.** The single most valuable idea in it. |
+| Master password handling | Raw password posted on every login; PBKDF2 `auth_hash` also sent at signup | Never sent; one Argon2id run split by HKDF into `K_auth` / `K_master` | **Plan**, with the `K_auth` replay caveat (section 4.2). The most valuable idea in it. |
 | KDF parameters | Argon2id, adaptive memory (to 128 MB) + PBKDF2 fallback; versioned | Fixed m=64 MiB, t=3, p=4 (matches RFC 9106's second recommended profile) | **Existing** for adaptivity/versioning; plan for using one KDF. |
 | Per-user salt | Per-user salt in the vault envelope | Email + constant | **Existing.** |
 | Vault key management | DEK/KEK envelope, wrapped DEK, password rotation, OAuth path, decoy slots, recovery factors | Single `K_master` | **Existing.** |
@@ -327,11 +333,24 @@ email-derived salt, or the `BYTEA`-only item format.
 
 **P1: the part that moves the security needle**
 
-5. Stop sending the raw master password: derive `K_auth` and `K_master` from one
-   Argon2id run client-side (plan, Part 1), send only `K_auth`, re-hash it
-   server-side (Django already uses Argon2). Needs a migration path for existing
-   accounts (accept both for a window, then flag/rotate), and a **per-user random
-   salt** served before login instead of the plan's email salt.
+5. Stop sending the raw master password. Derive `K_auth` and `K_master` from one
+   Argon2id run client-side (plan, Part 1) with a **per-user random salt** served
+   before login (not the plan's email salt). This removes the password from the wire
+   and from the server, and keeps `K_master` (hence the vault) out of reach. Be
+   explicit about what it does *not* do: a sent `K_auth` is a **replayable bearer
+   credential**, so treat this as step one and choose the login protocol on purpose:
+   - *Target:* an augmented PAKE such as **OPAQUE (RFC 9807, July 2025, CFRG,
+     Informational)**, where neither the password nor a replayable verifier crosses
+     the wire and the server never holds a password-equivalent. Needs a maintained
+     JS client and Python server implementation (not evaluated here) and a
+     registration migration for existing accounts.
+   - *Interim, if a PAKE is out of scope:* send `K_auth` only over the hybrid-TLS
+     channel (item 6), keep it server-side re-hashed with Argon2, rate-limit, and
+     require the existing second factor (TOTP / passkey) so a captured `K_auth`
+     alone is not enough. Whether the second factor is enforced on every login was
+     not verified.
+   - Migration for existing accounts: accept both forms for a window, then flag or
+     rotate.
 6. Hybrid post-quantum TLS at the edge. nginx's documentation describes
    `ssl_ecdh_curve X25519MLKEM768:X25519;` and notes OpenSSL **3.5+** is required;
    older builds ignore or reject the unknown group. The current image is
@@ -375,8 +394,15 @@ whatever was sent. In this application that includes the **master password** (F8
 The vault contents are AES-256-GCM under keys derived from that password; reading
 the password makes the vault key derivable. So:
 
-- the credential split (P1.5) turns "read the password" into "brute-force an
-  Argon2id hash offline", which a quantum computer does not shortcut meaningfully;
+- the credential split (P1.5) keeps the password and `K_master` off the wire, so a
+  later-decrypted recording no longer yields the vault key directly; the attacker
+  would have to brute-force an Argon2id-protected password offline, which a quantum
+  computer does not shortcut meaningfully. **A recorded `K_auth`, however, is a
+  replayable login credential** until it is rotated, which is why P1.5 recommends a
+  PAKE and why hybrid TLS (next bullet) still matters. OPAQUE's key exchange is
+  classical 3DH, so it removes the replayable secret but is **not** itself
+  post-quantum; I did not find a standardized post-quantum aPAKE (not an exhaustive
+  search);
 - hybrid TLS (P1.6) protects everything else in transit, including session tokens
   and metadata, without any application protocol;
 - application-layer ML-KEM matters for **data stored long-term under public-key
@@ -416,3 +442,6 @@ the password makes the vault key derivable. So:
 - Whether an inactivity auto-lock exists under a name my keyword search missed.
 - `@noble/curves` export names used in the plan (flagged as such above).
 - The `behavioral_recovery` design intent (F3).
+- Maturity of OPAQUE libraries for this stack (JS client, Python server); whether
+  the existing second factor is enforced on every login; and that no standardized
+  post-quantum aPAKE exists (the search was not exhaustive).
