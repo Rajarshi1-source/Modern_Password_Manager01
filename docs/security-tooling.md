@@ -15,6 +15,7 @@ deliberately *not* adding yet (with the cost and trigger).
 | Bandit | SAST (Python) | `.github/workflows/ci.yml` → `backend-test` |
 | CodeQL (advanced setup) | SAST | `.github/workflows/codeql.yml` (push/PR to `main`/`develop`, weekly, manual dispatch) |
 | Playwright E2E | E2E / functional | `.github/workflows/e2e.yml` (PR on `frontend/**` or `password_manager/**`, nightly, manual dispatch) — non-blocking |
+| Dependency compatibility | Supply-chain / compat | `.github/workflows/dependency-compat.yml` + `.github/scripts/dependency_smoke.py` (PR on requirements files, weekly, manual dispatch) — `requirements.txt` leg blocks, the rest advisory |
 | OpenSSF Scorecard | Supply-chain posture | `.github/workflows/scorecard.yml` (push to `main`, weekly, manual dispatch) |
 | `step-security/harden-runner` (audit mode) | Runner egress visibility | First step of `codeql.yml`, `security-multi-scanner.yml`, `ci-sbom.yml`, the `nuclei` job in `sast-dast.yml`, `scorecard.yml`, `e2e.yml`, `load-test.yml` |
 | k6 | Load/performance smoke | `.github/workflows/load-test.yml` (`workflow_dispatch` + weekly) — non-blocking |
@@ -76,6 +77,66 @@ some mock every network call and some hit `/api/` directly against the
 Django backend started by this workflow, so day-one green across all 19
 is not expected. Treat this as diagnostic, not a gate, until the suite's real
 pass rate is known.
+
+### Dependency compatibility (2026-10-06)
+
+Bumping a security pin used to mean checking by hand that nothing else broke.
+The `cryptography` 48 -> 50 bump showed why that is fragile: it needed
+`pyOpenSSL` 26.3+ and `fido2` 2.2+ as companions (each caps `cryptography` below
+the new major), the lock files still pinned the old pair, and Twisted turned
+out to still call an API pyOpenSSL had removed. `dependency-compat.yml` runs
+two checks so none of that depends on someone remembering:
+
+1. **Resolve** — `pip install --dry-run` (nothing installed) over the sets that
+   matter: `requirements.txt` (what the test suites install), `requirements-core.txt`
+   + `requirements-ml.txt` **together** (what `docker/backend/Dockerfile` ships;
+   the Dockerfile installs the ML layer with `|| echo "ML deps skipped"`, so a
+   conflict there would otherwise silently ship an image without its ML
+   dependencies), and both lock files. A conflict fails in about a minute.
+2. **Smoke** — `.github/scripts/dependency_smoke.py` runs the crypto/TLS stack
+   at the *resolved* versions: primitives cross-checked against `hashlib` /
+   `pycryptodome` / RFC vectors (stored data must still decrypt), a real TLS
+   handshake with hostname verification through Twisted's `ssl:` endpoint (the
+   form `daphne -e ssl:...` uses), Scrapy's pyOpenSSL context, JOSE/JWT, WebAuthn
+   COSE and NTLM. Resolution compares version metadata only; this catches a
+   release removing an API another package still calls.
+
+`dependabot.yml` groups `cryptography`, `pyopenssl`, `fido2` and `pyjwt` into a
+single `crypto-stack` PR so coupled bumps arrive together instead of as separate
+PRs that each fail to resolve.
+
+**What this does not do, and the risks of relying on it**
+
+- It is a tripwire for the library layer, not a behavioural guarantee. The
+  Django test suite stays the authority (`ci.yml` / `backend-ci.yml` still
+  install `requirements.txt` and run everything); a green run here means "these
+  versions install together and the crypto/TLS stack still works", nothing more.
+- `requirements.txt`, `-core` and `-ml` use unbounded `>=` pins, so what they
+  resolve to changes with every upstream release. The weekly run can therefore
+  go red with no change in this repo. That is the intended early warning, but it
+  only helps if someone acts on it; PRs only run the check when a requirements
+  file changes, so ordinary PRs are not blocked by upstream drift.
+- Do **not** answer a red run by adding upper bounds everywhere: that hides
+  upgrades (and security fixes) until the bound is noticed. Bound a package only
+  where a specific incompatibility is documented, as the `cryptography` block in
+  `requirements.txt` does.
+- The shipped-image and lock-file legs are **advisory** (`advisory: true` in the
+  matrix, reported as warnings) because they have never been resolved in CI;
+  nobody has resolved core + ml jointly before, and the lock files were never
+  installed anywhere. Flip `advisory` to `false` once a leg has been green for a
+  few weeks. Only the `requirements.txt` leg blocks from day one, because that
+  exact file already resolves in CI on every run.
+- `pip install --dry-run` can build an sdist's metadata, i.e. run package build
+  code, like every existing `pip install` step. The job has `contents: read`, no
+  secrets and Harden-Runner in audit mode.
+- It checks one interpreter and platform (Python 3.12, Ubuntu), the same as CI
+  and the Docker image. It says nothing about Windows or Python 3.13 developer
+  machines, where some pinned packages have no wheels.
+- Known, accepted incompatibilities are registered in `KNOWN_BROKEN` in the
+  smoke script rather than hidden. Today: Twisted 26.4.0's
+  `KeyPair.selfSignedCert` / `requestObject` call `OpenSSL.crypto.X509Req`,
+  removed in pyOpenSSL 26.3.0 (needed for `cryptography>=49`). Nothing here calls
+  them. If one starts passing, the script prints `XPASS` so the entry can go.
 
 ### OpenSSF Scorecard (2026-09-16)
 

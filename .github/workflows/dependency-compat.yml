@@ -1,0 +1,180 @@
+name: Dependency Compatibility
+
+# =============================================================================
+# Catches dependency incompatibilities automatically instead of by hand.
+#
+# Two checks, because neither alone is enough:
+#
+#   1. RESOLVE -- `pip install --dry-run` (nothing is installed) over the
+#      requirement sets that actually ship or get tested. A conflict between
+#      version bounds (e.g. pyOpenSSL 26.2.0 capping cryptography<49 while the
+#      app pins cryptography 50.x, or fido2 2.0.x capping <48) fails here in
+#      about a minute instead of 25 minutes into the backend tests -- or, for the
+#      ML layer of docker/backend/Dockerfile, never: that layer is installed with
+#      `|| echo "ML deps skipped"`, so a conflict there silently ships an image
+#      without its ML dependencies. core + ml are therefore resolved TOGETHER.
+#
+#   2. SMOKE -- .github/scripts/dependency_smoke.py exercises the crypto / TLS
+#      stack at the versions step 1 resolved. Resolution only compares version
+#      metadata; it cannot see that a release removed an API another package
+#      still calls (Twisted still uses pyOpenSSL's X509Req, removed in 26.3.0).
+#
+# What this does NOT replace: the Django test suite (ci.yml / backend-ci.yml
+# still install requirements.txt and run everything). This is a fast tripwire
+# for the library layer, not a behavioural guarantee for the app.
+#
+# Known risks, deliberately accepted -- see docs/security-tooling.md:
+#   * requirements.txt / -core / -ml use unbounded `>=` pins, so what they
+#     resolve to changes whenever upstream releases. The weekly run can go red
+#     with no repo change. That is the intended early warning, but it is noise
+#     if nobody acts on it. PRs only run this when a requirements file changes.
+#   * The lock-file legs are ADVISORY (continue-on-error) until they have run
+#     green in CI for a few weeks: they were never installed anywhere before,
+#     so their first results are unproven.
+#   * `pip install --dry-run` may build sdist metadata, i.e. run package build
+#     code, exactly like the existing `pip install` steps. The job has
+#     contents: read, no secrets, and Harden-Runner in audit mode.
+# =============================================================================
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'password_manager/requirements*.txt'
+      - 'password_manager/ml_dark_web/requirements*.txt'
+      - '.github/scripts/dependency_smoke.py'
+      - '.github/workflows/dependency-compat.yml'
+  schedule:
+    - cron: '23 5 * * 1'  # weekly, Monday 05:23 UTC: catches upstream drift
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compat:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Advisory legs report but never turn the check red.
+    continue-on-error: ${{ matrix.advisory }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Exactly what docker/backend/Dockerfile installs, resolved together.
+          # ADVISORY until proven: nobody has ever resolved core + ml jointly (the
+          # Dockerfile installs them separately and swallows ML failures), so a
+          # real pre-existing conflict could surface on the first run. Flip
+          # `advisory` to false once it has run green for a few weeks.
+          - name: Shipped image (core + ml)
+            args: >-
+              -r password_manager/requirements-core.txt
+              -r password_manager/requirements-ml.txt
+            smoke: true
+            advisory: true
+          # What ci.yml / backend-ci.yml install and run the test suite against.
+          - name: Test environment (requirements.txt)
+            args: -r password_manager/requirements.txt
+            smoke: true
+            advisory: false
+          - name: Lock file (requirements-lock.txt)
+            args: >-
+              -r password_manager/requirements-lock.txt
+              --extra-index-url https://download.pytorch.org/whl/cpu
+            smoke: false
+            advisory: true
+          - name: Lock file (ml_dark_web/requirements-lock.txt)
+            args: >-
+              -r password_manager/ml_dark_web/requirements-lock.txt
+              --extra-index-url https://download.pytorch.org/whl/cpu
+            smoke: false
+            advisory: true
+
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          # Same interpreter as CI and docker/backend/Dockerfile.
+          python-version: '3.12'
+
+      - name: Resolve (no install)
+        env:
+          RESOLVE_ARGS: ${{ matrix.args }}
+        run: |
+          set -eu
+          # pip>=25 matches the Dockerfile: older pips hit "resolution-too-deep"
+          # against these unbounded specifiers.
+          python -m pip install --upgrade "pip>=25.0"
+          # --ignore-installed: judge the requirement set on its own, not
+          # against whatever the runner image happens to have preinstalled.
+          # shellcheck disable=SC2086  # RESOLVE_ARGS is a trusted matrix value; word-splitting is intended
+          python -m pip install --dry-run --ignore-installed --prefer-binary --retries 5 \
+            $RESOLVE_ARGS --report resolved.json
+
+      - name: Summarise resolved versions
+        run: |
+          python - <<'PY'
+          import json, os
+          report = json.load(open("resolved.json"))
+          pins = {i["metadata"]["name"].lower(): i["metadata"]["version"] for i in report["install"]}
+          key = ["cryptography", "pyopenssl", "fido2", "pyjwt", "twisted", "daphne", "autobahn",
+                 "scrapy", "service-identity", "django", "channels", "celery", "torch"]
+          lines = [f"### {os.environ.get('MATRIX_NAME', 'Resolved set')}", "",
+                   f"{len(pins)} packages resolved.", "", "| package | version |", "|---|---|"]
+          lines += [f"| {k} | {pins[k]} |" for k in key if k in pins]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              fh.write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
+
+      - name: Install the crypto/TLS subset at the resolved versions
+        if: matrix.smoke
+        run: |
+          set -eu
+          python - <<'PY' > smoke-requirements.txt
+          import json
+          report = json.load(open("resolved.json"))
+          pins = {i["metadata"]["name"].lower(): i["metadata"]["version"] for i in report["install"]}
+          wanted = ["cryptography", "pyopenssl", "fido2", "pyjwt", "twisted", "daphne", "autobahn",
+                    "scrapy", "service-identity", "josepy", "authlib", "pyspnego", "requests-ntlm",
+                    "pycryptodome"]
+          for name in wanted:
+              if name in pins:
+                  print(f"{name}=={pins[name]}")
+          PY
+          cat smoke-requirements.txt
+          python -m pip install --prefer-binary --retries 5 -r smoke-requirements.txt
+
+      - name: Smoke-test the crypto / TLS stack
+        if: matrix.smoke
+        run: python .github/scripts/dependency_smoke.py
+
+      # `continue-on-error` reports an advisory leg as green, which would hide a
+      # real finding. Say so loudly instead.
+      - name: Flag an advisory failure
+        if: failure() && matrix.advisory
+        env:
+          LEG: ${{ matrix.name }}
+        run: |
+          echo "::warning title=Advisory dependency check failed::${LEG} did not pass. It is advisory (not yet trusted as a gate) but the failure is real information -- open the failed step."
+          {
+            echo "### :warning: Advisory leg failed: ${LEG}"
+            echo "This leg is advisory, so the check shows green. Read the failed step above."
+          } >> "$GITHUB_STEP_SUMMARY"
