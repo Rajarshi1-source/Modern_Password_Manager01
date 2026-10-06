@@ -41,6 +41,11 @@ mozilla-django-oidc>=4.0.0,<5
 # below 50; everything else sets a lower bound. Nothing in this codebase calls
 # a changed API: no x509/pkcs7, no raw algorithms.ChaCha20 (only the
 # ChaCha20Poly1305 AEAD), no DH, no removed *_KEY_TYPES alias.
+# Known gap, unused here: pyOpenSSL 26.3.0 removed X509Req / X509Extension, and
+# Twisted 26.4.0 (the latest) still calls X509Req in KeyPair.selfSignedCert and
+# requestObject, so those two helpers fail. daphne / scrapy / autobahn only load
+# PEM files, which works (a real TLS handshake is exercised by
+# .github/scripts/dependency_smoke.py); do not use Twisted's cert-generation helpers.
 cryptography==50.0.2
 argon2-cffi==21.3.0
 argon2-cffi-bindings==25.1.0
@@ -140,7 +145,7 @@ six==1.17.0
 python-dotenv==1.2.2
 
 # WSGI/ASGI Server
-Werkzeug==3.1.6
+Werkzeug==3.1.9  # CVE-2026-102598 (safe_join accepted Windows device names with an empty ADS marker)
 
 # Python 3.13+ Compatibility
 legacy-cgi>=2.6.4
@@ -187,7 +192,7 @@ pytest-asyncio==1.3.0
 pytest-cov>=5.0.0
 
 # Optional: MongoDB Support
-pymongo==4.6.3
+pymongo==4.18.2  # CVE-2026-88029/-96747/-96748/-96749; optional, no code imports it
 aiohttp>=3.14.3  # GHSA-mfx4-hv73-q22v (CVE-2026-69243) WebSocket-upgrade request smuggling, fixed 3.14.2; 3.14.3 adds permessage-deflate / control-frame hardening
 authlib>=1.6.12
 filelock>=3.20.3
