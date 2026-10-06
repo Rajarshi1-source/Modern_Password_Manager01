@@ -24,11 +24,14 @@ LIST_URL = '/api/ml-darkweb/breach-alerts/'
 
 
 def _mark_read_url(alert_id):
+    """URL of the mark-alert-read endpoint for ``alert_id``."""
     return f'/api/ml-darkweb/mark-alert-read/{alert_id}/'
 
 
 class BreachAlertsApiTests(TestCase):
+    """HTTP contract the dashboard relies on: alert list, mark-read, pagination, filters, ownership."""
     def setUp(self):
+        """Create two users and one unread, high-severity alert owned by the first."""
         self.user = User.objects.create_user(
             username='alerts_owner', email='owner@example.com', password='x'
         )
@@ -48,6 +51,7 @@ class BreachAlertsApiTests(TestCase):
         )
 
     def test_list_carries_what_the_dashboard_renders(self):
+        """The list returns the fields the dashboard card renders."""
         res = self.client.get(LIST_URL)
 
         self.assertEqual(res.status_code, 200)
@@ -60,6 +64,7 @@ class BreachAlertsApiTests(TestCase):
         self.assertEqual(item['exposed_data']['confidence'], 0.87)
 
     def test_list_excludes_other_users_alerts(self):
+        """Another user's alert never appears in the list."""
         BreachAlert.objects.create(
             user=self.other, breach_name='Not yours', identifier='x.example'
         )
@@ -70,6 +75,7 @@ class BreachAlertsApiTests(TestCase):
 
     @mock.patch('ml_dark_web.tasks.broadcast_alert_update.delay')
     def test_mark_read_persists_across_a_reload(self, broadcast):
+        """Marking read is saved and still shown as read on the next list."""
         res = self.client.post(_mark_read_url(self.alert.id))
 
         self.assertEqual(res.status_code, 200)
@@ -86,6 +92,7 @@ class BreachAlertsApiTests(TestCase):
 
     @mock.patch('ml_dark_web.tasks.broadcast_alert_update.delay')
     def test_mark_read_rejects_other_users_alert(self, broadcast):
+        """Marking another user's alert read returns 404 and changes nothing."""
         foreign = BreachAlert.objects.create(
             user=self.other, breach_name='Not yours', identifier='x.example'
         )
@@ -98,6 +105,7 @@ class BreachAlertsApiTests(TestCase):
         broadcast.assert_not_called()
 
     def test_list_pages_through_every_alert_without_overlap(self):
+        """Paging with limit/offset visits every alert once, newest first."""
         # Same detected_at on purpose: `-id` must keep the pages stable.
         for i in range(4):
             BreachAlert.objects.create(
@@ -118,6 +126,7 @@ class BreachAlertsApiTests(TestCase):
         self.assertEqual(ids, sorted(ids, reverse=True))
 
     def test_list_severity_filter_matches_stored_lowercase_in_any_case(self):
+        """The severity filter matches lowercase stored values for any query casing."""
         # setUp's alert is stored as 'high'; the documented query values are uppercase.
         BreachAlert.objects.create(
             user=self.user, breach_name='Low one', identifier='x.example', severity='low',
@@ -130,6 +139,7 @@ class BreachAlertsApiTests(TestCase):
         self.assertEqual(self.client.get(LIST_URL, {'severity': 'critical'}).data['count'], 0)
 
     def test_list_rejects_non_integer_pagination_with_400(self):
+        """A non-integer limit or offset is a 400, not a 500."""
         for params in ({'offset': 'abc'}, {'limit': 'abc'}, {'offset': ''}):
             res = self.client.get(LIST_URL, params)
 
@@ -137,6 +147,7 @@ class BreachAlertsApiTests(TestCase):
             self.assertEqual(res.data, {'error': 'invalid_pagination'})
 
     def test_list_reports_data_type_so_scan_alerts_can_be_labelled(self):
+        """The list reports data_type so scan alerts can be labelled accurately."""
         scan = BreachAlert.objects.create(
             user=self.user, breach_name='Scan hit', identifier='person@example.net',
             data_type='email',
@@ -148,6 +159,7 @@ class BreachAlertsApiTests(TestCase):
         self.assertEqual(by_id[scan.id]['identifier'], 'person@example.net')
 
     def test_list_caps_limit_and_ignores_negative_offset(self):
+        """An oversized limit is capped and a negative offset is treated as 0."""
         res = self.client.get(LIST_URL, {'limit': 100000, 'offset': -5})
 
         self.assertEqual(res.status_code, 200)
@@ -157,6 +169,7 @@ class BreachAlertsApiTests(TestCase):
     # breach_matches / resolve_match share the mount with the alert endpoints
     # and must stay scoped to request.user too.
     def _create_match(self, user):
+        """Create the minimum records for a breach match owned by ``user``."""
         source = BreachSource.objects.create(
             name='Test source', url='https://example.com', source_type='forum',
         )
@@ -174,6 +187,7 @@ class BreachAlertsApiTests(TestCase):
         )
 
     def test_breach_matches_excludes_other_users_matches(self):
+        """breach_matches lists only the requesting user's matches."""
         own = self._create_match(self.user)
         self._create_match(self.other)
 
@@ -183,6 +197,7 @@ class BreachAlertsApiTests(TestCase):
         self.assertEqual([m['id'] for m in res.data], [own.id])
 
     def test_resolve_match_rejects_other_users_match(self):
+        """resolve_match returns 404 for another user's match and leaves it unresolved."""
         foreign = self._create_match(self.other)
 
         res = self.client.post('/api/ml-darkweb/resolve_match/', {'match_id': foreign.id})

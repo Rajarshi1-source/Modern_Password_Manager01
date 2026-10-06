@@ -153,6 +153,40 @@ describe('BreachAlertsDashboard', () => {
     expect(screen.getByRole('heading', { name: 'Live breach' })).toBeInTheDocument();
   });
 
+  test('renders a live alert from the exact payload send_breach_notification emits', async () => {
+    // Mirrors ml_dark_web/tests/test_breach_notification_payload.py: `title` and
+    // UPPERCASE `severity` for every alert, `confidence` + `domain` for ML alerts.
+    // With the old producer (breach_name, lowercase severity, no confidence) this
+    // showed a generic title, MEDIUM styling and no filter match.
+    api.get.mockResolvedValue({ data: { alerts: [] } });
+    render(<BreachAlertsDashboard />);
+    await waitFor(() => expect(ws.onAlert).toBeTruthy());
+
+    act(() => {
+      ws.onAlert({
+        alert_id: 77,
+        breach_name: 'Live ML breach',
+        title: 'Live ML breach',
+        severity: 'HIGH',
+        detected_at: '2026-10-05T10:00:00Z',
+        description: 'Leaked credentials',
+        confidence: 0.66,
+        domain: 'live.example',
+      });
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Live ML breach' })).toBeInTheDocument();
+    expect(screen.getByText('HIGH')).toBeInTheDocument(); // badge: uppercase, not the lowercase fallback
+    expect(screen.getByText(/Match Confidence: 66\.0%/)).toBeInTheDocument();
+    expect(screen.getByText('live.example')).toBeInTheDocument();
+    expect(screen.getByText(/Confidence: 66%/)).toBeInTheDocument(); // the toast reads the same payload
+    expect(screen.queryByText('New Breach Detected')).not.toBeInTheDocument(); // no generic-title fallback
+
+    // The Critical/High filter only matches UPPERCASE severity.
+    await userEvent.click(screen.getByText('Critical/High'));
+    expect(screen.getByRole('heading', { name: 'Live ML breach' })).toBeInTheDocument();
+  });
+
   test('a read update received mid-load is not reverted by the fetched copy', async () => {
     let release;
     api.get.mockReturnValue(new Promise((resolve) => { release = resolve; }));
