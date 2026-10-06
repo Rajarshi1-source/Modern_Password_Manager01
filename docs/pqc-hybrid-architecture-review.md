@@ -24,8 +24,8 @@ locally, or the code itself). Section 8 lists what was **not** verified.
 | 1 | Does bumping to liboqs-python `0.16.0.1` (liboqs `0.16.0`) remove `Kyber768`? | **No.** At tag `0.16.0`, `OQS_ENABLE_KEM_KYBER` is `ON` by default and `kyber_512/768/1024` are enabled. The `0.12.0` notice ("last release to include Kyber") has not been carried out as of `0.16.0`. Kyber round 3 remains deprecated and could still be removed later. |
 | 2 | What does the bump remove? | Dilithium (removed in liboqs `0.15.0`) and SPHINCS+ (removed in `0.16.0`). **Neither is used anywhere in this codebase.** |
 | 3 | Is it safe to just bump the pin in `requirements-lock.txt` (the Copilot suggestion)? | **No, for process reasons, not algorithm reasons.** `DEPENDENCY_POLICY.md` requires the C library and the Python wrapper to move together, with refreshed commit SHAs, in one PR, validated against a freshly built image. The Docker image builds both from pinned git SHAs; the lock line only documents that. A lock-only bump recreates the "lock lies about what is installed" problem the Dockerfile already complains about. |
-| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several, and one is serious:** `behavioral_recovery/services/quantum_crypto_service.py` does `from oqs import KEM`, which does not exist in any liboqs-python version, so that service silently runs its non-post-quantum fallback even in the Docker image. See section 4. |
-| 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend silently selects a *simulated* KEM. A broken liboqs bump would pass CI. |
+| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several, and one is serious:** `behavioral_recovery/services/quantum_crypto_service.py` does `from oqs import KEM`, which does not exist in any liboqs-python version, so that service runs its non-post-quantum fallback even in the Docker image, with only a log warning (and only when `DEBUG=False`). See section 3.3. |
+| 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend selects a *simulated* KEM (a log warning at most, and only when `DEBUG=False`). A broken liboqs bump would pass CI. |
 | 6 | Is the proposed architecture better than what exists? | **Parts of it are; the whole is not.** Its password handling (never send the master password; one Argon2id run split with HKDF) and its use of standardized ML-KEM are better than the current code. Its single `K_master`, session-level hybrid handshake and storage schema are weaker than, or redundant with, what exists. Section 6. |
 | 7 | What is the most valuable post-quantum change? | **Not application-layer.** The master password reaches the server on every login; a recorded TLS session decrypted later reveals it directly. Stop sending it (and do not replace it with a replayable derived value), then enable hybrid post-quantum TLS at the edge. Sections 6-7. |
 
@@ -154,7 +154,7 @@ told to leave it alone.
 
 ### 3.3 Findings
 
-**F1: `from oqs import KEM` silently disables post-quantum protection (backend).**
+**F1: `from oqs import KEM` disables post-quantum protection and logs a fallback warning when `DEBUG=False` (backend).**
 `behavioral_recovery/services/quantum_crypto_service.py` imports a name that does
 not exist, inside `except (ImportError, Exception, SystemExit)`. The import fails,
 `LIBOQS_AVAILABLE` becomes `False`, and the service uses `_fallback_*` (random
@@ -302,7 +302,7 @@ These are fixable, but they show the plan is an illustration, not a drop-in desi
 | Hybrid combiner | `SHA-256(a ‖ b)`, no label (doc says HKDF) | HKDF-SHA256 with label | **Plan**; X-Wing better than both. |
 | Where PQ is applied | App-layer KEM for recovery shards / backups wrapped under a public key (data stored long-term) | A session handshake carrying nothing defined | **Existing's placement is right**: long-lived stored ciphertext is where "harvest now, decrypt later" bites. The plan's layer is redundant with TLS. |
 | Transport PQ | None | App-layer hybrid | **Neither**; hybrid TLS at the edge is simpler and covers all traffic (section 7). |
-| Downgrade behavior | Silent X25519-only (frontend); silent simulation (backend) | Not addressed | **Neither.** Both need fail-closed in production. |
+| Downgrade behavior | Silent X25519-only (frontend); simulation behind a log-only warning (backend) | Not addressed | **Neither.** Both need fail-closed in production. |
 | Auth tokens | HttpOnly-cookie flow (opt-in) else script-readable storage | `sessionStorage` | **Existing**, if the cookie flow is enabled by default. |
 | Memory hygiene | Some non-extractable keys, `lock()`, clipboard-clear setting, decoy handling; legacy `extractable: true` key in `cryptoService.js` | Non-extractable key, inactivity timer, clipboard clear after 30 s | Plan's checklist is good practice; verify each against the existing code (I did not find an inactivity-timeout implementation by keyword search). |
 | Tests of the real PQ path | None in CI (F7) | Not discussed | Gap in both. |
