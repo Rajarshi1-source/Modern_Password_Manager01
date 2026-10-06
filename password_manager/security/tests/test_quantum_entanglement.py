@@ -380,7 +380,9 @@ class EntropyMonitorUnitTests(TestCase):
     def test_detect_anomalies_healthy_pools(self):
         """Test anomaly detection with healthy pools."""
         # Seeded, not secrets.token_bytes: the monitor flags a pool at chi-squared
-        # p < 0.01, so truly random input trips it by chance about 0.1% of runs.
+        # p < 0.01 (1% per pool nominally), but its +1 smoothing lowers that to about
+        # 0.1% per pool, so truly random input still trips it by chance on a small
+        # fraction of runs (3 in 3000 measured, two pools).
         rng = random.Random(20261006)
         pool_a = rng.randbytes(4096)
         pool_b = rng.randbytes(4096)
