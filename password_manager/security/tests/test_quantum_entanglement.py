@@ -17,6 +17,7 @@ Run with: python manage.py test security.tests.test_quantum_entanglement -v 2
 import os
 import uuid
 import json
+import random
 import secrets
 import hashlib
 from datetime import datetime, timedelta
@@ -378,8 +379,11 @@ class EntropyMonitorUnitTests(TestCase):
     
     def test_detect_anomalies_healthy_pools(self):
         """Test anomaly detection with healthy pools."""
-        pool_a = secrets.token_bytes(4096)
-        pool_b = secrets.token_bytes(4096)
+        # Seeded, not secrets.token_bytes: the monitor flags a pool at chi-squared
+        # p < 0.01, so truly random input trips it by chance about 0.1% of runs.
+        rng = random.Random(20261006)
+        pool_a = rng.randbytes(4096)
+        pool_b = rng.randbytes(4096)
         
         report = self.monitor.detect_anomalies(pool_a, pool_b)
         

@@ -24,8 +24,8 @@ locally, or the code itself). Section 8 lists what was **not** verified.
 | 1 | Does bumping to liboqs-python `0.16.0.1` (liboqs `0.16.0`) remove `Kyber768`? | **No.** At tag `0.16.0`, `OQS_ENABLE_KEM_KYBER` is `ON` by default and `kyber_512/768/1024` are enabled. The `0.12.0` notice ("last release to include Kyber") has not been carried out as of `0.16.0`. Kyber round 3 remains deprecated and could still be removed later. |
 | 2 | What does the bump remove? | Dilithium (removed in liboqs `0.15.0`) and SPHINCS+ (removed in `0.16.0`). **Neither is used anywhere in this codebase.** |
 | 3 | Is it safe to just bump the pin in `requirements-lock.txt` (the Copilot suggestion)? | **No, for process reasons, not algorithm reasons.** `DEPENDENCY_POLICY.md` requires the C library and the Python wrapper to move together, with refreshed commit SHAs, in one PR, validated against a freshly built image. The Docker image builds both from pinned git SHAs; the lock line only documents that. A lock-only bump recreates the "lock lies about what is installed" problem the Dockerfile already complains about. |
-| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several, and one is serious:** `behavioral_recovery/services/quantum_crypto_service.py` does `from oqs import KEM`, which does not exist in any liboqs-python version, so that service runs its non-post-quantum fallback even in the Docker image, with only a log warning (and only when `DEBUG=False`). See section 3.3. |
-| 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend selects a *simulated* KEM (a log warning at most, and only when `DEBUG=False`). A broken liboqs bump would pass CI. |
+| 4 | Does the code have problems that exist regardless of any version bump? | **Yes, several, and one is serious:** `behavioral_recovery/services/quantum_crypto_service.py` does `from oqs import KEM`, which does not exist in any liboqs-python version, so that service runs its non-post-quantum fallback even in the Docker image, with only log warnings (the import-time one only when `DEBUG=False`; each fallback operation also logs "NOT QUANTUM-RESISTANT"). See section 3.3. |
+| 5 | Does CI protect against a liboqs regression? | **No.** No test job installs the Python wrapper, so `import oqs` fails and the backend selects a *simulated* KEM (log warnings only; the import-time one appears only when `DEBUG=False`). A broken liboqs bump would pass CI. |
 | 6 | Is the proposed architecture better than what exists? | **Parts of it are; the whole is not.** Its password handling (never send the master password; one Argon2id run split with HKDF) and its use of standardized ML-KEM are better than the current code. Its single `K_master`, session-level hybrid handshake and storage schema are weaker than, or redundant with, what exists. Section 6. |
 | 7 | What is the most valuable post-quantum change? | **Not application-layer.** The master password reaches the server on every login; a recorded TLS session decrypted later reveals it directly. Stop sending it (and do not replace it with a replayable derived value), then enable hybrid post-quantum TLS at the edge. Sections 6-7. |
 
@@ -154,11 +154,13 @@ told to leave it alone.
 
 ### 3.3 Findings
 
-**F1: `from oqs import KEM` disables post-quantum protection and logs a fallback warning when `DEBUG=False` (backend).**
+**F1: `from oqs import KEM` disables post-quantum protection behind log-only warnings (backend).**
 `behavioral_recovery/services/quantum_crypto_service.py` imports a name that does
 not exist, inside `except (ImportError, Exception, SystemExit)`. The import fails,
 `LIBOQS_AVAILABLE` becomes `False`, and the service uses `_fallback_*` (random
-keys, AES-GCM) even in the Docker image. Its docstring says "in production
+keys, AES-GCM) even in the Docker image. Nothing surfaces to the caller: the
+import-time warning is logged only when `DEBUG=False`, and each `_fallback_*`
+call logs "NOT QUANTUM-RESISTANT" in either mode. Its docstring says "in production
 (Docker), liboqs is compiled and installed for real PQC". Severity: **high** (a
 security claim that is not true), fix: one line plus a fail-closed check.
 
@@ -396,8 +398,11 @@ the password makes the vault key derivable. So:
 
 - the credential split (P1.5) keeps the password and `K_master` off the wire, so a
   later-decrypted recording no longer yields the vault key directly; the attacker
-  would have to brute-force an Argon2id-protected password offline, which a quantum
-  computer does not shortcut meaningfully. **A recorded `K_auth`, however, is a
+  would have to guess the password offline against an Argon2id-protected `K_auth`.
+  Grover's algorithm gives only a quadratic reduction for unstructured search, and
+  its practical benefit depends on the cost of the quantum oracle (here a full
+  Argon2id evaluation) and on the search being serial; this document does not
+  quantify that cost. **A recorded `K_auth`, however, is a
   replayable login credential** until it is rotated, which is why P1.5 recommends a
   PAKE and why hybrid TLS (next bullet) still matters. OPAQUE's key exchange is
   classical 3DH, so it removes the replayable secret but is **not** itself
