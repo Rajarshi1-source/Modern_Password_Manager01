@@ -97,7 +97,7 @@ is not a removal.** Treat it as risk that can materialize in any future release.
 | `from oqs import KEM` in `behavioral_recovery/services/quantum_crypto_service.py` | `oqs` exports `KeyEncapsulation` and `Signature`. There is no `KEM` at `0.10.0` (checked in `oqs/oqs.py`) and none in the `0.16.0.1` `__all__`. | **Broken today, with any version.** See F1. |
 | Failure semantics (0.12.0: `RuntimeError`) | The wrappers do not check numeric return codes; exceptions already propagate. | Compatible. |
 | Import-time auto-install | In 0.10.0+ a missing liboqs triggers a download + CMake build **at import** (`subprocess` calls). The test logs already show `Error installing liboqs … No oqs shared libraries found` appearing from this. `0.16.0.1` patches a command-injection bug in exactly this path. | Operational risk in CI/dev; **not** in the image (liboqs is preinstalled). |
-| `OQS_MINIMAL_BUILD` list | Only Kyber is compiled. ML-KEM is **not** in the shipped binary even though liboqs 0.11.0 contains it. | Must be extended before any ML-KEM use (section 7). |
+| `OQS_MINIMAL_BUILD` list | Only Kyber is compiled. ML-KEM is **not** in the shipped binary even though liboqs 0.11.0 contains it. | Must be extended before any ML-KEM use (section 6, P2). |
 | Python version | Image and CI use 3.12. Wrapper needs ≥3.10/3.11. | Compatible. |
 | Docker | Both refs and SHAs must change in the same PR (policy). Needs a real image build to validate; Docker was not available locally when this was written. | Unvalidated. |
 
@@ -112,7 +112,7 @@ manager" framing in the pasted summary; the project's own README is the authorit
 ### 2.5 Recommendation for the bump
 
 Do **not** bump now. Do it as a deliberate, staged migration after the fixes in
-section 7 (P0/P1), following `DEPENDENCY_POLICY.md`:
+section 6 (P0/P1), following `DEPENDENCY_POLICY.md`:
 
 1. bump liboqs and liboqs-python **together**, refresh both SHAs and the policy table;
 2. build the image and run the `lattice_crypto_engine` tests against it;
@@ -303,7 +303,7 @@ These are fixable, but they show the plan is an illustration, not a drop-in desi
 | KEM algorithm | Round-3 Kyber768 (`pqc-kyber`, unmaintained since 2023-08); backend liboqs `Kyber768` | ML-KEM-768 (FIPS 203) | **Plan.** Standardized and maintained. |
 | Hybrid combiner | `SHA-256(a ‖ b)`, no label (doc says HKDF) | HKDF-SHA256 with label | **Plan**; X-Wing better than both. |
 | Where PQ is applied | App-layer KEM for recovery shards / backups wrapped under a public key (data stored long-term) | A session handshake carrying nothing defined | **Existing's placement is right**: long-lived stored ciphertext is where "harvest now, decrypt later" bites. The plan's layer is redundant with TLS. |
-| Transport PQ | None | App-layer hybrid | **Neither**; hybrid TLS at the edge is simpler and covers all traffic (section 7). |
+| Transport PQ | None | App-layer hybrid | **Neither**; hybrid TLS at the edge is simpler and covers all traffic from clients that negotiate the hybrid group (sections 6-7). |
 | Downgrade behavior | Silent X25519-only (frontend); simulation behind a log-only warning (backend) | Not addressed | **Neither.** Both need fail-closed in production. |
 | Auth tokens | HttpOnly-cookie flow (opt-in) else script-readable storage | `sessionStorage` | **Existing**, if the cookie flow is enabled by default. |
 | Memory hygiene | Some non-extractable keys, `lock()`, clipboard-clear setting, decoy handling; legacy `extractable: true` key in `cryptoService.js` | Non-extractable key, inactivity timer, clipboard clear after 30 s | Plan's checklist is good practice; verify each against the existing code (I did not find an inactivity-timeout implementation by keyword search). |
@@ -346,8 +346,9 @@ email-derived salt, or the `BYTEA`-only item format.
      the wire and the server never holds a password-equivalent. Needs a maintained
      JS client and Python server implementation (not evaluated here) and a
      registration migration for existing accounts.
-   - *Interim, if a PAKE is out of scope:* send `K_auth` only over the hybrid-TLS
-     channel (item 6), keep it server-side re-hashed with Argon2, rate-limit, and
+   - *Interim, if a PAKE is out of scope:* send `K_auth` over hybrid-TLS
+     connections (item 6; a client that falls back to plain X25519 gets no
+     post-quantum protection), keep it server-side re-hashed with Argon2, rate-limit, and
      require the existing second factor (TOTP / passkey) so a captured `K_auth`
      alone is not enough. Whether the second factor is enforced on every login was
      not verified.
@@ -357,7 +358,11 @@ email-derived salt, or the `BYTEA`-only item format.
    `ssl_ecdh_curve X25519MLKEM768:X25519;` and notes OpenSSL **3.5+** is required;
    older builds ignore or reject the unknown group. The current image is
    `nginx:1.27-alpine`; check `nginx -V` of the image you will ship before relying
-   on it. Current Chrome, Edge and Firefox negotiate this group by default.
+   on it. Current Chrome, Edge and Firefox negotiate this group by default. With
+   `X25519MLKEM768:X25519`, a client that does not offer the hybrid group still
+   connects using classical X25519 alone, so post-quantum key exchange applies only
+   to connections that negotiate `X25519MLKEM768`. Listing only the hybrid group
+   would refuse such clients (a support-policy decision; not tested here).
 
 **P2: algorithm migration (Kyber round 3 → ML-KEM)**
 
@@ -382,8 +387,8 @@ email-derived salt, or the `BYTEA`-only item format.
 ### Why this order
 
 P0 makes existing claims true and testable. P1 removes the largest real exposure
-(the password crossing the wire) and covers all traffic with one configuration
-change. P2 is a data migration with compatibility risk and should happen once P0's
+(the password crossing the wire) and, for clients that negotiate the hybrid
+group, covers all traffic with one configuration change. P2 is a data migration with compatibility risk and should happen once P0's
 tests exist. The liboqs bump is last because it changes nothing the application
 needs that ML-KEM migration does not, and it is the riskiest to validate.
 
@@ -409,7 +414,8 @@ the password makes the vault key derivable. So:
   post-quantum; I did not find a standardized post-quantum aPAKE (not an exhaustive
   search);
 - hybrid TLS (P1.6) protects everything else in transit, including session tokens
-  and metadata, without any application protocol;
+  and metadata, without any application protocol, on connections that negotiate
+  the hybrid group (a client that falls back to X25519 gets classical key exchange only);
 - application-layer ML-KEM matters for **data stored long-term under public-key
   wrapping** (recovery shards, backups), which is where the current Kyber code is
   already placed.

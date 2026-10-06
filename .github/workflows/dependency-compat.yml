@@ -189,7 +189,18 @@ jobs:
                   print(f"{name}=={pins[name]}")
           PY
           cat smoke-requirements.txt
-          python -m pip install --prefer-binary --retries 5 -r smoke-requirements.txt
+          # Constrain EVERY package to the version step 1 resolved, so the transitive
+          # dependencies of this subset (cffi, attrs, ...) are not re-resolved to
+          # something newer than what the report recorded.
+          python - <<'PY' > resolved-constraints.txt
+          import json
+          report = json.load(open("resolved.json"))
+          for item in report["install"]:
+              meta = item["metadata"]
+              print(f'{meta["name"]}=={meta["version"]}')
+          PY
+          python -m pip install --prefer-binary --retries 5 \
+            -c resolved-constraints.txt -r smoke-requirements.txt
 
       - name: Smoke-test the crypto / TLS stack
         if: matrix.smoke
