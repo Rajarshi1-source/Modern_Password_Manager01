@@ -18,21 +18,27 @@ User = get_user_model()
 
 
 class _FakeChannelLayer:
+    """Minimal channel layer that records group_send calls."""
     def __init__(self):
+        """Start with no recorded sends."""
         self.sent = []
 
     async def group_send(self, group, event):
+        """Record the group and event instead of delivering them."""
         self.sent.append((group, event))
 
 
 class BreachNotificationPayloadTests(TestCase):
+    """The real-time payload carries what the frontend reads."""
     def setUp(self):
+        """Create the alert owner and a fake channel layer."""
         self.user = User.objects.create_user(
             username='notify_owner', email='notify@example.com', password='x'
         )
         self.layer = _FakeChannelLayer()
 
     def _send(self, alert):
+        """Run the task for ``alert`` and return the single message it sent."""
         with mock.patch('channels.layers.get_channel_layer', return_value=self.layer):
             result = send_breach_notification(alert.id)
         self.assertTrue(result['success'], result)
@@ -42,6 +48,7 @@ class BreachNotificationPayloadTests(TestCase):
         return event['message']
 
     def test_ml_alert_payload_carries_what_the_frontend_reads(self):
+        """An ML alert sends title, uppercase severity, confidence and domain."""
         alert = BreachAlert.objects.create(
             user=self.user, breach_name='Acme breach', breach_description='Leaked',
             identifier='acme.example', severity='high',
@@ -58,6 +65,7 @@ class BreachNotificationPayloadTests(TestCase):
         self.assertEqual(message['domain'], 'acme.example')
 
     def test_scan_alert_payload_omits_confidence_and_domain(self):
+        """A breach-scan alert sends no confidence or domain."""
         # Breach-scan alerts store an email / vault item id in `identifier`.
         alert = BreachAlert.objects.create(
             user=self.user, breach_name='Scan hit', identifier='person@example.net',
