@@ -32,7 +32,7 @@ variable to point at staging once it is deployed.
 
 With `NUCLEI_TARGET` unset, the job boots the root `docker-compose.yml` backend
 (throwaway masked secrets, `DEBUG=True` so it answers on plain HTTP) and **fails**
-with the container logs if `http://localhost:8000` never answers; it no longer
+with the container logs if `/api/health/` on `http://localhost:8000` never returns a 2xx; it no longer
 swallows a failed boot and scans nothing. Findings from that local target
 describe a debug-mode backend, not production: `DEBUG=False` redirects HTTP to
 HTTPS and requires `JWT_PRIVATE_KEY`. Scan a deployed target via `NUCLEI_TARGET`

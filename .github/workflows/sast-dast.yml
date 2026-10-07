@@ -94,6 +94,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # The local boot builds the full backend image (tensorflow, torch, a liboqs
+      # stage), which does not fit in the ~14 GB free on ubuntu-latest: the build
+      # fails with "no space left on device" during the final COPY of /opt/venv
+      # (see backend-ci.yml, ci-sbom.yml). Same reclaim as ci-sbom.yml.
+      - name: Free up disk space
+        if: ${{ vars.NUCLEI_TARGET == '' }}
+        run: |
+          sudo rm -rf /usr/local/lib/android \
+                      /usr/share/dotnet \
+                      /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL \
+                      "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          df -h
+
       # Boot the local stack only when scanning the local target. With the
       # NUCLEI_TARGET repo variable set, the hosted target is scanned instead and
       # nothing here is needed.
@@ -144,17 +159,22 @@ jobs:
           # The frontend is not booted: the scan target is the API on :8000.
           docker compose -f docker-compose.yml up -d backend
 
-          # Fail the job if the API never answers. Any HTTP status counts as up
-          # (a 503 from an optional health sub-check should not block the scan).
+          # Fail the job unless the API reports healthy. /api/health/ returns 200
+          # only when its database and cache checks pass (503 otherwise), so a
+          # 4xx/5xx means the target is broken and scanning it would just be
+          # scanning an error page.
+          code=000
           for i in $(seq 1 60); do
             code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/health/ || true)"
-            if [ "$code" != "000" ] && [ -n "$code" ]; then
-              echo "Backend answered HTTP $code after ~$((i * 5))s"
-              exit 0
-            fi
+            case "$code" in
+              2??)
+                echo "Backend healthy (HTTP $code) after ~$((i * 5))s"
+                exit 0
+                ;;
+            esac
             sleep 5
           done
-          echo "::error title=Nuclei target did not start::http://localhost:8000 never answered in 5 minutes; container logs are above."
+          echo "::error title=Nuclei target did not start::http://localhost:8000/api/health/ never returned 2xx in 5 minutes (last HTTP $code); container logs are above."
           exit 1
 
       - name: Run Nuclei
