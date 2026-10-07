@@ -352,13 +352,13 @@ RUN find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o 
     # wholesale shipped an image whose Django could not start. Import the two
     # packages that were hit (daphne -> autobahn.wamp, simplejwt -> django.test.signals).
     /opt/venv/bin/python -c "import autobahn.twisted.websocket, daphne.server, django.test.signals" && \
-    # Brace-grouped so the trailing ``|| true`` ONLY swallows failures
-    # from the system-site cleanup (where a missing path is fine). The
-    # earlier links in the && chain — strip, pip-upgrade, and the
-    # autobahn guard — must still fail-fast. Without the braces, ``||``
-    # binds to the whole left-side of the chain (``&&`` and ``||`` are
-    # left-associative with equal precedence), so a failure in pip or
-    # the guard would be silently masked.
+    # ``|| true`` sits INSIDE the braces, on the rm itself, so it ONLY swallows
+    # a missing system-site path. The earlier links in the && chain -- pip
+    # upgrade, the cryptosign guard and the startup import check -- must
+    # fail the build. Writing ``{ rm ...; } || true`` instead does NOT confine
+    # the ``||`` to the group: ``&&`` and ``||`` have equal precedence and are
+    # left-associative, so it applies to the WHOLE chain before it and a
+    # failed import check would still leave the build green.
     { rm -rf /usr/lib/python3*/dist-packages/python_dotenv* \
              /usr/local/lib/python3*/dist-packages/python_dotenv* \
              /usr/lib/python3*/dist-packages/pip \
@@ -370,7 +370,7 @@ RUN find /opt/venv -type f \( -name "*.example.pem" -o -name "*-example.pem" -o 
              /usr/lib/python3*/dist-packages/jaraco* \
              /usr/local/lib/python3*/dist-packages/jaraco* \
              /usr/lib/python3*/dist-packages/urllib3-2.6* \
-             /usr/local/lib/python3*/dist-packages/urllib3-2.6* 2>/dev/null; } || true
+             /usr/local/lib/python3*/dist-packages/urllib3-2.6* 2>/dev/null || true; }
 
 # Update library cache after all native libs and venv are in place
 RUN ldconfig
