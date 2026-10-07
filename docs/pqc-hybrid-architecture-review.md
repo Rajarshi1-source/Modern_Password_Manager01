@@ -192,6 +192,15 @@ comments that the private key is "not stored". The frontend's `kyber_public_key`
 sent to `setup-commitments` is not what the service encrypts to. The non-quantum
 path records `encryption_algorithm='base64'`. Observed from the code; the intended
 design was not confirmed.
+*Consequence (confirmed 2026-10-08, PR #553 review):* a quantum-mode commitment
+stores `encrypted_embedding=b''`, and `RecoveryOrchestrator` passes exactly that
+field to `verify_behavioral_similarity`, which raises `JSONDecodeError`. So
+**behavioral recovery fails for every commitment created with quantum mode on.**
+This predates the F1 fix. On the pre-fix code, run with liboqs unavailable (then
+true everywhere, because of F1), `_encrypt_embedding` already returned the
+quantum tuple, and `verify(b'')` raised `JSONDecodeError`. Fixing it needs F3's
+key-custody decision (P0.2a): persist the private key, wrapped, and give the
+recovery path the quantum blob and that key.
 
 **F4: the frontend library fallback chain does not work as written, and tests never
 run a real KEM.**
@@ -262,7 +271,15 @@ fallback can then be fixed or deleted to match.
 encoding, not encryption. A fail-closed raise (F7) or a real liboqs error (now
 reachable, F1) would have been converted into **unencrypted** storage.
 *Fixed 2026-10-07:* when `ALLOW_SIMULATION` is False the error propagates; the
-DEBUG behaviour is unchanged. Still open in DEBUG only: when the AES fallback
+DEBUG behaviour is unchanged. *2026-10-08 (review of #553):* the base64 path
+itself is now guarded, because it was also reachable when quantum was off from
+the start (explicit `use_quantum=False`, or `__init__` swallowing an
+initialization error). It is allowed only with `ALLOW_SIMULATION`, or when the
+operator sets `QUANTUM_CRYPTO_ENABLED=False`. That flag is documented in
+`env.example` for behavioral commitments but was never read here; it is now an
+explicit opt-out (as in `LatticeCryptoEngine`), stored honestly as `base64`.
+`QUANTUM_FALLBACK_ENABLED` stays unwired on purpose: it defaults to `True`, so
+honouring it would reopen the silent downgrade by default. Still open in DEBUG only: when the AES fallback
 succeeds, `_create_commitment` and `tasks.py` still label the row
 `kyber768-aes256gcm` / `is_quantum_protected=True`. They should read
 `QuantumCryptoService.is_quantum_protected(blob)` instead of hard-coding it.
