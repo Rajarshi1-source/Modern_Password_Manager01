@@ -223,6 +223,6 @@ msgpack>=1.2.1  # GHSA-6v7p-g79w-8964 (CVE-2026-57585): reusing an Unpacker afte
 nltk>=3.10.3  # GHSA-x99w-6fgc-pmfw (CVE-2026-71513/CVE-2026-79657): AllowlistUnpickler dotted-name/namespace pickle RCE via TransitionParser/Punkt loading; fixed in 3.10.3. Supersedes the prior 3.9.4 GHSA-gfwx-w7gr-fvh7/GHSA-jm6w-m3j8-898g floor.
 protego>=0.6.2  # GHSA-wjmf-p669-5m5p (CVE-2026-55520): robots.txt Allow/Disallow wildcards compiled to regex could exponentially backtrack, freezing the crawler on a crafted robots.txt; fixed in 0.6.2 (wildcard matching no longer uses regex)
 soupsieve>=2.8.4  # GHSA-2wc2-fm75-p42x (CVE-2026-49476) unbounded memory from large comma-separated selector lists + GHSA-836r-79rf-4m37 (CVE-2026-49477) catastrophic-backtracking ReDoS on unterminated quoted attribute selectors; both fixed in 2.8.4
-tornado>=6.5.8  # + CVE-2026-82397/GHSA-mpf4-983q-p7j4: urlencoded body parsing omitted max_num_fields, stalling the event loop; fixed in 6.5.8. Prior GHSA-mgf9-4vpg-hj56 / GHSA-3x9g-8vmp-wqvf fixes still apply.
+tornado>=6.5.10  # + CVE-2026-82397/GHSA-mpf4-983q-p7j4: urlencoded body parsing omitted max_num_fields, stalling the event loop; fixed in 6.5.8. Prior GHSA-mgf9-4vpg-hj56 / GHSA-3x9g-8vmp-wqvf fixes still apply.
 Twisted>=26.4.0  # GHSA-grgv-6hw6-v9g4 (CVE-2026-42304) DNS compression DoS (transitive via daphne)
 ujson>=5.12.1  # GHSA-c38f-wx89-p2xg (CVE-2026-44660) memory leak in ujson.dump()
