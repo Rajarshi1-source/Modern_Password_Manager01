@@ -192,7 +192,7 @@ torch>=2.12.0
 # CVEs above -- makes that impossible: no version satisfying this floor
 # is vulnerable to any of them. Keep this unbounded; do not reintroduce
 # a <6.0 ceiling.
-transformers>=5.10.0
+transformers>=5.18.0
 
 # Quantum Random Number Generation
 httpx>=0.27.0
