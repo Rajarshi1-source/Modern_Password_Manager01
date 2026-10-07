@@ -29,7 +29,7 @@ torch>=2.12.0
 # release; a floor below 5.10.0 left the door open for the same thing
 # via any future transitive <5.x constraint). No ceiling: do not
 # reintroduce a <6.0 cap.
-transformers>=5.10.0
+transformers>=5.18.0
 
 # Quantum Random Number Generation
 qiskit>=1.0.0
