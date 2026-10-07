@@ -64,6 +64,20 @@ class BreachNotificationPayloadTests(TestCase):
         self.assertEqual(message['confidence'], 0.87)
         self.assertEqual(message['domain'], 'acme.example')
 
+    def test_non_object_exposed_data_still_sends_the_alert(self):
+        """A list-valued exposed_data must not stop the notification being sent."""
+        alert = BreachAlert.objects.create(
+            user=self.user, breach_name='Odd data', identifier='odd.example',
+            severity='low', exposed_data=['email'],
+        )
+
+        message = self._send(alert)
+
+        self.assertEqual(message['title'], 'Odd data')
+        self.assertNotIn('confidence', message)
+        alert.refresh_from_db()
+        self.assertTrue(alert.notified)
+
     def test_scan_alert_payload_omits_confidence_and_domain(self):
         """A breach-scan alert sends no confidence or domain."""
         # Breach-scan alerts store an email / vault item id in `identifier`.

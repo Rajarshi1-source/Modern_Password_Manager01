@@ -596,7 +596,8 @@ def send_breach_notification(alert_id: int):
             }
             # Only ML-created alerts carry a confidence, and only they store a
             # domain in `identifier` (scan alerts store an email / vault item id).
-            confidence = (alert.exposed_data or {}).get('confidence')
+            exposed_data = alert.exposed_data
+            confidence = exposed_data.get('confidence') if isinstance(exposed_data, dict) else None
             if isinstance(confidence, (int, float)):
                 message['confidence'] = confidence
                 message['domain'] = alert.identifier
