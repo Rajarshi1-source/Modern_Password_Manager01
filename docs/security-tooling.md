@@ -30,6 +30,14 @@ Nuclei is gated to main-branch pushes, `workflow_dispatch`, and the
 nightly cron (`03:17 UTC`) so PRs stay fast. Set the `NUCLEI_TARGET` repo
 variable to point at staging once it is deployed.
 
+With `NUCLEI_TARGET` unset, the job boots the root `docker-compose.yml` backend
+(throwaway masked secrets, `DEBUG=True` so it answers on plain HTTP) and **fails**
+with the container logs if `http://localhost:8000` never answers; it no longer
+swallows a failed boot and scans nothing. Findings from that local target
+describe a debug-mode backend, not production: `DEBUG=False` redirects HTTP to
+HTTPS and requires `JWT_PRIVATE_KEY`. Scan a deployed target via `NUCLEI_TARGET`
+for production-mode coverage.
+
 ### CodeQL: default setup → advanced setup (2026-09-16)
 
 GitHub's CodeQL **default setup** had been enabled at the repo-settings
@@ -186,9 +194,8 @@ gating a merge. It reuses the boot sequence already proven in
 `stackhawk.yml` (Postgres 17/pgvector + Redis 7 service containers, the
 disk-space cleanup the ML dependency stack needs, `manage.py migrate`,
 `runserver` in the background, then a health-check poll) rather than the
-`docker compose` approach the Nuclei job uses, which is already
-soft-failed there and not proven reliable enough to build a new workflow
-on. The script ramps to ~50 VUs against the unauthenticated `/api/health/`
+`docker compose` approach the Nuclei job uses, which builds the full backend
+image first (about 20 minutes) before it can answer. The script ramps to ~50 VUs against the unauthenticated `/api/health/`
 and `/` endpoints — the playbook's 1,000-concurrent-user target is not
 realistic on a shared GitHub-hosted runner backed by a Django dev server,
 so this is a regression smoke test, not a capacity benchmark. Non-blocking

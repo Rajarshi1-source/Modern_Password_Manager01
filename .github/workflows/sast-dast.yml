@@ -78,6 +78,9 @@ jobs:
   nuclei:
     name: Nuclei DAST
     runs-on: ubuntu-latest
+    # The local boot builds the backend image (liboqs + ML layer): allow for it,
+    # but never the 6h default if something hangs.
+    timeout-minutes: 90
     # Only run on scheduled and main-branch pushes — Nuclei is noisy on PRs.
     if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     env:
@@ -91,10 +94,68 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Boot the local stack only when scanning the local target. With the
+      # NUCLEI_TARGET repo variable set, the hosted target is scanned instead and
+      # nothing here is needed.
       - name: Boot ephemeral backend for scanning
+        if: ${{ vars.NUCLEI_TARGET == '' }}
         run: |
-          docker compose -f docker-compose.yml up -d backend frontend || \
-            echo "docker compose up failed — continuing so Nuclei can hit the hosted target"
+          set -euo pipefail
+
+          # docker-compose.yml REQUIRES SECRET_KEY and DB_PASSWORD (`${VAR:?...}`),
+          # and TOR_CONTROL_PASSWORD too: compose interpolates the whole file, so
+          # the tor-profile services' guard fires even though that profile is not
+          # started. This step used to set none of them, so `compose up` always
+          # failed and the failure was swallowed by `|| echo`, leaving Nuclei to
+          # scan nothing. Throwaway values for this run only; masked so they
+          # never print.
+          SECRET_KEY="$(openssl rand -hex 32)"
+          DB_PASSWORD="$(openssl rand -hex 16)"
+          REDIS_PASSWORD="$(openssl rand -hex 16)"
+          TOR_CONTROL_PASSWORD="$(openssl rand -hex 16)"
+          for v in "$SECRET_KEY" "$DB_PASSWORD" "$REDIS_PASSWORD" "$TOR_CONTROL_PASSWORD"; do
+            echo "::add-mask::$v"
+          done
+
+          # DEBUG=True on purpose, for this scan target only. With DEBUG=False the
+          # app 301-redirects plain HTTP to HTTPS (there is no TLS here, so Nuclei
+          # would scan redirects) and requires JWT_PRIVATE_KEY, which the compose
+          # file does not forward. The findings therefore describe a debug-mode
+          # backend, not production; scan a deployed target via NUCLEI_TARGET for that.
+          {
+            echo "SECRET_KEY=$SECRET_KEY"
+            echo "DB_PASSWORD=$DB_PASSWORD"
+            echo "REDIS_PASSWORD=$REDIS_PASSWORD"
+            echo "TOR_CONTROL_PASSWORD=$TOR_CONTROL_PASSWORD"
+            echo "DEBUG=True"
+          } >> "$GITHUB_ENV"
+          export SECRET_KEY DB_PASSWORD REDIS_PASSWORD TOR_CONTROL_PASSWORD DEBUG=True
+
+          dump_logs() {
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              docker compose -f docker-compose.yml ps -a || true
+              docker compose -f docker-compose.yml logs --no-color --tail=200 || true
+            fi
+          }
+          trap dump_logs EXIT
+
+          # `backend` pulls in postgres, redis and the migrate/collectstatic init.
+          # The frontend is not booted: the scan target is the API on :8000.
+          docker compose -f docker-compose.yml up -d backend
+
+          # Fail the job if the API never answers. Any HTTP status counts as up
+          # (a 503 from an optional health sub-check should not block the scan).
+          for i in $(seq 1 60); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/health/ || true)"
+            if [ "$code" != "000" ] && [ -n "$code" ]; then
+              echo "Backend answered HTTP $code after ~$((i * 5))s"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error title=Nuclei target did not start::http://localhost:8000 never answered in 5 minutes; container logs are above."
+          exit 1
 
       - name: Run Nuclei
         uses: projectdiscovery/nuclei-action@cc153d0541e1adf8a42bbe31c0a4fb2376147538 # v3.1.1
